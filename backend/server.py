@@ -28,8 +28,13 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+ROOT_DIR = Path(__file__).resolve().parent
+# Try loading .env from backend dir, or fallback to current dir
+env_path = ROOT_DIR / '.env'
+if not env_path.exists():
+    env_path = Path.cwd() / '.env'
+
+load_dotenv(env_path)
 
 # Database connection
 try:
@@ -65,8 +70,17 @@ else:
 # Security
 security = HTTPBearer(auto_error=False)
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup logic can go here
+    yield
+    # Shutdown logic
+    pass
+
 # Create the main app
-app = FastAPI(title="Spinr API", version="1.0.0")
+app = FastAPI(title="Spinr API", version="1.0.0", lifespan=lifespan)
 
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)
@@ -2316,6 +2330,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    pass
+
+if __name__ == "__main__":
+    import uvicorn
+    # When running as script, we can pass the app object directly
+    uvicorn.run(app, host="0.0.0.0", port=8000)

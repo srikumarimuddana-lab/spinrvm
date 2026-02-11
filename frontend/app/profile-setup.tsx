@@ -16,18 +16,20 @@ import {
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useAuthStore } from '../store/authStore';
+import { useUserStore } from '../store/userStore';
+import { supabase } from '../config/supabase';
 import SpinrConfig from '../config/spinr.config';
 
 export default function ProfileSetupScreen() {
   const router = useRouter();
-  const { createProfile, isLoading } = useAuthStore();
+  const { user, setProfile } = useUserStore();
 
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [city, setCity] = useState('');
   const [showCityPicker, setShowCityPicker] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   const validateEmail = (email: string): boolean => {
     const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -47,17 +49,28 @@ export default function ProfileSetupScreen() {
 
     Keyboard.dismiss();
 
+    setIsLoading(true);
     try {
-      await createProfile({
-        first_name: firstName.trim(),
-        last_name: lastName.trim(),
-        email: email.trim().toLowerCase(),
-        city,
-      });
+      const { data, error } = await supabase
+        .from('profiles')
+        .upsert({
+          id: user.uid,
+          first_name: firstName.trim(),
+          last_name: lastName.trim(),
+          email: email.trim().toLowerCase(),
+          phone: user.phoneNumber,
+        })
+        .select()
+        .single();
 
+      if (error) throw error;
+
+      setProfile(data);
       router.replace('/(tabs)');
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to create profile');
+    } finally {
+      setIsLoading(false);
     }
   };
 

@@ -5,7 +5,7 @@ import { FirebaseRecaptchaVerifierModal } from 'expo-firebase-recaptcha';
 import { PhoneAuthProvider } from 'firebase/auth';
 import { auth } from '../config/firebase';
 
-export default function LoginScreen() {
+export default function DriverLoginScreen() {
   const router = useRouter();
   const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
@@ -49,11 +49,11 @@ export default function LoginScreen() {
       <FirebaseRecaptchaVerifierModal
         ref={recaptchaVerifier}
         firebaseConfig={auth.app.options}
-        // attemptInvisibleVerification={true} 
       />
 
       <View style={styles.content}>
-        <Text style={styles.title}>Enter your mobile number</Text>
+        <Text style={styles.title}>Driver Login</Text>
+        <Text style={styles.subtitle}>Enter your mobile number to continue</Text>
         
         <View style={styles.inputContainer}>
           <View style={styles.flagContainer}>
@@ -62,7 +62,7 @@ export default function LoginScreen() {
           <TextInput
             style={styles.input}
             placeholder="204 555 0123"
-            placeholderTextColor="#999"
+            placeholderTextColor="#666"
             keyboardType="number-pad"
             value={phoneNumber}
             onChangeText={setPhoneNumber}
@@ -88,28 +88,30 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
+  container: { flex: 1, backgroundColor: '#1A1A1A' },
   content: { flex: 1, padding: 24, justifyContent: 'center' },
-  title: { fontSize: 24, fontWeight: 'bold', marginBottom: 24, color: '#333' },
+  title: { fontSize: 32, fontWeight: 'bold', marginBottom: 8, color: '#FFFFFF' },
+  subtitle: { fontSize: 16, color: '#CCCCCC', marginBottom: 32 },
   inputContainer: { 
     flexDirection: 'row', 
     alignItems: 'center', 
-    borderWidth: 1, 
-    borderColor: '#ddd', 
-    borderRadius: 8, 
+    backgroundColor: '#333333',
+    borderRadius: 12, 
     marginBottom: 24,
     height: 56,
+    borderWidth: 1,
+    borderColor: '#444',
   },
   flagContainer: { 
     paddingHorizontal: 16, 
     borderRightWidth: 1, 
-    borderRightColor: '#ddd',
+    borderRightColor: '#444',
     justifyContent: 'center',
     height: '100%'
   },
-  flag: { fontSize: 16, fontWeight: '600' },
-  input: { flex: 1, paddingHorizontal: 16, fontSize: 18, height: '100%' },
-  button: { backgroundColor: '#000', borderRadius: 8, height: 56, justifyContent: 'center', alignItems: 'center' },
-  buttonDisabled: { backgroundColor: '#666' },
-  buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  flag: { fontSize: 16, fontWeight: '600', color: '#FFF' },
+  input: { flex: 1, paddingHorizontal: 16, fontSize: 18, height: '100%', color: '#FFFFFF' },
+  button: { backgroundColor: '#10B981', borderRadius: 12, height: 56, justifyContent: 'center', alignItems: 'center' },
+  buttonDisabled: { backgroundColor: '#059669', opacity: 0.7 },
+  buttonText: { color: '#fff', fontSize: 18, fontWeight: '600' },
 });

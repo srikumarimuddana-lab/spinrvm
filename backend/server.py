@@ -32,7 +32,10 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # Database connection
-from .db import db
+try:
+    from .db import db
+except ImportError:
+    from db import db
 
 # JWT Secret
 JWT_SECRET = os.environ.get('JWT_SECRET', 'spinr-secret-key-change-in-production')
@@ -117,17 +120,8 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# Helper to convert MongoDB documents
+# Helper to convert MongoDB documents (Legacy, now a pass-through)
 def serialize_doc(doc):
-    if doc is None:
-        return None
-    if isinstance(doc, list):
-        return [serialize_doc(d) for d in doc]
-    if isinstance(doc, dict):
-        doc = dict(doc)
-        if '_id' in doc:
-            doc['_id'] = str(doc['_id'])
-        return doc
     return doc
 
 # ============ Models ============
@@ -657,13 +651,9 @@ async def get_vehicle_types():
 
 @api_router.get("/fares")
 async def get_fares_for_location(lat: float = Query(...), lng: float = Query(...)):
-    service_areas = await db.service_areas.find({'is_active': True}).to_list(100)
-    
-    matching_area = None
-    for area in service_areas:
-        if point_in_polygon(lat, lng, area.get('polygon', [])):
-            matching_area = area
-            break
+    # Use PostGIS to find matching service area
+    areas = await db.rpc('get_service_area_for_point', {'lat': lat, 'lng': lng})
+    matching_area = areas[0] if areas else None
     
     if not matching_area:
         vehicle_types = await db.vehicle_types.find({'is_active': True}).to_list(100)
@@ -895,35 +885,63 @@ async def match_driver_to_ride(ride_id: str):
     min_rating = settings.get('min_driver_rating', 4.0) if settings else 4.0
     search_radius = settings.get('search_radius_km', 10.0) if settings else 10.0
     
-    drivers = await db.drivers.find({
-        'is_online': True,
-        'is_available': True,
-        'vehicle_type_id': ride['vehicle_type_id']
-    }).to_list(100)
+    # Use PostGIS to find nearby drivers
+    # Note: radius in meters for RPC
+    nearby_drivers = await db.rpc('find_nearby_drivers', {
+        'lat': ride['pickup_lat'],
+        'lng': ride['pickup_lng'],
+        'radius_meters': search_radius * 1000
+    })
     
+    # Filter by vehicle type (rpc returns all types nearby)
+    drivers = [d for d in nearby_drivers if d.get('vehicle_type_id') == ride['vehicle_type_id']]
+
     if not drivers:
+        # Create demo drivers if none found (for testing)
         await create_demo_drivers(ride['vehicle_type_id'], ride['pickup_lat'], ride['pickup_lng'])
-        drivers = await db.drivers.find({
-            'is_online': True,
-            'is_available': True,
-            'vehicle_type_id': ride['vehicle_type_id']
-        }).to_list(100)
+        # Try finding again
+        nearby_drivers = await db.rpc('find_nearby_drivers', {
+            'lat': ride['pickup_lat'],
+            'lng': ride['pickup_lng'],
+            'radius_meters': search_radius * 1000
+        })
+        drivers = [d for d in nearby_drivers if d.get('vehicle_type_id') == ride['vehicle_type_id']]
     
     if not drivers:
         return
-    
+
     if algorithm in ['rating_based', 'combined']:
-        drivers = [d for d in drivers if d.get('rating', 5.0) >= min_rating]
-    
-    drivers_with_distance = []
-    for driver in drivers:
-        dist = calculate_distance(
-            ride['pickup_lat'], ride['pickup_lng'],
-            driver['lat'], driver['lng']
-        )
-        if dist <= search_radius:
-            drivers_with_distance.append((driver, dist))
-    
+        # Fetch full driver details for rating if not in RPC (RPC returns basic info)
+        # For efficiency we might want to include rating in RPC, but let's assume we need to fetch or trust RPC has it if modified
+        # The RPC definition I wrote returns: id, name, vehicle_type_id, lat, lng, distance_meters.
+        # It misses 'rating'.
+        # I should probably update RPC or fetch details.
+        # Let's fetch details for candidates.
+        driver_ids = [d['id'] for d in drivers]
+        # Fetch full details
+        full_drivers = await db.drivers.find({'id': {'$in': driver_ids}}).to_list(len(driver_ids))
+        # Filter by rating
+        full_drivers = [d for d in full_drivers if d.get('rating', 5.0) >= min_rating]
+
+        # Map distance back
+        dist_map = {d['id']: d['distance_meters'] / 1000.0 for d in drivers} # Convert m to km
+        drivers_with_distance = []
+        for d in full_drivers:
+            if d['id'] in dist_map:
+                drivers_with_distance.append((d, dist_map[d['id']]))
+
+    else:
+        # For 'nearest', we can use the RPC result directly but we need full driver object for assignment logic later?
+        # RPC result is partial. Let's fetch full objects.
+        driver_ids = [d['id'] for d in drivers]
+        full_drivers = await db.drivers.find({'id': {'$in': driver_ids}}).to_list(len(driver_ids))
+        dist_map = {d['id']: d['distance_meters'] / 1000.0 for d in drivers}
+
+        drivers_with_distance = []
+        for d in full_drivers:
+             if d['id'] in dist_map:
+                drivers_with_distance.append((d, dist_map[d['id']]))
+
     if not drivers_with_distance:
         return
     
@@ -932,6 +950,23 @@ async def match_driver_to_ride(ride_id: str):
     if algorithm == 'nearest' or algorithm == 'combined':
         drivers_with_distance.sort(key=lambda x: x[1])
         selected_driver = drivers_with_distance[0][0]
+    elif algorithm == 'rating_based':
+        drivers_with_distance.sort(key=lambda x: x[0].get('rating', 5.0), reverse=True)
+        selected_driver = drivers_with_distance[0][0]
+    elif algorithm == 'round_robin':
+        last_ride = await db.rides.find_one(
+            {'driver_id': {'$ne': None}},
+            sort=[('created_at', -1)]
+        )
+        if last_ride:
+            last_driver_idx = next(
+                (i for i, (d, _) in enumerate(drivers_with_distance) if d['id'] == last_ride['driver_id']),
+                -1
+            )
+            next_idx = (last_driver_idx + 1) % len(drivers_with_distance)
+            selected_driver = drivers_with_distance[next_idx][0]
+        else:
+            selected_driver = drivers_with_distance[0][0]
     elif algorithm == 'rating_based':
         drivers_with_distance.sort(key=lambda x: x[0].get('rating', 5.0), reverse=True)
         selected_driver = drivers_with_distance[0][0]

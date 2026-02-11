@@ -3,9 +3,6 @@
 This module provides a small subset of the DB operations used by the server. It uses the
 `supabase` client and runs blocking calls on a threadpool via `asyncio.to_thread` so they
 can be used from async FastAPI handlers.
-
-Note: These helpers are intentionally minimal — they are suitable for smoke testing and
-incremental refactor. We keep behavior similar to the Mongo helpers used previously.
 """
 import asyncio
 from typing import Optional, List, Dict, Any
@@ -55,15 +52,19 @@ async def create_user(payload: Dict[str, Any]) -> Dict[str, Any]:
     return await asyncio.to_thread(lambda: _single_row_from_res(supabase.table('users').insert(payload).execute()))
 
 
-async def find_available_drivers(vehicle_type_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+async def find_nearby_drivers(lat: float, lng: float, radius_meters: float) -> List[Dict[str, Any]]:
+    """Use PostGIS RPC to find nearby drivers."""
     if not supabase:
         return []
+
     def _fn():
-        q = supabase.table('drivers').select('*').eq('is_online', True).eq('is_available', True)
-        if vehicle_type_id:
-            q = q.eq('vehicle_type_id', vehicle_type_id)
-        q = q.limit(limit)
-        return _rows_from_res(q.execute())
+        # Call the RPC function 'find_nearby_drivers'
+        res = supabase.rpc('find_nearby_drivers', {
+            'lat': lat,
+            'lng': lng,
+            'radius_meters': radius_meters
+        }).execute()
+        return _rows_from_res(res)
 
     return await asyncio.to_thread(_fn)
 
@@ -89,13 +90,18 @@ async def set_driver_available(driver_id: str, available: bool = True, total_rid
     def _update():
         payload = {'is_available': available}
         # Supabase PostgREST doesn't support incremental operators in the same request; use two-step if increment requested
+        # For simple boolean update:
+        if total_rides_inc == 0:
+             res = supabase.table('drivers').update(payload).eq('id', driver_id).execute()
+             return _single_row_from_res(res)
+
+        # If increment needed, read then write (or use RPC if we had one for this)
+        cur = supabase.table('drivers').select('total_rides').eq('id', driver_id).execute()
+        cur_data = cur.get('data') or []
+        cur_val = cur_data[0].get('total_rides', 0) if cur_data else 0
+
+        payload['total_rides'] = cur_val + total_rides_inc
         res = supabase.table('drivers').update(payload).eq('id', driver_id).execute()
-        if total_rides_inc and total_rides_inc != 0:
-            # Read current value and increment
-            cur = supabase.table('drivers').select('total_rides').eq('id', driver_id).execute()
-            cur_data = cur.get('data') or []
-            cur_val = cur_data[0].get('total_rides', 0) if cur_data else 0
-            supabase.table('drivers').update({'total_rides': cur_val + total_rides_inc}).eq('id', driver_id).execute()
         return _single_row_from_res(res)
 
     return await asyncio.to_thread(_update)
@@ -169,8 +175,6 @@ async def get_rides_for_driver(driver_id: str, statuses: Optional[List[str]] = N
     def _fn():
         q = supabase.table('rides').select('*').eq('driver_id', driver_id)
         if statuses:
-            # PostgREST doesn't support $in directly; build OR filter via or_()
-            # supabase-py allows filter string in .or_()
             status_filters = ','.join([f"status.eq.{s}" for s in statuses])
             q = q.or_(status_filters)
         q = q.order('created_at', desc=True).limit(limit)
@@ -184,8 +188,13 @@ async def update_driver_location(driver_id: str, lat: float, lng: float):
         return None
 
     def _update():
-        res = supabase.table('drivers').update({'lat': lat, 'lng': lng}).eq('id', driver_id).execute()
-        return _single_row_from_res(res)
+        # Use RPC to update location geography column
+        res = supabase.rpc('update_driver_location', {
+            'driver_id': driver_id,
+            'lat': lat,
+            'lng': lng
+        }).execute()
+        return True # RPC returns void
 
     return await asyncio.to_thread(_update)
 
@@ -195,7 +204,6 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
     if not filters:
         return q
     for k, v in filters.items():
-        # support simple equality, list 'in' and boolean
         if isinstance(v, dict):
             if '$in' in v and isinstance(v['$in'], (list, tuple)):
                 q = q.in_(k, list(v['$in']))
@@ -204,7 +212,6 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
             elif '$lt' in v:
                 q = q.lt(k, v['$lt'])
             else:
-                # unsupported operator; skip
                 continue
         else:
             q = q.eq(k, v)
@@ -219,14 +226,11 @@ async def count_documents(table: str, filters: Optional[Dict[str, Any]] = None) 
         q = supabase.table(table).select('id', count='exact')
         q = _apply_filters(q, filters)
         res = q.execute()
-        # APIResponse.data may be list
         data = getattr(res, 'data', None) or (res.get('data') if isinstance(res, dict) else None)
         if not data:
             return 0
-        # PostgREST returns list of rows; count is in res.count if available
         if hasattr(res, 'count') and res.count is not None:
             return int(res.count)
-        # Fallback: return length of data
         return len(data)
 
     return await asyncio.to_thread(_fn)
@@ -246,11 +250,3 @@ async def get_rows(table: str, filters: Optional[Dict[str, Any]] = None, order: 
         return _rows_from_res(q.execute())
 
     return await asyncio.to_thread(_fn)
-
-
-async def get_all_drivers(limit: int = 1000):
-    return await get_rows('drivers', None, order='created_at', desc=True, limit=limit)
-
-
-async def get_all_rides(limit: int = 10000):
-    return await get_rows('rides', None, order='created_at', desc=True, limit=limit)

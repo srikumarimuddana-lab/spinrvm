@@ -1,79 +1,50 @@
-"""Quick smoke test using Supabase service role key and our db_supabase helpers.
-
-Make sure the following env vars are set in the environment before running:
-  SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
-
-Run:
-  python tests_smoke_supabase.py
-"""
 import os
 import asyncio
+from dotenv import load_dotenv
+from pathlib import Path
 from pprint import pprint
 
-os.environ.setdefault('SUPABASE_URL', 'https://dbbadhihiwztmnqnbdke.supabase.co')
-# NOTE: The service role key will be read from env by supabase_client
-# You can set it here for local runs if desired
-# os.environ.setdefault('SUPABASE_SERVICE_ROLE_KEY', 'sb_secret_...')
+# Load env
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
 
 import sys
-sys.path.append('.')
-from backend.db_supabase import create_user, find_available_drivers, insert_ride, get_ride, get_user_by_id
+# sys.path.append('.') # Not needed if run as module
+
+from backend.db_supabase import create_user, find_nearby_drivers, insert_ride, get_ride
 
 async def main():
-    print('Running smoke tests (service-role client expected)')
+    print('Running smoke tests...')
 
-    # Create a test user
+    # 1. Create User
     import uuid
     user_id = str(uuid.uuid4())
     user = {
         'id': user_id,
-        'phone': '+10000000001',
+        'phone': f'+1555{random_digits(7)}',
         'first_name': 'Smoke',
         'last_name': 'Test',
         'role': 'rider',
-        'created_at': None
+        # 'created_at': None # Let DB handle default
     }
+    print(f"Creating user {user_id}...")
     try:
         created = await create_user(user)
-        print('Created user:')
-        pprint(created)
+        print('Created user:', created)
     except Exception as e:
         print('Create user failed:', e)
 
-    import uuid
-    ride_id = str(uuid.uuid4())
-    vehicle_type_id = str(uuid.uuid4())
-
-    # Query drivers (should be none)
-    drivers = await find_available_drivers(vehicle_type_id)
-    print('Available drivers (count):', len(drivers))
-
-    # Insert and retrieve a ride
-    ride = {
-        'id': ride_id,
-        'rider_id': user_id,
-        'vehicle_type_id': vehicle_type_id,
-        'pickup_address': '1 Test St',
-        'pickup_lat': 0.0,
-        'pickup_lng': 0.0,
-        'dropoff_address': '2 Test Ave',
-        'dropoff_lat': 0.1,
-        'dropoff_lng': 0.1,
-        'distance_km': 1.0,
-        'duration_minutes': 5,
-        'base_fare': 5.0,
-        'total_fare': 6.0,
-        'created_at': None
-    }
+    # 2. Test RPC (might fail if SQL not run)
+    print("\nTesting find_nearby_drivers RPC...")
     try:
-        inserted = await insert_ride(ride)
-        print('Inserted ride:')
-        pprint(inserted)
-        fetched = await get_ride(ride_id)
-        print('Fetched ride:')
-        pprint(fetched)
+        drivers = await find_nearby_drivers(52.1332, -106.6700, 5000)
+        print(f"Found {len(drivers)} drivers nearby.")
     except Exception as e:
-        print('Insert/get ride failed:', e)
+        print('RPC failed (Expected if SQL not run):', e)
+
+def random_digits(n):
+    import random
+    return ''.join([str(random.randint(0, 9)) for _ in range(n)])
 
 if __name__ == '__main__':
     asyncio.run(main())

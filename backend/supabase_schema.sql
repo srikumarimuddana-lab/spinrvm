@@ -1,94 +1,93 @@
--- Supabase/Postgres schema for Spinr (minimal)
+-- Supabase/Postgres schema for Spinr (Modernized & PostGIS)
 
+-- Enable Extensions
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "postgis";
 
 -- Users
 CREATE TABLE IF NOT EXISTS users (
-  id uuid PRIMARY KEY,
-  original_mongo_id text,
-  phone text,
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  phone text UNIQUE,
   first_name text,
   last_name text,
   email text,
   city text,
-  role text,
+  role text DEFAULT 'rider',
   profile_complete boolean DEFAULT false,
-  created_at timestamptz,
-  updated_at timestamptz
-);
-
--- Drivers
-CREATE TABLE IF NOT EXISTS drivers (
-  id uuid PRIMARY KEY,
-  original_mongo_id text,
-  name text,
-  phone text,
-  photo_url text,
-  vehicle_type_id uuid,
-  vehicle_make text,
-  vehicle_model text,
-  vehicle_color text,
-  license_plate text,
-  rating numeric,
-  total_rides integer,
-  lat double precision,
-  lng double precision,
-  is_online boolean,
-  is_available boolean,
-  created_at timestamptz
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
 );
 
 -- Vehicle types
 CREATE TABLE IF NOT EXISTS vehicle_types (
-  id uuid PRIMARY KEY,
-  original_mongo_id text,
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text,
   description text,
   icon text,
   capacity integer,
-  is_active boolean,
-  created_at timestamptz
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
 );
 
--- Service areas (store polygon as json)
+-- Drivers
+CREATE TABLE IF NOT EXISTS drivers (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text,
+  phone text UNIQUE,
+  photo_url text,
+  vehicle_type_id uuid REFERENCES vehicle_types(id),
+  vehicle_make text,
+  vehicle_model text,
+  vehicle_color text,
+  license_plate text,
+  rating numeric DEFAULT 5.0,
+  total_rides integer DEFAULT 0,
+  -- PostGIS location column
+  location geography(POINT, 4326),
+  is_online boolean DEFAULT false,
+  is_available boolean DEFAULT true,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
+);
+
+-- Create index for geospatial queries
+CREATE INDEX IF NOT EXISTS drivers_location_idx ON drivers USING GIST (location);
+
+-- Service areas
 CREATE TABLE IF NOT EXISTS service_areas (
-  id uuid PRIMARY KEY,
-  original_mongo_id text,
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   name text,
   city text,
-  polygon jsonb,
-  is_active boolean,
-  created_at timestamptz
+  -- Polygon stored as geography
+  area geography(POLYGON, 4326),
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
 );
 
 -- Fare configs
 CREATE TABLE IF NOT EXISTS fare_configs (
-  id uuid PRIMARY KEY,
-  original_mongo_id text,
-  service_area_id uuid,
-  vehicle_type_id uuid,
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  service_area_id uuid REFERENCES service_areas(id),
+  vehicle_type_id uuid REFERENCES vehicle_types(id),
   base_fare numeric,
   per_km_rate numeric,
   per_minute_rate numeric,
   minimum_fare numeric,
   booking_fee numeric,
-  is_active boolean,
-  created_at timestamptz
+  is_active boolean DEFAULT true,
+  created_at timestamptz DEFAULT now()
 );
 
--- Rides (simplified)
+-- Rides
 CREATE TABLE IF NOT EXISTS rides (
-  id uuid PRIMARY KEY,
-  original_mongo_id text,
-  rider_id uuid,
-  driver_id uuid,
-  vehicle_type_id uuid,
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  rider_id uuid REFERENCES users(id),
+  driver_id uuid REFERENCES drivers(id),
+  vehicle_type_id uuid REFERENCES vehicle_types(id),
   pickup_address text,
-  pickup_lat double precision,
-  pickup_lng double precision,
+  pickup_location geography(POINT, 4326),
   dropoff_address text,
-  dropoff_lat double precision,
-  dropoff_lng double precision,
+  dropoff_location geography(POINT, 4326),
   distance_km numeric,
   duration_minutes integer,
   base_fare numeric,
@@ -96,56 +95,120 @@ CREATE TABLE IF NOT EXISTS rides (
   time_fare numeric,
   booking_fee numeric,
   total_fare numeric,
-  tip_amount numeric,
-  payment_method text,
+  tip_amount numeric DEFAULT 0,
+  payment_method text DEFAULT 'card',
   payment_intent_id text,
-  payment_status text,
-  status text,
+  payment_status text DEFAULT 'pending',
+  status text DEFAULT 'searching', -- searching, driver_assigned, driver_arrived, in_progress, completed, cancelled
   pickup_otp text,
-  ride_requested_at timestamptz,
+
+  -- Timeline
+  ride_requested_at timestamptz DEFAULT now(),
   driver_notified_at timestamptz,
   driver_accepted_at timestamptz,
   driver_arrived_at timestamptz,
   ride_started_at timestamptz,
   ride_completed_at timestamptz,
   cancelled_at timestamptz,
-  driver_earnings numeric,
-  admin_earnings numeric,
-  cancellation_fee_driver numeric,
-  cancellation_fee_admin numeric,
+
+  -- Earnings
+  driver_earnings numeric DEFAULT 0,
+  admin_earnings numeric DEFAULT 0,
+  cancellation_fee_driver numeric DEFAULT 0,
+  cancellation_fee_admin numeric DEFAULT 0,
+
+  -- Rating
   rider_rating integer,
   rider_comment text,
-  created_at timestamptz,
-  updated_at timestamptz
+
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now()
 );
 
 -- Saved addresses
 CREATE TABLE IF NOT EXISTS saved_addresses (
-  id uuid PRIMARY KEY,
-  original_mongo_id text,
-  user_id uuid,
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid REFERENCES users(id),
   name text,
   address text,
-  lat double precision,
-  lng double precision,
-  icon text,
-  created_at timestamptz
+  location geography(POINT, 4326),
+  icon text DEFAULT 'location',
+  created_at timestamptz DEFAULT now()
 );
 
--- OTP records (for migration only, consider reworking auth to Firebase)
-CREATE TABLE IF NOT EXISTS otp_records (
-  id uuid PRIMARY KEY,
-  original_mongo_id text,
-  phone text,
-  code text,
-  expires_at timestamptz,
-  verified boolean,
-  created_at timestamptz
-);
-
--- Settings
+-- Settings (Singleton)
 CREATE TABLE IF NOT EXISTS settings (
   id text PRIMARY KEY,
   data jsonb,
-  updated_at timestamptz
+  updated_at timestamptz DEFAULT now()
 );
+
+-- OTP records (Consider replacing with Supabase Auth or Firebase)
+CREATE TABLE IF NOT EXISTS otp_records (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  phone text,
+  code text,
+  expires_at timestamptz,
+  verified boolean DEFAULT false,
+  created_at timestamptz DEFAULT now()
+);
+
+-- RPC Functions for PostGIS
+
+-- Find nearby drivers
+CREATE OR REPLACE FUNCTION find_nearby_drivers(
+  lat double precision,
+  lng double precision,
+  radius_meters double precision
+)
+RETURNS TABLE (
+  id uuid,
+  name text,
+  vehicle_type_id uuid,
+  lat double precision,
+  lng double precision,
+  distance_meters double precision
+)
+LANGUAGE sql
+AS $$
+  SELECT
+    id,
+    name,
+    vehicle_type_id,
+    ST_Y(location::geometry) as lat,
+    ST_X(location::geometry) as lng,
+    ST_Distance(location, ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography) as distance_meters
+  FROM drivers
+  WHERE
+    ST_DWithin(location, ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography, radius_meters)
+    AND is_online = true
+    AND is_available = true
+  ORDER BY
+    location <-> ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography;
+$$;
+
+-- Update driver location
+CREATE OR REPLACE FUNCTION update_driver_location(
+  driver_id uuid,
+  lat double precision,
+  lng double precision
+)
+RETURNS void
+LANGUAGE sql
+AS $$
+  UPDATE drivers
+  SET
+    location = ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography,
+    updated_at = now()
+  WHERE id = driver_id;
+$$;
+
+-- RPC: Get service area for point
+CREATE OR REPLACE FUNCTION get_service_area_for_point(lat double precision, lng double precision)
+RETURNS SETOF service_areas
+LANGUAGE sql
+AS $$
+  SELECT * FROM service_areas
+  WHERE ST_Intersects(area, ST_SetSRID(ST_MakePoint(lng, lat), 4326)::geography)
+  LIMIT 1;
+$$;

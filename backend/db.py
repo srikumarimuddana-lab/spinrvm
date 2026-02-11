@@ -16,7 +16,11 @@ class Cursor:
             self.sort_field = _sort.get('field')
             self.sort_desc = _sort.get('desc', False)
 
-    async def sort(self, field: str, order: int):
+        # Internal state for async iteration
+        self._results = None
+        self._iterator = None
+
+    def sort(self, field: str, order: int):
         self.sort_field = field
         self.sort_desc = (order == -1)
         return self
@@ -42,12 +46,26 @@ class Cursor:
         res = q.execute()
         return res.data or []
 
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._results is None:
+            # When iterating, fetch a batch (e.g. 1000)
+            self._results = await self.to_list(limit=1000)
+            self._iterator = iter(self._results)
+
+        try:
+            return next(self._iterator)
+        except StopIteration:
+            raise StopAsyncIteration
+
 
 class Collection:
     def __init__(self, name: str):
         self.name = name
 
-    async def find(self, _filter: Optional[Dict] = None):
+    def find(self, _filter: Optional[Dict] = None):
         return Cursor(self.name, _filter)
 
     async def find_one(self, _filter: Optional[Dict] = None) -> Optional[Dict[str, Any]]:

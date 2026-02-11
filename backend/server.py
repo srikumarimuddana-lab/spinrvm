@@ -4,8 +4,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-from bson import ObjectId
 import os
 import logging
 from pathlib import Path
@@ -33,10 +31,8 @@ from slowapi.errors import RateLimitExceeded
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# Database connection
+from .db import db
 
 # JWT Secret
 JWT_SECRET = os.environ.get('JWT_SECRET', 'spinr-secret-key-change-in-production')
@@ -2287,4 +2283,4 @@ app.add_middleware(
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    client.close()
+    pass

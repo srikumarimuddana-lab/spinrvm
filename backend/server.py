@@ -20,6 +20,16 @@ import math
 import json
 import asyncio
 
+# Firebase admin for auth & messaging
+import firebase_admin
+from firebase_admin import credentials as firebase_credentials
+from firebase_admin import auth as firebase_auth
+
+# Rate limiting
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -33,11 +43,36 @@ JWT_SECRET = os.environ.get('JWT_SECRET', 'spinr-secret-key-change-in-production
 JWT_ALGORITHM = 'HS256'
 OTP_EXPIRY_MINUTES = 5
 
+# Firebase initialization (expects JSON service account in env var `FIREBASE_SERVICE_ACCOUNT_JSON`)
+FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON')
+if FIREBASE_SERVICE_ACCOUNT_JSON:
+    try:
+        sa_info = json.loads(FIREBASE_SERVICE_ACCOUNT_JSON)
+        cred = firebase_credentials.Certificate(sa_info)
+        try:
+            firebase_admin.initialize_app(cred)
+        except ValueError:
+            # already initialized
+            pass
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Failed to initialize Firebase Admin from JSON: {e}")
+else:
+    # Attempt default initialization (works if GOOGLE_APPLICATION_CREDENTIALS is set)
+    try:
+        firebase_admin.initialize_app()
+    except Exception:
+        pass
+
 # Security
 security = HTTPBearer(auto_error=False)
 
 # Create the main app
 app = FastAPI(title="Spinr API", version="1.0.0")
+
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Create routers
 api_router = APIRouter(prefix="/api")
@@ -279,10 +314,49 @@ def verify_jwt_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail='Invalid token')
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    """Resolve the current user using Firebase ID token (preferred) or fallback to legacy JWT."""
     if not credentials:
         raise HTTPException(status_code=401, detail='No authorization token provided')
     token = credentials.credentials
-    payload = verify_jwt_token(token)
+
+    # First, try Firebase ID token
+    try:
+        try:
+            payload = firebase_auth.verify_id_token(token)
+        except Exception:
+            payload = None
+
+        if payload:
+            uid = payload.get('uid') or payload.get('user_id')
+            # Try to find user by Firebase UID
+            user = await db.users.find_one({'id': uid})
+            if not user:
+                # Fallback: try to match by phone number
+                phone = payload.get('phone_number')
+                if phone:
+                    user = await db.users.find_one({'phone': phone})
+                # If still not found, create a new user record tied to Firebase UID
+                if not user:
+                    new_user = {
+                        'id': uid,
+                        'phone': phone or '',
+                        'role': 'rider',
+                        'created_at': datetime.utcnow(),
+                        'profile_complete': False
+                    }
+                    await db.users.insert_one(new_user)
+                    user = new_user
+            return user
+    except HTTPException:
+        # fall through to try legacy JWT
+        pass
+
+    # Fallback: existing JWT behavior
+    try:
+        payload = verify_jwt_token(token)
+    except Exception:
+        raise HTTPException(status_code=401, detail='Invalid token')
+
     user = await db.users.find_one({'id': payload['user_id']})
     if not user:
         raise HTTPException(status_code=401, detail='User not found')
@@ -312,24 +386,73 @@ def point_in_polygon(lat: float, lng: float, polygon: List[Dict[str, float]]) ->
 
 @app.websocket("/ws/{client_type}/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: str):
-    await manager.connect(websocket, f"{client_type}_{client_id}")
+    """Require clients to authenticate via a first 'auth' message that contains a Firebase ID token or legacy JWT.
+
+    After successful verification we register the connection as '{client_type}_{user_id}' and proceed to handle messages.
+    """
+    await websocket.accept()
+    authenticated = False
+    user = None
+    connection_key = None
+
     try:
+        # Require the first message to be an auth message containing a token
+        auth_msg = await websocket.receive_json()
+        if not auth_msg or auth_msg.get('type') != 'auth' or not auth_msg.get('token'):
+            await websocket.send_json({'type': 'error', 'message': 'authentication_required'})
+            await websocket.close()
+            return
+
+        token = auth_msg.get('token')
+        # Try Firebase token first
+        try:
+            payload = firebase_auth.verify_id_token(token)
+            uid = payload.get('uid') or payload.get('user_id')
+            user = await db.users.find_one({'id': uid})
+            if not user:
+                phone = payload.get('phone_number')
+                if phone:
+                    user = await db.users.find_one({'phone': phone})
+                if not user:
+                    new_user = {
+                        'id': uid,
+                        'phone': phone or '',
+                        'role': 'rider',
+                        'created_at': datetime.utcnow(),
+                        'profile_complete': False
+                    }
+                    await db.users.insert_one(new_user)
+                    user = new_user
+        except Exception:
+            # Fallback to legacy JWT
+            try:
+                payload = verify_jwt_token(token)
+                user = await db.users.find_one({'id': payload['user_id']})
+            except Exception:
+                user = None
+
+        if not user:
+            await websocket.send_json({'type': 'error', 'message': 'invalid_token_or_user_not_found'})
+            await websocket.close()
+            return
+
+        # Register the connection with a server-controlled key to prevent impersonation
+        connection_key = f"{client_type}_{user['id']}"
+        await manager.connect(websocket, connection_key)
+        authenticated = True
+
+        # Main message loop
         while True:
             data = await websocket.receive_json()
-            
+
             if data.get('type') == 'driver_location':
-                # Update driver location
+                # Only allow drivers to report their own location
                 driver_id = data.get('driver_id')
                 lat = data.get('lat')
                 lng = data.get('lng')
-                if driver_id and lat and lng:
+                if driver_id and lat and lng and client_type == 'driver' and driver_id == user['id']:
                     manager.update_driver_location(driver_id, lat, lng)
-                    # Update in database
-                    await db.drivers.update_one(
-                        {'id': driver_id},
-                        {'$set': {'lat': lat, 'lng': lng}}
-                    )
-                    # Notify rider if there's an active ride
+                    await db.drivers.update_one({'id': driver_id}, {'$set': {'lat': lat, 'lng': lng}})
                     rides = await db.rides.find({
                         'driver_id': driver_id,
                         'status': {'$in': ['driver_assigned', 'driver_arrived', 'in_progress']}
@@ -344,7 +467,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                             },
                             f"rider_{ride['rider_id']}"
                         )
-            
+
             elif data.get('type') == 'ride_status_update':
                 ride_id = data.get('ride_id')
                 status = data.get('status')
@@ -359,7 +482,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                             },
                             f"rider_{ride['rider_id']}"
                         )
-            
+
             elif data.get('type') == 'get_nearby_drivers':
                 lat = data.get('lat')
                 lng = data.get('lng')
@@ -369,7 +492,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                         'is_online': True,
                         'is_available': True
                     }).to_list(100)
-                    
+
                     nearby = []
                     for driver in drivers:
                         dist = calculate_distance(lat, lng, driver['lat'], driver['lng'])
@@ -380,18 +503,25 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                                 'lng': driver['lng'],
                                 'vehicle_type_id': driver['vehicle_type_id']
                             })
-                    
-                    await websocket.send_json({
-                        'type': 'nearby_drivers',
-                        'drivers': nearby
-                    })
-                    
+
+                    await websocket.send_json({'type': 'nearby_drivers', 'drivers': nearby})
+
     except WebSocketDisconnect:
-        manager.disconnect(f"{client_type}_{client_id}")
+        if connection_key:
+            manager.disconnect(connection_key)
+    except Exception as e:
+        logger.exception(f"WebSocket error: {e}")
+        if connection_key:
+            manager.disconnect(connection_key)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 # ============ Auth Routes ============
 
 @api_router.post("/auth/send-otp")
+@limiter.limit("5/minute")
 async def send_otp(request: SendOTPRequest):
     phone = request.phone.strip()
     if len(phone) < 10:
@@ -416,6 +546,7 @@ async def send_otp(request: SendOTPRequest):
     }
 
 @api_router.post("/auth/verify-otp", response_model=AuthResponse)
+@limiter.limit("10/minute")
 async def verify_otp(request: VerifyOTPRequest):
     phone = request.phone.strip()
     code = request.code.strip()
@@ -824,6 +955,26 @@ async def match_driver_to_ride(ride_id: str):
             selected_driver = drivers_with_distance[0][0]
     
     if selected_driver:
+        # Attempt to atomically claim the driver (only if still available)
+        claim_result = await db.drivers.update_one(
+            {'id': selected_driver['id'], 'is_available': True},
+            {'$set': {'is_available': False}}
+        )
+
+        if claim_result.modified_count == 0:
+            # Driver was taken by another process; try to find next candidate
+            claimed = False
+            for d, _ in drivers_with_distance:
+                res = await db.drivers.update_one({'id': d['id'], 'is_available': True}, {'$set': {'is_available': False}})
+                if res.modified_count > 0:
+                    selected_driver = d
+                    claimed = True
+                    break
+            if not claimed:
+                # No drivers could be claimed
+                return
+
+        # Update ride with selected driver
         await db.rides.update_one(
             {'id': ride_id},
             {'$set': {
@@ -834,11 +985,7 @@ async def match_driver_to_ride(ride_id: str):
                 'updated_at': datetime.utcnow()
             }}
         )
-        await db.drivers.update_one(
-            {'id': selected_driver['id']},
-            {'$set': {'is_available': False}}
-        )
-        
+
         # Notify rider via WebSocket
         await manager.send_personal_message(
             {
@@ -966,14 +1113,19 @@ async def simulate_driver_arrival(ride_id: str, current_user: dict = Depends(get
 
 @api_router.post("/rides/{ride_id}/start")
 async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
-    """Start the ride after OTP verification"""
-    ride = await db.rides.find_one({'id': ride_id, 'rider_id': current_user['id']})
+    """Start the ride. Driver should start the ride or the rider can start after OTP verification (not implemented here)."""
+    # Allow driver to start, or the owning rider (depending on app flow)
+    if current_user.get('role') == 'driver':
+        ride = await db.rides.find_one({'id': ride_id, 'driver_id': current_user['id']})
+    else:
+        ride = await db.rides.find_one({'id': ride_id, 'rider_id': current_user['id']})
+
     if not ride:
         raise HTTPException(status_code=404, detail='Ride not found')
-    
+
     if ride['status'] != 'driver_arrived':
         raise HTTPException(status_code=400, detail='Driver has not arrived yet')
-    
+
     await db.rides.update_one(
         {'id': ride_id},
         {'$set': {
@@ -982,19 +1134,25 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
             'updated_at': datetime.utcnow()
         }}
     )
-    
+
     return {'success': True}
 
 @api_router.post("/rides/{ride_id}/complete")
 async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
-    """Complete the ride (normally called by driver, but for demo rider can trigger)"""
-    ride = await db.rides.find_one({'id': ride_id, 'rider_id': current_user['id']})
+    """Complete the ride — driver should complete the ride. Rider completion is not allowed in production."""
+    # If driver, confirm driver is assigned to this ride. If rider, reject by default for security.
+    if current_user.get('role') == 'driver':
+        ride = await db.rides.find_one({'id': ride_id, 'driver_id': current_user['id']})
+    else:
+        # Disallow riders from completing rides in production for security; keep behavior restrictive
+        raise HTTPException(status_code=403, detail='Only driver can complete the ride')
+
     if not ride:
         raise HTTPException(status_code=404, detail='Ride not found')
-    
+
     if ride['status'] != 'in_progress':
         raise HTTPException(status_code=400, detail='Ride is not in progress')
-    
+
     # Update ride as completed
     await db.rides.update_one(
         {'id': ride_id},
@@ -1004,7 +1162,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             'updated_at': datetime.utcnow()
         }}
     )
-    
+
     # Make driver available again
     if ride.get('driver_id'):
         await db.drivers.update_one(
@@ -1014,7 +1172,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 '$inc': {'total_rides': 1}
             }
         )
-    
+
     updated_ride = await db.rides.find_one({'id': ride_id})
     return serialize_doc(updated_ride)
 

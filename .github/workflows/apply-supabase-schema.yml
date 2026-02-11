@@ -1,0 +1,24 @@
+name: Apply Supabase Schema
+
+on:
+  workflow_dispatch:
+
+jobs:
+  apply-schema:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install psql client
+        run: |
+          sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Apply schema
+        env:
+          PG_CONNECTION_STRING: ${{ secrets.PG_CONNECTION_STRING }}
+        run: |
+          bash scripts/apply_supabase_schema.sh

@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, vscode_20260211 ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-backend:
+    runs-on: ubuntu-latest
+    # No Mongo service: CI uses Supabase or mocks; remove Mongo dependency
+    strategy:
+      matrix:
+        python-version: [3.12]
+    env:
+      # Provide Supabase service keys as repo secrets if needed
+      # SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY can be set in repository secrets
+      # Optionally set FIREBASE_SERVICE_ACCOUNT_JSON in repo secrets if you want Firebase tests.
+      FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+      # Optional: annotate only tests matching pattern (pytest -k). Empty = annotate all tests.
+      ANNOTATE_TESTS_PATTERN: ''
+      # Optional: fail the job if failures > FAIL_THRESHOLD. -1 means disabled.
+      FAIL_THRESHOLD: '-1'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/backend/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Install test tools
+        run: pip install pytest pytest-asyncio
+
+      - name: Run backend tests (full)
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          pytest -q --junitxml=junit.xml
+
+      - name: Run filtered tests for annotation (optional)
+        if: ${{ env.ANNOTATE_TESTS_PATTERN != '' }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          echo "Running tests matching pattern: $ANNOTATE_TESTS_PATTERN"
+          pytest -q -k "$ANNOTATE_TESTS_PATTERN" --junitxml=annotate_junit.xml || true
+
+      - name: Enforce test failure threshold
+        env:
+          FAIL_THRESHOLD: ${{ env.FAIL_THRESHOLD }}
+        run: |
+          python - <<'PY'
+import os, sys
+from xml.etree import ElementTree as ET
+p = 'junit.xml'
+if not os.path.exists(p):
+    print('No junit.xml produced')
+    sys.exit(0)
+try:
+    tree = ET.parse(p)
+    root = tree.getroot()
+    failures = 0
+    # Sum failures and errors from testsuite attributes
+    for ts in root.findall('.//testsuite'):
+        failures += int(ts.attrib.get('failures', '0')) + int(ts.attrib.get('errors', '0'))
+    # fallback: count failure/error elements
+    if failures == 0:
+        failures = len(root.findall('.//failure')) + len(root.findall('.//error'))
+    threshold = int(os.environ.get('FAIL_THRESHOLD', '-1'))
+    print(f"Detected failures+errors: {failures}; threshold={threshold}")
+    if threshold >= 0 and failures > threshold:
+        print(f"Failing job because failures ({failures}) > threshold ({threshold})")
+        sys.exit(2)
+    sys.exit(0)
+except Exception as e:
+    print('Error while parsing junit.xml:', e)
+    sys.exit(0)
+PY
+
+      - name: Upload test results (if any)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: |
+            tests
+            junit.xml
+
+      - name: Annotate pull request with filtered test results
+        if: ${{ always() && github.event_name == 'pull_request' && env.ANNOTATE_TESTS_PATTERN != '' }}
+        uses: dorny/test-reporter@v1
+        with:
+          name: pytest-filtered
+          path: annotate_junit.xml
+          reporter: junit
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Annotate pull request with all test results
+        if: ${{ always() && github.event_name == 'pull_request' && env.ANNOTATE_TESTS_PATTERN == '' }}
+        uses: dorny/test-reporter@v1
+        with:
+          name: pytest
+          path: junit.xml
+          reporter: junit
+          github_token: ${{ secrets.GITHUB_TOKEN }}

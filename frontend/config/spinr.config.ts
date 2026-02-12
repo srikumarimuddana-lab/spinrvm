@@ -1,3 +1,4 @@
+import Constants from 'expo-constants';
 /**
  * Spinr Configuration File
  * 
@@ -6,6 +7,7 @@
  */
 
 export const SpinrConfig = {
+  backendUrl: Constants.expoConfig?.extra?.backendUrl || process.env.EXPO_PUBLIC_BACKEND_URL || '',
   // App Info
   app: {
     name: 'Spinr',

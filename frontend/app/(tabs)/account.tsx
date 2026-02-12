@@ -15,7 +15,7 @@ import SpinrConfig from '../../config/spinr.config';
 
 export default function AccountScreen() {
   const router = useRouter();
-  const { user, logout } = useAuthStore();
+  const { user, logout, toggleDriverMode } = useAuthStore();
 
   const handleLogout = () => {
     Alert.alert(
@@ -33,6 +33,16 @@ export default function AccountScreen() {
         },
       ]
     );
+  };
+
+
+  const handleDriverSwitch = () => {
+    if (user?.is_driver || user?.role === 'driver') {
+        toggleDriverMode();
+        router.replace('/(driver)');
+    } else {
+        router.push('/become-driver');
+    }
   };
 
   const formatPhone = (phone: string) => {
@@ -121,6 +131,15 @@ export default function AccountScreen() {
             </TouchableOpacity>
           ))}
         </View>
+
+
+        {/* Driver Switch */}
+        <TouchableOpacity style={styles.driverButton} onPress={handleDriverSwitch}>
+          <Ionicons name="car-sport" size={22} color="#FFFFFF" />
+          <Text style={styles.driverButtonText}>
+            {user?.is_driver || user?.role === 'driver' ? 'Switch to Driver Mode' : 'Drive with Spinr'}
+          </Text>
+        </TouchableOpacity>
 
         {/* Logout Button */}
         <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
@@ -249,6 +268,23 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: 'PlusJakartaSans_400Regular',
     color: '#666',
+  },
+
+  driverButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: SpinrConfig.theme.colors.primary,
+    marginHorizontal: 24,
+    marginTop: 24,
+    paddingVertical: 16,
+    borderRadius: 28,
+    gap: 8,
+  },
+  driverButtonText: {
+    fontSize: 16,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#FFFFFF',
   },
   logoutButton: {
     flexDirection: 'row',

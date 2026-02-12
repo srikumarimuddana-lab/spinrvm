@@ -1,12 +1,9 @@
 import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
-import axios from 'axios';
-import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-
-const API_URL = Constants.expoConfig?.extra?.backendUrl || process.env.EXPO_PUBLIC_BACKEND_URL || '';
-
-console.log('API_URL configured:', API_URL);
+import { auth } from '../config/firebase';
+import { PhoneAuthProvider, signInWithCredential, signOut, User as FirebaseUser } from 'firebase/auth';
+import api from '../api/client';
 
 // Platform-safe secure storage
 const storage = {
@@ -45,7 +42,6 @@ const storage = {
   },
 };
 
-
 export interface Driver {
   id: string;
   user_id: string;
@@ -62,7 +58,7 @@ export interface Driver {
   is_available: boolean;
 }
 
-interface User {
+export interface User {
   id: string;
   phone: string;
   first_name?: string;
@@ -77,34 +73,24 @@ interface User {
 
 interface AuthState {
   user: User | null;
+  driver: Driver | null;
+  isDriverMode: boolean;
   token: string | null;
   isLoading: boolean;
   isInitialized: boolean;
   error: string | null;
-  driver: Driver | null;
-  isDriverMode: boolean;
 
+  // Actions
+  initialize: () => Promise<void>;
+  verifyOTP: (verificationId: string, code: string) => Promise<void>;
+  createProfile: (data: { first_name: string; last_name: string; email: string; city: string }) => Promise<void>;
   fetchDriverProfile: () => Promise<void>;
   registerDriver: (data: any) => Promise<void>;
   toggleDriverMode: () => void;
   updateDriverStatus: (isOnline: boolean) => Promise<void>;
-
-  
-  // Actions
-  initialize: () => Promise<void>;
-  sendOTP: (phone: string) => Promise<{ success: boolean; dev_otp?: string }>;
-  verifyOTP: (phone: string, code: string) => Promise<{ is_new_user: boolean }>;
-  createProfile: (data: { first_name: string; last_name: string; email: string; city: string }) => Promise<void>;
   logout: () => Promise<void>;
   clearError: () => void;
 }
-
-const api = axios.create({
-  baseURL: `${API_URL}/api`,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
@@ -115,6 +101,89 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isInitialized: false,
   error: null,
 
+  initialize: async () => {
+    console.log('Auth initializing...');
+    set({ isLoading: true });
+
+    // Listen for Firebase Auth changes
+    auth.onAuthStateChanged(async (firebaseUser) => {
+      if (firebaseUser) {
+        try {
+          const token = await firebaseUser.getIdToken();
+          console.log('Got Firebase token');
+
+          // No need to set headers manually as api/client.ts interceptor handles it
+
+          // Sync with backend
+          const response = await api.get('/auth/me');
+          const userData = response.data;
+
+          let driverData = null;
+          if (userData.is_driver || userData.role === 'driver') {
+            try {
+              const driverRes = await api.get('/drivers/me');
+              driverData = driverRes.data;
+            } catch (e) {
+              console.log('Failed to fetch driver data on init');
+            }
+          }
+
+          set({
+            user: userData,
+            driver: driverData,
+            token,
+            isInitialized: true,
+            isLoading: false
+          });
+
+          // Persist token just in case
+          await storage.setItem('auth_token', token);
+
+        } catch (error: any) {
+          console.log('Failed to sync user with backend:', error);
+          set({ isLoading: false, isInitialized: true, error: 'Failed to sync user' });
+        }
+      } else {
+        console.log('No user logged in');
+        await storage.deleteItem('auth_token');
+        set({
+          user: null,
+          driver: null,
+          token: null,
+          isInitialized: true,
+          isLoading: false
+        });
+      }
+    });
+  },
+
+  verifyOTP: async (verificationId: string, code: string) => {
+    try {
+      set({ isLoading: true, error: null });
+
+      const credential = PhoneAuthProvider.credential(verificationId, code);
+      await signInWithCredential(auth, credential);
+
+      // onAuthStateChanged will handle the rest
+    } catch (error: any) {
+      console.log('Verify OTP Error:', error);
+      const message = error.message || 'Invalid verification code';
+      set({ isLoading: false, error: message });
+      throw new Error(message);
+    }
+  },
+
+  createProfile: async (data) => {
+    try {
+      set({ isLoading: true, error: null });
+      const response = await api.post('/users/profile', data);
+      set({ user: response.data, isLoading: false });
+    } catch (error: any) {
+      const message = error.response?.data?.detail || 'Failed to create profile';
+      set({ isLoading: false, error: message });
+      throw new Error(message);
+    }
+  },
 
   fetchDriverProfile: async () => {
     try {
@@ -130,10 +199,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       set({ isLoading: true, error: null });
       const response = await api.post('/drivers/register', data);
-
       const user = get().user;
       const updatedUser = user ? { ...user, role: 'driver', is_driver: true } : user;
-
       set({
         driver: response.data,
         user: updatedUser,
@@ -173,150 +240,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  initialize: async () => {
-    try {
-      console.log('Auth initializing...');
-      set({ isLoading: true });
-      
-      // Get token from secure storage
-      const token = await storage.getItem('auth_token');
-      console.log('Token from storage:', token ? 'exists' : 'none');
-      
-      if (token) {
-        // Set token in axios headers
-        api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-        
-        try {
-          // Fetch user profile with timeout
-          const response = await Promise.race([
-            api.get('/auth/me'),
-            new Promise((_, reject) => 
-              setTimeout(() => reject(new Error('Timeout')), 5000)
-            )
-          ]) as any;
-          
-          console.log('User fetched successfully');
-
-          const userData = response.data;
-          let driverData = null;
-
-          if (userData.is_driver || userData.role === 'driver') {
-            try {
-              const driverRes = await api.get('/drivers/me');
-              driverData = driverRes.data;
-            } catch (e) {
-              console.log('Failed to fetch driver data on init');
-            }
-          }
-
-          set({ 
-            user: userData,
-            driver: driverData,
-            token,
-            isInitialized: true,
-            isLoading: false 
-          });
-
-        } catch (fetchError) {
-          console.log('Failed to fetch user, clearing token');
-          await storage.deleteItem('auth_token');
-          set({ 
-            user: null,
-  driver: null,
-  isDriverMode: false,
-            token: null, 
-            isInitialized: true, 
-            isLoading: false 
-          });
-        }
-      } else {
-        console.log('No token, setting initialized');
-        set({ isInitialized: true, isLoading: false });
-      }
-    } catch (error: any) {
-      console.log('Auth initialization error:', error.message);
-      // Token might be invalid, clear it
-      await storage.deleteItem('auth_token');
-      set({ 
-        user: null,
-  driver: null,
-  isDriverMode: false,
-        token: null, 
-        isInitialized: true, 
-        isLoading: false 
-      });
-    }
-  },
-
-  sendOTP: async (phone: string) => {
-    try {
-      set({ isLoading: true, error: null });
-      
-      const response = await api.post('/auth/send-otp', { phone });
-      
-      set({ isLoading: false });
-      return { 
-        success: response.data.success, 
-        dev_otp: response.data.dev_otp 
-      };
-    } catch (error: any) {
-      const message = error.response?.data?.detail || 'Failed to send OTP';
-      set({ isLoading: false, error: message });
-      throw new Error(message);
-    }
-  },
-
-  verifyOTP: async (phone: string, code: string) => {
-    try {
-      set({ isLoading: true, error: null });
-      
-      const response = await api.post('/auth/verify-otp', { phone, code });
-      const { token, user, is_new_user } = response.data;
-      
-      // Store token securely
-      await storage.setItem('auth_token', token);
-      
-      // Set token in axios headers
-      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      
-      set({ 
-        user, 
-        token, 
-        isLoading: false 
-      });
-      
-      return { is_new_user };
-    } catch (error: any) {
-      const message = error.response?.data?.detail || 'Invalid verification code';
-      set({ isLoading: false, error: message });
-      throw new Error(message);
-    }
-  },
-
-  createProfile: async (data) => {
-    try {
-      set({ isLoading: true, error: null });
-      
-      const response = await api.post('/users/profile', data);
-      
-      set({ 
-        user: response.data, 
-        isLoading: false 
-      });
-    } catch (error: any) {
-      const message = error.response?.data?.detail || 'Failed to create profile';
-      set({ isLoading: false, error: message });
-      throw new Error(message);
-    }
-  },
-
   logout: async () => {
     try {
-      await storage.deleteItem('auth_token');
-      delete api.defaults.headers.common['Authorization'];
-      set({ user: null,
-  driver: null,
-  isDriverMode: false, token: null });
+      await signOut(auth);
     } catch (error) {
       console.log('Logout error:', error);
     }

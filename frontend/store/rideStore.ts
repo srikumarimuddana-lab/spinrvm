@@ -1,9 +1,6 @@
 import { create } from 'zustand';
-import axios from 'axios';
-import Constants from 'expo-constants';
+import api from '../api/client';
 import { useAuthStore } from './authStore';
-
-const API_URL = Constants.expoConfig?.extra?.backendUrl || process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
 interface Location {
   address: string;
@@ -103,17 +100,6 @@ interface RideState {
   clearError: () => void;
 }
 
-const getApi = () => {
-  const token = useAuthStore.getState().token;
-  return axios.create({
-    baseURL: `${API_URL}/api`,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-  });
-};
-
 export const useRideStore = create<RideState>((set, get) => ({
   pickup: null,
   dropoff: null,
@@ -134,7 +120,6 @@ export const useRideStore = create<RideState>((set, get) => ({
 
     try {
       set({ isLoading: true, error: null });
-      const api = getApi();
       const response = await api.post('/rides/estimate', {
         pickup_lat: pickup.lat,
         pickup_lng: pickup.lng,
@@ -157,7 +142,6 @@ export const useRideStore = create<RideState>((set, get) => ({
 
     try {
       set({ isLoading: true, error: null });
-      const api = getApi();
       const response = await api.post('/rides', {
         vehicle_type_id: selectedVehicle.id,
         pickup_address: pickup.address,
@@ -179,7 +163,6 @@ export const useRideStore = create<RideState>((set, get) => ({
   fetchRide: async (rideId) => {
     try {
       set({ isLoading: true });
-      const api = getApi();
       const response = await api.get(`/rides/${rideId}`);
       set({
         currentRide: response.data.ride,
@@ -197,7 +180,6 @@ export const useRideStore = create<RideState>((set, get) => ({
 
     try {
       set({ isLoading: true });
-      const api = getApi();
       await api.post(`/rides/${currentRide.id}/cancel`);
       set({ currentRide: null, currentDriver: null, isLoading: false });
     } catch (error: any) {
@@ -210,7 +192,6 @@ export const useRideStore = create<RideState>((set, get) => ({
     if (!currentRide) return;
 
     try {
-      const api = getApi();
       const response = await api.post(`/rides/${currentRide.id}/simulate-arrival`);
       set({
         currentRide: { ...currentRide, status: 'driver_arrived', pickup_otp: response.data.pickup_otp },
@@ -225,7 +206,6 @@ export const useRideStore = create<RideState>((set, get) => ({
     if (!currentRide) return;
 
     try {
-      const api = getApi();
       await api.post(`/rides/${currentRide.id}/start`);
       set({
         currentRide: { ...currentRide, status: 'in_progress' },
@@ -240,7 +220,6 @@ export const useRideStore = create<RideState>((set, get) => ({
     if (!currentRide) return;
 
     try {
-      const api = getApi();
       const response = await api.post(`/rides/${currentRide.id}/complete`);
       set({
         currentRide: response.data,
@@ -253,7 +232,6 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   rateRide: async (rideId: string, rating: number, comment?: string, tipAmount?: number) => {
     try {
-      const api = getApi();
       await api.post(`/rides/${rideId}/rate`, {
         rating,
         comment,
@@ -267,7 +245,6 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   fetchSavedAddresses: async () => {
     try {
-      const api = getApi();
       const response = await api.get('/addresses');
       set({ savedAddresses: response.data });
     } catch (error: any) {
@@ -277,7 +254,6 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   addSavedAddress: async (address) => {
     try {
-      const api = getApi();
       const response = await api.post('/addresses', address);
       set({ savedAddresses: [...get().savedAddresses, response.data] });
     } catch (error: any) {
@@ -287,7 +263,6 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   deleteSavedAddress: async (id) => {
     try {
-      const api = getApi();
       await api.delete(`/addresses/${id}`);
       set({ savedAddresses: get().savedAddresses.filter((a) => a.id !== id) });
     } catch (error: any) {

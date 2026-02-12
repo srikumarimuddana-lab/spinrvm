@@ -27,6 +27,7 @@ def mock_db(monkeypatch):
             self.to_list = AsyncMock(return_value=[])
 
     dummy_db = types.SimpleNamespace()
+    dummy_db.otps = DummyColl()
     dummy_db.otp_records = DummyColl()
     dummy_db.users = DummyColl()
     dummy_db.drivers = DummyColl()

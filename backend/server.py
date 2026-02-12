@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
+from starlette.requests import Request
 import os
 import shutil
 import logging
@@ -422,44 +423,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     user['is_driver'] = True if driver else False
     return user
 
-# ============ Auth Routes ============
 
-@api_router.post("/auth/send-otp")
-async def send_otp(req: SendOTPRequest):
-    """Send OTP for Admin Login (Mock/Dev)."""
-    # Simple Mock Implementation
-    otp = "123456" 
-    # Log it for dev visibility
-    logger.info(f"Generated OTP for {req.phone}: {otp}")
-    
-    expiry = datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
-    await db.otps.update_one(
-        {'phone': req.phone},
-        {'$set': {'code': otp, 'expires_at': expiry, 'verified': False, 'created_at': datetime.utcnow()}},
-        upsert=True
-    )
-    
-    return {'success': True, 'dev_otp': otp} 
+# (Auth routes with rate limiting are defined below, after WebSocket routes)
 
-@api_router.post("/auth/verify-otp")
-async def verify_otp(req: VerifyOTPRequest):
-    """Verify OTP and return Admin Token."""
-    stored = await db.otps.find_one({'phone': req.phone})
-    
-    if not stored:
-         raise HTTPException(status_code=400, detail="No OTP sent for this number")
-         
-    if stored.get('code') != req.code:
-        raise HTTPException(status_code=400, detail="Invalid OTP")
-        
-    if stored.get('expires_at') and stored['expires_at'] < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="OTP expired")
-        
-    # Generate Admin JWT
-    # We use a dummy ID for admin since they might not be in users table
-    token = create_jwt_token(user_id='admin-user', phone=req.phone)
-    
-    return {'token': token}
 
 @api_router.get("/auth/me")
 async def get_me(current_user: dict = Depends(get_current_user)):
@@ -655,8 +621,8 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
 
 @api_router.post("/auth/send-otp")
 @limiter.limit("5/minute")
-async def send_otp(request: SendOTPRequest):
-    phone = request.phone.strip()
+async def send_otp(request: Request, body: SendOTPRequest):
+    phone = body.phone.strip()
     if len(phone) < 10:
         raise HTTPException(status_code=400, detail='Invalid phone number')
     
@@ -680,9 +646,9 @@ async def send_otp(request: SendOTPRequest):
 
 @api_router.post("/auth/verify-otp", response_model=AuthResponse)
 @limiter.limit("10/minute")
-async def verify_otp(request: VerifyOTPRequest):
-    phone = request.phone.strip()
-    code = request.code.strip()
+async def verify_otp(request: Request, body: VerifyOTPRequest):
+    phone = body.phone.strip()
+    code = body.code.strip()
     
     otp_record = await db.otp_records.find_one({
         'phone': phone,

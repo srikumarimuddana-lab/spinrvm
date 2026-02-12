@@ -46,7 +46,7 @@ services:
           property: url
 
   # 3. Expo Web App (Static Site)
-  - type: static
+  - type: static site
     name: spinr-web
     region: oregon
     buildCommand: |

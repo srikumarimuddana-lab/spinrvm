@@ -12,6 +12,10 @@ jobs:
   # ──────────────────────────────────────────────
   test-backend:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: write
     strategy:
       matrix:
         python-version: [3.12]

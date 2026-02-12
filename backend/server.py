@@ -422,6 +422,58 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     user['is_driver'] = True if driver else False
     return user
 
+# ============ Auth Routes ============
+
+@api_router.post("/auth/send-otp")
+async def send_otp(req: SendOTPRequest):
+    """Send OTP for Admin Login (Mock/Dev)."""
+    # Simple Mock Implementation
+    otp = "123456" 
+    # Log it for dev visibility
+    logger.info(f"Generated OTP for {req.phone}: {otp}")
+    
+    expiry = datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
+    await db.otps.update_one(
+        {'phone': req.phone},
+        {'$set': {'code': otp, 'expires_at': expiry, 'verified': False, 'created_at': datetime.utcnow()}},
+        upsert=True
+    )
+    
+    return {'success': True, 'dev_otp': otp} 
+
+@api_router.post("/auth/verify-otp")
+async def verify_otp(req: VerifyOTPRequest):
+    """Verify OTP and return Admin Token."""
+    stored = await db.otps.find_one({'phone': req.phone})
+    
+    if not stored:
+         raise HTTPException(status_code=400, detail="No OTP sent for this number")
+         
+    if stored.get('code') != req.code:
+        raise HTTPException(status_code=400, detail="Invalid OTP")
+        
+    if stored.get('expires_at') and stored['expires_at'] < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="OTP expired")
+        
+    # Generate Admin JWT
+    # We use a dummy ID for admin since they might not be in users table
+    token = create_jwt_token(user_id='admin-user', phone=req.phone)
+    
+    return {'token': token}
+
+@api_router.get("/auth/me")
+async def get_me(current_user: dict = Depends(get_current_user)):
+    """Return current user profile (synced from Firebase)."""
+    driver_profile = None
+    if current_user.get('is_driver'):
+        driver_profile = await db.drivers.find_one({'user_id': current_user['id']})
+    
+    # Return user data with role info
+    return {
+        **serialize_doc(current_user),
+        'driver_profile': serialize_doc(driver_profile) if driver_profile else None
+    }
+
 def calculate_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     R = 6371
     dlat = math.radians(lat2 - lat1)
@@ -1460,7 +1512,7 @@ async def update_driver_status(is_online: bool = Query(...), current_user: dict 
 
     await db.drivers.update_one(
         {'id': driver['id']},
-        {'': {'is_online': is_online, 'updated_at': datetime.utcnow()}}
+        {'$set': {'is_online': is_online, 'updated_at': datetime.utcnow()}}
     )
     return {'success': True, 'is_online': is_online}
 
@@ -1472,7 +1524,7 @@ async def get_pending_rides(current_user: dict = Depends(get_current_user)):
 
     rides = await db.rides.find({
         'driver_id': driver['id'],
-        'status': {'': ['driver_assigned', 'driver_arrived', 'in_progress']}
+        'status': {'$in': ['driver_assigned', 'driver_arrived', 'in_progress']}
     }).to_list(10)
     return serialize_doc(rides)
 

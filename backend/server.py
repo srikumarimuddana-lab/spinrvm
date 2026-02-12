@@ -2601,10 +2601,25 @@ app.include_router(support_router)
 app.include_router(admin_support_router)
 app.include_router(pricing_router)
 
+# Configure CORS
+origins = [
+    "http://localhost:3000",
+    "http://localhost:8081",
+    "http://localhost:8000",
+    "https://spinr-admin.vercel.app",
+    "https://spinr-admin-git-main-mkkreddys-projects.vercel.app",
+]
+
+# Allow dynamic origins from environment variable
+env_origins = os.environ.get("ALLOWED_ORIGINS")
+if env_origins:
+    origins.extend([origin.strip() for origin in env_origins.split(",")])
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
+    allow_origins=origins,
+    allow_origin_regex=r"https://.*-mkkreddys-projects\.vercel\.app",  # Allow Vercel preview deployments
     allow_methods=["*"],
     allow_headers=["*"],
 )

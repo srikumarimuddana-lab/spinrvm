@@ -61,5 +61,5 @@ services:
       - key: EXPO_PUBLIC_API_URL
         fromService:
           type: web
-          name: spinr-backend
+          name: spinr-backend1
           envVarKey: RENDER_EXTERNAL_URL

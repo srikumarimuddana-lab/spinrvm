@@ -7,20 +7,17 @@ on:
     branches: [ main ]
 
 jobs:
+  # ──────────────────────────────────────────────
+  # 1. Backend — Python tests
+  # ──────────────────────────────────────────────
   test-backend:
     runs-on: ubuntu-latest
-    # No Mongo service: CI uses Supabase or mocks; remove Mongo dependency
     strategy:
       matrix:
         python-version: [3.12]
     env:
-      # Provide Supabase service keys as repo secrets if needed
-      # SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY can be set in repository secrets
-      # Optionally set FIREBASE_SERVICE_ACCOUNT_JSON in repo secrets if you want Firebase tests.
       FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-      # Optional: annotate only tests matching pattern (pytest -k). Empty = annotate all tests.
       ANNOTATE_TESTS_PATTERN: ''
-      # Optional: fail the job if failures > FAIL_THRESHOLD. -1 means disabled.
       FAIL_THRESHOLD: '-1'
     steps:
       - name: Checkout code
@@ -66,32 +63,30 @@ jobs:
           FAIL_THRESHOLD: ${{ env.FAIL_THRESHOLD }}
         run: |
           python - <<'PY'
-import os, sys
-from xml.etree import ElementTree as ET
-p = 'junit.xml'
-if not os.path.exists(p):
-    print('No junit.xml produced')
-    sys.exit(0)
-try:
-    tree = ET.parse(p)
-    root = tree.getroot()
-    failures = 0
-    # Sum failures and errors from testsuite attributes
-    for ts in root.findall('.//testsuite'):
-        failures += int(ts.attrib.get('failures', '0')) + int(ts.attrib.get('errors', '0'))
-    # fallback: count failure/error elements
-    if failures == 0:
-        failures = len(root.findall('.//failure')) + len(root.findall('.//error'))
-    threshold = int(os.environ.get('FAIL_THRESHOLD', '-1'))
-    print(f"Detected failures+errors: {failures}; threshold={threshold}")
-    if threshold >= 0 and failures > threshold:
-        print(f"Failing job because failures ({failures}) > threshold ({threshold})")
-        sys.exit(2)
-    sys.exit(0)
-except Exception as e:
-    print('Error while parsing junit.xml:', e)
-    sys.exit(0)
-PY
+          import os, sys
+          from xml.etree import ElementTree as ET
+          p = 'junit.xml'
+          if not os.path.exists(p):
+              print('No junit.xml produced')
+              sys.exit(0)
+          try:
+              tree = ET.parse(p)
+              root = tree.getroot()
+              failures = 0
+              for ts in root.findall('.//testsuite'):
+                  failures += int(ts.attrib.get('failures', '0')) + int(ts.attrib.get('errors', '0'))
+              if failures == 0:
+                  failures = len(root.findall('.//failure')) + len(root.findall('.//error'))
+              threshold = int(os.environ.get('FAIL_THRESHOLD', '-1'))
+              print(f"Detected failures+errors: {failures}; threshold={threshold}")
+              if threshold >= 0 and failures > threshold:
+                  print(f"Failing job because failures ({failures}) > threshold ({threshold})")
+                  sys.exit(2)
+              sys.exit(0)
+          except Exception as e:
+              print('Error while parsing junit.xml:', e)
+              sys.exit(0)
+          PY
 
       - name: Upload test results (if any)
         if: always()
@@ -119,3 +114,64 @@ PY
           path: junit.xml
           reporter: junit
           github_token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ──────────────────────────────────────────────
+  # 2. Admin Dashboard — Next.js build & lint
+  # ──────────────────────────────────────────────
+  build-admin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: admin-dashboard
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: admin-dashboard/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Lint
+        run: npm run lint -- --max-warnings 0
+        continue-on-error: true
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: https://spinr-backend.onrender.com
+
+  # ──────────────────────────────────────────────
+  # 3. Frontend (Expo) — TypeScript type-check
+  # ──────────────────────────────────────────────
+  typecheck-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile || yarn install
+
+      - name: TypeScript type-check
+        run: npx tsc --noEmit
+        continue-on-error: true
+
+      - name: Lint
+        run: npx expo lint
+        continue-on-error: true

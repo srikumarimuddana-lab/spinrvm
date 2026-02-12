@@ -13,12 +13,12 @@
     "preview": {
       "distribution": "internal",
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://your-staging-api.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://spinr-backend.onrender.com"
       }
     },
     "production": {
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://your-production-api.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://spinr-backend.onrender.com"
       }
     }
   },

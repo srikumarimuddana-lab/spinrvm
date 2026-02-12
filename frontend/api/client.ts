@@ -1,6 +1,6 @@
 import axios from 'axios';
 import Constants from 'expo-constants';
-import { auth } from '../config/firebase';
+import { auth } from '../config/firebaseConfig';
 
 const API_URL = Constants.expoConfig?.extra?.backendUrl || process.env.EXPO_PUBLIC_BACKEND_URL || '';
 

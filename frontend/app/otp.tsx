@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import { auth } from '../config/firebaseConfig';
 import { useAuthStore } from '../store/authStore';
 
 export default function OtpScreen() {
@@ -55,7 +56,7 @@ export default function OtpScreen() {
         textAlign="center"
       />
 
-      <TouchableOpacity 
+      <TouchableOpacity
         style={[styles.button, verifying && styles.buttonDisabled]}
         onPress={handleVerify}
         disabled={verifying}
@@ -78,21 +79,21 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff', padding: 24, paddingTop: 80 },
   title: { fontSize: 24, fontWeight: 'bold', marginBottom: 8, color: '#333', textAlign: 'center' },
   subtitle: { fontSize: 16, color: '#666', marginBottom: 32, textAlign: 'center' },
-  input: { 
-    fontSize: 32, 
-    fontWeight: 'bold', 
+  input: {
+    fontSize: 32,
+    fontWeight: 'bold',
     letterSpacing: 8,
-    borderBottomWidth: 2, 
-    borderBottomColor: '#000', 
+    borderBottomWidth: 2,
+    borderBottomColor: '#000',
     marginBottom: 40,
     paddingVertical: 10,
     color: '#000'
   },
-  button: { 
-    backgroundColor: '#000', 
-    borderRadius: 8, 
-    height: 56, 
-    justifyContent: 'center', 
+  button: {
+    backgroundColor: '#000',
+    borderRadius: 8,
+    height: 56,
+    justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 20
   },

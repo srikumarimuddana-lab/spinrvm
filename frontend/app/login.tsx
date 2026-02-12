@@ -3,7 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator,
 import { useRouter } from 'expo-router';
 import { FirebaseRecaptchaVerifierModal } from 'expo-firebase-recaptcha';
 import { PhoneAuthProvider } from 'firebase/auth';
-import { auth } from '../config/firebase';
+import { auth } from '../config/firebaseConfig';
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -21,7 +21,7 @@ export default function LoginScreen() {
     try {
       // Format number to E.164 format (assuming Canadian +1)
       const formattedNumber = `+1${phoneNumber.replace(/\D/g, '')}`;
-      
+
       const phoneProvider = new PhoneAuthProvider(auth);
       const verificationId = await phoneProvider.verifyPhoneNumber(
         formattedNumber,
@@ -42,19 +42,19 @@ export default function LoginScreen() {
   };
 
   return (
-    <KeyboardAvoidingView 
+    <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
       <FirebaseRecaptchaVerifierModal
         ref={recaptchaVerifier}
         firebaseConfig={auth.app.options}
-        // attemptInvisibleVerification={true} 
+      // attemptInvisibleVerification={true} 
       />
 
       <View style={styles.content}>
         <Text style={styles.title}>Enter your mobile number</Text>
-        
+
         <View style={styles.inputContainer}>
           <View style={styles.flagContainer}>
             <Text style={styles.flag}>🇨🇦 +1</Text>
@@ -71,8 +71,8 @@ export default function LoginScreen() {
           />
         </View>
 
-        <TouchableOpacity 
-          style={[styles.button, loading && styles.buttonDisabled]} 
+        <TouchableOpacity
+          style={[styles.button, loading && styles.buttonDisabled]}
           onPress={handleSendCode}
           disabled={loading}
         >
@@ -91,18 +91,18 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   content: { flex: 1, padding: 24, justifyContent: 'center' },
   title: { fontSize: 24, fontWeight: 'bold', marginBottom: 24, color: '#333' },
-  inputContainer: { 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    borderWidth: 1, 
-    borderColor: '#ddd', 
-    borderRadius: 8, 
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
     marginBottom: 24,
     height: 56,
   },
-  flagContainer: { 
-    paddingHorizontal: 16, 
-    borderRightWidth: 1, 
+  flagContainer: {
+    paddingHorizontal: 16,
+    borderRightWidth: 1,
     borderRightColor: '#ddd',
     justifyContent: 'center',
     height: '100%'

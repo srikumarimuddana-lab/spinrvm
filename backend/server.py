@@ -1,10 +1,11 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, WebSocket, WebSocketDisconnect, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 import os
+import shutil
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
@@ -72,12 +73,19 @@ security = HTTPBearer(auto_error=False)
 
 from contextlib import asynccontextmanager
 
+# Import feature routers
+try:
+    from .features import support_router, admin_support_router, pricing_router, check_scheduled_rides
+except ImportError:
+    from features import support_router, admin_support_router, pricing_router, check_scheduled_rides
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup logic can go here
+    # Start scheduled ride checker background task
+    scheduler_task = asyncio.create_task(check_scheduled_rides())
     yield
-    # Shutdown logic
-    pass
+    # Shutdown: cancel the scheduler
+    scheduler_task.cancel()
 
 # Create the main app
 app = FastAPI(title="Spinr API", version="1.0.0", lifespan=lifespan)
@@ -90,6 +98,28 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Create routers
 api_router = APIRouter(prefix="/api")
 admin_router = APIRouter(prefix="/api/admin")
+
+# File Upload Handling
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
+@api_router.post("/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """Upload a file and return its URL"""
+    file_ext = os.path.splitext(file.filename)[1]
+    filename = f"{uuid.uuid4()}{file_ext}"
+    file_path = os.path.join(UPLOAD_DIR, filename)
+    
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not save file: {e}")
+        
+    # Return absolute URL if possible, or relative
+    # For now relative: /uploads/filename
+    return {"url": f"/uploads/{filename}", "filename": filename}
 
 # Configure logging
 logging.basicConfig(
@@ -197,6 +227,8 @@ class ServiceArea(BaseModel):
     city: str
     polygon: List[Dict[str, float]]
     is_active: bool = True
+    is_airport: bool = False
+    airport_fee: float = 0.0
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class VehicleType(BaseModel):
@@ -241,6 +273,21 @@ class Driver(BaseModel):
     vehicle_model: str
     vehicle_color: str
     license_plate: str
+    
+    # Verification & Compliance Fields
+    license_number: Optional[str] = None
+    license_expiry_date: Optional[datetime] = None
+    work_eligibility_expiry_date: Optional[datetime] = None
+    vehicle_year: Optional[int] = None
+    vehicle_vin: Optional[str] = None
+    vehicle_inspection_expiry_date: Optional[datetime] = None
+    insurance_expiry_date: Optional[datetime] = None
+    background_check_expiry_date: Optional[datetime] = None
+    documents: Dict[str, str] = {}  # { "license_front": "url" }
+    is_verified: bool = False
+    rejection_reason: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+
     rating: float = 5.0
     total_rides: int = 0
     lat: float
@@ -1310,11 +1357,27 @@ async def rate_ride(ride_id: str, rating_data: RideRatingRequest, current_user: 
 # ============ Driver Routes ============
 
 class DriverRegistration(BaseModel):
+    # Personal Info
+    first_name: str
+    last_name: str
+    email: EmailStr
+    city: str
+    # Vehicle Info
     vehicle_make: str
     vehicle_model: str
     vehicle_color: str
+    vehicle_year: int
     license_plate: str
+    vehicle_vin: str
     vehicle_type_id: str
+    # Documents & Dates
+    license_number: str
+    license_expiry_date: str  # ISO date
+    work_eligibility_expiry_date: Optional[str] = None
+    vehicle_inspection_expiry_date: str
+    insurance_expiry_date: str
+    background_check_expiry_date: str
+    documents: Dict[str, str]
 
 @api_router.post("/drivers/register")
 async def register_driver(data: DriverRegistration, current_user: dict = Depends(get_current_user)):
@@ -1326,21 +1389,59 @@ async def register_driver(data: DriverRegistration, current_user: dict = Depends
     if not vt:
         raise HTTPException(status_code=400, detail='Invalid vehicle type')
 
+    # Parse dates
+    try:
+        lic_exp = datetime.fromisoformat(data.license_expiry_date.replace('Z', ''))
+        insp_exp = datetime.fromisoformat(data.vehicle_inspection_expiry_date.replace('Z', ''))
+        ins_exp = datetime.fromisoformat(data.insurance_expiry_date.replace('Z', ''))
+        bg_exp = datetime.fromisoformat(data.background_check_expiry_date.replace('Z', ''))
+        work_exp = datetime.fromisoformat(data.work_eligibility_expiry_date.replace('Z', '')) if data.work_eligibility_expiry_date else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format")
+
     new_driver = Driver(
         user_id=current_user['id'],
-        name=f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip() or "Driver",
+        name=f"{data.first_name} {data.last_name}",
         phone=current_user['phone'],
         vehicle_type_id=data.vehicle_type_id,
         vehicle_make=data.vehicle_make,
         vehicle_model=data.vehicle_model,
         vehicle_color=data.vehicle_color,
         license_plate=data.license_plate,
-        is_online=True,
-        is_available=True
+        
+        # New Validation Fields
+        license_number=data.license_number,
+        license_expiry_date=lic_exp,
+        work_eligibility_expiry_date=work_exp,
+        vehicle_year=data.vehicle_year,
+        vehicle_vin=data.vehicle_vin,
+        vehicle_inspection_expiry_date=insp_exp,
+        insurance_expiry_date=ins_exp,
+        background_check_expiry_date=bg_exp,
+        documents=data.documents,
+        is_verified=False,
+        submitted_at=datetime.utcnow(),
+        
+        rating=5.0,
+        lat=0.0,
+        lng=0.0,
+        is_online=False, # Must be verified first
+        is_available=False
     )
 
     await db.drivers.insert_one(new_driver.dict())
-    await db.users.update_one({'id': current_user['id']}, {'': {'role': 'driver'}})
+    
+    # Update user profile
+    await db.users.update_one(
+        {'id': current_user['id']}, 
+        {'$set': {
+            'role': 'driver', 
+            'first_name': data.first_name, 
+            'last_name': data.last_name, 
+            'email': data.email, 
+            'city': data.city
+        }}
+    )
 
     return new_driver.dict()
 
@@ -1472,6 +1573,44 @@ async def admin_get_drivers():
 async def admin_get_rides():
     rides = await db.rides.find().sort('created_at', -1).to_list(100)
     return serialize_doc(rides)
+
+class DriverVerifyRequest(BaseModel):
+    is_verified: bool
+    rejection_reason: Optional[str] = None
+
+@admin_router.post("/drivers/{driver_id}/verify")
+async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest):
+    driver = await db.drivers.find_one({'id': driver_id})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+        
+    update_data = {
+        'is_verified': req.is_verified,
+        'rejection_reason': req.rejection_reason if not req.is_verified else None,
+        'updated_at': datetime.utcnow()
+    }
+    
+    # If verified, we can set them to allowable state (though they still need to go online themselves)
+    if req.is_verified:
+        # Send push notification
+        if driver.get('user_id'):
+            await send_push_notification(
+                driver['user_id'],
+                "Account Verified! 🎉",
+                "Your driver account has been approved. You can now go online.",
+                {'type': 'driver_verified'}
+            )
+    else:
+        if driver.get('user_id'):
+             await send_push_notification(
+                driver['user_id'],
+                "Action Required ⚠️",
+                f"Your driver application needs attention: {req.rejection_reason}",
+                {'type': 'driver_rejected'}
+            )
+
+    await db.drivers.update_one({'id': driver_id}, {'$set': update_data})
+    return {'success': True}
 
 @admin_router.get("/stats")
 async def admin_get_stats():
@@ -1665,7 +1804,14 @@ async def admin_export_drivers():
             'total_earnings': round(total_earnings, 2),
             'total_tips': round(total_tips, 2),
             'is_online': driver.get('is_online', False),
-            'is_available': driver.get('is_available', True)
+            'is_available': driver.get('is_available', True),
+            # New Fields
+            'is_verified': driver.get('is_verified', False),
+            'vehicle_year': driver.get('vehicle_year', ''),
+            'vehicle_vin': driver.get('vehicle_vin', ''),
+            'license_number': driver.get('license_number', ''),
+            'license_expiry': str(driver.get('license_expiry_date', '')),
+            'inspection_expiry': str(driver.get('vehicle_inspection_expiry_date', ''))
         })
     
     return export_data
@@ -2433,6 +2579,9 @@ async def health_check():
 # Include routers
 app.include_router(api_router)
 app.include_router(admin_router)
+app.include_router(support_router)
+app.include_router(admin_support_router)
+app.include_router(pricing_router)
 
 app.add_middleware(
     CORSMiddleware,

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
-import { auth } from '../config/firebase';
+import { auth } from '../config/firebaseConfig';
 import { PhoneAuthProvider, signInWithCredential, signOut, User as FirebaseUser } from 'firebase/auth';
 import api from '../api/client';
 
@@ -217,13 +217,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   toggleDriverMode: () => {
     const { isDriverMode, driver, fetchDriverProfile } = get();
     if (!isDriverMode && !driver) {
-       fetchDriverProfile().then(() => {
-         const { driver: newDriver } = get();
-         if (newDriver) {
-           set({ isDriverMode: true });
-         }
-       });
-       return;
+      fetchDriverProfile().then(() => {
+        const { driver: newDriver } = get();
+        if (newDriver) {
+          set({ isDriverMode: true });
+        }
+      });
+      return;
     }
     set({ isDriverMode: !isDriverMode });
   },

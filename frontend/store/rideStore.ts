@@ -83,7 +83,7 @@ interface RideState {
   savedAddresses: SavedAddress[];
   isLoading: boolean;
   error: string | null;
-  
+
   // Actions
   setPickup: (location: Location | null) => void;
   setDropoff: (location: Location | null) => void;
@@ -98,6 +98,7 @@ interface RideState {
   deleteSavedAddress: (id: string) => Promise<void>;
   clearRide: () => void;
   clearError: () => void;
+  rateRide: (rideId: string, rating: number, comment?: string, tipAmount?: number) => Promise<void>;
 }
 
 export const useRideStore = create<RideState>((set, get) => ({

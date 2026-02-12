@@ -16,20 +16,20 @@ import {
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useUserStore } from '../store/userStore';
-import { supabase } from '../config/supabase';
+import { useAuthStore } from '../store/authStore';
 import SpinrConfig from '../config/spinr.config';
 
 export default function ProfileSetupScreen() {
   const router = useRouter();
-  const { user, setProfile } = useUserStore();
+  const { user, createProfile, isLoading: authLoading, error: authError } = useAuthStore();
 
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [city, setCity] = useState('');
   const [showCityPicker, setShowCityPicker] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  // Local loading state not needed if authStore handles it, but keeps UI responsive immediately
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const validateEmail = (email: string): boolean => {
     const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -48,29 +48,21 @@ export default function ProfileSetupScreen() {
     }
 
     Keyboard.dismiss();
+    setIsSubmitting(true);
 
-    setIsLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .upsert({
-          id: user.uid,
-          first_name: firstName.trim(),
-          last_name: lastName.trim(),
-          email: email.trim().toLowerCase(),
-          phone: user.phoneNumber,
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      setProfile(data);
+      await createProfile({
+        first_name: firstName.trim(),
+        last_name: lastName.trim(),
+        email: email.trim().toLowerCase(),
+        city,
+      });
+      // Navigation is often handled by auth state changes, but we can force it or wait for effect
       router.replace('/(tabs)');
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to create profile');
     } finally {
-      setIsLoading(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -193,10 +185,10 @@ export default function ProfileSetupScreen() {
                 !isFormValid && styles.submitButtonDisabled,
               ]}
               onPress={handleSubmit}
-              disabled={!isFormValid || isLoading}
+              disabled={!isFormValid || isSubmitting || authLoading}
               activeOpacity={0.8}
             >
-              {isLoading ? (
+              {isSubmitting || authLoading ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
                 <Text style={styles.submitButtonText}>Get Started</Text>

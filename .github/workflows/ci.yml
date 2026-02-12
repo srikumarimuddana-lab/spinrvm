@@ -103,8 +103,8 @@ jobs:
         with:
           name: pytest-filtered
           path: annotate_junit.xml
-          reporter: junit
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          reporter: java-junit
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Annotate pull request with all test results
         if: ${{ always() && github.event_name == 'pull_request' && env.ANNOTATE_TESTS_PATTERN == '' }}
@@ -112,8 +112,8 @@ jobs:
         with:
           name: pytest
           path: junit.xml
-          reporter: junit
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          reporter: java-junit
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   # ──────────────────────────────────────────────
   # 2. Admin Dashboard — Next.js build & lint

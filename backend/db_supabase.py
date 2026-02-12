@@ -7,7 +7,7 @@ can be used from async FastAPI handlers.
 import asyncio
 import logging
 from typing import Optional, List, Dict, Any, Union
-from .supabase_client import supabase
+from supabase_client import supabase
 
 logger = logging.getLogger(__name__)
 

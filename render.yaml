@@ -48,13 +48,12 @@ services:
 staticSites:
   # 3. Expo Web App (Static Site)
   - name: spinr-web
-    runtime: static
     region: oregon
     buildCommand: |
       cd frontend
       npm install
       npx expo export --platform web
-    publish: frontend/dist
+    publishPath: frontend/dist
     envVars:
       - key: NODE_VERSION
         value: 18.17.0

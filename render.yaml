@@ -62,4 +62,4 @@ services:
         fromService:
           type: web
           name: spinr-backend
-          property: host  # FIXED: Changed 'url' to 'host'
+          envVarKey: RENDER_EXTERNAL_URL

@@ -45,6 +45,23 @@ const storage = {
   },
 };
 
+
+export interface Driver {
+  id: string;
+  user_id: string;
+  name: string;
+  phone: string;
+  vehicle_type_id: string;
+  vehicle_make: string;
+  vehicle_model: string;
+  vehicle_color: string;
+  license_plate: string;
+  rating: number;
+  total_rides: number;
+  is_online: boolean;
+  is_available: boolean;
+}
+
 interface User {
   id: string;
   phone: string;
@@ -55,6 +72,7 @@ interface User {
   role: string;
   created_at: string;
   profile_complete: boolean;
+  is_driver?: boolean;
 }
 
 interface AuthState {
@@ -63,6 +81,14 @@ interface AuthState {
   isLoading: boolean;
   isInitialized: boolean;
   error: string | null;
+  driver: Driver | null;
+  isDriverMode: boolean;
+
+  fetchDriverProfile: () => Promise<void>;
+  registerDriver: (data: any) => Promise<void>;
+  toggleDriverMode: () => void;
+  updateDriverStatus: (isOnline: boolean) => Promise<void>;
+
   
   // Actions
   initialize: () => Promise<void>;
@@ -82,10 +108,70 @@ const api = axios.create({
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
+  driver: null,
+  isDriverMode: false,
   token: null,
   isLoading: false,
   isInitialized: false,
   error: null,
+
+
+  fetchDriverProfile: async () => {
+    try {
+      const response = await api.get('/drivers/me');
+      set({ driver: response.data });
+    } catch (error) {
+      console.log('Failed to fetch driver profile');
+      set({ driver: null });
+    }
+  },
+
+  registerDriver: async (data: any) => {
+    try {
+      set({ isLoading: true, error: null });
+      const response = await api.post('/drivers/register', data);
+
+      const user = get().user;
+      const updatedUser = user ? { ...user, role: 'driver', is_driver: true } : user;
+
+      set({
+        driver: response.data,
+        user: updatedUser,
+        isLoading: false,
+        isDriverMode: true
+      });
+    } catch (error: any) {
+      const message = error.response?.data?.detail || 'Failed to register driver';
+      set({ isLoading: false, error: message });
+      throw new Error(message);
+    }
+  },
+
+  toggleDriverMode: () => {
+    const { isDriverMode, driver, fetchDriverProfile } = get();
+    if (!isDriverMode && !driver) {
+       fetchDriverProfile().then(() => {
+         const { driver: newDriver } = get();
+         if (newDriver) {
+           set({ isDriverMode: true });
+         }
+       });
+       return;
+    }
+    set({ isDriverMode: !isDriverMode });
+  },
+
+  updateDriverStatus: async (isOnline: boolean) => {
+    try {
+      await api.post(`/drivers/status?is_online=${isOnline}`);
+      const driver = get().driver;
+      if (driver) {
+        set({ driver: { ...driver, is_online: isOnline } });
+      }
+    } catch (error) {
+      console.log('Failed to update status');
+    }
+  },
 
   initialize: async () => {
     try {
@@ -110,17 +196,34 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           ]) as any;
           
           console.log('User fetched successfully');
+
+          const userData = response.data;
+          let driverData = null;
+
+          if (userData.is_driver || userData.role === 'driver') {
+            try {
+              const driverRes = await api.get('/drivers/me');
+              driverData = driverRes.data;
+            } catch (e) {
+              console.log('Failed to fetch driver data on init');
+            }
+          }
+
           set({ 
-            user: response.data, 
+            user: userData,
+            driver: driverData,
             token,
             isInitialized: true,
             isLoading: false 
           });
+
         } catch (fetchError) {
           console.log('Failed to fetch user, clearing token');
           await storage.deleteItem('auth_token');
           set({ 
-            user: null, 
+            user: null,
+  driver: null,
+  isDriverMode: false,
             token: null, 
             isInitialized: true, 
             isLoading: false 
@@ -135,7 +238,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // Token might be invalid, clear it
       await storage.deleteItem('auth_token');
       set({ 
-        user: null, 
+        user: null,
+  driver: null,
+  isDriverMode: false,
         token: null, 
         isInitialized: true, 
         isLoading: false 
@@ -209,7 +314,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       await storage.deleteItem('auth_token');
       delete api.defaults.headers.common['Authorization'];
-      set({ user: null, token: null });
+      set({ user: null,
+  driver: null,
+  isDriverMode: false, token: null });
     } catch (error) {
       console.log('Logout error:', error);
     }

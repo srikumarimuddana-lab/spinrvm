@@ -163,6 +163,7 @@ class UserProfile(BaseModel):
     role: str = 'rider'
     created_at: datetime
     profile_complete: bool = False
+    is_driver: bool = False
 
 class OTPRecord(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -231,6 +232,7 @@ class SavedAddress(BaseModel):
 
 class Driver(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: Optional[str] = None
     name: str
     phone: str
     photo_url: str = ""
@@ -350,6 +352,10 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                     }
                     await db.users.insert_one(new_user)
                     user = new_user
+
+            if user:
+                driver = await db.drivers.find_one({'user_id': user['id']})
+                user['is_driver'] = True if driver else False
             return user
     except HTTPException:
         # fall through to try legacy JWT
@@ -364,6 +370,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     user = await db.users.find_one({'id': payload['user_id']})
     if not user:
         raise HTTPException(status_code=401, detail='User not found')
+
+    driver = await db.drivers.find_one({'user_id': user['id']})
+    user['is_driver'] = True if driver else False
     return user
 
 def calculate_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -440,6 +449,14 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             await websocket.close()
             return
 
+        # If connecting as driver, ensure user has a driver profile
+        if client_type == 'driver':
+             driver_profile = await db.drivers.find_one({'user_id': user['id']})
+             if not driver_profile:
+                 await websocket.send_json({'type': 'error', 'message': 'user_is_not_a_driver'})
+                 await websocket.close()
+                 return
+
         # Register the connection with a server-controlled key to prevent impersonation
         connection_key = f"{client_type}_{user['id']}"
         await manager.connect(websocket, connection_key)
@@ -454,7 +471,16 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 driver_id = data.get('driver_id')
                 lat = data.get('lat')
                 lng = data.get('lng')
-                if driver_id and lat and lng and client_type == 'driver' and driver_id == user['id']:
+                # Verify driver ownership
+                is_valid_driver = False
+                if client_type == 'driver':
+                    # Only allow updating own driver record
+                    # Check if this user owns this driver_id
+                    owned_driver = await db.drivers.find_one({'id': driver_id, 'user_id': user['id']})
+                    if owned_driver:
+                        is_valid_driver = True
+
+                if driver_id and lat and lng and is_valid_driver:
                     manager.update_driver_location(driver_id, lat, lng)
                     await db.drivers.update_one({'id': driver_id}, {'$set': {'lat': lat, 'lng': lng}})
                     rides = await db.rides.find({
@@ -470,7 +496,9 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                                 'lng': lng
                             },
                             f"rider_{ride['rider_id']}"
-                        )
+        )
+
+        # Notify driver via WebSocket
 
             elif data.get('type') == 'ride_status_update':
                 ride_id = data.get('ride_id')
@@ -485,7 +513,9 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                                 'status': status
                             },
                             f"rider_{ride['rider_id']}"
-                        )
+        )
+
+        # Notify driver via WebSocket
 
             elif data.get('type') == 'get_nearby_drivers':
                 lat = data.get('lat')
@@ -1041,6 +1071,19 @@ async def match_driver_to_ride(ride_id: str):
             f"rider_{ride['rider_id']}"
         )
 
+        # Notify driver via WebSocket
+        if selected_driver.get('user_id'):
+             await manager.send_personal_message(
+                {
+                    'type': 'new_ride_assignment',
+                    'ride_id': ride_id,
+                    'pickup_address': ride['pickup_address'],
+                    'dropoff_address': ride['dropoff_address'],
+                    'fare': ride['driver_earnings']
+                },
+                f"driver_{selected_driver['user_id']}"
+            )
+
 async def create_demo_drivers(vehicle_type_id: str, lat: float, lng: float):
     demo_drivers = [
         {'name': 'Mike Johnson', 'vehicle_make': 'Toyota', 'vehicle_model': 'Camry', 'vehicle_color': 'Silver', 'license_plate': 'SKT 4521'},
@@ -1262,6 +1305,75 @@ async def rate_ride(ride_id: str, rating_data: RideRatingRequest, current_user: 
             )
     
     return {'success': True, 'tip_added': rating_data.tip_amount}
+
+
+# ============ Driver Routes ============
+
+class DriverRegistration(BaseModel):
+    vehicle_make: str
+    vehicle_model: str
+    vehicle_color: str
+    license_plate: str
+    vehicle_type_id: str
+
+@api_router.post("/drivers/register")
+async def register_driver(data: DriverRegistration, current_user: dict = Depends(get_current_user)):
+    existing = await db.drivers.find_one({'user_id': current_user['id']})
+    if existing:
+        raise HTTPException(status_code=400, detail='User is already a driver')
+
+    vt = await db.vehicle_types.find_one({'id': data.vehicle_type_id})
+    if not vt:
+        raise HTTPException(status_code=400, detail='Invalid vehicle type')
+
+    new_driver = Driver(
+        user_id=current_user['id'],
+        name=f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip() or "Driver",
+        phone=current_user['phone'],
+        vehicle_type_id=data.vehicle_type_id,
+        vehicle_make=data.vehicle_make,
+        vehicle_model=data.vehicle_model,
+        vehicle_color=data.vehicle_color,
+        license_plate=data.license_plate,
+        is_online=True,
+        is_available=True
+    )
+
+    await db.drivers.insert_one(new_driver.dict())
+    await db.users.update_one({'id': current_user['id']}, {'': {'role': 'driver'}})
+
+    return new_driver.dict()
+
+@api_router.get("/drivers/me")
+async def get_driver_profile(current_user: dict = Depends(get_current_user)):
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+    return serialize_doc(driver)
+
+@api_router.post("/drivers/status")
+async def update_driver_status(is_online: bool = Query(...), current_user: dict = Depends(get_current_user)):
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    await db.drivers.update_one(
+        {'id': driver['id']},
+        {'': {'is_online': is_online, 'updated_at': datetime.utcnow()}}
+    )
+    return {'success': True, 'is_online': is_online}
+
+@api_router.get("/drivers/rides/pending")
+async def get_pending_rides(current_user: dict = Depends(get_current_user)):
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    rides = await db.rides.find({
+        'driver_id': driver['id'],
+        'status': {'': ['driver_assigned', 'driver_arrived', 'in_progress']}
+    }).to_list(10)
+    return serialize_doc(rides)
 
 # ============ Admin Routes ============
 

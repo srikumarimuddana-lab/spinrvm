@@ -96,6 +96,8 @@ interface RideState {
   fetchSavedAddresses: () => Promise<void>;
   addSavedAddress: (address: Omit<SavedAddress, 'id' | 'user_id'>) => Promise<void>;
   deleteSavedAddress: (id: string) => Promise<void>;
+  startRide: () => Promise<void>;
+  completeRide: () => Promise<Ride | undefined>;
   clearRide: () => void;
   clearError: () => void;
   rateRide: (rideId: string, rating: number, comment?: string, tipAmount?: number) => Promise<void>;

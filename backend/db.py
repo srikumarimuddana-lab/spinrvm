@@ -137,7 +137,11 @@ class Collection:
 
 class DB:
     def __init__(self):
-        names = ['users','drivers','rides','otp_records','settings','saved_addresses','vehicle_types','service_areas','fare_configs']
+        names = [
+            'users', 'drivers', 'rides', 'otp_records', 'settings', 'saved_addresses',
+            'vehicle_types', 'service_areas', 'fare_configs',
+            'support_tickets', 'faqs', 'area_fees'
+        ]
         for n in names:
             setattr(self, n, Collection(n))
 

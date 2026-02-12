@@ -15,7 +15,17 @@ This repository contains a full-stack rideshare application built with React Nat
     *   `api/`: API client configuration.
 *   `admin-dashboard/`: Admin panel (Next.js/React).
 
-## Setup Instructions
+## Deployment
+
+**Spinr uses a hybrid deployment strategy:**
+
+*   **Frontend (Expo Web)**: Deployed to **Vercel** as a Static Site (SPA).
+*   **Admin Dashboard (Next.js)**: Deployed to **Vercel** (Serverless).
+*   **Backend (Python/FastAPI)**: Deployed to **Render** (Web Service).
+
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed step-by-step instructions.
+
+## Setup Instructions (Local Development)
 
 ### Backend
 

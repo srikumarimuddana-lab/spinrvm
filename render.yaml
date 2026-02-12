@@ -1,0 +1,65 @@
+services:
+  # 1. Backend API (Python/FastAPI)
+  - type: web
+    name: spinr-backend
+    runtime: python
+    region: oregon
+    buildCommand: |
+      cd backend
+      pip install -r requirements.txt
+    startCommand: |
+      cd backend
+      uvicorn server:app --host 0.0.0.0 --port 10000
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.9.0
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+
+  # 2. Admin Dashboard (Next.js)
+  - type: web
+    name: spinr-admin
+    runtime: node
+    region: oregon
+    buildCommand: |
+      cd admin-dashboard
+      npm install
+      npm run build
+    startCommand: |
+      cd admin-dashboard
+      npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 18.17.0
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          type: web
+          name: spinr-backend
+          property: url
+
+  # 3. Expo Web App (Static Site)
+  - type: static
+    name: spinr-web
+    runtime: static
+    region: oregon
+    buildCommand: |
+      cd frontend
+      npm install
+      npx expo export --platform web
+    publish: frontend/dist
+    envVars:
+      - key: NODE_VERSION
+        value: 18.17.0
+      - key: EXPO_PUBLIC_API_URL
+        fromService:
+          type: web
+          name: spinr-backend
+          property: url

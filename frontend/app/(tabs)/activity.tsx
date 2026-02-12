@@ -12,11 +12,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useRideStore } from '../../store/rideStore';
 import SpinrConfig from '../../config/spinr.config';
-import axios from 'axios';
-import Constants from 'expo-constants';
+import api from '../../api/client';
 import { useAuthStore } from '../../store/authStore';
-
-const API_URL = Constants.expoConfig?.extra?.backendUrl || process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
 interface RideHistory {
   id: string;
@@ -42,9 +39,7 @@ export default function ActivityScreen() {
 
   const fetchRides = async () => {
     try {
-      const response = await axios.get(`${API_URL}/api/rides`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const response = await api.get('/rides');
       setRides(response.data || []);
     } catch (error) {
       console.log('Error fetching rides:', error);

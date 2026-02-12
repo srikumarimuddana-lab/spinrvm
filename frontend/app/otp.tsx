@@ -1,17 +1,24 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { PhoneAuthProvider, signInWithCredential } from 'firebase/auth';
-import { auth } from '../config/firebase';
-import { supabase } from '../config/supabase';
-import { useUserStore } from '../store/userStore';
+import { useAuthStore } from '../store/authStore';
 
 export default function OtpScreen() {
   const router = useRouter();
   const { verificationId, phoneNumber } = useLocalSearchParams<{ verificationId: string, phoneNumber: string }>();
   const [code, setCode] = useState('');
-  const [loading, setLoading] = useState(false);
-  const { setUser, setProfile } = useUserStore();
+  const [verifying, setVerifying] = useState(false);
+  const { verifyOTP, user, error, clearError } = useAuthStore();
+
+  useEffect(() => {
+    if (user) {
+      if (user.profile_complete) {
+        router.replace('/(tabs)/activity');
+      } else {
+        router.replace('/profile-setup');
+      }
+    }
+  }, [user]);
 
   const handleVerify = async () => {
     if (!code || code.length !== 6) {
@@ -19,37 +26,15 @@ export default function OtpScreen() {
       return;
     }
 
-    setLoading(true);
+    setVerifying(true);
+    clearError();
     try {
-      const credential = PhoneAuthProvider.credential(
-        verificationId,
-        code
-      );
-      
-      const userCredential = await signInWithCredential(auth, credential);
-      
-      // Set Firebase user in store
-      setUser(userCredential.user);
-
-      // Check if user profile exists in Supabase
-      const { data: profile, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userCredential.user.uid)
-        .single();
-
-      if (profile) {
-        setProfile(profile);
-        router.replace('/home');
-      } else {
-        // No profile found, navigate to profile creation
-        router.replace('/profile-setup');
-      }
-    } catch (error: any) {
-      console.error(error);
-      Alert.alert('Verification Failed', 'Invalid code. Please try again.');
+      await verifyOTP(verificationId, code);
+      // Navigation is handled by the useEffect above once user is populated
+    } catch (err: any) {
+      Alert.alert('Verification Failed', err.message || 'Invalid code. Please try again.');
     } finally {
-      setLoading(false);
+      setVerifying(false);
     }
   };
 
@@ -71,11 +56,11 @@ export default function OtpScreen() {
       />
 
       <TouchableOpacity 
-        style={[styles.button, loading && styles.buttonDisabled]} 
+        style={[styles.button, verifying && styles.buttonDisabled]}
         onPress={handleVerify}
-        disabled={loading}
+        disabled={verifying}
       >
-        {loading ? (
+        {verifying ? (
           <ActivityIndicator color="#fff" />
         ) : (
           <Text style={styles.buttonText}>Verify</Text>

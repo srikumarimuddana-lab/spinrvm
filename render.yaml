@@ -43,22 +43,23 @@ services:
         fromService:
           type: web
           name: spinr-backend
-          property: url
+          envVarKey: RENDER_EXTERNAL_URL
 
   # 3. Expo Web App (Static Site)
-  - type: static site
+  - type: web
     name: spinr-web
-    region: oregon
+    runtime: static
+    # region: oregon  <-- REMOVED: Static sites cannot have a region
     buildCommand: |
       cd frontend
       npm install
       npx expo export --platform web
-    publishPath: frontend/dist
+    staticPublishPath: frontend/dist
     envVars:
       - key: NODE_VERSION
         value: 18.17.0
-      - key: EXPO_PUBLIC_API_URL
+      - key: EXPO_PUBLIC_BACKEND_URL
         fromService:
           type: web
           name: spinr-backend
-          property: url
+          envVarKey: RENDER_EXTERNAL_URL

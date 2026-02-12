@@ -41,8 +41,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: yarn
-          cache-dependency-path: frontend/yarn.lock
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Setup EAS CLI
         uses: expo/expo-github-action@v8
@@ -51,7 +51,7 @@ jobs:
           token: ${{ secrets.EXPO_TOKEN }}
 
       - name: Install dependencies
-        run: yarn install --frozen-lockfile || yarn install
+        run: npm ci || npm install
 
       - name: Build (auto-triggered)
         if: github.event_name == 'push'

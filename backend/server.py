@@ -1642,18 +1642,23 @@ async def admin_get_stats():
     
     # Calculate earnings
     rides_cursor = db.rides.find({'status': 'completed'})
+    # Supabase fetches all rows at once, so we get the list
+    rides = await rides_cursor.to_list(limit=10000)
+
     total_driver_earnings = 0
     total_admin_earnings = 0
     total_tips = 0
     
-    async for ride in rides_cursor:
+    for ride in rides:
         total_driver_earnings += ride.get('driver_earnings', 0) + ride.get('tip_amount', 0)
         total_admin_earnings += ride.get('admin_earnings', 0)
         total_tips += ride.get('tip_amount', 0)
     
     # Add cancellation earnings
     cancelled_cursor = db.rides.find({'status': 'cancelled', 'cancellation_fee_admin': {'$gt': 0}})
-    async for ride in cancelled_cursor:
+    cancelled_rides = await cancelled_cursor.to_list(limit=10000)
+
+    for ride in cancelled_rides:
         total_admin_earnings += ride.get('cancellation_fee_admin', 0)
         total_driver_earnings += ride.get('cancellation_fee_driver', 0)
     

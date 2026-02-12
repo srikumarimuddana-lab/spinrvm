@@ -48,12 +48,13 @@ services:
   # 3. Expo Web App (Static Site)
   - type: web
     name: spinr-web
+    runtime: static  # MUST use runtime: static for static sites
     region: oregon
     buildCommand: |
       cd frontend
       npm install
       npx expo export --platform web
-    publishPath: frontend/dist
+    staticPublishPath: frontend/dist  # Field name must be staticPublishPath
     envVars:
       - key: NODE_VERSION
         value: 18.17.0

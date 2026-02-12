@@ -51,7 +51,7 @@ jobs:
           token: ${{ secrets.EXPO_TOKEN }}
 
       - name: Install dependencies
-        run: npm ci || npm install
+        run: npm ci --legacy-peer-deps || npm install --legacy-peer-deps
 
       - name: Build (auto-triggered)
         if: github.event_name == 'push'

@@ -11,28 +11,6 @@ class MockCursor:
         self.filter = _filter
         self.sort_field = _sort.get('field') if _sort else None
         self.sort_desc = _sort.get('desc', False) if _sort else False
-        self._results = None
-        self._index = 0
-
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        if self._results is None:
-            # If explicit limit was not set, fetch a larger batch for iteration,
-            # otherwise respect the limit.
-            # to_list defaults to 100 if no limit set.
-            # We use a larger default for iteration to avoid missing data in stats.
-            limit = self._limit if hasattr(self, '_limit') else 10000
-            self._results = await self.to_list(limit=limit)
-            self._index = 0
-
-        if self._index < len(self._results):
-            result = self._results[self._index]
-            self._index += 1
-            return result
-        else:
-            raise StopAsyncIteration
 
     def sort(self, field: str, order: int):
         self.sort_field = field

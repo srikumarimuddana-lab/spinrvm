@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getAuth, Auth } from 'firebase/auth';
 
 const firebaseConfig = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
@@ -13,13 +13,31 @@ const firebaseConfig = {
 // Initialize Firebase
 // Check if already initialized to avoid hot reload errors
 let app;
-try {
-  app = initializeApp(firebaseConfig);
-} catch (error: any) {
-  if (!/already exists/.test(error.message)) {
-    console.error('Firebase initialization error', error.stack);
+let auth: Auth;
+
+if (firebaseConfig.apiKey) {
+  try {
+    app = initializeApp(firebaseConfig);
+  } catch (error: any) {
+    // If the app is already initialized, we can ignore this error
+    // and let getAuth() use the default app instance.
+    if (!/already exists/.test(error.message)) {
+      console.error('Firebase initialization error', error.stack);
+    }
   }
+
+  try {
+    // If app is undefined (e.g. "already exists" error), getAuth() uses the default app.
+    // If initialization failed completely, this might throw, so we catch it.
+    auth = getAuth(app);
+  } catch (error) {
+    console.warn('Failed to get Firebase Auth instance, using mock:', error);
+    auth = {} as Auth;
+  }
+} else {
+  console.warn('Firebase API key is missing. Skipping initialization.');
+  // Mock auth object to prevent build failures when env vars are missing
+  auth = {} as Auth;
 }
 
-// Initialize Auth
-export const auth = getAuth(app);
+export { auth };

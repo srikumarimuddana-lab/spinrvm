@@ -63,5 +63,3 @@ services:
           type: web
           name: spinr-backend
           property: host  # FIXED: Changed 'url' to 'host'
-          name: spinr-backend
-          property: url

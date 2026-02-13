@@ -15,6 +15,7 @@ import {
     Banknote,
     LogOut,
     Menu,
+    FileText,
     X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";

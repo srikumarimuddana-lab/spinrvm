@@ -52,7 +52,7 @@ sys.modules['starlette.middleware'] = MagicMock()
 sys.modules['starlette.middleware.cors'] = MagicMock()
 sys.modules['starlette.requests'] = MagicMock()
 sys.modules['uvicorn'] = MagicMock()
-sys.modules['pydantic'] = MagicMock()
+# sys.modules['pydantic'] = MagicMock()
 sys.modules['jwt'] = MagicMock()
 sys.modules['dotenv'] = MagicMock()
 

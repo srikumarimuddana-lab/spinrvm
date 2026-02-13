@@ -27,6 +27,18 @@ interface RideEstimate {
   time_fare: number;
   booking_fee: number;
   total_fare: number;
+  available: boolean;
+  eta_minutes: number;
+  driver_count: number;
+}
+
+export interface NearbyDriver {
+  id: string;
+  lat: number;
+  lng: number;
+  vehicle_type_id: string;
+  vehicle_make?: string;
+  vehicle_model?: string;
 }
 
 interface Driver {
@@ -80,6 +92,7 @@ interface RideState {
   dropoff: Location | null;
   stops: Location[]; // Intermediate stops
   estimates: RideEstimate[];
+  nearbyDrivers: NearbyDriver[];
   selectedVehicle: VehicleType | null;
   currentRide: Ride | null;
   currentDriver: Driver | null;
@@ -95,6 +108,7 @@ interface RideState {
   removeStop: (index: number) => void;
   updateStop: (index: number, location: Location) => void;
   fetchEstimates: () => Promise<void>;
+  fetchNearbyDrivers: () => Promise<void>;
   selectVehicle: (vehicle: VehicleType) => void;
   createRide: (paymentMethod: string) => Promise<Ride>;
   fetchRide: (rideId: string) => Promise<void>;
@@ -118,6 +132,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   dropoff: null,
   stops: [], // Init empty
   estimates: [],
+  nearbyDrivers: [],
   selectedVehicle: null,
   currentRide: null,
   currentDriver: null,
@@ -138,6 +153,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   }),
 
   fetchEstimates: async () => {
+    console.log('fetchEstimates store action started');
     const { pickup, dropoff, stops } = get();
     if (!pickup || !dropoff) return;
 
@@ -150,9 +166,22 @@ export const useRideStore = create<RideState>((set, get) => ({
         dropoff_lng: dropoff.lng,
         stops: stops, // Send stops to backend
       });
+      console.log('Ride API Response:', response.data);
       set({ estimates: response.data, isLoading: false });
     } catch (error: any) {
+      console.error('fetchEstimates error:', error);
       set({ isLoading: false, error: error.message });
+    }
+  },
+
+  fetchNearbyDrivers: async () => {
+    const { pickup } = get();
+    if (!pickup) return;
+    try {
+      const response = await api.get(`/nearby-drivers?lat=${pickup.lat}&lng=${pickup.lng}`);
+      set({ nearbyDrivers: response.data });
+    } catch (error) {
+      console.log('Error fetching nearby drivers', error);
     }
   },
 

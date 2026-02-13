@@ -35,6 +35,7 @@ def mock_db(monkeypatch):
     dummy_db.vehicle_types = DummyColl()
     dummy_db.fare_configs = DummyColl()
     dummy_db.service_areas = DummyColl()
+    dummy_db.settings = DummyColl()
 
     monkeypatch.setattr(server, 'db', dummy_db)
     return

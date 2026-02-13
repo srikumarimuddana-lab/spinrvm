@@ -7,12 +7,9 @@ import {
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
-  Keyboard,
-  TouchableWithoutFeedback,
-  ActivityIndicator,
   Alert,
   ScrollView,
-  Image,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -25,9 +22,23 @@ import { uploadFile } from '../api/upload';
 // Steps: 0=Intro, 1=Personal, 2=Vehicle, 3=Docs, 4=Review
 const STEPS = ['Intro', 'Personal', 'Vehicle', 'Documents', 'Review'];
 
+interface Requirement {
+  id: string;
+  name: string;
+  description: string;
+  is_mandatory: boolean;
+  requires_back_side: boolean;
+}
+
+interface DocState {
+  front?: string;
+  back?: string;
+  expiry?: string;
+}
+
 export default function BecomeDriverScreen() {
   const router = useRouter();
-  const { registerDriver, isLoading, error, clearError, user } = useAuthStore();
+  const { registerDriver, isLoading, user } = useAuthStore();
 
   const [currentStep, setCurrentStep] = useState(0);
 
@@ -47,31 +58,18 @@ export default function BecomeDriverScreen() {
   const [vehicleType, setVehicleType] = useState('');
   const [licenseNumber, setLicenseNumber] = useState('');
 
-  // Documents (URLs)
-  const [docs, setDocs] = useState({
-    license_front: '',
-    license_back: '',
-    insurance: '',
-    registration: '',
-    inspection: '',
-    background_check: '',
-  });
-
-  // Expiry Dates (YYYY-MM-DD strings for complexity reduction)
-  const [dates, setDates] = useState({
-    license_expiry: '',
-    insurance_expiry: '',
-    inspection_expiry: '',
-    background_check_expiry: '',
-  });
+  // Dynamic Requirements
+  const [requirements, setRequirements] = useState<Requirement[]>([]);
+  const [docs, setDocs] = useState<Record<string, DocState>>({});
 
   // UI State
   const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
   const [loadingTypes, setLoadingTypes] = useState(false);
-  const [uploadingDoc, setUploadingDoc] = useState<string | null>(null);
+  const [uploadingDoc, setUploadingDoc] = useState<string | null>(null); // reqId_side
 
   useEffect(() => {
     fetchVehicleTypes();
+    fetchRequirements();
   }, []);
 
   const fetchVehicleTypes = async () => {
@@ -87,7 +85,19 @@ export default function BecomeDriverScreen() {
     }
   };
 
-  const handleUpload = async (key: keyof typeof docs) => {
+  const fetchRequirements = async () => {
+    try {
+      const response = await fetch(`${SpinrConfig.backendUrl}/api/drivers/requirements`);
+      if (response.ok) {
+        const data = await response.json();
+        setRequirements(data);
+      }
+    } catch (e) {
+      console.log('Error fetching requirements:', e);
+    }
+  };
+
+  const handleUpload = async (reqId: string, side: 'front' | 'back') => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: ['image/*', 'application/pdf'],
@@ -97,11 +107,17 @@ export default function BecomeDriverScreen() {
       if (result.canceled) return;
 
       const asset = result.assets[0];
-      setUploadingDoc(key);
+      setUploadingDoc(`${reqId}_${side}`);
 
       const url = await uploadFile(asset.uri, asset.name, asset.mimeType || 'image/jpeg');
 
-      setDocs(prev => ({ ...prev, [key]: url }));
+      setDocs(prev => ({
+        ...prev,
+        [reqId]: {
+          ...prev[reqId],
+          [side]: url
+        }
+      }));
       Alert.alert('Success', 'Document uploaded successfully');
     } catch (err: any) {
       Alert.alert('Upload Failed', err.message);
@@ -123,23 +139,28 @@ export default function BecomeDriverScreen() {
         }
         return vehicleMake && vehicleModel && vehicleColor && licensePlate && vehicleVin && vehicleType;
       case 3: // Docs
-        // Basic check: all required docs + dates
-        const missing = [];
-        if (!docs.license_front) missing.push('License Front');
-        if (!docs.license_back) missing.push('License Back');
-        if (!licenseNumber) missing.push('License Number');
-        if (!docs.insurance) missing.push('Insurance');
-        if (!docs.registration) missing.push('Registration');
-        if (!docs.inspection) missing.push('Inspection');
-        if (!docs.background_check) missing.push('Background Check');
+        const missing: string[] = [];
+        if (!licenseNumber) missing.push('Driver License Number');
 
-        if (!dates.license_expiry) missing.push('License Expiry');
-        if (!dates.insurance_expiry) missing.push('Insurance Expiry');
-        if (!dates.inspection_expiry) missing.push('Inspection Expiry');
-        if (!dates.background_check_expiry) missing.push('Background Check Expiry');
+        requirements.forEach(req => {
+          if (req.is_mandatory) {
+            const uploaded = docs[req.id];
+            if (!uploaded?.front) {
+              missing.push(`${req.name} (Front)`);
+            }
+            if (req.requires_back_side && !uploaded?.back) {
+              missing.push(`${req.name} (Back)`);
+            }
+            // Check expiry if we want to enforce it for everything
+            // For now, let's enforce expiry only for License and Insurance which are critical
+            if (['Driving License', 'Vehicle Insurance'].includes(req.name) && !uploaded?.expiry) {
+              missing.push(`${req.name} Expiry Date`);
+            }
+          }
+        });
 
         if (missing.length > 0) {
-          Alert.alert('Missing Documents', `Please upload: ${missing.join(', ')}`);
+          Alert.alert('Missing Documents', `Please provide: ${missing.join(', ')}`);
           return false;
         }
         return true;
@@ -158,6 +179,39 @@ export default function BecomeDriverScreen() {
 
   const handleSubmit = async () => {
     try {
+      // Map expiry dates to legacy fields
+      const getExpiry = (name: string) => {
+        const req = requirements.find(r => r.name === name);
+        return req && docs[req.id]?.expiry ? new Date(docs[req.id].expiry!).toISOString() : undefined;
+      };
+
+      const licenseExpiry = getExpiry('Driving License');
+      const insuranceExpiry = getExpiry('Vehicle Insurance');
+      const inspectionExpiry = getExpiry('Vehicle Inspection');
+      const backgroundExpiry = getExpiry('Background Check');
+
+      // Construct dynamic documents list
+      const documentsPayload: any[] = [];
+      Object.entries(docs).forEach(([reqId, data]) => {
+        const req = requirements.find(r => r.id === reqId);
+        if (data.front) {
+          documentsPayload.push({
+            requirement_id: reqId,
+            document_url: data.front,
+            side: 'front',
+            document_type: req?.name
+          });
+        }
+        if (data.back) {
+          documentsPayload.push({
+            requirement_id: reqId,
+            document_url: data.back,
+            side: 'back',
+            document_type: req?.name
+          });
+        }
+      });
+
       await registerDriver({
         // Personal
         first_name: firstName,
@@ -172,15 +226,16 @@ export default function BecomeDriverScreen() {
         license_plate: licensePlate,
         vehicle_vin: vehicleVin,
         vehicle_type_id: vehicleType,
-        // Docs & Dates
+
+        // Legacy/Top-level Fields
         license_number: licenseNumber,
+        license_expiry_date: licenseExpiry,
+        insurance_expiry_date: insuranceExpiry,
+        vehicle_inspection_expiry_date: inspectionExpiry,
+        background_check_expiry_date: backgroundExpiry,
 
-        license_expiry_date: new Date(dates.license_expiry).toISOString(),
-        insurance_expiry_date: new Date(dates.insurance_expiry).toISOString(),
-        vehicle_inspection_expiry_date: new Date(dates.inspection_expiry).toISOString(),
-        background_check_expiry_date: new Date(dates.background_check_expiry).toISOString(),
-
-        documents: docs,
+        // New Dynamic Docs
+        documents: documentsPayload,
       });
 
       Alert.alert('Success', 'Application submitted! Waiting for approval.', [
@@ -203,45 +258,6 @@ export default function BecomeDriverScreen() {
         keyboardType={keyboardType}
         maxLength={maxLength}
       />
-    </View>
-  );
-
-  const renderDocUpload = (label: string, docKey: keyof typeof docs, dateKey?: keyof typeof dates, dateLabel?: string) => (
-    <View style={styles.docContainer}>
-      <Text style={styles.label}>{label}</Text>
-
-      <TouchableOpacity
-        style={[styles.uploadButton, docs[docKey] ? styles.uploadSuccess : {}]}
-        onPress={() => handleUpload(docKey)}
-        disabled={!!uploadingDoc}
-      >
-        {uploadingDoc === docKey ? (
-          <ActivityIndicator color={SpinrConfig.theme.colors.primary} />
-        ) : docs[docKey] ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Ionicons name="checkmark-circle" size={20} color="green" />
-            <Text style={[styles.uploadText, { color: 'green', marginLeft: 8 }]}>Uploaded</Text>
-          </View>
-        ) : (
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Ionicons name="cloud-upload-outline" size={20} color="#666" />
-            <Text style={styles.uploadText}>Select Document</Text>
-          </View>
-        )}
-      </TouchableOpacity>
-
-      {dateKey && (
-        <View style={{ marginTop: 10 }}>
-          <Text style={styles.subLabel}>{dateLabel || 'Expiry Date (YYYY-MM-DD)'}</Text>
-          <TextInput
-            style={styles.dateInput}
-            value={dates[dateKey]}
-            onChangeText={(t) => setDates(prev => ({ ...prev, [dateKey]: t }))}
-            placeholder="2025-12-31"
-            placeholderTextColor="#999"
-          />
-        </View>
-      )}
     </View>
   );
 
@@ -326,12 +342,70 @@ export default function BecomeDriverScreen() {
 
               {renderInput('Driver License Number', licenseNumber, setLicenseNumber, 'S1234-5678-9012', 'default')}
 
-              {renderDocUpload('License Front', 'license_front', 'license_expiry', 'License Expiry')}
-              {renderDocUpload('License Back', 'license_back')}
-              {renderDocUpload('Insurance', 'insurance', 'insurance_expiry', 'Insurance Expiry')}
-              {renderDocUpload('Registration', 'registration')}
-              {renderDocUpload('Inspection', 'inspection', 'inspection_expiry', 'Inspection Expiry')}
-              {renderDocUpload('Background Check', 'background_check', 'background_check_expiry', 'Check Expiry')}
+              {requirements.map(req => (
+                <View key={req.id} style={styles.docContainer}>
+                  <Text style={styles.label}>{req.name} {req.is_mandatory && '*'}</Text>
+
+                  {/* Front Side */}
+                  <TouchableOpacity
+                    style={[styles.uploadButton, docs[req.id]?.front ? styles.uploadSuccess : {}]}
+                    onPress={() => handleUpload(req.id, 'front')}
+                    disabled={!!uploadingDoc}
+                  >
+                    {uploadingDoc === `${req.id}_front` ? (
+                      <ActivityIndicator color={SpinrConfig.theme.colors.primary} />
+                    ) : docs[req.id]?.front ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Ionicons name="checkmark-circle" size={20} color="green" />
+                        <Text style={[styles.uploadText, { color: 'green' }]}>{req.requires_back_side ? 'Front Uploaded' : 'Uploaded'}</Text>
+                      </View>
+                    ) : (
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Ionicons name="cloud-upload-outline" size={20} color="#666" />
+                        <Text style={styles.uploadText}>{req.requires_back_side ? 'Upload Front' : 'Upload Document'}</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+
+                  {/* Back Side */}
+                  {req.requires_back_side && (
+                    <TouchableOpacity
+                      style={[styles.uploadButton, { marginTop: 10 }, docs[req.id]?.back ? styles.uploadSuccess : {}]}
+                      onPress={() => handleUpload(req.id, 'back')}
+                      disabled={!!uploadingDoc}
+                    >
+                      {uploadingDoc === `${req.id}_back` ? (
+                        <ActivityIndicator color={SpinrConfig.theme.colors.primary} />
+                      ) : docs[req.id]?.back ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Ionicons name="checkmark-circle" size={20} color="green" />
+                          <Text style={[styles.uploadText, { color: 'green' }]}>Back Uploaded</Text>
+                        </View>
+                      ) : (
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Ionicons name="cloud-upload-outline" size={20} color="#666" />
+                          <Text style={styles.uploadText}>Upload Back</Text>
+                        </View>
+                      )}
+                    </TouchableOpacity>
+                  )}
+
+                  {/* Expiry Date - Show for all, or configured ones */}
+                  <View style={{ marginTop: 10 }}>
+                    <Text style={styles.subLabel}>Expiry Date (YYYY-MM-DD)</Text>
+                    <TextInput
+                      style={styles.dateInput}
+                      value={docs[req.id]?.expiry || ''}
+                      onChangeText={(t) => setDocs(p => ({
+                        ...p,
+                        [req.id]: { ...p[req.id], expiry: t }
+                      }))}
+                      placeholder="2025-12-31"
+                      placeholderTextColor="#999"
+                    />
+                  </View>
+                </View>
+              ))}
 
               <TouchableOpacity style={styles.primaryButton} onPress={nextStep}>
                 <Text style={styles.primaryButtonText}>Review Application</Text>
@@ -346,7 +420,7 @@ export default function BecomeDriverScreen() {
                 <Text style={styles.reviewRow}><Text style={{ fontWeight: 'bold' }}>Name:</Text> {firstName} {lastName}</Text>
                 <Text style={styles.reviewRow}><Text style={{ fontWeight: 'bold' }}>Vehicle:</Text> {vehicleYear} {vehicleColor} {vehicleMake} {vehicleModel}</Text>
                 <Text style={styles.reviewRow}><Text style={{ fontWeight: 'bold' }}>Plate:</Text> {licensePlate}</Text>
-                <Text style={styles.reviewRow}><Text style={{ fontWeight: 'bold' }}>Docs Uploaded:</Text> {Object.values(docs).filter(Boolean).length}/6</Text>
+                <Text style={styles.reviewRow}><Text style={{ fontWeight: 'bold' }}>Docs Set:</Text> {Object.values(docs).filter(d => d.front).length} / {requirements.length}</Text>
               </View>
 
               <TouchableOpacity
@@ -384,7 +458,7 @@ const styles = StyleSheet.create({
   },
   dateInput: {
     borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, padding: 10,
-    fontSize: 14
+    fontSize: 14, color: '#000'
   },
 
   docContainer: {

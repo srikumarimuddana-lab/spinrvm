@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -6,16 +6,30 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
+  Image,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useAuthStore } from '../../store/authStore';
 import SpinrConfig from '../../config/spinr.config';
+import Constants from 'expo-constants';
+
+const getBackendUrl = () => {
+  if (process.env.EXPO_PUBLIC_BACKEND_URL) return process.env.EXPO_PUBLIC_BACKEND_URL;
+  if (Constants.expoConfig?.hostUri) {
+    const host = Constants.expoConfig.hostUri.split(':')[0];
+    return `http://${host}:8000`;
+  }
+  return 'http://localhost:8000';
+};
 
 export default function AccountScreen() {
   const router = useRouter();
-  const { user, logout, toggleDriverMode } = useAuthStore();
+  const { user, logout, toggleDriverMode, updateProfileImage, isLoading } = useAuthStore();
+  const [uploading, setUploading] = useState(false);
 
   const handleLogout = () => {
     Alert.alert(
@@ -35,13 +49,88 @@ export default function AccountScreen() {
     );
   };
 
+  const handlePickImage = async () => {
+    Alert.alert(
+      'Upload Profile Picture',
+      'Choose an option',
+      [
+        {
+          text: 'Take Photo',
+          onPress: async () => {
+            try {
+              const { status } = await ImagePicker.requestCameraPermissionsAsync();
+              if (status !== 'granted') {
+                Alert.alert('Permission needed', 'Please allow camera access to take a photo.');
+                return;
+              }
+
+              const result = await ImagePicker.launchCameraAsync({
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.8,
+              });
+
+              if (!result.canceled && result.assets[0]) {
+                setUploading(true);
+                try {
+                  await updateProfileImage(result.assets[0].uri);
+                } catch (error: any) {
+                  Alert.alert('Upload Failed', error.message || 'Could not upload profile picture.');
+                } finally {
+                  setUploading(false);
+                }
+              }
+            } catch (error) {
+              Alert.alert('Error', 'Could not open camera.');
+            }
+          },
+        },
+        {
+          text: 'Choose from Library',
+          onPress: async () => {
+            try {
+              const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+              if (status !== 'granted') {
+                Alert.alert('Permission needed', 'Please allow access to your photo library.');
+                return;
+              }
+
+              const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ['images'],
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.8,
+              });
+
+              if (!result.canceled && result.assets[0]) {
+                setUploading(true);
+                try {
+                  await updateProfileImage(result.assets[0].uri);
+                } catch (error: any) {
+                  Alert.alert('Upload Failed', error.message || 'Could not upload profile picture.');
+                } finally {
+                  setUploading(false);
+                }
+              }
+            } catch (error) {
+              Alert.alert('Error', 'Could not open photo library.');
+            }
+          },
+        },
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+      ]
+    );
+  };
 
   const handleDriverSwitch = () => {
     if (user?.is_driver || user?.role === 'driver') {
-        toggleDriverMode();
-        router.replace('/(driver)');
+      toggleDriverMode();
+      router.replace('/(driver)');
     } else {
-        router.push('/become-driver');
+      router.push('/become-driver');
     }
   };
 
@@ -89,9 +178,21 @@ export default function AccountScreen() {
         <View style={styles.profileCard}>
           <View style={styles.avatarContainer}>
             <View style={styles.avatar}>
-              <Ionicons name="person" size={40} color="#666" />
+              {user?.profile_image ? (
+                <Image
+                  source={{ uri: user.profile_image }}
+                  style={styles.avatarImage}
+                />
+              ) : (
+                <Ionicons name="person" size={40} color="#666" />
+              )}
+              {uploading && (
+                <View style={styles.uploadingOverlay}>
+                  <ActivityIndicator size="small" color="#FFF" />
+                </View>
+              )}
             </View>
-            <TouchableOpacity style={styles.editAvatarButton}>
+            <TouchableOpacity style={styles.editAvatarButton} onPress={handlePickImage} disabled={uploading}>
               <Ionicons name="camera" size={14} color="#FFF" />
             </TouchableOpacity>
           </View>
@@ -189,6 +290,19 @@ const styles = StyleSheet.create({
     height: 100,
     borderRadius: 50,
     backgroundColor: '#E8E8E8',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+  },
+  uploadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    borderRadius: 50,
     justifyContent: 'center',
     alignItems: 'center',
   },

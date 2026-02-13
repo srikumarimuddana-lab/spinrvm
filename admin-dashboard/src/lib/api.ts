@@ -195,3 +195,32 @@ export const assignDriverArea = (driverId: string, serviceAreaId: string) =>
     request<any>(`/api/admin/drivers/${driverId}/area?service_area_id=${serviceAreaId}`, {
         method: "PUT",
     });
+
+/* ── Document Requirements ───────────────── */
+export const getRequirements = () =>
+    request<any[]>("/api/admin/documents/requirements");
+
+export const createRequirement = (data: any) =>
+    request<any>("/api/admin/documents/requirements", {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+
+export const updateRequirement = (id: string, data: any) =>
+    request<any>(`/api/admin/documents/requirements/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+    });
+
+export const deleteRequirement = (id: string) =>
+    request<any>(`/api/admin/documents/requirements/${id}`, { method: "DELETE" });
+
+/* ── Driver Document Verification ────────── */
+export const getDriverDocuments = (driverId: string) =>
+    request<any[]>(`/api/admin/documents/drivers/${driverId}`);
+
+export const reviewDocument = (docId: string, status: string, reason?: string) =>
+    request<any>(`/api/admin/documents/${docId}/review`, {
+        method: "POST",
+        body: JSON.stringify({ status, rejection_reason: reason }),
+    });

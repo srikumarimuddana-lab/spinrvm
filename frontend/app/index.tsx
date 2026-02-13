@@ -1,26 +1,26 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Animated } from 'react-native';
 import { useRouter } from 'expo-router';
+import Constants from 'expo-constants';
 import { useAuthStore } from '../store/authStore';
 import SpinrConfig from '../config/spinr.config';
 
-export default function SplashScreen() {
+export default function Index() {
   const router = useRouter();
-  const { user, isInitialized, token } = useAuthStore();
-  const fadeAnim = React.useRef(new Animated.Value(0)).current;
-  const scaleAnim = React.useRef(new Animated.Value(0.8)).current;
+  const { isInitialized, token, user } = useAuthStore();
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const scaleAnim = useRef(new Animated.Value(0.5)).current;
 
   useEffect(() => {
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
-        duration: 800,
+        duration: 1000,
         useNativeDriver: true,
       }),
       Animated.spring(scaleAnim, {
         toValue: 1,
         friction: 8,
-        tension: 40,
         useNativeDriver: true,
       }),
     ]).start();
@@ -34,10 +34,20 @@ export default function SplashScreen() {
         router.replace('/login');
       } else if (user && !user.profile_complete) {
         router.replace('/profile-setup');
-      } else if (user && user.profile_complete) {
-        router.replace('/(tabs)');
       } else {
-        router.replace('/login');
+        // Profile is complete, check App Variant
+        const appVariant = Constants.expoConfig?.extra?.APP_VARIANT;
+
+        if (appVariant === 'driver') {
+          if (user?.is_driver) {
+            router.replace('/(driver)');
+          } else {
+            router.replace('/become-driver');
+          }
+        } else {
+          // Default / Rider App
+          router.replace('/(tabs)');
+        }
       }
     }, 1500);
 

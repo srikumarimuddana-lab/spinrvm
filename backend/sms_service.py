@@ -1,45 +1,60 @@
+"""
+SMS Service for Spinr
+Supports Twilio for production SMS delivery with console fallback for development.
+Credentials are read from DB settings (passed in by caller), not env vars.
+"""
 import logging
-from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-async def send_otp_sms(
-    phone: str,
-    otp_code: str,
-    twilio_sid: Optional[str] = None,
-    twilio_token: Optional[str] = None,
-    twilio_from: Optional[str] = None
-) -> Dict[str, Any]:
+
+async def send_sms(to_phone: str, message: str, *,
+                   twilio_sid: str = '', twilio_token: str = '', twilio_from: str = '') -> dict:
     """
-    Sends an OTP via SMS using Twilio if credentials are provided.
-    Falls back to logging the OTP if Twilio is not configured.
+    Send an SMS message.
+
+    When Twilio credentials are provided: sends real SMS via Twilio.
+    Otherwise: logs to console and returns mock result.
+
+    Returns:
+        dict with 'success' (bool), 'provider' (str), and optionally 'sid' or 'error'.
     """
+    if not all([twilio_sid, twilio_token, twilio_from]):
+        # Development fallback — log to console
+        logger.info(f'[DEV SMS] To: {to_phone} | Message: {message}')
+        return {
+            'success': True,
+            'provider': 'console',
+            'message': 'SMS logged to console (Twilio not configured)'
+        }
 
-    # 1. Check if Twilio is fully configured
-    if twilio_sid and twilio_token and twilio_from:
-        try:
-            from twilio.rest import Client
-            client = Client(twilio_sid, twilio_token)
+    try:
+        from twilio.rest import Client
 
-            message = client.messages.create(
-                body=f"Your Spinr verification code is: {otp_code}",
-                from_=twilio_from,
-                to=phone
-            )
+        client = Client(twilio_sid, twilio_token)
+        sms = client.messages.create(
+            body=message,
+            from_=twilio_from,
+            to=to_phone
+        )
+        logger.info(f'SMS sent to {to_phone} via Twilio (SID: {sms.sid})')
+        return {
+            'success': True,
+            'provider': 'twilio',
+            'sid': sms.sid
+        }
+    except Exception as e:
+        logger.error(f'Failed to send SMS to {to_phone}: {e}')
+        return {
+            'success': False,
+            'provider': 'twilio',
+            'error': str(e)
+        }
 
-            logger.info(f"SMS sent via Twilio to {phone}: SID {message.sid}")
-            return {"success": True, "sid": message.sid}
 
-        except ImportError:
-            logger.error("Twilio library not installed. Add 'twilio' to requirements.txt")
-            return {"success": False, "error": "Twilio library missing"}
-        except Exception as e:
-            logger.error(f"Twilio SMS failed: {e}")
-            return {"success": False, "error": str(e)}
-
-    # 2. Fallback: Log the OTP (Development Mode)
-    else:
-        logger.warning(f"Twilio not configured. Mocking SMS to {phone}. OTP: {otp_code}")
-        # In a real production app, you might want to return False here if SMS is mandatory.
-        # But for this hybrid setup, we allow mocking if credentials aren't set.
-        return {"success": True, "message": "Twilio not configured; OTP logged."}
+async def send_otp_sms(phone: str, otp_code: str, *,
+                       twilio_sid: str = '', twilio_token: str = '', twilio_from: str = '') -> dict:
+    """Send an OTP code via SMS."""
+    message = f'Your Spinr verification code is: {otp_code}. It expires in 5 minutes.'
+    return await send_sms(phone, message,
+                          twilio_sid=twilio_sid, twilio_token=twilio_token, twilio_from=twilio_from)

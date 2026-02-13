@@ -195,6 +195,64 @@ export default function SettingsPage() {
                                     placeholder="sk_test_..."
                                 />
                             </div>
+                            <div className="space-y-2">
+                                <Label>Webhook Secret</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.stripe_webhook_secret || ""}
+                                    onChange={(e) =>
+                                        update("stripe_webhook_secret", e.target.value)
+                                    }
+                                    placeholder="whsec_..."
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    From Stripe Dashboard → Developers → Webhooks
+                                </p>
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* SMS / Twilio */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">SMS / Twilio</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                When not configured, OTP defaults to <strong>1234</strong> for testing.
+                            </p>
+                            <div className="space-y-2">
+                                <Label>Account SID</Label>
+                                <Input
+                                    value={settings.twilio_account_sid || ""}
+                                    onChange={(e) =>
+                                        update("twilio_account_sid", e.target.value)
+                                    }
+                                    placeholder="AC..."
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Auth Token</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.twilio_auth_token || ""}
+                                    onChange={(e) =>
+                                        update("twilio_auth_token", e.target.value)
+                                    }
+                                    placeholder="Token"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>From Number</Label>
+                                <Input
+                                    value={settings.twilio_from_number || ""}
+                                    onChange={(e) =>
+                                        update("twilio_from_number", e.target.value)
+                                    }
+                                    placeholder="+1234567890"
+                                />
+                            </div>
                         </CardContent>
                     </Card>
 

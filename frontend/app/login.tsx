@@ -1,9 +1,21 @@
 import React, { useState, useRef } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
-import { FirebaseRecaptchaVerifierModal } from 'expo-firebase-recaptcha';
-import { PhoneAuthProvider } from 'firebase/auth';
 import { auth } from '../config/firebaseConfig';
+import api from '../api/client';
+
+// Only import Firebase phone auth when Firebase is actually configured
+const isFirebaseConfigured = typeof auth.onAuthStateChanged === 'function';
+let FirebaseRecaptchaVerifierModal: any = null;
+let PhoneAuthProvider: any = null;
+if (isFirebaseConfigured) {
+  try {
+    FirebaseRecaptchaVerifierModal = require('expo-firebase-recaptcha').FirebaseRecaptchaVerifierModal;
+    PhoneAuthProvider = require('firebase/auth').PhoneAuthProvider;
+  } catch (e) {
+    console.warn('Firebase recaptcha not available');
+  }
+}
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -18,24 +30,37 @@ export default function LoginScreen() {
     }
 
     setLoading(true);
+    const formattedNumber = `+1${phoneNumber.replace(/\D/g, '')}`;
+
     try {
-      // Format number to E.164 format (assuming Canadian +1)
-      const formattedNumber = `+1${phoneNumber.replace(/\D/g, '')}`;
+      if (isFirebaseConfigured && PhoneAuthProvider) {
+        // Firebase phone auth flow
+        const phoneProvider = new PhoneAuthProvider(auth);
+        const verificationId = await phoneProvider.verifyPhoneNumber(
+          formattedNumber,
+          recaptchaVerifier.current!
+        );
 
-      const phoneProvider = new PhoneAuthProvider(auth);
-      const verificationId = await phoneProvider.verifyPhoneNumber(
-        formattedNumber,
-        recaptchaVerifier.current!
-      );
+        router.push({
+          pathname: '/otp',
+          params: { verificationId, phoneNumber: formattedNumber, mode: 'firebase' }
+        });
+      } else {
+        // Backend OTP flow (dev mode — OTP is 1234)
+        const response = await api.post('/auth/send-otp', { phone: formattedNumber });
 
-      // Navigate to OTP screen with the verification ID
-      router.push({
-        pathname: '/otp',
-        params: { verificationId, phoneNumber: formattedNumber }
-      });
+        if (response.data.success) {
+          router.push({
+            pathname: '/otp',
+            params: { phoneNumber: formattedNumber, mode: 'backend' }
+          });
+        } else {
+          Alert.alert('Error', 'Failed to send OTP');
+        }
+      }
     } catch (error: any) {
       console.error(error);
-      Alert.alert('Login Failed', error.message);
+      Alert.alert('Login Failed', error.response?.data?.detail || error.message);
     } finally {
       setLoading(false);
     }
@@ -46,11 +71,12 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
-      <FirebaseRecaptchaVerifierModal
-        ref={recaptchaVerifier}
-        firebaseConfig={auth.app.options}
-      // attemptInvisibleVerification={true} 
-      />
+      {isFirebaseConfigured && FirebaseRecaptchaVerifierModal && (
+        <FirebaseRecaptchaVerifierModal
+          ref={recaptchaVerifier}
+          firebaseConfig={auth.app?.options}
+        />
+      )}
 
       <View style={styles.content}>
         <Text style={styles.title}>Enter your mobile number</Text>
@@ -70,6 +96,10 @@ export default function LoginScreen() {
             editable={!loading}
           />
         </View>
+
+        {!isFirebaseConfigured && (
+          <Text style={styles.devHint}>Dev mode — OTP is 1234</Text>
+        )}
 
         <TouchableOpacity
           style={[styles.button, loading && styles.buttonDisabled]}
@@ -112,4 +142,5 @@ const styles = StyleSheet.create({
   button: { backgroundColor: '#000', borderRadius: 8, height: 56, justifyContent: 'center', alignItems: 'center' },
   buttonDisabled: { backgroundColor: '#666' },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  devHint: { fontSize: 13, color: '#999', textAlign: 'center' as const, marginBottom: 12 },
 });

@@ -64,11 +64,13 @@ export interface User {
   first_name?: string;
   last_name?: string;
   email?: string;
+  gender?: string;
   city?: string;
   role: string;
   created_at: string;
   profile_complete: boolean;
   is_driver?: boolean;
+  profile_image?: string;  // Base64 data URI
 }
 
 interface AuthState {
@@ -83,11 +85,12 @@ interface AuthState {
   // Actions
   initialize: () => Promise<void>;
   verifyOTP: (verificationId: string, code: string) => Promise<void>;
-  createProfile: (data: { first_name: string; last_name: string; email: string; city: string }) => Promise<void>;
+  createProfile: (data: { first_name: string; last_name: string; email: string; gender: string }) => Promise<void>;
   fetchDriverProfile: () => Promise<void>;
   registerDriver: (data: any) => Promise<void>;
   toggleDriverMode: () => void;
   updateDriverStatus: (isOnline: boolean) => Promise<void>;
+  updateProfileImage: (imageUri: string) => Promise<void>;
   logout: () => Promise<void>;
   clearError: () => void;
 }
@@ -105,23 +108,82 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     console.log('Auth initializing...');
     set({ isLoading: true });
 
-    // Listen for Firebase Auth changes
-    auth.onAuthStateChanged(async (firebaseUser) => {
-      if (firebaseUser) {
+    // Safety timeout: if Firebase doesn't respond within 4s, force init to prevent splash screen hang
+    setTimeout(() => {
+      const state = get();
+      if (!state.isInitialized) {
+        console.log('Auth init timed out - forcing completion');
+        set({ isInitialized: true, isLoading: false });
+      }
+    }, 4000);
+
+    // Check if Firebase Auth is actually available
+    if (typeof auth.onAuthStateChanged === 'function') {
+      // Listen for Firebase Auth changes
+      auth.onAuthStateChanged(async (firebaseUser) => {
+        if (firebaseUser) {
+          try {
+            const token = await firebaseUser.getIdToken();
+            console.log('Got Firebase token');
+
+            // Sync with backend
+            const response = await api.get('/auth/me');
+            const userData = response.data;
+
+            let driverData = null;
+            if (userData.is_driver || userData.role === 'driver') {
+              try {
+                const driverRes = await api.get('/drivers/me');
+                driverData = driverRes.data;
+              } catch (e) {
+                console.log('Failed to fetch driver data on init');
+              }
+            }
+
+            set({
+              user: userData,
+              driver: driverData,
+              token,
+              isInitialized: true,
+              isLoading: false
+            });
+
+            await storage.setItem('auth_token', token);
+
+          } catch (error: any) {
+            console.log('Failed to sync user with backend:', error);
+            set({ isLoading: false, isInitialized: true, error: 'Failed to sync user' });
+          }
+        } else {
+          console.log('No user logged in');
+          await storage.deleteItem('auth_token');
+          set({
+            user: null,
+            driver: null,
+            token: null,
+            isInitialized: true,
+            isLoading: false
+          });
+        }
+      });
+    } else {
+      // Firebase not configured — fall back to stored JWT token
+      console.log('Firebase not configured, using stored token auth');
+      const storedToken = await storage.getItem('auth_token');
+
+      if (storedToken) {
         try {
-          const token = await firebaseUser.getIdToken();
-          console.log('Got Firebase token');
-
-          // No need to set headers manually as api/client.ts interceptor handles it
-
-          // Sync with backend
-          const response = await api.get('/auth/me');
+          const response = await api.get('/auth/me', {
+            headers: { Authorization: `Bearer ${storedToken}` }
+          });
           const userData = response.data;
 
           let driverData = null;
           if (userData.is_driver || userData.role === 'driver') {
             try {
-              const driverRes = await api.get('/drivers/me');
+              const driverRes = await api.get('/drivers/me', {
+                headers: { Authorization: `Bearer ${storedToken}` }
+              });
               driverData = driverRes.data;
             } catch (e) {
               console.log('Failed to fetch driver data on init');
@@ -131,30 +193,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           set({
             user: userData,
             driver: driverData,
-            token,
+            token: storedToken,
             isInitialized: true,
             isLoading: false
           });
-
-          // Persist token just in case
-          await storage.setItem('auth_token', token);
-
         } catch (error: any) {
-          console.log('Failed to sync user with backend:', error);
-          set({ isLoading: false, isInitialized: true, error: 'Failed to sync user' });
+          console.log('Stored token invalid or expired:', error.message);
+          await storage.deleteItem('auth_token');
+          set({ user: null, driver: null, token: null, isInitialized: true, isLoading: false });
         }
       } else {
-        console.log('No user logged in');
-        await storage.deleteItem('auth_token');
-        set({
-          user: null,
-          driver: null,
-          token: null,
-          isInitialized: true,
-          isLoading: false
-        });
+        console.log('No stored token found');
+        set({ user: null, driver: null, token: null, isInitialized: true, isLoading: false });
       }
-    });
+    }
   },
 
   verifyOTP: async (verificationId: string, code: string) => {
@@ -242,9 +294,38 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   logout: async () => {
     try {
-      await signOut(auth);
+      if (typeof auth.onAuthStateChanged === 'function') {
+        await signOut(auth);
+      }
     } catch (error) {
       console.log('Logout error:', error);
+    }
+    await storage.deleteItem('auth_token');
+    set({ user: null, driver: null, token: null, isDriverMode: false });
+  },
+
+  updateProfileImage: async (imageUri: string) => {
+    try {
+      set({ isLoading: true, error: null });
+      const formData = new FormData();
+      const filename = imageUri.split('/').pop() || 'profile.jpg';
+      const match = /\.([\w]+)$/.exec(filename);
+      const type = match ? `image/${match[1] === 'jpg' ? 'jpeg' : match[1]}` : 'image/jpeg';
+
+      formData.append('file', {
+        uri: imageUri,
+        name: filename,
+        type,
+      } as any);
+
+      const response = await api.put('/users/profile-image', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      set({ user: response.data, isLoading: false });
+    } catch (error: any) {
+      const message = error.response?.data?.detail || 'Failed to upload profile image';
+      set({ isLoading: false, error: message });
+      throw new Error(message);
     }
   },
 

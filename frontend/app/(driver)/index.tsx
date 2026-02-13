@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, Dimensions, Switch, ActivityIndicator, Image } from 'react-native';
-import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Dimensions, Switch, ActivityIndicator, Image, Platform } from 'react-native';
 import * as Location from 'expo-location';
 import { useAuthStore } from '../../store/authStore';
 import SpinrConfig from '../../config/spinr.config';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+
+import AppMap from '../../components/AppMap';
 
 export default function DriverDashboard() {
   const router = useRouter();
@@ -14,7 +15,7 @@ export default function DriverDashboard() {
   const [isOnline, setIsOnline] = useState(false);
   const [incomingRide, setIncomingRide] = useState<any>(null);
   const [currentRide, setCurrentRide] = useState<any>(null);
-  const mapRef = useRef<MapView>(null);
+  const mapRef = useRef<any>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   // Initialize location
@@ -117,10 +118,9 @@ export default function DriverDashboard() {
   return (
     <View style={styles.container}>
       {location ? (
-        <MapView
+        <AppMap
           ref={mapRef}
           style={styles.map}
-          provider={PROVIDER_GOOGLE}
           initialRegion={{
             latitude: location.coords.latitude,
             longitude: location.coords.longitude,
@@ -129,8 +129,16 @@ export default function DriverDashboard() {
           }}
           showsUserLocation
         >
-            {/* Show pickup/dropoff markers if ride active */}
-        </MapView>
+          {/* Show pickup/dropoff markers if ride active */}
+        </AppMap>
+      ) : location ? (
+        <View style={[styles.loadingContainer, { backgroundColor: '#e8f4f8' }]}>
+          <Ionicons name="map-outline" size={64} color="#999" />
+          <Text style={{ marginTop: 12, fontSize: 16, color: '#666' }}>Map view is only available on mobile</Text>
+          <Text style={{ marginTop: 4, fontSize: 13, color: '#999' }}>
+            Lat: {location.coords.latitude.toFixed(4)}, Lng: {location.coords.longitude.toFixed(4)}
+          </Text>
+        </View>
       ) : (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={SpinrConfig.theme.colors.primary} />
@@ -155,12 +163,12 @@ export default function DriverDashboard() {
           <Text style={styles.requestTitle}>New Ride Request!</Text>
           <View style={styles.rideDetails}>
             <View style={styles.detailRow}>
-               <Ionicons name="location" size={20} color="green" />
-               <Text style={styles.detailText}>{incomingRide.pickup_address}</Text>
+              <Ionicons name="location" size={20} color="green" />
+              <Text style={styles.detailText}>{incomingRide.pickup_address}</Text>
             </View>
             <View style={styles.detailRow}>
-               <Ionicons name="flag" size={20} color="red" />
-               <Text style={styles.detailText}>{incomingRide.dropoff_address}</Text>
+              <Ionicons name="flag" size={20} color="red" />
+              <Text style={styles.detailText}>{incomingRide.dropoff_address}</Text>
             </View>
             <Text style={styles.fareText}>Est. Earnings: ${incomingRide.fare}</Text>
           </View>
@@ -173,19 +181,19 @@ export default function DriverDashboard() {
       {/* Current Ride Overlay */}
       {currentRide && (
         <View style={styles.rideContainer}>
-           <Text style={styles.rideTitle}>Current Ride</Text>
-           <Text>Picking up at: {currentRide.pickup_address}</Text>
-           <TouchableOpacity
-             style={styles.actionButton}
-             onPress={() => {
-                 // Logic to arrive/start/complete would go here.
-                 // For now, let's just clear it to "complete" simulation locally
-                 Alert.alert('Ride Completed', 'You earned $' + currentRide.fare);
-                 setCurrentRide(null);
-             }}
-           >
-             <Text style={styles.actionButtonText}>Complete Ride (Simulated)</Text>
-           </TouchableOpacity>
+          <Text style={styles.rideTitle}>Current Ride</Text>
+          <Text>Picking up at: {currentRide.pickup_address}</Text>
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => {
+              // Logic to arrive/start/complete would go here.
+              // For now, let's just clear it to "complete" simulation locally
+              Alert.alert('Ride Completed', 'You earned $' + currentRide.fare);
+              setCurrentRide(null);
+            }}
+          >
+            <Text style={styles.actionButtonText}>Complete Ride (Simulated)</Text>
+          </TouchableOpacity>
         </View>
       )}
     </View>

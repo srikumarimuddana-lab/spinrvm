@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useState, Suspense, lazy } from "react";
-import { getDrivers, getServiceAreas } from "@/lib/api";
+import {
+    getDrivers,
+    getServiceAreas,
+    getDriverDocuments,
+    reviewDocument,
+    getRequirements
+} from "@/lib/api";
 import { exportToCsv } from "@/lib/export-csv";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -30,8 +36,8 @@ import {
     FileText,
     CheckCircle,
     XCircle,
-    Copy,
-    ExternalLink
+    ExternalLink,
+    AlertCircle
 } from "lucide-react";
 import {
     Sheet,
@@ -49,7 +55,6 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-    DialogTrigger,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -75,6 +80,11 @@ export default function DriversPage() {
     const [serviceAreas, setServiceAreas] = useState<any[]>([]);
     const [selectedArea, setSelectedArea] = useState("all");
 
+    // Dynamic Documents
+    const [requirements, setRequirements] = useState<any[]>([]);
+    const [driverDocs, setDriverDocs] = useState<any[]>([]);
+    const [docsLoading, setDocsLoading] = useState(false);
+
     // Verification state
     const [selectedDriver, setSelectedDriver] = useState<any>(null);
     const [rejectReason, setRejectReason] = useState("");
@@ -89,7 +99,23 @@ export default function DriversPage() {
         getServiceAreas()
             .then(setServiceAreas)
             .catch(() => { });
+        getRequirements()
+            .then(setRequirements)
+            .catch(() => { });
     }, []);
+
+    // Fetch docs when driver selected
+    useEffect(() => {
+        if (selectedDriver) {
+            setDocsLoading(true);
+            getDriverDocuments(selectedDriver.id)
+                .then(setDriverDocs)
+                .catch(err => console.error(err))
+                .finally(() => setDocsLoading(false));
+        } else {
+            setDriverDocs([]);
+        }
+    }, [selectedDriver]);
 
     const filtered = drivers.filter((d) => {
         const matchSearch =
@@ -127,6 +153,21 @@ export default function DriversPage() {
 
     const onlineCount = filtered.filter((d) => d.is_online === true).length;
     const offlineCount = filtered.filter((d) => d.is_online !== true).length;
+
+    const handleDocReview = async (docId: string, status: 'approved' | 'rejected') => {
+        let reason = null;
+        if (status === 'rejected') {
+            reason = prompt("Enter rejection reason:");
+            if (!reason) return; // Cancelled
+        }
+
+        try {
+            const updatedDoc = await reviewDocument(docId, status, reason || undefined);
+            setDriverDocs(docs => docs.map(d => d.id === docId ? updatedDoc : d));
+        } catch (error) {
+            alert("Failed to review document");
+        }
+    };
 
     return (
         <div className="space-y-6">
@@ -443,42 +484,87 @@ export default function DriversPage() {
                                     <Separator />
 
                                     <div className="space-y-4">
-                                        <h3 className="font-medium">Documents</h3>
-                                        <div className="grid gap-3">
-                                            {renderDoc("License Front", selectedDriver.documents?.license_front)}
-                                            {renderDoc("License Back", selectedDriver.documents?.license_back)}
-                                            {renderDoc("Insurance", selectedDriver.documents?.insurance)}
-                                            {renderDoc("Vehicle Registration", selectedDriver.documents?.registration)}
-                                            {renderDoc("Vehicle Inspection", selectedDriver.documents?.inspection)}
-                                            {renderDoc("Background Check", selectedDriver.documents?.background_check)}
+                                        <div className="flex items-center justify-between">
+                                            <h3 className="font-medium">Uploaded Documents</h3>
+                                            <span className="text-xs text-muted-foreground">{driverDocs.length} found</span>
                                         </div>
 
-                                        <div className="grid grid-cols-2 gap-4 text-sm mt-4">
-                                            <div>
-                                                <Label className="text-xs text-muted-foreground">License Expiry</Label>
-                                                <div className={isExpired(selectedDriver.license_expiry_date) ? "text-red-500 font-bold" : ""}>
-                                                    {formatDate(selectedDriver.license_expiry_date)}
-                                                </div>
+                                        {docsLoading ? (
+                                            <div className="text-center py-4 text-sm text-muted-foreground">Loading documents...</div>
+                                        ) : driverDocs.length === 0 ? (
+                                            <div className="text-center py-4 bg-muted/20 rounded-md border border-dashed">
+                                                <p className="text-sm text-muted-foreground">No documents uploaded.</p>
                                             </div>
-                                            <div>
-                                                <Label className="text-xs text-muted-foreground">Inspection Expiry</Label>
-                                                <div className={isExpired(selectedDriver.vehicle_inspection_expiry_date) ? "text-red-500 font-bold" : ""}>
-                                                    {formatDate(selectedDriver.vehicle_inspection_expiry_date)}
-                                                </div>
+                                        ) : (
+                                            <div className="grid gap-3">
+                                                {driverDocs.map(doc => {
+                                                    const req = requirements.find(r => r.id === doc.requirement_id);
+                                                    const reqName = req ? req.name : doc.document_type || "Unknown Document";
+                                                    const sideLabel = doc.side ? `(${doc.side})` : "";
+
+                                                    return (
+                                                        <div key={doc.id} className="p-3 border rounded-md bg-card">
+                                                            <div className="flex items-start justify-between mb-2">
+                                                                <div>
+                                                                    <div className="font-medium text-sm flex items-center gap-1">
+                                                                        <FileText className="h-3.5 w-3.5" />
+                                                                        {reqName} {sideLabel}
+                                                                    </div>
+                                                                    <div className="text-xs text-muted-foreground mt-0.5">
+                                                                        {new Date(doc.uploaded_at).toLocaleDateString()}
+                                                                    </div>
+                                                                </div>
+                                                                <Badge variant={
+                                                                    doc.status === 'approved' ? 'default' :
+                                                                        doc.status === 'rejected' ? 'destructive' : 'secondary'
+                                                                } className={
+                                                                    doc.status === 'approved' ? 'bg-emerald-500' : ''
+                                                                }>
+                                                                    {doc.status}
+                                                                </Badge>
+                                                            </div>
+
+                                                            <div className="flex items-center justify-between mt-3">
+                                                                <Button variant="outline" size="sm" asChild className="h-7 text-xs">
+                                                                    <a href={`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}${doc.document_url}`} target="_blank" rel="noopener noreferrer">
+                                                                        View File <ExternalLink className="ml-1 h-3 w-3" />
+                                                                    </a>
+                                                                </Button>
+
+                                                                {doc.status !== 'approved' && (
+                                                                    <div className="flex gap-1">
+                                                                        <Button
+                                                                            size="sm"
+                                                                            variant="ghost"
+                                                                            className="h-7 w-7 p-0 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
+                                                                            onClick={() => handleDocReview(doc.id, 'approved')}
+                                                                            title="Approve"
+                                                                        >
+                                                                            <CheckCircle className="h-4 w-4" />
+                                                                        </Button>
+                                                                        <Button
+                                                                            size="sm"
+                                                                            variant="ghost"
+                                                                            className="h-7 w-7 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
+                                                                            onClick={() => handleDocReview(doc.id, 'rejected')}
+                                                                            title="Reject"
+                                                                        >
+                                                                            <XCircle className="h-4 w-4" />
+                                                                        </Button>
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                            {doc.rejection_reason && (
+                                                                <div className="mt-2 text-xs text-red-500 bg-red-50 p-2 rounded">
+                                                                    Reason: {doc.rejection_reason}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
                                             </div>
-                                            <div>
-                                                <Label className="text-xs text-muted-foreground">Insurance Expiry</Label>
-                                                <div className={isExpired(selectedDriver.insurance_expiry_date) ? "text-red-500 font-bold" : ""}>
-                                                    {formatDate(selectedDriver.insurance_expiry_date)}
-                                                </div>
-                                            </div>
-                                            <div>
-                                                <Label className="text-xs text-muted-foreground">Background Check Expiry</Label>
-                                                <div className={isExpired(selectedDriver.background_check_expiry_date) ? "text-red-500 font-bold" : ""}>
-                                                    {formatDate(selectedDriver.background_check_expiry_date)}
-                                                </div>
-                                            </div>
-                                        </div>
+                                        )}
+                                        {/* Legacy documents fallback if needed, but new system prefers dynamic */}
                                     </div>
                                 </div>
                             </div>
@@ -507,26 +593,6 @@ export default function DriversPage() {
             </Dialog>
         </div >
     );
-
-    function renderDoc(label: string, url: string) {
-        if (!url) return null;
-        const processUrl = (u: string) => u.startsWith("http") ? u : `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}${u}`;
-        return (
-            <div className="flex items-center justify-between p-3 border rounded-md">
-                <div className="flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm font-medium">{label}</span>
-                </div>
-                <div className="flex gap-2">
-                    <Button variant="ghost" size="icon" asChild>
-                        <a href={processUrl(url)} target="_blank" rel="noopener noreferrer">
-                            <ExternalLink className="h-4 w-4" />
-                        </a>
-                    </Button>
-                </div>
-            </div>
-        );
-    }
 
     function formatDate(dateStr: string) {
         if (!dateStr) return "N/A";

@@ -1,25 +1,70 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   Dimensions,
+  ActivityIndicator,
+  Platform,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
+import Constants from 'expo-constants';
 import { useAuthStore } from '../../store/authStore';
 import { useRideStore } from '../../store/rideStore';
 import SpinrConfig from '../../config/spinr.config';
+import AppMap from '../../components/AppMap';
 
 const { width, height } = Dimensions.get('window');
+
+const getBackendUrl = () => {
+  if (process.env.EXPO_PUBLIC_BACKEND_URL) return process.env.EXPO_PUBLIC_BACKEND_URL;
+  if (Constants.expoConfig?.hostUri) {
+    const host = Constants.expoConfig.hostUri.split(':')[0];
+    return `http://${host}:8000`;
+  }
+  return 'http://localhost:8000';
+};
 
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
   const { savedAddresses, fetchSavedAddresses } = useRideStore();
   const [showPromo, setShowPromo] = useState(true);
+  const [location, setLocation] = useState<any>(null);
+  const [region, setRegion] = useState<any>(null);
+  const [temperature, setTemperature] = useState<number | null>(null);
+  const mapRef = useRef<any>(null);
+
+  useEffect(() => {
+    (async () => {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        // Handle permission denied
+        return;
+      }
+
+      let loc = await Location.getCurrentPositionAsync({});
+      setLocation(loc);
+
+      // Fetch temperature from Open-Meteo (free, no API key needed)
+      try {
+        const weatherRes = await fetch(
+          `https://api.open-meteo.com/v1/forecast?latitude=${loc.coords.latitude}&longitude=${loc.coords.longitude}&current_weather=true`
+        );
+        const weatherData = await weatherRes.json();
+        if (weatherData?.current_weather?.temperature !== undefined) {
+          setTemperature(Math.round(weatherData.current_weather.temperature));
+        }
+      } catch (e) {
+        console.log('Weather fetch failed:', e);
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     fetchSavedAddresses();
@@ -43,18 +88,34 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Map Placeholder */}
+      {/* Map Implementation */}
       <View style={styles.mapContainer}>
         {/* Header */}
         <SafeAreaView edges={['top']} style={styles.headerSafeArea}>
           <View style={styles.header}>
             <View style={styles.headerLeft}>
               <View style={styles.avatarContainer}>
-                <Ionicons name="person" size={20} color="#666" />
+                {user?.profile_image ? (
+                  <Image
+                    source={{ uri: user.profile_image }}
+                    style={styles.avatarImage}
+                  />
+                ) : (
+                  <Ionicons name="person" size={20} color="#666" />
+                )}
               </View>
               <View style={styles.greetingContainer}>
-                <Text style={styles.greetingText}>{getGreeting()}</Text>
-                <Text style={styles.cityText}>{user?.city || 'Saskatchewan'}</Text>
+                <View style={styles.greetingRow}>
+                  <Text style={styles.greetingText}>
+                    {getGreeting()}
+                  </Text>
+                  {temperature !== null && (
+                    <Text style={styles.temperatureText}> · {temperature}°C</Text>
+                  )}
+                </View>
+                {user?.first_name && (
+                  <Text style={styles.cityText}>{user.first_name}</Text>
+                )}
               </View>
             </View>
             <TouchableOpacity style={styles.notificationButton}>
@@ -63,26 +124,94 @@ export default function HomeScreen() {
           </View>
         </SafeAreaView>
 
-        {/* Map Background */}
-        <View style={styles.mapPlaceholder}>
-          <View style={styles.mapOverlay}>
-            <Ionicons name="location" size={40} color={SpinrConfig.theme.colors.primary} />
-            <Text style={styles.mapText}>Map View</Text>
+        {/* Map View */}
+        {/* Map View */}
+        {location ? (
+          <AppMap
+            ref={mapRef}
+            style={StyleSheet.absoluteFill}
+            initialRegion={{
+              latitude: location.coords.latitude,
+              longitude: location.coords.longitude,
+              latitudeDelta: 0.0922,
+              longitudeDelta: 0.0421,
+            }}
+            showsUserLocation={true}
+            userInterfaceStyle="light"
+            onRegionChangeComplete={setRegion}
+          />
+        ) : (
+          <View style={styles.mapPlaceholder}>
+            {location ? (
+              <ActivityIndicator size="large" color={SpinrConfig.theme.colors.primary} />
+            ) : (
+              <View style={styles.mapOverlay}>
+                <Ionicons name="location" size={40} color={SpinrConfig.theme.colors.primary} />
+                <Text style={styles.mapText}>Locating...</Text>
+              </View>
+            )}
           </View>
-          {/* Fake car markers */}
-          <View style={[styles.carMarker, { top: '30%', left: '20%' }]}>
-            <Ionicons name="car" size={16} color="#FFF" />
-          </View>
-          <View style={[styles.carMarker, { top: '50%', right: '25%' }]}>
-            <Ionicons name="car" size={16} color="#FFF" />
-          </View>
-          <View style={[styles.carMarker, { top: '40%', left: '60%' }]}>
-            <Ionicons name="car" size={16} color="#FFF" />
-          </View>
+        )}
+
+        {/* Map Controls Container - Right Side */}
+        {/* Map Controls Container - Right Side */}
+        <View style={styles.mapControls}>
+          <TouchableOpacity style={styles.mapControlButton} onPress={() => {
+            if (region && mapRef.current) {
+              mapRef.current.animateToRegion({
+                ...region,
+                latitudeDelta: region.latitudeDelta / 2,
+                longitudeDelta: region.longitudeDelta / 2,
+              }, 500);
+            }
+          }}>
+            <Ionicons name="add" size={24} color="#1A1A1A" />
+          </TouchableOpacity>
+          <View style={styles.divider} />
+          <TouchableOpacity style={styles.mapControlButton} onPress={() => {
+            if (region && mapRef.current) {
+              mapRef.current.animateToRegion({
+                ...region,
+                latitudeDelta: region.latitudeDelta * 2,
+                longitudeDelta: region.longitudeDelta * 2,
+              }, 500);
+            }
+          }}>
+            <Ionicons name="remove" size={24} color="#1A1A1A" />
+          </TouchableOpacity>
         </View>
 
-        {/* Current Location Button */}
-        <TouchableOpacity style={styles.locationButton}>
+        {/* SOS Button - Left Side */}
+        <TouchableOpacity style={styles.sosButton} onPress={() => {
+          // SOS Logic
+          alert('SOS Triggered');
+        }}>
+          <Ionicons name="shield-checkmark" size={24} color="#FFFFFF" />
+          <Text style={styles.sosText}>SOS</Text>
+        </TouchableOpacity>
+
+        {/* Current Location Button - Fixed Logic */}
+        <TouchableOpacity style={styles.locationButton} onPress={async () => {
+          if (mapRef.current) {
+            let loc = location;
+            if (!loc) {
+              const { status } = await Location.requestForegroundPermissionsAsync();
+              if (status === 'granted') {
+                loc = await Location.getCurrentPositionAsync({});
+                setLocation(loc);
+              }
+            }
+
+            if (loc) {
+              mapRef.current.animateToRegion({
+                latitude: loc.coords.latitude,
+                longitude: loc.coords.longitude,
+                latitudeDelta: 0.01, // Zoom level
+                longitudeDelta: 0.01,
+              }, 1000);
+            }
+          }
+        }}>
           <Ionicons name="locate" size={24} color="#1A1A1A" />
         </TouchableOpacity>
       </View>
@@ -177,15 +306,31 @@ const styles = StyleSheet.create({
     backgroundColor: '#D4C4A8',
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
   },
   greetingContainer: {
     marginLeft: 12,
+  },
+  greetingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   greetingText: {
     fontSize: 11,
     fontFamily: 'PlusJakartaSans_500Medium',
     color: '#666',
     letterSpacing: 1,
+  },
+  temperatureText: {
+    fontSize: 11,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#444',
+    letterSpacing: 0.5,
   },
   cityText: {
     fontSize: 18,
@@ -243,8 +388,53 @@ const styles = StyleSheet.create({
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
+    elevation: 4,
+  },
+  mapControls: {
+    position: 'absolute',
+    right: 20,
+    bottom: 80, // Above location button
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
     shadowRadius: 6,
     elevation: 4,
+    padding: 4,
+  },
+  mapControlButton: {
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#E0E0E0',
+    marginHorizontal: 4,
+  },
+  sosButton: {
+    position: 'absolute',
+    left: 20,
+    bottom: 20, // Move to bottom like location button
+    backgroundColor: '#FF3B30',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  sosText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    marginLeft: 8,
   },
   bottomSheet: {
     backgroundColor: '#FFFFFF',

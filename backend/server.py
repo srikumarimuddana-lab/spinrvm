@@ -87,10 +87,10 @@ from contextlib import asynccontextmanager
 
 # Import feature routers
 try:
-    from .features import support_router, admin_support_router, pricing_router, check_scheduled_rides
+    from .features import support_router, admin_support_router, pricing_router, check_scheduled_rides, calculate_airport_fee
     from .documents import documents_router, admin_documents_router
 except ImportError:
-    from features import support_router, admin_support_router, pricing_router, check_scheduled_rides
+    from features import support_router, admin_support_router, pricing_router, check_scheduled_rides, calculate_airport_fee
     from documents import documents_router, admin_documents_router
 
 @asynccontextmanager
@@ -1119,12 +1119,6 @@ async def stripe_webhook(request: Request):
 
 # ============ Ride Routes ============
 
-class RideEstimateRequest(BaseModel):
-    pickup_lat: float
-    pickup_lng: float
-    dropoff_lat: float
-    dropoff_lng: float
-
 class CreateRideRequest(BaseModel):
     vehicle_type_id: str
     pickup_address: str
@@ -1134,39 +1128,6 @@ class CreateRideRequest(BaseModel):
     dropoff_lat: float
     dropoff_lng: float
     payment_method: str = "card"
-
-@api_router.post("/rides/estimate")
-async def estimate_ride(request: RideEstimateRequest):
-    distance_km = calculate_distance(
-        request.pickup_lat, request.pickup_lng,
-        request.dropoff_lat, request.dropoff_lng
-    )
-    
-    duration_minutes = int(distance_km / 30 * 60) + 5
-    
-    fares = await get_fares_for_location(request.pickup_lat, request.pickup_lng)
-    
-    estimates = []
-    for fare_info in fares:
-        total = fare_info['base_fare'] + \
-                (fare_info['per_km_rate'] * distance_km) + \
-                (fare_info['per_minute_rate'] * duration_minutes) + \
-                fare_info['booking_fee']
-        
-        total = max(total, fare_info['minimum_fare'])
-        
-        estimates.append({
-            'vehicle_type': fare_info['vehicle_type'],
-            'distance_km': round(distance_km, 2),
-            'duration_minutes': duration_minutes,
-            'base_fare': fare_info['base_fare'],
-            'distance_fare': round(fare_info['per_km_rate'] * distance_km, 2),
-            'time_fare': round(fare_info['per_minute_rate'] * duration_minutes, 2),
-            'booking_fee': fare_info['booking_fee'],
-            'total_fare': round(total, 2)
-        })
-    
-    return estimates
 
 @api_router.post("/rides")
 async def create_ride(request: CreateRideRequest, current_user: dict = Depends(get_current_user)):
@@ -1237,11 +1198,18 @@ async def match_driver_to_ride(ride_id: str):
     
     # Use PostGIS to find nearby drivers
     # Note: radius in meters for RPC
-    nearby_drivers = await db.rpc('find_nearby_drivers', {
-        'lat': ride['pickup_lat'],
-        'lng': ride['pickup_lng'],
-        'radius_meters': search_radius * 1000
-    })
+    try:
+        nearby_drivers = await db.rpc('find_nearby_drivers', {
+            'lat': ride['pickup_lat'],
+            'lng': ride['pickup_lng'],
+            'radius_meters': search_radius * 1000
+        })
+    except Exception as e:
+        logger.warning(f"find_nearby_drivers RPC not available in match_driver: {e}")
+        nearby_drivers = []
+    
+    if not nearby_drivers:
+        nearby_drivers = []
     
     # Filter by vehicle type (rpc returns all types nearby)
     drivers = [d for d in nearby_drivers if d.get('vehicle_type_id') == ride['vehicle_type_id']]
@@ -1250,11 +1218,17 @@ async def match_driver_to_ride(ride_id: str):
         # Create demo drivers if none found (for testing)
         await create_demo_drivers(ride['vehicle_type_id'], ride['pickup_lat'], ride['pickup_lng'])
         # Try finding again
-        nearby_drivers = await db.rpc('find_nearby_drivers', {
-            'lat': ride['pickup_lat'],
-            'lng': ride['pickup_lng'],
-            'radius_meters': search_radius * 1000
-        })
+        try:
+            nearby_drivers = await db.rpc('find_nearby_drivers', {
+                'lat': ride['pickup_lat'],
+                'lng': ride['pickup_lng'],
+                'radius_meters': search_radius * 1000
+            })
+        except Exception as e:
+            logger.warning(f"find_nearby_drivers RPC retry failed: {e}")
+            nearby_drivers = []
+        if not nearby_drivers:
+            nearby_drivers = []
         drivers = [d for d in nearby_drivers if d.get('vehicle_type_id') == ride['vehicle_type_id']]
     
     if not drivers:
@@ -2863,75 +2837,124 @@ async def seed_default_data():
     
     return {'message': 'Default data seeded successfully'}
 
-# ============ Ride Estimate ============
+    
+# ============ Nearby Drivers & Estimate ============
+
+@api_router.get("/nearby-drivers")
+async def get_nearby_drivers(lat: float, lng: float, radius_km: float = 10.0):
+    """Find available drivers near a location."""
+    try:
+        nearby_drivers = await db.rpc('find_nearby_drivers', {
+            'lat': lat,
+            'lng': lng,
+            'radius_meters': radius_km * 1000
+        })
+    except Exception as e:
+        logger.warning(f"find_nearby_drivers RPC not available: {e}")
+        return []
+    
+    if not nearby_drivers:
+        return []
+    
+    # Return limited info for public API
+    return [
+        {
+            'id': d['id'],
+            'lat': d['lat'],
+            'lng': d['lng'],
+            'vehicle_type_id': d.get('vehicle_type_id'),
+            'vehicle_make': d.get('vehicle_make'),
+            'vehicle_model': d.get('vehicle_model'),
+        }
+        for d in nearby_drivers
+    ]
 
 class RideEstimateRequest(BaseModel):
     pickup_lat: float
     pickup_lng: float
     dropoff_lat: float
     dropoff_lng: float
-    stops: List[Dict[str, Any]] = []
+    stops: Optional[List[Dict[str, Any]]] = None
 
 @api_router.post("/rides/estimate")
 async def estimate_ride(req: RideEstimateRequest):
     """Calculate fare estimates for all available vehicle types."""
-    
+    print(f"DEBUG: estimate_ride start with {req}")
     # Calculate distance using haversine formula
-    def haversine(lat1, lon1, lat2, lon2):
-        R = 6371  # Earth radius in km
-        dlat = math.radians(lat2 - lat1)
-        dlon = math.radians(lon2 - lon1)
-        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
-        c = 2 * math.asin(math.sqrt(a))
-        return R * c
+    distance_km = calculate_distance(req.pickup_lat, req.pickup_lng, req.dropoff_lat, req.dropoff_lng)
     
-    # Calculate total distance including stops
-    points = [(req.pickup_lat, req.pickup_lng)]
-    for stop in req.stops:
-        if stop.get('lat') and stop.get('lng'):
-            points.append((stop['lat'], stop['lng']))
-    points.append((req.dropoff_lat, req.dropoff_lng))
-    
-    total_distance = 0.0
-    for i in range(len(points) - 1):
-        total_distance += haversine(points[i][0], points[i][1], points[i+1][0], points[i+1][1])
+    # Add stops distance (simplified)
+    if req.stops:
+        points = [(req.pickup_lat, req.pickup_lng)]
+        for stop in req.stops:
+            if stop.get('lat') and stop.get('lng'):
+                points.append((stop['lat'], stop['lng']))
+        points.append((req.dropoff_lat, req.dropoff_lng))
+        
+        total_dist = 0
+        for i in range(len(points) - 1):
+            total_dist += calculate_distance(points[i][0], points[i][1], points[i+1][0], points[i+1][1])
+        distance_km = total_dist
     
     # Round to 1 decimal place
-    total_distance = round(total_distance, 1)
+    distance_km = round(distance_km, 1)
     
     # Estimate duration based on average speed (30 km/h city driving)
     avg_speed_kmh = 30
-    duration_minutes = max(5, round((total_distance / avg_speed_kmh) * 60))
+    duration_minutes = max(5, round((distance_km / avg_speed_kmh) * 60))
     
-    # Get vehicle types
+    # Get all active vehicle types
     vehicle_types = await db.vehicle_types.find({'is_active': True}).to_list(100)
     
+    # If no vehicle types in DB, use hardcoded fallback (for dev)
     if not vehicle_types:
-        # Return default vehicle types if none in DB
         vehicle_types = [
             {'id': 'spinr-go', 'name': 'Spinr Go', 'description': 'Affordable rides', 'icon': 'car', 'capacity': 4, 'is_active': True, 'image_url': 'https://img.icons8.com/3d-fluency/200/sedan.png'},
             {'id': 'spinr-xl', 'name': 'Spinr XL', 'description': 'Extra space for groups', 'icon': 'car-sport', 'capacity': 6, 'is_active': True, 'image_url': 'https://img.icons8.com/3d-fluency/200/suv.png'},
             {'id': 'spinr-comfort', 'name': 'Comfort', 'description': 'Premium comfort', 'icon': 'car-outline', 'capacity': 4, 'is_active': True, 'image_url': 'https://img.icons8.com/3d-fluency/200/car.png'},
         ]
     
+    # Check driver availability for each type
+    nearby_drivers = []
+    try:
+        nearby_drivers = await db.rpc('find_nearby_drivers', {
+            'lat': req.pickup_lat,
+            'lng': req.pickup_lng,
+            'radius_meters': 30000 
+        })
+    except Exception as e:
+        logger.warning(f"find_nearby_drivers RPC not available: {e}")
+        nearby_drivers = []
+    
+    # Group drivers by vehicle type
+    drivers_by_type = {}
+    for d in (nearby_drivers or []):
+        vt_id = d.get('vehicle_type_id')
+        if vt_id not in drivers_by_type:
+            drivers_by_type[vt_id] = []
+        drivers_by_type[vt_id].append(d)
+
     # Get fare configs
-    all_areas = await db.service_areas.find({'is_active': True}).to_list(100)
-    matching_area = None
-    for area in all_areas:
-        poly = area.get('polygon', [])
-        if point_in_polygon(req.pickup_lat, req.pickup_lng, poly):
-            matching_area = area
-            break
-    
     fare_map = {}
-    if matching_area:
-        fares = await db.fare_configs.find({
-            'service_area_id': matching_area['id'],
-            'is_active': True
-        }).to_list(100)
-        fare_map = {f['vehicle_type_id']: f for f in fares}
+    try:
+        all_areas = await db.service_areas.find({'is_active': True}).to_list(100)
+        matching_area = None
+        for area in all_areas:
+            poly = area.get('polygon', [])
+            if point_in_polygon(req.pickup_lat, req.pickup_lng, poly):
+                matching_area = area
+                break
+        
+        if matching_area:
+            fares = await db.fare_configs.find({
+                'service_area_id': matching_area['id'],
+                'is_active': True
+            }).to_list(100)
+            fare_map = {f['vehicle_type_id']: f for f in fares}
+    except Exception as e:
+        logger.warning(f"Error fetching fare configs: {e}")
     
-    # Default fare rates per vehicle type
+    # Default fare rates per vehicle type fallback
     default_fares = {
         'spinr-go': {'base_fare': 3.50, 'per_km_rate': 1.50, 'per_minute_rate': 0.25, 'minimum_fare': 8.00, 'booking_fee': 2.00},
         'spinr-xl': {'base_fare': 5.00, 'per_km_rate': 2.00, 'per_minute_rate': 0.35, 'minimum_fare': 12.00, 'booking_fee': 2.50},
@@ -2940,21 +2963,32 @@ async def estimate_ride(req: RideEstimateRequest):
     
     # Check for surge pricing
     surge_multiplier = 1.0
-    surge = await db.surge_pricing.find_one({'is_active': True})
-    if surge:
-        surge_multiplier = surge.get('multiplier', 1.0)
+    try:
+        surge = await db.surge_pricing.find_one({'is_active': True})
+        if surge:
+            surge_multiplier = surge.get('multiplier', 1.0)
+    except Exception as e:
+        logger.warning(f"Surge pricing lookup failed: {e}")
     
     # Calculate airport fee if applicable
-    airport_info = calculate_airport_fee(req.pickup_lat, req.pickup_lng, req.dropoff_lat, req.dropoff_lng)
-    airport_fee = airport_info.get('airport_fee', 0.0)
+    airport_fee = 0.0
+    try:
+        airport_info = await calculate_airport_fee(req.pickup_lat, req.pickup_lng, req.dropoff_lat, req.dropoff_lng)
+        airport_fee = airport_info.get('airport_fee', 0.0)
+    except Exception as e:
+        logger.warning(f"Airport fee calculation failed: {e}")
     
     estimates = []
     for vt in vehicle_types:
         vt_id = vt['id']
-        fare_config = fare_map.get(vt_id, default_fares.get(vt_id, default_fares['spinr-go']))
+        fare_config = fare_map.get(vt_id, default_fares.get(vt_id, default_fares.get('spinr-go'))) # fallback chain
         
+        # Safety for fare config
+        if not fare_config:
+             fare_config = default_fares['spinr-go']
+
         base_fare = fare_config.get('base_fare', 3.50)
-        distance_fare = total_distance * fare_config.get('per_km_rate', 1.50)
+        distance_fare = distance_km * fare_config.get('per_km_rate', 1.50)
         time_fare = duration_minutes * fare_config.get('per_minute_rate', 0.25)
         booking_fee = fare_config.get('booking_fee', 2.00)
         minimum_fare = fare_config.get('minimum_fare', 8.00)
@@ -2962,6 +2996,23 @@ async def estimate_ride(req: RideEstimateRequest):
         # Apply surge
         subtotal = (base_fare + distance_fare + time_fare) * surge_multiplier
         total = max(subtotal + booking_fee + airport_fee, minimum_fare)
+        
+        # Availability Logic
+        type_drivers = drivers_by_type.get(vt_id, [])
+        is_available = len(type_drivers) > 0
+        eta_minutes = -1
+        
+        if is_available:
+            # Find nearest driver
+            min_dist = float('inf')
+            for d in type_drivers:
+                # Calculate distance to driver
+                dist = calculate_distance(req.pickup_lat, req.pickup_lng, d['lat'], d['lng'])
+                if dist < min_dist:
+                    min_dist = dist
+            
+            # Estimate ETA: 2 mins overhead + 2 mins per km (30km/h)
+            eta_minutes = int(2 + (min_dist * 2))
         
         estimates.append({
             'vehicle_type': {
@@ -2972,7 +3023,7 @@ async def estimate_ride(req: RideEstimateRequest):
                 'capacity': vt.get('capacity', 4),
                 'image_url': vt.get('image_url'),
             },
-            'distance_km': total_distance,
+            'distance_km': distance_km,
             'duration_minutes': duration_minutes,
             'base_fare': round(base_fare * surge_multiplier, 2),
             'distance_fare': round(distance_fare * surge_multiplier, 2),
@@ -2981,7 +3032,13 @@ async def estimate_ride(req: RideEstimateRequest):
             'airport_fee': round(airport_fee, 2),
             'surge_multiplier': surge_multiplier,
             'total_fare': round(total, 2),
+            'available': is_available,
+            'eta_minutes': eta_minutes,
+            'driver_count': len(type_drivers)
         })
+    
+    # Sort: available first, then price
+    estimates.sort(key=lambda x: (not x['available'], x['total_fare']))
     
     return estimates
 

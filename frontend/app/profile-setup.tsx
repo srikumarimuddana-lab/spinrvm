@@ -26,9 +26,8 @@ export default function ProfileSetupScreen() {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
-  const [city, setCity] = useState('');
-  const [showCityPicker, setShowCityPicker] = useState(false);
-  // Local loading state not needed if authStore handles it, but keeps UI responsive immediately
+  const [gender, setGender] = useState('');
+  const [showGenderPicker, setShowGenderPicker] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const validateEmail = (email: string): boolean => {
@@ -37,7 +36,7 @@ export default function ProfileSetupScreen() {
   };
 
   const handleSubmit = async () => {
-    if (!firstName.trim() || !lastName.trim() || !email.trim() || !city) {
+    if (!firstName.trim() || !lastName.trim() || !email.trim() || !gender) {
       Alert.alert('Missing Info', 'Please fill in all fields');
       return;
     }
@@ -55,9 +54,8 @@ export default function ProfileSetupScreen() {
         first_name: firstName.trim(),
         last_name: lastName.trim(),
         email: email.trim().toLowerCase(),
-        city,
+        gender,
       });
-      // Navigation is often handled by auth state changes, but we can force it or wait for effect
       router.replace('/(tabs)');
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to create profile');
@@ -66,7 +64,13 @@ export default function ProfileSetupScreen() {
     }
   };
 
-  const isFormValid = firstName.trim() && lastName.trim() && email.trim() && city;
+  const isFormValid = firstName.trim() && lastName.trim() && email.trim() && gender;
+
+  const genderOptions = [
+    { label: 'Male', value: 'Male' },
+    { label: 'Female', value: 'Female' },
+    { label: 'Other', value: 'Other' },
+  ];
 
   return (
     <SafeAreaView style={styles.container}>
@@ -130,45 +134,45 @@ export default function ProfileSetupScreen() {
               </View>
 
               <View style={styles.inputGroup}>
-                <Text style={styles.label}>City</Text>
+                <Text style={styles.label}>Gender</Text>
                 <TouchableOpacity
                   style={styles.citySelector}
-                  onPress={() => setShowCityPicker(!showCityPicker)}
+                  onPress={() => setShowGenderPicker(!showGenderPicker)}
                   activeOpacity={0.7}
                 >
-                  <Text style={[styles.citySelectorText, !city && styles.placeholder]}>
-                    {city || 'Select your city'}
+                  <Text style={[styles.citySelectorText, !gender && styles.placeholder]}>
+                    {gender || 'Select your gender'}
                   </Text>
                   <Ionicons
-                    name={showCityPicker ? 'chevron-up' : 'chevron-down'}
+                    name={showGenderPicker ? 'chevron-up' : 'chevron-down'}
                     size={20}
                     color="#666"
                   />
                 </TouchableOpacity>
 
-                {showCityPicker && (
+                {showGenderPicker && (
                   <View style={styles.cityDropdown}>
-                    {SpinrConfig.cities.map((c) => (
+                    {genderOptions.map((g) => (
                       <TouchableOpacity
-                        key={c.value}
+                        key={g.value}
                         style={[
                           styles.cityOption,
-                          city === c.value && styles.cityOptionSelected,
+                          gender === g.value && styles.cityOptionSelected,
                         ]}
                         onPress={() => {
-                          setCity(c.value);
-                          setShowCityPicker(false);
+                          setGender(g.value);
+                          setShowGenderPicker(false);
                         }}
                       >
                         <Text
                           style={[
                             styles.cityOptionText,
-                            city === c.value && styles.cityOptionTextSelected,
+                            gender === g.value && styles.cityOptionTextSelected,
                           ]}
                         >
-                          {c.label}
+                          {g.label}
                         </Text>
-                        {city === c.value && (
+                        {gender === g.value && (
                           <Ionicons name="checkmark" size={20} color={SpinrConfig.theme.colors.primary} />
                         )}
                       </TouchableOpacity>

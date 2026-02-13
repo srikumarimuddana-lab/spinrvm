@@ -1,15 +1,35 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Platform } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { auth } from '../config/firebaseConfig';
 import { useAuthStore } from '../store/authStore';
+import api from '../api/client';
+
+// Platform-safe token storage
+const storage = {
+  async setItem(key: string, value: string) {
+    try {
+      if (Platform.OS === 'web') {
+        localStorage.setItem(key, value);
+      } else {
+        const SecureStore = require('expo-secure-store');
+        await SecureStore.setItemAsync(key, value);
+      }
+    } catch (e) {
+      console.log('Storage setItem error:', e);
+    }
+  }
+};
 
 export default function OtpScreen() {
   const router = useRouter();
-  const { verificationId, phoneNumber } = useLocalSearchParams<{ verificationId: string, phoneNumber: string }>();
+  const params = useLocalSearchParams<{ verificationId?: string, phoneNumber: string, mode?: string }>();
+  const { phoneNumber, verificationId, mode } = params;
+  const isBackendMode = mode === 'backend' || !verificationId;
+  const codeLength = isBackendMode ? 4 : 6;
+
   const [code, setCode] = useState('');
   const [verifying, setVerifying] = useState(false);
-  const { verifyOTP, user, error, clearError } = useAuthStore();
+  const { verifyOTP, user, initialize, clearError } = useAuthStore();
 
   useEffect(() => {
     if (user) {
@@ -22,18 +42,36 @@ export default function OtpScreen() {
   }, [user]);
 
   const handleVerify = async () => {
-    if (!code || code.length !== 6) {
-      Alert.alert('Invalid Code', 'Please enter the 6-digit code sent to your phone.');
+    if (!code || code.length !== codeLength) {
+      Alert.alert('Invalid Code', `Please enter the ${codeLength}-digit code sent to your phone.`);
       return;
     }
 
     setVerifying(true);
     clearError();
+
     try {
-      await verifyOTP(verificationId, code);
+      if (isBackendMode) {
+        // Backend OTP verification
+        const response = await api.post('/auth/verify-otp', {
+          phone: phoneNumber,
+          code: code
+        });
+
+        const { token } = response.data;
+        if (token) {
+          await storage.setItem('auth_token', token);
+          // Re-initialize auth store with the new token
+          await initialize();
+        }
+      } else {
+        // Firebase OTP verification
+        await verifyOTP(verificationId!, code);
+      }
       // Navigation is handled by the useEffect above once user is populated
     } catch (err: any) {
-      Alert.alert('Verification Failed', err.message || 'Invalid code. Please try again.');
+      const message = err.response?.data?.detail || err.message || 'Invalid code. Please try again.';
+      Alert.alert('Verification Failed', message);
     } finally {
       setVerifying(false);
     }
@@ -46,12 +84,12 @@ export default function OtpScreen() {
 
       <TextInput
         style={styles.input}
-        placeholder="000000"
+        placeholder={isBackendMode ? '1234' : '000000'}
         placeholderTextColor="#ccc"
         keyboardType="number-pad"
         value={code}
         onChangeText={setCode}
-        maxLength={6}
+        maxLength={codeLength}
         autoFocus
         textAlign="center"
       />

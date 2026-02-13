@@ -140,7 +140,9 @@ class DB:
         names = [
             'users', 'drivers', 'rides', 'otp_records', 'settings', 'saved_addresses',
             'vehicle_types', 'service_areas', 'fare_configs',
-            'support_tickets', 'faqs', 'area_fees'
+            'support_tickets', 'faqs', 'area_fees',
+            'driver_documents', 'document_requirements',
+            'surge_pricing'
         ]
         for n in names:
             setattr(self, n, Collection(n))

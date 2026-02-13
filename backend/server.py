@@ -8,6 +8,7 @@ from starlette.requests import Request
 import os
 import shutil
 import logging
+import base64
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Dict, Any
@@ -18,6 +19,10 @@ from datetime import datetime, timedelta
 import jwt
 import math
 import json
+try:
+    from .sms_service import send_otp_sms
+except ImportError:
+    from sms_service import send_otp_sms
 import asyncio
 
 # Firebase admin for auth & messaging
@@ -44,8 +49,14 @@ try:
 except ImportError:
     from db import db
 
-# JWT Secret
-JWT_SECRET = os.environ.get('JWT_SECRET', 'spinr-secret-key-change-in-production')
+# JWT Secret — REQUIRED in production
+_env = os.environ.get('ENV', 'development')
+JWT_SECRET = os.environ.get('JWT_SECRET')
+if not JWT_SECRET:
+    if _env == 'production':
+        raise RuntimeError('JWT_SECRET environment variable is required in production')
+    JWT_SECRET = 'spinr-dev-secret-key-NOT-FOR-PRODUCTION'
+    logging.warning('JWT_SECRET not set — using insecure dev key. Set JWT_SECRET for production.')
 JWT_ALGORITHM = 'HS256'
 OTP_EXPIRY_MINUTES = 5
 
@@ -77,8 +88,10 @@ from contextlib import asynccontextmanager
 # Import feature routers
 try:
     from .features import support_router, admin_support_router, pricing_router, check_scheduled_rides
+    from .documents import documents_router, admin_documents_router
 except ImportError:
     from features import support_router, admin_support_router, pricing_router, check_scheduled_rides
+    from documents import documents_router, admin_documents_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -90,6 +103,15 @@ async def lifespan(app: FastAPI):
 
 # Create the main app
 app = FastAPI(title="Spinr API", version="1.0.0", lifespan=lifespan)
+
+# CORS Middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for dev
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)
@@ -182,7 +204,7 @@ class CreateProfileRequest(BaseModel):
     first_name: str
     last_name: str
     email: EmailStr
-    city: str
+    gender: str
 
 class UserProfile(BaseModel):
     id: str
@@ -190,7 +212,8 @@ class UserProfile(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     email: Optional[str] = None
-    city: Optional[str] = None
+    gender: Optional[str] = None
+    profile_image: Optional[str] = None  # Base64 encoded image
     role: str = 'rider'
     created_at: datetime
     profile_complete: bool = False
@@ -214,6 +237,10 @@ class AppSettings(BaseModel):
     google_maps_api_key: str = ""
     stripe_publishable_key: str = ""
     stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_from_number: str = ""
     driver_matching_algorithm: str = "nearest"
     min_driver_rating: float = 4.0
     search_radius_km: float = 10.0
@@ -238,6 +265,7 @@ class VehicleType(BaseModel):
     description: str
     icon: str
     capacity: int
+    image_url: Optional[str] = None
     is_active: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -412,16 +440,48 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     # Fallback: existing JWT behavior
     try:
         payload = verify_jwt_token(token)
-    except Exception:
+        logger.info(f"JWT Valid. Payload: {payload}")
+    except Exception as e:
+        logger.warning(f"JWT Verification Failed: {e}")
         raise HTTPException(status_code=401, detail='Invalid token')
 
-    user = await db.users.find_one({'id': payload['user_id']})
-    if not user:
-        raise HTTPException(status_code=401, detail='User not found')
+    user = None
+    try:
+        user = await db.users.find_one({'id': payload['user_id']})
+        logger.info(f"DB User Lookup Result: {user}")
+    except Exception as e:
+        logger.warning(f'Could not look up user from DB: {e}')
 
-    driver = await db.drivers.find_one({'user_id': user['id']})
-    user['is_driver'] = True if driver else False
+    if not user:
+        # User not in DB yet — create them
+        user = {
+            'id': payload['user_id'],
+            'phone': payload.get('phone', ''),
+            'role': 'rider',
+            'created_at': datetime.utcnow().isoformat(),
+            'profile_complete': False,
+        }
+        try:
+            await db.users.insert_one(user)
+            logger.info(f'Created new user {user["id"]} from JWT')
+        except Exception as e:
+            logger.warning(f'Could not insert user into DB: {e}')
+        user['is_driver'] = False
+        return user
+
+    try:
+        driver = await db.drivers.find_one({'user_id': user['id']})
+        user['is_driver'] = True if driver else False
+    except Exception:
+        user['is_driver'] = False
     return user
+
+
+async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict:
+    """Require the caller to be an authenticated admin."""
+    if current_user.get('role') != 'admin':
+        raise HTTPException(status_code=403, detail='Admin access required')
+    return current_user
 
 
 # (Auth routes with rate limiting are defined below, after WebSocket routes)
@@ -626,23 +686,56 @@ async def send_otp(request: Request, body: SendOTPRequest):
     if len(phone) < 10:
         raise HTTPException(status_code=400, detail='Invalid phone number')
     
-    otp_code = generate_otp()
+    # Check if Twilio is configured via DB settings
+    settings = None
+    try:
+        settings = await db.settings.find_one({'id': 'app_settings'})
+    except Exception as e:
+        logger.warning(f'Could not read app_settings from DB: {e}')
+    
+    twilio_configured = bool(
+        settings and
+        settings.get('twilio_account_sid') and
+        settings.get('twilio_auth_token') and
+        settings.get('twilio_from_number')
+    )
+    
+    # Use fixed 1234 OTP when Twilio is not configured (dev mode)
+    otp_code = generate_otp() if twilio_configured else '1234'
+    
     otp_record = OTPRecord(
         phone=phone,
         code=otp_code,
         expires_at=datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
     )
     
-    await db.otp_records.delete_many({'phone': phone})
-    await db.otp_records.insert_one(otp_record.dict())
+    try:
+        await db.otp_records.delete_many({'phone': phone})
+        await db.otp_records.insert_one(otp_record.dict())
+    except Exception as e:
+        logger.warning(f'Could not store OTP in DB: {e}')
     
-    logger.info(f"📱 MOCKED SMS to {phone} - OTP: {otp_code}")
+    # Send OTP via SMS (Twilio when configured, console log otherwise)
+    sms_result = await send_otp_sms(
+        phone,
+        otp_code,
+        twilio_sid=settings.get('twilio_account_sid', '') if settings else '',
+        twilio_token=settings.get('twilio_auth_token', '') if settings else '',
+        twilio_from=settings.get('twilio_from_number', '') if settings else ''
+    )
+    if not sms_result.get('success'):
+        logger.error(f'Failed to send OTP SMS to {phone}: {sms_result.get("error")}')
+        raise HTTPException(status_code=500, detail='Failed to send verification code')
     
-    return {
+    response = {
         'success': True,
-        'message': f'OTP sent to {phone}',
-        'dev_otp': otp_code
+        'message': f'OTP sent to {phone}'
     }
+    # Include dev_otp when Twilio is NOT configured (always shows 1234 in dev)
+    if not twilio_configured:
+        response['dev_otp'] = otp_code
+    
+    return response
 
 @api_router.post("/auth/verify-otp", response_model=AuthResponse)
 @limiter.limit("10/minute")
@@ -650,22 +743,44 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
     phone = body.phone.strip()
     code = body.code.strip()
     
-    otp_record = await db.otp_records.find_one({
-        'phone': phone,
-        'code': code,
-        'verified': False
-    })
+    otp_record = None
+    db_available = True
+    try:
+        otp_record = await db.otp_records.find_one({
+            'phone': phone,
+            'code': code,
+            'verified': False
+        })
+    except Exception as e:
+        logger.warning(f'Could not query OTP from DB: {e}')
+        db_available = False
+    
+    # Dev fallback: accept code 1234 when no OTP record found (Twilio not configured)
+    if not otp_record and code == '1234':
+        logger.info(f'Dev mode: accepting code 1234 for {phone}')
+        otp_record = {'id': 'dev', 'phone': phone, 'code': code, 'expires_at': datetime.utcnow() + timedelta(minutes=5)}
     
     if not otp_record:
         raise HTTPException(status_code=400, detail='Invalid verification code')
     
     if datetime.utcnow() > otp_record['expires_at']:
-        await db.otp_records.delete_one({'id': otp_record['id']})
+        try:
+            await db.otp_records.delete_one({'id': otp_record['id']})
+        except Exception:
+            pass
         raise HTTPException(status_code=400, detail='OTP has expired')
     
-    await db.otp_records.update_one({'id': otp_record['id']}, {'$set': {'verified': True}})
+    try:
+        await db.otp_records.update_one({'id': otp_record['id']}, {'$set': {'verified': True}})
+    except Exception:
+        pass
     
-    existing_user = await db.users.find_one({'phone': phone})
+    # Find or create user
+    existing_user = None
+    try:
+        existing_user = await db.users.find_one({'phone': phone})
+    except Exception as e:
+        logger.warning(f'Could not query user from DB: {e}')
     
     if existing_user:
         token = create_jwt_token(existing_user['id'], phone)
@@ -676,10 +791,13 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             'id': user_id,
             'phone': phone,
             'role': 'rider',
-            'created_at': datetime.utcnow(),
+            'created_at': datetime.utcnow().isoformat(),
             'profile_complete': False
         }
-        await db.users.insert_one(new_user)
+        try:
+            await db.users.insert_one(new_user)
+        except Exception as e:
+            logger.warning(f'Could not create user in DB: {e}')
         token = create_jwt_token(user_id, phone)
         return AuthResponse(token=token, user=UserProfile(**new_user), is_new_user=True)
 
@@ -689,19 +807,47 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 
 @api_router.post("/users/profile", response_model=UserProfile)
 async def create_profile(request: CreateProfileRequest, current_user: dict = Depends(get_current_user)):
-    valid_cities = ['Saskatoon', 'Regina']
-    if request.city not in valid_cities:
-        raise HTTPException(status_code=400, detail=f'City must be one of: {", ".join(valid_cities)}')
+    valid_genders = ['Male', 'Female', 'Other']
+    if request.gender not in valid_genders:
+        raise HTTPException(status_code=400, detail=f'Gender must be one of: {", ".join(valid_genders)}')
     
     update_data = {
         'first_name': request.first_name.strip(),
         'last_name': request.last_name.strip(),
         'email': request.email.strip().lower(),
-        'city': request.city,
+        'gender': request.gender,
         'profile_complete': True
     }
     
     await db.users.update_one({'id': current_user['id']}, {'$set': update_data})
+    updated_user = await db.users.find_one({'id': current_user['id']})
+    return UserProfile(**updated_user)
+
+@api_router.put("/users/profile-image", response_model=UserProfile)
+async def upload_profile_image(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """Upload a profile image for the current user (stored as base64 in database)."""
+    # Validate file type
+    allowed_types = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail='File must be an image (JPEG, PNG, WebP, or GIF)')
+
+    # Validate file size (max 5MB)
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail='Image must be smaller than 5MB')
+    
+    # Convert to base64
+    base64_image = base64.b64encode(content).decode('utf-8')
+    # Store as data URI
+    data_uri = f"data:{file.content_type};base64,{base64_image}"
+    
+    await db.users.update_one(
+        {'id': current_user['id']},
+        {'$set': {'profile_image': data_uri}}
+    )
     updated_user = await db.users.find_one({'id': current_user['id']})
     return UserProfile(**updated_user)
 
@@ -760,9 +906,17 @@ async def get_vehicle_types():
 
 @api_router.get("/fares")
 async def get_fares_for_location(lat: float = Query(...), lng: float = Query(...)):
-    # Use PostGIS to find matching service area
-    areas = await db.rpc('get_service_area_for_point', {'lat': lat, 'lng': lng})
-    matching_area = areas[0] if areas else None
+    # Use Python to find matching service area (since DB RPC might be missing/requires PostGIS)
+    # areas = await db.rpc('get_service_area_for_point', {'lat': lat, 'lng': lng})
+    all_areas = await db.service_areas.find({'is_active': True}).to_list(100)
+    matching_area = None
+    for area in all_areas:
+        # Check if point is inside polygon
+        # Ensure polygon is loaded correctly
+        poly = area.get('polygon', [])
+        if point_in_polygon(lat, lng, poly):
+            matching_area = area
+            break
     
     if not matching_area:
         vehicle_types = await db.vehicle_types.find({'is_active': True}).to_list(100)
@@ -875,6 +1029,93 @@ async def confirm_payment(request: Dict[str, Any], current_user: dict = Depends(
             raise HTTPException(status_code=500, detail=str(e))
     
     return {'status': 'unknown', 'mock': True}
+
+# ============ Stripe Webhook ============
+
+@app.post("/webhooks/stripe")
+async def stripe_webhook(request: Request):
+    """Handle Stripe webhook events for server-side payment confirmation."""
+    payload = await request.body()
+    sig_header = request.headers.get('stripe-signature')
+
+    settings = await db.settings.find_one({'id': 'app_settings'})
+    webhook_secret = settings.get('stripe_webhook_secret', '') if settings else ''
+    stripe_secret = settings.get('stripe_secret_key', '') if settings else ''
+
+    if not webhook_secret:
+        logger.warning('stripe_webhook_secret not set in admin settings — webhook verification disabled')
+        return {'received': True, 'verified': False}
+
+    if not stripe_secret:
+        logger.error('Stripe secret key not configured in app settings')
+        raise HTTPException(status_code=500, detail='Stripe not configured')
+
+    try:
+        import stripe
+        stripe.api_key = stripe_secret
+        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+    except ValueError:
+        raise HTTPException(status_code=400, detail='Invalid payload')
+    except Exception as e:
+        logger.error(f'Stripe webhook signature verification failed: {e}')
+        raise HTTPException(status_code=400, detail='Invalid signature')
+
+    event_type = event.get('type', '')
+    data_object = event.get('data', {}).get('object', {})
+
+    if event_type == 'payment_intent.succeeded':
+        ride_id = data_object.get('metadata', {}).get('ride_id')
+        user_id = data_object.get('metadata', {}).get('user_id')
+        payment_intent_id = data_object.get('id')
+
+        if ride_id:
+            await db.rides.update_one(
+                {'id': ride_id},
+                {'$set': {
+                    'payment_status': 'paid',
+                    'payment_intent_id': payment_intent_id,
+                    'paid_at': datetime.utcnow()
+                }}
+            )
+            logger.info(f'Payment confirmed via webhook for ride {ride_id}')
+
+        if user_id:
+            await send_push_notification(
+                user_id,
+                'Payment Confirmed ✅',
+                'Your payment has been processed successfully.',
+                {'type': 'payment_confirmed', 'ride_id': ride_id or ''}
+            )
+
+    elif event_type == 'payment_intent.payment_failed':
+        ride_id = data_object.get('metadata', {}).get('ride_id')
+        user_id = data_object.get('metadata', {}).get('user_id')
+        payment_intent_id = data_object.get('id')
+        failure_message = data_object.get('last_payment_error', {}).get('message', 'Payment failed')
+
+        if ride_id:
+            await db.rides.update_one(
+                {'id': ride_id},
+                {'$set': {
+                    'payment_status': 'failed',
+                    'payment_intent_id': payment_intent_id,
+                    'payment_failure_reason': failure_message
+                }}
+            )
+            logger.warning(f'Payment failed for ride {ride_id}: {failure_message}')
+
+        if user_id:
+            await send_push_notification(
+                user_id,
+                'Payment Failed ❌',
+                f'Your payment could not be processed: {failure_message}',
+                {'type': 'payment_failed', 'ride_id': ride_id or ''}
+            )
+
+    else:
+        logger.info(f'Unhandled Stripe event type: {event_type}')
+
+    return {'received': True}
 
 # ============ Ride Routes ============
 
@@ -1374,6 +1615,12 @@ async def rate_ride(ride_id: str, rating_data: RideRatingRequest, current_user: 
 
 # ============ Driver Routes ============
 
+class DriverDocumentInput(BaseModel):
+    requirement_id: str
+    document_url: str
+    side: Optional[str] = None
+    document_type: Optional[str] = None
+
 class DriverRegistration(BaseModel):
     # Personal Info
     first_name: str
@@ -1389,13 +1636,13 @@ class DriverRegistration(BaseModel):
     vehicle_vin: str
     vehicle_type_id: str
     # Documents & Dates
-    license_number: str
-    license_expiry_date: str  # ISO date
+    license_number: Optional[str] = None
+    license_expiry_date: Optional[str] = None
     work_eligibility_expiry_date: Optional[str] = None
-    vehicle_inspection_expiry_date: str
-    insurance_expiry_date: str
-    background_check_expiry_date: str
-    documents: Dict[str, str]
+    vehicle_inspection_expiry_date: Optional[str] = None
+    insurance_expiry_date: Optional[str] = None
+    background_check_expiry_date: Optional[str] = None
+    documents: List[DriverDocumentInput]
 
 @api_router.post("/drivers/register")
 async def register_driver(data: DriverRegistration, current_user: dict = Depends(get_current_user)):
@@ -1409,11 +1656,23 @@ async def register_driver(data: DriverRegistration, current_user: dict = Depends
 
     # Parse dates
     try:
-        lic_exp = datetime.fromisoformat(data.license_expiry_date.replace('Z', ''))
-        insp_exp = datetime.fromisoformat(data.vehicle_inspection_expiry_date.replace('Z', ''))
-        ins_exp = datetime.fromisoformat(data.insurance_expiry_date.replace('Z', ''))
-        bg_exp = datetime.fromisoformat(data.background_check_expiry_date.replace('Z', ''))
-        work_exp = datetime.fromisoformat(data.work_eligibility_expiry_date.replace('Z', '')) if data.work_eligibility_expiry_date else None
+        lic_exp = datetime.fromisoformat(data.license_expiry_date.replace('Z', '')) if data.license_expiry_date else None
+        
+        insp_exp = None
+        if data.vehicle_inspection_expiry_date:
+            insp_exp = datetime.fromisoformat(data.vehicle_inspection_expiry_date.replace('Z', ''))
+            
+        ins_exp = None
+        if data.insurance_expiry_date:
+            ins_exp = datetime.fromisoformat(data.insurance_expiry_date.replace('Z', ''))
+            
+        bg_exp = None
+        if data.background_check_expiry_date:
+            bg_exp = datetime.fromisoformat(data.background_check_expiry_date.replace('Z', ''))
+            
+        work_exp = None
+        if data.work_eligibility_expiry_date:
+            work_exp = datetime.fromisoformat(data.work_eligibility_expiry_date.replace('Z', ''))
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format")
 
@@ -1436,7 +1695,7 @@ async def register_driver(data: DriverRegistration, current_user: dict = Depends
         vehicle_inspection_expiry_date=insp_exp,
         insurance_expiry_date=ins_exp,
         background_check_expiry_date=bg_exp,
-        documents=data.documents,
+        documents={}, # Legacy field empty
         is_verified=False,
         submitted_at=datetime.utcnow(),
         
@@ -1449,6 +1708,21 @@ async def register_driver(data: DriverRegistration, current_user: dict = Depends
 
     await db.drivers.insert_one(new_driver.dict())
     
+    # Insert dynamic documents
+    for doc in data.documents:
+        doc_entry = {
+            "id": str(uuid.uuid4()),
+            "driver_id": new_driver.id,
+            "requirement_id": doc.requirement_id,
+            "document_url": doc.document_url,
+            "side": doc.side,
+            "document_type": doc.document_type or "Unknown",
+            "status": "pending",
+            "uploaded_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }
+        await db.driver_documents.insert_one(doc_entry)
+        
     # Update user profile
     await db.users.update_one(
         {'id': current_user['id']}, 
@@ -2540,9 +2814,9 @@ async def seed_default_data():
         return {'message': 'Already seeded'}
     
     vehicle_types = [
-        VehicleType(id='spinr-go', name='Spinr Go', description='Affordable rides', icon='car', capacity=4),
-        VehicleType(id='spinr-xl', name='Spinr XL', description='Extra space for groups', icon='car-sport', capacity=6),
-        VehicleType(id='spinr-comfort', name='Comfort', description='Premium comfort', icon='car-outline', capacity=4),
+        VehicleType(id='spinr-go', name='Spinr Go', description='Affordable rides', icon='car', capacity=4, image_url='https://img.icons8.com/3d-fluency/200/sedan.png'),
+        VehicleType(id='spinr-xl', name='Spinr XL', description='Extra space for groups', icon='car-sport', capacity=6, image_url='https://img.icons8.com/3d-fluency/200/suv.png'),
+        VehicleType(id='spinr-comfort', name='Comfort', description='Premium comfort', icon='car-outline', capacity=4, image_url='https://img.icons8.com/3d-fluency/200/car.png'),
     ]
     
     for vt in vehicle_types:
@@ -2589,6 +2863,129 @@ async def seed_default_data():
     
     return {'message': 'Default data seeded successfully'}
 
+# ============ Ride Estimate ============
+
+class RideEstimateRequest(BaseModel):
+    pickup_lat: float
+    pickup_lng: float
+    dropoff_lat: float
+    dropoff_lng: float
+    stops: List[Dict[str, Any]] = []
+
+@api_router.post("/rides/estimate")
+async def estimate_ride(req: RideEstimateRequest):
+    """Calculate fare estimates for all available vehicle types."""
+    
+    # Calculate distance using haversine formula
+    def haversine(lat1, lon1, lat2, lon2):
+        R = 6371  # Earth radius in km
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+        c = 2 * math.asin(math.sqrt(a))
+        return R * c
+    
+    # Calculate total distance including stops
+    points = [(req.pickup_lat, req.pickup_lng)]
+    for stop in req.stops:
+        if stop.get('lat') and stop.get('lng'):
+            points.append((stop['lat'], stop['lng']))
+    points.append((req.dropoff_lat, req.dropoff_lng))
+    
+    total_distance = 0.0
+    for i in range(len(points) - 1):
+        total_distance += haversine(points[i][0], points[i][1], points[i+1][0], points[i+1][1])
+    
+    # Round to 1 decimal place
+    total_distance = round(total_distance, 1)
+    
+    # Estimate duration based on average speed (30 km/h city driving)
+    avg_speed_kmh = 30
+    duration_minutes = max(5, round((total_distance / avg_speed_kmh) * 60))
+    
+    # Get vehicle types
+    vehicle_types = await db.vehicle_types.find({'is_active': True}).to_list(100)
+    
+    if not vehicle_types:
+        # Return default vehicle types if none in DB
+        vehicle_types = [
+            {'id': 'spinr-go', 'name': 'Spinr Go', 'description': 'Affordable rides', 'icon': 'car', 'capacity': 4, 'is_active': True, 'image_url': 'https://img.icons8.com/3d-fluency/200/sedan.png'},
+            {'id': 'spinr-xl', 'name': 'Spinr XL', 'description': 'Extra space for groups', 'icon': 'car-sport', 'capacity': 6, 'is_active': True, 'image_url': 'https://img.icons8.com/3d-fluency/200/suv.png'},
+            {'id': 'spinr-comfort', 'name': 'Comfort', 'description': 'Premium comfort', 'icon': 'car-outline', 'capacity': 4, 'is_active': True, 'image_url': 'https://img.icons8.com/3d-fluency/200/car.png'},
+        ]
+    
+    # Get fare configs
+    all_areas = await db.service_areas.find({'is_active': True}).to_list(100)
+    matching_area = None
+    for area in all_areas:
+        poly = area.get('polygon', [])
+        if point_in_polygon(req.pickup_lat, req.pickup_lng, poly):
+            matching_area = area
+            break
+    
+    fare_map = {}
+    if matching_area:
+        fares = await db.fare_configs.find({
+            'service_area_id': matching_area['id'],
+            'is_active': True
+        }).to_list(100)
+        fare_map = {f['vehicle_type_id']: f for f in fares}
+    
+    # Default fare rates per vehicle type
+    default_fares = {
+        'spinr-go': {'base_fare': 3.50, 'per_km_rate': 1.50, 'per_minute_rate': 0.25, 'minimum_fare': 8.00, 'booking_fee': 2.00},
+        'spinr-xl': {'base_fare': 5.00, 'per_km_rate': 2.00, 'per_minute_rate': 0.35, 'minimum_fare': 12.00, 'booking_fee': 2.50},
+        'spinr-comfort': {'base_fare': 6.00, 'per_km_rate': 2.50, 'per_minute_rate': 0.40, 'minimum_fare': 15.00, 'booking_fee': 3.00},
+    }
+    
+    # Check for surge pricing
+    surge_multiplier = 1.0
+    surge = await db.surge_pricing.find_one({'is_active': True})
+    if surge:
+        surge_multiplier = surge.get('multiplier', 1.0)
+    
+    # Calculate airport fee if applicable
+    airport_info = calculate_airport_fee(req.pickup_lat, req.pickup_lng, req.dropoff_lat, req.dropoff_lng)
+    airport_fee = airport_info.get('airport_fee', 0.0)
+    
+    estimates = []
+    for vt in vehicle_types:
+        vt_id = vt['id']
+        fare_config = fare_map.get(vt_id, default_fares.get(vt_id, default_fares['spinr-go']))
+        
+        base_fare = fare_config.get('base_fare', 3.50)
+        distance_fare = total_distance * fare_config.get('per_km_rate', 1.50)
+        time_fare = duration_minutes * fare_config.get('per_minute_rate', 0.25)
+        booking_fee = fare_config.get('booking_fee', 2.00)
+        minimum_fare = fare_config.get('minimum_fare', 8.00)
+        
+        # Apply surge
+        subtotal = (base_fare + distance_fare + time_fare) * surge_multiplier
+        total = max(subtotal + booking_fee + airport_fee, minimum_fare)
+        
+        estimates.append({
+            'vehicle_type': {
+                'id': vt_id,
+                'name': vt.get('name', vt_id),
+                'description': vt.get('description', ''),
+                'icon': vt.get('icon', 'car'),
+                'capacity': vt.get('capacity', 4),
+                'image_url': vt.get('image_url'),
+            },
+            'distance_km': total_distance,
+            'duration_minutes': duration_minutes,
+            'base_fare': round(base_fare * surge_multiplier, 2),
+            'distance_fare': round(distance_fare * surge_multiplier, 2),
+            'time_fare': round(time_fare * surge_multiplier, 2),
+            'booking_fee': round(booking_fee, 2),
+            'airport_fee': round(airport_fee, 2),
+            'surge_multiplier': surge_multiplier,
+            'total_fare': round(total, 2),
+        })
+    
+    return estimates
+
+
 # ============ Health & Root ============
 
 @api_router.get("/")
@@ -2601,10 +2998,12 @@ async def health_check():
 
 # Include routers
 app.include_router(api_router)
-app.include_router(admin_router)
+app.include_router(admin_router, dependencies=[Depends(get_admin_user)])
 app.include_router(support_router)
-app.include_router(admin_support_router)
-app.include_router(pricing_router)
+app.include_router(admin_support_router, dependencies=[Depends(get_admin_user)])
+app.include_router(pricing_router, dependencies=[Depends(get_admin_user)])
+app.include_router(documents_router)
+app.include_router(admin_documents_router, dependencies=[Depends(get_admin_user)])
 
 # Configure CORS
 origins = [

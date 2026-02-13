@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import api from '../api/client';
 import { useAuthStore } from './authStore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface Location {
   address: string;
@@ -14,6 +15,7 @@ interface VehicleType {
   description: string;
   icon: string;
   capacity: number;
+  image_url?: string;
 }
 
 interface RideEstimate {
@@ -76,17 +78,22 @@ interface SavedAddress {
 interface RideState {
   pickup: Location | null;
   dropoff: Location | null;
+  stops: Location[]; // Intermediate stops
   estimates: RideEstimate[];
   selectedVehicle: VehicleType | null;
   currentRide: Ride | null;
   currentDriver: Driver | null;
   savedAddresses: SavedAddress[];
+  recentSearches: Location[];
   isLoading: boolean;
   error: string | null;
 
   // Actions
   setPickup: (location: Location | null) => void;
   setDropoff: (location: Location | null) => void;
+  addStop: (location: Location) => void;
+  removeStop: (index: number) => void;
+  updateStop: (index: number, location: Location) => void;
   fetchEstimates: () => Promise<void>;
   selectVehicle: (vehicle: VehicleType) => void;
   createRide: (paymentMethod: string) => Promise<Ride>;
@@ -101,24 +108,37 @@ interface RideState {
   clearRide: () => void;
   clearError: () => void;
   rateRide: (rideId: string, rating: number, comment?: string, tipAmount?: number) => Promise<void>;
+  addRecentSearch: (location: Location) => void;
+  loadRecentSearches: () => Promise<void>;
+  clearRecentSearches: () => void;
 }
 
 export const useRideStore = create<RideState>((set, get) => ({
   pickup: null,
   dropoff: null,
+  stops: [], // Init empty
   estimates: [],
   selectedVehicle: null,
   currentRide: null,
   currentDriver: null,
   savedAddresses: [],
+  recentSearches: [],
   isLoading: false,
   error: null,
 
   setPickup: (location) => set({ pickup: location }),
   setDropoff: (location) => set({ dropoff: location }),
 
+  addStop: (location) => set((state) => ({ stops: [...state.stops, location] })),
+  removeStop: (index) => set((state) => ({ stops: state.stops.filter((_, i) => i !== index) })),
+  updateStop: (index, location) => set((state) => {
+    const newStops = [...state.stops];
+    newStops[index] = location;
+    return { stops: newStops };
+  }),
+
   fetchEstimates: async () => {
-    const { pickup, dropoff } = get();
+    const { pickup, dropoff, stops } = get();
     if (!pickup || !dropoff) return;
 
     try {
@@ -128,6 +148,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         pickup_lng: pickup.lng,
         dropoff_lat: dropoff.lat,
         dropoff_lng: dropoff.lng,
+        stops: stops, // Send stops to backend
       });
       set({ estimates: response.data, isLoading: false });
     } catch (error: any) {
@@ -138,7 +159,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   selectVehicle: (vehicle) => set({ selectedVehicle: vehicle }),
 
   createRide: async (paymentMethod) => {
-    const { pickup, dropoff, selectedVehicle } = get();
+    const { pickup, dropoff, selectedVehicle, stops } = get();
     if (!pickup || !dropoff || !selectedVehicle) {
       throw new Error('Missing ride details');
     }
@@ -153,6 +174,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         dropoff_address: dropoff.address,
         dropoff_lat: dropoff.lat,
         dropoff_lng: dropoff.lng,
+        stops: stops, // Include stops
         payment_method: paymentMethod,
       });
       set({ currentRide: response.data, isLoading: false });
@@ -283,4 +305,27 @@ export const useRideStore = create<RideState>((set, get) => ({
   }),
 
   clearError: () => set({ error: null }),
+
+  addRecentSearch: (location) => {
+    const { recentSearches } = get();
+    // Avoid duplicates (by address)
+    const filtered = recentSearches.filter(s => s.address !== location.address);
+    const updated = [location, ...filtered].slice(0, 10); // Keep max 10
+    set({ recentSearches: updated });
+    AsyncStorage.setItem('recent_searches', JSON.stringify(updated)).catch(() => { });
+  },
+
+  loadRecentSearches: async () => {
+    try {
+      const stored = await AsyncStorage.getItem('recent_searches');
+      if (stored) {
+        set({ recentSearches: JSON.parse(stored) });
+      }
+    } catch { }
+  },
+
+  clearRecentSearches: () => {
+    set({ recentSearches: [] });
+    AsyncStorage.removeItem('recent_searches').catch(() => { });
+  },
 }));

@@ -28,7 +28,9 @@ const NAV = [
     { href: "/dashboard/surge", label: "Surge Pricing", icon: TrendingUp },
     { href: "/dashboard/pricing", label: "Pricing", icon: Banknote },
     { href: "/dashboard/service-areas", label: "Service Areas", icon: MapPin },
+    { href: "/dashboard/vehicle-types", label: "Vehicle Types", icon: Car },
     { href: "/dashboard/support", label: "Support", icon: LifeBuoy },
+    { href: "/dashboard/documents", label: "Documents", icon: FileText },
     { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
 

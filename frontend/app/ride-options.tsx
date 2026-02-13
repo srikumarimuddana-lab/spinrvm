@@ -6,6 +6,8 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
+  Image,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -13,14 +15,20 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
 import SpinrConfig from '../config/spinr.config';
 
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const MAP_HEIGHT = 200;
+
 export default function RideOptionsScreen() {
   const router = useRouter();
-  const { pickup, dropoff, estimates, selectedVehicle, fetchEstimates, selectVehicle, isLoading } = useRideStore();
+  const { pickup, dropoff, stops, estimates, selectedVehicle, fetchEstimates, selectVehicle, isLoading } = useRideStore();
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [mapUrl, setMapUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (pickup && dropoff) {
       fetchEstimates();
+      fetchRouteAndBuildMap();
     }
   }, [pickup, dropoff]);
 
@@ -29,6 +37,57 @@ export default function RideOptionsScreen() {
       selectVehicle(estimates[0].vehicle_type);
     }
   }, [estimates]);
+
+  // Fetch actual road route from Directions API, then build static map URL
+  const fetchRouteAndBuildMap = async () => {
+    if (!pickup || !dropoff || !GOOGLE_MAPS_API_KEY) return;
+
+    try {
+      const waypoints = stops
+        .filter(s => s.lat && s.lng)
+        .map(s => `${s.lat},${s.lng}`)
+        .join('|');
+      const waypointParam = waypoints ? `&waypoints=${encodeURIComponent(waypoints)}` : '';
+      const directionsUrl = `https://maps.googleapis.com/maps/api/directions/json?origin=${pickup.lat},${pickup.lng}&destination=${dropoff.lat},${dropoff.lng}${waypointParam}&key=${GOOGLE_MAPS_API_KEY}`;
+
+      const response = await fetch(directionsUrl);
+      const data = await response.json();
+
+      if (data.routes && data.routes.length > 0) {
+        const encodedPolyline = data.routes[0].overview_polyline.points;
+        buildMapWithPolyline(encodedPolyline);
+      } else {
+        buildMapFallback();
+      }
+    } catch (error) {
+      console.log('Directions API error:', error);
+      buildMapFallback();
+    }
+  };
+
+  const buildMapWithPolyline = (encodedPolyline: string) => {
+    if (!pickup || !dropoff || !GOOGLE_MAPS_API_KEY) return;
+    const markers = [];
+    markers.push(`markers=color:green%7Clabel:A%7C${pickup.lat},${pickup.lng}`);
+    stops.forEach((stop, i) => {
+      if (stop.lat && stop.lng) {
+        markers.push(`markers=color:orange%7Clabel:${String.fromCharCode(66 + i)}%7C${stop.lat},${stop.lng}`);
+      }
+    });
+    markers.push(`markers=color:red%7Clabel:B%7C${dropoff.lat},${dropoff.lng}`);
+    const color = SpinrConfig.theme.colors.primary.replace('#', '');
+    const mapWidth = Math.round(SCREEN_WIDTH - 40);
+    setMapUrl(`https://maps.googleapis.com/maps/api/staticmap?size=${mapWidth}x${MAP_HEIGHT}&maptype=roadmap&${markers.join('&')}&path=color:0x${color}ff%7Cweight:5%7Cenc:${encodeURIComponent(encodedPolyline)}&key=${GOOGLE_MAPS_API_KEY}`);
+  };
+
+  const buildMapFallback = () => {
+    if (!pickup || !dropoff || !GOOGLE_MAPS_API_KEY) return;
+    const markers = [];
+    markers.push(`markers=color:green%7Clabel:A%7C${pickup.lat},${pickup.lng}`);
+    markers.push(`markers=color:red%7Clabel:B%7C${dropoff.lat},${dropoff.lng}`);
+    const mapWidth = Math.round(SCREEN_WIDTH - 40);
+    setMapUrl(`https://maps.googleapis.com/maps/api/staticmap?size=${mapWidth}x${MAP_HEIGHT}&maptype=roadmap&${markers.join('&')}&key=${GOOGLE_MAPS_API_KEY}`);
+  };
 
   const handleSelect = (index: number) => {
     setSelectedIndex(index);
@@ -39,40 +98,51 @@ export default function RideOptionsScreen() {
     router.push('/payment-confirm');
   };
 
-  const getVehicleIcon = (icon: string) => {
-    switch (icon) {
-      case 'car-sport':
-        return 'car-sport';
-      case 'car-outline':
-        return 'car';
-      default:
-        return 'car';
-    }
+  // Random ETA per vehicle for visual display
+  const getETA = (index: number) => {
+    const etas = [3, 8, 5, 4, 7];
+    return etas[index % etas.length];
   };
 
   const selectedEstimate = estimates[selectedIndex];
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Header */}
+      {/* Header with back button and destination chip */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Choose a ride</Text>
+        {dropoff && (
+          <View style={styles.destinationChip}>
+            <Text style={styles.destinationChipText} numberOfLines={1}>
+              GOING TO {dropoff.address.toUpperCase()}
+            </Text>
+          </View>
+        )}
         <View style={{ width: 44 }} />
       </View>
 
-      {/* Route Summary */}
-      <View style={styles.routeSummary}>
-        <View style={styles.routePoint}>
-          <View style={[styles.routeDot, { backgroundColor: '#10B981' }]} />
-          <Text style={styles.routeText} numberOfLines={1}>{pickup?.address}</Text>
+      {/* Map Preview */}
+      {mapUrl ? (
+        <View style={styles.mapContainer}>
+          <Image
+            source={{ uri: mapUrl }}
+            style={styles.mapImage}
+            resizeMode="cover"
+          />
         </View>
-        <View style={styles.routeDivider} />
-        <View style={styles.routePoint}>
-          <View style={[styles.routeDot, { backgroundColor: SpinrConfig.theme.colors.primary }]} />
-          <Text style={styles.routeText} numberOfLines={1}>{dropoff?.address}</Text>
+      ) : (
+        <View style={[styles.mapContainer, styles.mapPlaceholder]}>
+          <ActivityIndicator size="small" color={SpinrConfig.theme.colors.primary} />
+        </View>
+      )}
+
+      {/* Choose a ride header with commission badge */}
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>Choose a ride</Text>
+        <View style={styles.commissionBadge}>
+          <Text style={styles.commissionText}>% 0% Commission</Text>
         </View>
       </View>
 
@@ -94,74 +164,66 @@ export default function RideOptionsScreen() {
               onPress={() => handleSelect(index)}
               activeOpacity={0.7}
             >
-              <View style={styles.optionLeft}>
-                <View style={[
-                  styles.vehicleIconContainer,
-                  selectedIndex === index && styles.vehicleIconSelected,
-                ]}>
-                  <Ionicons
-                    name={getVehicleIcon(estimate.vehicle_type.icon) as any}
-                    size={28}
-                    color={selectedIndex === index ? '#FFFFFF' : SpinrConfig.theme.colors.primary}
+              {/* Car Image */}
+              <View style={styles.carImageContainer}>
+                {estimate.vehicle_type.image_url ? (
+                  <Image
+                    source={{ uri: estimate.vehicle_type.image_url }}
+                    style={styles.carImage}
+                    resizeMode="contain"
                   />
-                </View>
-                <View style={styles.optionInfo}>
-                  <Text style={styles.optionName}>{estimate.vehicle_type.name}</Text>
-                  <Text style={styles.optionDesc}>
-                    {estimate.duration_minutes} min • {estimate.vehicle_type.capacity} seats
-                  </Text>
-                </View>
+                ) : (
+                  <View style={styles.carIconFallback}>
+                    <Ionicons name="car" size={36} color="#666" />
+                  </View>
+                )}
               </View>
-              <View style={styles.optionRight}>
+
+              {/* Info */}
+              <View style={styles.optionInfo}>
+                <View style={styles.optionNameRow}>
+                  <Text style={styles.optionName}>{estimate.vehicle_type.name}</Text>
+                  <View style={styles.capacityBadge}>
+                    <Ionicons name="person" size={12} color="#666" />
+                    <Text style={styles.capacityText}>{estimate.vehicle_type.capacity}</Text>
+                  </View>
+                </View>
+                <Text style={styles.optionETA}>{getETA(index)} min away</Text>
+              </View>
+
+              {/* Price */}
+              <View style={styles.optionPriceContainer}>
                 <Text style={styles.optionPrice}>${estimate.total_fare.toFixed(2)}</Text>
                 {selectedIndex === index && (
-                  <View style={styles.checkmark}>
-                    <Ionicons name="checkmark" size={16} color="#FFFFFF" />
+                  <View style={styles.selectedCheck}>
+                    <Ionicons name="checkmark-circle" size={22} color={SpinrConfig.theme.colors.primary} />
                   </View>
                 )}
               </View>
             </TouchableOpacity>
           ))}
-
-          {/* Fare Breakdown */}
-          {selectedEstimate && (
-            <View style={styles.fareBreakdown}>
-              <Text style={styles.breakdownTitle}>Fare Details</Text>
-              <View style={styles.breakdownRow}>
-                <Text style={styles.breakdownLabel}>Base fare</Text>
-                <Text style={styles.breakdownValue}>${selectedEstimate.base_fare.toFixed(2)}</Text>
-              </View>
-              <View style={styles.breakdownRow}>
-                <Text style={styles.breakdownLabel}>Distance ({selectedEstimate.distance_km} km)</Text>
-                <Text style={styles.breakdownValue}>${selectedEstimate.distance_fare.toFixed(2)}</Text>
-              </View>
-              <View style={styles.breakdownRow}>
-                <Text style={styles.breakdownLabel}>Time ({selectedEstimate.duration_minutes} min)</Text>
-                <Text style={styles.breakdownValue}>${selectedEstimate.time_fare.toFixed(2)}</Text>
-              </View>
-              <View style={styles.breakdownRow}>
-                <Text style={styles.breakdownLabel}>Booking fee</Text>
-                <Text style={styles.breakdownValue}>${selectedEstimate.booking_fee.toFixed(2)}</Text>
-              </View>
-              <View style={[styles.breakdownRow, styles.breakdownTotal]}>
-                <Text style={styles.breakdownTotalLabel}>Total</Text>
-                <Text style={styles.breakdownTotalValue}>${selectedEstimate.total_fare.toFixed(2)}</Text>
-              </View>
-            </View>
-          )}
         </ScrollView>
       )}
 
-      {/* Confirm Button */}
+      {/* Payment Method + Confirm Button */}
       {!isLoading && estimates.length > 0 && (
         <View style={styles.footer}>
+          {/* Payment method row */}
+          <TouchableOpacity style={styles.paymentRow}>
+            <Ionicons name="card" size={20} color="#1A1A1A" />
+            <Text style={styles.paymentText}>Visa •••• 4242</Text>
+            <Ionicons name="chevron-forward" size={16} color="#999" />
+          </TouchableOpacity>
+
+          {/* Confirm button */}
           <TouchableOpacity
             style={styles.confirmButton}
             onPress={handleConfirm}
             activeOpacity={0.8}
           >
-            <Text style={styles.confirmButtonText}>Confirm {selectedEstimate?.vehicle_type.name}</Text>
-            <Text style={styles.confirmButtonPrice}>${selectedEstimate?.total_fare.toFixed(2)}</Text>
+            <Text style={styles.confirmButtonText}>
+              Confirm {selectedEstimate?.vehicle_type.name}
+            </Text>
           </TouchableOpacity>
         </View>
       )}
@@ -179,9 +241,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
+    paddingVertical: 8,
   },
   backButton: {
     width: 44,
@@ -189,38 +249,58 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  headerTitle: {
-    fontSize: 18,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
-  },
-  routeSummary: {
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    backgroundColor: '#F9F9F9',
-  },
-  routePoint: {
-    flexDirection: 'row',
+  destinationChip: {
+    flex: 1,
+    backgroundColor: '#F2F2F2',
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    marginHorizontal: 8,
     alignItems: 'center',
   },
-  routeDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginRight: 12,
+  destinationChipText: {
+    fontSize: 12,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#333',
+    letterSpacing: 0.5,
   },
-  routeDivider: {
-    width: 2,
-    height: 20,
-    backgroundColor: '#E0E0E0',
-    marginLeft: 4,
-    marginVertical: 4,
+  mapContainer: {
+    marginHorizontal: 0,
+    backgroundColor: '#F0F0F0',
+    height: MAP_HEIGHT,
   },
-  routeText: {
-    flex: 1,
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_500Medium',
+  mapPlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mapImage: {
+    width: '100%',
+    height: MAP_HEIGHT,
+  },
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontFamily: 'PlusJakartaSans_700Bold',
     color: '#1A1A1A',
+  },
+  commissionBadge: {
+    backgroundColor: '#E8F5E9',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  commissionText: {
+    fontSize: 12,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    color: '#2E7D32',
   },
   loadingContainer: {
     flex: 1,
@@ -235,56 +315,73 @@ const styles = StyleSheet.create({
   },
   optionsList: {
     flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 16,
   },
   optionCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 16,
-    marginBottom: 12,
-    backgroundColor: '#F9F9F9',
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: 'transparent',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F5F5F5',
   },
   optionCardSelected: {
     backgroundColor: '#FFF5F5',
-    borderColor: SpinrConfig.theme.colors.primary,
+    borderLeftWidth: 3,
+    borderLeftColor: SpinrConfig.theme.colors.primary,
   },
-  optionLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  vehicleIconContainer: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#FFF0F0',
+  carImageContainer: {
+    width: 72,
+    height: 48,
+    marginRight: 14,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 14,
   },
-  vehicleIconSelected: {
-    backgroundColor: SpinrConfig.theme.colors.primary,
+  carImage: {
+    width: 72,
+    height: 48,
+  },
+  carIconFallback: {
+    width: 72,
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: '#F5F5F5',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   optionInfo: {
     flex: 1,
   },
-  optionName: {
-    fontSize: 17,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
-    marginBottom: 4,
+  optionNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
-  optionDesc: {
-    fontSize: 13,
-    fontFamily: 'PlusJakartaSans_400Regular',
+  optionName: {
+    fontSize: 16,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#1A1A1A',
+  },
+  capacityBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: '#F0F0F0',
+    borderRadius: 8,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+  },
+  capacityText: {
+    fontSize: 11,
+    fontFamily: 'PlusJakartaSans_500Medium',
     color: '#666',
   },
-  optionRight: {
+  optionETA: {
+    fontSize: 13,
+    fontFamily: 'PlusJakartaSans_400Regular',
+    color: '#10B981',
+    marginTop: 2,
+  },
+  optionPriceContainer: {
     alignItems: 'flex-end',
   },
   optionPrice: {
@@ -292,82 +389,42 @@ const styles = StyleSheet.create({
     fontFamily: 'PlusJakartaSans_700Bold',
     color: '#1A1A1A',
   },
-  checkmark: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    justifyContent: 'center',
+  selectedCheck: {
+    marginTop: 4,
+  },
+  footer: {
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 20,
+    borderTopWidth: 1,
+    borderTopColor: '#F0F0F0',
+    backgroundColor: '#FFFFFF',
+  },
+  paymentRow: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 8,
-  },
-  fareBreakdown: {
-    backgroundColor: '#F9F9F9',
-    borderRadius: 16,
-    padding: 16,
-    marginTop: 8,
-    marginBottom: 20,
-  },
-  breakdownTitle: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
+    gap: 10,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F5F5F5',
     marginBottom: 12,
   },
-  breakdownRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 6,
-  },
-  breakdownLabel: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666',
-  },
-  breakdownValue: {
+  paymentText: {
+    flex: 1,
     fontSize: 14,
     fontFamily: 'PlusJakartaSans_500Medium',
     color: '#1A1A1A',
   },
-  breakdownTotal: {
-    borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
-    marginTop: 8,
-    paddingTop: 12,
-  },
-  breakdownTotalLabel: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
-  },
-  breakdownTotalValue: {
-    fontSize: 18,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: SpinrConfig.theme.colors.primary,
-  },
-  footer: {
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#F0F0F0',
-  },
   confirmButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     backgroundColor: SpinrConfig.theme.colors.primary,
     borderRadius: 28,
     paddingVertical: 18,
-    paddingHorizontal: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   confirmButtonText: {
     fontSize: 17,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#FFFFFF',
-  },
-  confirmButtonPrice: {
-    fontSize: 17,
-    fontFamily: 'PlusJakartaSans_700Bold',
     color: '#FFFFFF',
   },
 });

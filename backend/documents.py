@@ -10,8 +10,10 @@ from pathlib import Path
 
 try:
     from .db import db
+    from .dependencies import get_current_user
 except ImportError:
     from db import db
+    from dependencies import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +42,12 @@ class UpdateRequirementRequest(BaseModel):
     description: Optional[str] = None
     is_mandatory: Optional[bool] = None
     requires_back_side: Optional[bool] = None
+
+class LinkDocumentRequest(BaseModel):
+    requirement_id: str
+    document_url: str
+    document_type: str = "image/jpeg"
+    side: Optional[str] = "front"
 
 class DriverDocument(BaseModel):
     id: str
@@ -79,6 +87,57 @@ async def get_document_requirements():
     # In future, filter by country/city if needed
     requirements = await db.document_requirements.find().sort('created_at', 1).to_list(100)
     return requirements
+
+@documents_router.get("/documents")
+async def get_driver_documents(current_user: dict = Depends(get_current_user)):
+    """Get all documents uploaded by the current driver."""
+    if not current_user.get('is_driver'):
+        raise HTTPException(status_code=403, detail="User is not a driver")
+        
+    # Get driver profile to ensure we have the correct driver_id
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+        
+    documents = await db.driver_documents.find({'driver_id': driver['id']}).sort('uploaded_at', -1).to_list(100)
+    return documents
+
+@documents_router.post("/documents")
+async def link_driver_document(
+    doc_data: LinkDocumentRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Link an uploaded document to the current driver."""
+    if not current_user.get('is_driver'):
+        raise HTTPException(status_code=403, detail="User is not a driver")
+        
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    # Validate requirement exists
+    req = await db.document_requirements.find_one({'id': doc_data.requirement_id})
+    if not req:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+
+    # Create document record
+    doc_record = {
+        'id': str(uuid.uuid4()),
+        'driver_id': driver['id'],
+        'requirement_id': doc_data.requirement_id,
+        'document_type': doc_data.document_type,
+        'document_url': doc_data.document_url,
+        'side': doc_data.side,
+        'status': 'pending', 
+        'uploaded_at': datetime.utcnow(),
+        'updated_at': datetime.utcnow()
+    }
+
+    # Archive previous documents for this requirement/side?? 
+    # For now, just insert. The latest ONE is what we show.
+    
+    await db.driver_documents.insert_one(doc_record)
+    return doc_record
 
 @documents_router.post("/documents/upload")
 async def upload_driver_document(

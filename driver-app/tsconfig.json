@@ -1,0 +1,40 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "paths": {
+      "@/*": [
+        "./*"
+      ],
+      "@shared/*": [
+        "../shared/*"
+      ],
+      "react-native": [
+        "./node_modules/react-native"
+      ],
+      "expo-constants": [
+        "./node_modules/expo-constants"
+      ],
+      "expo-notifications": [
+        "./node_modules/expo-notifications"
+      ],
+      "axios": [
+        "./node_modules/axios"
+      ],
+      "zustand": [
+        "./node_modules/zustand"
+      ],
+      "expo-secure-store": [
+        "./node_modules/expo-secure-store"
+      ]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts",
+    "../shared/**/*.ts",
+    "../shared/**/*.tsx"
+  ]
+}

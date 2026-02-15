@@ -1,48 +1,183 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator } from 'react-native';
-import { useAuthStore } from '../../store/authStore';
-import SpinrConfig from '../../config/spinr.config';
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  FlatList,
+  Platform,
+  ActivityIndicator,
+  RefreshControl,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
+import { useDriverStore } from '../../store/driverStore';
 
-export default function DriverRides() {
-  const { token } = useAuthStore();
-  const [rides, setRides] = useState([]);
+const COLORS = {
+  primary: '#FFFFFF', // Background (white)
+  accent: '#FF3B30', // Action/brand color (red)
+  accentDim: '#D32F2F',
+  surface: '#FFFFFF',
+  surfaceLight: '#F5F5F5',
+  text: '#1A1A1A',
+  textDim: '#666666',
+  success: '#34C759',
+  gold: '#FFD700',
+  orange: '#FF9500',
+  danger: '#DC2626',
+  border: '#E5E7EB',
+};
+
+type Filter = 'all' | 'completed' | 'cancelled';
+
+export default function RidesScreen() {
+  const router = useRouter();
+  const { rideHistory, historyTotal, fetchRideHistory } = useDriverStore();
+  const [filter, setFilter] = useState<Filter>('all');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    fetchRides();
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    await fetchRideHistory(50, 0);
+    setLoading(false);
   }, []);
 
-  const fetchRides = async () => {
-    try {
-      const res = await fetch(`${SpinrConfig.backendUrl}/api/drivers/rides/pending`, { // Using pending endpoint for now, maybe add history
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      setRides(data);
-    } catch (e) {
-      console.log(e);
-    } finally {
-      setLoading(false);
-    }
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchRideHistory(50, 0);
+    setRefreshing(false);
+  };
+
+  const filteredRides = rideHistory.filter((r) => {
+    if (filter === 'all') return true;
+    return r.status === filter;
+  });
+
+  const renderRideCard = ({ item }: { item: any }) => {
+    const isCompleted = item.status === 'completed';
+    const statusColor = isCompleted ? COLORS.accent : COLORS.danger;
+    const statusLabel = isCompleted ? 'Completed' : 'Cancelled';
+
+    const date = item.ride_completed_at || item.cancelled_at || item.created_at;
+    const formattedDate = date
+      ? new Date(date).toLocaleDateString('en', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+      : '';
+
+    return (
+      <TouchableOpacity style={styles.rideCard} onPress={() => router.push(`/(driver)/ride-detail?id=${item.id}` as any)}>
+        {/* Status and Date */}
+        <View style={styles.cardHeader}>
+          <View style={[styles.statusBadge, { backgroundColor: `${statusColor}15` }]}>
+            <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+            <Text style={[styles.statusText, { color: statusColor }]}>{statusLabel}</Text>
+          </View>
+          <Text style={styles.dateText}>{formattedDate}</Text>
+        </View>
+
+        {/* Route */}
+        <View style={styles.routeRow}>
+          <View style={styles.routeDots}>
+            <View style={[styles.dot, { backgroundColor: COLORS.accent }]} />
+            <View style={styles.dotLine} />
+            <View style={[styles.dot, { backgroundColor: COLORS.danger }]} />
+          </View>
+          <View style={styles.routeTexts}>
+            <Text style={styles.routeAddress} numberOfLines={1}>
+              {item.pickup_address || 'Pickup location'}
+            </Text>
+            <Text style={styles.routeAddress} numberOfLines={1}>
+              {item.dropoff_address || 'Dropoff location'}
+            </Text>
+          </View>
+        </View>
+
+        {/* Fare and Trip Info */}
+        <View style={styles.cardFooter}>
+          <View style={styles.tripMeta}>
+            {item.distance_km && (
+              <Text style={styles.metaText}>{item.distance_km.toFixed(1)} km</Text>
+            )}
+            {item.duration_minutes && (
+              <>
+                <Text style={styles.metaDivider}>·</Text>
+                <Text style={styles.metaText}>{item.duration_minutes} min</Text>
+              </>
+            )}
+            {item.rider_rating !== null && item.rider_rating !== undefined && (
+              <>
+                <Text style={styles.metaDivider}>·</Text>
+                <Ionicons name="star" size={12} color={COLORS.gold} />
+                <Text style={styles.metaText}>{item.rider_rating}</Text>
+              </>
+            )}
+          </View>
+          {isCompleted && (
+            <Text style={styles.fareText}>
+              ${(item.driver_earnings || item.total_fare || 0).toFixed(2)}
+            </Text>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
   };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>Recent Rides</Text>
+      {/* Header */}
+      <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={styles.header}>
+        <Text style={styles.headerTitle}>Ride History</Text>
+        <Text style={styles.headerSub}>
+          {historyTotal} total ride{historyTotal !== 1 ? 's' : ''}
+        </Text>
+      </LinearGradient>
+
+      {/* Filter Tabs */}
+      <View style={styles.filterRow}>
+        {(['all', 'completed', 'cancelled'] as Filter[]).map((f) => (
+          <TouchableOpacity
+            key={f}
+            style={[styles.filterBtn, filter === f && styles.filterBtnActive]}
+            onPress={() => setFilter(f)}
+          >
+            <Text style={[styles.filterText, filter === f && styles.filterTextActive]}>
+              {f === 'all' ? 'All' : f === 'completed' ? 'Completed' : 'Cancelled'}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* Rides List */}
       {loading ? (
-        <ActivityIndicator />
+        <ActivityIndicator color={COLORS.accent} style={{ marginTop: 40 }} />
       ) : (
         <FlatList
-          data={rides}
-          keyExtractor={(item: any) => item.id}
-          renderItem={({ item }) => (
-            <View style={styles.card}>
-              <Text style={styles.date}>{new Date(item.created_at).toLocaleDateString()}</Text>
-              <Text style={styles.fare}>${item.total_fare}</Text>
-              <Text>{item.status}</Text>
+          data={filteredRides}
+          renderItem={renderRideCard}
+          keyExtractor={(item) => item.id || Math.random().toString()}
+          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 100 }}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />
+          }
+          ListEmptyComponent={
+            <View style={styles.emptyState}>
+              <Ionicons name="car-outline" size={56} color={COLORS.surfaceLight} />
+              <Text style={styles.emptyTitle}>No rides yet</Text>
+              <Text style={styles.emptySub}>Your completed rides will appear here</Text>
             </View>
-          )}
-          ListEmptyComponent={<Text>No rides yet.</Text>}
+          }
         />
       )}
     </View>
@@ -50,9 +185,154 @@ export default function DriverRides() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: '#fff' },
-  header: { fontSize: 24, fontWeight: 'bold', marginBottom: 20 },
-  card: { padding: 15, backgroundColor: '#f9f9f9', marginBottom: 10, borderRadius: 8 },
-  date: { color: '#666' },
-  fare: { fontSize: 18, fontWeight: 'bold', color: 'green' }
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.primary,
+  },
+  header: {
+    paddingTop: Platform.OS === 'ios' ? 60 : 45,
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+  },
+  headerTitle: {
+    color: COLORS.text,
+    fontSize: 26,
+    fontWeight: '800',
+  },
+  headerSub: {
+    color: COLORS.textDim,
+    fontSize: 13,
+    marginTop: 4,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+    gap: 8,
+  },
+  filterBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  filterBtnActive: {
+    backgroundColor: COLORS.accent,
+    borderColor: COLORS.accent,
+  },
+  filterText: {
+    color: COLORS.textDim,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  filterTextActive: {
+    color: '#fff',
+  },
+  rideCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.04)',
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  dateText: {
+    color: COLORS.textDim,
+    fontSize: 11,
+  },
+  routeRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 12,
+  },
+  routeDots: {
+    alignItems: 'center',
+    width: 12,
+    paddingTop: 3,
+  },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  dotLine: {
+    width: 2,
+    height: 16,
+    backgroundColor: COLORS.surfaceLight,
+    marginVertical: 2,
+  },
+  routeTexts: {
+    flex: 1,
+    gap: 10,
+  },
+  routeAddress: {
+    color: COLORS.text,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  cardFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: COLORS.surfaceLight,
+  },
+  tripMeta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  metaText: {
+    color: COLORS.textDim,
+    fontSize: 12,
+  },
+  metaDivider: {
+    color: COLORS.surfaceLight,
+    fontSize: 12,
+  },
+  fareText: {
+    color: COLORS.accent,
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 60,
+    gap: 8,
+  },
+  emptyTitle: {
+    color: COLORS.textDim,
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  emptySub: {
+    color: COLORS.surfaceLight,
+    fontSize: 13,
+  },
 });

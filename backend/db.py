@@ -86,6 +86,18 @@ class Collection:
 
         return await db_supabase.insert_one(self.name, doc)
 
+    async def insert_many(self, docs: List[Dict[str, Any]]):
+        if not docs:
+            return type('Result', (), {'inserted_ids': []})()
+        
+        # Simple loop for now as Supabase might not have bulk insert exposed in db_supabase yet
+        ids = []
+        for doc in docs:
+            await self.insert_one(doc)
+            ids.append(doc.get('id'))
+            
+        return type('Result', (), {'inserted_ids': ids})()
+
     async def update_one(self, _filter: Dict[str, Any], update: Dict[str, Any], upsert: bool = False):
         update_data = update.get('$set') if isinstance(update, dict) and '$set' in update else update
 
@@ -98,7 +110,7 @@ class Collection:
                 # Check if we are doing atomic claim
                 if update_data['is_available'] is False and _filter.get('is_available') is True:
                      success = await db_supabase.claim_driver_atomic(_filter['id'])
-                     return type('Result', (), {'modified_count': 1 if success else 0})()
+                     return type('Result', (), {'modified_count': 1 if success else 0, 'matched_count': 1 if success else 0})()
 
                 # Check for increment total_rides
                 inc_val = 0
@@ -108,14 +120,16 @@ class Collection:
                 return await db_supabase.set_driver_available(_filter['id'], update_data['is_available'], total_rides_inc=inc_val)
 
         if self.name == 'otp_records' and 'id' in _filter and 'verified' in update_data:
-            return await db_supabase.verify_otp_record(_filter['id'])
+            res = await db_supabase.verify_otp_record(_filter['id'])
+            return type('Result', (), {'modified_count': 1 if res else 0, 'matched_count': 1 if res else 0})()
 
         if self.name == 'rides' and 'id' in _filter:
-            return await db_supabase.update_ride(_filter['id'], update_data)
+            res = await db_supabase.update_ride(_filter['id'], update_data)
+            return type('Result', (), {'modified_count': 1 if res else 0, 'matched_count': 1 if res else 0})()
 
         # Generic update
         res = await db_supabase.update_one(self.name, _filter, update, upsert=upsert)
-        return type('Result', (), {'modified_count': 1 if res else 0})()
+        return type('Result', (), {'modified_count': 1 if res else 0, 'matched_count': 1 if res else 0})()
 
     async def delete_one(self, _filter: Dict[str, Any]):
         if self.name == 'otp_records' and 'id' in _filter:
@@ -142,7 +156,9 @@ class DB:
             'vehicle_types', 'service_areas', 'fare_configs',
             'support_tickets', 'faqs', 'area_fees',
             'driver_documents', 'document_requirements',
-            'surge_pricing'
+            'surge_pricing', 'document_files',  # Stores actual file content (fallback)
+            'driver_location_history',  # Stores GPS breadcrumbs
+            'corporate_accounts'  # Corporate accounts for business clients
         ]
         for n in names:
             setattr(self, n, Collection(n))

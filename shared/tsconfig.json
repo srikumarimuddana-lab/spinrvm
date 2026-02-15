@@ -1,0 +1,15 @@
+{
+    "extends": "../driver-app/tsconfig.json",
+    "compilerOptions": {
+        "baseUrl": ".",
+        "paths": {
+            "*": [
+                "../driver-app/node_modules/*"
+            ]
+        }
+    },
+    "include": [
+        "**/*.ts",
+        "**/*.tsx"
+    ]
+}

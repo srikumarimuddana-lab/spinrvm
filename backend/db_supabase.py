@@ -1,18 +1,24 @@
-"""Supabase data access helpers.
-
-This module provides DB operations used by the server. It uses the
-`supabase` client and runs blocking calls on a threadpool via `asyncio.to_thread` so they
-can be used from async FastAPI handlers.
-"""
 import asyncio
 import logging
 from typing import Optional, List, Dict, Any, Union
+from datetime import datetime, date
+
 try:
     from .supabase_client import supabase
 except ImportError:
     from supabase_client import supabase
 
 logger = logging.getLogger(__name__)
+
+def _serialize_for_api(data: Any) -> Any:
+    """Recursively convert datetime/date objects to ISO format strings."""
+    if isinstance(data, dict):
+        return {k: _serialize_for_api(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_serialize_for_api(v) for v in data]
+    if isinstance(data, (datetime, date)):
+        return data.isoformat()
+    return data
 
 def _single_row_from_res(res: Any) -> Optional[Dict[str, Any]]:
     if not res:
@@ -63,6 +69,7 @@ async def get_user_by_phone(phone: str) -> Optional[Dict[str, Any]]:
 async def create_user(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not supabase:
         raise RuntimeError('Supabase client not configured')
+    payload = _serialize_for_api(payload)
     return await asyncio.to_thread(lambda: _single_row_from_res(
         supabase.table('users').insert(payload).execute()
     ))
@@ -151,6 +158,7 @@ async def get_ride(ride_id: str) -> Optional[Dict[str, Any]]:
 async def insert_ride(payload: Dict[str, Any]):
     if not supabase:
         raise RuntimeError('Supabase client not configured')
+    payload = _serialize_for_api(payload)
     return await asyncio.to_thread(lambda: _single_row_from_res(
         supabase.table('rides').insert(payload).execute()
     ))
@@ -158,6 +166,7 @@ async def insert_ride(payload: Dict[str, Any]):
 async def update_ride(ride_id: str, updates: Dict[str, Any]):
     if not supabase:
         return None
+    updates = _serialize_for_api(updates)
     return await asyncio.to_thread(lambda: _single_row_from_res(
         supabase.table('rides').update(updates).eq('id', ride_id).execute()
     ))
@@ -188,6 +197,7 @@ async def get_rides_for_driver(driver_id: str, statuses: Optional[List[str]] = N
 async def insert_otp_record(payload: Dict[str, Any]):
     if not supabase:
         raise RuntimeError('Supabase client not configured')
+    payload = _serialize_for_api(payload)
     return await asyncio.to_thread(lambda: _single_row_from_res(
         supabase.table('otp_records').insert(payload).execute()
     ))
@@ -269,6 +279,7 @@ async def count_documents(table: str, filters: Optional[Dict[str, Any]] = None) 
 async def insert_one(table: str, doc: Dict[str, Any]):
     if not supabase:
         return None
+    doc = _serialize_for_api(doc)
     return await asyncio.to_thread(lambda: _single_row_from_res(
         supabase.table(table).insert(doc).execute()
     ))
@@ -279,6 +290,7 @@ async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any]
 
     def _fn():
         update_data = update.get('$set', update)
+        update_data = _serialize_for_api(update_data)
 
         if upsert:
             # Upsert requires merging filters and update data

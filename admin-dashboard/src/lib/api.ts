@@ -1,4 +1,5 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Use relative URL to go through Next.js proxy (avoids CORS and IPv6 issues)
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const token =
@@ -9,19 +10,28 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     };
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
-    if (res.status === 401) {
-        if (typeof window !== "undefined") {
-            localStorage.removeItem("admin_token");
-            window.location.href = "/login";
+    const url = `${API_BASE}${path}`;
+    try {
+        const res = await fetch(url, { ...options, headers });
+
+        if (res.status === 401) {
+            if (typeof window !== "undefined") {
+                localStorage.removeItem("admin_token");
+                window.location.href = "/login";
+            }
+            throw new Error("Unauthorized");
         }
-        throw new Error("Unauthorized");
+
+        if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            throw new Error(body.detail || res.statusText);
+        }
+
+        return res.json();
+    } catch (err) {
+        console.error(`API Request Failed: ${url}`, err);
+        throw err;
     }
-    if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || res.statusText);
-    }
-    return res.json();
 }
 
 /* ── Auth ─────────────────────────────────── */
@@ -223,4 +233,76 @@ export const reviewDocument = (docId: string, status: string, reason?: string) =
     request<any>(`/api/admin/documents/${docId}/review`, {
         method: "POST",
         body: JSON.stringify({ status, rejection_reason: reason }),
+    });
+
+/* ── Corporate Accounts ─────────────────────── */
+export const getCorporateAccounts = () =>
+    request<any[]>("/api/admin/corporate-accounts");
+
+export const createCorporateAccount = (data: any) =>
+    request<any>("/api/admin/corporate-accounts", {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+
+export const updateCorporateAccount = (id: string, data: any) =>
+    request<any>(`/api/admin/corporate-accounts/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+    });
+
+export const deleteCorporateAccount = (id: string) =>
+    request<any>(`/api/admin/corporate-accounts/${id}`, { method: "DELETE" });
+
+/* ── Heat Map Data ─────────────────────────── */
+export interface HeatMapData {
+    pickup_points: [number, number, number][];
+    dropoff_points: [number, number, number][];
+    stats: {
+        total_rides: number;
+        corporate_rides: number;
+        regular_rides: number;
+    };
+}
+
+export const getHeatMapData = (params: {
+    filter?: string;
+    start_date?: string;
+    end_date?: string;
+    service_area_id?: string;
+    group_by?: string;
+}) => {
+    const searchParams = new URLSearchParams();
+    if (params.filter) searchParams.set('filter', params.filter);
+    if (params.start_date) searchParams.set('start_date', params.start_date);
+    if (params.end_date) searchParams.set('end_date', params.end_date);
+    if (params.service_area_id) searchParams.set('service_area_id', params.service_area_id);
+    if (params.group_by) searchParams.set('group_by', params.group_by);
+
+    return request<HeatMapData>(`/api/admin/rides/heatmap-data?${searchParams.toString()}`);
+};
+
+/* ── Heat Map Settings ─────────────────────── */
+export interface HeatMapSettings {
+    heat_map_enabled: boolean;
+    heat_map_default_range: string;
+    heat_map_intensity: string;
+    heat_map_radius: number;
+    heat_map_blur: number;
+    heat_map_gradient_start: string;
+    heat_map_gradient_mid: string;
+    heat_map_gradient_end: string;
+    heat_map_show_pickups: boolean;
+    heat_map_show_dropoffs: boolean;
+    corporate_heat_map_enabled: boolean;
+    regular_rider_heat_map_enabled: boolean;
+}
+
+export const getHeatMapSettings = () =>
+    request<HeatMapSettings>("/api/admin/settings/heatmap");
+
+export const updateHeatMapSettings = (data: Partial<HeatMapSettings>) =>
+    request<any>("/api/admin/settings/heatmap", {
+        method: "PUT",
+        body: JSON.stringify(data),
     });

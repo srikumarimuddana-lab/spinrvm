@@ -622,8 +622,9 @@ export default function DriversPage() {
 
             if (!res.ok) throw new Error("Failed to update status");
 
-            setDrivers(drivers.map(d => d.id === driverId ? { ...d, is_verified: isVerified, rejection_reason: isVerified ? null : rejectReason } : d));
-            setSelectedDriver((prev: any) => ({ ...prev, is_verified: isVerified }));
+            const now = new Date().toISOString();
+            setDrivers(drivers.map(d => d.id === driverId ? { ...d, is_verified: isVerified, rejection_reason: isVerified ? null : rejectReason, updated_at: now } : d));
+            setSelectedDriver((prev: any) => ({ ...prev, is_verified: isVerified, updated_at: now }));
             setRejectDialogOpen(false);
             setRejectReason("");
             // Don't close sheet, let them see it updated

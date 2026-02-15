@@ -1,25 +1,39 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import SpinrConfig from '../../config/spinr.config';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { View, Platform } from 'react-native';
+
+// Consistent theme with rider app (white and red)
+const COLORS = {
+  primary: '#FF3B30', // Vibrant Red
+  background: '#FFFFFF',
+  surface: '#FFFFFF',
+  surfaceLight: '#F5F5F5',
+  text: '#1A1A1A',
+  textDim: '#666666',
+  border: '#E5E7EB',
+};
 
 export default function DriverLayout() {
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: SpinrConfig.theme.colors.primary,
-        tabBarInactiveTintColor: '#999',
         tabBarStyle: {
+          backgroundColor: COLORS.background,
           borderTopWidth: 1,
-          borderTopColor: '#F0F0F0',
-          height: 60,
-          paddingBottom: 8,
+          borderTopColor: COLORS.border,
+          height: Platform.OS === 'ios' ? 88 : 65,
+          paddingBottom: Platform.OS === 'ios' ? 28 : 10,
           paddingTop: 8,
+          elevation: 0,
         },
+        tabBarActiveTintColor: COLORS.primary,
+        tabBarInactiveTintColor: '#999',
         tabBarLabelStyle: {
-          fontFamily: 'PlusJakartaSans_500Medium',
-          fontSize: 10,
+          fontSize: 11,
+          fontWeight: '600',
+          letterSpacing: 0.2,
         },
       }}
     >
@@ -28,7 +42,9 @@ export default function DriverLayout() {
         options={{
           title: 'Drive',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="car" size={size} color={color} />
+            <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+              <MaterialCommunityIcons name="steering" size={size} color={color} />
+            </View>
           ),
         }}
       />
@@ -37,7 +53,7 @@ export default function DriverLayout() {
         options={{
           title: 'Rides',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="list" size={size} color={color} />
+            <Ionicons name="car-sport" size={size} color={color} />
           ),
         }}
       />
@@ -55,10 +71,15 @@ export default function DriverLayout() {
         options={{
           title: 'Profile',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person" size={size} color={color} />
+            <Ionicons name="person-circle" size={size} color={color} />
           ),
         }}
       />
+      {/* Hidden screens — accessible via navigation but not shown in tab bar */}
+      <Tabs.Screen name="ride-detail" options={{ href: null, headerShown: false }} />
+      <Tabs.Screen name="settings" options={{ href: null, headerShown: false }} />
+      <Tabs.Screen name="notifications" options={{ href: null, headerShown: false }} />
+      <Tabs.Screen name="chat" options={{ href: null, headerShown: false }} />
     </Tabs>
   );
 }

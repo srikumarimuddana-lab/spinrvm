@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import { auth } from '../config/firebaseConfig';
 import { PhoneAuthProvider, signInWithCredential, signOut, User as FirebaseUser } from 'firebase/auth';
 import api from '../api/client';
+import { appCache, CACHE_KEYS, CACHE_CONFIG } from '../../shared/cache';
 
 // Platform-safe secure storage
 const storage = {
@@ -51,11 +52,18 @@ export interface Driver {
   vehicle_make: string;
   vehicle_model: string;
   vehicle_color: string;
+  vehicle_year?: number;
   license_plate: string;
   rating: number;
   total_rides: number;
   is_online: boolean;
   is_available: boolean;
+  is_verified?: boolean;
+  license_expiry_date?: string;
+  insurance_expiry_date?: string;
+  background_check_expiry_date?: string;
+  vehicle_inspection_expiry_date?: string;
+  [key: string]: any;
 }
 
 export interface User {
@@ -126,15 +134,39 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             const token = await firebaseUser.getIdToken();
             console.log('Got Firebase token');
 
-            // Sync with backend
-            const response = await api.get('/auth/me');
-            const userData = response.data;
+            // Try to get cached user data first for faster load
+            let userData = await appCache.get<User>(CACHE_KEYS.USER_PROFILE);
+            let driverData: Driver | null = null;
 
-            let driverData = null;
-            if (userData.is_driver || userData.role === 'driver') {
+            // If we don't have cached data, fetch fresh
+            if (!userData) {
+              // Fetch fresh user data
+              const response = await api.get('/auth/me');
+              userData = response.data as User;
+            }
+
+            // Cache user profile
+            if (userData) {
+              await appCache.set(CACHE_KEYS.USER_PROFILE, userData, CACHE_CONFIG.USER_PROFILE_TTL);
+            }
+
+            if (userData?.is_driver || userData?.role === 'driver') {
               try {
-                const driverRes = await api.get('/drivers/me');
-                driverData = driverRes.data;
+                // Try to get cached driver data first
+                const cachedDriver = await appCache.get<Driver>(CACHE_KEYS.DRIVER_PROFILE);
+                if (cachedDriver) {
+                  driverData = cachedDriver;
+                  // Fetch fresh data in background and update cache
+                  api.get('/drivers/me').then(async (driverRes) => {
+                    const freshDriver = driverRes.data as Driver;
+                    await appCache.set(CACHE_KEYS.DRIVER_PROFILE, freshDriver, CACHE_CONFIG.USER_PROFILE_TTL);
+                    set({ driver: freshDriver });
+                  }).catch(() => { });
+                } else {
+                  const driverRes = await api.get('/drivers/me');
+                  driverData = driverRes.data as Driver;
+                  await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, CACHE_CONFIG.USER_PROFILE_TTL);
+                }
               } catch (e) {
                 console.log('Failed to fetch driver data on init');
               }
@@ -157,6 +189,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         } else {
           console.log('No user logged in');
           await storage.deleteItem('auth_token');
+          // Clear user cache on logout
+          await appCache.clearUserCache();
           set({
             user: null,
             driver: null,

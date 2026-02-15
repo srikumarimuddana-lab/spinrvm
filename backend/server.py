@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, WebSocket, WebSocketDisconnect, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Query, WebSocket, WebSocketDisconnect, UploadFile, File, Body
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -15,7 +15,7 @@ from typing import List, Optional, Dict, Any
 import uuid
 import random
 import string
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import jwt
 import math
 import json
@@ -49,16 +49,31 @@ try:
 except ImportError:
     from db import db
 
-# JWT Secret — REQUIRED in production
-_env = os.environ.get('ENV', 'development')
-JWT_SECRET = os.environ.get('JWT_SECRET')
-if not JWT_SECRET:
-    if _env == 'production':
-        raise RuntimeError('JWT_SECRET environment variable is required in production')
-    JWT_SECRET = 'spinr-dev-secret-key-NOT-FOR-PRODUCTION'
-    logging.warning('JWT_SECRET not set — using insecure dev key. Set JWT_SECRET for production.')
-JWT_ALGORITHM = 'HS256'
-OTP_EXPIRY_MINUTES = 5
+# Security
+try:
+    from .dependencies import (
+        get_current_user,
+        get_admin_user,
+        create_jwt_token,
+        verify_jwt_token,
+        generate_otp,
+        JWT_SECRET,
+        JWT_ALGORITHM,
+        OTP_EXPIRY_MINUTES,
+        security
+    )
+except ImportError:
+    from dependencies import (
+        get_current_user,
+        get_admin_user,
+        create_jwt_token,
+        verify_jwt_token,
+        generate_otp,
+        JWT_SECRET,
+        JWT_ALGORITHM,
+        OTP_EXPIRY_MINUTES,
+        security
+    )
 
 # Firebase initialization (expects JSON service account in env var `FIREBASE_SERVICE_ACCOUNT_JSON`)
 FIREBASE_SERVICE_ACCOUNT_JSON = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON')
@@ -80,23 +95,27 @@ else:
     except Exception:
         pass
 
-# Security
-security = HTTPBearer(auto_error=False)
 
 from contextlib import asynccontextmanager
 
 # Import feature routers
 try:
-    from .features import support_router, admin_support_router, pricing_router, check_scheduled_rides, calculate_airport_fee
+    from .features import support_router, admin_support_router, pricing_router, check_scheduled_rides, calculate_airport_fee, send_push_notification
     from .documents import documents_router, admin_documents_router
 except ImportError:
-    from features import support_router, admin_support_router, pricing_router, check_scheduled_rides, calculate_airport_fee
+    from features import support_router, admin_support_router, pricing_router, check_scheduled_rides, calculate_airport_fee, send_push_notification
     from documents import documents_router, admin_documents_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Start scheduled ride checker background task
     scheduler_task = asyncio.create_task(check_scheduled_rides())
+    # Create indexes for location history (idempotent)
+    try:
+        await db.driver_location_history.create_index([('driver_id', 1), ('timestamp', 1)])
+        await db.driver_location_history.create_index([('ride_id', 1), ('timestamp', 1)])
+    except Exception as e:
+        logger.warning(f"Could not create location history indexes: {e}")
     yield
     # Shutdown: cancel the scheduler
     scheduler_task.cancel()
@@ -105,9 +124,27 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Spinr API", version="1.0.0", lifespan=lifespan)
 
 # CORS Middleware
+# CORS Middleware
+origins = [
+    "http://localhost:3000",
+    "http://localhost:3001",
+    "http://localhost:8081",
+    "http://localhost:8000",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
+    "http://127.0.0.1:8000",
+    "https://spinr-admin.vercel.app",
+    "https://spinr-admin-git-main-mkkreddys-projects.vercel.app",
+]
+
+# Allow dynamic origins from environment variable
+env_origins = os.environ.get("ALLOWED_ORIGINS")
+if env_origins:
+    origins.extend([origin.strip() for origin in env_origins.split(",")])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for dev
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -122,27 +159,121 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 api_router = APIRouter(prefix="/api")
 admin_router = APIRouter(prefix="/api/admin")
 
-# File Upload Handling
-UPLOAD_DIR = "uploads"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+# File Upload Handling - Using Supabase Storage or Database
+# Documents are stored in Supabase Storage for security
 
 @api_router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """Upload a file and return its URL"""
-    file_ext = os.path.splitext(file.filename)[1]
-    filename = f"{uuid.uuid4()}{file_ext}"
-    file_path = os.path.join(UPLOAD_DIR, filename)
+    """Upload a file to Supabase Storage and return its public URL"""
+    try:
+        from supabase import create_client
+        import os
+        import base64
+        
+        supabase_url = os.environ.get('SUPABASE_URL')
+        supabase_key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
+        
+        # Read file content
+        file_content = await file.read()
+        file_ext = os.path.splitext(file.filename or '.jpg')[1]
+        content_type = file.content_type or 'application/octet-stream'
+        
+                # Try Supabase Storage first
+        if supabase_url and supabase_key:
+            try:
+                supabase = create_client(supabase_url, supabase_key)
+                
+                # Generate unique filename
+                unique_filename = f"{uuid.uuid4()}{file_ext}"
+                bucket_name = 'driver-documents'
+                
+                # Check/Create bucket
+                try:
+                    buckets = supabase.storage.list_buckets()
+                    bucket_exists = any(b.name == bucket_name for b in buckets)
+                    if not bucket_exists:
+                         print(f"Creating bucket: {bucket_name}")
+                         supabase.storage.create_bucket(bucket_name, {'public': True})
+                except Exception as bucket_error:
+                    print(f"Bucket check/create error (ignoring): {bucket_error}")
+
+                # Upload to Supabase Storage
+                bucket = supabase.storage.from_(bucket_name)
+                response = bucket.upload(
+                    unique_filename,
+                    file_content,
+                    file_options={
+                        "content-type": content_type,
+                        "upsert": "false"
+                    }
+                )
+                
+                # Get public URL
+                public_url = f"{supabase_url}/storage/v1/object/public/{bucket_name}/{unique_filename}"
+                return {"url": public_url, "filename": unique_filename}
+                
+            except Exception as storage_error:
+                print(f"Supabase Storage error: {storage_error}")
+                # Raise the storage error directly so we can debug it
+                print(f"Storage failed, attempting DB fallback. Error: {storage_error}")
+        
+        # Fallback: Store as base64 in database (document_files table)
+        # NOTE: User must create 'document_files' table manually in Supabase SQL editor
+        file_id = str(uuid.uuid4())
+        base64_content = base64.b64encode(file_content).decode('utf-8')
+        
+        # Store in database
+        doc_record = {
+            'id': file_id,
+            'filename': file.filename or 'document',
+            'content_type': content_type,
+            'data': base64_content,
+            'created_at': datetime.utcnow().isoformat()
+        }
+        
+        try:
+            await db.document_files.insert_one(doc_record)
+            return {
+                "url": f"/api/documents/{file_id}", 
+                "filename": file.filename or 'document',
+                "storage_type": "database"
+            }
+        except Exception as db_error:
+            print(f"Database error: {db_error}")
+            import traceback
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail='Upload failed - Storage not configured and DB fallback failed. Ensure "document_files" table exists.')
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Upload error: {e}")
+        raise HTTPException(status_code=500, detail=f'Upload error: {str(e)}')
+
+@api_router.get("/documents/{doc_id}")
+async def get_document(doc_id: str):
+    """Retrieve a document from database storage"""
+    from fastapi.responses import Response
     
     try:
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Could not save file: {e}")
+        # Try fetching from document_files (fallback storage)
+        doc = await db.document_files.find_one({'id': doc_id})
         
-    # Return absolute URL if possible, or relative
-    # For now relative: /uploads/filename
-    return {"url": f"/uploads/{filename}", "filename": filename}
+        if not doc:
+            raise HTTPException(status_code=404, detail='Document file not found')
+        
+        # Decode base64
+        file_content = base64.b64decode(doc['data'])
+        
+        return Response(
+            content=file_content,
+            media_type=doc.get('content_type', 'application/octet-stream'),
+            headers={'Content-Disposition': f'inline; filename="{doc["filename"]}"'}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f'Error retrieving document: {str(e)}')
 
 # Configure logging
 logging.basicConfig(
@@ -302,6 +433,7 @@ class Driver(BaseModel):
     vehicle_model: str
     vehicle_color: str
     license_plate: str
+    city: Optional[str] = None
     
     # Verification & Compliance Fields
     license_number: Optional[str] = None
@@ -591,16 +723,21 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
         while True:
             data = await websocket.receive_json()
 
-            if data.get('type') == 'driver_location':
-                # Only allow drivers to report their own location
+            if data.get('type') in ('driver_location', 'location_update'):
+                # Accept both message types for backwards compat
                 driver_id = data.get('driver_id')
                 lat = data.get('lat')
                 lng = data.get('lng')
+
+                # If driver_id not sent, look it up from the authenticated user
+                if not driver_id and client_type == 'driver':
+                    dp = await db.drivers.find_one({'user_id': user['id']})
+                    if dp:
+                        driver_id = dp['id']
+
                 # Verify driver ownership
                 is_valid_driver = False
-                if client_type == 'driver':
-                    # Only allow updating own driver record
-                    # Check if this user owns this driver_id
+                if client_type == 'driver' and driver_id:
                     owned_driver = await db.drivers.find_one({'id': driver_id, 'user_id': user['id']})
                     if owned_driver:
                         is_valid_driver = True
@@ -608,6 +745,41 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 if driver_id and lat and lng and is_valid_driver:
                     manager.update_driver_location(driver_id, lat, lng)
                     await db.drivers.update_one({'id': driver_id}, {'$set': {'lat': lat, 'lng': lng}})
+
+                    # ── Persist GPS breadcrumb ──────────────────────
+                    active_ride = await db.rides.find_one({
+                        'driver_id': driver_id,
+                        'status': {'$in': ['driver_assigned', 'driver_accepted', 'driver_arrived', 'in_progress']}
+                    })
+                    ride_id = active_ride['id'] if active_ride else None
+
+                    # Determine tracking phase
+                    tracking_phase = 'online_idle'
+                    if active_ride:
+                        status_map = {
+                            'driver_assigned': 'navigating_to_pickup',
+                            'driver_accepted': 'navigating_to_pickup',
+                            'driver_arrived': 'arrived_at_pickup',
+                            'in_progress': 'trip_in_progress',
+                        }
+                        tracking_phase = status_map.get(active_ride.get('status', ''), 'online_idle')
+
+                    breadcrumb = {
+                        'id': str(uuid.uuid4()),
+                        'driver_id': driver_id,
+                        'ride_id': ride_id,
+                        'lat': lat,
+                        'lng': lng,
+                        'speed': data.get('speed'),
+                        'heading': data.get('heading'),
+                        'accuracy': data.get('accuracy'),
+                        'altitude': data.get('altitude'),
+                        'tracking_phase': tracking_phase,
+                        'timestamp': datetime.utcnow(),
+                    }
+                    await db.driver_location_history.insert_one(breadcrumb)
+
+                    # Forward to rider in real-time
                     rides = await db.rides.find({
                         'driver_id': driver_id,
                         'status': {'$in': ['driver_assigned', 'driver_arrived', 'in_progress']}
@@ -618,10 +790,42 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                                 'type': 'driver_location_update',
                                 'driver_id': driver_id,
                                 'lat': lat,
-                                'lng': lng
+                                'lng': lng,
+                                'speed': data.get('speed'),
+                                'heading': data.get('heading'),
                             },
                             f"rider_{ride['rider_id']}"
-        )
+                        )
+
+            elif data.get('type') == 'location_batch':
+                # Batch upload of buffered GPS points (offline recovery)
+                points = data.get('points', [])
+                driver_id = data.get('driver_id')
+                if not driver_id and client_type == 'driver':
+                    dp = await db.drivers.find_one({'user_id': user['id']})
+                    if dp:
+                        driver_id = dp['id']
+                if driver_id and points and client_type == 'driver':
+                    owned = await db.drivers.find_one({'id': driver_id, 'user_id': user['id']})
+                    if owned:
+                        docs = []
+                        for pt in points[:500]:  # cap at 500 points per batch
+                            docs.append({
+                                'id': str(uuid.uuid4()),
+                                'driver_id': driver_id,
+                                'ride_id': pt.get('ride_id'),
+                                'lat': pt.get('lat'),
+                                'lng': pt.get('lng'),
+                                'speed': pt.get('speed'),
+                                'heading': pt.get('heading'),
+                                'accuracy': pt.get('accuracy'),
+                                'altitude': pt.get('altitude'),
+                                'tracking_phase': pt.get('tracking_phase', 'online_idle'),
+                                'timestamp': datetime.fromisoformat(pt['timestamp']) if pt.get('timestamp') else datetime.utcnow(),
+                            })
+                        if docs:
+                            await db.driver_location_history.insert_many(docs)
+                        await websocket.send_json({'type': 'location_batch_ack', 'count': len(docs)})
 
         # Notify driver via WebSocket
 
@@ -763,7 +967,26 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
     if not otp_record:
         raise HTTPException(status_code=400, detail='Invalid verification code')
     
-    if datetime.utcnow() > otp_record['expires_at']:
+    # Parse expires_at to datetime if it's a string (from Supabase)
+    expires_at = otp_record.get('expires_at')
+    if isinstance(expires_at, str):
+        try:
+            # Handle ISO format from Supabase (replace Z with +00:00 if present)
+            expires_at = expires_at.replace('Z', '+00:00')
+            expires_at = datetime.fromisoformat(expires_at)
+        except ValueError:
+            logger.error(f"Invalid date format for OTP expires_at: {expires_at}")
+            raise HTTPException(status_code=500, detail="Internal data error: invalid expiration date")
+            
+    if not expires_at:
+        logger.error("OTP record missing expires_at field")
+        raise HTTPException(status_code=500, detail="Internal data error: missing expiration date")
+    
+    # Ensure expires_at is timezone-aware for comparison
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    
+    if datetime.now(timezone.utc) > expires_at:
         try:
             await db.otp_records.delete_one({'id': otp_record['id']})
         except Exception:
@@ -775,31 +998,50 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
     except Exception:
         pass
     
-    # Find or create user
-    existing_user = None
     try:
-        existing_user = await db.users.find_one({'phone': phone})
-    except Exception as e:
-        logger.warning(f'Could not query user from DB: {e}')
-    
-    if existing_user:
-        token = create_jwt_token(existing_user['id'], phone)
-        return AuthResponse(token=token, user=UserProfile(**existing_user), is_new_user=False)
-    else:
-        user_id = str(uuid.uuid4())
-        new_user = {
-            'id': user_id,
-            'phone': phone,
-            'role': 'rider',
-            'created_at': datetime.utcnow().isoformat(),
-            'profile_complete': False
-        }
+        # Find or create user
+        existing_user = None
         try:
-            await db.users.insert_one(new_user)
+            print(f"Searching for user with phone: {phone}")
+            existing_user = await db.users.find_one({'phone': phone})
+            print(f"User search result: {existing_user}")
         except Exception as e:
-            logger.warning(f'Could not create user in DB: {e}')
-        token = create_jwt_token(user_id, phone)
-        return AuthResponse(token=token, user=UserProfile(**new_user), is_new_user=True)
+            logger.warning(f'Could not query user from DB: {e}')
+        
+        if existing_user:
+            print("User exists, creating token")
+            token = create_jwt_token(existing_user['id'], phone)
+            print("Token created. Validating UserProfile...")
+            try:
+                user_obj = UserProfile(**existing_user)
+                print(f"UserProfile valid: {user_obj}")
+            except Exception as e:
+                print(f"UserProfile validation failed: {e}")
+                # Fallback constructs if validation fails to inspect why
+                raise e
+            
+            return AuthResponse(token=token, user=user_obj, is_new_user=False)
+        else:
+            print("Creating new user")
+            user_id = str(uuid.uuid4())
+            new_user = {
+                'id': user_id,
+                'phone': phone,
+                'role': 'rider',
+                'created_at': datetime.utcnow().isoformat(),
+                'profile_complete': False
+            }
+            try:
+                await db.users.insert_one(new_user)
+            except Exception as e:
+                logger.warning(f'Could not create user in DB: {e}')
+            token = create_jwt_token(user_id, phone)
+            return AuthResponse(token=token, user=UserProfile(**new_user), is_new_user=True)
+    except Exception as e:
+        print(f"CRITICAL ERROR IN VERIFY_OTP: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal Login Error: {str(e)}")
 
 @api_router.get("/auth/me", response_model=UserProfile)
 async def get_me(current_user: dict = Depends(get_current_user)):
@@ -1600,6 +1842,7 @@ class DriverRegistration(BaseModel):
     first_name: str
     last_name: str
     email: EmailStr
+    gender: str
     city: str
     # Vehicle Info
     vehicle_make: str
@@ -1618,11 +1861,62 @@ class DriverRegistration(BaseModel):
     background_check_expiry_date: Optional[str] = None
     documents: List[DriverDocumentInput]
 
+# Default document requirements for driver registration
+DEFAULT_REQUIREMENTS = [
+    {
+        "id": "driving_license",
+        "name": "Driving License",
+        "description": "Your valid driver's license",
+        "is_mandatory": True,
+        "requires_back_side": False
+    },
+    {
+        "id": "vehicle_insurance",
+        "name": "Vehicle Insurance",
+        "description": "Proof of vehicle insurance",
+        "is_mandatory": True,
+        "requires_back_side": True
+    },
+    {
+        "id": "vehicle_inspection",
+        "name": "Vehicle Inspection",
+        "description": "Vehicle inspection certificate",
+        "is_mandatory": True,
+        "requires_back_side": False
+    },
+    {
+        "id": "background_check",
+        "name": "Background Check",
+        "description": "Criminal background check",
+        "is_mandatory": True,
+        "requires_back_side": False
+    }
+]
+
+@api_router.get("/drivers/requirements")
+async def get_driver_requirements():
+    """Get document requirements for driver registration."""
+    # Try to fetch from database first
+    try:
+        requirements = await db.document_requirements.find({}).to_list(20)
+        if requirements and len(requirements) > 0:
+            return requirements
+    except:
+        pass
+    # Return default requirements if database is empty
+    return DEFAULT_REQUIREMENTS
+
 @api_router.post("/drivers/register")
 async def register_driver(data: DriverRegistration, current_user: dict = Depends(get_current_user)):
     existing = await db.drivers.find_one({'user_id': current_user['id']})
     if existing:
-        raise HTTPException(status_code=400, detail='User is already a driver')
+        if existing.get('is_verified'):
+            raise HTTPException(status_code=400, detail='User is already a driver')
+        else:
+            # Cleanup partial/unverified registration to allow retry
+            await db.drivers.delete_one({'id': existing['id']})
+            # Optional: delete old documents if you want, but likely fine to leave or they use new IDs
+
 
     vt = await db.vehicle_types.find_one({'id': data.vehicle_type_id})
     if not vt:
@@ -1676,6 +1970,7 @@ async def register_driver(data: DriverRegistration, current_user: dict = Depends
         rating=5.0,
         lat=0.0,
         lng=0.0,
+        city=data.city,
         is_online=False, # Must be verified first
         is_available=False
     )
@@ -1705,7 +2000,7 @@ async def register_driver(data: DriverRegistration, current_user: dict = Depends
             'first_name': data.first_name, 
             'last_name': data.last_name, 
             'email': data.email, 
-            'city': data.city
+            'gender': data.gender
         }}
     )
 
@@ -1718,17 +2013,171 @@ async def get_driver_profile(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail='Driver profile not found')
     return serialize_doc(driver)
 
+class DriverUpdate(BaseModel):
+    vehicle_make: Optional[str] = None
+    vehicle_model: Optional[str] = None
+    vehicle_color: Optional[str] = None
+    vehicle_year: Optional[int] = None
+    license_plate: Optional[str] = None
+
+@api_router.put("/drivers/me")
+async def update_driver_profile(data: DriverUpdate, current_user: dict = Depends(get_current_user)):
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    update_data = {k: v for k, v in data.dict().items() if v is not None}
+    
+    if not update_data:
+        return serialize_doc(driver)
+
+    # If critical vehicle info changes, reset verification
+    critical_fields = ['vehicle_make', 'vehicle_model', 'license_plate', 'vehicle_year']
+    if any(field in update_data for field in critical_fields):
+        update_data['is_verified'] = False
+        update_data['is_online'] = False
+        update_data['is_available'] = False
+        update_data['rejection_reason'] = None # Clear previous rejection if any
+
+    update_data['updated_at'] = datetime.utcnow()
+
+    await db.drivers.update_one(
+        {'id': driver['id']},
+        {'$set': update_data}
+    )
+
+    updated_driver = await db.drivers.find_one({'id': driver['id']})
+    return serialize_doc(updated_driver)
+
+class DocumentUpload(BaseModel):
+    requirement_id: str
+    document_url: str
+    side: Optional[str] = None
+    document_type: Optional[str] = None
+
+@api_router.post("/drivers/documents")
+async def upload_driver_document(data: DocumentUpload, current_user: dict = Depends(get_current_user)):
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    # Check if document exists for this requirement and side
+    query = {
+        'driver_id': driver['id'],
+        'requirement_id': data.requirement_id
+    }
+    if data.side:
+        query['side'] = data.side
+
+    existing = await db.driver_documents.find_one(query)
+
+    doc_entry = {
+        "driver_id": driver['id'],
+        "requirement_id": data.requirement_id,
+        "document_url": data.document_url,
+        "side": data.side,
+        "document_type": data.document_type or "Unknown",
+        "status": "pending",
+        "rejection_reason": None,
+        "uploaded_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat()
+    }
+
+    if existing:
+        await db.driver_documents.update_one(
+            {'_id': existing['_id']},
+            {'$set': doc_entry}
+        )
+    else:
+        doc_entry['id'] = str(uuid.uuid4())
+        await db.driver_documents.insert_one(doc_entry)
+    
+    # Reset driver verification status to pending since documents changed
+    await db.drivers.update_one(
+        {'id': driver['id']},
+        {'$set': {
+            'is_verified': False, 
+            'is_online': False,
+            'is_available': False,
+            'rejection_reason': None
+        }}
+    )
+
+    return {'success': True, 'message': 'Document uploaded and pending review'}
+
+@api_router.get("/drivers/documents")
+async def get_my_documents(current_user: dict = Depends(get_current_user)):
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+    
+    docs = await db.driver_documents.find({'driver_id': driver['id']}).to_list(100)
+    return serialize_doc(docs)
+
 @api_router.post("/drivers/status")
 async def update_driver_status(is_online: bool = Query(...), current_user: dict = Depends(get_current_user)):
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     if not driver:
         raise HTTPException(status_code=404, detail='Driver profile not found')
 
+    if is_online and not driver.get('is_verified'):
+         raise HTTPException(status_code=403, detail='Account not verified. Please complete your profile and wait for approval.')
+
     await db.drivers.update_one(
         {'id': driver['id']},
         {'$set': {'is_online': is_online, 'updated_at': datetime.utcnow()}}
     )
     return {'success': True, 'is_online': is_online}
+
+@api_router.post("/admin/drivers/{driver_id}/verify")
+async def verify_driver(
+    driver_id: str,
+    verification_data: dict = Body(...),
+    current_user: dict = Depends(get_admin_user)
+):
+    """Verify or reject a driver application (admin only)."""
+    driver = await db.drivers.find_one({'id': driver_id})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver not found')
+    
+    is_verified = verification_data.get('is_verified', False)
+    rejection_reason = verification_data.get('rejection_reason', None)
+    
+    update_data = {
+        'is_verified': is_verified,
+        'updated_at': datetime.utcnow()
+    }
+    
+    if not is_verified and rejection_reason:
+        update_data['rejection_reason'] = rejection_reason
+    elif is_verified:
+        update_data['rejection_reason'] = None
+    
+    await db.drivers.update_one(
+        {'id': driver_id},
+        {'$set': update_data}
+    )
+    
+    return {'success': True, 'is_verified': is_verified}
+
+@api_router.post("/drivers/push-token")
+async def update_push_token(push_data: dict, current_user: dict = Depends(get_current_user)):
+    """Register push notification token for the driver."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    push_token = push_data.get('push_token')
+    platform = push_data.get('platform', 'unknown')
+
+    if push_token:
+        await db.drivers.update_one(
+            {'id': driver['id']},
+            {'$set': {'push_token': push_token, 'push_platform': platform, 'updated_at': datetime.utcnow()}}
+        )
+        return {'success': True}
+
+    return {'success': False, 'error': 'No push token provided'}
 
 @api_router.get("/drivers/rides/pending")
 async def get_pending_rides(current_user: dict = Depends(get_current_user)):
@@ -1741,6 +2190,707 @@ async def get_pending_rides(current_user: dict = Depends(get_current_user)):
         'status': {'$in': ['driver_assigned', 'driver_arrived', 'in_progress']}
     }).to_list(10)
     return serialize_doc(rides)
+
+@api_router.get("/drivers/rides/active")
+async def get_active_ride(current_user: dict = Depends(get_current_user)):
+    """Get the driver's current active ride (if any)."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    ride = await db.rides.find_one({
+        'driver_id': driver['id'],
+        'status': {'$in': ['driver_assigned', 'driver_arrived', 'in_progress']}
+    })
+    if not ride:
+        return None
+
+    # Enrich with rider info
+    rider = await db.users.find_one({'id': ride['rider_id']})
+    vehicle_type = await db.vehicle_types.find_one({'id': ride['vehicle_type_id']})
+    return {
+        'ride': serialize_doc(ride),
+        'rider': serialize_doc(rider) if rider else None,
+        'vehicle_type': serialize_doc(vehicle_type) if vehicle_type else None
+    }
+
+@api_router.get("/drivers/rides/history")
+async def get_driver_ride_history(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get completed/cancelled ride history for the driver."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    rides = await db.rides.find({
+        'driver_id': driver['id'],
+        'status': {'$in': ['completed', 'cancelled']}
+    }).sort('created_at', -1).skip(offset).to_list(limit)
+
+    total = await db.rides.count_documents({
+        'driver_id': driver['id'],
+        'status': {'$in': ['completed', 'cancelled']}
+    })
+
+    return {'rides': serialize_doc(rides), 'total': total, 'limit': limit, 'offset': offset}
+
+@api_router.post("/drivers/rides/{ride_id}/accept")
+async def driver_accept_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """Driver accepts a ride assignment."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    ride = await db.rides.find_one({'id': ride_id, 'driver_id': driver['id']})
+    if not ride:
+        raise HTTPException(status_code=404, detail='Ride not found or not assigned to you')
+
+    if ride['status'] != 'driver_assigned':
+        raise HTTPException(status_code=400, detail=f"Cannot accept ride in status '{ride['status']}'")
+
+    await db.rides.update_one(
+        {'id': ride_id},
+        {'$set': {
+            'status': 'driver_accepted',
+            'driver_accepted_at': datetime.utcnow(),
+            'updated_at': datetime.utcnow()
+        }}
+    )
+
+    # Notify rider via WebSocket
+    await manager.send_personal_message(
+        {'type': 'driver_accepted', 'ride_id': ride_id, 'driver_id': driver['id']},
+        f"rider_{ride['rider_id']}"
+    )
+
+    # Push notification to rider
+    try:
+        await send_push_notification(
+            ride['rider_id'],
+            'Driver Accepted! 🚗',
+            f"{driver.get('name', 'Your driver')} is on the way to pick you up.",
+            {'type': 'driver_accepted', 'ride_id': ride_id}
+        )
+    except Exception as e:
+        logger.warning(f"Push notification failed: {e}")
+
+    updated_ride = await db.rides.find_one({'id': ride_id})
+    return serialize_doc(updated_ride)
+
+@api_router.post("/drivers/rides/{ride_id}/decline")
+async def driver_decline_ride(ride_id: str, reason: str = Query(''), current_user: dict = Depends(get_current_user)):
+    """Driver declines a ride. Ride goes back to searching for another driver."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    ride = await db.rides.find_one({'id': ride_id, 'driver_id': driver['id']})
+    if not ride:
+        raise HTTPException(status_code=404, detail='Ride not found or not assigned to you')
+
+    if ride['status'] not in ['driver_assigned']:
+        raise HTTPException(status_code=400, detail='Cannot decline this ride')
+
+    # Release driver
+    await db.drivers.update_one(
+        {'id': driver['id']},
+        {'$set': {'is_available': True}}
+    )
+
+    # Put ride back to searching
+    await db.rides.update_one(
+        {'id': ride_id},
+        {'$set': {
+            'driver_id': None,
+            'status': 'searching',
+            'driver_notified_at': None,
+            'driver_accepted_at': None,
+            'updated_at': datetime.utcnow()
+        }}
+    )
+
+    # Try to match another driver
+    await match_driver_to_ride(ride_id)
+
+    return {'success': True, 'message': 'Ride declined, searching for another driver'}
+
+@api_router.post("/drivers/rides/{ride_id}/arrive")
+async def driver_arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """Driver marks arrival at pickup location."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    ride = await db.rides.find_one({'id': ride_id, 'driver_id': driver['id']})
+    if not ride:
+        raise HTTPException(status_code=404, detail='Ride not found')
+
+    if ride['status'] not in ['driver_assigned', 'driver_accepted']:
+        raise HTTPException(status_code=400, detail=f"Cannot mark arrival in status '{ride['status']}'")
+
+    await db.rides.update_one(
+        {'id': ride_id},
+        {'$set': {
+            'status': 'driver_arrived',
+            'driver_arrived_at': datetime.utcnow(),
+            'updated_at': datetime.utcnow()
+        }}
+    )
+
+    # Notify rider
+    await manager.send_personal_message(
+        {'type': 'driver_arrived', 'ride_id': ride_id, 'pickup_otp': ride.get('pickup_otp', '')},
+        f"rider_{ride['rider_id']}"
+    )
+
+    try:
+        await send_push_notification(
+            ride['rider_id'],
+            'Driver Has Arrived! 📍',
+            f"Your driver is at the pickup. PIN: {ride.get('pickup_otp', 'N/A')}",
+            {'type': 'driver_arrived', 'ride_id': ride_id}
+        )
+    except Exception as e:
+        logger.warning(f"Push notification failed: {e}")
+
+    return {'success': True, 'pickup_otp': ride.get('pickup_otp', '')}
+
+class VerifyOTPBody(BaseModel):
+    otp: str
+
+@api_router.post("/drivers/rides/{ride_id}/verify-otp")
+async def driver_verify_otp(ride_id: str, body: VerifyOTPBody, current_user: dict = Depends(get_current_user)):
+    """Driver verifies the rider's OTP and starts the trip."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    ride = await db.rides.find_one({'id': ride_id, 'driver_id': driver['id']})
+    if not ride:
+        raise HTTPException(status_code=404, detail='Ride not found')
+
+    if ride['status'] != 'driver_arrived':
+        raise HTTPException(status_code=400, detail='Driver has not arrived yet')
+
+    if ride.get('pickup_otp', '') != body.otp:
+        raise HTTPException(status_code=400, detail='Invalid OTP')
+
+    # OTP verified — start the ride
+    await db.rides.update_one(
+        {'id': ride_id},
+        {'$set': {
+            'status': 'in_progress',
+            'ride_started_at': datetime.utcnow(),
+            'updated_at': datetime.utcnow()
+        }}
+    )
+
+    # Notify rider ride started
+    await manager.send_personal_message(
+        {'type': 'ride_started', 'ride_id': ride_id},
+        f"rider_{ride['rider_id']}"
+    )
+
+    return {'success': True, 'message': 'OTP verified, ride started'}
+
+@api_router.post("/drivers/rides/{ride_id}/start")
+async def driver_start_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """Driver starts the ride (without OTP, for flexibility)."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    ride = await db.rides.find_one({'id': ride_id, 'driver_id': driver['id']})
+    if not ride:
+        raise HTTPException(status_code=404, detail='Ride not found')
+
+    if ride['status'] != 'driver_arrived':
+        raise HTTPException(status_code=400, detail='Driver has not arrived yet')
+
+    await db.rides.update_one(
+        {'id': ride_id},
+        {'$set': {
+            'status': 'in_progress',
+            'ride_started_at': datetime.utcnow(),
+            'updated_at': datetime.utcnow()
+        }}
+    )
+
+    await manager.send_personal_message(
+        {'type': 'ride_started', 'ride_id': ride_id},
+        f"rider_{ride['rider_id']}"
+    )
+
+    return {'success': True}
+
+@api_router.post("/drivers/rides/{ride_id}/complete")
+async def driver_complete_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """Driver completes the ride."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    ride = await db.rides.find_one({'id': ride_id, 'driver_id': driver['id']})
+    if not ride:
+        raise HTTPException(status_code=404, detail='Ride not found')
+
+    if ride['status'] != 'in_progress':
+        raise HTTPException(status_code=400, detail='Ride is not in progress')
+
+    await db.rides.update_one(
+        {'id': ride_id},
+        {'$set': {
+            'status': 'completed',
+            'ride_completed_at': datetime.utcnow(),
+            'updated_at': datetime.utcnow()
+        }}
+    )
+
+    # Make driver available again and increment total rides
+    await db.drivers.update_one(
+        {'id': driver['id']},
+        {'$set': {'is_available': True}, '$inc': {'total_rides': 1}}
+    )
+
+    # Notify rider ride completed
+    await manager.send_personal_message(
+        {
+            'type': 'ride_completed',
+            'ride_id': ride_id,
+            'total_fare': ride.get('total_fare', 0),
+            'driver_earnings': ride.get('driver_earnings', 0)
+        },
+        f"rider_{ride['rider_id']}"
+    )
+
+    try:
+        await send_push_notification(
+            ride['rider_id'],
+            'Ride Completed! ✅',
+            f"You've arrived! Total fare: ${ride.get('total_fare', 0):.2f}",
+            {'type': 'ride_completed', 'ride_id': ride_id}
+        )
+    except Exception as e:
+        logger.warning(f"Push notification failed: {e}")
+
+    updated_ride = await db.rides.find_one({'id': ride_id})
+    return serialize_doc(updated_ride)
+
+@api_router.post("/drivers/rides/{ride_id}/cancel")
+async def driver_cancel_ride(ride_id: str, reason: str = Query(''), current_user: dict = Depends(get_current_user)):
+    """Driver cancels a ride."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    ride = await db.rides.find_one({'id': ride_id, 'driver_id': driver['id']})
+    if not ride:
+        raise HTTPException(status_code=404, detail='Ride not found')
+
+    if ride['status'] in ['completed', 'cancelled']:
+        raise HTTPException(status_code=400, detail='Cannot cancel this ride')
+
+    if ride['status'] == 'in_progress':
+        raise HTTPException(status_code=400, detail='Cannot cancel ride after it has started')
+
+    # Release driver
+    await db.drivers.update_one(
+        {'id': driver['id']},
+        {'$set': {'is_available': True}}
+    )
+
+    # Cancel the ride
+    await db.rides.update_one(
+        {'id': ride_id},
+        {'$set': {
+            'status': 'cancelled',
+            'cancelled_at': datetime.utcnow(),
+            'updated_at': datetime.utcnow()
+        }}
+    )
+
+    # Notify rider
+    await manager.send_personal_message(
+        {'type': 'ride_cancelled', 'ride_id': ride_id, 'cancelled_by': 'driver', 'reason': reason},
+        f"rider_{ride['rider_id']}"
+    )
+
+    try:
+        await send_push_notification(
+            ride['rider_id'],
+            'Ride Cancelled',
+            'Your driver has cancelled the ride. We\'re searching for a new driver.',
+            {'type': 'ride_cancelled', 'ride_id': ride_id}
+        )
+    except Exception as e:
+        logger.warning(f"Push notification failed: {e}")
+
+    # Try to match a new driver
+    await db.rides.update_one(
+        {'id': ride_id},
+        {'$set': {'driver_id': None, 'status': 'searching', 'updated_at': datetime.utcnow()}}
+    )
+    await match_driver_to_ride(ride_id)
+
+    return {'success': True}
+
+# ============ Driver Earnings Routes ============
+
+@api_router.get("/drivers/earnings")
+async def get_driver_earnings(
+    period: str = Query('today', regex='^(today|week|month|all)$'),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get driver earnings summary for a given period."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    now = datetime.utcnow()
+    date_filter = {}
+    if period == 'today':
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        date_filter = {'ride_completed_at': {'$gte': start}}
+    elif period == 'week':
+        from datetime import timedelta
+        start = now - timedelta(days=now.weekday())
+        start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+        date_filter = {'ride_completed_at': {'$gte': start}}
+    elif period == 'month':
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        date_filter = {'ride_completed_at': {'$gte': start}}
+
+    query = {
+        'driver_id': driver['id'],
+        'status': 'completed',
+        **date_filter
+    }
+
+    rides = await db.rides.find(query).sort('ride_completed_at', -1).to_list(500)
+
+    total_earnings = sum(r.get('driver_earnings', 0) for r in rides)
+    total_tips = sum(r.get('tip_amount', 0) for r in rides)
+    total_rides = len(rides)
+    total_distance = sum(r.get('distance_km', 0) for r in rides)
+    total_duration = sum(r.get('duration_minutes', 0) for r in rides)
+
+    return {
+        'period': period,
+        'total_earnings': round(total_earnings, 2),
+        'total_tips': round(total_tips, 2),
+        'total_rides': total_rides,
+        'total_distance_km': round(total_distance, 2),
+        'total_duration_minutes': total_duration,
+        'average_per_ride': round(total_earnings / total_rides, 2) if total_rides > 0 else 0
+    }
+
+@api_router.get("/drivers/earnings/daily")
+async def get_driver_daily_earnings(
+    days: int = Query(7, ge=1, le=30),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get daily earnings breakdown for the last N days."""
+    from datetime import timedelta
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    now = datetime.utcnow()
+    start = now - timedelta(days=days)
+    start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    rides = await db.rides.find({
+        'driver_id': driver['id'],
+        'status': 'completed',
+        'ride_completed_at': {'$gte': start}
+    }).to_list(500)
+
+    # Group by day
+    daily = {}
+    for r in rides:
+        completed = r.get('ride_completed_at')
+        if completed:
+            day_key = completed.strftime('%Y-%m-%d')
+            if day_key not in daily:
+                daily[day_key] = {'date': day_key, 'earnings': 0, 'tips': 0, 'rides': 0, 'distance_km': 0}
+            daily[day_key]['earnings'] += r.get('driver_earnings', 0)
+            daily[day_key]['tips'] += r.get('tip_amount', 0)
+            daily[day_key]['rides'] += 1
+            daily[day_key]['distance_km'] += r.get('distance_km', 0)
+
+    # Fill missing days
+    result = []
+    for i in range(days):
+        day = (start + timedelta(days=i)).strftime('%Y-%m-%d')
+        if day in daily:
+            entry = daily[day]
+            entry['earnings'] = round(entry['earnings'], 2)
+            entry['tips'] = round(entry['tips'], 2)
+            entry['distance_km'] = round(entry['distance_km'], 2)
+            result.append(entry)
+        else:
+            result.append({'date': day, 'earnings': 0, 'tips': 0, 'rides': 0, 'distance_km': 0})
+
+    return result
+
+@api_router.get("/drivers/earnings/trips")
+async def get_driver_trip_earnings(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get per-trip earnings for completed rides."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver profile not found')
+
+    rides = await db.rides.find({
+        'driver_id': driver['id'],
+        'status': 'completed'
+    }).sort('ride_completed_at', -1).skip(offset).to_list(limit)
+
+    trips = []
+    for r in rides:
+        trips.append({
+            'ride_id': r['id'],
+            'pickup_address': r.get('pickup_address', ''),
+            'dropoff_address': r.get('dropoff_address', ''),
+            'distance_km': r.get('distance_km', 0),
+            'duration_minutes': r.get('duration_minutes', 0),
+            'base_fare': r.get('base_fare', 0),
+            'distance_fare': r.get('distance_fare', 0),
+            'time_fare': r.get('time_fare', 0),
+            'driver_earnings': r.get('driver_earnings', 0),
+            'tip_amount': r.get('tip_amount', 0),
+            'rider_rating': r.get('rider_rating'),
+            'completed_at': r.get('ride_completed_at')
+        })
+
+    return trips
+
+# ============ Driver Rates Rider ============
+
+class DriverRateRiderBody(BaseModel):
+    rating: int
+    comment: str = ''
+
+@api_router.post("/drivers/rides/{ride_id}/rate-rider")
+async def driver_rate_rider(ride_id: str, body: DriverRateRiderBody, current_user: dict = Depends(get_current_user)):
+    """Driver rates a rider after completing a ride."""
+    if body.rating < 1 or body.rating > 5:
+        raise HTTPException(status_code=400, detail='Rating must be between 1 and 5')
+
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=403, detail='Not a driver')
+
+    ride = await db.rides.find_one({'id': ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail='Ride not found')
+    if ride.get('driver_id') != driver['id']:
+        raise HTTPException(status_code=403, detail='Not your ride')
+    if ride.get('status') != 'completed':
+        raise HTTPException(status_code=400, detail='Ride must be completed to rate')
+    if ride.get('driver_rated_rider'):
+        raise HTTPException(status_code=400, detail='Already rated this rider')
+
+    # Update ride with driver's rating of rider
+    await db.rides.update_one(
+        {'id': ride_id},
+        {'$set': {
+            'driver_rating_of_rider': body.rating,
+            'driver_comment_on_rider': body.comment,
+            'driver_rated_rider': True,
+            'updated_at': datetime.utcnow()
+        }}
+    )
+
+    # Update rider's average rating
+    rider_id = ride.get('rider_id')
+    if rider_id:
+        rider_rides = await db.rides.find({
+            'rider_id': rider_id,
+            'driver_rated_rider': True
+        }).to_list(1000)
+        ratings = [r.get('driver_rating_of_rider', 0) for r in rider_rides if r.get('driver_rating_of_rider')]
+        if ratings:
+            avg_rating = round(sum(ratings) / len(ratings), 2)
+            await db.users.update_one(
+                {'id': rider_id},
+                {'$set': {'rider_rating': avg_rating}}
+            )
+
+    return {'success': True, 'message': 'Rider rated successfully'}
+
+# ============ Tip Routes ============
+
+class TipRequest(BaseModel):
+    amount: float
+
+@api_router.post("/rides/{ride_id}/tip")
+async def add_tip(ride_id: str, tip_data: TipRequest, current_user: dict = Depends(get_current_user)):
+    """Add a tip to a completed ride."""
+    if tip_data.amount <= 0:
+        raise HTTPException(status_code=400, detail='Tip amount must be positive')
+
+    ride = await db.rides.find_one({'id': ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail='Ride not found')
+    
+    # Verify the user is the rider of this ride
+    if ride.get('rider_id') != current_user['id']:
+        raise HTTPException(status_code=403, detail='Not authorized to tip this ride')
+    
+    if ride.get('status') != 'completed':
+        raise HTTPException(status_code=400, detail='Can only tip completed rides')
+
+    # Update the tip amount
+    current_tip = ride.get('tip_amount', 0)
+    new_tip = current_tip + tip_data.amount
+    
+    await db.rides.update_one(
+        {'id': ride_id},
+        {'$set': {
+            'tip_amount': new_tip,
+            'updated_at': datetime.utcnow()
+        }}
+    )
+
+    # Update driver earnings (tip goes to driver)
+    driver_id = ride.get('driver_id')
+    if driver_id:
+        driver = await db.drivers.find_one({'id': driver_id})
+        if driver:
+            current_earnings = driver.get('total_earnings', 0)
+            await db.drivers.update_one(
+                {'id': driver_id},
+                {'$set': {'total_earnings': current_earnings + tip_data.amount}}
+            )
+
+    return {'success': True, 'tip_amount': new_tip}
+
+# ============ Driver Location Trail Routes ============
+
+@api_router.get("/drivers/location-history")
+async def get_driver_location_history(
+    start: str = Query(None, description='ISO date start'),
+    end: str = Query(None, description='ISO date end'),
+    ride_id: str = Query(None, description='Filter by ride'),
+    limit: int = Query(500, ge=1, le=5000),
+    current_user: dict = Depends(get_current_user)
+):
+    """Driver's own GPS breadcrumb trail with date range and ride filter."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=403, detail='Not a driver')
+
+    query: dict = {'driver_id': driver['id']}
+    if ride_id:
+        query['ride_id'] = ride_id
+    if start or end:
+        ts_filter: dict = {}
+        if start:
+            ts_filter['$gte'] = datetime.fromisoformat(start)
+        if end:
+            ts_filter['$lte'] = datetime.fromisoformat(end)
+        if ts_filter:
+            query['timestamp'] = ts_filter
+
+    points = await db.driver_location_history.find(query).sort('timestamp', 1).to_list(limit)
+    return {
+        'points': serialize_doc(points),
+        'count': len(points),
+    }
+
+
+@api_router.get("/rides/{ride_id}/location-trail")
+async def get_ride_location_trail(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """Location trail for a specific ride — accessible by the ride's driver or rider."""
+    ride = await db.rides.find_one({'id': ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail='Ride not found')
+
+    # Allow both the driver and rider of this ride to view the trail
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    is_driver = driver and ride.get('driver_id') == driver['id']
+    is_rider = ride.get('rider_id') == current_user['id']
+    if not is_driver and not is_rider:
+        raise HTTPException(status_code=403, detail='Not authorized to view this trail')
+
+    points = await db.driver_location_history.find(
+        {'ride_id': ride_id}
+    ).sort('timestamp', 1).to_list(5000)
+
+    return {
+        'ride_id': ride_id,
+        'points': serialize_doc(points),
+        'count': len(points),
+    }
+
+
+@admin_router.get("/drivers/{driver_id}/location-trail")
+async def admin_get_driver_location_trail(
+    driver_id: str,
+    start: str = Query(None),
+    end: str = Query(None),
+    ride_id: str = Query(None),
+    limit: int = Query(1000, ge=1, le=10000),
+):
+    """Admin endpoint to view any driver's GPS trail."""
+    query: dict = {'driver_id': driver_id}
+    if ride_id:
+        query['ride_id'] = ride_id
+    if start or end:
+        ts_filter: dict = {}
+        if start:
+            ts_filter['$gte'] = datetime.fromisoformat(start)
+        if end:
+            ts_filter['$lte'] = datetime.fromisoformat(end)
+        if ts_filter:
+            query['timestamp'] = ts_filter
+
+    points = await db.driver_location_history.find(query).sort('timestamp', 1).to_list(limit)
+    return {
+        'driver_id': driver_id,
+        'points': serialize_doc(points),
+        'count': len(points),
+    }
+
+
+class LocationBatchRequest(BaseModel):
+    points: list
+
+
+@api_router.post("/drivers/location-batch")
+async def post_location_batch(body: LocationBatchRequest, current_user: dict = Depends(get_current_user)):
+    """REST fallback for batch-uploading buffered GPS points when WS is unavailable."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=403, detail='Not a driver')
+
+    docs = []
+    for pt in body.points[:500]:
+        docs.append({
+            'id': str(uuid.uuid4()),
+            'driver_id': driver['id'],
+            'ride_id': pt.get('ride_id'),
+            'lat': pt.get('lat'),
+            'lng': pt.get('lng'),
+            'speed': pt.get('speed'),
+            'heading': pt.get('heading'),
+            'accuracy': pt.get('accuracy'),
+            'altitude': pt.get('altitude'),
+            'tracking_phase': pt.get('tracking_phase', 'online_idle'),
+            'timestamp': datetime.fromisoformat(pt['timestamp']) if pt.get('timestamp') else datetime.utcnow(),
+        })
+
+    if docs:
+        await db.driver_location_history.insert_many(docs)
+
+    return {'success': True, 'count': len(docs)}
 
 # ============ Admin Routes ============
 
@@ -2086,6 +3236,176 @@ async def admin_export_drivers():
         })
     
     return export_data
+
+# ============ Corporate Accounts CRUD ============
+
+@admin_router.get("/corporate-accounts")
+async def admin_get_corporate_accounts():
+    """List all corporate accounts"""
+    accounts = await db.corporate_accounts.find().sort('created_at', -1).to_list(100)
+    return serialize_doc(accounts)
+
+@admin_router.post("/corporate-accounts")
+async def admin_create_corporate_account(account: Dict[str, Any]):
+    """Create a new corporate account"""
+    account['id'] = str(uuid.uuid4())
+    account['created_at'] = datetime.utcnow()
+    account['updated_at'] = datetime.utcnow()
+    await db.corporate_accounts.insert_one(account)
+    return serialize_doc(account)
+
+@admin_router.put("/corporate-accounts/{account_id}")
+async def admin_update_corporate_account(account_id: str, account: Dict[str, Any]):
+    """Update a corporate account"""
+    account['updated_at'] = datetime.utcnow()
+    await db.corporate_accounts.update_one({'id': account_id}, {'$set': account})
+    return serialize_doc(await db.corporate_accounts.find_one({'id': account_id}))
+
+@admin_router.delete("/corporate-accounts/{account_id}")
+async def admin_delete_corporate_account(account_id: str):
+    """Delete a corporate account"""
+    await db.corporate_accounts.delete_one({'id': account_id})
+    return {'success': True}
+
+# ============ Heat Map Data ============
+
+@admin_router.get("/rides/heatmap-data")
+async def admin_get_heatmap_data(
+    filter: str = Query("all", description="Filter: all | corporate | regular"),
+    start_date: Optional[str] = Query(None, description="ISO date string"),
+    end_date: Optional[str] = Query(None, description="ISO date string"),
+    service_area_id: Optional[str] = Query(None),
+    group_by: str = Query("both", description="pickup | dropoff | both")
+):
+    """
+    Get heat map data for rides.
+    Returns pickup/dropoff points with intensity based on ride count.
+    """
+    # Build base query filter
+    query_filter = {}
+    
+    # Add date filters
+    if start_date or end_date:
+        query_filter['created_at'] = {}
+        if start_date:
+            query_filter['created_at']['$gte'] = start_date
+        if end_date:
+            query_filter['created_at']['$lte'] = end_date
+    
+    # Add service area filter if provided
+    if service_area_id:
+        query_filter['service_area_id'] = service_area_id
+    
+    # Get all rides (completed only for meaningful heat data)
+    query_filter['status'] = 'completed'
+    
+    # Apply filter for corporate vs regular
+    if filter == 'corporate':
+        query_filter['corporate_account_id'] = {'$ne': None}
+    elif filter == 'regular':
+        query_filter['corporate_account_id'] = None
+    
+    rides = await db.rides.find(query_filter).to_list(10000)
+    
+    # Aggregate pickup points
+    pickup_agg = {}
+    dropoff_agg = {}
+    
+    for ride in rides:
+        # Pickup points
+        if group_by in ('pickup', 'both'):
+            pickup_key = (round(ride.get('pickup_lat', 0), 3), round(ride.get('pickup_lng', 0), 3))
+            if pickup_key not in pickup_agg:
+                pickup_agg[pickup_key] = 0
+            pickup_agg[pickup_key] += 1
+        
+        # Dropoff points
+        if group_by in ('dropoff', 'both'):
+            dropoff_key = (round(ride.get('dropoff_lat', 0), 3), round(ride.get('dropoff_lng', 0), 3))
+            if dropoff_key not in dropoff_agg:
+                dropoff_agg[dropoff_key] = 0
+            dropoff_agg[dropoff_key] += 1
+    
+    # Convert to heat map format [lat, lng, intensity]
+    # Normalize intensity to 0-1 range
+    max_pickup = max(pickup_agg.values()) if pickup_agg else 1
+    max_dropoff = max(dropoff_agg.values()) if dropoff_agg else 1
+    
+    pickup_points = [
+        [lat, lng, round(count / max_pickup, 2)]
+        for (lat, lng), count in pickup_agg.items()
+    ]
+    
+    dropoff_points = [
+        [lat, lng, round(count / max_dropoff, 2)]
+        for (lat, lng), count in dropoff_agg.items()
+    ]
+    
+    # Calculate stats
+    corporate_rides = [r for r in rides if r.get('corporate_account_id')]
+    regular_rides = [r for r in rides if not r.get('corporate_account_id')]
+    
+    return {
+        'pickup_points': pickup_points,
+        'dropoff_points': dropoff_points,
+        'stats': {
+            'total_rides': len(rides),
+            'corporate_rides': len(corporate_rides),
+            'regular_rides': len(regular_rides)
+        }
+    }
+
+# ============ Heat Map Settings ============
+
+@admin_router.get("/settings/heatmap")
+async def admin_get_heatmap_settings():
+    """Get heat map configuration settings"""
+    settings = await db.settings.find_one({'id': 'app_settings'})
+    if not settings:
+        # Return default settings
+        return {
+            'heat_map_enabled': True,
+            'heat_map_default_range': '30d',
+            'heat_map_intensity': 'medium',
+            'heat_map_radius': 25,
+            'heat_map_blur': 15,
+            'heat_map_gradient_start': '#00ff00',
+            'heat_map_gradient_mid': '#ffff00',
+            'heat_map_gradient_end': '#ff0000',
+            'heat_map_show_pickups': True,
+            'heat_map_show_dropoffs': True,
+            'corporate_heat_map_enabled': True,
+            'regular_rider_heat_map_enabled': True
+        }
+    
+    return {
+        'heat_map_enabled': settings.get('heat_map_enabled', True),
+        'heat_map_default_range': settings.get('heat_map_default_range', '30d'),
+        'heat_map_intensity': settings.get('heat_map_intensity', 'medium'),
+        'heat_map_radius': settings.get('heat_map_radius', 25),
+        'heat_map_blur': settings.get('heat_map_blur', 15),
+        'heat_map_gradient_start': settings.get('heat_map_gradient_start', '#00ff00'),
+        'heat_map_gradient_mid': settings.get('heat_map_gradient_mid', '#ffff00'),
+        'heat_map_gradient_end': settings.get('heat_map_gradient_end', '#ff0000'),
+        'heat_map_show_pickups': settings.get('heat_map_show_pickups', True),
+        'heat_map_show_dropoffs': settings.get('heat_map_show_dropoffs', True),
+        'corporate_heat_map_enabled': settings.get('corporate_heat_map_enabled', True),
+        'regular_rider_heat_map_enabled': settings.get('regular_rider_heat_map_enabled', True)
+    }
+
+@admin_router.put("/settings/heatmap")
+async def admin_update_heatmap_settings(settings: Dict[str, Any]):
+    """Update heat map configuration settings"""
+    settings['id'] = 'app_settings'
+    settings['updated_at'] = datetime.utcnow()
+    
+    await db.settings.update_one(
+        {'id': 'app_settings'},
+        {'$set': settings},
+        upsert=True
+    )
+    
+    return serialize_doc(await db.settings.find_one({'id': 'app_settings'}))
 
 # ============ Admin Panel HTML ============
 
@@ -3046,7 +4366,9 @@ async def estimate_ride(req: RideEstimateRequest):
 # ============ Health & Root ============
 
 @api_router.get("/")
+@app.get("/")
 async def root():
+    print("Received request at root")
     return {"message": "Spinr API is running", "version": "1.0.0"}
 
 @api_router.get("/health")
@@ -3062,28 +4384,7 @@ app.include_router(pricing_router, dependencies=[Depends(get_admin_user)])
 app.include_router(documents_router)
 app.include_router(admin_documents_router, dependencies=[Depends(get_admin_user)])
 
-# Configure CORS
-origins = [
-    "http://localhost:3000",
-    "http://localhost:8081",
-    "http://localhost:8000",
-    "https://spinr-admin.vercel.app",
-    "https://spinr-admin-git-main-mkkreddys-projects.vercel.app",
-]
 
-# Allow dynamic origins from environment variable
-env_origins = os.environ.get("ALLOWED_ORIGINS")
-if env_origins:
-    origins.extend([origin.strip() for origin in env_origins.split(",")])
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=origins,
-    allow_origin_regex=r"https://.*-mkkreddys-projects\.vercel\.app",  # Allow Vercel preview deployments
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 if __name__ == "__main__":

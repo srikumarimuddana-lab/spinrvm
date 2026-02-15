@@ -1,4 +1,3 @@
-import axios from 'axios';
 import Constants from 'expo-constants';
 import { auth } from '../config/firebaseConfig';
 import { Platform } from 'react-native';
@@ -32,13 +31,6 @@ const API_URL = getBackendUrl();
 
 console.log('API Client configured with URL:', API_URL);
 
-const client = axios.create({
-  baseURL: `${API_URL}/api`,
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
-
 // Helper to get stored token
 const getStoredToken = async (): Promise<string | null> => {
   try {
@@ -52,28 +44,156 @@ const getStoredToken = async (): Promise<string | null> => {
   return null;
 };
 
-client.interceptors.request.use(
-  async (config) => {
-    try {
-      if (isFirebaseConfigured && auth.currentUser) {
-        // Firebase token flow
-        const token = await auth.currentUser.getIdToken();
-        config.headers.Authorization = `Bearer ${token}`;
-      } else {
-        // Backend JWT flow — use stored token
-        const storedToken = await getStoredToken();
-        if (storedToken) {
-          config.headers.Authorization = `Bearer ${storedToken}`;
-        }
-      }
-    } catch (error) {
-      console.error('Error attaching auth token:', error);
+// Helper to get auth header
+const getAuthHeader = async (): Promise<string | null> => {
+  try {
+    if (isFirebaseConfigured && auth.currentUser) {
+      // Firebase token flow
+      return await auth.currentUser.getIdToken();
+    } else {
+      // Backend JWT flow — use stored token
+      return await getStoredToken();
     }
-    return config;
-  },
-  (error) => {
-    return Promise.reject(error);
+  } catch (error) {
+    console.error('Error getting auth token:', error);
+    return null;
   }
-);
+};
+
+// Custom API client using fetch
+const client = {
+  async get<T = any>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+    const token = await getAuthHeader();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...config?.headers,
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_URL}/api${url}`, {
+      method: 'GET',
+      headers,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
+      const error: any = new Error(errorData.detail || 'Request failed');
+      error.response = { data: errorData, status: response.status };
+      throw error;
+    }
+
+    const data = await response.json();
+    return { data, status: response.status };
+  },
+
+  async post<T = any>(url: string, body?: any, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+    const token = await getAuthHeader();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...config?.headers,
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_URL}/api${url}`, {
+      method: 'POST',
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
+      const error: any = new Error(errorData.detail || 'Request failed');
+      error.response = { data: errorData, status: response.status };
+      throw error;
+    }
+
+    const data = await response.json();
+    return { data, status: response.status };
+  },
+
+  async put<T = any>(url: string, body?: any, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+    const token = await getAuthHeader();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...config?.headers,
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_URL}/api${url}`, {
+      method: 'PUT',
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
+      const error: any = new Error(errorData.detail || 'Request failed');
+      error.response = { data: errorData, status: response.status };
+      throw error;
+    }
+
+    const data = await response.json();
+    return { data, status: response.status };
+  },
+
+  async patch<T = any>(url: string, body?: any, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+    const token = await getAuthHeader();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...config?.headers,
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_URL}/api${url}`, {
+      method: 'PATCH',
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
+      const error: any = new Error(errorData.detail || 'Request failed');
+      error.response = { data: errorData, status: response.status };
+      throw error;
+    }
+
+    const data = await response.json();
+    return { data, status: response.status };
+  },
+
+  async delete<T = any>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+    const token = await getAuthHeader();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...config?.headers,
+    };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(`${API_URL}/api${url}`, {
+      method: 'DELETE',
+      headers,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
+      const error: any = new Error(errorData.detail || 'Request failed');
+      error.response = { data: errorData, status: response.status };
+      throw error;
+    }
+
+    const data = await response.json().catch(() => ({} as T));
+    return { data, status: response.status };
+  },
+};
 
 export default client;

@@ -12,7 +12,8 @@ const getBackendUrl = () => {
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
         return 'http://localhost:8000';
     }
-    return '';
+    // Default to production if no local environment is detected
+    return 'https://spinr-backend.onrender.com';
 };
 
 export const API_URL = getBackendUrl();

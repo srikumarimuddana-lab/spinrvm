@@ -88,7 +88,25 @@ Deploy the Expo Web app as a static site.
 
 **Note**: The `vercel.json` file in `frontend/` handles routing rewrites for the SPA.
 
-## 3. Admin Dashboard Deployment (Vercel)
+## 3. Driver App Deployment (Vercel)
+
+Deploy the **Driver App** (Expo Web) as a static site.
+
+1.  **Import Project**:
+    - Go to Vercel Dashboard.
+    - Click "Add New..." -> "Project".
+    - Import the SAME repository again.
+2.  **Configure Project**:
+    - **Project Name**: `spinr-driver` (or similar).
+    - **Root Directory**: `driver-app` (Click "Edit").
+    - **Framework Preset**: Select "Other" (Expo exports static files).
+    - **Build Command**: `npx expo export -p web`
+    - **Output Directory**: `dist`
+3.  **Environment Variables**:
+    - Add the same `EXPO_PUBLIC_*` variables as the frontend (see above).
+4.  **Deploy**: Click "Deploy".
+
+## 4. Admin Dashboard Deployment (Vercel)
 
 Deploy the Next.js admin panel.
 

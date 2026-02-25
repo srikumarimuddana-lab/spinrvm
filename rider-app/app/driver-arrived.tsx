@@ -25,8 +25,16 @@ export default function DriverArrivedScreen() {
   useEffect(() => {
     if (rideId) {
       fetchRide(rideId);
+      const interval = setInterval(() => fetchRide(rideId), 3000);
+      return () => clearInterval(interval);
     }
   }, [rideId]);
+
+  useEffect(() => {
+    if (currentRide?.status === 'in_progress') {
+      router.replace({ pathname: '/ride-in-progress', params: { rideId } });
+    }
+  }, [currentRide?.status]);
 
   const handleBack = () => {
     router.back();
@@ -44,12 +52,12 @@ export default function DriverArrivedScreen() {
     const driverInfo = `
 🚗 SPINR RIDE - DRIVER ARRIVED!
 
-👤 DRIVER: ${currentDriver?.name || 'John D.'}
-⭐ RATING: ${currentDriver?.rating || 4.9}/5
-🚙 TOTAL TRIPS: ${currentDriver?.total_rides || 1247}
+👤 DRIVER: ${currentDriver?.name || 'Unknown'}
+⭐ RATING: ${currentDriver?.rating || 'New'}
+🚙 TOTAL TRIPS: ${currentDriver?.total_rides || 0}
 
-🚙 VEHICLE: ${currentDriver?.vehicle_color || 'Grey'} ${currentDriver?.vehicle_make || 'Honda'} ${currentDriver?.vehicle_model || 'Civic'}
-📋 LICENSE PLATE: ${currentDriver?.license_plate || 'SK-123-ABC'}
+🚙 VEHICLE: ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || 'Unknown'} ${currentDriver?.vehicle_model || 'Vehicle'}
+📋 LICENSE PLATE: ${currentDriver?.license_plate || 'Pending'}
 
 📍 PICKUP: ${currentRide?.pickup_address || 'University of Saskatchewan'}
 🔑 PICKUP OTP: ${pickupOtp}
@@ -68,16 +76,12 @@ I'm sharing this ride for safety. Screenshot this info!
   };
 
   const handleCopyDetails = async () => {
-    const details = `Driver: ${currentDriver?.name || 'John D.'} | Vehicle: ${currentDriver?.vehicle_color || 'Grey'} ${currentDriver?.vehicle_make || 'Honda'} ${currentDriver?.vehicle_model || 'Civic'} | Plate: ${currentDriver?.license_plate || 'SK-123-ABC'} | OTP: ${pickupOtp}`;
+    const details = `Driver: ${currentDriver?.name || 'Unknown'} | Vehicle: ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || 'Unknown'} ${currentDriver?.vehicle_model || 'Vehicle'} | Plate: ${currentDriver?.license_plate || 'Pending'} | OTP: ${pickupOtp}`;
     await Clipboard.setStringAsync(details);
     Alert.alert('Copied!', 'Driver details copied to clipboard');
   };
 
-  const handleStartRide = () => {
-    // In a real app, driver would verify OTP and start the ride
-    // For demo, we'll navigate to in-progress
-    router.replace({ pathname: '/ride-in-progress', params: { rideId } });
-  };
+  // handleStartRide removed for production; handled automatically via status updates
 
   const pickupOtp = currentRide?.pickup_otp || '1234';
 
@@ -89,12 +93,12 @@ I'm sharing this ride for safety. Screenshot this info!
           <TouchableOpacity style={styles.backButton} onPress={handleBack}>
             <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
           </TouchableOpacity>
-          
+
           <View style={styles.arrivedPill}>
             <View style={styles.greenDot} />
             <Text style={styles.arrivedText}>Driver has arrived</Text>
           </View>
-          
+
           <TouchableOpacity style={styles.emergencyButton}>
             <Ionicons name="shield" size={20} color={SpinrConfig.theme.colors.primary} />
           </TouchableOpacity>
@@ -110,7 +114,7 @@ I'm sharing this ride for safety. Screenshot this info!
               <Ionicons name="location" size={20} color="#FFF" />
             </View>
           </View>
-          
+
           {/* Car at pickup */}
           <View style={styles.carAtPickup}>
             <Ionicons name="car" size={16} color="#FFF" />
@@ -121,7 +125,7 @@ I'm sharing this ride for safety. Screenshot this info!
       {/* Bottom Sheet */}
       <View style={styles.bottomSheet}>
         <View style={styles.sheetHandle} />
-        
+
         {/* OTP Section */}
         <View style={styles.otpSection}>
           <Text style={styles.otpLabel}>Share this PIN with your driver</Text>
@@ -134,7 +138,7 @@ I'm sharing this ride for safety. Screenshot this info!
           </View>
           <Text style={styles.otpHint}>Driver will enter this to start the trip</Text>
         </View>
-        
+
         {/* Driver Details Card - Comprehensive for Screenshot */}
         <View style={styles.driverDetailsCard}>
           <View style={styles.driverCardHeader}>
@@ -150,13 +154,13 @@ I'm sharing this ride for safety. Screenshot this info!
               <Ionicons name="person" size={28} color="#666" />
               <View style={styles.ratingBadge}>
                 <Ionicons name="star" size={10} color="#FFB800" />
-                <Text style={styles.ratingText}>{currentDriver?.rating || 4.9}</Text>
+                <Text style={styles.ratingText}>{currentDriver?.rating || 'New'}</Text>
               </View>
             </View>
-            
+
             <View style={styles.driverInfo}>
-              <Text style={styles.driverName}>{currentDriver?.name || 'John D.'}</Text>
-              <Text style={styles.totalTrips}>{currentDriver?.total_rides || 1247} trips completed</Text>
+              <Text style={styles.driverName}>{currentDriver?.name || 'Unknown'}</Text>
+              <Text style={styles.totalTrips}>{currentDriver?.total_rides || 0} trips completed</Text>
               <View style={styles.arrivedIndicator}>
                 <Ionicons name="checkmark-circle" size={14} color="#10B981" />
                 <Text style={styles.arrivedIndicatorText}>Arrived at pickup</Text>
@@ -171,16 +175,16 @@ I'm sharing this ride for safety. Screenshot this info!
               <View style={styles.vehicleTextContainer}>
                 <Text style={styles.vehicleLabel}>VEHICLE</Text>
                 <Text style={styles.vehicleValue}>
-                  {currentDriver?.vehicle_color || 'Grey'} {currentDriver?.vehicle_make || 'Honda'} {currentDriver?.vehicle_model || 'Civic'}
+                  {currentDriver?.vehicle_color || ''} {currentDriver?.vehicle_make || 'Unknown'} {currentDriver?.vehicle_model || 'Vehicle'}
                 </Text>
               </View>
             </View>
-            
+
             <View style={styles.plateRow}>
               <Text style={styles.plateEmoji}>🪪</Text>
               <View style={styles.vehicleTextContainer}>
                 <Text style={styles.vehicleLabel}>LICENSE PLATE</Text>
-                <Text style={styles.plateValue}>{currentDriver?.license_plate || 'SK-123-ABC'}</Text>
+                <Text style={styles.plateValue}>{currentDriver?.license_plate || 'Pending'}</Text>
               </View>
             </View>
           </View>
@@ -192,20 +196,17 @@ I'm sharing this ride for safety. Screenshot this info!
             <Ionicons name="chatbubble" size={18} color="#FFF" />
             <Text style={styles.messageButtonText}>Message</Text>
           </TouchableOpacity>
-          
+
           <TouchableOpacity style={styles.callButton} onPress={handleCall}>
             <Ionicons name="call" size={20} color={SpinrConfig.theme.colors.primary} />
           </TouchableOpacity>
-          
+
           <TouchableOpacity style={styles.shareIconButton} onPress={handleShareTrip}>
             <Ionicons name="share-outline" size={20} color="#1A1A1A" />
           </TouchableOpacity>
         </View>
 
-        {/* Demo Button */}
-        <TouchableOpacity style={styles.demoButton} onPress={handleStartRide}>
-          <Text style={styles.demoButtonText}>Start Ride (Demo)</Text>
-        </TouchableOpacity>
+        {/* Demo Button removed for production */}
       </View>
     </View>
   );

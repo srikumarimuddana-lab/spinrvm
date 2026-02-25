@@ -63,6 +63,13 @@ export default function RootLayout() {
         <Stack.Screen name="ride-options" />
         <Stack.Screen name="payment-confirm" />
         <Stack.Screen name="ride-status" options={{ gestureEnabled: false }} />
+        <Stack.Screen name="driver-arriving" options={{ gestureEnabled: false }} />
+        <Stack.Screen name="driver-arrived" options={{ gestureEnabled: false }} />
+        <Stack.Screen name="ride-in-progress" options={{ gestureEnabled: false }} />
+        <Stack.Screen name="ride-completed" options={{ gestureEnabled: false }} />
+        <Stack.Screen name="chat-driver" />
+        <Stack.Screen name="rate-ride" />
+        <Stack.Screen name="become-driver" />
       </Stack>
     </SafeAreaProvider>
   );

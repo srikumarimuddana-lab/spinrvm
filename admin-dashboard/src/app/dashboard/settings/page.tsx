@@ -5,6 +5,7 @@ import { getSettings, updateSettings } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
     Select,
@@ -515,6 +516,40 @@ export default function SettingsPage() {
                                         update("regular_rider_heat_map_enabled", checked)
                                     }
                                 />
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Legal Documents */}
+                    <Card className="border-border/50 lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle className="text-base">Legal Documents</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-6">
+                            <div className="space-y-2">
+                                <Label>Terms of Service</Label>
+                                <Textarea
+                                    value={settings.terms_of_service_text || ""}
+                                    onChange={(e) => update("terms_of_service_text", e.target.value)}
+                                    placeholder="Enter full terms of service text here..."
+                                    className="min-h-[200px]"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Supports basic formatting or markdown. Sent directly to driver/rider apps.
+                                </p>
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Privacy Policy</Label>
+                                <Textarea
+                                    value={settings.privacy_policy_text || ""}
+                                    onChange={(e) => update("privacy_policy_text", e.target.value)}
+                                    placeholder="Enter full privacy policy text here..."
+                                    className="min-h-[200px]"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    Supports basic formatting or markdown. Sent directly to driver/rider apps.
+                                </p>
                             </div>
                         </CardContent>
                     </Card>

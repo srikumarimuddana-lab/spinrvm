@@ -29,7 +29,7 @@ export default function RateRideScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const { currentRide, currentDriver, fetchRide, rateRide } = useRideStore();
-  
+
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('');
   const [selectedTip, setSelectedTip] = useState<number | null>(null);
@@ -66,15 +66,15 @@ export default function RateRideScreen() {
 
   const handleSubmit = async () => {
     if (!rideId) return;
-    
+
     setIsSubmitting(true);
     try {
       const tipAmount = getTipAmount();
       await rateRide(rideId, rating, comment, tipAmount);
-      
+
       Alert.alert(
         'Thank you!',
-        tipAmount > 0 
+        tipAmount > 0
           ? `Your ${rating}-star rating and $${tipAmount.toFixed(2)} tip have been submitted.`
           : `Your ${rating}-star rating has been submitted.`,
         [
@@ -97,11 +97,11 @@ export default function RateRideScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <KeyboardAvoidingView 
+      <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
       >
-        <ScrollView 
+        <ScrollView
           style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
@@ -112,9 +112,9 @@ export default function RateRideScreen() {
               <Ionicons name="checkmark-circle" size={20} color="#10B981" />
               <Text style={styles.arrivedText}>You arrived!</Text>
             </View>
-            
+
             <Text style={styles.fareAmount}>${totalFare.toFixed(2)}</Text>
-            
+
             <View style={styles.commissionBadge}>
               <Text style={styles.commissionText}>0% commission</Text>
               <Text style={styles.commissionSubtext}>Driver keeps 100% of fare</Text>
@@ -127,17 +127,17 @@ export default function RateRideScreen() {
               <Ionicons name="person" size={32} color="#666" />
             </View>
             <View style={styles.driverInfo}>
-              <Text style={styles.driverName}>{currentDriver?.name || 'John D.'}</Text>
+              <Text style={styles.driverName}>{currentDriver?.name || 'Unknown'}</Text>
               <Text style={styles.vehicleInfo}>
-                {currentDriver?.vehicle_color || 'Grey'} {currentDriver?.vehicle_make || 'Honda'} {currentDriver?.vehicle_model || 'Civic'}
+                {currentDriver?.vehicle_color || ''} {currentDriver?.vehicle_make || 'Unknown'} {currentDriver?.vehicle_model || 'Vehicle'}
               </Text>
               <View style={styles.driverStats}>
                 <View style={styles.statItem}>
                   <Ionicons name="star" size={14} color="#FFB800" />
-                  <Text style={styles.statText}>{currentDriver?.rating || 4.9}</Text>
+                  <Text style={styles.statText}>{currentDriver?.rating || 'New'}</Text>
                 </View>
                 <View style={styles.statDivider} />
-                <Text style={styles.plateText}>{currentDriver?.license_plate || 'SK-123-ABC'}</Text>
+                <Text style={styles.plateText}>{currentDriver?.license_plate || 'Pending'}</Text>
               </View>
             </View>
           </View>
@@ -184,7 +184,7 @@ export default function RateRideScreen() {
           <View style={styles.tipSection}>
             <Text style={styles.tipTitle}>Add a tip for {currentDriver?.name?.split(' ')[0] || 'your driver'}</Text>
             <Text style={styles.tipSubtitle}>100% goes to your driver</Text>
-            
+
             <View style={styles.tipOptions}>
               {TIP_OPTIONS.map((tip) => (
                 <TouchableOpacity

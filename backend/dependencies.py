@@ -33,13 +33,18 @@ logger = logging.getLogger(__name__)
 def generate_otp() -> str:
     return ''.join(random.choices(string.digits, k=4))
 
-def create_jwt_token(user_id: str, phone: str) -> str:
+def create_jwt_token(user_id: str, phone: str, session_id: str = None) -> str:
     payload = {
         'user_id': user_id,
         'phone': phone,
         'exp': datetime.utcnow() + timedelta(days=30)
     }
-    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    if session_id:
+        payload['session_id'] = session_id
+        
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    logger.info(f"DEBUG: Created JWT token for user_id={user_id}, session_id={session_id}, JWT_SECRET prefix used: {JWT_SECRET[:10] if JWT_SECRET else 'None'}...")
+    return token
 
 def verify_jwt_token(token: str) -> dict:
     try:
@@ -97,14 +102,22 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         payload = verify_jwt_token(token)
         # logger.info(f"JWT Valid. Payload: {payload}")
     except Exception as e:
-        # logger.warning(f"JWT Verification Failed: {e}")
-        raise HTTPException(status_code=401, detail='Invalid token')
+        logger.error(f"JWT Verification Failed: {e} | Token prefix: {token[:20] if token else 'None'}...")
+        logger.error(f"DEBUG: Active JWT_SECRET being used for verification: '{JWT_SECRET}' (length: {len(JWT_SECRET) if JWT_SECRET else 0})")
+        raise HTTPException(status_code=401, detail=f'Invalid token: {str(e)}')
 
     user = None
     try:
         user = await db.users.find_one({'id': payload['user_id']})
     except Exception as e:
         logger.warning(f'Could not look up user from DB: {e}')
+
+    if user:
+        # Enforce single-device login: check if the session_id matches the one in DB
+        token_session = payload.get('session_id')
+        db_session = user.get('current_session_id')
+        if db_session and token_session != db_session:
+            raise HTTPException(status_code=401, detail='Session expired. Logged in from another device.')
 
     if not user:
         # User not in DB yet — create them
@@ -135,3 +148,4 @@ async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict
     if current_user.get('role') != 'admin':
         raise HTTPException(status_code=403, detail='Admin access required')
     return current_user
+

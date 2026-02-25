@@ -60,11 +60,11 @@ export default function DriverArrivingScreen() {
     const driverInfo = `
 🚗 SPINR RIDE - TRIP DETAILS
 
-👤 DRIVER: ${currentDriver?.name || 'John D.'}
-⭐ RATING: ${currentDriver?.rating || 4.9}/5
+👤 DRIVER: ${currentDriver?.name || 'Assigning...'}
+⭐ RATING: ${currentDriver?.rating || 'New'}
 
-🚙 VEHICLE: ${currentDriver?.vehicle_color || 'Grey'} ${currentDriver?.vehicle_make || 'Honda'} ${currentDriver?.vehicle_model || 'Civic'}
-📋 LICENSE PLATE: ${currentDriver?.license_plate || 'SK-123-ABC'}
+🚙 VEHICLE: ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || 'Unknown'} ${currentDriver?.vehicle_model || 'Vehicle'}
+📋 LICENSE PLATE: ${currentDriver?.license_plate || 'Pending'}
 
 📍 PICKUP: ${currentRide?.pickup_address || 'University of Saskatchewan'}
 📍 DESTINATION: ${currentRide?.dropoff_address || '123 Main St, Saskatoon'}
@@ -87,14 +87,12 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
   };
 
   const handleCopyDetails = async () => {
-    const details = `Driver: ${currentDriver?.name || 'John D.'} | Vehicle: ${currentDriver?.vehicle_color || 'Grey'} ${currentDriver?.vehicle_make || 'Honda'} ${currentDriver?.vehicle_model || 'Civic'} | Plate: ${currentDriver?.license_plate || 'SK-123-ABC'} | Rating: ${currentDriver?.rating || 4.9}⭐`;
+    const details = `Driver: ${currentDriver?.name || 'Assigning...'} | Vehicle: ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || 'Unknown'} ${currentDriver?.vehicle_model || 'Vehicle'} | Plate: ${currentDriver?.license_plate || 'Pending'} | Rating: ${currentDriver?.rating || 'New'}`;
     await Clipboard.setStringAsync(details);
     Alert.alert('Copied!', 'Driver details copied to clipboard');
   };
 
-  const handleSimulateArrival = async () => {
-    await simulateDriverArrival();
-  };
+  // simulateDriverArrival demo function removed for production
 
   return (
     <View style={styles.container}>
@@ -104,12 +102,12 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
           <TouchableOpacity style={styles.backButton} onPress={handleBack}>
             <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
           </TouchableOpacity>
-          
+
           <View style={styles.etaPill}>
             <View style={styles.greenDot} />
             <Text style={styles.etaText}>Arriving in {eta} min</Text>
           </View>
-          
+
           <TouchableOpacity style={styles.emergencyButton} onPress={handleEmergency}>
             <Ionicons name="shield" size={20} color={SpinrConfig.theme.colors.primary} />
           </TouchableOpacity>
@@ -121,7 +119,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
         <View style={styles.mapPlaceholder}>
           {/* Simulated route line */}
           <View style={styles.routeLine} />
-          
+
           {/* Driver marker */}
           <View style={styles.driverMarker}>
             <View style={styles.driverMarkerInner}>
@@ -131,7 +129,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
               <Text style={styles.etaBadgeText}>{eta} min away</Text>
             </View>
           </View>
-          
+
           {/* Pickup marker */}
           <View style={styles.pickupMarker}>
             <View style={styles.pickupDot} />
@@ -142,7 +140,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
       {/* Bottom Sheet */}
       <View style={styles.bottomSheet}>
         <View style={styles.sheetHandle} />
-        
+
         {/* Safety Banner - Share Trip */}
         <TouchableOpacity style={styles.shareTripBanner} onPress={handleShareTrip}>
           <View style={styles.shareTripIcon}>
@@ -164,19 +162,19 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
               <Text style={styles.copyText}>Copy Details</Text>
             </TouchableOpacity>
           </View>
-          
+
           <View style={styles.driverSection}>
             <View style={styles.driverAvatar}>
               <Ionicons name="person" size={28} color="#666" />
               <View style={styles.ratingBadge}>
                 <Ionicons name="star" size={10} color="#FFB800" />
-                <Text style={styles.ratingText}>{currentDriver?.rating || 4.9}</Text>
+                <Text style={styles.ratingText}>{currentDriver?.rating || 'New'}</Text>
               </View>
             </View>
-            
+
             <View style={styles.driverInfo}>
-              <Text style={styles.driverName}>{currentDriver?.name || 'John D.'}</Text>
-              <Text style={styles.totalTrips}>{currentDriver?.total_rides || 1247} trips completed</Text>
+              <Text style={styles.driverName}>{currentDriver?.name || 'Assigning...'}</Text>
+              <Text style={styles.totalTrips}>{currentDriver?.total_rides || 0} trips completed</Text>
             </View>
           </View>
 
@@ -187,18 +185,18 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
               <View style={styles.vehicleTextContainer}>
                 <Text style={styles.vehicleLabel}>VEHICLE</Text>
                 <Text style={styles.vehicleValue}>
-                  {currentDriver?.vehicle_color || 'Grey'} {currentDriver?.vehicle_make || 'Honda'} {currentDriver?.vehicle_model || 'Civic'}
+                  {currentDriver?.vehicle_color || ''} {currentDriver?.vehicle_make || 'Unknown'} {currentDriver?.vehicle_model || 'Vehicle'}
                 </Text>
               </View>
             </View>
-            
+
             <View style={styles.plateRow}>
               <View style={styles.plateIconContainer}>
                 <Text style={styles.plateIcon}>🪪</Text>
               </View>
               <View style={styles.vehicleTextContainer}>
                 <Text style={styles.vehicleLabel}>LICENSE PLATE</Text>
-                <Text style={styles.plateValue}>{currentDriver?.license_plate || 'SK-123-ABC'}</Text>
+                <Text style={styles.plateValue}>{currentDriver?.license_plate || 'Pending'}</Text>
               </View>
             </View>
           </View>
@@ -210,11 +208,11 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
             <Ionicons name="chatbubble" size={20} color="#FFF" />
             <Text style={styles.messageButtonText}>Message</Text>
           </TouchableOpacity>
-          
+
           <TouchableOpacity style={styles.callButton} onPress={handleCall}>
             <Ionicons name="call" size={22} color="#1A1A1A" />
           </TouchableOpacity>
-          
+
           <TouchableOpacity style={styles.shareButton} onPress={handleShareTrip}>
             <Ionicons name="share-outline" size={22} color="#1A1A1A" />
           </TouchableOpacity>
@@ -233,7 +231,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
               <View style={styles.tripLine} />
               <View style={styles.redDot} />
             </View>
-            
+
             <View style={styles.tripAddresses}>
               <View style={styles.addressRow}>
                 <Text style={styles.addressLabel}>PICKED UP</Text>
@@ -241,7 +239,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                   {currentRide?.pickup_address || 'University of Saskatchewan'}
                 </Text>
               </View>
-              
+
               <View style={[styles.addressRow, { marginTop: 16 }]}>
                 <Text style={styles.dropoffLabel}>DROPPING OFF</Text>
                 <Text style={styles.dropoffText} numberOfLines={1}>
@@ -253,10 +251,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
           </View>
         </View>
 
-        {/* Demo Button */}
-        <TouchableOpacity style={styles.demoButton} onPress={handleSimulateArrival}>
-          <Text style={styles.demoButtonText}>Simulate Driver Arrival (Demo)</Text>
-        </TouchableOpacity>
+        {/* Demo Button removed for production */}
       </View>
     </View>
   );

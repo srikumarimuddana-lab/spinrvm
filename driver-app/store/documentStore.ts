@@ -64,7 +64,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
             }
 
             // Fetch from API
-            const response = await api.get('/api/drivers/requirements');
+            const response = await api.get('/drivers/requirements');
             const requirements = response.data as DocumentRequirement[];
 
             // Cache the results

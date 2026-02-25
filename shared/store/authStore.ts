@@ -80,6 +80,7 @@ export interface User {
   profile_complete: boolean;
   is_driver?: boolean;
   profile_image?: string;  // Base64 data URI
+  rating?: number;
 }
 
 interface AuthState {

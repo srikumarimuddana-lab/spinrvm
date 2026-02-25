@@ -7,19 +7,20 @@ const getBackendUrl = () => {
     return process.env.EXPO_PUBLIC_BACKEND_URL;
   }
 
-  // 2. Expo Go / Dev Client (Physical Device or Emulator)
+  // 2. Fallback to API URL or Base URL generically
+  if (process.env.EXPO_PUBLIC_API_URL) {
+    return process.env.EXPO_PUBLIC_API_URL;
+  }
+
+  // 3. Expo Go / Dev Client (Physical Device or Emulator)
   // This automatically grabs the IP of the machine running `npx expo start`
   if (Constants.expoConfig?.hostUri) {
     const host = Constants.expoConfig.hostUri.split(':')[0];
     return `http://${host}:8000`;
   }
 
-  // 3. Web / Fallback
-  if (Platform.OS === 'web' || process.env.NODE_ENV === 'development') {
-    return 'http://localhost:8000';
-  }
-
-  return 'http://localhost:8000';
+  console.warn("No EXPO_PUBLIC_BACKEND_URL or EXPO_PUBLIC_API_URL provided!");
+  return '';
 };
 
 export const SpinrConfig = {
@@ -46,6 +47,14 @@ export const SpinrConfig = {
       error: '#DC2626',
       success: '#34C759', // Green for success
       warning: '#FFCC00',
+
+      // Aliases & Legacy Support
+      accent: '#FF3B30',
+      accentDim: '#D32F2F',
+      danger: '#DC2626',
+      orange: '#FF9500',
+      gold: '#FFD700',
+      overlay: 'rgba(255, 255, 255, 0.95)',
     },
     borderRadius: 16,
     fontFamily: 'PlusJakartaSans',

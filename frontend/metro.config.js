@@ -22,4 +22,14 @@ config.cacheStores = [
 // Reduce the number of workers to decrease resource usage
 config.maxWorkers = 2;
 
+// Add path aliases for shared modules
+config.resolver.extraNodeModules = {
+  '@shared': path.resolve(__dirname, '../shared'),
+};
+
+// Ensure Metro watches the shared folder
+config.watchFolders = [
+  path.resolve(__dirname, '../shared')
+];
+
 module.exports = config;

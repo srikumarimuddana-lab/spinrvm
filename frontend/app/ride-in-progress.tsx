@@ -13,7 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
-import SpinrConfig from '../config/spinr.config';
+import SpinrConfig from '@shared/config/spinr.config';
 
 const { width } = Dimensions.get('window');
 
@@ -30,29 +30,18 @@ export default function RideInProgressScreen() {
     if (rideId) {
       fetchRide(rideId);
     }
-    
+
     // Calculate estimated arrival time
     const now = new Date();
     now.setMinutes(now.getMinutes() + 15);
     setEstimatedTime(now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }));
   }, [rideId]);
 
-  // Simulate countdown
   useEffect(() => {
-    const interval = setInterval(() => {
-      setEta((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          // Navigate to completion screen
-          router.replace({ pathname: '/ride-completed', params: { rideId } });
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 5000); // Every 5 seconds for demo
-
-    return () => clearInterval(interval);
-  }, []);
+    if (currentRide?.status === 'completed') {
+      router.replace({ pathname: '/ride-completed', params: { rideId } });
+    }
+  }, [currentRide?.status]);
 
   const handleSafety = () => {
     Alert.alert('Safety', 'Emergency services will be contacted.');
@@ -63,11 +52,11 @@ export default function RideInProgressScreen() {
     const tripDetails = `
 🚗 TRACK MY SPINR RIDE - LIVE LOCATION
 
-👤 DRIVER: ${currentDriver?.name || 'John D.'}
-⭐ RATING: ${currentDriver?.rating || 4.9}/5
+👤 DRIVER: ${currentDriver?.name || 'Unknown'}
+⭐ RATING: ${currentDriver?.rating || 'New'}
 
-🚙 VEHICLE: ${currentDriver?.vehicle_color || 'Grey'} ${currentDriver?.vehicle_make || 'Honda'} ${currentDriver?.vehicle_model || 'Civic'}
-📋 LICENSE PLATE: ${currentDriver?.license_plate || 'SK-123-ABC'}
+🚙 VEHICLE: ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || 'Unknown'} ${currentDriver?.vehicle_model || 'Vehicle'}
+📋 LICENSE PLATE: ${currentDriver?.license_plate || 'Pending'}
 
 📍 CURRENT LOCATION: ${currentLocation}
 📍 HEADING TO: ${currentRide?.dropoff_address || '1055 Canada Place'}
@@ -87,7 +76,7 @@ I've shared my live location with you for safety.
       });
       setIsSharingLocation(true);
       Alert.alert(
-        'Trip Shared!', 
+        'Trip Shared!',
         'Your live location is now being shared. They can track your journey in real-time.'
       );
     } catch (error) {
@@ -148,21 +137,21 @@ I've shared my live location with you for safety.
               <View key={`v-${i}`} style={[styles.gridLine, styles.gridVertical, { left: `${i * 10}%` }]} />
             ))}
           </View>
-          
+
           {/* Route line */}
           <View style={styles.routeLine} />
-          
+
           {/* Current position marker */}
           <View style={styles.carMarker}>
             <Ionicons name="car" size={18} color="#FFF" />
           </View>
-          
+
           {/* Destination marker */}
           <View style={styles.destinationMarker}>
             <View style={styles.destinationDot} />
           </View>
         </View>
-        
+
         {/* Location button */}
         <TouchableOpacity style={styles.locationButton} onPress={handleLocation}>
           <Ionicons name="navigate" size={22} color="#1A1A1A" />
@@ -172,7 +161,7 @@ I've shared my live location with you for safety.
       {/* Bottom Sheet */}
       <View style={styles.bottomSheet}>
         <View style={styles.sheetHandle} />
-        
+
         {/* ETA Section */}
         <View style={styles.etaSection}>
           <View style={styles.etaLeft}>
@@ -183,7 +172,7 @@ I've shared my live location with you for safety.
               <Text style={styles.etaRemainingText}>{eta} min left</Text>
             </View>
           </View>
-          
+
           <TouchableOpacity style={styles.safetyButton} onPress={handleSafety}>
             <Ionicons name="shield-checkmark" size={24} color="#FFF" />
             <Text style={styles.safetyText}>Safety</Text>
@@ -203,12 +192,12 @@ I've shared my live location with you for safety.
               <View style={styles.tripLine} />
               <View style={styles.redDot} />
             </View>
-            
+
             <View style={styles.tripAddresses}>
               <View style={styles.addressRow}>
                 <Text style={styles.currentLabel}>Current: {currentLocation}</Text>
               </View>
-              
+
               <View style={[styles.addressRow, { marginTop: 24 }]}>
                 <Text style={styles.destinationName} numberOfLines={1}>
                   {currentRide?.dropoff_address || '1055 Canada Place'}
@@ -235,8 +224,8 @@ I've shared my live location with you for safety.
 
         {/* Action Buttons */}
         <View style={styles.actionButtons}>
-          <TouchableOpacity 
-            style={[styles.shareButton, isSharingLocation && styles.shareButtonActive]} 
+          <TouchableOpacity
+            style={[styles.shareButton, isSharingLocation && styles.shareButtonActive]}
             onPress={handleShareTrip}
           >
             <View style={styles.shareButtonIcon}>
@@ -247,7 +236,7 @@ I've shared my live location with you for safety.
               {isSharingLocation ? 'Sharing Live' : 'Share Trip'}
             </Text>
           </TouchableOpacity>
-          
+
           <TouchableOpacity style={styles.cancelButton} onPress={handleCancelRide}>
             <Ionicons name="close" size={20} color="#1A1A1A" />
             <Text style={styles.cancelButtonText}>Cancel Ride</Text>

@@ -235,7 +235,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchActiveRide: async () => {
         try {
-            const res = await api.get('/api/drivers/rides/active');
+            const res = await api.get('/drivers/rides/active');
             if (res.data && res.data.ride) {
                 const ride = res.data.ride;
                 let rideState: RideState = 'idle';

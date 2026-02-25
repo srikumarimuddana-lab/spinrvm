@@ -10,7 +10,12 @@ const getBackendUrl = () => {
     return process.env.EXPO_PUBLIC_BACKEND_URL;
   }
 
-  // 2. Fallback for Expo Go (Local Development)
+  // 2. Fallback to API URL generically
+  if (process.env.EXPO_PUBLIC_API_URL) {
+    return process.env.EXPO_PUBLIC_API_URL;
+  }
+
+  // 3. Fallback for Expo Go (Local Development)
   // Expo Go runs on a physical device, so "localhost" won't work.
   // We need the IP of the machine running the Expo server.
   if (Constants.expoConfig?.hostUri) {
@@ -18,12 +23,7 @@ const getBackendUrl = () => {
     return `http://${host}:8000`;
   }
 
-  // 3. Fallback for Web (Localhost)
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    // If no env var is set, assume local backend
-    return 'http://localhost:8000';
-  }
-
+  console.warn("No EXPO_PUBLIC_BACKEND_URL or EXPO_PUBLIC_API_URL provided!");
   return '';
 };
 

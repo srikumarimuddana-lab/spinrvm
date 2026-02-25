@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS users (
     role            TEXT NOT NULL DEFAULT 'rider',       -- rider | driver | admin
     profile_complete BOOLEAN NOT NULL DEFAULT FALSE,
     is_driver       BOOLEAN NOT NULL DEFAULT FALSE,
+    profile_image   TEXT,                                -- profile picture URL
     fcm_token       TEXT,                                 -- push notification token
+    current_session_id TEXT,                              -- for single device login constraint
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -76,6 +78,7 @@ CREATE TABLE IF NOT EXISTS drivers (
     is_online       BOOLEAN NOT NULL DEFAULT TRUE,
     is_available    BOOLEAN NOT NULL DEFAULT TRUE,
     service_area_id TEXT,                                      -- assigned area (optional)
+    stripe_account_id TEXT,                                    -- Stripe Connect Custom/Express Account ID
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -250,6 +253,8 @@ CREATE TABLE IF NOT EXISTS settings (
     cancellation_fee_admin  FLOAT DEFAULT 0.50,
     cancellation_fee_driver FLOAT DEFAULT 2.50,
     platform_fee_percent    FLOAT DEFAULT 0.0,
+    terms_of_service_text   TEXT DEFAULT '',
+    privacy_policy_text     TEXT DEFAULT '',
     updated_at              TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -355,10 +360,10 @@ CREATE OR REPLACE FUNCTION update_driver_location(
 )
 RETURNS VOID
 LANGUAGE sql
-AS $$
+AS $
     UPDATE drivers SET lat = update_driver_location.lat, lng = update_driver_location.lng
-    WHERE id = p_driver_id;
-$$;
+    WHERE id::TEXT = p_driver_id;
+$;
 
 -- ============================================================
 -- Row Level Security (RLS)
@@ -484,4 +489,41 @@ WHERE NOT EXISTS (SELECT 1 FROM public.document_requirements WHERE name = 'Vehic
 INSERT INTO public.document_requirements (name, description, is_mandatory, requires_back_side)
 SELECT 'Vehicle Inspection', 'Vehicle inspection report', true, false
 WHERE NOT EXISTS (SELECT 1 FROM public.document_requirements WHERE name = 'Vehicle Inspection');
+
+-- ============================================================
+-- 14. PAYOUTS & BANK ACCOUNTS (added for missing links)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS payouts (
+    id              TEXT PRIMARY KEY,
+    driver_id       TEXT NOT NULL REFERENCES drivers(id),
+    amount          FLOAT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',  -- pending | processing | completed | failed
+    stripe_payout_id TEXT,                            -- Stripe Payout ID
+    bank_name       TEXT,
+    account_last4   TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    processed_at    TIMESTAMPTZ,
+    error_message   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS bank_accounts (
+    id                    TEXT PRIMARY KEY,
+    driver_id             TEXT NOT NULL REFERENCES drivers(id) UNIQUE,
+    stripe_bank_id        TEXT, -- Stripe External Account ID
+    bank_name             TEXT NOT NULL,
+    institution_number    TEXT NOT NULL, -- 3 digits
+    transit_number        TEXT NOT NULL, -- 5 digits
+    routing_number        TEXT NOT NULL, -- Stripe requires: 0 + institution + transit (9 digits) for Canada
+    account_number_last4  TEXT NOT NULL,
+    account_holder_name   TEXT NOT NULL,
+    account_type          TEXT NOT NULL DEFAULT 'chequing',
+    currency              TEXT NOT NULL DEFAULT 'cad',
+    country               TEXT NOT NULL DEFAULT 'CA',
+    is_verified           BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE payouts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bank_accounts ENABLE ROW LEVEL SECURITY;
+
 

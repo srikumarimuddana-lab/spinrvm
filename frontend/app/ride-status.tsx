@@ -11,13 +11,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
-import SpinrConfig from '../config/spinr.config';
+import SpinrConfig from '@shared/config/spinr.config';
 
 export default function RideStatusScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const { currentRide, currentDriver, fetchRide, cancelRide, simulateDriverArrival, clearRide } = useRideStore();
-  
+
   const [pulseAnim] = useState(new Animated.Value(1));
   const [dotAnim] = useState(new Animated.Value(0));
 
@@ -53,15 +53,7 @@ export default function RideStatusScreen() {
     router.replace('/(tabs)');
   };
 
-  const handleSimulateArrival = async () => {
-    await simulateDriverArrival();
-    fetchRide(rideId!);
-  };
-
-  const handleRideComplete = () => {
-    clearRide();
-    router.replace('/(tabs)');
-  };
+  // handleSimulateArrival and handleRideComplete removed for production
 
   const renderSearching = () => (
     <View style={styles.statusContainer}>
@@ -70,11 +62,6 @@ export default function RideStatusScreen() {
       </Animated.View>
       <Text style={styles.statusTitle}>Finding your driver</Text>
       <Text style={styles.statusSubtitle}>This usually takes 1-3 minutes</Text>
-      
-      {/* Simulate button for demo */}
-      <TouchableOpacity style={styles.demoButton} onPress={() => fetchRide(rideId!)}>
-        <Text style={styles.demoButtonText}>Refresh Status</Text>
-      </TouchableOpacity>
     </View>
   );
 
@@ -121,10 +108,6 @@ export default function RideStatusScreen() {
         </View>
       </View>
 
-      {/* Simulate Arrival Button (Demo) */}
-      <TouchableOpacity style={styles.simulateButton} onPress={handleSimulateArrival}>
-        <Text style={styles.simulateButtonText}>Simulate Driver Arrival (Demo)</Text>
-      </TouchableOpacity>
     </View>
   );
 
@@ -171,10 +154,6 @@ export default function RideStatusScreen() {
         </View>
       </View>
 
-      {/* Complete Demo Button */}
-      <TouchableOpacity style={styles.completeButton} onPress={handleRideComplete}>
-        <Text style={styles.completeButtonText}>Complete Ride (Demo)</Text>
-      </TouchableOpacity>
     </View>
   );
 

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import api from '../api/client';
-import { appCache, CACHE_KEYS, CACHE_CONFIG } from '../../shared/cache';
+import { appCache, CACHE_KEYS, CACHE_CONFIG } from '@shared/cache';
 
 export interface DocumentRequirement {
     id: string;
@@ -64,7 +64,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
             }
 
             // Fetch from API
-            const response = await api.get('/api/drivers/requirements');
+            const response = await api.get('/drivers/requirements');
             const requirements = response.data as DocumentRequirement[];
 
             // Cache the results
@@ -138,7 +138,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
                 formData.append('side', side);
             }
 
-            const response = await api.post('/api/drivers/documents/upload', formData, {
+            const response = await api.post('/drivers/documents/upload', formData, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             });
 

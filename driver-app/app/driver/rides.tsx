@@ -32,7 +32,7 @@ const COLORS = {
   border: THEME.border,
 };
 
-type Filter = 'all' | 'completed' | 'cancelled';
+type Filter = 'all' | 'completed' | 'cancelled' | 'scheduled';
 
 export default function RidesScreen() {
   const router = useRouter();
@@ -59,6 +59,7 @@ export default function RidesScreen() {
 
   const filteredRides = rideHistory.filter((r) => {
     if (filter === 'all') return true;
+    if (filter === 'scheduled') return r.status === 'scheduled';
     return r.status === filter;
   });
 
@@ -156,7 +157,7 @@ export default function RidesScreen() {
 
       {/* Filter Tabs */}
       <View style={styles.filterRow}>
-        {(['all', 'completed', 'cancelled'] as Filter[]).map((f) => (
+        {(['all', 'scheduled', 'completed', 'cancelled'] as Filter[]).map((f) => (
           <TouchableOpacity
             key={f}
             style={[styles.filterBtn, filter === f && styles.filterBtnActive]}

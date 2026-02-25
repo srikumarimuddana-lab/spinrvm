@@ -46,24 +46,28 @@ const getStoredToken = async (): Promise<string | null> => {
       return localStorage.getItem('auth_token');
     } else {
       const SecureStore = require('expo-secure-store');
-      return await SecureStore.getItemAsync('auth_token');
+      const token = await SecureStore.getItemAsync('auth_token');
+      console.log('DEBUG: Token from SecureStore:', token ? 'EXISTS' : 'NULL');
+      return token;
     }
-  } catch (e) { }
-  return null;
+  } catch (e: any) {
+    console.error('DEBUG: SecureStore error:', e?.message || e);
+    return null;
+  }
 };
 
 // Helper to get auth header
 const getAuthHeader = async (): Promise<string | null> => {
   try {
     if (isFirebaseConfigured && auth.currentUser) {
-      // Firebase token flow
+      console.log('DEBUG: Using Firebase token');
       return await auth.currentUser.getIdToken();
     } else {
-      // Backend JWT flow — use stored token
+      console.log('DEBUG: Using stored JWT token');
       return await getStoredToken();
     }
-  } catch (error) {
-    console.error('Error getting auth token:', error);
+  } catch (error: any) {
+    console.error('DEBUG: Error getting auth token:', error?.message || error);
     return null;
   }
 };
@@ -78,6 +82,9 @@ const client = {
     };
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+      console.log('DEBUG: Adding auth header for GET', url, 'Token starts with:', token.substring(0, 20));
+    } else {
+      console.log('DEBUG: NO TOKEN for GET', url);
     }
 
     const response = await fetchWithTimeout(`${API_URL}/api${url}`, {

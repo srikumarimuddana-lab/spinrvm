@@ -71,6 +71,8 @@ export default function DriverDashboard() {
     fetchActiveRide,
     resetRideState,
     clearError,
+    fetchEarnings,
+    earnings,
   } = useDriverStore();
 
   const [isOnline, setIsOnline] = useState(driverData?.is_online || false);
@@ -109,7 +111,7 @@ export default function DriverDashboard() {
     locationBufferRef.current = [];
 
     try {
-      await api.post('/api/drivers/location-batch', {
+      await api.post('/drivers/location-batch', {
         points: pointsToUpload,
       });
       console.log(`Uploaded ${pointsToUpload.length} location points`);
@@ -361,6 +363,7 @@ export default function DriverDashboard() {
   useEffect(() => {
     if (isOnline) {
       fetchActiveRide();
+      fetchEarnings('today');
     }
   }, [isOnline]);
 
@@ -388,7 +391,7 @@ export default function DriverDashboard() {
 
       // Send token to backend to associate with driver
       try {
-        await api.post('/api/drivers/push-token', {
+        await api.post('/drivers/push-token', {
           push_token: token.data,
           platform: Platform.OS,
         });
@@ -429,6 +432,22 @@ export default function DriverDashboard() {
 
   // ─── Toggle Online/Offline ───────────────────────────────────────
   const toggleOnline = async () => {
+    // Check for vehicle info
+    if (!driverData?.vehicle_make || !driverData?.license_plate) {
+      Alert.alert(
+        "Profile Incomplete",
+        "You must provide vehicle details before going online.",
+        [
+          {
+            text: "Add Vehicle Info",
+            onPress: () => router.push('/vehicle-info' as any)
+          },
+          { text: "Cancel", style: "cancel" }
+        ]
+      );
+      return;
+    }
+
     // Check if driver is verified before allowing to go online
     if (!driverData?.is_verified) {
       Alert.alert(
@@ -436,7 +455,7 @@ export default function DriverDashboard() {
         "Your account is not verified yet. Please complete your profile and wait for admin approval before going online.",
         [
           {
-            text: "Update Profile",
+            text: "Check Status",
             onPress: () => router.push('/driver/profile' as any)
           },
           { text: "OK", style: "default" }
@@ -515,6 +534,23 @@ export default function DriverDashboard() {
   //  RENDER PANELS BY STATE
   // ═══════════════════════════════════════════════════════════════════
 
+  const renderStatsRow = () => (
+    <View style={styles.statsGrid}>
+      <View style={styles.statBox}>
+        <Text style={styles.statValue}>{driverData?.acceptance_rate || '100'}%</Text>
+        <Text style={styles.statLabel}>Acceptance</Text>
+      </View>
+      <View style={styles.statBox}>
+        <Text style={styles.statValue}>${(earnings?.total_earnings || 0).toFixed(2)}</Text>
+        <Text style={styles.statLabel}>Earnings</Text>
+      </View>
+      <View style={styles.statBox}>
+        <Text style={styles.statValue}>{driverData?.total_rides || '0'}</Text>
+        <Text style={styles.statLabel}>Rides</Text>
+      </View>
+    </View>
+  );
+
   const renderIdlePanel = () => (
     <View style={styles.idlePanel}>
       <TouchableOpacity
@@ -553,25 +589,8 @@ export default function DriverDashboard() {
         </View>
       </TouchableOpacity>
 
-      {isOnline && (
-        <View style={styles.statsRow}>
-          <View style={styles.statCard}>
-            <FontAwesome5 name="road" size={18} color={COLORS.accent} />
-            <Text style={styles.statValue}>{driverData?.total_rides || 0}</Text>
-            <Text style={styles.statLabel}>Total Rides</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Ionicons name="star" size={18} color={COLORS.gold} />
-            <Text style={styles.statValue}>{(driverData?.rating || 5.0).toFixed(1)}</Text>
-            <Text style={styles.statLabel}>Rating</Text>
-          </View>
-          <View style={styles.statCard}>
-            <MaterialCommunityIcons name="clock-outline" size={18} color={COLORS.orange} />
-            <Text style={styles.statValue}>0h</Text>
-            <Text style={styles.statLabel}>Online</Text>
-          </View>
-        </View>
-      )}
+      {/* Stats Row */}
+      {renderStatsRow()}
     </View>
   );
 
@@ -1131,108 +1150,168 @@ const styles = StyleSheet.create({
   onlineToggle: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
-    borderRadius: 20,
+    padding: 20,
+    borderRadius: 16,
     gap: 14,
+    backgroundColor: COLORS.surface,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
+    marginBottom: 16,
+    borderWidth: 1,
   },
   onlineActive: {
-    backgroundColor: 'rgba(0, 212, 170, 0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(0, 212, 170, 0.25)',
+    borderColor: COLORS.success,
   },
   onlineInactive: {
-    backgroundColor: COLORS.overlay,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: 'transparent',
+  },
+  onlineDisabled: {
+    opacity: 0.7,
+    borderColor: COLORS.border,
   },
   pulseIndicator: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
+    marginRight: 0,
   },
   statusDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
   },
   toggleText: {
     flex: 1,
   },
   toggleLabel: {
-    color: COLORS.text,
-    fontSize: 16,
+    fontSize: 18,
     fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: 4,
   },
   toggleSub: {
+    fontSize: 13,
     color: COLORS.textDim,
-    fontSize: 12,
-    marginTop: 2,
   },
   toggleSwitch: {
     width: 50,
-    height: 28,
-    borderRadius: 14,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: COLORS.surfaceLight,
+    padding: 2,
     justifyContent: 'center',
-    paddingHorizontal: 3,
   },
   toggleSwitchOn: {
-    backgroundColor: COLORS.accent,
-  },
-  toggleKnob: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: '#fff',
-  },
-  toggleKnobOn: {
-    alignSelf: 'flex-end',
-  },
-  onlineDisabled: {
-    backgroundColor: 'rgba(255, 140, 66, 0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 140, 66, 0.3)',
+    backgroundColor: COLORS.success,
+    alignItems: 'flex-end',
   },
   toggleSwitchDisabled: {
-    backgroundColor: 'rgba(255, 140, 66, 0.3)',
+    backgroundColor: COLORS.border,
+  },
+  toggleKnob: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  toggleKnobOn: {
+    marginRight: 0,
   },
   toggleKnobDisabled: {
-    backgroundColor: 'rgba(255, 255, 255, 0.6)',
+    backgroundColor: '#f5f5f5',
   },
-  statsRow: {
+  statsGrid: {
     flexDirection: 'row',
-    gap: 10,
-    marginTop: 12,
+    gap: 12,
+    marginBottom: 16,
   },
-  statCard: {
+  statBox: {
     flex: 1,
-    backgroundColor: COLORS.overlay,
-    borderRadius: 14,
-    padding: 14,
+    backgroundColor: COLORS.surface,
+    padding: 12,
+    borderRadius: 12,
     alignItems: 'center',
-    gap: 6,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
   },
   statValue: {
-    color: COLORS.text,
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: 4,
   },
   statLabel: {
+    fontSize: 11,
     color: COLORS.textDim,
-    fontSize: 10,
-    letterSpacing: 0.5,
+    fontWeight: '600',
     textTransform: 'uppercase',
   },
-
-  // ── Ride Offer ───────────────────────────────────────────────────
+  statsRow: {
+    marginTop: 0,
+  },
+  earningsCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 16,
+    padding: 20,
+    width: '100%',
+    alignItems: 'center',
+    gap: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  earningsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: COLORS.surfaceLight,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  earningsLabel: {
+    color: COLORS.textDim,
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 1,
+  },
+  earningsAmount: {
+    color: COLORS.text,
+    fontSize: 48,
+    fontWeight: '800',
+    letterSpacing: -1,
+  },
+  earningsTips: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255, 215, 0, 0.1)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+  },
+  earningsTipsText: {
+    color: COLORS.gold,
+    fontSize: 13,
+    fontWeight: '600',
+  },
   rideOfferOverlay: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
+    height: height * 0.75, // Taller for better map visibility behind
+    justifyContent: 'flex-end',
   },
   rideOfferGradient: {
     borderTopLeftRadius: 28,

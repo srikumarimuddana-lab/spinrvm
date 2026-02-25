@@ -148,21 +148,25 @@ export default function AccountScreen() {
       icon: 'person-outline',
       title: 'My Account',
       subtitle: 'Payment, security, language',
+      action: () => Alert.alert('Coming Soon', 'Account settings will be available in the next update.')
     },
     {
       icon: 'shield-outline',
       title: 'Safety',
       subtitle: 'Trusted contacts, emergency assist',
+      action: () => router.push('/report-safety' as any)
     },
     {
       icon: 'headset-outline',
       title: 'Support',
       subtitle: 'Help center, report an issue',
+      action: () => router.push('/support' as any)
     },
     {
       icon: 'information-circle-outline',
       title: 'About',
       subtitle: 'T&C, privacy policy',
+      action: () => router.push('/legal?type=tos' as any)
     },
   ];
 
@@ -202,7 +206,7 @@ export default function AccountScreen() {
           <View style={styles.userInfo}>
             <View style={styles.ratingContainer}>
               <Ionicons name="star" size={14} color={SpinrConfig.theme.colors.primary} />
-              <Text style={styles.ratingText}>4.9</Text>
+              <Text style={styles.ratingText}>{user?.rating ? user.rating.toFixed(1) : '5.0'}</Text>
             </View>
             <Text style={styles.userInfoDivider}>•</Text>
             <Text style={styles.phoneText}>{formatPhone(user?.phone || '')}</Text>
@@ -216,6 +220,7 @@ export default function AccountScreen() {
               key={index}
               style={styles.menuItem}
               activeOpacity={0.7}
+              onPress={item.action}
             >
               <View style={styles.menuIconContainer}>
                 <Ionicons

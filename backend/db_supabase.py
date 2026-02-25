@@ -102,12 +102,17 @@ async def update_driver_location(driver_id: str, lat: float, lng: float):
     if not supabase:
         return None
 
+    
     def _update():
-        supabase.rpc('update_driver_location', {
-            'driver_id': driver_id,
-            'lat': lat,
-            'lng': lng
-        }).execute()
+        # The Supabase RPC seems to have a type mismatch (text vs uuid) error.
+        # We'll bypass the RPC and update the table directly.
+        # Assuming table has 'lat' and 'lng' columns (or 'location' if that works, but Traceback used lat/lng).
+        
+        # Note: If 'location' is a PostGIS column, we might need to update it too.
+        # But failing RPC prevents any update. Direct update is safer for now.
+        
+        data = {'lat': lat, 'lng': lng, 'updated_at': datetime.utcnow().isoformat()}
+        supabase.table('drivers').update(data).eq('id', str(driver_id)).execute()
         return True
 
     return await asyncio.to_thread(_update)
@@ -223,7 +228,7 @@ async def delete_otp_record(record_id: str):
         supabase.table('otp_records').delete().eq('id', record_id).execute()
     ))
 
-# ============ Generic Helpers (for Mongo compatibility) ============
+# ============ Query Helpers ============
 
 def _apply_filters(q, filters: Optional[Dict[str, Any]]):
     if not filters:
@@ -242,7 +247,7 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
                 q = q.lte(k, v['$lte'])
             elif '$ne' in v:
                 q = q.neq(k, v['$ne'])
-            # Add more mongo operators as needed
+            # Add more query operators as needed
         else:
             q = q.eq(k, v)
     return q

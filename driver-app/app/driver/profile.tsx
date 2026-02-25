@@ -212,7 +212,7 @@ export default function ProfileScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Quick Actions</Text>
 
-          <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/(driver)/notifications' as any)}>
+          <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/driver/notifications' as any)}>
             <View style={[styles.iconBox, { backgroundColor: '#F9FAFB' }]}>
               <Ionicons name="help-circle" size={18} color={THEME.text} />
             </View>
@@ -220,7 +220,15 @@ export default function ProfileScreen() {
             <Ionicons name="chevron-forward" size={18} color={THEME.textDim} />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/(driver)/settings' as any)}>
+          <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/driver/referral' as any)}>
+            <View style={[styles.iconBox, { backgroundColor: '#FEF3C7' }]}>
+              <Ionicons name="gift" size={18} color="#F59E0B" />
+            </View>
+            <Text style={styles.actionText}>Referral Program</Text>
+            <Ionicons name="chevron-forward" size={18} color={THEME.textDim} />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/driver/settings' as any)}>
             <View style={[styles.iconBox, { backgroundColor: '#F9FAFB' }]}>
               <Ionicons name="settings" size={18} color={THEME.text} />
             </View>

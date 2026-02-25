@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
 import { useDriverStore } from '../../store/driverStore';
 
 const { width } = Dimensions.get('window');
@@ -37,13 +38,16 @@ const COLORS = {
 type Period = 'today' | 'week' | 'month' | 'all';
 
 export default function EarningsScreen() {
+  const router = useRouter();
   const {
     earnings,
     dailyEarnings,
     tripEarnings,
+    driverBalance,
     fetchEarnings,
     fetchDailyEarnings,
     fetchTripEarnings,
+    fetchDriverBalance,
   } = useDriverStore();
 
   const [period, setPeriod] = useState<Period>('today');
@@ -56,6 +60,7 @@ export default function EarningsScreen() {
       fetchEarnings(period),
       fetchDailyEarnings(period === 'today' ? 1 : period === 'week' ? 7 : period === 'month' ? 30 : 30),
       fetchTripEarnings(),
+      fetchDriverBalance(),
     ]);
     setLoading(false);
   }, [period]);
@@ -79,7 +84,16 @@ export default function EarningsScreen() {
         colors={[COLORS.surface, COLORS.primary]}
         style={styles.header}
       >
-        <Text style={styles.headerTitle}>Earnings</Text>
+        <View style={styles.headerRow}>
+          <Text style={styles.headerTitle}>Earnings</Text>
+          <TouchableOpacity
+            style={styles.payoutBtn}
+            onPress={() => router.push('/(driver)/payout' as any)}
+          >
+            <Ionicons name="wallet" size={18} color={COLORS.accent} />
+            <Text style={styles.payoutBtnText}>Payout</Text>
+          </TouchableOpacity>
+        </View>
 
         {/* Period Selector */}
         <View style={styles.periodRow}>
@@ -249,11 +263,30 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 20,
   },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
   headerTitle: {
     color: COLORS.text,
     fontSize: 26,
     fontWeight: '800',
-    marginBottom: 16,
+  },
+  payoutBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,212,170,0.1)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    gap: 6,
+  },
+  payoutBtnText: {
+    color: COLORS.accent,
+    fontSize: 14,
+    fontWeight: '600',
   },
   periodRow: {
     flexDirection: 'row',

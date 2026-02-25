@@ -1,0 +1,136 @@
+{
+    "common": {
+        "loading": "Chargement...",
+        "error": "Erreur",
+        "success": "Succès",
+        "cancel": "Annuler",
+        "confirm": "Confirmer",
+        "save": "Enregistrer",
+        "delete": "Supprimer",
+        "edit": "Modifier",
+        "back": "Retour",
+        "next": "Suivant",
+        "done": "Terminé",
+        "retry": "Réessayer"
+    },
+    "tabs": {
+        "home": "Accueil",
+        "rides": "Courses",
+        "earnings": "Revenus",
+        "profile": "Profil"
+    },
+    "home": {
+        "online": "Vous êtes en ligne",
+        "offline": "Vous êtes hors ligne",
+        "goOnline": "Se mettre en ligne",
+        "goOffline": "Se mettre hors ligne",
+        "accept": "Accepter",
+        "decline": "Refuser",
+        "noRideRequests": "Aucune demande de course",
+        "waitingForRequests": "En attente de demandes de course..."
+    },
+    "earnings": {
+        "today": "Aujourd'hui",
+        "thisWeek": "Cette semaine",
+        "thisMonth": "Ce mois-ci",
+        "totalEarnings": "Revenus totaux",
+        "availableBalance": "Solde disponible",
+        "pendingPayouts": "Paiements en attente",
+        "trips": "Courses",
+        "viewPayout": "Voir les paiements",
+        "requestPayout": "Demander un paiement",
+        "payoutHistory": "Historique des paiements",
+        "noEarnings": "Pas encore de revenus",
+        "startEarning": "Commencez à accepter des courses pour gagner"
+    },
+    "rides": {
+        "pastRides": "Courses passées",
+        "noRides": "Pas encore de courses",
+        "rideDetails": "Détails de la course",
+        "pickup": "Prise en charge",
+        "dropoff": "Dépose",
+        "fare": "Tarif",
+        "distance": "Distance",
+        "duration": "Durée",
+        "rider": "Passager"
+    },
+    "profile": {
+        "editProfile": "Modifier le profil",
+        "myVehicles": "Mes véhicules",
+        "documents": "Documents",
+        "bankAccount": "Compte bancaire",
+        "settings": "Paramètres",
+        "help": "Aide et support",
+        "logout": "Déconnexion",
+        "rating": "Note",
+        "totalTrips": "Total des courses"
+    },
+    "settings": {
+        "title": "Paramètres",
+        "account": "Compte",
+        "language": "Langue",
+        "notifications": "Notifications",
+        "termsOfService": "Conditions d'utilisation",
+        "privacyPolicy": "Politique de confidentialité",
+        "taxDocuments": "Documents fiscaux (T4A)",
+        "legal": "Mentions légales",
+        "logout": "Déconnexion"
+    },
+    "payout": {
+        "title": "Paiement",
+        "bankAccount": "Compte bancaire",
+        "addBankAccount": "Ajouter un compte bancaire",
+        "bankName": "Nom de la banque",
+        "institutionNumber": "Numéro d'institution",
+        "transitNumber": "Numéro de transit",
+        "accountNumber": "Numéro de compte",
+        "accountHolder": "Nom du titulaire du compte",
+        "accountType": "Type de compte",
+        "checking": "Compte-chèques",
+        "savings": "Compte d'épargne",
+        "availableBalance": "Solde disponible",
+        "requestPayout": "Demander un paiement",
+        "enterAmount": "Entrez le montant",
+        "maxAmount": "Montant maximum",
+        "payoutSuccess": "Paiement demandé avec succès",
+        "payoutError": "Échec de la demande de paiement"
+    },
+    "tax": {
+        "title": "Documents fiscaux",
+        "t4a": "T4A - État de la rémunération",
+        "year": "Année",
+        "totalEarnings": "Revenus totaux",
+        "totalTrips": "Nombre total de courses",
+        "platformFees": "Frais de plateforme",
+        "netEarnings": "Revenus nets",
+        "download": "Télécharger PDF",
+        "noTaxDocs": "Aucun document fiscal disponible",
+        "availableYears": "Années disponibles"
+    },
+    "documents": {
+        "title": "Documents",
+        "license": "Permis de conduire",
+        "insurance": "Assurance",
+        "registration": "Immatriculation du véhicule",
+        "upload": "Télécharger",
+        "verified": "Vérifié",
+        "pending": "En attente de révision",
+        "expired": "Expiré",
+        "uploadNew": "Télécharger nouveau"
+    },
+    "vehicle": {
+        "title": "Véhicule",
+        "make": "Marque",
+        "model": "Modèle",
+        "year": "Année",
+        "plate": "Plaque d'immatriculation",
+        "color": "Couleur",
+        "type": "Type de véhicule"
+    },
+    "errors": {
+        "networkError": "Erreur réseau. Veuillez vérifier votre connexion.",
+        "serverError": "Erreur serveur. Veuillez réessayer plus tard.",
+        "unauthorized": "Session expirée. Veuillez vous reconnecter.",
+        "unknown": "Une erreur inconnue s'est produite."
+    }
+}

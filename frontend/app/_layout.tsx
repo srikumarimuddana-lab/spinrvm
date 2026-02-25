@@ -63,7 +63,7 @@ export default function RootLayout() {
         <Stack.Screen name="ride-options" />
         <Stack.Screen name="payment-confirm" />
         <Stack.Screen name="ride-status" options={{ gestureEnabled: false }} />
-        <Stack.Screen name="(driver)" options={{ animation: "fade" }} />
+        <Stack.Screen name="become-driver" />
         <Stack.Screen name="become-driver" />
       </Stack>
     </SafeAreaProvider>

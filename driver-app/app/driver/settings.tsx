@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     View,
     Text,
@@ -8,11 +8,15 @@ import {
     Platform,
     Switch,
     Alert,
+    Modal,
+    Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
+import { useLanguageStore } from '../../store/languageStore';
+import { languages, Language } from '../../i18n';
 
 import SpinrConfig from '@shared/config/spinr.config';
 
@@ -35,6 +39,12 @@ const COLORS = {
 export default function SettingsScreen() {
     const router = useRouter();
     const { logout } = useAuthStore();
+    const { language, setLanguage, loadLanguage, t } = useLanguageStore();
+    const [showLanguageModal, setShowLanguageModal] = useState(false);
+
+    useEffect(() => {
+        loadLanguage();
+    }, []);
 
     // Preference states (local)
     const [pushNotifications, setPushNotifications] = useState(true);
@@ -167,16 +177,19 @@ export default function SettingsScreen() {
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>Account</Text>
                     <View style={styles.card}>
-                        <TouchableOpacity style={styles.actionRow}>
+                        <TouchableOpacity
+                            style={styles.actionRow}
+                            onPress={() => setShowLanguageModal(true)}
+                        >
                             <View style={[styles.settingIcon, { backgroundColor: 'rgba(0,212,170,0.08)' }]}>
                                 <Ionicons name="language" size={18} color={COLORS.accent} />
                             </View>
-                            <Text style={styles.settingLabel}>Language</Text>
-                            <Text style={styles.settingValue}>English</Text>
+                            <Text style={styles.settingLabel}>{t('settings.language')}</Text>
+                            <Text style={styles.settingValue}>{language === 'en' ? 'English' : 'Français'}</Text>
                             <Ionicons name="chevron-forward" size={18} color={COLORS.textDim} />
                         </TouchableOpacity>
                         <View style={styles.cardDivider} />
-                        <TouchableOpacity style={styles.actionRow}>
+                        <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/legal?type=tos' as any)}>
                             <View style={[styles.settingIcon, { backgroundColor: 'rgba(0,212,170,0.08)' }]}>
                                 <Ionicons name="document-text" size={18} color={COLORS.accent} />
                             </View>
@@ -184,11 +197,56 @@ export default function SettingsScreen() {
                             <Ionicons name="chevron-forward" size={18} color={COLORS.textDim} />
                         </TouchableOpacity>
                         <View style={styles.cardDivider} />
-                        <TouchableOpacity style={styles.actionRow}>
+                        <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/legal?type=privacy' as any)}>
                             <View style={[styles.settingIcon, { backgroundColor: 'rgba(0,212,170,0.08)' }]}>
                                 <Ionicons name="shield" size={18} color={COLORS.accent} />
                             </View>
                             <Text style={styles.settingLabel}>Privacy Policy</Text>
+                            <Ionicons name="chevron-forward" size={18} color={COLORS.textDim} />
+                        </TouchableOpacity>
+                        <View style={styles.cardDivider} />
+                        <TouchableOpacity
+                            style={styles.actionRow}
+                            onPress={() => router.push('/driver/tax-documents')}
+                        >
+                            <View style={[styles.settingIcon, { backgroundColor: 'rgba(0,212,170,0.08)' }]}>
+                                <Ionicons name="receipt" size={18} color={COLORS.accent} />
+                            </View>
+                            <Text style={styles.settingLabel}>Tax Documents (T4A)</Text>
+                            <Ionicons name="chevron-forward" size={18} color={COLORS.textDim} />
+                        </TouchableOpacity>
+                    </View>
+                </View>
+
+                {/* Emergency Assistance */}
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Emergency Assistance</Text>
+                    <View style={styles.card}>
+                        <TouchableOpacity
+                            style={styles.actionRow}
+                            onPress={() => {
+                                Alert.alert(
+                                    'Emergency Services',
+                                    'Call 911 for immediate emergency assistance.',
+                                    [
+                                        { text: 'Cancel', style: 'cancel' },
+                                        { text: 'Call 911', style: 'destructive', onPress: () => { } },
+                                    ]
+                                );
+                            }}
+                        >
+                            <View style={[styles.settingIcon, { backgroundColor: 'rgba(239,68,68,0.1)' }]}>
+                                <Ionicons name="call" size={18} color="#EF4444" />
+                            </View>
+                            <Text style={[styles.settingLabel, { color: '#EF4444' }]}>Call Emergency (911)</Text>
+                            <Ionicons name="chevron-forward" size={18} color={COLORS.textDim} />
+                        </TouchableOpacity>
+                        <View style={styles.cardDivider} />
+                        <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/report-safety' as any)}>
+                            <View style={[styles.settingIcon, { backgroundColor: 'rgba(245,158,11,0.1)' }]}>
+                                <Ionicons name="warning" size={18} color="#F59E0B" />
+                            </View>
+                            <Text style={styles.settingLabel}>Report Safety Issue</Text>
                             <Ionicons name="chevron-forward" size={18} color={COLORS.textDim} />
                         </TouchableOpacity>
                     </View>
@@ -209,6 +267,53 @@ export default function SettingsScreen() {
                 {/* App Version */}
                 <Text style={styles.version}>Spinr Driver v1.0.0</Text>
             </ScrollView>
+
+            {/* Language Modal */}
+            <Modal
+                visible={showLanguageModal}
+                transparent
+                animationType="slide"
+                onRequestClose={() => setShowLanguageModal(false)}
+            >
+                <Pressable style={styles.modalOverlay} onPress={() => setShowLanguageModal(false)}>
+                    <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalTitle}>{t('settings.language')}</Text>
+                            <TouchableOpacity onPress={() => setShowLanguageModal(false)}>
+                                <Ionicons name="close" size={24} color={COLORS.text} />
+                            </TouchableOpacity>
+                        </View>
+                        <View style={styles.languageOptions}>
+                            {languages.map((lang) => (
+                                <TouchableOpacity
+                                    key={lang.code}
+                                    style={[
+                                        styles.languageOption,
+                                        language === lang.code && styles.languageOptionSelected,
+                                    ]}
+                                    onPress={() => {
+                                        setLanguage(lang.code);
+                                        setShowLanguageModal(false);
+                                    }}
+                                >
+                                    <View>
+                                        <Text style={[
+                                            styles.languageName,
+                                            language === lang.code && styles.languageNameSelected,
+                                        ]}>
+                                            {lang.nativeName}
+                                        </Text>
+                                        <Text style={styles.languageEnglish}>{lang.name}</Text>
+                                    </View>
+                                    {language === lang.code && (
+                                        <Ionicons name="checkmark-circle" size={24} color={COLORS.accent} />
+                                    )}
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+                    </Pressable>
+                </Pressable>
+            </Modal>
         </View>
     );
 }
@@ -323,5 +428,59 @@ const styles = StyleSheet.create({
         fontSize: 12,
         marginTop: 20,
         marginBottom: 20,
+    },
+    // Modal styles
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        justifyContent: 'flex-end',
+    },
+    modalContent: {
+        backgroundColor: COLORS.primary,
+        borderTopLeftRadius: 20,
+        borderTopRightRadius: 20,
+        paddingBottom: Platform.OS === 'ios' ? 40 : 20,
+    },
+    modalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: 20,
+        borderBottomWidth: 1,
+        borderBottomColor: COLORS.border,
+    },
+    modalTitle: {
+        fontSize: 18,
+        fontWeight: '600',
+        color: COLORS.text,
+    },
+    languageOptions: {
+        padding: 20,
+    },
+    languageOption: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: 16,
+        paddingHorizontal: 16,
+        borderRadius: 12,
+        marginBottom: 8,
+        backgroundColor: COLORS.surface,
+    },
+    languageOptionSelected: {
+        backgroundColor: 'rgba(0,212,170,0.1)',
+    },
+    languageName: {
+        fontSize: 16,
+        fontWeight: '500',
+        color: COLORS.text,
+    },
+    languageNameSelected: {
+        color: COLORS.accent,
+    },
+    languageEnglish: {
+        fontSize: 13,
+        color: COLORS.textDim,
+        marginTop: 2,
     },
 });

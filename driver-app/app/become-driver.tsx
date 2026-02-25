@@ -309,40 +309,31 @@ export default function BecomeDriverScreen() {
   const validateStep = (step: number) => {
     switch (step) {
       case 1: // Personal
-        return firstName && lastName && email && gender && city;
+        return !!(firstName && lastName && email && gender && city);
       case 2: // Vehicle
+        // Determine if user has entered ANY vehicle info
+        const hasVehicleInfo = vehicleMake || vehicleModel || vehicleColor || vehicleYear || licensePlate || vehicleVin || vehicleType;
+        if (!hasVehicleInfo) return true; // Allow proceeding if completely empty (skip)
+
+        // If partial info, enforce valid year and other fields? 
+        // For simplification, let's just warn but allow if they explicitly skip. 
+        // But here we are in "Next", so maybe enforce completeness if started.
         const year = parseInt(vehicleYear);
         const currentYear = new Date().getFullYear();
-        if (!vehicleYear || isNaN(year) || year < currentYear - 9) {
+        if (vehicleYear && (isNaN(year) || year < currentYear - 9)) {
           Alert.alert('Invalid Year', 'Vehicle must be 9 years old or newer.');
           return false;
         }
-        return vehicleMake && vehicleModel && vehicleColor && licensePlate && vehicleVin && vehicleType;
-      case 3: // Docs
-        const missing: string[] = [];
-        if (!licenseNumber) missing.push('Driver License Number');
-
-        requirements.forEach(req => {
-          if (req.is_mandatory) {
-            const uploaded = docs[req.id];
-            if (!uploaded?.front) {
-              missing.push(`${req.name} (Front)`);
-            }
-            if (req.requires_back_side && !uploaded?.back) {
-              missing.push(`${req.name} (Back)`);
-            }
-            // Check expiry if we want to enforce it for everything
-            // For now, let's enforce expiry only for License and Insurance which are critical
-            if (['Driving License', 'Vehicle Insurance'].includes(req.name) && !uploaded?.expiry) {
-              missing.push(`${req.name} Expiry Date`);
-            }
-          }
-        });
-
-        if (missing.length > 0) {
-          Alert.alert('Missing Documents', `Please provide: ${missing.join(', ')}`);
+        // If they started entering info, require basic fields or use Skip
+        if (hasVehicleInfo && (!vehicleMake || !vehicleModel || !licensePlate || !vehicleType)) {
+          Alert.alert('Incomplete Vehicle Info', 'Please complete all vehicle fields or use "Skip for now".');
           return false;
         }
+        return true;
+      case 3: // Docs
+        // Similar logic: if they uploaded some but not all, warn? 
+        // Or just let them proceed. Backend validates "Go Online".
+        // Let's allow partial upload.
         return true;
       default:
         return true;
@@ -353,6 +344,10 @@ export default function BecomeDriverScreen() {
     if (validateStep(currentStep)) {
       setCurrentStep(prev => prev + 1);
     }
+  };
+
+  const skipStep = () => {
+    setCurrentStep(prev => prev + 1);
   };
 
   const prevStep = () => setCurrentStep(prev => prev - 1);
@@ -392,6 +387,8 @@ export default function BecomeDriverScreen() {
         }
       });
 
+      const parsedYear = parseInt(vehicleYear);
+
       await registerDriver({
         // Personal
         first_name: firstName,
@@ -399,17 +396,17 @@ export default function BecomeDriverScreen() {
         email,
         gender,
         city,
-        // Vehicle
-        vehicle_make: vehicleMake,
-        vehicle_model: vehicleModel,
-        vehicle_color: vehicleColor,
-        vehicle_year: parseInt(vehicleYear),
-        license_plate: licensePlate,
-        vehicle_vin: vehicleVin,
-        vehicle_type_id: vehicleType,
+        // Vehicle (send undefined if empty to avoid validation errors or "None" strings)
+        vehicle_make: vehicleMake || undefined,
+        vehicle_model: vehicleModel || undefined,
+        vehicle_color: vehicleColor || undefined,
+        vehicle_year: isNaN(parsedYear) ? undefined : parsedYear,
+        license_plate: licensePlate || undefined,
+        vehicle_vin: vehicleVin || undefined,
+        vehicle_type_id: vehicleType || undefined,
 
         // Legacy/Top-level Fields
-        license_number: licenseNumber,
+        license_number: licenseNumber || undefined,
         license_expiry_date: licenseExpiry,
         insurance_expiry_date: insuranceExpiry,
         vehicle_inspection_expiry_date: inspectionExpiry,
@@ -419,7 +416,7 @@ export default function BecomeDriverScreen() {
         documents: documentsPayload,
       });
 
-      Alert.alert('Success', 'Application submitted! Waiting for approval.', [
+      Alert.alert('Success', 'Application submitted! You can now log in, but you must complete your profile to go online.', [
         {
           text: 'OK', onPress: async () => {
             await AsyncStorage.removeItem('driver_application_draft');
@@ -538,6 +535,9 @@ export default function BecomeDriverScreen() {
               <TouchableOpacity style={styles.primaryButton} onPress={nextStep}>
                 <Text style={styles.primaryButtonText}>Next: Documents</Text>
               </TouchableOpacity>
+              <TouchableOpacity style={styles.secondaryButton} onPress={skipStep}>
+                <Text style={styles.secondaryButtonText}>Skip for now</Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -641,6 +641,9 @@ export default function BecomeDriverScreen() {
               <TouchableOpacity style={styles.primaryButton} onPress={nextStep}>
                 <Text style={styles.primaryButtonText}>Review Application</Text>
               </TouchableOpacity>
+              <TouchableOpacity style={styles.secondaryButton} onPress={skipStep}>
+                <Text style={styles.secondaryButtonText}>Skip for now</Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -721,5 +724,11 @@ const styles = StyleSheet.create({
   primaryButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
 
   reviewCard: { padding: 20, backgroundColor: '#F3F4F6', borderRadius: 12 },
-  reviewRow: { fontSize: 16, marginBottom: 10 }
+  reviewRow: { fontSize: 16, marginBottom: 10 },
+
+  secondaryButton: {
+    backgroundColor: 'transparent', borderRadius: 30, padding: 15,
+    alignItems: 'center', marginTop: 10
+  },
+  secondaryButtonText: { color: '#666', fontSize: 16, fontWeight: '600' }
 });

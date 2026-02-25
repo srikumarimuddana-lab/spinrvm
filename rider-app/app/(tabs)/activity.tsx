@@ -33,16 +33,27 @@ export default function ActivityScreen() {
   const router = useRouter();
   const { token } = useAuthStore();
   const [rides, setRides] = useState<RideHistory[]>([]);
+  const [vehicleTypes, setVehicleTypes] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState<FilterType>('all');
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const fetchRides = async () => {
+  const fetchData = async () => {
     try {
-      const response = await api.get('/rides');
-      setRides(response.data || []);
+      const [ridesRes, typesRes] = await Promise.all([
+        api.get('/rides'),
+        api.get('/fares/vehicle-types').catch(() => ({ data: [] }))
+      ]);
+
+      setRides(ridesRes.data || []);
+
+      const typesMap: Record<string, string> = {};
+      (typesRes.data || []).forEach((t: any) => {
+        typesMap[t.id] = t.name;
+      });
+      setVehicleTypes(typesMap);
     } catch (error) {
-      console.log('Error fetching rides:', error);
+      console.log('Error fetching activity data:', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -50,12 +61,12 @@ export default function ActivityScreen() {
   };
 
   useEffect(() => {
-    fetchRides();
+    fetchData();
   }, []);
 
   const onRefresh = () => {
     setRefreshing(true);
-    fetchRides();
+    fetchData();
   };
 
   const formatDate = (dateString: string) => {
@@ -69,7 +80,7 @@ export default function ActivityScreen() {
     } else if (isYesterday) {
       return `Yesterday, ${date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
     } else {
-      return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + 
+      return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
         `, ${date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
     }
   };
@@ -119,29 +130,26 @@ export default function ActivityScreen() {
   };
 
   const getVehicleType = (id: string) => {
-    // Mock vehicle type mapping
-    if (id.includes('xl') || id.includes('XL')) return 'XL';
-    if (id.includes('lux') || id.includes('Lux')) return 'Comfort';
-    return 'Standard';
+    return vehicleTypes[id] || 'Standard';
   };
 
   // Group rides by month
   const groupRidesByMonth = (rides: RideHistory[]) => {
     const groups: { [key: string]: RideHistory[] } = {};
     const now = new Date();
-    
+
     rides.forEach(ride => {
       const date = new Date(ride.created_at);
       const isRecent = (now.getTime() - date.getTime()) < 7 * 24 * 60 * 60 * 1000; // 7 days
-      
+
       const key = isRecent ? 'RECENT' : date.toLocaleDateString([], { month: 'long' }).toUpperCase();
-      
+
       if (!groups[key]) {
         groups[key] = [];
       }
       groups[key].push(ride);
     });
-    
+
     return groups;
   };
 
@@ -222,7 +230,7 @@ export default function ActivityScreen() {
                       color={ride.status === 'cancelled' ? SpinrConfig.theme.colors.primary : SpinrConfig.theme.colors.primary}
                     />
                   </View>
-                  
+
                   <View style={styles.rideDetails}>
                     <Text style={styles.rideDestination} numberOfLines={1}>
                       {ride.dropoff_address || 'Unknown destination'}
@@ -231,7 +239,7 @@ export default function ActivityScreen() {
                       {formatDate(ride.created_at)} • {getVehicleType(ride.vehicle_type_id)}
                     </Text>
                   </View>
-                  
+
                   <View style={styles.rideFareContainer}>
                     <Text style={[styles.rideFare, ride.status === 'cancelled' && styles.rideFareCancelled]}>
                       ${ride.status === 'cancelled' ? '0.00' : ride.total_fare?.toFixed(2) || '0.00'}

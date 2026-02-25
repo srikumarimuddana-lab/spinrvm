@@ -14,15 +14,23 @@ from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel, Field
 
 try:
+    from .dependencies import get_current_user
     from .db import db
 except ImportError:
+    from dependencies import get_current_user
     from db import db
 
 logger = logging.getLogger(__name__)
 
 # ============ Routers ============
-support_router = APIRouter(prefix="/api")
-admin_support_router = APIRouter(prefix="/api/admin")
+support_router = APIRouter(tags=["Support"])
+admin_support_router = APIRouter(tags=["Admin Support"])
+
+# ... (rest of file)
+
+# ============ Admin: Area Fees (Pricing) ============
+
+pricing_router = APIRouter(tags=["Pricing"])
 
 
 # ============ Geometry Helpers ============
@@ -160,6 +168,27 @@ async def create_ticket(req: CreateTicketRequest, user_id: str = Query(...)):
         'message': req.message,
         'category': req.category,
         'status': 'open',
+        'replies': [],
+        'created_at': datetime.utcnow(),
+        'updated_at': datetime.utcnow(),
+    }
+    await db.support_tickets.insert_one(ticket)
+    return ticket
+
+class SafetyReportRequest(BaseModel):
+    description: str
+
+@support_router.post("/tickets/safety-report")
+async def create_safety_report(req: SafetyReportRequest, user_id: str = Depends(get_current_user)):
+    """Create a new safety report ticket (high priority)."""
+    ticket = {
+        'id': str(uuid.uuid4()),
+        'user_id': user_id,
+        'subject': 'SAFETY INCIDENT REPORT',
+        'message': req.description,
+        'category': 'safety',
+        'status': 'open',
+        'priority': 'critical',
         'replies': [],
         'created_at': datetime.utcnow(),
         'updated_at': datetime.utcnow(),
@@ -313,7 +342,7 @@ async def admin_update_surge(area_id: str, req: UpdateSurgeRequest):
 
 # ============ Admin: Area Fees (Pricing) ============
 
-pricing_router = APIRouter(prefix="/api/admin")
+pricing_router = APIRouter(tags=["Pricing"])
 
 
 class CreateAreaFeeRequest(BaseModel):

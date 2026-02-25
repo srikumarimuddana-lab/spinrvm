@@ -32,7 +32,7 @@ export default function ChatDriverScreen() {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: '1',
-      text: "Hi " + (currentDriver?.name?.split(' ')[0] || 'David') + ", I'm waiting near the main entrance.",
+      text: "Hi " + (currentDriver?.name?.split(' ')[0] || 'Driver') + ", I'm waiting near the main entrance.",
       isUser: true,
       time: '10:42 AM',
       status: 'read',
@@ -68,7 +68,7 @@ export default function ChatDriverScreen() {
 
   const sendMessage = (text: string) => {
     if (!text.trim()) return;
-    
+
     const newMsg: Message = {
       id: Date.now().toString(),
       text: text.trim(),
@@ -76,10 +76,10 @@ export default function ChatDriverScreen() {
       time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
       status: 'sent',
     };
-    
+
     setMessages([...messages, newMsg]);
     setMessage('');
-    
+
     // Scroll to bottom
     setTimeout(() => {
       scrollViewRef.current?.scrollToEnd({ animated: true });
@@ -102,7 +102,7 @@ export default function ChatDriverScreen() {
     sendMessage(text);
   };
 
-  const driverName = currentDriver?.name || 'David S.';
+  const driverName = currentDriver?.name || 'Driver';
   const driverFirstName = driverName.split(' ')[0];
 
   return (
@@ -112,7 +112,7 @@ export default function ChatDriverScreen() {
         <TouchableOpacity style={styles.backButton} onPress={handleBack}>
           <Ionicons name="chevron-back" size={28} color="#1A1A1A" />
         </TouchableOpacity>
-        
+
         <View style={styles.driverHeader}>
           <View style={styles.driverAvatar}>
             <Ionicons name="person" size={22} color="#666" />
@@ -121,7 +121,7 @@ export default function ChatDriverScreen() {
           <View style={styles.driverInfo}>
             <Text style={styles.driverName}>{driverName}</Text>
             <Text style={styles.vehicleInfo}>
-              {currentDriver?.vehicle_color || 'White'} {currentDriver?.vehicle_make || 'Toyota'} {currentDriver?.vehicle_model || 'Camry'} • {currentDriver?.rating || 4.9} <Ionicons name="star" size={12} color="#FFB800" />
+              {currentDriver?.vehicle_color || ''} {currentDriver?.vehicle_make || 'Unknown'} {currentDriver?.vehicle_model || 'Vehicle'} • {currentDriver?.rating || 'New'} <Ionicons name="star" size={12} color="#FFB800" />
             </Text>
           </View>
         </View>
@@ -129,19 +129,19 @@ export default function ChatDriverScreen() {
         <TouchableOpacity style={styles.callButton} onPress={handleCall}>
           <Ionicons name="call" size={22} color={SpinrConfig.theme.colors.primary} />
         </TouchableOpacity>
-        
+
         <View style={styles.toggleContainer}>
           <View style={styles.toggleDot} />
         </View>
       </View>
 
       {/* Messages */}
-      <KeyboardAvoidingView 
+      <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.messagesContainer}
         keyboardVerticalOffset={0}
       >
-        <ScrollView 
+        <ScrollView
           ref={scrollViewRef}
           style={styles.messagesList}
           contentContainerStyle={styles.messagesContent}
@@ -180,8 +180,8 @@ export default function ChatDriverScreen() {
         {/* Quick Replies */}
         <View style={styles.quickReplies}>
           {quickReplies.map((reply) => (
-            <TouchableOpacity 
-              key={reply.id} 
+            <TouchableOpacity
+              key={reply.id}
               style={styles.quickReplyButton}
               onPress={() => handleQuickReply(reply.text)}
             >
@@ -198,7 +198,7 @@ export default function ChatDriverScreen() {
               <Ionicons name="add" size={10} color="#FFF" />
             </View>
           </TouchableOpacity>
-          
+
           <View style={styles.textInputContainer}>
             <TextInput
               style={styles.textInput}
@@ -209,8 +209,8 @@ export default function ChatDriverScreen() {
               multiline
             />
           </View>
-          
-          <TouchableOpacity 
+
+          <TouchableOpacity
             style={[styles.sendButton, message.trim() && styles.sendButtonActive]}
             onPress={() => sendMessage(message)}
             disabled={!message.trim()}

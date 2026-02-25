@@ -4,7 +4,7 @@ import { Platform } from 'react-native';
 import { auth } from '../config/firebaseConfig';
 import { PhoneAuthProvider, signInWithCredential, signOut, User as FirebaseUser } from 'firebase/auth';
 import api from '../api/client';
-import { appCache, CACHE_KEYS, CACHE_CONFIG } from '../../shared/cache';
+import { appCache, CACHE_KEYS, CACHE_CONFIG } from '@shared/cache';
 
 // Platform-safe secure storage
 const storage = {
@@ -79,6 +79,7 @@ export interface User {
   profile_complete: boolean;
   is_driver?: boolean;
   profile_image?: string;  // Base64 data URI
+  rating?: number;
 }
 
 interface AuthState {

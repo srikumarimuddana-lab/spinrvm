@@ -26,6 +26,18 @@
       ],
       "expo-secure-store": [
         "./node_modules/expo-secure-store"
+      ],
+      "@components/*": [
+        "./components/*"
+      ],
+      "@hooks/*": [
+        "./hooks/*"
+      ],
+      "@styles/*": [
+        "./styles/*"
+      ],
+      "@types/*": [
+        "./types/*"
       ]
     }
   },

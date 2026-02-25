@@ -5,3 +5,11 @@ __pycache__/
 venv/
 node_modules/
 backend/repro_issue.py
+
+# Build outputs
+.next/
+.expo/
+*.apk
+*.aab
+dist/
+build/

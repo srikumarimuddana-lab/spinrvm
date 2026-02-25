@@ -129,7 +129,7 @@ export default function AccountScreen() {
   const handleDriverSwitch = () => {
     if (user?.is_driver || user?.role === 'driver') {
       toggleDriverMode();
-      router.replace('/(driver)');
+      router.replace('/(driver)' as any);
     } else {
       router.push('/become-driver');
     }

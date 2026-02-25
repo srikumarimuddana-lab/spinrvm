@@ -11,9 +11,12 @@
       }
     },
     "preview": {
-      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://spinr-backend.onrender.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://spinr-backend.onrender.com",
+        "EXPO_PUBLIC_API_URL": "https://spinr-backend.onrender.com"
       }
     },
     "production": {

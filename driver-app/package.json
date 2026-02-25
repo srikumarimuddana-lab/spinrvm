@@ -66,6 +66,7 @@
     "cross-env": "^10.1.0",
     "eslint": "^9.25.0",
     "eslint-config-expo": "~9.2.0",
+    "patch-package": "^8.0.1",
     "typescript": "~5.8.3"
   },
   "overrides": {

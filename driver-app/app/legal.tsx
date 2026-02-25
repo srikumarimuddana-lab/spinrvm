@@ -30,7 +30,7 @@ export default function LegalScreen() {
 
     const fetchLegalText = async () => {
         try {
-            const response = await fetch(`${SpinrConfig.api.baseUrl}/settings/legal`);
+            const response = await fetch(`${SpinrConfig.backendUrl}/settings/legal`);
             const data = await response.json();
             if (type === 'tos') {
                 setContent(data.terms_of_service_text || 'No Terms of Service have been added yet.');

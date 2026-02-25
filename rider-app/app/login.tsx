@@ -1,27 +1,12 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
-import { auth } from '@shared/config/firebaseConfig';
 import api from '@shared/api/client';
-
-// Only import Firebase phone auth when Firebase is actually configured
-const isFirebaseConfigured = typeof auth.onAuthStateChanged === 'function';
-let FirebaseRecaptchaVerifierModal: any = null;
-let PhoneAuthProvider: any = null;
-if (isFirebaseConfigured) {
-  try {
-    FirebaseRecaptchaVerifierModal = require('expo-firebase-recaptcha').FirebaseRecaptchaVerifierModal;
-    PhoneAuthProvider = require('firebase/auth').PhoneAuthProvider;
-  } catch (e) {
-    console.warn('Firebase recaptcha not available');
-  }
-}
 
 export default function LoginScreen() {
   const router = useRouter();
   const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
-  const recaptchaVerifier = useRef(null);
 
   const handleSendCode = async () => {
     if (!phoneNumber || phoneNumber.length < 10) {
@@ -33,30 +18,15 @@ export default function LoginScreen() {
     const formattedNumber = `+1${phoneNumber.replace(/\D/g, '')}`;
 
     try {
-      if (isFirebaseConfigured && PhoneAuthProvider) {
-        // Firebase phone auth flow
-        const phoneProvider = new PhoneAuthProvider(auth);
-        const verificationId = await phoneProvider.verifyPhoneNumber(
-          formattedNumber,
-          recaptchaVerifier.current!
-        );
+      const response = await api.post('/auth/send-otp', { phone: formattedNumber });
 
+      if (response.data.success) {
         router.push({
           pathname: '/otp',
-          params: { verificationId, phoneNumber: formattedNumber, mode: 'firebase' }
+          params: { phoneNumber: formattedNumber, mode: 'backend' }
         });
       } else {
-        // Backend OTP flow (dev mode — OTP is 1234)
-        const response = await api.post('/auth/send-otp', { phone: formattedNumber });
-
-        if (response.data.success) {
-          router.push({
-            pathname: '/otp',
-            params: { phoneNumber: formattedNumber, mode: 'backend' }
-          });
-        } else {
-          Alert.alert('Error', 'Failed to send OTP');
-        }
+        Alert.alert('Error', 'Failed to send OTP');
       }
     } catch (error: any) {
       console.error(error);
@@ -71,12 +41,6 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
-      {isFirebaseConfigured && FirebaseRecaptchaVerifierModal && (
-        <FirebaseRecaptchaVerifierModal
-          ref={recaptchaVerifier}
-          firebaseConfig={auth.app?.options}
-        />
-      )}
 
       <View style={styles.content}>
         <Text style={styles.title}>Enter your mobile number</Text>
@@ -97,9 +61,8 @@ export default function LoginScreen() {
           />
         </View>
 
-        {!isFirebaseConfigured && (
-          <Text style={styles.devHint}>Dev mode — OTP is 1234</Text>
-        )}
+        <Text style={styles.devHint}>Dev mode — OTP is 1234</Text>
+
 
         <TouchableOpacity
           style={[styles.button, loading && styles.buttonDisabled]}

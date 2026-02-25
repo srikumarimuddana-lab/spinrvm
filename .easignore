@@ -1,0 +1,8 @@
+# Ignore other apps during EAS build to save space and upload time
+admin-dashboard/
+backend/
+frontend/
+.next/
+.expo/
+*.apk
+*.aab

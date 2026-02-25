@@ -47,6 +47,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     plugins: [
         'expo-router',
+        '@stripe/stripe-react-native',
+        'expo-font',
+        'expo-web-browser',
         [
             'expo-splash-screen',
             {

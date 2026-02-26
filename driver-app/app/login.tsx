@@ -7,14 +7,12 @@ import SpinrConfig from '@shared/config/spinr.config';
 
 // Only import Firebase phone auth when Firebase is actually configured
 const isFirebaseConfigured = typeof auth.onAuthStateChanged === 'function';
-let FirebaseRecaptchaVerifierModal: any = null;
 let PhoneAuthProvider: any = null;
 if (isFirebaseConfigured) {
   try {
-    FirebaseRecaptchaVerifierModal = require('expo-firebase-recaptcha').FirebaseRecaptchaVerifierModal;
     PhoneAuthProvider = require('firebase/auth').PhoneAuthProvider;
   } catch (e) {
-    console.warn('Firebase recaptcha not available');
+    console.warn('Firebase auth not available');
   }
 }
 
@@ -76,12 +74,7 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
-      {isFirebaseConfigured && FirebaseRecaptchaVerifierModal && (
-        <FirebaseRecaptchaVerifierModal
-          ref={recaptchaVerifier}
-          firebaseConfig={auth.app?.options}
-        />
-      )}
+
 
       <View style={styles.content}>
         <Text style={styles.title}>Enter your mobile number</Text>

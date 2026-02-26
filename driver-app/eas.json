@@ -12,7 +12,10 @@
     },
     "preview": {
       "android": {
-        "buildType": "apk"
+        "buildType": "apk",
+        "gradleArgs": [
+          "-PreactNativeArchitectures=arm64-v8a"
+        ]
       },
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "https://spinr-backend.onrender.com",

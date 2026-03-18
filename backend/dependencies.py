@@ -148,3 +148,6 @@ async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict
         raise HTTPException(status_code=403, detail='Admin access required')
     return current_user
 
+# Alias for backward compatibility
+get_current_admin = get_admin_user
+

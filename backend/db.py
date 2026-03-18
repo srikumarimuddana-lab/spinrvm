@@ -1,6 +1,16 @@
 import os
 from typing import Any, Dict, Optional, List, Union
-from . import db_supabase
+try:
+    from . import db_supabase
+except ImportError:
+    import db_supabase
+
+# Provide a db variable for backward compatibility
+# This now points to the Supabase client
+try:
+    from supabase_client import supabase as db
+except ImportError:
+    from .supabase_client import supabase as db
 class MockCursor:
     def __init__(self, collection_name: str, _filter: Optional[Dict], _sort: Optional[Dict] = None):
         self.collection_name = collection_name

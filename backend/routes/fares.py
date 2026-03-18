@@ -1,10 +1,10 @@
 from fastapi import APIRouter, Query
 try:
     from ..db import db
-    from ..utils import point_in_polygon, get_service_area_polygon
+    from ..geo_utils import point_in_polygon, get_service_area_polygon
 except ImportError:
     from db import db
-    from utils import point_in_polygon, get_service_area_polygon
+    from geo_utils import point_in_polygon, get_service_area_polygon
 
 api_router = APIRouter(tags=["Fares"])
 

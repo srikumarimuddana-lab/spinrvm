@@ -3,6 +3,7 @@ __pycache__/
 .DS_Store
 .env
 venv/
+backend/.venv/
 node_modules/
 backend/repro_issue.py
 

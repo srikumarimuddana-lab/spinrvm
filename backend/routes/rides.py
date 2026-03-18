@@ -10,7 +10,7 @@ except ImportError:
     from dependencies import get_current_user, generate_otp
     from schemas import CreateRideRequest, Ride, UserProfile, RideRatingRequest
     from db import db
-    from utils import calculate_distance
+    from geo_utils import calculate_distance
     from socket_manager import manager
     from settings_loader import get_app_settings
 from .fares import get_fares_for_location

@@ -1,0 +1,3 @@
+ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS stripe_account_id TEXT;
+ALTER TABLE drivers ADD COLUMN IF NOT EXISTS stripe_account_onboarded BOOLEAN DEFAULT FALSE;

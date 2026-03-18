@@ -15,11 +15,11 @@ from pydantic import BaseModel, Field
 try:
     from .dependencies import get_current_user
     from .db import db
-    from .utils import get_service_area_polygon
+    from .geo_utils import get_service_area_polygon
 except ImportError:
     from dependencies import get_current_user
     from db import db
-    from utils import get_service_area_polygon
+    from geo_utils import get_service_area_polygon
 
 from loguru import logger
 

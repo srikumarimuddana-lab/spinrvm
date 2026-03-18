@@ -6,11 +6,8 @@ except ImportError:
     import db_supabase
 
 # Provide a db variable for backward compatibility
-# This now points to the Supabase client
-try:
-    from supabase_client import supabase as db
-except ImportError:
-    from .supabase_client import supabase as db
+# This will be set to DB instance after the class is defined
+db = None
 class MockCursor:
     def __init__(self, collection_name: str, _filter: Optional[Dict], _sort: Optional[Dict] = None):
         self.collection_name = collection_name
@@ -386,5 +383,11 @@ class DisputeCollection(BaseCollection):
 
 class NotificationCollection(BaseCollection):
     pass
+
+class NotificationPreferenceCollection(BaseCollection):
+    pass
+
+# Initialize db instance after all classes are defined
+db = DB()
 
 

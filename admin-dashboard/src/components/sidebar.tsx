@@ -33,6 +33,9 @@ const NAV = [
     { href: "/dashboard/corporate-accounts", label: "Corporate Accounts", icon: Building2 },
     { href: "/dashboard/rides", label: "Rides", icon: Car },
     { href: "/dashboard/earnings", label: "Earnings", icon: DollarSign },
+    { href: "/dashboard/promotions", label: "Promotions", icon: Ticket },
+    { href: "/dashboard/disputes", label: "Disputes", icon: HelpCircle },
+    { href: "/dashboard/users", label: "Users", icon: Users },
     { href: "/dashboard/surge", label: "Surge Pricing", icon: TrendingUp },
     { href: "/dashboard/heatmap", label: "Heat Map", icon: Flame },
     { href: "/dashboard/pricing", label: "Pricing", icon: Banknote },
@@ -40,6 +43,7 @@ const NAV = [
     { href: "/dashboard/vehicle-types", label: "Vehicle Types", icon: Car },
     { href: "/dashboard/support", label: "Support", icon: LifeBuoy },
     { href: "/dashboard/documents", label: "Documents", icon: FileText },
+    { href: "/dashboard/notifications", label: "Notifications", icon: Bell },
     { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
 

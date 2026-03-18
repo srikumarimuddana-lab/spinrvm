@@ -1,182 +1,336 @@
-name: CI
+name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, vscode_20260211 ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main ]
+    branches: [main, develop]
 
-permissions:
-  contents: read
-  checks: write
-  pull-requests: write
+env:
+  PYTHON_VERSION: '3.11'
+  NODE_VERSION: '20'
 
 jobs:
-  # ──────────────────────────────────────────────
-  # 1. Backend — Python tests
-  # ──────────────────────────────────────────────
-  test-backend:
+  # Backend Tests
+  backend-test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: [3.12]
-    env:
-      FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
-      ANNOTATE_TESTS_PATTERN: ''
-      FAIL_THRESHOLD: '-1'
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: spinr_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Cache pip
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Cache pip packages
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/backend/requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('spinr/backend/requirements.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
-
-      - name: Install backend dependencies
+      
+      - name: Install dependencies
+        working-directory: spinr/backend
         run: |
           python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt
-
-      - name: Install test tools
-        run: pip install pytest pytest-asyncio
-
-      - name: Run backend tests (full)
+          pip install -r requirements.txt
+          pip install pytest-cov pytest-asyncio pytest-mock
+      
+      - name: Run backend tests
+        working-directory: spinr/backend
         env:
-          PYTHONPATH: ${{ github.workspace }}
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/spinr_test
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SECRET_KEY: test-secret-key-for-ci
+          ENV: test
         run: |
-          pytest -q --junitxml=junit.xml
-
-      - name: Run filtered tests for annotation (optional)
-        if: ${{ env.ANNOTATE_TESTS_PATTERN != '' }}
-        env:
-          PYTHONPATH: ${{ github.workspace }}
-        run: |
-          echo "Running tests matching pattern: $ANNOTATE_TESTS_PATTERN"
-          pytest -q -k "$ANNOTATE_TESTS_PATTERN" --junitxml=annotate_junit.xml || true
-
-      - name: Enforce test failure threshold
-        env:
-          FAIL_THRESHOLD: ${{ env.FAIL_THRESHOLD }}
-        run: |
-          python - <<'PY'
-          import os, sys
-          from xml.etree import ElementTree as ET
-          p = 'junit.xml'
-          if not os.path.exists(p):
-              print('No junit.xml produced')
-              sys.exit(0)
-          try:
-              tree = ET.parse(p)
-              root = tree.getroot()
-              failures = 0
-              for ts in root.findall('.//testsuite'):
-                  failures += int(ts.attrib.get('failures', '0')) + int(ts.attrib.get('errors', '0'))
-              if failures == 0:
-                  failures = len(root.findall('.//failure')) + len(root.findall('.//error'))
-              threshold = int(os.environ.get('FAIL_THRESHOLD', '-1'))
-              print(f"Detected failures+errors: {failures}; threshold={threshold}")
-              if threshold >= 0 and failures > threshold:
-                  print(f"Failing job because failures ({failures}) > threshold ({threshold})")
-                  sys.exit(2)
-              sys.exit(0)
-          except Exception as e:
-              print('Error while parsing junit.xml:', e)
-              sys.exit(0)
-          PY
-
-      - name: Upload test results (if any)
-        if: always()
-        uses: actions/upload-artifact@v4
+          pytest --cov=backend --cov-report=xml --cov-report=term-missing
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
         with:
-          name: pytest-report
+          file: ./spinr/backend/coverage.xml
+          flags: backend
+          name: backend-coverage
+
+  # Frontend Tests
+  frontend-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Cache node modules
+        uses: actions/cache@v4
+        with:
           path: |
-            tests
-            junit.xml
-
-      - name: Annotate pull request with filtered test results
-        if: ${{ always() && github.event_name == 'pull_request' && env.ANNOTATE_TESTS_PATTERN != '' }}
-        uses: dorny/test-reporter@v1
-        with:
-          name: pytest-filtered
-          path: annotate_junit.xml
-          reporter: java-junit
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Annotate pull request with all test results
-        if: ${{ always() && github.event_name == 'pull_request' && env.ANNOTATE_TESTS_PATTERN == '' }}
-        uses: dorny/test-reporter@v1
-        with:
-          name: pytest
-          path: junit.xml
-          reporter: java-junit
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  # ──────────────────────────────────────────────
-  # 2. Admin Dashboard — Next.js build & lint
-  # ──────────────────────────────────────────────
-  build-admin:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: admin-dashboard
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: admin-dashboard/package-lock.json
-
+            spinr/frontend/node_modules
+            spinr/rider-app/node_modules
+            spinr/driver-app/node_modules
+            spinr/admin-dashboard/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+      
       - name: Install dependencies
-        run: npm ci || npm install
-
-      - name: Lint
-        run: npm run lint -- --max-warnings 0
-        continue-on-error: true
-
-      - name: Build
+        run: |
+          cd spinr/frontend && npm ci
+          cd ../rider-app && npm ci
+          cd ../driver-app && npm ci
+          cd ../admin-dashboard && npm ci
+      
+      - name: Run TypeScript type check
+        working-directory: spinr/frontend
+        run: npm run type-check
+      
+      - name: Run ESLint
+        working-directory: spinr/frontend
+        run: npm run lint
+      
+      - name: Run frontend tests
+        working-directory: spinr/frontend
+        run: npm test -- --coverage
+      
+      - name: Build frontend
+        working-directory: spinr/frontend
         run: npm run build
-        env:
-          NEXT_PUBLIC_API_URL: https://spinr-backend.onrender.com
 
-  # ──────────────────────────────────────────────
-  # 3. Frontend (Expo) — TypeScript type-check
-  # ──────────────────────────────────────────────
-  typecheck-frontend:
+  # Admin Dashboard Tests
+  admin-test:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
+      
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Cache node modules
+        uses: actions/cache@v4
+        with:
+          path: spinr/admin-dashboard/node_modules
+          key: ${{ runner.os }}-admin-node-${{ hashFiles('spinr/admin-dashboard/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-admin-node-
+      
       - name: Install dependencies
-        run: npm ci --legacy-peer-deps || npm install --legacy-peer-deps
+        working-directory: spinr/admin-dashboard
+        run: npm ci
+      
+      - name: Run TypeScript type check
+        working-directory: spinr/admin-dashboard
+        run: npm run type-check
+      
+      - name: Run ESLint
+        working-directory: spinr/admin-dashboard
+        run: npm run lint
+      
+      - name: Build admin dashboard
+        working-directory: spinr/admin-dashboard
+        run: npm run build
 
-      - name: TypeScript type-check
-        run: npx tsc --noEmit
-        continue-on-error: true
+  # E2E Tests (run on main branch only)
+  e2e-test:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: [backend-test, frontend-test]
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Install dependencies
+        working-directory: spinr/frontend
+        run: npm ci
+      
+      - name: Install Detox
+        working-directory: spinr/frontend
+        run: npm install -g detox-cli
+      
+      - name: Build app
+        working-directory: spinr/frontend
+        run: npm run build
+      
+      # Note: Full E2E tests require emulator/simulator setup
+      # This is a placeholder for the E2E test step
+      - name: Run E2E tests (placeholder)
+        working-directory: spinr/frontend
+        run: echo "E2E tests would run here with detox build-and-test"
 
-      - name: Lint
-        run: npx expo lint
-        continue-on-error: true
+  # Deploy Backend
+  deploy-backend:
+    runs-on: ubuntu-latest
+    needs: [backend-test]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Deploy to Render
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_BACKEND_SERVICE_ID }}
+        run: |
+          curl -X POST \
+            "https://api.render.com/v1/services/${{ secrets.RENDER_BACKEND_SERVICE_ID }}/deploys" \
+            -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}"
+      
+      - name: Deploy to Fly.io (alternative)
+        if: failure()
+        uses: superfly/flyctl-actions@1.3
+        with:
+          args: "deploy --remote-only"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  # Deploy Frontend
+  deploy-frontend:
+    runs-on: ubuntu-latest
+    needs: [frontend-test]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Install dependencies
+        working-directory: spinr/frontend
+        run: npm ci
+      
+      - name: Build for production
+        working-directory: spinr/frontend
+        env:
+          EXPO_PUBLIC_API_URL: ${{ secrets.EXPO_PUBLIC_API_URL }}
+        run: npm run build
+      
+      - name: Deploy to Vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_FRONTEND_PROJECT_ID }}
+          working-directory: spinr/frontend
+
+  # Deploy Admin Dashboard
+  deploy-admin:
+    runs-on: ubuntu-latest
+    needs: [admin-test]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      
+      - name: Install dependencies
+        working-directory: spinr/admin-dashboard
+        run: npm ci
+      
+      - name: Build for production
+        working-directory: spinr/admin-dashboard
+        run: npm run build
+      
+      - name: Deploy to Vercel
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_ADMIN_PROJECT_ID }}
+          working-directory: spinr/admin-dashboard
+
+  # Mobile Build (EAS)
+  mobile-build:
+    runs-on: ubuntu-latest
+    needs: [frontend-test]
+    if: github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[build]')
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      
+      - name: Install dependencies
+        working-directory: spinr/rider-app
+        run: npm ci
+      
+      - name: Build iOS
+        working-directory: spinr/rider-app
+        run: eas build --platform ios --non-interactive
+      
+      - name: Build Android
+        working-directory: spinr/rider-app
+        run: eas build --platform android --non-interactive
+
+  # Security Scan
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+      
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # Notify on failure
+  notify-failure:
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-test, deploy-backend, deploy-frontend]
+    if: failure()
+    
+    steps:
+      - name: Send Slack notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          text: 'CI/CD Pipeline Failed'

@@ -13,3 +13,11 @@ backend/repro_issue.py
 *.aab
 dist/
 build/
+
+# Metro cache
+rider-app/.metro-cache/
+
+# Logs
+*.log
+status_full.txt
+code_diff.txt

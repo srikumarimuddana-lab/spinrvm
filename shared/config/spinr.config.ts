@@ -14,13 +14,20 @@ const getBackendUrl = () => {
 
   // 3. Expo Go / Dev Client (Physical Device or Emulator)
   // This automatically grabs the IP of the machine running `npx expo start`
+  let host = 'localhost';
   if (Constants.expoConfig?.hostUri) {
-    const host = Constants.expoConfig.hostUri.split(':')[0];
-    return `http://${host}:8000`;
+    host = Constants.expoConfig.hostUri.split(':')[0];
+    if (Platform.OS === 'android' && (host === '127.0.0.1' || host === 'localhost')) {
+      host = '10.0.2.2';
+    }
+  } else if (Platform.OS === 'android') {
+    // 10.0.2.2 is the special alias for the host loopback interface on Android Emulator
+    host = '10.0.2.2';
   }
 
-  console.warn("No EXPO_PUBLIC_BACKEND_URL or EXPO_PUBLIC_API_URL provided!");
-  return '';
+  const generatedUrl = `http://${host}:8000`;
+  console.log("Using generated backend URL:", generatedUrl);
+  return generatedUrl;
 };
 
 export const SpinrConfig = {

@@ -6,7 +6,6 @@ Includes: Support Tickets, FAQs, Surge Pricing, Scheduled Rides,
 import uuid
 import secrets
 import asyncio
-import logging
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 
@@ -16,11 +15,13 @@ from pydantic import BaseModel, Field
 try:
     from .dependencies import get_current_user
     from .db import db
+    from .utils import get_service_area_polygon
 except ImportError:
     from dependencies import get_current_user
     from db import db
+    from utils import get_service_area_polygon
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 # ============ Routers ============
 support_router = APIRouter(tags=["Support"])
@@ -62,7 +63,7 @@ async def calculate_airport_fee(pickup_lat: float, pickup_lng: float,
     result = {'airport_fee': 0.0, 'airport_zone_name': None, 'is_pickup': False, 'is_dropoff': False}
 
     for area in areas:
-        polygon = area.get('polygon', [])
+        polygon = get_service_area_polygon(area)
         fee = float(area.get('airport_fee', 0))
         if fee <= 0 or len(polygon) < 3:
             continue
@@ -514,7 +515,7 @@ async def calculate_all_fees(
     all_areas = await db.service_areas.find({'is_active': True}).to_list(100)
     matched_area = None
     for area in all_areas:
-        polygon = area.get('polygon', [])
+        polygon = get_service_area_polygon(area)
         if len(polygon) >= 3 and point_in_polygon(pickup_lat, pickup_lng, polygon):
             matched_area = area
             break
@@ -562,7 +563,7 @@ async def calculate_all_fees(
             airport_areas = await db.service_areas.find({'is_airport': True}).to_list(20)
             in_airport = False
             for ap in airport_areas:
-                ap_poly = ap.get('polygon', [])
+                ap_poly = get_service_area_polygon(ap)
                 if len(ap_poly) >= 3:
                     if point_in_polygon(pickup_lat, pickup_lng, ap_poly) or \
                        point_in_polygon(dropoff_lat, dropoff_lng, ap_poly):

@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     # CORS settings
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001"
     
+    # Admin credentials
+    ADMIN_EMAIL: str = "admin@spinr.com"
+    ADMIN_PASSWORD: str = "admin123"
+    
     # Rate limiting
     RATE_LIMIT: str = "10/minute"
     

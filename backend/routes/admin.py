@@ -1,18 +1,66 @@
-from fastapi import APIRouter, Depends, Query  # type: ignore
+from fastapi import APIRouter, Depends, Query, HTTPException  # type: ignore
 from typing import Dict, Any, Optional
 from pydantic import BaseModel  # type: ignore
 from datetime import datetime, timedelta
+import jwt
 
 try:
     from ..dependencies import get_current_user, get_admin_user  # type: ignore
     from ..db import db  # type: ignore
     from ..settings_loader import get_app_settings  # type: ignore
+    from ..core.config import settings
 except ImportError:
     from dependencies import get_current_user, get_admin_user  # type: ignore
     from db import db  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
+    from core.config import settings
 
 admin_router = APIRouter(prefix="/admin", tags=["Admin"])
+
+# Admin authentication sub-router
+admin_auth_router = APIRouter(prefix="/admin/auth", tags=["Admin Auth"])
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class SessionResponse(BaseModel):
+    user: Optional[Dict[str, Any]] = None
+    authenticated: bool = False
+
+
+@admin_auth_router.get("/session", response_model=SessionResponse)
+async def get_session():
+    """Get current admin session - returns user if authenticated"""
+    # This endpoint is called to check if user is logged in
+    # For now, return unauthenticated - frontend should handle login
+    return SessionResponse(user=None, authenticated=False)
+
+
+@admin_auth_router.post("/login")
+async def admin_login(request: LoginRequest):
+    """Admin login endpoint"""
+    # Validate credentials from settings
+    if request.email == settings.ADMIN_EMAIL and request.password == settings.ADMIN_PASSWORD:
+        token = jwt.encode({"sub": request.email, "role": "admin"}, settings.JWT_SECRET, algorithm=settings.ALGORITHM)
+        return {
+            "user": {
+                "id": "admin-001",
+                "email": request.email,
+                "role": "admin"
+            },
+            "token": token
+        }
+    else:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+
+@admin_auth_router.post("/logout")
+async def admin_logout():
+    """Admin logout endpoint"""
+    return {"message": "Logged out successfully"}
 
 
 class DriverVerifyRequest(BaseModel):

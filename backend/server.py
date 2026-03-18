@@ -10,7 +10,7 @@ from core.lifespan import lifespan
 from core.security import init_firebase
 from routes.rides import api_router as rides_router
 from routes.drivers import api_router as drivers_router
-from routes.admin import admin_router as admin_router
+from routes.admin import admin_router as admin_router, admin_auth_router
 from routes.corporate_accounts import router as corporate_accounts_router
 from routes.auth import api_router as auth_router
 
@@ -27,6 +27,7 @@ v1_api_router = APIRouter()
 v1_api_router.include_router(rides_router)
 v1_api_router.include_router(drivers_router)
 v1_api_router.include_router(admin_router)
+v1_api_router.include_router(admin_auth_router)
 v1_api_router.include_router(corporate_accounts_router)
 
 # Include API routers

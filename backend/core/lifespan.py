@@ -55,8 +55,7 @@ async def lifespan(app: FastAPI):
     
     # Start background tasks
     logger.info("Starting scheduled rides checker...")
-    # Commented out until migration to Supabase is complete
-    # scheduler_task = asyncio.create_task(check_scheduled_rides())
+    # Note: scheduler_task is disabled - scheduled rides feature needs Supabase migration
     
     # Perform startup checks
     logger.info("Spinr API startup complete")
@@ -65,11 +64,7 @@ async def lifespan(app: FastAPI):
     
     # Cleanup on shutdown
     logger.info("Shutting down Spinr API...")
-    scheduler_task.cancel()
-    try:
-        await scheduler_task
-    except asyncio.CancelledError:
-        pass
+    # Note: scheduler_task is disabled - no background tasks to cancel
     
     # Cleanup database
     if hasattr(app.state, 'db') and app.state.db:

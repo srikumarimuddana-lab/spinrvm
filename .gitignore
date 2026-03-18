@@ -21,3 +21,9 @@ rider-app/.metro-cache/
 *.log
 status_full.txt
 code_diff.txt
+
+# Temporary check files
+git_status.txt
+status.txt
+status_check.txt
+status_full.txt

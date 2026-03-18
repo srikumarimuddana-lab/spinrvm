@@ -1,11 +1,15 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useAuthStore } from '@shared/store/authStore';
+import { useLocationStore } from '@shared/store/locationStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
+import { OfflineBanner } from '@shared/components/OfflineBanner';
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
@@ -15,14 +19,16 @@ export default function RootLayout() {
     PlusJakartaSans_700Bold,
   });
 
-  const { initialize, isInitialized } = useAuthStore();
+  const { initialize: initializeAuth, isInitialized: isAuthInitialized } = useAuthStore();
+  const { initialize: initializeLocation, isInitialized: isLocationInitialized } = useLocationStore();
+  const [isOffline, setIsOffline] = useState(false);
 
   useEffect(() => {
     const init = async () => {
       try {
-        await initialize();
+        await Promise.all([initializeAuth(), initializeLocation()]);
       } catch (err: any) {
-        console.log('Init error:', err);
+        console.error('Initialization error:', err);
       }
     };
     init();
@@ -36,34 +42,47 @@ export default function RootLayout() {
     }
   }, []);
 
-  if (!fontsLoaded || !isInitialized) {
+  if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized) {
     return (
-      <View style={styles.loadingContainer}>
-        <Text style={styles.logoText}>Spinr</Text>
-        <ActivityIndicator size="large" color="#FFFFFF" style={{ marginTop: 20 }} />
-      </View>
+      <ErrorBoundary>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.logoText}>Spinr</Text>
+          <ActivityIndicator size="large" color="#FFFFFF" style={{ marginTop: 20 }} />
+        </View>
+      </ErrorBoundary>
     );
   }
 
   return (
-    <SafeAreaProvider>
-      <StatusBar style="dark" />
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          animation: 'slide_from_right',
-        }}
-      >
-        <Stack.Screen name="index" />
-        <Stack.Screen name="login" />
-        <Stack.Screen name="otp" />
-        <Stack.Screen name="profile-setup" options={{ gestureEnabled: false }} />
-        <Stack.Screen name="become-driver" options={{ gestureEnabled: false }} />
-        <Stack.Screen name="driver" options={{ animation: "fade", gestureEnabled: false }} />
-        <Stack.Screen name="vehicle-info" />
-        <Stack.Screen name="documents" />
-      </Stack>
-    </SafeAreaProvider>
+    <ErrorBoundary>
+      <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <SafeAreaProvider>
+          <StatusBar style={isOffline ? "light" : "dark"} />
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              animation: 'slide_from_right',
+            }}
+          >
+            <Stack.Screen name="index" />
+            <Stack.Screen name="login" />
+            <Stack.Screen name="otp" />
+            <Stack.Screen name="forgot-password" />
+            <Stack.Screen name="reset-password" />
+            <Stack.Screen name="profile-setup" options={{ gestureEnabled: false }} />
+            <Stack.Screen name="become-driver" options={{ gestureEnabled: false }} />
+            <Stack.Screen name="driver" options={{ animation: "fade", gestureEnabled: false }} />
+            <Stack.Screen name="vehicle-info" />
+            <Stack.Screen name="documents" />
+            <Stack.Screen name="support-chat" />
+            <Stack.Screen name="settings" />
+            <Stack.Screen name="payout-methods" />
+            <Stack.Screen name="ride-history" />
+          </Stack>
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
+    </ErrorBoundary>
   );
 }
 

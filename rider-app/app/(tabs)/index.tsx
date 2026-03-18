@@ -34,7 +34,7 @@ const getBackendUrl = () => {
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const { savedAddresses, fetchSavedAddresses } = useRideStore();
+  const { savedAddresses, fetchSavedAddresses, setUserLocation } = useRideStore();
   const [showPromo, setShowPromo] = useState(true);
   const [location, setLocation] = useState<any>(null);
   const [region, setRegion] = useState<any>(null);
@@ -49,8 +49,19 @@ export default function HomeScreen() {
         return;
       }
 
-      let loc = await Location.getCurrentPositionAsync({});
+      let loc;
+      try {
+        loc = await Location.getCurrentPositionAsync({});
+      } catch (error) {
+        console.warn('Could not get current location, using fallback:', error);
+        loc = { coords: { latitude: 43.6532, longitude: -79.3832 } };
+      }
       setLocation(loc);
+      // Save to shared store so search-destination has it instantly
+      setUserLocation({
+        latitude: loc.coords.latitude,
+        longitude: loc.coords.longitude,
+      });
 
       // Fetch temperature from Open-Meteo (free, no API key needed)
       try {
@@ -198,7 +209,12 @@ export default function HomeScreen() {
             if (!loc) {
               const { status } = await Location.requestForegroundPermissionsAsync();
               if (status === 'granted') {
-                loc = await Location.getCurrentPositionAsync({});
+                try {
+                  loc = await Location.getCurrentPositionAsync({});
+                } catch (e) {
+                  console.warn('Could not get current location, using fallback:', e);
+                  loc = { coords: { latitude: 43.6532, longitude: -79.3832 } };
+                }
                 setLocation(loc);
               }
             }

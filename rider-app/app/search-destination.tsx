@@ -36,6 +36,7 @@ export default function SearchDestinationScreen() {
     setPickup, setDropoff, addStop, removeStop, updateStop,
     savedAddresses, fetchSavedAddresses,
     recentSearches, addRecentSearch, loadRecentSearches,
+    userLocation, setUserLocation,
   } = useRideStore();
 
   const [activeField, setActiveField] = useState<'pickup' | 'dropoff' | number>('dropoff');
@@ -44,7 +45,6 @@ export default function SearchDestinationScreen() {
   const [stopTexts, setStopTexts] = useState<string[]>(stops.map(s => s.address || ''));
   const [predictions, setPredictions] = useState<PlacePrediction[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [userLocation, setUserLocation] = useState<any>(null);
 
   const pickupRef = useRef<TextInput>(null);
   const dropoffRef = useRef<TextInput>(null);
@@ -54,28 +54,38 @@ export default function SearchDestinationScreen() {
   useEffect(() => {
     fetchSavedAddresses();
     loadRecentSearches();
-    (async () => {
-      const { status } = await Location.getForegroundPermissionsAsync();
-      if (status === 'granted') {
-        const loc = await Location.getCurrentPositionAsync({});
-        setUserLocation({
-          latitude: loc.coords.latitude,
-          longitude: loc.coords.longitude,
-        });
-      }
-    })();
+    // If home screen didn't get GPS yet, fetch it now
+    if (!userLocation) {
+      (async () => {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          try {
+            let loc;
+            try {
+              loc = await Location.getCurrentPositionAsync({
+                accuracy: Location.Accuracy.Balanced,
+              });
+            } catch (e) {
+              console.warn('Could not get current location, using fallback:', e);
+              loc = { coords: { latitude: 43.6532, longitude: -79.3832 } };
+            }
+            setUserLocation({
+              latitude: loc.coords.latitude,
+              longitude: loc.coords.longitude,
+            });
+          } catch (e) {
+            console.log('GPS error:', e);
+          }
+        }
+      })();
+    }
   }, []);
 
+  // When GPS location is available (from store), set pickup immediately
   useEffect(() => {
-    if (!pickup) {
-      if (userLocation) {
+    if (userLocation) {
+      if (!pickup || pickup.address === 'Current Location') {
         setPickup({ address: 'Current Location', lat: userLocation.latitude, lng: userLocation.longitude });
-        setPickupText('Current Location');
-      } else {
-        const defaultPickup = user?.city === 'Regina'
-          ? { address: 'Current Location', lat: 50.4452, lng: -104.6189 }
-          : { address: 'Current Location', lat: 52.1332, lng: -106.6700 };
-        setPickup(defaultPickup);
         setPickupText('Current Location');
       }
     }

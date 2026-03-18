@@ -7,11 +7,16 @@ import {
   Dimensions,
   Share,
   Alert,
+  Linking,
+  Platform,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapViewDirections from 'react-native-maps-directions';
+import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useRideStore } from '../store/rideStore';
 import SpinrConfig from '@shared/config/spinr.config';
 
@@ -20,11 +25,39 @@ const { width } = Dimensions.get('window');
 export default function RideInProgressScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
-  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide } = useRideStore();
+  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency } = useRideStore();
   const [eta, setEta] = useState(15);
   const [estimatedTime, setEstimatedTime] = useState('12:45 PM');
   const [currentLocation, setCurrentLocation] = useState('4th Avenue North');
   const [isSharingLocation, setIsSharingLocation] = useState(false);
+  const mapRef = React.useRef<MapView>(null);
+  const bottomSheetRef = React.useRef<BottomSheet>(null);
+
+  const snapPoints = React.useMemo(() => ['30%', '50%', '85%'], []);
+
+  useEffect(() => {
+    if (currentRide && mapRef.current) {
+        if (currentDriver?.lat && currentDriver?.lng) {
+          mapRef.current.fitToCoordinates(
+            [
+              { latitude: currentDriver.lat, longitude: currentDriver.lng },
+              { latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }
+            ],
+            {
+              edgePadding: { top: 50, right: 50, bottom: 250, left: 50 },
+              animated: true,
+            }
+          );
+        } else {
+             mapRef.current.animateToRegion({
+                latitude: currentRide.pickup_lat || currentRide.dropoff_lat,
+                longitude: currentRide.pickup_lng || currentRide.dropoff_lng,
+                latitudeDelta: 0.05,
+                longitudeDelta: 0.05,
+             });
+        }
+    }
+  }, [currentRide?.dropoff_lat, currentRide?.dropoff_lng, currentDriver?.lat, currentDriver?.lng]);
 
   useEffect(() => {
     if (rideId) {
@@ -44,11 +77,25 @@ export default function RideInProgressScreen() {
   }, [currentRide?.status]);
 
   const handleSafety = () => {
-    Alert.alert('Safety', 'Emergency services will be contacted.');
+    Alert.alert(
+      'Emergency',
+      'Are you sure you want to contact emergency services?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Call 911', 
+          style: 'destructive',
+          onPress: () => {
+            if (rideId) triggerEmergency(rideId as string);
+            Linking.openURL('tel:911');
+          }
+        }
+      ]
+    );
   };
 
   const handleShareTrip = async () => {
-    const liveTrackingUrl = `spinr://track/${rideId || 'demo'}`;
+    const liveTrackingUrl = `https://spinr-track.app/${rideId || 'demo'}`;
     const tripDetails = `
 🚗 TRACK MY SPINR RIDE - LIVE LOCATION
 
@@ -85,7 +132,7 @@ I've shared my live location with you for safety.
   };
 
   const handleCopyTrackingLink = async () => {
-    const trackingLink = `spinr://track/${rideId || 'demo'}`;
+    const trackingLink = `https://spinr-track.app/${rideId || 'demo'}`;
     await Clipboard.setStringAsync(trackingLink);
     Alert.alert('Copied!', 'Live tracking link copied to clipboard');
   };
@@ -127,30 +174,50 @@ I've shared my live location with you for safety.
 
       {/* Map Area */}
       <View style={styles.mapContainer}>
-        <View style={styles.mapPlaceholder}>
-          {/* Grid pattern */}
-          <View style={styles.gridPattern}>
-            {Array.from({ length: 10 }).map((_, i) => (
-              <View key={`h-${i}`} style={[styles.gridLine, styles.gridHorizontal, { top: `${i * 10}%` }]} />
-            ))}
-            {Array.from({ length: 10 }).map((_, i) => (
-              <View key={`v-${i}`} style={[styles.gridLine, styles.gridVertical, { left: `${i * 10}%` }]} />
-            ))}
-          </View>
+        {currentRide ? (
+          <MapView
+            {...({ ref: mapRef } as any)}
+            provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+            style={styles.map}
+            initialRegion={{
+              latitude: currentRide.pickup_lat || 52.1332,
+              longitude: currentRide.pickup_lng || -106.6700,
+              latitudeDelta: 0.05,
+              longitudeDelta: 0.05,
+            }}
+          >
+            {currentDriver?.lat && currentDriver?.lng && (
+              <MapViewDirections
+                origin={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}
+                destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
+                apikey={process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
+                strokeWidth={4}
+                strokeColor={SpinrConfig.theme.colors.primary}
+                onReady={(result: any) => setEta(Math.ceil(result.duration))}
+              />
+            )}
 
-          {/* Route line */}
-          <View style={styles.routeLine} />
+            {/* Destination Marker */}
+            <Marker coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}>
+              <View style={styles.destinationMarker}>
+                <View style={styles.destinationDot} />
+              </View>
+            </Marker>
 
-          {/* Current position marker */}
-          <View style={styles.carMarker}>
-            <Ionicons name="car" size={18} color="#FFF" />
+            {/* Current Car Marker */}
+            {currentDriver?.lat && currentDriver?.lng && (
+              <Marker coordinate={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}>
+                <View style={styles.carMarker}>
+                  <Ionicons name="car" size={18} color="#FFF" />
+                </View>
+              </Marker>
+            )}
+          </MapView>
+        ) : (
+          <View style={styles.mapPlaceholder}>
+             <Text>Loading Map...</Text>
           </View>
-
-          {/* Destination marker */}
-          <View style={styles.destinationMarker}>
-            <View style={styles.destinationDot} />
-          </View>
-        </View>
+        )}
 
         {/* Location button */}
         <TouchableOpacity style={styles.locationButton} onPress={handleLocation}>
@@ -159,10 +226,18 @@ I've shared my live location with you for safety.
       </View>
 
       {/* Bottom Sheet */}
-      <View style={styles.bottomSheet}>
-        <View style={styles.sheetHandle} />
-
-        {/* ETA Section */}
+      <BottomSheet
+        ref={bottomSheetRef}
+        index={1}
+        snapPoints={snapPoints}
+        enablePanDownToClose={false}
+        backgroundStyle={styles.bottomSheetBackground}
+        handleIndicatorStyle={styles.sheetHandleIndicator}
+      >
+        {/* @ts-ignore - gorhom/bottom-sheet v4 has a known children typing bug with React 18 */}
+        <BottomSheetScrollView contentContainerStyle={styles.bottomSheetContent}>
+          <View>
+            {/* ETA Section */}
         <View style={styles.etaSection}>
           <View style={styles.etaLeft}>
             <Text style={styles.etaLabel}>ESTIMATED ARRIVAL</Text>
@@ -241,8 +316,10 @@ I've shared my live location with you for safety.
             <Ionicons name="close" size={20} color="#1A1A1A" />
             <Text style={styles.cancelButtonText}>Cancel Ride</Text>
           </TouchableOpacity>
-        </View>
-      </View>
+            </View>
+          </View>
+        </BottomSheetScrollView>
+      </BottomSheet>
     </View>
   );
 }
@@ -290,46 +367,17 @@ const styles = StyleSheet.create({
     flex: 1,
     position: 'relative',
   },
+  map: {
+    ...StyleSheet.absoluteFillObject,
+  },
   mapPlaceholder: {
     flex: 1,
     backgroundColor: '#F0F0F0',
     position: 'relative',
-    overflow: 'hidden',
-  },
-  gridPattern: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-  },
-  gridLine: {
-    position: 'absolute',
-    backgroundColor: '#E0E0E0',
-  },
-  gridHorizontal: {
-    height: 1,
-    left: 0,
-    right: 0,
-  },
-  gridVertical: {
-    width: 1,
-    top: 0,
-    bottom: 0,
-  },
-  routeLine: {
-    position: 'absolute',
-    top: '20%',
-    left: '15%',
-    width: 250,
-    height: 3,
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    transform: [{ rotate: '45deg' }],
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   carMarker: {
-    position: 'absolute',
-    top: '40%',
-    left: '40%',
     width: 40,
     height: 40,
     borderRadius: 20,
@@ -344,9 +392,7 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
   },
   destinationMarker: {
-    position: 'absolute',
-    top: '25%',
-    right: '25%',
+     alignItems: 'center',
   },
   destinationDot: {
     width: 24,
@@ -372,21 +418,19 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 4,
   },
-  bottomSheet: {
+  bottomSheetBackground: {
     backgroundColor: '#FFF',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 30,
   },
-  sheetHandle: {
+  sheetHandleIndicator: {
     width: 40,
-    height: 4,
     backgroundColor: '#E0E0E0',
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginBottom: 20,
+  },
+  bottomSheetContent: {
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 40,
   },
   etaSection: {
     flexDirection: 'row',

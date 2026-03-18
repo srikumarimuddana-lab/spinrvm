@@ -1,9 +1,7 @@
 from typing import Dict, List
 from fastapi import WebSocket
 from datetime import datetime
-import logging
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 class ConnectionManager:
     def __init__(self):

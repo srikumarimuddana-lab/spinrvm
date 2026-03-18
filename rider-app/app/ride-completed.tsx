@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -6,12 +6,15 @@ import {
   TouchableOpacity,
   ScrollView,
   Dimensions,
+  Alert,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import api from '@shared/api/client';
 
 const { width } = Dimensions.get('window');
 
@@ -19,13 +22,41 @@ export default function RideCompletedScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const { currentRide, clearRide } = useRideStore();
+  const [selectedTip, setSelectedTip] = useState<number | null>(null);
+  const [customTip, setCustomTip] = useState('');
+  const [tipSent, setTipSent] = useState(false);
+  const [sendingTip, setSendingTip] = useState(false);
+
+  const tipOptions = [2, 5, 10];
+
+  const handleSendTip = async (amount: number) => {
+    if (amount <= 0 || sendingTip) return;
+    setSendingTip(true);
+    try {
+      await api.post(`/rides/${rideId}/tip`, { amount });
+      setTipSent(true);
+      setSelectedTip(amount);
+    } catch (error) {
+      Alert.alert('Error', 'Could not send tip. Please try again.');
+    } finally {
+      setSendingTip(false);
+    }
+  };
+
+  const handleCustomTip = () => {
+    const amount = parseFloat(customTip);
+    if (isNaN(amount) || amount <= 0) {
+      Alert.alert('Invalid Amount', 'Please enter a valid tip amount.');
+      return;
+    }
+    handleSendTip(amount);
+  };
 
   const handleHelp = () => {
     // Open help
   };
 
   const handleProceedToRating = () => {
-    // Navigate to rating screen
     router.replace({ pathname: '/rate-ride', params: { rideId } });
   };
 
@@ -96,6 +127,57 @@ export default function RideCompletedScreen() {
             {/* End marker */}
             <View style={[styles.routeMarker, styles.endMarker]} />
           </View>
+        </View>
+
+        {/* Tip Your Driver */}
+        <View style={styles.tipSection}>
+          <Text style={styles.tipTitle}>Tip your driver</Text>
+          {tipSent ? (
+            <View style={styles.tipConfirmation}>
+              <Ionicons name="checkmark-circle" size={24} color="#10B981" />
+              <Text style={styles.tipConfirmText}>
+                ${selectedTip?.toFixed(2)} tip added! 🎉
+              </Text>
+            </View>
+          ) : (
+            <>
+              <View style={styles.tipButtons}>
+                {tipOptions.map((amount) => (
+                  <TouchableOpacity
+                    key={amount}
+                    style={[
+                      styles.tipButton,
+                      selectedTip === amount && styles.tipButtonSelected,
+                    ]}
+                    onPress={() => handleSendTip(amount)}
+                    disabled={sendingTip}
+                  >
+                    <Text
+                      style={[
+                        styles.tipButtonText,
+                        selectedTip === amount && styles.tipButtonTextSelected,
+                      ]}
+                    >
+                      ${amount}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+                <View style={styles.customTipContainer}>
+                  <Text style={styles.dollarSign}>$</Text>
+                  <TextInput
+                    style={styles.customTipInput}
+                    placeholder="Other"
+                    placeholderTextColor="#999"
+                    keyboardType="decimal-pad"
+                    value={customTip}
+                    onChangeText={setCustomTip}
+                    onSubmitEditing={handleCustomTip}
+                    returnKeyType="send"
+                  />
+                </View>
+              </View>
+            </>
+          )}
         </View>
       </ScrollView>
 
@@ -279,5 +361,81 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: '#FFF',
+  },
+  tipSection: {
+    width: '100%',
+    marginBottom: 20,
+    paddingHorizontal: 4,
+  },
+  tipTitle: {
+    fontSize: 16,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#1A1A1A',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  tipButtons: {
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'center',
+  },
+  tipButton: {
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderRadius: 16,
+    backgroundColor: '#F5F5F5',
+    borderWidth: 1.5,
+    borderColor: '#E5E5E5',
+    minWidth: 64,
+    alignItems: 'center',
+  },
+  tipButtonSelected: {
+    backgroundColor: SpinrConfig.theme.colors.primary + '15',
+    borderColor: SpinrConfig.theme.colors.primary,
+  },
+  tipButtonText: {
+    fontSize: 16,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#1A1A1A',
+  },
+  tipButtonTextSelected: {
+    color: SpinrConfig.theme.colors.primary,
+  },
+  customTipContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#E5E5E5',
+    paddingHorizontal: 12,
+    minWidth: 80,
+  },
+  dollarSign: {
+    fontSize: 16,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#999',
+  },
+  customTipInput: {
+    fontSize: 16,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    color: '#1A1A1A',
+    paddingVertical: 14,
+    paddingHorizontal: 4,
+    minWidth: 50,
+  },
+  tipConfirmation: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    backgroundColor: '#F0FFF4',
+    borderRadius: 12,
+  },
+  tipConfirmText: {
+    fontSize: 15,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#059669',
   },
 });

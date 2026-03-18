@@ -11,6 +11,7 @@ from firebase_admin import auth as firebase_auth
 from datetime import datetime
 import uuid
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,27 @@ logger = logging.getLogger(__name__)
 # Let's use a router.
 
 router = APIRouter()
+
+# GAP FIX: Heartbeat constants (matching industry standard for rideshare apps)
+HEARTBEAT_INTERVAL = 30  # Send ping every 30 seconds
+HEARTBEAT_TIMEOUT = 10   # Expect pong within 10 seconds
+
+
+async def heartbeat_task(websocket: WebSocket, connection_key: str):
+    """Background task that sends periodic ping messages to keep the connection alive
+    and detect dead connections early. This is critical for rideshare apps where
+    a silently disconnected driver would miss ride offers."""
+    try:
+        while True:
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
+            try:
+                await websocket.send_json({'type': 'ping', 'timestamp': datetime.utcnow().isoformat()})
+            except Exception:
+                logger.info(f"Heartbeat failed for {connection_key} - connection likely dead")
+                break
+    except asyncio.CancelledError:
+        pass
+
 
 @router.websocket("/ws/{client_type}/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: str):
@@ -31,6 +53,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
     authenticated = False
     user = None
     connection_key = None
+    hb_task = None
 
     try:
         # Require the first message to be an auth message containing a token
@@ -86,9 +109,17 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
         await manager.connect(websocket, connection_key)
         authenticated = True
 
+        # GAP FIX: Start heartbeat background task
+        hb_task = asyncio.create_task(heartbeat_task(websocket, connection_key))
+
         # Main message loop
         while True:
             data = await websocket.receive_json()
+
+            # GAP FIX: Handle pong responses (client acknowledges our ping)
+            if data.get('type') == 'pong':
+                # Client is alive, nothing to do
+                continue
 
             if data.get('type') in ('driver_location', 'location_update'):
                 # Accept both message types for backwards compat
@@ -249,18 +280,24 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                             if driver and driver.get('user_id'):
                                 target = f"driver_{driver['user_id']}"
                         
+                        
+                        msg_data = {
+                            'id': str(uuid.uuid4()),
+                            'ride_id': ride_id,
+                            'text': message,
+                            'sender': sender,
+                            'timestamp': datetime.utcnow()
+                        }
+                        
+                        # Persist message to database
+                        await db.ride_messages.insert_one(msg_data)
+                        
+                        # Forward to connected target
                         if target:
-                            await manager.send_personal_message(
-                                {
-                                    'type': 'chat_message',
-                                    'id': str(uuid.uuid4()),
-                                    'ride_id': ride_id,
-                                    'text': message,
-                                    'sender': sender,
-                                    'timestamp': datetime.utcnow().isoformat()
-                                },
-                                target
-                            )
+                            # Format timestamp strings for JSON
+                            msg_data['timestamp'] = msg_data['timestamp'].isoformat()
+                            msg_data['type'] = 'chat_message'
+                            await manager.send_personal_message(msg_data, target)
 
     except WebSocketDisconnect:
         if connection_key:
@@ -273,3 +310,8 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             await websocket.close()
         except Exception:
             pass
+    finally:
+        # GAP FIX: Cancel heartbeat task on disconnect
+        if hb_task:
+            hb_task.cancel()
+

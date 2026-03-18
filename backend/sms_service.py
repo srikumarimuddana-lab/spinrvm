@@ -3,9 +3,7 @@ SMS Service for Spinr
 Supports Twilio for production SMS delivery with console fallback for development.
 Credentials are read from DB settings (passed in by caller), not env vars.
 """
-import logging
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 async def send_sms(to_phone: str, message: str, *,

@@ -30,7 +30,7 @@ export default function SupportScreen() {
         setSubmitting(true);
         // Submit to the support endpoint
         try {
-            await fetch(`${SpinrConfig.api.baseUrl}/support/tickets`, {
+            await fetch(`${SpinrConfig.backendUrl}/support/tickets`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ subject: 'App Support Request', message: issue, category: 'general' })

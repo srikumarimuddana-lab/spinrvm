@@ -155,7 +155,7 @@ export default function AccountScreen() {
       icon: 'shield-outline',
       title: 'Safety',
       subtitle: 'Trusted contacts, emergency assist',
-      action: () => router.push('/report-safety' as any)
+      action: () => router.push('/emergency-contacts' as any)
     },
     {
       icon: 'headset-outline',

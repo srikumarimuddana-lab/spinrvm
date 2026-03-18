@@ -21,7 +21,7 @@ import SpinrConfig from '@shared/config/spinr.config';
 
 export default function ProfileSetupScreen() {
   const router = useRouter();
-  const { user, createProfile, isLoading: authLoading, error: authError } = useAuthStore();
+  const { user, createProfile, logout, isLoading: authLoading, error: authError } = useAuthStore();
 
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -62,6 +62,11 @@ export default function ProfileSetupScreen() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleLogout = async () => {
+    await logout();
+    router.replace('/login');
   };
 
   const isFormValid = firstName.trim() && lastName.trim() && email.trim() && gender;
@@ -198,6 +203,15 @@ export default function ProfileSetupScreen() {
                 <Text style={styles.submitButtonText}>Get Started</Text>
               )}
             </TouchableOpacity>
+
+            {/* Logout / Change Number Button */}
+            <TouchableOpacity
+              style={styles.logoutButton}
+              onPress={handleLogout}
+              disabled={isSubmitting || authLoading}
+            >
+              <Text style={styles.logoutButtonText}>Not you? Change phone number</Text>
+            </TouchableOpacity>
           </ScrollView>
         </TouchableWithoutFeedback>
       </KeyboardAvoidingView>
@@ -320,5 +334,16 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: '#FFFFFF',
+  },
+  logoutButton: {
+    marginTop: 16,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoutButtonText: {
+    fontSize: 15,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#666666',
   },
 });

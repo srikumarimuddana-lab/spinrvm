@@ -178,7 +178,7 @@ export const useRideStore = create<RideState>((set, get) => ({
     const { pickup } = get();
     if (!pickup) return;
     try {
-      const response = await api.get(`/nearby-drivers?lat=${pickup.lat}&lng=${pickup.lng}`);
+      const response = await api.get(`/drivers/nearby?lat=${pickup.lat}&lng=${pickup.lng}`);
       set({ nearbyDrivers: response.data });
     } catch (error) {
       console.log('Error fetching nearby drivers', error);
@@ -327,6 +327,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   clearRide: () => set({
     pickup: null,
     dropoff: null,
+    stops: [],
     estimates: [],
     selectedVehicle: null,
     currentRide: null,

@@ -22,6 +22,7 @@ except ImportError:
     )
     from db import db
     from sms_service import send_otp_sms
+    from settings_loader import get_app_settings
 import logging
 from datetime import datetime, timedelta, timezone
 from slowapi import Limiter
@@ -42,7 +43,7 @@ async def send_otp(request: Request, body: SendOTPRequest):
     # Check if Twilio is configured via DB settings
     settings = None
     try:
-        settings = await db.settings.find_one({'id': 'app_settings'})
+        settings = await get_app_settings()
     except Exception as e:
         logger.warning(f'Could not read app_settings from DB: {e}')
     

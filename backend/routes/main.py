@@ -7,6 +7,7 @@ from .auth import router as auth_router
 from .rides import router as rides_router
 from .drivers import router as drivers_router
 from .admin import router as admin_router
+from .corporate_accounts import router as corporate_accounts_router
 
 # Create the main API router
 api_router = APIRouter()
@@ -16,6 +17,7 @@ api_router.include_router(auth_router)
 api_router.include_router(rides_router)
 api_router.include_router(drivers_router)
 api_router.include_router(admin_router)
+api_router.include_router(corporate_accounts_router)
 
 # Health check and root endpoints
 @api_router.get("/")

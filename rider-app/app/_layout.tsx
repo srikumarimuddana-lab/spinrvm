@@ -1,11 +1,16 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useAuthStore } from '@shared/store/authStore';
+import { useLocationStore } from '@shared/store/locationStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import Constants from 'expo-constants';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
+import { OfflineBanner } from '@shared/components/OfflineBanner';
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
@@ -15,14 +20,16 @@ export default function RootLayout() {
     PlusJakartaSans_700Bold,
   });
 
-  const { initialize, isInitialized } = useAuthStore();
+  const { initialize: initializeAuth, isInitialized: isAuthInitialized } = useAuthStore();
+  const { initialize: initializeLocation, isInitialized: isLocationInitialized } = useLocationStore();
+  const [isOffline, setIsOffline] = useState(false);
 
   useEffect(() => {
     const init = async () => {
       try {
-        await initialize();
+        await Promise.all([initializeAuth(), initializeLocation()]);
       } catch (err: any) {
-        console.log('Init error:', err);
+        console.error('Initialization error:', err);
       }
     };
     init();
@@ -30,48 +37,75 @@ export default function RootLayout() {
     // Load Google Maps script for Web
     if (Platform.OS === 'web') {
       const script = document.createElement('script');
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY}&libraries=places`;
-      script.async = true;
-      document.body.appendChild(script);
+      const apiKey = Constants.expoConfig?.extra?.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+      
+      if (!apiKey) {
+        console.error('Google Maps API key is missing. Please check your app.config.js');
+      } else {
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
+        script.async = true;
+        script.onerror = () => {
+          console.error('Failed to load Google Maps script');
+        };
+        document.body.appendChild(script);
+      }
     }
   }, []);
 
-  if (!fontsLoaded || !isInitialized) {
+  if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized) {
     return (
-      <View style={styles.loadingContainer}>
-        <Text style={styles.logoText}>Spinr</Text>
-        <ActivityIndicator size="large" color="#FFFFFF" style={{ marginTop: 20 }} />
-      </View>
+      <ErrorBoundary>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.logoText}>Spinr</Text>
+          <ActivityIndicator size="large" color="#FFFFFF" style={{ marginTop: 20 }} />
+        </View>
+      </ErrorBoundary>
     );
   }
 
   return (
-    <SafeAreaProvider>
-      <StatusBar style="dark" />
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          animation: 'slide_from_right',
-        }}
-      >
-        <Stack.Screen name="index" />
-        <Stack.Screen name="login" />
-        <Stack.Screen name="otp" />
-        <Stack.Screen name="profile-setup" />
-        <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
-        <Stack.Screen name="search-destination" options={{ animation: 'slide_from_bottom' }} />
-        <Stack.Screen name="ride-options" />
-        <Stack.Screen name="payment-confirm" />
-        <Stack.Screen name="ride-status" options={{ gestureEnabled: false }} />
-        <Stack.Screen name="driver-arriving" options={{ gestureEnabled: false }} />
-        <Stack.Screen name="driver-arrived" options={{ gestureEnabled: false }} />
-        <Stack.Screen name="ride-in-progress" options={{ gestureEnabled: false }} />
-        <Stack.Screen name="ride-completed" options={{ gestureEnabled: false }} />
-        <Stack.Screen name="chat-driver" />
-        <Stack.Screen name="rate-ride" />
-        <Stack.Screen name="become-driver" />
-      </Stack>
-    </SafeAreaProvider>
+    <ErrorBoundary>
+      <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
+      <GestureHandlerRootView>
+        <View style={{ flex: 1 }}>
+          <SafeAreaProvider>
+            <StatusBar style={isOffline ? "light" : "dark"} />
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                animation: 'slide_from_right',
+              }}
+            >
+              <Stack.Screen name="index" />
+              <Stack.Screen name="login" />
+              <Stack.Screen name="otp" />
+              <Stack.Screen name="forgot-password" />
+              <Stack.Screen name="reset-password" />
+              <Stack.Screen name="profile-setup" options={{ gestureEnabled: false, headerBackVisible: false }} />
+              <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
+              <Stack.Screen name="search-destination" options={{ animation: 'slide_from_bottom' }} />
+              <Stack.Screen name="ride-options" />
+              <Stack.Screen name="payment-confirm" />
+              <Stack.Screen name="ride-status" options={{ gestureEnabled: false }} />
+              <Stack.Screen name="driver-arriving" options={{ gestureEnabled: false }} />
+              <Stack.Screen name="driver-arrived" options={{ gestureEnabled: false }} />
+              <Stack.Screen name="ride-in-progress" options={{ gestureEnabled: false }} />
+              <Stack.Screen name="ride-completed" options={{ gestureEnabled: false }} />
+              <Stack.Screen name="chat-driver" />
+              <Stack.Screen name="rate-ride" />
+              <Stack.Screen name="become-driver" />
+              <Stack.Screen name="support-chat" />
+              <Stack.Screen name="emergency-contact" />
+              <Stack.Screen name="settings" />
+              <Stack.Screen name="payment-methods" />
+              <Stack.Screen name="promo-codes" />
+              <Stack.Screen name="ride-history" />
+              <Stack.Screen name="ride-details" />
+            </Stack>
+          </SafeAreaProvider>
+        </View>
+      </GestureHandlerRootView>
+    </ErrorBoundary>
   );
 }
 

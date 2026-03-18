@@ -7,12 +7,14 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import api from '@shared/api/client';
 
 const PAYMENT_METHODS = [
   { id: 'card', name: 'Credit Card', icon: 'card', last4: '4242' },
@@ -21,22 +23,48 @@ const PAYMENT_METHODS = [
 
 export default function PaymentConfirmScreen() {
   const router = useRouter();
-  const { pickup, dropoff, selectedVehicle, estimates, createRide, isLoading } = useRideStore();
+  const { pickup, dropoff, selectedVehicle, estimates, createRide, isLoading, scheduledTime } = useRideStore();
   const [selectedPayment, setSelectedPayment] = useState('card');
+  const [promoExpanded, setPromoExpanded] = useState(false);
+  const [promoCode, setPromoCode] = useState('');
+  const [promoDiscount, setPromoDiscount] = useState(0);
+  const [promoValidating, setPromoValidating] = useState(false);
+  const [promoApplied, setPromoApplied] = useState(false);
+  const [promoMessage, setPromoMessage] = useState('');
 
   const selectedEstimate = estimates.find((e) => e.vehicle_type.id === selectedVehicle?.id);
 
   const handleBookRide = async () => {
     try {
       const ride = await createRide(selectedPayment);
-      router.replace({
-        pathname: '/driver-arriving',
-        params: { rideId: ride.id },
-      });
+      router.replace('/driver-arriving?rideId=' + ride.id);
     } catch (error: any) {
       Alert.alert('Error', error.message || 'Failed to book ride');
     }
   };
+
+  const handleApplyPromo = async () => {
+    const code = promoCode.trim();
+    if (!code) return;
+    setPromoValidating(true);
+    setPromoMessage('');
+    try {
+      const fare = selectedEstimate?.total_fare || 0;
+      const res = await api.post('/promo/validate', { code, ride_fare: fare });
+      setPromoDiscount(res.data.discount_amount);
+      setPromoApplied(true);
+      setPromoMessage(`-$${res.data.discount_amount.toFixed(2)} discount applied!`);
+    } catch (error: any) {
+      const msg = error?.response?.data?.detail || 'Invalid promo code';
+      setPromoMessage(msg);
+      setPromoDiscount(0);
+      setPromoApplied(false);
+    } finally {
+      setPromoValidating(false);
+    }
+  };
+
+  const totalFare = (selectedEstimate?.total_fare || 0) - promoDiscount;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -82,7 +110,61 @@ export default function PaymentConfirmScreen() {
           </View>
         </View>
 
-        {/* Payment Methods */}
+        {/* Fare Breakdown */}
+        {selectedEstimate && (
+          <View style={styles.fareBreakdown}>
+            <Text style={styles.fareBreakdownTitle}>Fare Breakdown</Text>
+
+            <View style={styles.fareRow}>
+              <Text style={styles.fareLabel}>Base fare</Text>
+              <Text style={styles.fareValue}>${selectedEstimate.base_fare.toFixed(2)}</Text>
+            </View>
+            <View style={styles.fareRow}>
+              <Text style={styles.fareLabel}>Distance ({selectedEstimate.distance_km} km)</Text>
+              <Text style={styles.fareValue}>${selectedEstimate.distance_fare.toFixed(2)}</Text>
+            </View>
+            <View style={styles.fareRow}>
+              <Text style={styles.fareLabel}>Time ({selectedEstimate.duration_minutes} min)</Text>
+              <Text style={styles.fareValue}>${selectedEstimate.time_fare.toFixed(2)}</Text>
+            </View>
+            <View style={styles.fareDivider} />
+            <View style={styles.fareRow}>
+              <Text style={styles.fareLabel}>Insurance fee</Text>
+              <Text style={styles.fareValue}>${(selectedEstimate.total_fare * 0.02).toFixed(2)}</Text>
+            </View>
+            <View style={styles.fareRow}>
+              <Text style={styles.fareLabel}>City fee</Text>
+              <Text style={styles.fareValue}>$0.50</Text>
+            </View>
+            <View style={styles.fareRow}>
+              <Text style={styles.fareLabel}>GST/PST (11%)</Text>
+              <Text style={styles.fareValue}>${(selectedEstimate.total_fare * 0.11).toFixed(2)}</Text>
+            </View>
+            <View style={styles.fareRow}>
+              <Text style={styles.fareLabel}>Platform fee</Text>
+              <Text style={styles.fareValue}>${selectedEstimate.booking_fee.toFixed(2)}</Text>
+            </View>
+            {(selectedEstimate as any).surge_multiplier > 1.0 && (
+              <View style={styles.fareRow}>
+                <Text style={[styles.fareLabel, { color: '#EF4444' }]}>Surge ({(selectedEstimate as any).surge_multiplier}x)</Text>
+                <Text style={[styles.fareValue, { color: '#EF4444' }]}>Applied</Text>
+              </View>
+            )}
+            <View style={styles.fareDivider} />
+            <View style={styles.fareRow}>
+              <Text style={styles.fareTotalLabel}>Estimated Total</Text>
+              <Text style={styles.fareTotalValue}>
+                ${(
+                  selectedEstimate.total_fare +
+                  selectedEstimate.total_fare * 0.02 +
+                  0.50 +
+                  selectedEstimate.total_fare * 0.11
+                ).toFixed(2)}
+              </Text>
+            </View>
+          </View>
+        )}
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Payment Method</Text>
           {PAYMENT_METHODS.map((method) => (
@@ -122,19 +204,75 @@ export default function PaymentConfirmScreen() {
         </View>
 
         {/* Promo Code */}
-        <TouchableOpacity style={styles.promoButton}>
-          <Ionicons name="pricetag" size={20} color={SpinrConfig.theme.colors.primary} />
-          <Text style={styles.promoText}>Add promo code</Text>
-          <Ionicons name="chevron-forward" size={20} color="#999" />
-        </TouchableOpacity>
+        {!promoExpanded ? (
+          <TouchableOpacity style={styles.promoButton} onPress={() => setPromoExpanded(true)}>
+            <Ionicons name="pricetag" size={20} color={SpinrConfig.theme.colors.primary} />
+            <Text style={styles.promoText}>
+              {promoApplied ? `Promo applied: -$${promoDiscount.toFixed(2)}` : 'Add promo code'}
+            </Text>
+            <Ionicons name="chevron-forward" size={20} color="#999" />
+          </TouchableOpacity>
+        ) : (
+          <View style={styles.promoSection}>
+            <Text style={styles.promoSectionTitle}>Promo Code</Text>
+            <View style={styles.promoInputRow}>
+              <TextInput
+                style={styles.promoInput}
+                placeholder="Enter code"
+                placeholderTextColor="#999"
+                value={promoCode}
+                onChangeText={(t) => { setPromoCode(t.toUpperCase()); setPromoApplied(false); setPromoMessage(''); }}
+                autoCapitalize="characters"
+                autoFocus
+              />
+              <TouchableOpacity
+                style={[styles.promoApplyButton, (!promoCode.trim() || promoValidating) && styles.promoApplyDisabled]}
+                onPress={handleApplyPromo}
+                disabled={!promoCode.trim() || promoValidating}
+              >
+                {promoValidating ? (
+                  <ActivityIndicator color="#FFF" size="small" />
+                ) : (
+                  <Text style={styles.promoApplyText}>Apply</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+            {promoMessage ? (
+              <Text style={[styles.promoMessage, promoApplied && styles.promoMessageSuccess]}>
+                {promoMessage}
+              </Text>
+            ) : null}
+          </View>
+        )}
       </ScrollView>
 
       {/* Book Button */}
       <View style={styles.footer}>
         <View style={styles.totalRow}>
-          <Text style={styles.totalLabel}>Total</Text>
+          <Text style={styles.totalLabel}>Subtotal</Text>
           <Text style={styles.totalAmount}>${selectedEstimate?.total_fare.toFixed(2)}</Text>
         </View>
+        {promoDiscount > 0 && (
+          <View style={styles.discountRow}>
+            <Text style={styles.discountLabel}>Promo discount</Text>
+            <Text style={styles.discountAmount}>-${promoDiscount.toFixed(2)}</Text>
+          </View>
+        )}
+        {promoDiscount > 0 && (
+          <View style={[styles.totalRow, { marginTop: 4 }]}>
+            <Text style={[styles.totalLabel, { fontFamily: 'PlusJakartaSans_700Bold', color: '#1A1A1A' }]}>Total</Text>
+            <Text style={styles.totalAmount}>${totalFare.toFixed(2)}</Text>
+          </View>
+        )}
+        {scheduledTime && (
+          <View style={styles.scheduledBadge}>
+            <Ionicons name="calendar-outline" size={16} color={SpinrConfig.theme.colors.primary} />
+            <Text style={styles.scheduledText}>
+              Scheduled: {scheduledTime.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })}{' '}
+              at {scheduledTime.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })}
+            </Text>
+          </View>
+        )}
         <TouchableOpacity
           style={styles.bookButton}
           onPress={handleBookRide}
@@ -145,7 +283,9 @@ export default function PaymentConfirmScreen() {
             <ActivityIndicator color="#FFFFFF" />
           ) : (
             <>
-              <Text style={styles.bookButtonText}>Book {selectedVehicle?.name}</Text>
+              <Text style={styles.bookButtonText}>
+                {scheduledTime ? 'Schedule' : 'Book'} {selectedVehicle?.name}
+              </Text>
               <Ionicons name="arrow-forward" size={20} color="#FFFFFF" />
             </>
           )}
@@ -374,5 +514,128 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: '#FFFFFF',
+  },
+  promoSection: {
+    backgroundColor: '#FFFFFF',
+    padding: 20,
+    marginBottom: 20,
+  },
+  promoSectionTitle: {
+    fontSize: 16,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: '#1A1A1A',
+    marginBottom: 12,
+  },
+  promoInputRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  promoInput: {
+    flex: 1,
+    height: 48,
+    backgroundColor: '#F5F5F5',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    fontSize: 16,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#1A1A1A',
+    letterSpacing: 1,
+  },
+  promoApplyButton: {
+    backgroundColor: SpinrConfig.theme.colors.primary,
+    paddingHorizontal: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  promoApplyDisabled: {
+    opacity: 0.5,
+  },
+  promoApplyText: {
+    fontSize: 15,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#FFFFFF',
+  },
+  promoMessage: {
+    marginTop: 8,
+    fontSize: 13,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    color: '#EF4444',
+  },
+  promoMessageSuccess: {
+    color: '#10B981',
+  },
+  discountRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  discountLabel: {
+    fontSize: 14,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    color: '#10B981',
+  },
+  discountAmount: {
+    fontSize: 16,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#10B981',
+  },
+  scheduledBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#F0F7FF',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    marginBottom: 12,
+  },
+  scheduledText: {
+    fontSize: 13,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    color: '#1A1A1A',
+  },
+  fareBreakdown: {
+    backgroundColor: '#FFFFFF',
+    padding: 20,
+    marginBottom: 12,
+  },
+  fareBreakdownTitle: {
+    fontSize: 16,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: '#1A1A1A',
+    marginBottom: 14,
+  },
+  fareRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  fareLabel: {
+    fontSize: 14,
+    fontFamily: 'PlusJakartaSans_400Regular',
+    color: '#6B7280',
+  },
+  fareValue: {
+    fontSize: 14,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    color: '#1A1A1A',
+  },
+  fareDivider: {
+    height: 1,
+    backgroundColor: '#E5E7EB',
+    marginVertical: 10,
+  },
+  fareTotalLabel: {
+    fontSize: 16,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: '#1A1A1A',
+  },
+  fareTotalValue: {
+    fontSize: 18,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: SpinrConfig.theme.colors.primary,
   },
 });

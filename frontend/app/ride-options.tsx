@@ -14,7 +14,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Polyline, Circle, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Circle, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapViewDirections from 'react-native-maps-directions';
 import { useRideStore } from '../store/rideStore';
 import SpinrConfig from '../config/spinr.config';
 
@@ -48,7 +49,6 @@ export default function RideOptionsScreen() {
       console.log('Platform:', Platform.OS, '| Fetching estimates & nearby drivers for:', pickup.address, 'to', dropoff.address);
       fetchEstimates();
       fetchNearbyDrivers();
-      fetchRoute();
 
       // Auto-refresh drivers every 10 seconds
       const interval = setInterval(() => {
@@ -95,96 +95,14 @@ export default function RideOptionsScreen() {
     }
   }, [pickup, dropoff, nearbyDrivers, routeCoordinates, mapReady]);
 
-  const fetchRoute = async () => {
-    if (!pickup || !dropoff) return;
-
-    // Build straight-line fallback through all points
-    const fallbackRoute = [
-      { latitude: pickup.lat, longitude: pickup.lng },
-      ...stops.filter(s => s.lat && s.lng).map(s => ({ latitude: s.lat, longitude: s.lng })),
-      { latitude: dropoff.lat, longitude: dropoff.lng },
-    ];
-
-    if (!GOOGLE_MAPS_API_KEY) {
-      console.log('No Google Maps API key — using straight-line route');
-      setRouteCoordinates(fallbackRoute);
-      return;
+  // Helper to trigger map fit when directions are ready
+  const onReadyDirections = (result: any) => {
+    if (mapRef.current && mapReady) {
+      mapRef.current.fitToCoordinates(result.coordinates, {
+        edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+        animated: true,
+      });
     }
-
-    try {
-      const waypoints = stops
-        .filter(s => s.lat && s.lng)
-        .map(s => `via:${s.lat},${s.lng}`)
-        .join('|');
-
-      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${pickup.lat},${pickup.lng}&destination=${dropoff.lat},${dropoff.lng}${waypoints ? `&waypoints=${waypoints}` : ''}&key=${GOOGLE_MAPS_API_KEY}`;
-      const response = await fetch(url);
-      const data = await response.json();
-
-      console.log('Directions API status:', data.status);
-
-      if (data.status === 'OK' && data.routes.length) {
-        const points = decodePolyline(data.routes[0].overview_polyline.points);
-        console.log('Route decoded:', points.length, 'points');
-        if (points.length > 0) {
-          console.log('Sample/First Point:', points[0], 'Type Lat:', typeof points[0].latitude);
-          console.log('Sample/Last Point:', points[points.length - 1]);
-        }
-
-        // Filter out invalid points just in case
-        const validPoints = points.filter(p =>
-          typeof p.latitude === 'number' && !isNaN(p.latitude) &&
-          typeof p.longitude === 'number' && !isNaN(p.longitude) &&
-          Math.abs(p.latitude) > 0.1 && Math.abs(p.longitude) > 0.1
-        );
-
-        if (validPoints.length !== points.length) {
-          console.warn('Filtered out', points.length - validPoints.length, 'invalid points');
-        }
-
-        // Increased delay to ensure map is fully ready before drawing route
-        setTimeout(() => {
-          setRouteCoordinates(validPoints);
-          setRouteKey(Date.now()); // Force re-render with new key
-        }, 500);
-      } else {
-        // Fall back to straight line
-        setRouteCoordinates(fallbackRoute);
-        setRouteKey(Date.now());
-      }
-    } catch (error) {
-      console.log('Directions API fetch error:', error);
-      // Fall back to straight line
-      setRouteCoordinates(fallbackRoute);
-      setRouteKey(Date.now());
-    }
-  };
-
-  const decodePolyline = (t: string) => {
-    let points = [];
-    let index = 0, len = t.length;
-    let lat = 0, lng = 0;
-    while (index < len) {
-      let b, shift = 0, result = 0;
-      do {
-        b = t.charCodeAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      let dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
-      lat += dlat;
-      shift = 0;
-      result = 0;
-      do {
-        b = t.charCodeAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      let dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
-      lng += dlng;
-      points.push({ latitude: (lat / 1e5), longitude: (lng / 1e5) });
-    }
-    return points;
   };
 
   const handleSelect = (index: number) => {
@@ -234,14 +152,17 @@ export default function RideOptionsScreen() {
               longitudeDelta: 0.05,
             }}
           >
-            {/* Route Polyline - Blue works best */}
-            {routeCoordinates.length > 0 && (
-              <Polyline
-                key={`route-${routeKey}`} // Forces deep re-mount on every update
-                coordinates={routeCoordinates}
-                strokeColor="#2196F3"
+            {/* MapViewDirections to display real route natively */}
+            {GOOGLE_MAPS_API_KEY && (
+              <MapViewDirections
+                origin={{ latitude: pickup.lat, longitude: pickup.lng }}
+                destination={{ latitude: dropoff.lat, longitude: dropoff.lng }}
+                waypoints={stops.filter(s => s.lat && s.lng).map(s => ({ latitude: s.lat, longitude: s.lng }))}
+                apikey={GOOGLE_MAPS_API_KEY}
                 strokeWidth={5}
-                zIndex={100}
+                strokeColor="#2196F3"
+                onReady={onReadyDirections}
+                optimizeWaypoints={true}
               />
             )}
 

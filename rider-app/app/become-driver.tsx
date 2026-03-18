@@ -239,7 +239,7 @@ export default function BecomeDriverScreen() {
       });
 
       Alert.alert('Success', 'Application submitted! Waiting for approval.', [
-        { text: 'OK', onPress: () => router.replace('/(driver)') }
+        { text: 'OK', onPress: () => router.replace('/(driver)' as any) }
       ]);
     } catch (err: any) {
       Alert.alert('Registration Failed', err.message);

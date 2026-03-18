@@ -8,6 +8,27 @@
       ],
       "@shared/*": [
         "../shared/*"
+      ],
+      "zustand": [
+        "./node_modules/zustand"
+      ],
+      "expo-secure-store": [
+        "./node_modules/expo-secure-store"
+      ],
+      "react-native": [
+        "./node_modules/react-native"
+      ],
+      "firebase/*": [
+        "./node_modules/firebase/*"
+      ],
+      "react": [
+        "./node_modules/react"
+      ],
+      "react-native-maps": [
+        "./node_modules/react-native-maps"
+      ],
+      "expo-constants": [
+        "./node_modules/expo-constants"
       ]
     }
   },

@@ -64,11 +64,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         ]
     ],
     experiments: {
-        typedRoutes: true
+        typedRoutes: false
     },
     extra: {
         eas: {
             projectId: "63b5d645-e787-4f47-8289-d879ca6c51a4"
-        }
+        },
+        googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
     }
 });

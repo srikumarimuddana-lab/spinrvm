@@ -27,6 +27,7 @@ class UserProfile(BaseModel):
     gender: Optional[str] = None
     profile_image: Optional[str] = None  # Base64 encoded image
     role: str = 'rider'
+    corporate_account_id: Optional[str] = None
     created_at: datetime
     profile_complete: bool = False
     is_driver: bool = False
@@ -71,6 +72,7 @@ class ServiceArea(BaseModel):
     is_active: bool = True
     is_airport: bool = False
     airport_fee: float = 0.0
+    surge_multiplier: float = 1.0
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class VehicleType(BaseModel):
@@ -158,12 +160,17 @@ class Ride(BaseModel):
     dropoff_address: str
     dropoff_lat: float
     dropoff_lng: float
+    stops: Optional[List[Dict[str, Any]]] = []
+    is_scheduled: bool = False
+    scheduled_time: Optional[datetime] = None
+    corporate_account_id: Optional[str] = None
     distance_km: float
     duration_minutes: int
     base_fare: float
     distance_fare: float = 0.0
     time_fare: float = 0.0
     booking_fee: float = 2.0
+    surge_multiplier: float = 1.0
     total_fare: float
     tip_amount: float = 0.0
     payment_method: str = "card"
@@ -191,9 +198,9 @@ class Ride(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 class RideRatingRequest(BaseModel):
-    rating: int
+    rating: int = Field(ge=1, le=5, description="Rating must be between 1 and 5")
     comment: Optional[str] = None
-    tip_amount: float = 0.0
+    tip_amount: float = Field(default=0.0, ge=0, description="Tip amount must be non-negative")
 
 class CreateRideRequest(BaseModel):
     vehicle_type_id: str
@@ -203,4 +210,8 @@ class CreateRideRequest(BaseModel):
     dropoff_address: str
     dropoff_lat: float
     dropoff_lng: float
+    stops: Optional[List[Dict[str, Any]]] = []
+    is_scheduled: bool = False
+    scheduled_time: Optional[datetime] = None
+    corporate_account_id: Optional[str] = None
     payment_method: str = "card"

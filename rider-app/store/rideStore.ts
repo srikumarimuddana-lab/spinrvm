@@ -74,6 +74,8 @@ interface Ride {
   payment_method: string;
   status: string;
   pickup_otp: string;
+  is_scheduled?: boolean;
+  scheduled_time?: string;
   created_at: string;
 }
 
@@ -98,6 +100,9 @@ interface RideState {
   currentDriver: Driver | null;
   savedAddresses: SavedAddress[];
   recentSearches: Location[];
+  scheduledTime: Date | null;
+  scheduledRides: Ride[];
+  userLocation: { latitude: number; longitude: number } | null;
   isLoading: boolean;
   error: string | null;
 
@@ -122,9 +127,14 @@ interface RideState {
   clearRide: () => void;
   clearError: () => void;
   rateRide: (rideId: string, rating: number, comment?: string, tipAmount?: number) => Promise<void>;
+  triggerEmergency: (rideId: string, latitude?: number, longitude?: number) => Promise<void>;
   addRecentSearch: (location: Location) => void;
   loadRecentSearches: () => Promise<void>;
   clearRecentSearches: () => void;
+  setScheduledTime: (time: Date | null) => void;
+  fetchScheduledRides: () => Promise<void>;
+  cancelScheduledRide: (rideId: string) => Promise<void>;
+  setUserLocation: (loc: { latitude: number; longitude: number } | null) => void;
 }
 
 export const useRideStore = create<RideState>((set, get) => ({
@@ -138,11 +148,15 @@ export const useRideStore = create<RideState>((set, get) => ({
   currentDriver: null,
   savedAddresses: [],
   recentSearches: [],
+  scheduledTime: null,
+  scheduledRides: [],
+  userLocation: null,
   isLoading: false,
   error: null,
 
   setPickup: (location) => set({ pickup: location }),
   setDropoff: (location) => set({ dropoff: location }),
+  setUserLocation: (loc) => set({ userLocation: loc }),
 
   addStop: (location) => set((state) => ({ stops: [...state.stops, location] })),
   removeStop: (index) => set((state) => ({ stops: state.stops.filter((_, i) => i !== index) })),
@@ -178,7 +192,7 @@ export const useRideStore = create<RideState>((set, get) => ({
     const { pickup } = get();
     if (!pickup) return;
     try {
-      const response = await api.get(`/nearby-drivers?lat=${pickup.lat}&lng=${pickup.lng}`);
+      const response = await api.get(`/drivers/nearby?lat=${pickup.lat}&lng=${pickup.lng}`);
       set({ nearbyDrivers: response.data });
     } catch (error) {
       console.log('Error fetching nearby drivers', error);
@@ -188,14 +202,14 @@ export const useRideStore = create<RideState>((set, get) => ({
   selectVehicle: (vehicle) => set({ selectedVehicle: vehicle }),
 
   createRide: async (paymentMethod) => {
-    const { pickup, dropoff, selectedVehicle, stops } = get();
+    const { pickup, dropoff, selectedVehicle, stops, scheduledTime } = get();
     if (!pickup || !dropoff || !selectedVehicle) {
       throw new Error('Missing ride details');
     }
 
     try {
       set({ isLoading: true, error: null });
-      const response = await api.post('/rides', {
+      const rideData: any = {
         vehicle_type_id: selectedVehicle.id,
         pickup_address: pickup.address,
         pickup_lat: pickup.lat,
@@ -203,10 +217,17 @@ export const useRideStore = create<RideState>((set, get) => ({
         dropoff_address: dropoff.address,
         dropoff_lat: dropoff.lat,
         dropoff_lng: dropoff.lng,
-        stops: stops, // Include stops
+        stops: stops,
         payment_method: paymentMethod,
-      });
-      set({ currentRide: response.data, isLoading: false });
+      };
+
+      if (scheduledTime) {
+        rideData.is_scheduled = true;
+        rideData.scheduled_time = scheduledTime.toISOString();
+      }
+
+      const response = await api.post('/rides', rideData);
+      set({ currentRide: response.data, isLoading: false, scheduledTime: null });
       return response.data;
     } catch (error: any) {
       set({ isLoading: false, error: error.message });
@@ -218,9 +239,11 @@ export const useRideStore = create<RideState>((set, get) => ({
     try {
       set({ isLoading: true });
       const response = await api.get(`/rides/${rideId}`);
+      // Backend returns the ride object directly, with driver embedded inside
+      // response.data is the ride object, response.data.driver is the driver (if assigned)
       set({
-        currentRide: response.data.ride,
-        currentDriver: response.data.driver,
+        currentRide: response.data,
+        currentDriver: response.data.driver || null,
         isLoading: false,
       });
     } catch (error: any) {
@@ -297,6 +320,19 @@ export const useRideStore = create<RideState>((set, get) => ({
     }
   },
 
+  triggerEmergency: async (rideId: string, latitude?: number, longitude?: number) => {
+    try {
+      await api.post(`/rides/${rideId}/emergency`, {
+        message: 'Emergency assistance requested via app button',
+        latitude,
+        longitude
+      });
+    } catch (error: any) {
+      console.error('Failed to trigger emergency:', error);
+      // Even if API fails, we don't throw to not block the local 911 UI flow
+    }
+  },
+
   fetchSavedAddresses: async () => {
     try {
       const response = await api.get('/addresses');
@@ -331,6 +367,7 @@ export const useRideStore = create<RideState>((set, get) => ({
     selectedVehicle: null,
     currentRide: null,
     currentDriver: null,
+    scheduledTime: null,
   }),
 
   clearError: () => set({ error: null }),
@@ -356,5 +393,27 @@ export const useRideStore = create<RideState>((set, get) => ({
   clearRecentSearches: () => {
     set({ recentSearches: [] });
     AsyncStorage.removeItem('recent_searches').catch(() => { });
+  },
+
+  setScheduledTime: (time) => set({ scheduledTime: time }),
+
+  fetchScheduledRides: async () => {
+    try {
+      const response = await api.get('/rides/scheduled');
+      set({ scheduledRides: response.data });
+    } catch (error: any) {
+      console.log('Error fetching scheduled rides:', error.message);
+    }
+  },
+
+  cancelScheduledRide: async (rideId) => {
+    try {
+      await api.delete(`/rides/scheduled/${rideId}`);
+      set((state) => ({
+        scheduledRides: state.scheduledRides.filter((r) => r.id !== rideId),
+      }));
+    } catch (error: any) {
+      set({ error: error.message });
+    }
   },
 }));

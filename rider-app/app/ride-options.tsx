@@ -10,13 +10,17 @@ import {
   Dimensions,
   Alert,
   Platform,
+  Switch,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Polyline, Circle, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Circle, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapViewDirections from 'react-native-maps-directions';
 import { useRideStore } from '../store/rideStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import DateTimePicker from '@react-native-community/datetimepicker';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -34,13 +38,19 @@ export default function RideOptionsScreen() {
     fetchNearbyDrivers,
     nearbyDrivers,
     selectVehicle,
-    isLoading
+    isLoading,
+    scheduledTime,
+    setScheduledTime,
   } = useRideStore();
 
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [routeKey, setRouteKey] = useState(0); // Unique key to force re-render
+  const [routeKey, setRouteKey] = useState(0);
   const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
   const [mapReady, setMapReady] = useState(false);
+  const [isScheduling, setIsScheduling] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [tempDate, setTempDate] = useState<Date>(new Date(Date.now() + 30 * 60000)); // default 30 min from now
   const mapRef = useRef<MapView>(null);
 
   useEffect(() => {
@@ -48,7 +58,6 @@ export default function RideOptionsScreen() {
       console.log('Platform:', Platform.OS, '| Fetching estimates & nearby drivers for:', pickup.address, 'to', dropoff.address);
       fetchEstimates();
       fetchNearbyDrivers();
-      fetchRoute();
 
       // Auto-refresh drivers every 10 seconds
       const interval = setInterval(() => {
@@ -95,96 +104,14 @@ export default function RideOptionsScreen() {
     }
   }, [pickup, dropoff, nearbyDrivers, routeCoordinates, mapReady]);
 
-  const fetchRoute = async () => {
-    if (!pickup || !dropoff) return;
-
-    // Build straight-line fallback through all points
-    const fallbackRoute = [
-      { latitude: pickup.lat, longitude: pickup.lng },
-      ...stops.filter(s => s.lat && s.lng).map(s => ({ latitude: s.lat, longitude: s.lng })),
-      { latitude: dropoff.lat, longitude: dropoff.lng },
-    ];
-
-    if (!GOOGLE_MAPS_API_KEY) {
-      console.log('No Google Maps API key — using straight-line route');
-      setRouteCoordinates(fallbackRoute);
-      return;
+  // Helper to trigger map fit when directions are ready
+  const onReadyDirections = (result: any) => {
+    if (mapRef.current && mapReady) {
+      mapRef.current.fitToCoordinates(result.coordinates, {
+        edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+        animated: true,
+      });
     }
-
-    try {
-      const waypoints = stops
-        .filter(s => s.lat && s.lng)
-        .map(s => `via:${s.lat},${s.lng}`)
-        .join('|');
-
-      const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${pickup.lat},${pickup.lng}&destination=${dropoff.lat},${dropoff.lng}${waypoints ? `&waypoints=${waypoints}` : ''}&key=${GOOGLE_MAPS_API_KEY}`;
-      const response = await fetch(url);
-      const data = await response.json();
-
-      console.log('Directions API status:', data.status);
-
-      if (data.status === 'OK' && data.routes.length) {
-        const points = decodePolyline(data.routes[0].overview_polyline.points);
-        console.log('Route decoded:', points.length, 'points');
-        if (points.length > 0) {
-          console.log('Sample/First Point:', points[0], 'Type Lat:', typeof points[0].latitude);
-          console.log('Sample/Last Point:', points[points.length - 1]);
-        }
-
-        // Filter out invalid points just in case
-        const validPoints = points.filter(p =>
-          typeof p.latitude === 'number' && !isNaN(p.latitude) &&
-          typeof p.longitude === 'number' && !isNaN(p.longitude) &&
-          Math.abs(p.latitude) > 0.1 && Math.abs(p.longitude) > 0.1
-        );
-
-        if (validPoints.length !== points.length) {
-          console.warn('Filtered out', points.length - validPoints.length, 'invalid points');
-        }
-
-        // Increased delay to ensure map is fully ready before drawing route
-        setTimeout(() => {
-          setRouteCoordinates(validPoints);
-          setRouteKey(Date.now()); // Force re-render with new key
-        }, 500);
-      } else {
-        // Fall back to straight line
-        setRouteCoordinates(fallbackRoute);
-        setRouteKey(Date.now());
-      }
-    } catch (error) {
-      console.log('Directions API fetch error:', error);
-      // Fall back to straight line
-      setRouteCoordinates(fallbackRoute);
-      setRouteKey(Date.now());
-    }
-  };
-
-  const decodePolyline = (t: string) => {
-    let points = [];
-    let index = 0, len = t.length;
-    let lat = 0, lng = 0;
-    while (index < len) {
-      let b, shift = 0, result = 0;
-      do {
-        b = t.charCodeAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      let dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
-      lat += dlat;
-      shift = 0;
-      result = 0;
-      do {
-        b = t.charCodeAt(index++) - 63;
-        result |= (b & 0x1f) << shift;
-        shift += 5;
-      } while (b >= 0x20);
-      let dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
-      lng += dlng;
-      points.push({ latitude: (lat / 1e5), longitude: (lng / 1e5) });
-    }
-    return points;
   };
 
   const handleSelect = (index: number) => {
@@ -195,7 +122,78 @@ export default function RideOptionsScreen() {
 
   const handleConfirm = () => {
     if (!selectedVehicle) return;
+    if (isScheduling && !scheduledTime) {
+      Alert.alert('Select Time', 'Please pick a date and time for your scheduled ride.');
+      return;
+    }
     router.push('/payment-confirm');
+  };
+
+  const handleToggleSchedule = (value: boolean) => {
+    setIsScheduling(value);
+    if (!value) {
+      setScheduledTime(null);
+    } else {
+      setShowDatePicker(true);
+    }
+  };
+
+  const handleCancelSchedule = () => {
+    setShowDatePicker(false);
+    setShowTimePicker(false);
+    if (!scheduledTime) {
+      setIsScheduling(false);
+    }
+  };
+
+  const handleDateChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowDatePicker(false);
+    }
+    if (event.type === 'dismissed') {
+      handleCancelSchedule();
+      return;
+    }
+    if (selectedDate) {
+      setTempDate(selectedDate);
+      if (Platform.OS === 'android') {
+        setShowTimePicker(true);
+      }
+    }
+  };
+
+  const confirmDateSelection = () => {
+    setShowDatePicker(false);
+    setTimeout(() => setShowTimePicker(true), 100);
+  };
+
+  const handleTimeChange = (event: any, selectedTime?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowTimePicker(false);
+    }
+    if (event.type === 'dismissed') {
+      handleCancelSchedule();
+      return;
+    }
+    if (selectedTime) {
+      const combined = new Date(tempDate);
+      combined.setHours(selectedTime.getHours(), selectedTime.getMinutes());
+      setTempDate(combined);
+      
+      if (Platform.OS === 'android') {
+        confirmTimeSelection(combined);
+      }
+    }
+  };
+
+  const confirmTimeSelection = (timeToConfirm = tempDate) => {
+    const minTime = new Date(Date.now() + 15 * 60000);
+    if (timeToConfirm < minTime) {
+      Alert.alert('Invalid Time', 'Scheduled time must be at least 15 minutes from now.');
+      return;
+    }
+    setScheduledTime(timeToConfirm);
+    setShowTimePicker(false);
   };
 
   const selectedEstimate = estimates.length > selectedIndex ? estimates[selectedIndex] : null;
@@ -234,14 +232,17 @@ export default function RideOptionsScreen() {
               longitudeDelta: 0.05,
             }}
           >
-            {/* Route Polyline - Blue works best */}
-            {routeCoordinates.length > 0 && (
-              <Polyline
-                key={`route-${routeKey}`} // Forces deep re-mount on every update
-                coordinates={routeCoordinates}
-                strokeColor="#2196F3"
+            {/* MapViewDirections to display real route natively */}
+            {GOOGLE_MAPS_API_KEY && (
+              <MapViewDirections
+                origin={{ latitude: pickup.lat, longitude: pickup.lng }}
+                destination={{ latitude: dropoff.lat, longitude: dropoff.lng }}
+                waypoints={stops.filter(s => s.lat && s.lng).map(s => ({ latitude: s.lat, longitude: s.lng }))}
+                apikey={GOOGLE_MAPS_API_KEY}
                 strokeWidth={5}
-                zIndex={100}
+                strokeColor="#2196F3"
+                onReady={onReadyDirections}
+                optimizeWaypoints={true}
               />
             )}
 
@@ -268,11 +269,12 @@ export default function RideOptionsScreen() {
               </Marker>
             ))}
 
-            {/* Nearby Drivers Markers - Filtered */}
+            {/* Nearby Drivers Markers - Filtered by selected vehicle type */}
             {nearbyDrivers.filter(d =>
               typeof d.lat === 'number' && !isNaN(d.lat) &&
               typeof d.lng === 'number' && !isNaN(d.lng) &&
-              Math.abs(d.lat) > 0.1 && Math.abs(d.lng) > 0.1
+              Math.abs(d.lat) > 0.1 && Math.abs(d.lng) > 0.1 &&
+              (!selectedVehicle || d.vehicle_type_id === selectedVehicle.id)
             ).map((driver) => (
               <Marker
                 key={driver.id}
@@ -361,9 +363,12 @@ export default function RideOptionsScreen() {
                   </View>
 
                   {isAvailable ? (
-                    <Text style={styles.optionETA}>{estimate.eta_minutes} min away</Text>
+                    <Text style={styles.optionETA}>
+                      {estimate.eta_minutes ? `${estimate.eta_minutes} min away` : 'Nearby'}
+                      {estimate.driver_count > 0 && ` · ${estimate.driver_count} driver${estimate.driver_count > 1 ? 's' : ''}`}
+                    </Text>
                   ) : (
-                    <Text style={styles.unavailableText}>Not available</Text>
+                    <Text style={styles.unavailableText}>No drivers nearby</Text>
                   )}
                 </View>
 
@@ -385,6 +390,105 @@ export default function RideOptionsScreen() {
       {/* Confirm Button */}
       {!isLoading && !allUnavailable && estimates.length > 0 && selectedEstimate && (
         <View style={styles.footer}>
+          {/* Schedule Toggle */}
+          <View style={styles.scheduleRow}>
+            <View style={styles.scheduleInfo}>
+              <Ionicons name="time-outline" size={20} color="#1A1A1A" />
+              <Text style={styles.scheduleLabel}>Schedule later</Text>
+            </View>
+            <Switch
+              value={isScheduling}
+              onValueChange={handleToggleSchedule}
+              trackColor={{ false: '#D1D5DB', true: SpinrConfig.theme.colors.primary + '60' }}
+              thumbColor={isScheduling ? SpinrConfig.theme.colors.primary : '#F3F4F6'}
+            />
+          </View>
+
+          {/* Scheduled Time Display */}
+          {isScheduling && scheduledTime && (
+            <TouchableOpacity
+              style={styles.scheduledTimeRow}
+              onPress={() => setShowDatePicker(true)}
+            >
+              <Ionicons name="calendar-outline" size={18} color={SpinrConfig.theme.colors.primary} />
+              <Text style={styles.scheduledTimeText}>
+                {scheduledTime.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })}{' '}
+                at {scheduledTime.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })}
+              </Text>
+              <Text style={styles.changeText}>Change</Text>
+            </TouchableOpacity>
+          )}
+
+          {/* DateTimePicker Modals */}
+          {showDatePicker && (
+            Platform.OS === 'ios' ? (
+              <Modal transparent animationType="slide" visible={showDatePicker}>
+                <View style={styles.modalOverlay}>
+                  <View style={styles.pickerContainer}>
+                    <View style={styles.pickerHeader}>
+                      <TouchableOpacity onPress={handleCancelSchedule}>
+                        <Text style={styles.pickerCancelText}>Cancel</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={confirmDateSelection}>
+                        <Text style={styles.pickerDoneText}>Next</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <DateTimePicker
+                      value={tempDate}
+                      mode="date"
+                      display="spinner"
+                      minimumDate={new Date()}
+                      maximumDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
+                      onChange={handleDateChange}
+                      textColor="#000000"
+                    />
+                  </View>
+                </View>
+              </Modal>
+            ) : (
+              <DateTimePicker
+                value={tempDate}
+                mode="date"
+                display="default"
+                minimumDate={new Date()}
+                maximumDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
+                onChange={handleDateChange}
+              />
+            )
+          )}
+          {showTimePicker && (
+            Platform.OS === 'ios' ? (
+              <Modal transparent animationType="slide" visible={showTimePicker}>
+                <View style={styles.modalOverlay}>
+                  <View style={styles.pickerContainer}>
+                    <View style={styles.pickerHeader}>
+                      <TouchableOpacity onPress={handleCancelSchedule}>
+                        <Text style={styles.pickerCancelText}>Cancel</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => confirmTimeSelection()}>
+                        <Text style={styles.pickerDoneText}>Done</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <DateTimePicker
+                      value={tempDate}
+                      mode="time"
+                      display="spinner"
+                      onChange={handleTimeChange}
+                      textColor="#000000"
+                    />
+                  </View>
+                </View>
+              </Modal>
+            ) : (
+              <DateTimePicker
+                value={tempDate}
+                mode="time"
+                display="default"
+                onChange={handleTimeChange}
+              />
+            )
+          )}
+
           {/* Payment method row */}
           <TouchableOpacity style={styles.paymentRow}>
             <Ionicons name="card" size={20} color="#1A1A1A" />
@@ -399,7 +503,7 @@ export default function RideOptionsScreen() {
             disabled={!selectedEstimate.available}
           >
             <Text style={styles.confirmButtonText}>
-              Confirm {selectedEstimate.vehicle_type.name}
+              {isScheduling ? 'Schedule' : 'Confirm'} {selectedEstimate.vehicle_type.name}
             </Text>
           </TouchableOpacity>
         </View>
@@ -646,5 +750,134 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: 'PlusJakartaSans_500Medium',
     flex: 1,
+  },
+  scheduleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F5F5F5',
+    marginBottom: 4,
+  },
+  scheduleInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  scheduleLabel: {
+    fontSize: 14,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    color: '#1A1A1A',
+  },
+  scheduledTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: '#F0F7FF',
+    borderRadius: 10,
+    marginBottom: 8,
+  },
+  scheduledTimeText: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    color: '#1A1A1A',
+  },
+  changeText: {
+    fontSize: 13,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: SpinrConfig.theme.colors.primary,
+  },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  pickerContainer: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingBottom: 20,
+  },
+  pickerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  pickerCancelText: {
+    fontSize: 16,
+    color: '#6B7280',
+    fontFamily: 'PlusJakartaSans_500Medium',
+  },
+  pickerDoneText: {
+    fontSize: 16,
+    color: SpinrConfig.theme.colors.primary,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+  },
+  fareBreakdown: {
+    backgroundColor: '#F9FAFB',
+    marginHorizontal: 16,
+    marginVertical: 8,
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  fareBreakdownHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  fareBreakdownTitle: {
+    fontSize: 15,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: '#1A1A1A',
+  },
+  fareBreakdownVehicle: {
+    fontSize: 12,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    color: '#6B7280',
+    backgroundColor: '#E5E7EB',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  fareRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 5,
+  },
+  fareLabel: {
+    fontSize: 13,
+    fontFamily: 'PlusJakartaSans_400Regular',
+    color: '#6B7280',
+  },
+  fareValue: {
+    fontSize: 13,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    color: '#1A1A1A',
+  },
+  fareDivider: {
+    height: 1,
+    backgroundColor: '#E5E7EB',
+    marginVertical: 8,
+  },
+  fareTotalLabel: {
+    fontSize: 15,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: '#1A1A1A',
+  },
+  fareTotalValue: {
+    fontSize: 17,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: SpinrConfig.theme.colors.primary,
   },
 });

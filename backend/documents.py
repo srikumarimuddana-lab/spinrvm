@@ -3,7 +3,6 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import uuid
-import logging
 import os
 import shutil
 from pathlib import Path
@@ -15,7 +14,7 @@ except ImportError:
     from db import db
     from dependencies import get_current_user
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 # Routers
 # Routers

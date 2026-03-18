@@ -1,12 +1,25 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import api from '@shared/api/client';
+import { useAuthStore } from '@shared/store/authStore';
 
 export default function LoginScreen() {
   const router = useRouter();
   const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
+  const { user, logout } = useAuthStore();
+
+  useFocusEffect(
+    React.useCallback(() => {
+      // If we are on the login screen, we shouldn't have an active user.
+      // This happens if a user starts signing up, gets past OTP to profile setup,
+      // and then swipes back. We must clear their partial state so the next number they type works correctly.
+      if (user) {
+        logout();
+      }
+    }, [user, logout])
+  );
 
   const handleSendCode = async () => {
     if (!phoneNumber || phoneNumber.length < 10) {

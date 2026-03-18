@@ -1,6 +1,5 @@
 import os
 import jwt
-import logging
 import random
 import string
 from datetime import datetime, timedelta
@@ -20,14 +19,14 @@ JWT_SECRET = os.environ.get('JWT_SECRET')
 if not JWT_SECRET:
     if _env == 'production':
         # In a real app we might raise error, but to avoid breaking things during migration we'll warn
-        logging.warning('JWT_SECRET not set — using insecure dev key.')
+        logger.warning('JWT_SECRET not set — using insecure dev key.')
     JWT_SECRET = 'spinr-dev-secret-key-NOT-FOR-PRODUCTION'
 
 JWT_ALGORITHM = 'HS256'
 OTP_EXPIRY_MINUTES = 5
 
 security = HTTPBearer(auto_error=False)
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 # Helper Functions
 def generate_otp() -> str:

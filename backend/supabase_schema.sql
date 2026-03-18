@@ -527,3 +527,30 @@ ALTER TABLE payouts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bank_accounts ENABLE ROW LEVEL SECURITY;
 
 
+-- ============================================================
+-- GAP FIX: Emergency Contacts (Uber/Lyft/Grab standard feature)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS emergency_contacts (
+    id                    TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    user_id               TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name                  TEXT NOT NULL,
+    phone                 TEXT NOT NULL,
+    relationship          TEXT NOT NULL DEFAULT 'Friend',
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_emergency_contacts_user_id ON emergency_contacts(user_id);
+ALTER TABLE emergency_contacts ENABLE ROW LEVEL SECURITY;
+
+
+-- GAP FIX: Unique email constraint (prevent duplicate signups)
+-- Note: Using a partial unique index to allow NULL emails (users who haven't set profile yet)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique
+    ON users (email) WHERE email IS NOT NULL AND email != '';
+
+-- GAP FIX: Add shared_trip_token field for ride sharing
+-- (This would be an ALTER TABLE since rides table already exists)
+-- ALTER TABLE rides ADD COLUMN IF NOT EXISTS shared_trip_token TEXT;
+-- ALTER TABLE rides ADD COLUMN IF NOT EXISTS actual_distance_km FLOAT;
+-- ALTER TABLE rides ADD COLUMN IF NOT EXISTS cancelled_by TEXT;
+ALTER TABLE rides ADD COLUMN IF NOT EXISTS surge_multiplier FLOAT NOT NULL DEFAULT 1.0;

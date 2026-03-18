@@ -2,9 +2,11 @@ from fastapi import APIRouter, Request, HTTPException
 try:
     from ..db import db
     from ..features import send_push_notification
+    from ..settings_loader import get_app_settings
 except ImportError:
     from db import db
     from features import send_push_notification
+    from settings_loader import get_app_settings
 import logging
 from datetime import datetime
 
@@ -22,9 +24,9 @@ async def stripe_webhook(request: Request):
     payload = await request.body()
     sig_header = request.headers.get('stripe-signature')
 
-    settings = await db.settings.find_one({'id': 'app_settings'})
-    webhook_secret = settings.get('stripe_webhook_secret', '') if settings else ''
-    stripe_secret = settings.get('stripe_secret_key', '') if settings else ''
+    settings = await get_app_settings()
+    webhook_secret = settings.get('stripe_webhook_secret', '')
+    stripe_secret = settings.get('stripe_secret_key', '')
 
     if not webhook_secret:
         logger.warning('stripe_webhook_secret not set in admin settings — webhook verification disabled')

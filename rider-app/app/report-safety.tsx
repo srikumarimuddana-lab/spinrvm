@@ -30,7 +30,7 @@ export default function ReportSafetyScreen() {
         setSubmitting(true);
         // Submit to the safety-report endpoint
         try {
-            await fetch(`${SpinrConfig.api.baseUrl}/support/tickets/safety-report`, {
+            await fetch(`${SpinrConfig.backendUrl}/support/tickets/safety-report`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ description: issue })

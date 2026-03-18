@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
     
     # Cleanup on shutdown
     logger.info("Shutting down Spinr API...")
-    # Note: scheduler_task is disabled - no background tasks to cancel
+    # Note: Background tasks are disabled - no cleanup needed
     
     # Cleanup database
     if hasattr(app.state, 'db') and app.state.db:

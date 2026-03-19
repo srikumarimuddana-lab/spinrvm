@@ -39,7 +39,21 @@ This file contains:
 ### Step 1: Run the Corporate Accounts Schema
 1. Go to Supabase Dashboard → SQL Editor
 2. Copy and paste the contents of `spinr/backend/corporate_accounts_schema.sql`
-3. Execute the SQL to create the table and policies
+3. Execute the SQL to create the table, trigger function, and policies
+
+**Note:** The schema file includes the `update_updated_at_column()` function which automatically updates the `updated_at` timestamp when records are modified.
+
+### Step 2: Fix Frontend API Endpoints (IMPORTANT)
+The frontend was using `/api/v1/admin/` endpoints but the backend uses `/api/admin/` endpoints. All API calls have been updated to match the backend routes:
+
+- ✅ Fixed auth session endpoint: `/api/admin/auth/session`
+- ✅ Fixed all admin endpoints: `/api/admin/stats`, `/api/admin/rides`, etc.
+- ✅ Fixed corporate accounts endpoint: `/api/admin/corporate-accounts`
+- ✅ Fixed all other admin functionality endpoints
+
+**Files Updated:**
+- `spinr/admin-dashboard/src/lib/api.ts` - All API endpoints corrected
+- `spinr/admin-dashboard/src/store/authStore.ts` - Session endpoint corrected
 
 ### Step 2: Test the Fix
 1. Run the test suite:

@@ -117,13 +117,17 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         db_session = user.get('current_session_id')
         if db_session and token_session != db_session:
             raise HTTPException(status_code=401, detail='Session expired. Logged in from another device.')
+        # If the JWT carries a role claim (e.g. admin), honour it over the DB value
+        jwt_role = payload.get('role')
+        if jwt_role:
+            user['role'] = jwt_role
 
     if not user:
-        # User not in DB yet — create them
+        # User not in DB yet — create them (preserve role from JWT if present)
         user = {
             'id': payload['user_id'],
             'phone': payload.get('phone', ''),
-            'role': 'rider',
+            'role': payload.get('role', 'rider'),
             'created_at': datetime.utcnow().isoformat(),
             'profile_complete': False,
         }

@@ -42,7 +42,7 @@ export default function PromotionsPage() {
 
     const fetchPromos = async () => {
         try {
-            const res = await fetch(`${API_BASE}/api/admin/promo-codes`, { headers });
+            const res = await fetch(`${API_BASE}/api/admin/promotions`, { headers });
             const data = await res.json();
             setPromos(Array.isArray(data) ? data : []);
         } catch {
@@ -58,7 +58,7 @@ export default function PromotionsPage() {
         if (!code.trim() || !discountValue) return;
         setCreating(true);
         try {
-            await fetch(`${API_BASE}/api/admin/promo-codes`, {
+            await fetch(`${API_BASE}/api/admin/promotions`, {
                 method: "POST", headers,
                 body: JSON.stringify({
                     code: code.trim().toUpperCase(),
@@ -79,7 +79,7 @@ export default function PromotionsPage() {
     };
 
     const toggleActive = async (promo: PromoCode) => {
-        await fetch(`${API_BASE}/api/admin/promo-codes/${promo.id}`, {
+        await fetch(`${API_BASE}/api/admin/promotions/${promo.id}`, {
             method: "PUT", headers,
             body: JSON.stringify({ is_active: !promo.is_active }),
         });
@@ -88,7 +88,7 @@ export default function PromotionsPage() {
 
     const deletePromo = async (id: string) => {
         if (!confirm("Delete this promo code?")) return;
-        await fetch(`${API_BASE}/api/admin/promo-codes/${id}`, { method: "DELETE", headers });
+        await fetch(`${API_BASE}/api/admin/promotions/${id}`, { method: "DELETE", headers });
         await fetchPromos();
     };
 

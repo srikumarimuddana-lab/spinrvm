@@ -34,6 +34,11 @@ v1_api_router.include_router(corporate_accounts_router)
 app.include_router(v1_api_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api")
 
+# Mount admin routes under /api so the admin dashboard can reach them at /api/admin/...
+app.include_router(admin_router, prefix="/api")
+app.include_router(admin_auth_router, prefix="/api")
+app.include_router(corporate_accounts_router, prefix="/api")
+
 # Configure structured logging with Loguru
 from loguru import logger
 import sys

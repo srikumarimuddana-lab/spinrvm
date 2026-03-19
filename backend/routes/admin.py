@@ -186,9 +186,7 @@ async def admin_delete_service_area(area_id: str):
 @admin_router.get("/vehicle-types")
 async def admin_get_vehicle_types():
     """Get all vehicle types."""
-    types = await db.get_rows("vehicle_types", order="display_order", limit=100)
-    if not types and db.vehicle_types.name:
-        types = await db.get_rows("vehicle_types", order="created_at", limit=100)
+    types = await db.get_rows("vehicle_types", order="created_at", limit=100)
     return types
 
 
@@ -203,7 +201,7 @@ async def admin_create_vehicle_type(vtype: Dict[str, Any]):
         "price_per_km": vtype.get("price_per_km"),
         "price_per_minute": vtype.get("price_per_minute"),
         "is_active": vtype.get("is_active", True),
-        "display_order": vtype.get("display_order", 1),
+
         "created_at": datetime.utcnow().isoformat(),
     }
     row = await db.vehicle_types.insert_one(doc)
@@ -622,16 +620,33 @@ async def admin_get_promotions():
 async def admin_create_promotion(promotion: Dict[str, Any]):
     """Create a new promotion/discount code."""
     doc = {
-        "code": promotion.get("code"),
+        "code": (promotion.get("code") or "").strip().upper(),
         "description": promotion.get("description", ""),
-        "discount_type": promotion.get("discount_type", "percentage"),  # percentage, fixed
+        "promo_type": promotion.get("promo_type", "discount"),
+        "discount_type": promotion.get("discount_type", "flat"),
         "discount_value": promotion.get("discount_value", 0),
-        "max_uses": promotion.get("max_uses", 0),
-        "current_uses": 0,
-        "valid_from": promotion.get("valid_from"),
-        "valid_until": promotion.get("valid_until"),
+        "max_discount": promotion.get("max_discount"),
+        "max_uses": promotion.get("max_uses", 100),
+        "max_uses_per_user": promotion.get("max_uses_per_user", 1),
+        "uses": 0,
+        "valid_from": promotion.get("valid_from", datetime.utcnow().isoformat()),
+        "expiry_date": promotion.get("expiry_date"),
+        "min_ride_fare": promotion.get("min_ride_fare", 0),
+        "first_ride_only": promotion.get("first_ride_only", False),
+        "new_user_days": promotion.get("new_user_days", 0),
+        "applicable_areas": promotion.get("applicable_areas", []),
+        "applicable_vehicles": promotion.get("applicable_vehicles", []),
+        "user_segments": promotion.get("user_segments", []),
+        "total_budget": promotion.get("total_budget", 0),
+        "budget_used": 0,
+        "valid_days": promotion.get("valid_days", []),
+        "valid_hours_start": promotion.get("valid_hours_start"),
+        "valid_hours_end": promotion.get("valid_hours_end"),
+        "referrer_user_id": promotion.get("referrer_user_id"),
+        "referrer_reward": promotion.get("referrer_reward", 0),
         "is_active": promotion.get("is_active", True),
         "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
     }
     row = await db.promotions.insert_one(doc)
     return {"promotion_id": str(row.get("id") if row and isinstance(row, dict) else "")}
@@ -640,24 +655,15 @@ async def admin_create_promotion(promotion: Dict[str, Any]):
 @admin_router.put("/promotions/{promotion_id}")
 async def admin_update_promotion(promotion_id: str, promotion: Dict[str, Any]):
     """Update a promotion."""
-    updates = {}
-    if promotion.get("code") is not None:
-        updates["code"] = promotion.get("code")
-    if promotion.get("description") is not None:
-        updates["description"] = promotion.get("description")
-    if promotion.get("discount_type") is not None:
-        updates["discount_type"] = promotion.get("discount_type")
-    if promotion.get("discount_value") is not None:
-        updates["discount_value"] = promotion.get("discount_value")
-    if promotion.get("max_uses") is not None:
-        updates["max_uses"] = promotion.get("max_uses")
-    if promotion.get("valid_from") is not None:
-        updates["valid_from"] = promotion.get("valid_from")
-    if promotion.get("valid_until") is not None:
-        updates["valid_until"] = promotion.get("valid_until")
-    if promotion.get("is_active") is not None:
-        updates["is_active"] = promotion.get("is_active")
-    
+    allowed_fields = [
+        "code", "description", "promo_type", "discount_type", "discount_value",
+        "max_discount", "max_uses", "max_uses_per_user", "valid_from", "expiry_date",
+        "min_ride_fare", "first_ride_only", "new_user_days", "applicable_areas",
+        "applicable_vehicles", "user_segments", "total_budget", "valid_days",
+        "valid_hours_start", "valid_hours_end", "referrer_reward", "is_active",
+    ]
+    updates = {k: v for k, v in promotion.items() if k in allowed_fields and v is not None}
+
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
         await db.promotions.update_one({"id": promotion_id}, {"$set": updates})
@@ -1067,6 +1073,127 @@ async def admin_review_driver_document(
         {"$set": updates}
     )
     return {"message": f"Document {status}"}
+
+
+# ---------- Heat Map Data ----------
+
+@admin_router.get("/rides/heatmap-data")
+async def admin_get_heatmap_data(
+    filter: str = Query("all"),
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    service_area_id: Optional[str] = None,
+    group_by: str = Query("both"),
+):
+    """Get ride location data for heat map visualisation.
+
+    Query params:
+        filter: 'all' | 'corporate' | 'regular'
+        start_date / end_date: ISO date strings (YYYY-MM-DD)
+        service_area_id: optional area filter
+        group_by: 'pickup' | 'dropoff' | 'both'
+    """
+    query_filters: Dict[str, Any] = {}
+
+    # Date range filter
+    if start_date:
+        query_filters.setdefault("created_at", {})["$gte"] = start_date
+    if end_date:
+        query_filters.setdefault("created_at", {})["$lte"] = end_date + "T23:59:59"
+
+    # Corporate vs regular filter
+    if filter == "corporate":
+        query_filters["corporate_account_id"] = {"$ne": None}
+    elif filter == "regular":
+        query_filters["corporate_account_id"] = None
+
+    # Service area filter
+    if service_area_id:
+        query_filters["service_area_id"] = service_area_id
+
+    rides = await db.get_rows("rides", query_filters, order="created_at", desc=True, limit=10000)
+
+    pickup_points = []
+    dropoff_points = []
+    corporate_count = 0
+    regular_count = 0
+
+    for r in rides:
+        p_lat = r.get("pickup_lat")
+        p_lng = r.get("pickup_lng")
+        d_lat = r.get("dropoff_lat")
+        d_lng = r.get("dropoff_lng")
+
+        if p_lat is not None and p_lng is not None:
+            pickup_points.append([float(p_lat), float(p_lng), 1])
+        if d_lat is not None and d_lng is not None:
+            dropoff_points.append([float(d_lat), float(d_lng), 1])
+
+        if r.get("corporate_account_id"):
+            corporate_count += 1
+        else:
+            regular_count += 1
+
+    return {
+        "pickup_points": pickup_points,
+        "dropoff_points": dropoff_points,
+        "stats": {
+            "total_rides": len(rides),
+            "corporate_rides": corporate_count,
+            "regular_rides": regular_count,
+        },
+    }
+
+
+# ---------- Heat Map Settings ----------
+
+_HEATMAP_SETTINGS_ID = "heatmap_settings"
+
+_DEFAULT_HEATMAP_SETTINGS = {
+    "heat_map_enabled": True,
+    "heat_map_default_range": "month",
+    "heat_map_intensity": "medium",
+    "heat_map_radius": 25,
+    "heat_map_blur": 15,
+    "heat_map_gradient_start": "#00ff00",
+    "heat_map_gradient_mid": "#ffff00",
+    "heat_map_gradient_end": "#ff0000",
+    "heat_map_show_pickups": True,
+    "heat_map_show_dropoffs": True,
+    "corporate_heat_map_enabled": True,
+    "regular_rider_heat_map_enabled": True,
+}
+
+
+@admin_router.get("/settings/heatmap")
+async def admin_get_heatmap_settings():
+    """Return heat-map display settings (single settings row)."""
+    row = await db.settings.find_one({"id": _HEATMAP_SETTINGS_ID})
+    if row:
+        # Merge defaults with stored values so new keys always appear
+        merged = {**_DEFAULT_HEATMAP_SETTINGS, **row}
+        merged.pop("_id", None)
+        return merged
+    return {**_DEFAULT_HEATMAP_SETTINGS, "id": _HEATMAP_SETTINGS_ID}
+
+
+@admin_router.put("/settings/heatmap")
+async def admin_update_heatmap_settings(data: Dict[str, Any]):
+    """Update heat-map display settings."""
+    payload = {
+        "id": _HEATMAP_SETTINGS_ID,
+        **{k: v for k, v in data.items() if k in _DEFAULT_HEATMAP_SETTINGS},
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+
+    existing = await db.settings.find_one({"id": _HEATMAP_SETTINGS_ID})
+    if existing:
+        update_fields = {k: v for k, v in payload.items() if k != "id"}
+        await db.settings.update_one({"id": _HEATMAP_SETTINGS_ID}, {"$set": update_fields})
+    else:
+        await db.settings.insert_one(payload)
+
+    return {"message": "Heat map settings updated"}
 
 
 # ---------- Corporate Accounts (moved to dedicated routes) ----------

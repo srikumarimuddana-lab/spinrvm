@@ -72,7 +72,7 @@ export const loginAdmin = (phone: string, code: string) =>
     });
 
 export const loginAdminSession = (email: string, password: string) =>
-    request<AdminLoginResponse>("/api/v1/admin/auth/login", {
+    request<AdminLoginResponse>("/api/admin/auth/login", {
         method: "POST",
         body: JSON.stringify({ email, password }),
     });
@@ -96,253 +96,253 @@ export const getStats = () =>
         total_driver_earnings: number;
         total_admin_earnings: number;
         total_tips: number;
-    }>("/api/v1/admin/stats");
+    }>("/api/admin/stats");
 
 /* ── Rides ────────────────────────────────── */
-export const getRides = () => request<any[]>("/api/v1/admin/rides");
+export const getRides = () => request<any[]>("/api/admin/rides");
 export const getRideDetails = (id: string) =>
-    request<any>(`/api/v1/admin/rides/${id}/details`);
+    request<any>(`/api/admin/rides/${id}/details`);
 
 /* ── Drivers ──────────────────────────────── */
-export const getDrivers = () => request<any[]>("/api/v1/admin/drivers");
+export const getDrivers = () => request<any[]>("/api/admin/drivers");
 export const getDriverRides = (id: string) =>
-    request<any>(`/api/v1/admin/drivers/${id}/rides`);
+    request<any>(`/api/admin/drivers/${id}/rides`);
 
 /* ── Earnings ─────────────────────────────── */
-export const getEarnings = () => request<any[]>("/api/v1/admin/earnings");
+export const getEarnings = () => request<any[]>("/api/admin/earnings");
 
 /* ── Settings ─────────────────────────────── */
-export const getSettings = () => request<any>("/api/v1/admin/settings");
+export const getSettings = () => request<any>("/api/admin/settings");
 export const updateSettings = (data: any) =>
-    request<any>("/api/v1/admin/settings", {
+    request<any>("/api/admin/settings", {
         method: "PUT",
         body: JSON.stringify(data),
     });
 
 /* ── Service Areas ────────────────────────── */
 export const getServiceAreas = () =>
-    request<any[]>("/api/v1/admin/service-areas");
+    request<any[]>("/api/admin/service-areas");
 export const createServiceArea = (data: any) =>
-    request<any>("/api/v1/admin/service-areas", {
+    request<any>("/api/admin/service-areas", {
         method: "POST",
         body: JSON.stringify(data),
     });
 export const updateServiceArea = (id: string, data: any) =>
-    request<any>(`/api/v1/admin/service-areas/${id}`, {
+    request<any>(`/api/admin/service-areas/${id}`, {
         method: "PUT",
         body: JSON.stringify(data),
     });
 export const deleteServiceArea = (id: string) =>
-    request<any>(`/api/v1/admin/service-areas/${id}`, { method: "DELETE" });
+    request<any>(`/api/admin/service-areas/${id}`, { method: "DELETE" });
 
 /* ── Vehicle Types ────────────────────────── */
 export const getVehicleTypes = () =>
-    request<any[]>("/api/v1/admin/vehicle-types");
+    request<any[]>("/api/admin/vehicle-types");
 export const createVehicleType = (data: any) =>
-    request<any>("/api/v1/admin/vehicle-types", {
+    request<any>("/api/admin/vehicle-types", {
         method: "POST",
         body: JSON.stringify(data),
     });
 export const updateVehicleType = (id: string, data: any) =>
-    request<any>(`/api/v1/admin/vehicle-types/${id}`, {
+    request<any>(`/api/admin/vehicle-types/${id}`, {
         method: "PUT",
         body: JSON.stringify(data),
     });
 export const deleteVehicleType = (id: string) =>
-    request<any>(`/api/v1/admin/vehicle-types/${id}`, { method: "DELETE" });
+    request<any>(`/api/admin/vehicle-types/${id}`, { method: "DELETE" });
 
 /* ── Fare Configs ─────────────────────────── */
 export const getFareConfigs = () =>
-    request<any[]>("/api/v1/admin/fare-configs");
+    request<any[]>("/api/admin/fare-configs");
 export const createFareConfig = (data: any) =>
-    request<any>("/api/v1/admin/fare-configs", {
+    request<any>("/api/admin/fare-configs", {
         method: "POST",
         body: JSON.stringify(data),
     });
 export const updateFareConfig = (id: string, data: any) =>
-    request<any>(`/api/v1/admin/fare-configs/${id}`, {
+    request<any>(`/api/admin/fare-configs/${id}`, {
         method: "PUT",
         body: JSON.stringify(data),
     });
 export const deleteFareConfig = (id: string) =>
-    request<any>(`/api/v1/admin/fare-configs/${id}`, { method: "DELETE" });
+    request<any>(`/api/admin/fare-configs/${id}`, { method: "DELETE" });
 
 /* ── Surge Pricing ────────────────────────── */
 export const updateSurge = (areaId: string, data: any) =>
-    request<any>(`/api/v1/admin/service-areas/${areaId}/surge`, {
+    request<any>(`/api/admin/service-areas/${areaId}/surge`, {
         method: "PUT",
         body: JSON.stringify(data),
     });
 
 /* ── Document Requirements ───────────────── */
 export const getRequirements = () =>
-    request<any[]>("/api/v1/admin/documents/requirements");
+    request<any[]>("/api/admin/documents/requirements");
 
 export const createRequirement = (data: any) =>
-    request<any>("/api/v1/admin/documents/requirements", {
+    request<any>("/api/admin/documents/requirements", {
         method: "POST",
         body: JSON.stringify(data),
     });
 
 export const updateRequirement = (id: string, data: any) =>
-    request<any>(`/api/v1/admin/documents/requirements/${id}`, {
+    request<any>(`/api/admin/documents/requirements/${id}`, {
         method: "PUT",
         body: JSON.stringify(data),
     });
 
 export const deleteRequirement = (id: string) =>
-    request<any>(`/api/v1/admin/documents/requirements/${id}`, { method: "DELETE" });
+    request<any>(`/api/admin/documents/requirements/${id}`, { method: "DELETE" });
 
 /* ── Driver Document Verification ────────── */
 export const getDriverDocuments = (driverId: string) =>
-    request<any[]>(`/api/v1/admin/documents/drivers/${driverId}`);
+    request<any[]>(`/api/admin/documents/drivers/${driverId}`);
 
 export const reviewDocument = (docId: string, status: string, reason?: string) =>
-    request<any>(`/api/v1/admin/documents/${docId}/review`, {
+    request<any>(`/api/admin/documents/${docId}/review`, {
         method: "POST",
         body: JSON.stringify({ status, rejection_reason: reason }),
     });
 
 /* ── Corporate Accounts ─────────────────────── */
 export const getCorporateAccounts = () =>
-    request<any[]>("/api/v1/admin/corporate-accounts");
+    request<any[]>("/api/admin/corporate-accounts");
 
 export const createCorporateAccount = (data: any) =>
-    request<any>("/api/v1/admin/corporate-accounts", {
+    request<any>("/api/admin/corporate-accounts", {
         method: "POST",
         body: JSON.stringify(data),
     });
 
 export const updateCorporateAccount = (id: string, data: any) =>
-    request<any>(`/api/v1/admin/corporate-accounts/${id}`, {
+    request<any>(`/api/admin/corporate-accounts/${id}`, {
         method: "PUT",
         body: JSON.stringify(data),
     });
 
 export const deleteCorporateAccount = (id: string) =>
-    request<any>(`/api/v1/admin/corporate-accounts/${id}`, { method: "DELETE" });
+    request<any>(`/api/admin/corporate-accounts/${id}`, { method: "DELETE" });
 
 /* ── Users (Riders) ─────────────────────────── */
 export const getUsers = () =>
-    request<any[]>("/api/v1/admin/users");
+    request<any[]>("/api/admin/users");
 
 export const getUserDetails = (id: string) =>
-    request<any>(`/api/v1/admin/users/${id}`);
+    request<any>(`/api/admin/users/${id}`);
 
 export const updateUserStatus = (id: string, statusData: any) =>
-    request<any>(`/api/v1/admin/users/${id}/status`, {
+    request<any>(`/api/admin/users/${id}/status`, {
         method: "PUT",
         body: JSON.stringify(statusData),
     });
 
 /* ── Promotions ─────────────────────────────── */
 export const getPromotions = () =>
-    request<any[]>("/api/v1/admin/promotions");
+    request<any[]>("/api/admin/promotions");
 
 export const createPromotion = (data: any) =>
-    request<any>("/api/v1/admin/promotions", {
+    request<any>("/api/admin/promotions", {
         method: "POST",
         body: JSON.stringify(data),
     });
 
 export const updatePromotion = (id: string, data: any) =>
-    request<any>(`/api/v1/admin/promotions/${id}`, {
+    request<any>(`/api/admin/promotions/${id}`, {
         method: "PUT",
         body: JSON.stringify(data),
     });
 
 export const deletePromotion = (id: string) =>
-    request<any>(`/api/v1/admin/promotions/${id}`, { method: "DELETE" });
+    request<any>(`/api/admin/promotions/${id}`, { method: "DELETE" });
 
 /* ── Disputes ───────────────────────────────── */
 export const getDisputes = () =>
-    request<any[]>("/api/v1/admin/disputes");
+    request<any[]>("/api/admin/disputes");
 
 export const getDisputeDetails = (id: string) =>
-    request<any>(`/api/v1/admin/disputes/${id}`);
+    request<any>(`/api/admin/disputes/${id}`);
 
 export const resolveDispute = (id: string, resolution: any) =>
-    request<any>(`/api/v1/admin/disputes/${id}/resolve`, {
+    request<any>(`/api/admin/disputes/${id}/resolve`, {
         method: "PUT",
         body: JSON.stringify(resolution),
     });
 
 /* ── Support Tickets ────────────────────────── */
 export const getTickets = () =>
-    request<any[]>("/api/v1/admin/tickets");
+    request<any[]>("/api/admin/tickets");
 
 export const getTicketDetails = (id: string) =>
-    request<any>(`/api/v1/admin/tickets/${id}`);
+    request<any>(`/api/admin/tickets/${id}`);
 
 export const replyToTicket = (id: string, message: string) =>
-    request<any>(`/api/v1/admin/tickets/${id}/reply`, {
+    request<any>(`/api/admin/tickets/${id}/reply`, {
         method: "POST",
         body: JSON.stringify({ message }),
     });
 
 export const closeTicket = (id: string) =>
-    request<any>(`/api/v1/admin/tickets/${id}/close`, { method: "POST" });
+    request<any>(`/api/admin/tickets/${id}/close`, { method: "POST" });
 
 /* ── FAQs ───────────────────────────────────── */
 export const getFaqs = () =>
-    request<any[]>("/api/v1/admin/faqs");
+    request<any[]>("/api/admin/faqs");
 
 export const createFaq = (data: any) =>
-    request<any>("/api/v1/admin/faqs", {
+    request<any>("/api/admin/faqs", {
         method: "POST",
         body: JSON.stringify(data),
     });
 
 export const updateFaq = (id: string, data: any) =>
-    request<any>(`/api/v1/admin/faqs/${id}`, {
+    request<any>(`/api/admin/faqs/${id}`, {
         method: "PUT",
         body: JSON.stringify(data),
     });
 
 export const deleteFaq = (id: string) =>
-    request<any>(`/api/v1/admin/faqs/${id}`, { method: "DELETE" });
+    request<any>(`/api/admin/faqs/${id}`, { method: "DELETE" });
 
 /* ── Notifications ──────────────────────────── */
 export const sendNotification = (data: { user_id: string; title: string; body: string }) =>
-    request<any>("/api/v1/admin/notifications/send", {
+    request<any>("/api/admin/notifications/send", {
         method: "POST",
         body: JSON.stringify(data),
     });
 
 /* ── Area Management (Pricing, Tax, Vehicle Pricing) ─────────────────── */
 export const getAreaFees = (areaId: string) =>
-    request<any[]>(`/api/v1/admin/areas/${areaId}/fees`);
+    request<any[]>(`/api/admin/areas/${areaId}/fees`);
 
 export const createAreaFee = (areaId: string, data: any) =>
-    request<any>(`/api/v1/admin/areas/${areaId}/fees`, {
+    request<any>(`/api/admin/areas/${areaId}/fees`, {
         method: "POST",
         body: JSON.stringify(data),
     });
 
 export const updateAreaFee = (areaId: string, feeId: string, data: any) =>
-    request<any>(`/api/v1/admin/areas/${areaId}/fees/${feeId}`, {
+    request<any>(`/api/admin/areas/${areaId}/fees/${feeId}`, {
         method: "PUT",
         body: JSON.stringify(data),
     });
 
 export const deleteAreaFee = (areaId: string, feeId: string) =>
-    request<any>(`/api/v1/admin/areas/${areaId}/fees/${feeId}`, { method: "DELETE" });
+    request<any>(`/api/admin/areas/${areaId}/fees/${feeId}`, { method: "DELETE" });
 
 export const getAreaTax = (areaId: string) =>
-    request<any>(`/api/v1/admin/areas/${areaId}/tax`);
+    request<any>(`/api/admin/areas/${areaId}/tax`);
 
 export const updateAreaTax = (areaId: string, data: any) =>
-    request<any>(`/api/v1/admin/areas/${areaId}/tax`, {
+    request<any>(`/api/admin/areas/${areaId}/tax`, {
         method: "PUT",
         body: JSON.stringify(data),
     });
 
 export const getVehiclePricing = (areaId: string) =>
-    request<any>(`/api/v1/admin/areas/${areaId}/vehicle-pricing`);
+    request<any>(`/api/admin/areas/${areaId}/vehicle-pricing`);
 
 /* ── Driver Area Assignment ──────────────────── */
 export const assignDriverArea = (driverId: string, serviceAreaId: string) =>
-    request<any>(`/api/v1/admin/drivers/${driverId}/area?service_area_id=${serviceAreaId}`, {
+    request<any>(`/api/admin/drivers/${driverId}/area?service_area_id=${serviceAreaId}`, {
         method: "PUT",
     });
 
@@ -372,7 +372,7 @@ export const getHeatMapData = (params: {
     if (params.service_area_id) searchParams.set('service_area_id', params.service_area_id);
     if (params.group_by) searchParams.set('group_by', params.group_by);
 
-    return request<HeatMapData>(`/api/v1/admin/rides/heatmap-data?${searchParams.toString()}`);
+    return request<HeatMapData>(`/api/admin/rides/heatmap-data?${searchParams.toString()}`);
 };
 
 /* ── Heat Map Settings ─────────────────────── */
@@ -392,10 +392,10 @@ export interface HeatMapSettings {
 }
 
 export const getHeatMapSettings = () =>
-    request<HeatMapSettings>("/api/v1/admin/settings/heatmap");
+    request<HeatMapSettings>("/api/admin/settings/heatmap");
 
 export const updateHeatMapSettings = (data: Partial<HeatMapSettings>) =>
-    request<any>("/api/v1/admin/settings/heatmap", {
+    request<any>("/api/admin/settings/heatmap", {
         method: "PUT",
         body: JSON.stringify(data),
     });

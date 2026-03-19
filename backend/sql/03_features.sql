@@ -124,3 +124,106 @@ CREATE POLICY IF NOT EXISTS "Anyone can read active FAQs" ON faqs
 
 CREATE POLICY IF NOT EXISTS "Admins manage FAQs" ON faqs
   FOR ALL USING (auth.role() = 'service_role');
+
+
+-- ========== Promotions / Promo Codes ==========
+CREATE TABLE IF NOT EXISTS promotions (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+  -- Core promo info
+  code                TEXT NOT NULL UNIQUE,                      -- e.g. SAVE10, WELCOME50
+  description         TEXT DEFAULT '',                           -- admin-facing description
+  promo_type          TEXT DEFAULT 'discount',                   -- discount | referral | cashback | free_ride
+
+  -- Discount configuration
+  discount_type       TEXT NOT NULL DEFAULT 'flat',              -- flat | percentage
+  discount_value      NUMERIC(8,2) NOT NULL DEFAULT 0.00,       -- $ amount or % value
+  max_discount        NUMERIC(8,2),                              -- cap for percentage discounts (nullable = no cap)
+
+  -- Usage limits
+  max_uses            INTEGER DEFAULT 100,                       -- total redemptions allowed (0 = unlimited)
+  max_uses_per_user   INTEGER DEFAULT 1,                         -- per-user redemption limit
+  uses                INTEGER DEFAULT 0,                         -- current total redemption count
+
+  -- Validity window
+  valid_from          TIMESTAMPTZ DEFAULT now(),                 -- promotion start date/time
+  expiry_date         TIMESTAMPTZ,                               -- promotion end date/time (nullable = no expiry)
+
+  -- Targeting & eligibility
+  min_ride_fare       NUMERIC(8,2) DEFAULT 0.00,                -- minimum ride fare to apply promo
+  first_ride_only     BOOLEAN DEFAULT false,                     -- only for users with 0 completed rides
+  new_user_days       INTEGER DEFAULT 0,                         -- only for users registered within N days (0 = any)
+  applicable_areas    JSONB DEFAULT '[]'::jsonb,                 -- [] = all areas; ["area_id_1", "area_id_2"]
+  applicable_vehicles JSONB DEFAULT '[]'::jsonb,                 -- [] = all types; ["vehicle_type_id_1"]
+  user_segments       JSONB DEFAULT '[]'::jsonb,                 -- [] = all; ["new", "returning", "inactive"]
+
+  -- Budget tracking
+  total_budget        NUMERIC(10,2) DEFAULT 0.00,               -- total spend cap ($0 = unlimited)
+  budget_used         NUMERIC(10,2) DEFAULT 0.00,               -- running total of discount $ given
+
+  -- Scheduling (day/time restrictions)
+  valid_days          JSONB DEFAULT '[]'::jsonb,                 -- [] = all; ["mon","tue","wed","thu","fri","sat","sun"]
+  valid_hours_start   INTEGER,                                   -- hour of day (0-23), nullable = any
+  valid_hours_end     INTEGER,                                   -- hour of day (0-23), nullable = any
+
+  -- Referral link
+  referrer_user_id    UUID,                                      -- if referral type, the referring user
+  referrer_reward     NUMERIC(8,2) DEFAULT 0.00,                -- reward $ for referrer when code is used
+
+  -- Status
+  is_active           BOOLEAN DEFAULT true,
+
+  -- Timestamps
+  created_at          TIMESTAMPTZ DEFAULT now(),
+  updated_at          TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_promotions_code ON promotions(code);
+CREATE INDEX IF NOT EXISTS idx_promotions_is_active ON promotions(is_active);
+CREATE INDEX IF NOT EXISTS idx_promotions_expiry ON promotions(expiry_date);
+
+
+-- ========== Promo Applications (usage tracking) ==========
+CREATE TABLE IF NOT EXISTS promo_applications (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  promo_id            UUID REFERENCES promotions(id) ON DELETE SET NULL,
+  user_id             TEXT,                                      -- matches users.id (TEXT)
+  ride_id             UUID,                                      -- ride this was applied to
+  code                TEXT NOT NULL,
+  discount_applied    NUMERIC(8,2) NOT NULL DEFAULT 0.00,        -- actual $ discount given
+  ride_fare_before    NUMERIC(8,2) DEFAULT 0.00,                 -- fare before discount
+  ride_fare_after     NUMERIC(8,2) DEFAULT 0.00,                 -- fare after discount
+  created_at          TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_promo_applications_user ON promo_applications(user_id);
+CREATE INDEX IF NOT EXISTS idx_promo_applications_promo ON promo_applications(promo_id);
+
+
+-- RLS for promotions
+ALTER TABLE promotions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE promo_applications ENABLE ROW LEVEL SECURITY;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='promotions' AND policyname='Anyone can read active promotions') THEN
+    CREATE POLICY "Anyone can read active promotions" ON promotions FOR SELECT USING (is_active = true);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='promotions' AND policyname='Admins manage promotions') THEN
+    CREATE POLICY "Admins manage promotions" ON promotions FOR ALL USING (auth.role() = 'service_role');
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='promo_applications' AND policyname='Users can view own promo applications') THEN
+    CREATE POLICY "Users can view own promo applications" ON promo_applications FOR SELECT USING (user_id = auth.uid()::text);
+  END IF;
+END $$;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename='promo_applications' AND policyname='Admins manage promo applications') THEN
+    CREATE POLICY "Admins manage promo applications" ON promo_applications FOR ALL USING (auth.role() = 'service_role');
+  END IF;
+END $$;

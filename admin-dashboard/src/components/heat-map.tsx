@@ -4,11 +4,12 @@ import { useEffect, useRef, useCallback } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-// Import leaflet.heat dynamically
-let heatLayer: any = null;
+// Import leaflet.heat dynamically – the plugin extends L with L.heatLayer()
+let heatLoaded = false;
 if (typeof window !== "undefined") {
     try {
-        heatLayer = require("leaflet.heat");
+        require("leaflet.heat");
+        heatLoaded = true;
     } catch (e) {
         console.warn("leaflet.heat not available");
     }
@@ -83,7 +84,7 @@ export default function HeatMap({
     };
 
     useEffect(() => {
-        if (!containerRef.current || mapRef.current || !heatLayer) return;
+        if (!containerRef.current || mapRef.current || !heatLoaded) return;
 
         const map = L.map(containerRef.current, {
             center: [center.lat, center.lng],
@@ -109,7 +110,7 @@ export default function HeatMap({
 
     // Update heat layers when points or visibility changes
     useEffect(() => {
-        if (!mapRef.current || !heatLayer) return;
+        if (!mapRef.current || !heatLoaded) return;
 
         const map = mapRef.current;
 
@@ -133,7 +134,7 @@ export default function HeatMap({
 
         // Add pickup heat layer
         if (showPickups && pickupPoints.length > 0) {
-            const pickupHeat = heatLayer.layer(toHeatPoints(pickupPoints), {
+            const pickupHeat = (L as any).heatLayer(toHeatPoints(pickupPoints), {
                 ...heatOptions,
                 // Use blue/cyan gradient for pickups
                 gradient: {
@@ -150,7 +151,7 @@ export default function HeatMap({
 
         // Add dropoff heat layer
         if (showDropoffs && dropoffPoints.length > 0) {
-            const dropoffHeat = heatLayer.layer(toHeatPoints(dropoffPoints), heatOptions);
+            const dropoffHeat = (L as any).heatLayer(toHeatPoints(dropoffPoints), heatOptions);
             dropoffHeat.addTo(map);
             dropoffLayerRef.current = dropoffHeat;
         }

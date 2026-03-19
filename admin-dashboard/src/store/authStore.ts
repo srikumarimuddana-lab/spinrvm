@@ -66,7 +66,7 @@ export const useAuthStore = create<AuthState>()(
                 }
 
                 try {
-                    const res = await fetch(`${API_BASE}/api/v1/admin/auth/session`, {
+                    const res = await fetch(`${API_BASE}/api/admin/auth/session`, {
                         headers: {
                             'Authorization': `Bearer ${token}`,
                             'Content-Type': 'application/json',

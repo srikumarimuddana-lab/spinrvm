@@ -75,8 +75,6 @@ async def get_corporate_accounts(
         is_active: Filter by active status
         current_admin: Authenticated admin user
     """
-    from ..db_supabase import get_all_corporate_accounts
-    
     try:
         accounts = await get_all_corporate_accounts(
             skip=skip,
@@ -105,8 +103,6 @@ async def create_corporate_account(
         account: Corporate account data
         current_admin: Authenticated admin user
     """
-    from ..db_supabase import insert_corporate_account
-    
     # Validate inputs
     if account.contact_email:
         valid, normalized_email = validate_email(account.contact_email, raise_exception=True)
@@ -144,8 +140,6 @@ async def get_corporate_account(
         account_id: ID of the corporate account
         current_admin: Authenticated admin user
     """
-    from ..db_supabase import get_corporate_account_by_id
-    
     # Validate account ID
     valid, normalized_id = validate_id(account_id, "Corporate Account ID", raise_exception=True)
     
@@ -180,8 +174,6 @@ async def update_corporate_account(
         account_update: Updated account data
         current_admin: Authenticated admin user
     """
-    from ..db_supabase import get_corporate_account_by_id, update_corporate_account
-    
     # Validate account ID
     valid, normalized_id = validate_id(account_id, "Corporate Account ID", raise_exception=True)
     
@@ -232,8 +224,6 @@ async def delete_corporate_account(
         account_id: ID of the corporate account to delete
         current_admin: Authenticated admin user
     """
-    from ..db_supabase import get_corporate_account_by_id, delete_corporate_account
-    
     # Validate account ID
     valid, normalized_id = validate_id(account_id, "Corporate Account ID", raise_exception=True)
     

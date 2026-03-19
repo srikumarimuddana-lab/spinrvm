@@ -60,7 +60,7 @@ async def validate_promo(
 ):
     """Validate a promo code and return the discount amount."""
     code = req.code.strip().upper()
-    promo = await db.promo_codes.find_one({"code": code})
+    promo = await db.promotions.find_one({"code": code})
 
     if not promo:
         raise HTTPException(status_code=404, detail="Invalid promo code")
@@ -88,7 +88,7 @@ async def validate_promo(
     # Check per-user usage
     max_per_user = promo.get("max_uses_per_user", 1)
     user_uses = await db.promo_applications.count_documents({
-        "promo_code_id": promo["id"],
+        "promo_id": promo["id"],
         "user_id": current_user["id"],
     })
     if user_uses >= max_per_user:
@@ -130,7 +130,7 @@ async def apply_promo(
     application = {
         "id": str(uuid.uuid4()),
         "user_id": current_user["id"],
-        "promo_code_id": validation["promo_id"],
+        "promo_id": validation["promo_id"],
         "code": validation["code"],
         "discount_applied": validation["discount_amount"],
         "created_at": datetime.utcnow().isoformat(),
@@ -138,9 +138,9 @@ async def apply_promo(
     await db.promo_applications.insert_one(application)
 
     # Increment usage count
-    promo = await db.promo_codes.find_one({"id": validation["promo_id"]})
+    promo = await db.promotions.find_one({"id": validation["promo_id"]})
     if promo:
-        await db.promo_codes.update_one(
+        await db.promotions.update_one(
             {"id": validation["promo_id"]},
             {"$set": {"uses": promo.get("uses", 0) + 1}},
         )
@@ -160,7 +160,7 @@ admin_router = APIRouter(prefix="/admin/promo-codes", tags=["Admin Promotions"])
 @admin_router.get("")
 async def admin_get_promo_codes():
     """Get all promo codes."""
-    codes = await db.get_rows("promo_codes", order="created_at", desc=True, limit=500)
+    codes = await db.get_rows("promotions", order="created_at", desc=True, limit=500)
     return codes
 
 
@@ -170,7 +170,7 @@ async def admin_create_promo_code(req: CreatePromoCodeRequest):
     code = req.code.strip().upper()
 
     # Check uniqueness
-    existing = await db.promo_codes.find_one({"code": code})
+    existing = await db.promotions.find_one({"code": code})
     if existing:
         raise HTTPException(status_code=400, detail=f"Promo code '{code}' already exists")
 
@@ -193,7 +193,7 @@ async def admin_create_promo_code(req: CreatePromoCodeRequest):
         "updated_at": datetime.utcnow().isoformat(),
     }
 
-    await db.promo_codes.insert_one(promo)
+    await db.promotions.insert_one(promo)
     return {"success": True, "promo": promo}
 
 
@@ -210,8 +210,8 @@ async def admin_update_promo_code(promo_id: str, req: UpdatePromoCodeRequest):
         if val is not None:
             update_data[field] = val
 
-    await db.promo_codes.update_one({"id": promo_id}, {"$set": update_data})
-    updated = await db.promo_codes.find_one({"id": promo_id})
+    await db.promotions.update_one({"id": promo_id}, {"$set": update_data})
+    updated = await db.promotions.find_one({"id": promo_id})
     if not updated:
         raise HTTPException(status_code=404, detail="Promo code not found")
     return updated
@@ -220,5 +220,5 @@ async def admin_update_promo_code(promo_id: str, req: UpdatePromoCodeRequest):
 @admin_router.delete("/{promo_id}")
 async def admin_delete_promo_code(promo_id: str):
     """Delete a promo code."""
-    await db.promo_codes.delete_one({"id": promo_id})
+    await db.promotions.delete_one({"id": promo_id})
     return {"deleted": True}

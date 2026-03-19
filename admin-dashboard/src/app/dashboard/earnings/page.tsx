@@ -26,7 +26,18 @@ export default function EarningsPage() {
 
     useEffect(() => {
         getEarnings()
-            .then(setEarnings)
+            .then((data) => {
+                // API may return an array or a summary object; ensure we always set an array
+                if (Array.isArray(data)) {
+                    setEarnings(data);
+                } else if (data && typeof data === "object") {
+                    // If the response contains an array property, use it
+                    const arr = (data as any).earnings || (data as any).rides || (data as any).data;
+                    setEarnings(Array.isArray(arr) ? arr : []);
+                } else {
+                    setEarnings([]);
+                }
+            })
             .catch(() => { })
             .finally(() => setLoading(false));
     }, []);

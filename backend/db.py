@@ -191,6 +191,7 @@ class DB:
         self.bank_accounts = BankAccountCollection('bank_accounts')
         self.payouts = PayoutCollection('payouts')
         self.promo_codes = PromoCodeCollection('promo_codes')
+        self.promotions = PromotionCollection('promotions')
         self.promo_applications = PromoApplicationCollection('promo_applications')
         self.disputes = DisputeCollection('disputes')
         self.notifications = NotificationCollection('notifications')
@@ -373,6 +374,9 @@ class PayoutCollection(BaseCollection):
     pass
 
 class PromoCodeCollection(BaseCollection):
+    pass
+
+class PromotionCollection(BaseCollection):
     pass
 
 class PromoApplicationCollection(BaseCollection):

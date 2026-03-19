@@ -1,125 +1,143 @@
-"use client"
+"use client";
 
-import * as React from "react"
-import { Slot } from "@radix-ui/react-slot"
-import { PanelLeft } from "lucide-react"
-import { cn } from "@/lib/utils"
-import { Button } from "@/components/ui/button"
+import * as React from "react";
+import { Slot } from "@radix-ui/react-slot";
+import { cva, type VariantProps } from "class-variance-authority";
+import { cn } from "@/lib/utils";
+import { useIsMobile } from "@/hooks/use-mobile";
 
-export interface SidebarContextValue {
-    isOpen: boolean
-    setIsOpen: (open: boolean) => void
-}
+const SidebarContext = React.createContext<{
+  state: "expanded" | "collapsed";
+  toggle: () => void;
+}>({
+  state: "expanded",
+  toggle: () => {},
+});
 
-const SidebarContext = React.createContext<SidebarContextValue | undefined>(undefined)
+const SidebarProvider = ({ children }: { children: React.ReactNode }) => {
+  const [state, setState] = React.useState<"expanded" | "collapsed">("expanded");
+  const isMobile = useIsMobile();
 
-function useSidebar() {
-    const context = React.useContext(SidebarContext)
-    if (!context) {
-        throw new Error("useSidebar must be used within a SidebarProvider.")
+  const toggle = () => {
+    if (isMobile) {
+      setState(prev => prev === "expanded" ? "collapsed" : "expanded");
+    } else {
+      setState(prev => prev === "expanded" ? "collapsed" : "expanded");
     }
-    return context
-}
+  };
 
-interface SidebarProviderProps extends React.ComponentProps<"div"> {
-    defaultOpen?: boolean
-    open?: boolean
-    onOpenChange?: (open: boolean) => void
-}
+  return (
+    <SidebarContext.Provider value={{ state, toggle }}>
+      {children}
+    </SidebarContext.Provider>
+  );
+};
 
-const SidebarProvider = React.forwardRef<
-    HTMLDivElement,
-    SidebarProviderProps
->(({
-    defaultOpen = true,
-    open: openProp,
-    onOpenChange: setOpenProp,
-    className,
-    children,
-    ...props
-}, ref) => {
-    const [open, setOpen] = React.useState(defaultOpen)
+const useSidebar = () => React.useContext(SidebarContext);
 
-    const openState = openProp !== undefined ? openProp : open
-    const setOpenState = setOpenProp !== undefined ? setOpenProp : setOpen
+const Sidebar = ({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) => {
+  return (
+    <div
+      className={cn(
+        "flex h-full w-[240px] flex-col gap-6 overflow-hidden border-r bg-background p-4",
+        className
+      )}
+      {...props}
+    />
+  );
+};
 
-    return (
-        <SidebarContext.Provider value={{ isOpen: openState, setIsOpen: setOpenState }}>
-            <div
-                ref={ref}
-                className={cn(
-                    "flex min-h-screen w-full",
-                    className
-                )}
-                {...props}
-            >
-                {children}
-            </div>
-        </SidebarContext.Provider>
-    )
-})
-SidebarProvider.displayName = "SidebarProvider"
+const SidebarHeader = ({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) => {
+  return (
+    <div
+      className={cn("flex flex-col gap-2 text-sm", className)}
+      {...props}
+    />
+  );
+};
 
-interface SidebarProps extends React.ComponentProps<"aside"> {
-    side?: "left" | "right"
-    variant?: "sidebar" | "floating" | "inset"
-}
+const SidebarFooter = ({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) => {
+  return (
+    <div
+      className={cn("mt-auto flex flex-col gap-2", className)}
+      {...props}
+    />
+  );
+};
 
-const Sidebar = React.forwardRef<HTMLDivElement, SidebarProps>(
-    ({ className, side = "left", variant = "sidebar", ...props }, ref) => {
-        const { isOpen, setIsOpen } = useSidebar()
+const SidebarContent = ({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) => {
+  return (
+    <div
+      className={cn(
+        "flex min-h-0 flex-1 flex-col gap-1 overflow-auto",
+        className
+      )}
+      {...props}
+    />
+  );
+};
 
-        return (
-            <aside
-                ref={ref}
-                className={cn(
-                    "fixed top-0 z-40 h-screen w-64 border-r bg-background transition-transform",
-                    side === "left" ? "left-0" : "right-0",
-                    !isOpen && (side === "left" ? "-translate-x-full" : "translate-x-full"),
-                    className
-                )}
-                {...props}
-            >
-                <div className="flex h-16 items-center border-b px-4">
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => setIsOpen(!isOpen)}
-                    >
-                        <PanelLeft className="h-4 w-4" />
-                    </Button>
-                </div>
-                <div className="p-4">
-                    {props.children}
-                </div>
-            </aside>
-        )
-    }
-)
-Sidebar.displayName = "Sidebar"
+const SidebarGroup = ({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) => {
+  return (
+    <div
+      className={cn("flex flex-col gap-1", className)}
+      {...props}
+    />
+  );
+};
+
+const SidebarItem = ({
+  className,
+  ...props
+}: React.HTMLAttributes<HTMLDivElement>) => {
+  return (
+    <div
+      className={cn("flex flex-col gap-1", className)}
+      {...props}
+    />
+  );
+};
 
 const SidebarTrigger = React.forwardRef<
-    React.ElementRef<typeof Button>,
-    React.ComponentPropsWithoutRef<typeof Button>
+  HTMLButtonElement,
+  React.ComponentPropsWithoutRef<"button">
 >(({ className, ...props }, ref) => {
-    const { isOpen, setIsOpen } = useSidebar()
+  const { toggle } = useSidebar();
 
-    return (
-        <Button
-            ref={ref}
-            variant="ghost"
-            size="icon"
-            onClick={() => setIsOpen(!isOpen)}
-            className={className}
-            {...props}
-        />
-    )
-})
-SidebarTrigger.displayName = "SidebarTrigger"
+  return (
+    <button
+      ref={ref}
+      onClick={toggle}
+      className={cn("rounded-md p-2 hover:bg-accent", className)}
+      {...props}
+    />
+  );
+});
+SidebarTrigger.displayName = "SidebarTrigger";
 
 export {
-    Sidebar,
-    SidebarProvider,
-    SidebarTrigger,
-    useSidebar,
-}
+  SidebarProvider,
+  useSidebar,
+  Sidebar,
+  SidebarHeader,
+  SidebarFooter,
+  SidebarContent,
+  SidebarGroup,
+  SidebarItem,
+  SidebarTrigger,
+};

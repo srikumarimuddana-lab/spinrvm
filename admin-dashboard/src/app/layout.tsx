@@ -19,14 +19,21 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${inter.variable} font-sans antialiased dark`}>
+      <body className={`${inter.variable} font-sans antialiased`}>
         <AuthProvider>
-          <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+          <ThemeProvider
+            attribute="class"
+            defaultTheme="dark"
+            enableSystem
+            disableTransitionOnChange
+          >
             <SidebarProvider>
-              <TooltipProvider>
-                {children}
-                <Toaster />
-              </TooltipProvider>
+              <RequireAuth>
+                <TooltipProvider>
+                  {children}
+                  <Toaster />
+                </TooltipProvider>
+              </RequireAuth>
             </SidebarProvider>
           </ThemeProvider>
         </AuthProvider>

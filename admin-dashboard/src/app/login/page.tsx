@@ -22,9 +22,11 @@ export default function LoginPage() {
         setLoading(true);
         try {
             const res = await sendOtp(phone);
+            console.log('OTP Response:', res);
             if (res.dev_otp) setDevOtp(res.dev_otp);
             setStep("otp");
         } catch (e: any) {
+            console.error('Send OTP error:', e);
             setError(e.message || "Failed to send OTP");
         } finally {
             setLoading(false);
@@ -37,6 +39,8 @@ export default function LoginPage() {
         try {
             const res = await loginAdmin(phone, code);
             localStorage.setItem("admin_token", res.token);
+            // Store user data for display
+            localStorage.setItem("admin_user", JSON.stringify(res.user));
             router.push("/dashboard");
         } catch (e: any) {
             setError(e.message || "Invalid code");

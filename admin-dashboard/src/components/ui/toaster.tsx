@@ -3,32 +3,35 @@
 import {
     Toast,
     ToastClose,
-    ToastDescription,
     ToastProvider,
     ToastTitle,
+    ToastDescription,
     ToastViewport,
 } from "@/components/ui/toast"
+import { useToast } from "@/components/ui/use-toast"
 
-export {
-    Toast,
-    ToastClose,
-    ToastDescription,
-    ToastProvider,
-    ToastTitle,
-    ToastViewport,
-}
+function Toaster() {
+    const { toasts } = useToast()
 
-export function Toaster() {
     return (
         <ToastProvider>
-            <Toast>
-                <ToastTitle>Scheduled: Catch up</ToastTitle>
-                <ToastDescription>
-                    See you on Friday morning at 8am!
-                </ToastDescription>
-                <ToastClose />
-            </Toast>
+            {toasts.map(function ({ id, title, description, action, ...props }) {
+                return (
+                    <Toast key={id} {...props}>
+                        <div className="grid gap-1">
+                            {title && <ToastTitle>{title}</ToastTitle>}
+                            {description && (
+                                <ToastDescription>{description}</ToastDescription>
+                            )}
+                        </div>
+                        {action}
+                        <ToastClose />
+                    </Toast>
+                )
+            })}
             <ToastViewport />
         </ToastProvider>
     )
 }
+
+export { Toaster }

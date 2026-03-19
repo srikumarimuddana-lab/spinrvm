@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { sendOtp, loginAdmin } from "@/lib/api";
+import { loginAdminSession } from "@/lib/api";
+import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,40 +11,32 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default function LoginPage() {
     const router = useRouter();
-    const [phone, setPhone] = useState("");
-    const [code, setCode] = useState("");
-    const [step, setStep] = useState<"phone" | "otp">("phone");
+    const { setToken, setUser } = useAuthStore();
+    const [email, setEmail] = useState("");
+    const [password, setPassword] = useState("");
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
-    const [devOtp, setDevOtp] = useState("");
 
-    const handleSendOtp = async () => {
+    const handleLogin = async () => {
         setError("");
         setLoading(true);
         try {
-            const res = await sendOtp(phone);
-            console.log('OTP Response:', res);
-            if (res.dev_otp) setDevOtp(res.dev_otp);
-            setStep("otp");
-        } catch (e: any) {
-            console.error('Send OTP error:', e);
-            setError(e.message || "Failed to send OTP");
-        } finally {
-            setLoading(false);
-        }
-    };
+            // Call the admin login API
+            const data = await loginAdminSession(email, password);
 
-    const handleVerify = async () => {
-        setError("");
-        setLoading(true);
-        try {
-            const res = await loginAdmin(phone, code);
-            localStorage.setItem("admin_token", res.token);
-            // Store user data for display
-            localStorage.setItem("admin_user", JSON.stringify(res.user));
-            router.push("/dashboard");
+            // Store token and user in Zustand
+            setToken(data.token);
+            setUser({
+                id: data.user.id,
+                email: data.user.email,
+                role: data.user.role,
+            });
+
+            // Redirect to dashboard
+            router.push('/dashboard');
         } catch (e: any) {
-            setError(e.message || "Invalid code");
+            console.error('Login error:', e);
+            setError(e.message || "Invalid credentials");
         } finally {
             setLoading(false);
         }
@@ -68,64 +61,37 @@ export default function LoginPage() {
                         </div>
                     )}
 
-                    {step === "phone" ? (
-                        <>
-                            <div className="space-y-2">
-                                <Label htmlFor="phone">Phone Number</Label>
-                                <Input
-                                    id="phone"
-                                    placeholder="+1306555xxxx"
-                                    value={phone}
-                                    onChange={(e) => setPhone(e.target.value)}
-                                    onKeyDown={(e) => e.key === "Enter" && handleSendOtp()}
-                                />
-                            </div>
-                            <Button
-                                className="w-full"
-                                onClick={handleSendOtp}
-                                disabled={loading || !phone}
-                            >
-                                {loading ? "Sending..." : "Send Verification Code"}
-                            </Button>
-                        </>
-                    ) : (
-                        <>
-                            <div className="space-y-2">
-                                <Label htmlFor="code">Verification Code</Label>
-                                <Input
-                                    id="code"
-                                    placeholder="Enter 4-digit code"
-                                    value={code}
-                                    onChange={(e) => setCode(e.target.value)}
-                                    onKeyDown={(e) => e.key === "Enter" && handleVerify()}
-                                    maxLength={4}
-                                />
-                                {devOtp && (
-                                    <p className="text-xs text-muted-foreground">
-                                        Dev OTP: <span className="font-mono font-bold text-emerald-500">{devOtp}</span>
-                                    </p>
-                                )}
-                            </div>
-                            <Button
-                                className="w-full"
-                                onClick={handleVerify}
-                                disabled={loading || !code}
-                            >
-                                {loading ? "Verifying..." : "Sign In"}
-                            </Button>
-                            <Button
-                                variant="ghost"
-                                className="w-full"
-                                onClick={() => {
-                                    setStep("phone");
-                                    setCode("");
-                                    setDevOtp("");
-                                }}
-                            >
-                                Change Phone Number
-                            </Button>
-                        </>
-                    )}
+                    <div className="space-y-2">
+                        <Label htmlFor="email">Email</Label>
+                        <Input
+                            id="email"
+                            type="email"
+                            placeholder="admin@example.com"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                        />
+                    </div>
+
+                    <div className="space-y-2">
+                        <Label htmlFor="password">Password</Label>
+                        <Input
+                            id="password"
+                            type="password"
+                            placeholder="Enter your password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                        />
+                    </div>
+
+                    <Button
+                        className="w-full"
+                        onClick={handleLogin}
+                        disabled={loading || !email || !password}
+                    >
+                        {loading ? "Signing in..." : "Sign In"}
+                    </Button>
                 </CardContent>
             </Card>
         </div>

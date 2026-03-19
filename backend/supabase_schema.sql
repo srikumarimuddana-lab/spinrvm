@@ -491,6 +491,12 @@ SELECT 'Vehicle Inspection', 'Vehicle inspection report', true, false
 WHERE NOT EXISTS (SELECT 1 FROM public.document_requirements WHERE name = 'Vehicle Inspection');
 
 -- ============================================================
+-- 13. CORPORATE ACCOUNTS
+-- ============================================================
+-- Note: Corporate accounts schema is in a separate file: corporate_accounts_schema.sql
+-- Run that file in Supabase SQL Editor to create the corporate_accounts table and RLS policies
+
+-- ============================================================
 -- 14. PAYOUTS & BANK ACCOUNTS (added for missing links)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS payouts (

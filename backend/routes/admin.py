@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, HTTPException  # type: ignore
+from fastapi import APIRouter, Depends, Query, HTTPException, Header  # type: ignore
 from typing import Dict, Any, Optional
 from pydantic import BaseModel  # type: ignore
 from datetime import datetime, timedelta
@@ -32,11 +32,44 @@ class SessionResponse(BaseModel):
 
 
 @admin_auth_router.get("/session", response_model=SessionResponse)
-async def get_session():
+async def get_session(authorization: Optional[str] = Header(None)):
     """Get current admin session - returns user if authenticated"""
-    # This endpoint is called to check if user is logged in
-    # For now, return unauthenticated - frontend should handle login
-    return SessionResponse(user=None, authenticated=False)
+    if not authorization:
+        return SessionResponse(user=None, authenticated=False)
+    
+    # Extract token from "Bearer <token>" format
+    try:
+        scheme, token = authorization.split()
+        if scheme.lower() != "bearer":
+            return SessionResponse(user=None, authenticated=False)
+    except ValueError:
+        return SessionResponse(user=None, authenticated=False)
+    
+    # Verify the JWT token
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+        user_id = payload.get("user_id")
+        role = payload.get("role")
+        email = payload.get("email")
+        phone = payload.get("phone")
+        
+        if not user_id:
+            return SessionResponse(user=None, authenticated=False)
+        
+        # Return authenticated user info
+        return SessionResponse(
+            user={
+                "id": user_id,
+                "email": email,
+                "phone": phone,
+                "role": role or "admin"
+            },
+            authenticated=True
+        )
+    except jwt.ExpiredSignatureError:
+        return SessionResponse(user=None, authenticated=False)
+    except jwt.InvalidTokenError:
+        return SessionResponse(user=None, authenticated=False)
 
 
 @admin_auth_router.post("/login")
@@ -44,7 +77,13 @@ async def admin_login(request: LoginRequest):
     """Admin login endpoint"""
     # Validate credentials from settings
     if request.email == settings.ADMIN_EMAIL and request.password == settings.ADMIN_PASSWORD:
-        token = jwt.encode({"sub": request.email, "role": "admin"}, settings.JWT_SECRET, algorithm=settings.ALGORITHM)
+        # Include user_id claim for get_current_user to work properly
+        token = jwt.encode({
+            "user_id": "admin-001",
+            "email": request.email,
+            "role": "admin",
+            "phone": request.email  # Use email as phone for admin users
+        }, settings.JWT_SECRET, algorithm=settings.ALGORITHM)
         return {
             "user": {
                 "id": "admin-001",
@@ -412,32 +451,39 @@ async def admin_get_driver_rides(driver_id: str):
 
 @admin_router.get("/earnings")
 async def admin_get_earnings(period: str = Query("month")):
-    """Get earnings statistics (schema: total_fare, ride_completed_at, admin_earnings).
+    """Get earnings statistics from completed rides.
     
-    Note: For large datasets, consider creating a PostgreSQL aggregate function in Supabase
-    and calling it via db.rpc('function_name', {...}) for better performance.
+    Uses MongoDB aggregation to calculate totals from ride data.
     """
-    query = ""
-    params = {}
-    
+    # Calculate date range
+    now = datetime.utcnow()
     if period == "day":
-        query = "SELECT SUM(total_fare) as total_revenue, SUM(driver_earnings) as driver_earnings, SUM(admin_earnings) as platform_fees FROM rides WHERE status = 'completed' AND ride_completed_at >= $1"
-        params = {"start": datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()}
+        start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
     elif period == "week":
-        query = "SELECT SUM(total_fare) as total_revenue, SUM(driver_earnings) as driver_earnings, SUM(admin_earnings) as platform_fees FROM rides WHERE status = 'completed' AND ride_completed_at >= $1"
-        params = {"start": (datetime.utcnow() - timedelta(days=7)).isoformat()}
+        start_date = now - timedelta(days=7)
     else:  # month
-        query = "SELECT SUM(total_fare) as total_revenue, SUM(driver_earnings) as driver_earnings, SUM(admin_earnings) as platform_fees FROM rides WHERE status = 'completed' AND ride_completed_at >= $1"
-        params = {"start": (datetime.utcnow() - timedelta(days=30)).isoformat()}
+        start_date = now - timedelta(days=30)
     
-    result = await db.fetchone(query, params)
+    start_date_str = start_date.isoformat()
+    
+    # Get completed rides since start_date
+    completed_rides = await db.get_rows(
+        "rides",
+        {"status": "completed", "ride_completed_at": {"$gte": start_date_str}},
+        limit=10000
+    )
+    
+    # Calculate totals
+    total_revenue = sum(float(r.get("total_fare") or 0) for r in completed_rides)
+    driver_earnings = sum(float(r.get("driver_earnings") or 0) for r in completed_rides)
+    platform_fees = sum(float(r.get("admin_earnings") or 0) for r in completed_rides)
     
     return {
         "period": period,
-        "total_revenue": float(result.get("total_revenue") or 0),
-        "total_rides": 0,  # This would require a separate count query
-        "driver_earnings": float(result.get("driver_earnings") or 0),
-        "platform_fees": float(result.get("platform_fees") or 0),
+        "total_revenue": total_revenue,
+        "total_rides": len(completed_rides),
+        "driver_earnings": driver_earnings,
+        "platform_fees": platform_fees,
     }
 
 @admin_router.get("/export/rides")
@@ -507,6 +553,413 @@ async def admin_export_drivers():
     return {"drivers": out, "count": len(out)}
 
 
+# ---------- Users (riders) ----------
+
+@admin_router.get("/users")
+async def admin_get_users(
+    limit: int = 50,
+    offset: int = 0,
+    search: Optional[str] = None,
+):
+    """Get all users (riders) with optional search and pagination."""
+    filters = {}
+    if search:
+        # Search across name, email, phone
+        filters["$or"] = [
+            {"first_name": {"$regex": search, "$options": "i"}},
+            {"last_name": {"$regex": search, "$options": "i"}},
+            {"email": {"$regex": search, "$options": "i"}},
+            {"phone": {"$regex": search, "$options": "i"}},
+        ]
+    
+    users = await db.get_rows("users", filters, order="created_at", desc=True, limit=limit, offset=offset)
+    return users
+
+
+@admin_router.get("/users/{user_id}")
+async def admin_get_user_details(user_id: str):
+    """Get detailed user information."""
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Get user's recent rides
+    rides = await db.get_rows("rides", {"rider_id": user_id}, order="created_at", desc=True, limit=10)
+    
+    return {
+        **user,
+        "total_rides": await db.rides.count_documents({"rider_id": user_id}),
+        "recent_rides": rides
+    }
+
+
+@admin_router.put("/users/{user_id}/status")
+async def admin_update_user_status(user_id: str, status_data: Dict[str, Any]):
+    """Update user status (e.g., suspend, activate)."""
+    valid_status = ["active", "suspended", "banned"]
+    new_status = status_data.get("status")
+    
+    if new_status not in valid_status:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_status}")
+    
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": {"status": new_status, "updated_at": datetime.utcnow().isoformat()}}
+    )
+    return {"message": f"User status updated to {new_status}"}
+
+
+# ---------- Promotions (Discount Codes) ----------
+
+@admin_router.get("/promotions")
+async def admin_get_promotions():
+    """Get all promotions/discount codes."""
+    promotions = await db.get_rows("promotions", order="created_at", desc=True, limit=500)
+    return promotions
+
+
+@admin_router.post("/promotions")
+async def admin_create_promotion(promotion: Dict[str, Any]):
+    """Create a new promotion/discount code."""
+    doc = {
+        "code": promotion.get("code"),
+        "description": promotion.get("description", ""),
+        "discount_type": promotion.get("discount_type", "percentage"),  # percentage, fixed
+        "discount_value": promotion.get("discount_value", 0),
+        "max_uses": promotion.get("max_uses", 0),
+        "current_uses": 0,
+        "valid_from": promotion.get("valid_from"),
+        "valid_until": promotion.get("valid_until"),
+        "is_active": promotion.get("is_active", True),
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    row = await db.promotions.insert_one(doc)
+    return {"promotion_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+
+
+@admin_router.put("/promotions/{promotion_id}")
+async def admin_update_promotion(promotion_id: str, promotion: Dict[str, Any]):
+    """Update a promotion."""
+    updates = {}
+    if promotion.get("code") is not None:
+        updates["code"] = promotion.get("code")
+    if promotion.get("description") is not None:
+        updates["description"] = promotion.get("description")
+    if promotion.get("discount_type") is not None:
+        updates["discount_type"] = promotion.get("discount_type")
+    if promotion.get("discount_value") is not None:
+        updates["discount_value"] = promotion.get("discount_value")
+    if promotion.get("max_uses") is not None:
+        updates["max_uses"] = promotion.get("max_uses")
+    if promotion.get("valid_from") is not None:
+        updates["valid_from"] = promotion.get("valid_from")
+    if promotion.get("valid_until") is not None:
+        updates["valid_until"] = promotion.get("valid_until")
+    if promotion.get("is_active") is not None:
+        updates["is_active"] = promotion.get("is_active")
+    
+    if updates:
+        updates["updated_at"] = datetime.utcnow().isoformat()
+        await db.promotions.update_one({"id": promotion_id}, {"$set": updates})
+    return {"message": "Promotion updated"}
+
+
+@admin_router.delete("/promotions/{promotion_id}")
+async def admin_delete_promotion(promotion_id: str):
+    """Delete a promotion."""
+    await db.promotions.delete_many({"id": promotion_id})
+    return {"message": "Promotion deleted"}
+
+
+# ---------- Disputes ----------
+
+@admin_router.get("/disputes")
+async def admin_get_disputes():
+    """Get all disputes."""
+    disputes = await db.get_rows("disputes", order="created_at", desc=True, limit=500)
+    return disputes
+
+
+@admin_router.get("/disputes/{dispute_id}")
+async def admin_get_dispute_details(dispute_id: str):
+    """Get detailed dispute information."""
+    dispute = await db.disputes.find_one({"id": dispute_id})
+    if not dispute:
+        raise HTTPException(status_code=404, detail="Dispute not found")
+    
+    # Get related ride information
+    ride = await db.rides.find_one({"id": dispute.get("ride_id")})
+    
+    return {
+        **dispute,
+        "ride_details": ride
+    }
+
+
+@admin_router.put("/disputes/{dispute_id}/resolve")
+async def admin_resolve_dispute(dispute_id: str, resolution: Dict[str, Any]):
+    """Resolve a dispute."""
+    resolution_data = {
+        "resolution_status": resolution.get("status"),  # resolved, rejected, pending
+        "resolution_notes": resolution.get("notes", ""),
+        "resolved_at": datetime.utcnow().isoformat(),
+        "resolved_by": resolution.get("resolved_by", "admin")
+    }
+    
+    await db.disputes.update_one(
+        {"id": dispute_id},
+        {"$set": resolution_data}
+    )
+    return {"message": "Dispute resolved"}
+
+
+# ---------- Support Tickets ----------
+
+@admin_router.get("/tickets")
+async def admin_get_tickets():
+    """Get all support tickets."""
+    tickets = await db.get_rows("support_tickets", order="created_at", desc=True, limit=500)
+    return tickets
+
+
+@admin_router.get("/tickets/{ticket_id}")
+async def admin_get_ticket_details(ticket_id: str):
+    """Get detailed ticket information."""
+    ticket = await db.support_tickets.find_one({"id": ticket_id})
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    
+    # Get ticket messages
+    messages = await db.get_rows("support_messages", {"ticket_id": ticket_id}, order="created_at", limit=100)
+    
+    return {
+        **ticket,
+        "messages": messages
+    }
+
+
+@admin_router.post("/tickets/{ticket_id}/reply")
+async def admin_reply_to_ticket(ticket_id: str, reply: Dict[str, Any]):
+    """Reply to a support ticket."""
+    message_doc = {
+        "ticket_id": ticket_id,
+        "sender_type": "admin",
+        "sender_id": "admin-001",  # Could be dynamic based on current admin
+        "message": reply.get("message", ""),
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    
+    # Insert message
+    await db.support_messages.insert_one(message_doc)
+    
+    # Update ticket status if needed
+    if reply.get("status"):
+        await db.support_tickets.update_one(
+            {"id": ticket_id},
+            {"$set": {"status": reply.get("status"), "updated_at": datetime.utcnow().isoformat()}}
+        )
+    
+    return {"message": "Reply sent"}
+
+
+@admin_router.post("/tickets/{ticket_id}/close")
+async def admin_close_ticket(ticket_id: str):
+    """Close a support ticket."""
+    await db.support_tickets.update_one(
+        {"id": ticket_id},
+        {"$set": {"status": "closed", "closed_at": datetime.utcnow().isoformat()}}
+    )
+    return {"message": "Ticket closed"}
+
+
+# ---------- FAQs ----------
+
+@admin_router.get("/faqs")
+async def admin_get_faqs():
+    """Get all FAQ entries."""
+    faqs = await db.get_rows("faqs", order="created_at", desc=True, limit=500)
+    return faqs
+
+
+@admin_router.post("/faqs")
+async def admin_create_faq(faq: Dict[str, Any]):
+    """Create a new FAQ entry."""
+    doc = {
+        "question": faq.get("question"),
+        "answer": faq.get("answer"),
+        "category": faq.get("category", "general"),
+        "is_active": faq.get("is_active", True),
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    row = await db.faqs.insert_one(doc)
+    return {"faq_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+
+
+@admin_router.put("/faqs/{faq_id}")
+async def admin_update_faq(faq_id: str, faq: Dict[str, Any]):
+    """Update an FAQ entry."""
+    updates = {}
+    if faq.get("question") is not None:
+        updates["question"] = faq.get("question")
+    if faq.get("answer") is not None:
+        updates["answer"] = faq.get("answer")
+    if faq.get("category") is not None:
+        updates["category"] = faq.get("category")
+    if faq.get("is_active") is not None:
+        updates["is_active"] = faq.get("is_active")
+    
+    if updates:
+        updates["updated_at"] = datetime.utcnow().isoformat()
+        await db.faqs.update_one({"id": faq_id}, {"$set": updates})
+    return {"message": "FAQ updated"}
+
+
+@admin_router.delete("/faqs/{faq_id}")
+async def admin_delete_faq(faq_id: str):
+    """Delete an FAQ entry."""
+    await db.faqs.delete_many({"id": faq_id})
+    return {"message": "FAQ deleted"}
+
+
+# ---------- Notifications ----------
+
+@admin_router.post("/notifications/send")
+async def admin_send_notification(notification: Dict[str, Any]):
+    """Send a notification to a specific user."""
+    # This would integrate with your notification service
+    # For now, just log the notification
+    notification_doc = {
+        "user_id": notification.get("user_id"),
+        "title": notification.get("title"),
+        "body": notification.get("body"),
+        "type": notification.get("type", "general"),
+        "sent_at": datetime.utcnow().isoformat(),
+        "status": "sent"
+    }
+    
+    await db.notifications.insert_one(notification_doc)
+    return {"message": "Notification sent"}
+
+
+# ---------- Area Management (Pricing, Tax, Vehicle Pricing) ----------
+
+@admin_router.get("/areas/{area_id}/fees")
+async def admin_get_area_fees(area_id: str):
+    """Get all fees for a service area."""
+    fees = await db.get_rows("area_fees", {"service_area_id": area_id}, order="created_at", limit=100)
+    return fees
+
+
+@admin_router.post("/areas/{area_id}/fees")
+async def admin_create_area_fee(area_id: str, fee: Dict[str, Any]):
+    """Create a new fee for a service area."""
+    doc = {
+        "service_area_id": area_id,
+        "fee_type": fee.get("fee_type"),  # airport, toll, surge, etc.
+        "amount": fee.get("amount", 0),
+        "description": fee.get("description", ""),
+        "is_active": fee.get("is_active", True),
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    row = await db.area_fees.insert_one(doc)
+    return {"fee_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+
+
+@admin_router.put("/areas/{area_id}/fees/{fee_id}")
+async def admin_update_area_fee(area_id: str, fee_id: str, fee: Dict[str, Any]):
+    """Update an area fee."""
+    updates = {}
+    if fee.get("fee_type") is not None:
+        updates["fee_type"] = fee.get("fee_type")
+    if fee.get("amount") is not None:
+        updates["amount"] = fee.get("amount")
+    if fee.get("description") is not None:
+        updates["description"] = fee.get("description")
+    if fee.get("is_active") is not None:
+        updates["is_active"] = fee.get("is_active")
+    
+    if updates:
+        updates["updated_at"] = datetime.utcnow().isoformat()
+        await db.area_fees.update_one({"id": fee_id}, {"$set": updates})
+    return {"message": "Area fee updated"}
+
+
+@admin_router.delete("/areas/{area_id}/fees/{fee_id}")
+async def admin_delete_area_fee(area_id: str, fee_id: str):
+    """Delete an area fee."""
+    await db.area_fees.delete_many({"id": fee_id})
+    return {"message": "Area fee deleted"}
+
+
+@admin_router.get("/areas/{area_id}/tax")
+async def admin_get_area_tax(area_id: str):
+    """Get tax configuration for a service area."""
+    tax = await db.area_taxes.find_one({"service_area_id": area_id})
+    return tax or {"service_area_id": area_id, "tax_rate": 0, "tax_name": "Tax"}
+
+
+@admin_router.put("/areas/{area_id}/tax")
+async def admin_update_area_tax(area_id: str, tax: Dict[str, Any]):
+    """Update tax configuration for a service area."""
+    tax_doc = {
+        "service_area_id": area_id,
+        "tax_rate": tax.get("tax_rate", 0),
+        "tax_name": tax.get("tax_name", "Tax"),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    
+    existing = await db.area_taxes.find_one({"service_area_id": area_id})
+    if existing:
+        await db.area_taxes.update_one({"service_area_id": area_id}, {"$set": tax_doc})
+    else:
+        await db.area_taxes.insert_one(tax_doc)
+    
+    return {"message": "Area tax updated"}
+
+
+@admin_router.get("/areas/{area_id}/vehicle-pricing")
+async def admin_get_vehicle_pricing(area_id: str):
+    """Get vehicle pricing configuration for a service area."""
+    pricing = await db.get_rows("vehicle_pricing", {"service_area_id": area_id}, order="created_at", limit=100)
+    return pricing
+
+
+# ---------- Driver Area Assignment ----------
+
+@admin_router.put("/drivers/{driver_id}/area")
+async def admin_assign_driver_area(driver_id: str, service_area_id: str):
+    """Assign a driver to a specific service area."""
+    await db.drivers.update_one(
+        {"id": driver_id},
+        {"$set": {
+            "service_area_id": service_area_id,
+            "updated_at": datetime.utcnow().isoformat()
+        }}
+    )
+    return {"message": f"Driver assigned to area {service_area_id}"}
+
+
+# ---------- Surge Pricing ----------
+
+@admin_router.put("/service-areas/{area_id}/surge")
+async def admin_update_surge_pricing(area_id: str, surge: Dict[str, Any]):
+    """Update surge pricing for a service area."""
+    surge_doc = {
+        "service_area_id": area_id,
+        "multiplier": surge.get("multiplier", 1.0),
+        "is_active": surge.get("is_active", False),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    
+    existing = await db.surge_pricing.find_one({"service_area_id": area_id})
+    if existing:
+        await db.surge_pricing.update_one({"service_area_id": area_id}, {"$set": surge_doc})
+    else:
+        await db.surge_pricing.insert_one(surge_doc)
+    
+    return {"message": "Surge pricing updated"}
+
+
 @admin_router.get("/drivers/{driver_id}/location-trail")
 async def admin_get_driver_location_trail(
     driver_id: str,
@@ -521,6 +974,99 @@ async def admin_get_driver_location_trail(
         limit=5000,
     )
     return [{"lat": loc.get("lat"), "lng": loc.get("lng"), "timestamp": loc.get("timestamp")} for loc in locations]
+
+
+# ---------- Document Requirements ----------
+
+@admin_router.get("/documents/requirements")
+async def admin_get_document_requirements():
+    """Get all document requirements."""
+    requirements = await db.get_rows("document_requirements", order="created_at", limit=100)
+    return requirements or []
+
+
+@admin_router.post("/documents/requirements")
+async def admin_create_document_requirement(requirement: Dict[str, Any]):
+    """Create a new document requirement."""
+    doc = {
+        "name": requirement.get("name"),
+        "description": requirement.get("description", ""),
+        "document_type": requirement.get("document_type"),
+        "is_required": requirement.get("is_required", True),
+        "applicable_to": requirement.get("applicable_to", "driver"),  # driver, rider, vehicle
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    row = await db.document_requirements.insert_one(doc)
+    return {"requirement_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+
+
+@admin_router.put("/documents/requirements/{requirement_id}")
+async def admin_update_document_requirement(requirement_id: str, requirement: Dict[str, Any]):
+    """Update a document requirement."""
+    updates = {}
+    if requirement.get("name") is not None:
+        updates["name"] = requirement.get("name")
+    if requirement.get("description") is not None:
+        updates["description"] = requirement.get("description")
+    if requirement.get("document_type") is not None:
+        updates["document_type"] = requirement.get("document_type")
+    if requirement.get("is_required") is not None:
+        updates["is_required"] = requirement.get("is_required")
+    if requirement.get("applicable_to") is not None:
+        updates["applicable_to"] = requirement.get("applicable_to")
+    
+    if updates:
+        updates["updated_at"] = datetime.utcnow().isoformat()
+        await db.document_requirements.update_one({"id": requirement_id}, {"$set": updates})
+    return {"message": "Document requirement updated"}
+
+
+@admin_router.delete("/documents/requirements/{requirement_id}")
+async def admin_delete_document_requirement(requirement_id: str):
+    """Delete a document requirement."""
+    await db.document_requirements.delete_one({"id": requirement_id})
+    return {"message": "Document requirement deleted"}
+
+
+# ---------- Driver Documents ----------
+
+@admin_router.get("/documents/drivers/{driver_id}")
+async def admin_get_driver_documents(driver_id: str):
+    """Get all documents for a specific driver."""
+    documents = await db.get_rows(
+        "driver_documents",
+        {"driver_id": driver_id},
+        order="uploaded_at",
+        desc=True,
+        limit=100
+    )
+    return documents or []
+
+
+@admin_router.post("/documents/{document_id}/review")
+async def admin_review_driver_document(
+    document_id: str,
+    review_data: Dict[str, Any]
+):
+    """Review and approve/reject a driver document."""
+    status = review_data.get("status")
+    rejection_reason = review_data.get("rejection_reason")
+    
+    if status not in ["approved", "rejected", "pending"]:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    
+    updates = {
+        "status": status,
+        "reviewed_at": datetime.utcnow().isoformat(),
+    }
+    if rejection_reason:
+        updates["rejection_reason"] = rejection_reason
+    
+    await db.driver_documents.update_one(
+        {"id": document_id},
+        {"$set": updates}
+    )
+    return {"message": f"Document {status}"}
 
 
 # ---------- Corporate Accounts (moved to dedicated routes) ----------

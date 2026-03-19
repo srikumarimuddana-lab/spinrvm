@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
@@ -26,6 +27,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
+import { useAuthStore } from "@/store/authStore";
 
 const NAV = [
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -49,11 +51,13 @@ const NAV = [
 
 export function Sidebar() {
     const pathname = usePathname();
+    const router = useRouter();
     const [open, setOpen] = useState(false);
+    const { logout } = useAuthStore();
 
     const handleLogout = () => {
-        localStorage.removeItem("admin_token");
-        window.location.href = "/login";
+        logout();
+        router.push('/login');
     };
 
     return (

@@ -21,7 +21,7 @@ from validators import validate_id, validate_email, validate_phone, sanitize_str
 # Validate that we're importing the right function
 from db_supabase import get_all_corporate_accounts, get_corporate_account_by_id, insert_corporate_account, update_corporate_account, delete_corporate_account
 
-router = APIRouter(prefix="/api/admin/corporate-accounts", tags=["Corporate Accounts"])
+router = APIRouter(prefix="/admin/corporate-accounts", tags=["Corporate Accounts"])
 
 
 # Pydantic models for request/response validation

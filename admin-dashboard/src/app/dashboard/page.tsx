@@ -34,56 +34,56 @@ const CARD_CONFIGS = [
         label: "Total Rides",
         icon: Car,
         color: "from-blue-600 to-blue-400",
-        format: (v: number) => v.toLocaleString(),
+        format: (v: number) => (v ?? 0).toLocaleString(),
     },
     {
         key: "active_rides",
         label: "Active Rides",
         icon: Activity,
         color: "from-emerald-600 to-emerald-400",
-        format: (v: number) => v.toLocaleString(),
+        format: (v: number) => (v ?? 0).toLocaleString(),
     },
     {
         key: "completed_rides",
         label: "Completed",
         icon: Zap,
         color: "from-violet-600 to-violet-400",
-        format: (v: number) => v.toLocaleString(),
+        format: (v: number) => (v ?? 0).toLocaleString(),
     },
     {
         key: "cancelled_rides",
         label: "Cancelled",
         icon: XCircle,
         color: "from-red-600 to-red-400",
-        format: (v: number) => v.toLocaleString(),
+        format: (v: number) => (v ?? 0).toLocaleString(),
     },
     {
         key: "total_users",
         label: "Total Users",
         icon: Users,
         color: "from-sky-600 to-sky-400",
-        format: (v: number) => v.toLocaleString(),
+        format: (v: number) => (v ?? 0).toLocaleString(),
     },
     {
         key: "total_drivers",
         label: "Total Drivers",
         icon: UserCheck,
         color: "from-amber-600 to-amber-400",
-        format: (v: number) => v.toLocaleString(),
+        format: (v: number) => (v ?? 0).toLocaleString(),
     },
     {
         key: "online_drivers",
         label: "Online Drivers",
         icon: TrendingUp,
         color: "from-teal-600 to-teal-400",
-        format: (v: number) => v.toLocaleString(),
+        format: (v: number) => (v ?? 0).toLocaleString(),
     },
     {
         key: "total_admin_earnings",
         label: "Platform Revenue",
         icon: DollarSign,
         color: "from-pink-600 to-pink-400",
-        format: (v: number) => formatCurrency(v),
+        format: (v: number) => formatCurrency(v ?? 0),
     },
 ] as const;
 
@@ -165,7 +165,7 @@ export default function DashboardPage() {
                         </CardHeader>
                         <CardContent>
                             <div className="text-2xl font-bold text-emerald-500">
-                                {formatCurrency(stats.total_driver_earnings)}
+                                {formatCurrency(stats.total_driver_earnings ?? 0)}
                             </div>
                         </CardContent>
                     </Card>
@@ -177,7 +177,7 @@ export default function DashboardPage() {
                         </CardHeader>
                         <CardContent>
                             <div className="text-2xl font-bold text-violet-500">
-                                {formatCurrency(stats.total_admin_earnings)}
+                                {formatCurrency(stats.total_admin_earnings ?? 0)}
                             </div>
                         </CardContent>
                     </Card>
@@ -189,7 +189,7 @@ export default function DashboardPage() {
                         </CardHeader>
                         <CardContent>
                             <div className="text-2xl font-bold text-amber-500">
-                                {formatCurrency(stats.total_tips)}
+                                {formatCurrency(stats.total_tips ?? 0)}
                             </div>
                         </CardContent>
                     </Card>

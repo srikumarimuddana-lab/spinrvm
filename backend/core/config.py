@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = "*"
     
     # Admin credentials
-    ADMIN_EMAIL: str = "admin@spinr.com"
+    ADMIN_EMAIL: str = "admin@spinr.ca"
     ADMIN_PASSWORD: str = "admin123"
     
     # Rate limiting

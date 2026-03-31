@@ -222,6 +222,34 @@ export const updateCorporateAccount = (id: string, data: any) =>
 export const deleteCorporateAccount = (id: string) =>
     request<any>(`/api/admin/corporate-accounts/${id}`, { method: "DELETE" });
 
+/* ── Notifications ──────────────────────────── */
+export interface Notification {
+    id: string;
+    user_id?: string;
+    title: string;
+    body: string;
+    type: string;
+    audience?: string;
+    status: string;
+    sent_count?: number;
+    created_at: string;
+}
+
+export const getNotifications = (limit?: number, offset?: number, status?: string, type?: string) => {
+    const params = new URLSearchParams();
+    if (limit) params.set('limit', limit.toString());
+    if (offset) params.set('offset', offset.toString());
+    if (status) params.set('status', status);
+    if (type) params.set('type', type);
+    return request<Notification[]>(`/api/admin/notifications?${params.toString()}`);
+};
+
+export const sendNotification = (data: { user_id?: string; title: string; body: string; type: string; audience: string }) =>
+    request<any>("/api/admin/notifications/send", {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+
 /* ── Users (Riders) ─────────────────────────── */
 export const getUsers = () =>
     request<any[]>("/api/admin/users");

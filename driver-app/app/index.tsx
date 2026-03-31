@@ -1,14 +1,16 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Animated } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useNavigationContainerRef } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
 
 export default function Index() {
   const router = useRouter();
+  const navigationRef = useNavigationContainerRef();
   const { isInitialized, token, user } = useAuthStore();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.5)).current;
+  const hasNavigated = useRef(false);
 
   useEffect(() => {
     Animated.parallel([
@@ -26,22 +28,23 @@ export default function Index() {
   }, []);
 
   useEffect(() => {
-    if (!isInitialized) return;
+    if (!isInitialized || hasNavigated.current) return;
+    if (!navigationRef.isReady()) return;
 
-    // Route immediately once auth is initialized
+    hasNavigated.current = true;
+
     if (!token) {
       router.replace('/login' as any);
     } else if (user && !user.profile_complete) {
       router.replace('/profile-setup' as any);
     } else {
-      // Driver App Flow
       if (user?.is_driver) {
         router.replace('/driver/' as any);
       } else {
         router.replace('/become-driver' as any);
       }
     }
-  }, [isInitialized, token, user]);
+  }, [isInitialized, token, user, navigationRef.isReady()]);
 
   return (
     <View style={styles.container}>

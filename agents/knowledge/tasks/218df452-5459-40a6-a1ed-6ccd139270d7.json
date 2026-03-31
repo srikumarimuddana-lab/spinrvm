@@ -1,0 +1,18 @@
+{
+  "id": "218df452-5459-40a6-a1ed-6ccd139270d7",
+  "category": "tasks",
+  "title": "Task: Security Review: Comprehensive Spinr Project Code Review",
+  "content": "{\n  \"id\": \"ee82fa3d-f83e-4dab-80ff-9bf845df9fd3\",\n  \"title\": \"Security Review: Comprehensive Spinr Project Code Review\",\n  \"description\": \"Review security: \\n        Perform a comprehensive code review of the entire Spinr ride-sharing platform including:\\n        \\n        1. Backend (Python/FastAPI):\\n           - API endpoints and route handlers\\n           - Database queries and Supabase integration\\n           - Authentication and authorization\\n           - Error handling and validation\\n           - Performance optimizations\\n        \\n        2. Rider App (React Native/Expo):\\n           - Component structure and reusability\\n           - State management (Zustand stores)\\n           - Navigation and routing\\n           - API integration\\n           - UI/UX consistency\\n        \\n        3. Driver App (React Native/Expo):\\n           - Similar to rider app\\n           - Driver-specific features\\n        \\n        4. Admin Dashboard (Next.js):\\n           - Component organization\\n           - Data fetching and caching\\n           - Authentication flow\\n           - UI components\\n        \\n        5. Security:\\n           - Authentication mechanisms\\n           - Data protection\\n           - API security\\n           - Environment variable handling\\n        \\n        6. Code Quality:\\n           - TypeScript usage\\n           - Code organization\\n           - Naming conventions\\n           - Documentation\\n        \",\n  \"task_type\": \"security_review\",\n  \"status\": \"pending\",\n  \"priority\": 2,\n  \"assigned_to\": \"security-001\",\n  \"created_by\": \"orchestrator-001\",\n  \"created_at\": \"2026-03-26T15:47:17.729090\",\n  \"updated_at\": \"2026-03-26T15:47:17.729090\",\n  \"completed_at\": null,\n  \"context\": {\n    \"scope\": \"full_project\",\n    \"components\": [\n      \"backend\",\n      \"rider_app\",\n      \"driver_app\",\n      \"admin_dashboard\"\n    ],\n    \"focus_areas\": [\n      \"security\",\n      \"performance\",\n      \"code_quality\",\n      \"best_practices\",\n      \"architecture\"\n    ],\n    \"project_structure\": {\n      \"backend\": \"backend/\",\n      \"rider_app\": \"rider-app/\",\n      \"driver_app\": \"driver-app/\",\n      \"admin_dashboard\": \"admin-dashboard/\",\n      \"shared\": \"shared/\"\n    }\n  },\n  \"result\": null,\n  \"error\": null,\n  \"dependencies\": [],\n  \"subtasks\": [],\n  \"parent_task\": \"46e85d86-6146-4bed-b731-2631f3771e71\"\n}",
+  "tags": [
+    "security_review",
+    "pending"
+  ],
+  "source": "security-001",
+  "created_at": "2026-03-26T15:47:17.732892",
+  "updated_at": "2026-03-26T15:47:17.732892",
+  "metadata": {
+    "task_id": "ee82fa3d-f83e-4dab-80ff-9bf845df9fd3",
+    "priority": 2
+  },
+  "relevance_score": 1.0
+}

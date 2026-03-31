@@ -52,7 +52,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             enableGooglePay: true,
         }],
         'expo-font',
-        'expo-web-browser',
         [
             'expo-splash-screen',
             {

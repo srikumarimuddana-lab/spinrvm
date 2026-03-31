@@ -739,6 +739,89 @@ async def get_ride_messages(ride_id: str, current_user: dict = Depends(get_curre
         
     return {'success': True, 'messages': serialized}
 
+@api_router.get("/scheduled")
+async def get_scheduled_rides(current_user: dict = Depends(get_current_user)):
+    """Get all upcoming scheduled rides for the current rider."""
+    rides_cursor = db.rides.find({
+        'rider_id': current_user['id'],
+        'is_scheduled': True,
+        'status': {'$nin': ['completed', 'cancelled']}
+    })
+    rides = await rides_cursor.to_list(length=50) if hasattr(rides_cursor, 'to_list') else list(rides_cursor)
+    return rides
+
+@api_router.delete("/scheduled/{ride_id}")
+async def cancel_scheduled_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """Cancel a scheduled ride."""
+    ride = await db.rides.find_one({'id': ride_id, 'rider_id': current_user['id'], 'is_scheduled': True})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Scheduled ride not found")
+    if ride.get('status') in ['completed', 'cancelled']:
+        raise HTTPException(status_code=400, detail="Ride is already completed or cancelled")
+
+    await db.rides.update_one(
+        {'id': ride_id},
+        {'$set': {
+            'status': 'cancelled',
+            'cancelled_at': datetime.utcnow(),
+            'cancellation_reason': 'Cancelled by rider (scheduled)',
+            'updated_at': datetime.utcnow()
+        }}
+    )
+    return {'success': True}
+
+@api_router.post("/{ride_id}/simulate-arrival")
+async def simulate_driver_arrival(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """Dev/test only: Simulate driver arriving at pickup, returns OTP."""
+    ride = await db.rides.find_one({'id': ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get('rider_id') != current_user['id']:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    await db.rides.update_one(
+        {'id': ride_id},
+        {'$set': {
+            'status': 'driver_arrived',
+            'driver_arrived_at': datetime.utcnow(),
+            'updated_at': datetime.utcnow()
+        }}
+    )
+    updated_ride = await db.rides.find_one({'id': ride_id})
+    return {'success': True, 'pickup_otp': updated_ride.get('pickup_otp', '0000')}
+
+@api_router.post("/{ride_id}/start")
+async def rider_start_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """Rider-side: Mark ride as in progress (when OTP already verified or used together with driver)."""
+    ride = await db.rides.find_one({'id': ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get('rider_id') != current_user['id']:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if ride.get('status') not in ['driver_arrived']:
+        raise HTTPException(status_code=400, detail=f"Cannot start ride with status: {ride.get('status')}")
+
+    await db.rides.update_one(
+        {'id': ride_id},
+        {'$set': {
+            'status': 'in_progress',
+            'ride_started_at': datetime.utcnow(),
+            'updated_at': datetime.utcnow()
+        }}
+    )
+    return {'success': True}
+
+@api_router.post("/{ride_id}/complete")
+async def rider_complete_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """Rider-side: Get completed ride data (ride is completed by driver; this fetches the result)."""
+    ride = await db.rides.find_one({'id': ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get('rider_id') != current_user['id']:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    # Return the current ride state (driver will have set it to completed)
+    return ride
+
 @api_router.get("/{ride_id}/receipt")
 async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Get a detailed receipt for a completed ride"""

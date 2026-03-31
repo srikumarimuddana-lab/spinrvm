@@ -18,7 +18,7 @@ export async function uploadFile(uri: string, name: string, type: string): Promi
 
     try {
         // We do NOT set Content-Type header so that the browser/engine sets the boundary correctly
-        const response = await fetch(`${SpinrConfig.backendUrl}/api/upload`, {
+        const response = await fetch(`${SpinrConfig.backendUrl}/api/v1/upload`, {
             method: 'POST',
             body: formData,
         });

@@ -87,7 +87,7 @@ const client = {
       console.log('DEBUG: NO TOKEN for GET', url);
     }
 
-    const response = await fetchWithTimeout(`${API_URL}/api${url}`, {
+    const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
       method: 'GET',
       headers,
     });
@@ -113,7 +113,7 @@ const client = {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetchWithTimeout(`${API_URL}/api${url}`, {
+    const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
       method: 'POST',
       headers,
       body: body ? JSON.stringify(body) : undefined,
@@ -140,7 +140,7 @@ const client = {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(`${API_URL}/api${url}`, {
+    const response = await fetch(`${API_URL}/api/v1${url}`, {
       method: 'PUT',
       headers,
       body: body ? JSON.stringify(body) : undefined,
@@ -167,7 +167,7 @@ const client = {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(`${API_URL}/api${url}`, {
+    const response = await fetch(`${API_URL}/api/v1${url}`, {
       method: 'PATCH',
       headers,
       body: body ? JSON.stringify(body) : undefined,
@@ -194,7 +194,7 @@ const client = {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(`${API_URL}/api${url}`, {
+    const response = await fetch(`${API_URL}/api/v1${url}`, {
       method: 'DELETE',
       headers,
     });

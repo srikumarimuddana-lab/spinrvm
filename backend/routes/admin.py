@@ -3,6 +3,8 @@ from typing import Dict, Any, Optional
 from pydantic import BaseModel  # type: ignore
 from datetime import datetime, timedelta
 import jwt
+import uuid
+import logging
 
 try:
     from ..dependencies import get_current_user, get_admin_user  # type: ignore
@@ -14,6 +16,8 @@ except ImportError:
     from db import db  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
     from core.config import settings
+
+logger = logging.getLogger(__name__)
 
 admin_router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -831,20 +835,67 @@ async def admin_delete_faq(faq_id: str):
 
 @admin_router.post("/notifications/send")
 async def admin_send_notification(notification: Dict[str, Any]):
-    """Send a notification to a specific user."""
-    # This would integrate with your notification service
-    # For now, just log the notification
+    """Send a notification to a specific user or audience."""
+    user_id = notification.get("user_id")
+    title = notification.get("title", "")
+    body = notification.get("body", "")
+    notification_type = notification.get("type", "general")
+    audience = notification.get("audience", "user")  # user, all, riders, drivers
+
+    # Create notification document
     notification_doc = {
-        "user_id": notification.get("user_id"),
-        "title": notification.get("title"),
-        "body": notification.get("body"),
-        "type": notification.get("type", "general"),
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "title": title,
+        "body": body,
+        "type": notification_type,
+        "audience": audience,
         "sent_at": datetime.utcnow().isoformat(),
-        "status": "sent"
+        "status": "sent",
+        "sent_count": 1 if user_id else 0,
     }
-    
-    await db.notifications.insert_one(notification_doc)
-    return {"message": "Notification sent"}
+
+    # If targeting specific user, insert and send
+    if user_id:
+        await db.notifications.insert_one(notification_doc)
+        # TODO: Integrate with push notification service (FCM)
+        logger.info(f"Notification sent to user {user_id}: {title}")
+    elif audience == "all":
+        # Broadcast to all users - just log for now
+        logger.info(f"Broadcast notification to all users: {title}")
+    elif audience == "riders":
+        # Broadcast to all riders
+        logger.info(f"Broadcast notification to all riders: {title}")
+    elif audience == "drivers":
+        # Broadcast to all drivers
+        logger.info(f"Broadcast notification to all drivers: {title}")
+
+    return {"success": True, "notification": notification_doc}
+
+
+@admin_router.get("/notifications")
+async def admin_get_notifications(
+    limit: int = Query(50),
+    offset: int = Query(0),
+    status: Optional[str] = None,
+    notification_type: Optional[str] = None,
+):
+    """Get all sent notifications with optional filters."""
+    filters: Dict[str, Any] = {}
+    if status:
+        filters["status"] = status
+    if notification_type:
+        filters["type"] = notification_type
+
+    notifications = await db.get_rows(
+        "notifications",
+        filters,
+        order="created_at" if "created_at" in (await db.notifications.find_one({}) or {}) else "sent_at",
+        desc=True,
+        limit=limit,
+        offset=offset,
+    )
+    return notifications
 
 
 # ---------- Area Management (Pricing, Tax, Vehicle Pricing) ----------

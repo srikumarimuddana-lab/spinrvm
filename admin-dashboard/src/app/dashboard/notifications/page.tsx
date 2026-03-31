@@ -32,6 +32,7 @@ import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Bell, Search, Send, Users, Car, MapPin, AlertCircle, Info, Calendar, Clock, Download, Trash2, Mail, Phone } from "lucide-react";
 import { formatDate } from "@/lib/utils";
+import { getNotifications, sendNotification } from "@/lib/api";
 
 // Mock notification data - replace with API calls when backend is ready
 const mockNotifications = [
@@ -88,13 +89,14 @@ const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
 };
 
 export default function NotificationsPage() {
-    const [notifications, setNotifications] = useState<any[]>(mockNotifications);
+    const [notifications, setNotifications] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const [typeFilter, setTypeFilter] = useState("all");
     const [statusFilter, setStatusFilter] = useState("all");
     const [createDialogOpen, setCreateDialogOpen] = useState(false);
     const [selectedNotification, setSelectedNotification] = useState<any>(null);
+    const [notifStats, setNotifStats] = useState({ total: 0, sent: 0, drafts: 0, reach: 0 });
 
     const [form, setForm] = useState({
         title: "",
@@ -107,10 +109,37 @@ export default function NotificationsPage() {
     });
 
     useEffect(() => {
-        // TODO: Replace with API call when backend endpoint is ready
-        // fetchNotifications().then(setNotifications).catch(console.error).finally(() => setLoading(false));
-        setLoading(false);
+        fetchNotifications();
     }, []);
+
+    const fetchNotifications = async () => {
+        setLoading(true);
+        try {
+            const data = await getNotifications();
+            const transformed = (data || []).map((n: any) => ({
+                id: n.id,
+                title: n.title,
+                message: n.body,
+                type: n.type,
+                audience: n.audience || 'user',
+                status: n.status,
+                created_at: n.created_at || n.sent_at,
+                sent_count: n.sent_count || 0,
+            }));
+            setNotifications(transformed);
+            setNotifStats({
+                total: transformed.length,
+                sent: transformed.filter((n: any) => n.status === 'sent').length,
+                drafts: transformed.filter((n: any) => n.status === 'draft').length,
+                reach: transformed.reduce((s: number, n: any) => s + (n.sent_count || 0), 0),
+            });
+        } catch (error) {
+            console.error('Failed to fetch notifications:', error);
+            setNotifications(mockNotifications);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     const filtered = notifications.filter((n) => {
         const matchSearch =
@@ -122,34 +151,33 @@ export default function NotificationsPage() {
         return matchSearch && matchType && matchStatus;
     });
 
-    const handleCreate = () => {
+    const handleCreate = async () => {
         if (!form.title.trim() || !form.message.trim()) {
             alert("Please fill in title and message");
             return;
         }
 
-        const newNotification = {
-            id: Date.now().toString(),
-            title: form.title,
-            message: form.message,
-            type: form.type,
-            audience: form.audience,
-            status: "sent",
-            created_at: new Date().toISOString(),
-            sent_count: 0,
-        };
-
-        setNotifications([newNotification, ...notifications]);
-        setCreateDialogOpen(false);
-        setForm({
-            title: "",
-            message: "",
-            type: "info",
-            audience: "all",
-            send_push: true,
-            send_email: false,
-            send_sms: false,
-        });
+        try {
+            await sendNotification({
+                title: form.title,
+                body: form.message,
+                type: form.type,
+                audience: form.audience,
+            });
+            await fetchNotifications();
+            setCreateDialogOpen(false);
+            setForm({
+                title: "",
+                message: "",
+                type: "info",
+                audience: "all",
+                send_push: true,
+                send_email: false,
+                send_sms: false,
+            });
+        } catch (error: any) {
+            alert(`Failed to send notification: ${error.message}`);
+        }
     };
 
     const handleDelete = (id: string) => {
@@ -208,7 +236,7 @@ export default function NotificationsPage() {
                             <Bell className="h-5 w-5 text-violet-500" />
                             <div>
                                 <p className="text-xs text-muted-foreground">Total</p>
-                                <p className="text-2xl font-bold">{notifications.length}</p>
+                                <p className="text-2xl font-bold">{notifStats.total}</p>
                             </div>
                         </div>
                     </CardContent>
@@ -219,7 +247,7 @@ export default function NotificationsPage() {
                             <Info className="h-5 w-5 text-emerald-500" />
                             <div>
                                 <p className="text-xs text-muted-foreground">Sent</p>
-                                <p className="text-2xl font-bold">{notifications.filter(n => n.status === "sent").length}</p>
+                                <p className="text-2xl font-bold">{notifStats.sent}</p>
                             </div>
                         </div>
                     </CardContent>
@@ -230,7 +258,7 @@ export default function NotificationsPage() {
                             <Clock className="h-5 w-5 text-blue-500" />
                             <div>
                                 <p className="text-xs text-muted-foreground">Drafts</p>
-                                <p className="text-2xl font-bold">{notifications.filter(n => n.status === "draft").length}</p>
+                                <p className="text-2xl font-bold">{notifStats.drafts}</p>
                             </div>
                         </div>
                     </CardContent>
@@ -241,7 +269,7 @@ export default function NotificationsPage() {
                             <Users className="h-5 w-5 text-amber-500" />
                             <div>
                                 <p className="text-xs text-muted-foreground">Total Reach</p>
-                                <p className="text-2xl font-bold">{notifications.reduce((s, n) => s + (n.sent_count || 0), 0).toLocaleString()}</p>
+                                <p className="text-2xl font-bold">{notifStats.reach.toLocaleString()}</p>
                             </div>
                         </div>
                     </CardContent>

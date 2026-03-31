@@ -164,7 +164,7 @@ export default function RidesScreen() {
             onPress={() => setFilter(f)}
           >
             <Text style={[styles.filterText, filter === f && styles.filterTextActive]}>
-              {f === 'all' ? 'All' : f === 'completed' ? 'Completed' : 'Cancelled'}
+              {f === 'all' ? 'All' : f === 'scheduled' ? 'Scheduled' : f === 'completed' ? 'Completed' : 'Cancelled'}
             </Text>
           </TouchableOpacity>
         ))}

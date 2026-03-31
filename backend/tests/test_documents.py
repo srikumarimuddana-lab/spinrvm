@@ -417,3 +417,45 @@ class TestDocumentEndpoints:
         )
         
         assert response.status_code in [200, 401, 403, 404, 422]
+
+
+class TestDocumentRegressions:
+    """Regression tests for bugs that were previously found and fixed."""
+
+    def test_websocket_route_is_registered(self):
+        """Regression: WebSocket router must be registered on the app.
+
+        Previously the router in routes/websocket.py was never imported or
+        included in server.py, causing all WebSocket upgrade requests to return
+        403 Forbidden instead of 101 Switching Protocols.
+        """
+        from server import app
+        ws_routes = [
+            r for r in app.routes
+            if hasattr(r, 'path') and r.path.startswith('/ws/')
+        ]
+        assert len(ws_routes) > 0, (
+            "No WebSocket routes found — did you forget to include websocket_router in server.py?"
+        )
+
+    @pytest.mark.asyncio
+    async def test_get_driver_documents_no_driver_returns_empty_list(self):
+        """Regression: GET /drivers/documents must return [] (not 404) when the
+        authenticated user has no driver profile yet.
+
+        Previously the endpoint raised HTTPException(404) during onboarding,
+        which crashed the Documents screen in the driver app.
+        """
+        from unittest.mock import AsyncMock, patch, MagicMock
+
+        mock_db = MagicMock()
+        mock_db.drivers.find_one = AsyncMock(return_value=None)  # no driver profile
+
+        mock_user = {'id': 'user_999', 'role': 'driver', 'is_driver': False}
+
+        with patch('documents.db', mock_db):
+            from documents import get_driver_documents
+            result = await get_driver_documents(current_user=mock_user)
+            assert result == [], (
+                "Expected empty list when driver profile is absent, not an exception"
+            )

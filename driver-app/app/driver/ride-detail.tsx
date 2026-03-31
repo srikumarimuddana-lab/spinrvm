@@ -10,6 +10,9 @@ import {
     Dimensions,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+
+// Use Google Maps on Android, Apple Maps (native) on iOS
+const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -118,7 +121,7 @@ export default function RideDetailScreen() {
                 <View style={styles.mapContainer}>
                     <MapView
                         style={styles.map}
-                        provider={PROVIDER_GOOGLE}
+                        provider={MAP_PROVIDER}
                         initialRegion={mapRegion}
                         customMapStyle={mapStyle}
                         scrollEnabled={false}

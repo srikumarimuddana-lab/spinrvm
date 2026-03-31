@@ -174,9 +174,9 @@ export default function BecomeDriverScreen() {
 
   const fetchVehicleTypes = async () => {
     setLoadingTypes(true);
-    console.log('Fetching vehicle types from:', `${SpinrConfig.backendUrl}/api/vehicle-types`);
+    console.log('Fetching vehicle types from:', `${SpinrConfig.backendUrl}/api/v1/vehicle-types`);
     try {
-      const response = await fetch(`${SpinrConfig.backendUrl}/api/vehicle-types`);
+      const response = await fetch(`${SpinrConfig.backendUrl}/api/v1/vehicle-types`);
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
@@ -192,7 +192,7 @@ export default function BecomeDriverScreen() {
 
   const fetchRequirements = async () => {
     try {
-      const response = await fetch(`${SpinrConfig.backendUrl}/api/drivers/requirements`);
+      const response = await fetch(`${SpinrConfig.backendUrl}/api/v1/drivers/requirements`);
       if (response.ok) {
         const data = await response.json();
         setRequirements(data);

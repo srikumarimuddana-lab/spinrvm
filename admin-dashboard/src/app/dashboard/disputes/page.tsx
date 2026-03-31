@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/select";
 import { HelpCircle, Search, MessageSquare, CheckCircle, XCircle, Clock } from "lucide-react";
 import { formatDate } from "@/lib/utils";
+import { getDisputes, resolveDispute } from "@/lib/api";
 
 // Mock dispute data - replace with API calls when backend is ready
 const mockDisputes = [
@@ -72,19 +73,47 @@ const DISPUTE_TYPES = [
 ];
 
 export default function DisputesPage() {
-    const [disputes, setDisputes] = useState<any[]>(mockDisputes);
+    const [disputes, setDisputes] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
     const [selectedDispute, setSelectedDispute] = useState<any>(null);
     const [resolutionDialogOpen, setResolutionDialogOpen] = useState(false);
     const [resolution, setResolution] = useState("");
+    const [disputeStats, setDisputeStats] = useState({ pending: 0, resolved: 0, rejected: 0 });
 
     useEffect(() => {
-        // TODO: Replace with API call when backend endpoint is ready
-        // fetchDisputes().then(setDisputes).catch(console.error).finally(() => setLoading(false));
-        setLoading(false);
+        fetchDisputes();
     }, []);
+
+    const fetchDisputes = async () => {
+        setLoading(true);
+        try {
+            const data = await getDisputes();
+            const transformed = (data || []).map((d: any) => ({
+                id: d.id,
+                ride_id: d.ride_id,
+                user_name: d.user_name || 'Unknown',
+                user_type: 'rider',
+                dispute_type: d.reason || 'other',
+                description: d.description,
+                status: d.status,
+                created_at: d.created_at,
+                resolution: d.admin_note || d.resolution,
+            }));
+            setDisputes(transformed);
+            setDisputeStats({
+                pending: transformed.filter((d: any) => d.status === 'open' || d.status === 'pending').length,
+                resolved: transformed.filter((d: any) => d.status === 'resolved').length,
+                rejected: transformed.filter((d: any) => d.status === 'rejected').length,
+            });
+        } catch (error) {
+            console.error('Failed to fetch disputes:', error);
+            setDisputes(mockDisputes);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     const filtered = disputes.filter((d) => {
         const matchSearch =
@@ -96,32 +125,39 @@ export default function DisputesPage() {
         return matchSearch && matchStatus;
     });
 
-    const handleResolve = () => {
+    const handleResolve = async () => {
         if (!selectedDispute || !resolution.trim()) return;
 
-        // TODO: Replace with API call
-        setDisputes(disputes.map(d =>
-            d.id === selectedDispute.id
-                ? { ...d, status: "resolved", resolution: resolution.trim() }
-                : d
-        ));
-        setResolutionDialogOpen(false);
-        setResolution("");
-        setSelectedDispute(null);
+        try {
+            await resolveDispute(selectedDispute.id, {
+                resolution: 'approved',
+                refund_amount: selectedDispute.requested_amount,
+                admin_note: resolution.trim(),
+            });
+            await fetchDisputes();
+            setResolutionDialogOpen(false);
+            setResolution("");
+            setSelectedDispute(null);
+        } catch (error: any) {
+            alert(`Failed to resolve dispute: ${error.message}`);
+        }
     };
 
-    const handleReject = () => {
+    const handleReject = async () => {
         if (!selectedDispute || !resolution.trim()) return;
 
-        // TODO: Replace with API call
-        setDisputes(disputes.map(d =>
-            d.id === selectedDispute.id
-                ? { ...d, status: "rejected", resolution: resolution.trim() }
-                : d
-        ));
-        setResolutionDialogOpen(false);
-        setResolution("");
-        setSelectedDispute(null);
+        try {
+            await resolveDispute(selectedDispute.id, {
+                resolution: 'rejected',
+                admin_note: resolution.trim(),
+            });
+            await fetchDisputes();
+            setResolutionDialogOpen(false);
+            setResolution("");
+            setSelectedDispute(null);
+        } catch (error: any) {
+            alert(`Failed to reject dispute: ${error.message}`);
+        }
     };
 
     return (
@@ -170,7 +206,7 @@ export default function DisputesPage() {
                             <Clock className="h-5 w-5 text-amber-500" />
                             <div>
                                 <p className="text-xs text-muted-foreground">Pending</p>
-                                <p className="text-2xl font-bold">{disputes.filter(d => d.status === "pending").length}</p>
+                                <p className="text-2xl font-bold">{disputeStats.pending}</p>
                             </div>
                         </div>
                     </CardContent>
@@ -181,7 +217,7 @@ export default function DisputesPage() {
                             <CheckCircle className="h-5 w-5 text-emerald-500" />
                             <div>
                                 <p className="text-xs text-muted-foreground">Resolved</p>
-                                <p className="text-2xl font-bold">{disputes.filter(d => d.status === "resolved").length}</p>
+                                <p className="text-2xl font-bold">{disputeStats.resolved}</p>
                             </div>
                         </div>
                     </CardContent>
@@ -192,7 +228,7 @@ export default function DisputesPage() {
                             <XCircle className="h-5 w-5 text-red-500" />
                             <div>
                                 <p className="text-xs text-muted-foreground">Rejected</p>
-                                <p className="text-2xl font-bold">{disputes.filter(d => d.status === "rejected").length}</p>
+                                <p className="text-2xl font-bold">{disputeStats.rejected}</p>
                             </div>
                         </div>
                     </CardContent>

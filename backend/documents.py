@@ -91,13 +91,11 @@ async def get_document_requirements():
 @documents_router.get("/documents")
 async def get_driver_documents(current_user: dict = Depends(get_current_user)):
     """Get all documents uploaded by the current driver."""
-    if not current_user.get('is_driver'):
-        raise HTTPException(status_code=403, detail="User is not a driver")
-        
-    # Get driver profile to ensure we have the correct driver_id
+    # Look up the driver profile directly — avoids a stale is_driver flag and
+    # returns an empty list gracefully during the onboarding flow.
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     if not driver:
-        raise HTTPException(status_code=404, detail="Driver profile not found")
+        return []   # No driver profile yet — not an error
         
     documents = await db.driver_documents.find({'driver_id': driver['id']}).sort('uploaded_at', -1).to_list(100)
     return documents

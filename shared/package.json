@@ -1,4 +1,8 @@
 {
+  "dependencies": {
+    "@react-native-community/netinfo": "*",
+    "react-native-worklets": "*"
+  },
   "devDependencies": {
     "@types/node": "^25.3.0"
   }

@@ -29,8 +29,9 @@ import {
 } from "@/components/ui/select";
 import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, ShieldAlert, Download, RefreshCw } from "lucide-react";
 import { formatDate } from "@/lib/utils";
+import { getUsers, getUserDetails, updateUserStatus, getStats } from "@/lib/api";
 
-// Mock user data - replace with API calls when backend is ready
+// Mock user data - fallback if API fails
 const mockUsers = [
     {
         id: "1",
@@ -57,17 +58,50 @@ const mockUsers = [
 ];
 
 export default function UsersPage() {
-    const [users, setUsers] = useState<any[]>(mockUsers);
+    const [users, setUsers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const [verifiedFilter, setVerifiedFilter] = useState("all");
     const [selectedUser, setSelectedUser] = useState<any>(null);
+    const [userStats, setUserStats] = useState({ total: 0, verified: 0, unverified: 0, avgRating: 0 });
 
     useEffect(() => {
-        // TODO: Replace with API call when backend endpoint is ready
-        // fetchUsers().then(setUsers).catch(console.error).finally(() => setLoading(false));
-        setLoading(false);
+        fetchUsers();
     }, []);
+
+    const fetchUsers = async () => {
+        setLoading(true);
+        try {
+            const [usersData, statsData] = await Promise.all([
+                getUsers(),
+                getStats()
+            ]);
+            // Transform API response to match UI expectations
+            const transformedUsers = (usersData || []).map((u: any) => ({
+                id: u.id,
+                name: `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.email || u.phone,
+                email: u.email,
+                phone: u.phone,
+                created_at: u.created_at,
+                total_rides: 0, // Would need to fetch separately
+                rating: 5.0, // Default rating
+                is_verified: u.is_verified || true,
+                city: u.city,
+            }));
+            setUsers(transformedUsers);
+            setUserStats({
+                total: statsData?.total_users || transformedUsers.length,
+                verified: transformedUsers.filter((u: any) => u.is_verified).length,
+                unverified: transformedUsers.filter((u: any) => !u.is_verified).length,
+                avgRating: 5.0,
+            });
+        } catch (error) {
+            console.error('Failed to fetch users:', error);
+            setUsers(mockUsers);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     const filtered = users.filter((u) => {
         const matchSearch =

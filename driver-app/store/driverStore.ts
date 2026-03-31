@@ -385,7 +385,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         }
     },
 
-    fetchEarnings: async (period = 'today') => {
+    fetchEarnings: async (period = 'day') => {
         try {
             const res = await api.get(`/drivers/earnings?period=${period}`);
             set({ earnings: res.data });

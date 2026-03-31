@@ -75,7 +75,7 @@ export default function BecomeDriverScreen() {
   const fetchVehicleTypes = async () => {
     setLoadingTypes(true);
     try {
-      const response = await fetch(`${SpinrConfig.backendUrl}/api/vehicle-types`);
+      const response = await fetch(`${SpinrConfig.backendUrl}/api/v1/vehicle-types`);
       const data = await response.json();
       setVehicleTypes(data);
     } catch (e) {
@@ -87,7 +87,7 @@ export default function BecomeDriverScreen() {
 
   const fetchRequirements = async () => {
     try {
-      const response = await fetch(`${SpinrConfig.backendUrl}/api/drivers/requirements`);
+      const response = await fetch(`${SpinrConfig.backendUrl}/api/v1/drivers/requirements`);
       if (response.ok) {
         const data = await response.json();
         setRequirements(data);

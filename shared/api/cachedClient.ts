@@ -9,15 +9,15 @@ const CACHED_ENDPOINTS: Array<{
     keyFn?: (url: string) => string;
 }> = [
         // Document requirements - long TTL (static data)
-        { pattern: /\/api\/drivers\/requirements$/, ttl: CACHE_CONFIG.DOCUMENT_REQUIREMENTS_TTL },
+        { pattern: /\/api\/v1\/drivers\/requirements$/, ttl: CACHE_CONFIG.DOCUMENT_REQUIREMENTS_TTL },
         // Driver documents
-        { pattern: /\/api\/drivers\/documents$/, ttl: CACHE_CONFIG.DRIVER_DOCUMENTS_TTL },
+        { pattern: /\/api\/v1\/drivers\/documents$/, ttl: CACHE_CONFIG.DRIVER_DOCUMENTS_TTL },
         // Vehicle types - static reference data
-        { pattern: /\/api\/vehicle-types$/, ttl: CACHE_CONFIG.DOCUMENT_REQUIREMENTS_TTL },
+        { pattern: /\/api\/v1\/vehicle-types$/, ttl: CACHE_CONFIG.DOCUMENT_REQUIREMENTS_TTL },
         // Pricing rules - relatively static
-        { pattern: /\/api\/pricing$/, ttl: CACHE_CONFIG.DOCUMENT_REQUIREMENTS_TTL },
+        { pattern: /\/api\/v1\/pricing$/, ttl: CACHE_CONFIG.DOCUMENT_REQUIREMENTS_TTL },
         // Service areas - static reference data
-        { pattern: /\/api\/service-areas$/, ttl: CACHE_CONFIG.DOCUMENT_REQUIREMENTS_TTL },
+        { pattern: /\/api\/v1\/service-areas$/, ttl: CACHE_CONFIG.DOCUMENT_REQUIREMENTS_TTL },
     ];
 
 const API_URL = SpinrConfig.backendUrl;

@@ -1,65 +1,36 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { router } from 'expo-router';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Dimensions,
-  Animated,
-  ActivityIndicator,
-  Platform,
-  Linking,
-  Alert,
-  Vibration,
-} from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, Alert, Platform, Linking, Animated } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
-import * as Location from 'expo-location';
-import * as Notifications from 'expo-notifications';
-import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { useAuthStore } from '@shared/store/authStore';
-import { useDriverStore, RideState } from '../../store/driverStore';
-import api from '@shared/api/client';
-import { API_URL } from '@shared/config';
-
+import { Ionicons } from '@expo/vector-icons';
+import { useDriverStore } from '../../store/driverStore';
+import {
+  DriverTopBar,
+  DriverIdlePanel,
+  ActiveRidePanel,
+  TripCompletedPanel,
+  MapControls,
+} from '../../components/dashboard';
+import { useDriverDashboard } from '../../hooks/useDriverDashboard';
 import SpinrConfig from '@shared/config/spinr.config';
 
-const { width, height } = Dimensions.get('window');
+// Use Google Maps on Android, Apple Maps (native) on iOS
+const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
-// ─── Colors (Mapped to Light Theme) ────────────────────────────────
-const THEME = SpinrConfig.theme.colors;
 const COLORS = {
-  // Map old "primary" (background) to new light background
-  primary: THEME.background,
-  // Map old "accent" (action) to new primary (Red)
-  accent: THEME.primary,
-  accentDim: THEME.primaryDark,
-  danger: THEME.error,
-  orange: '#FF9500', // Keep orange for specific UI elements or map to warning
-  surface: THEME.surface,
-  surfaceLight: THEME.surfaceLight,
-  text: THEME.text,
-  textDim: THEME.textDim,
-  success: THEME.success,
-  gold: '#FFD700',
-  overlay: 'rgba(255, 255, 255, 0.95)', // Light overlay
-  border: THEME.border,
-  // Helper for old "primary" usage that might need actual brand color
-  brand: THEME.primary,
+  primary: SpinrConfig.theme.colors.background,
+  accent: SpinrConfig.theme.colors.primary,
+  text: SpinrConfig.theme.colors.text,
+  textDim: SpinrConfig.theme.colors.textDim,
 };
 
 export default function DriverDashboard() {
-  const { user, driver: driverData, updateDriverStatus } = useAuthStore();
+  const { user, driver: driverData } = useDriverStore();
   const {
     rideState,
     incomingRide,
     activeRide,
     completedRide,
     countdownSeconds,
-    isLoading,
-    error,
-    setIncomingRide,
     setCountdown,
     acceptRide,
     declineRide,
@@ -68,426 +39,58 @@ export default function DriverDashboard() {
     startRide,
     completeRide,
     cancelRide,
-    fetchActiveRide,
     resetRideState,
     clearError,
-    fetchEarnings,
     earnings,
   } = useDriverStore();
 
-  const [isOnline, setIsOnline] = useState(driverData?.is_online || false);
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
-  const [otpInput, setOtpInput] = useState('');
-  const mapRef = useRef<MapView>(null);
-  const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000]; // Exponential backoff
-  const wsRef = useRef<WebSocket | null>(null);
-  const locationSubRef = useRef<Location.LocationSubscription | null>(null);
-  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const reconnectAttemptRef = useRef(0);
-  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const {
+    isOnline,
+    location,
+    otpInput,
+    setOtpInput,
+    toggleOnline,
+    openNavigation,
+    mapRef,
+    currentRegionRef,
+    pulseAnim,
+    slideUpAnim,
+    fadeAnim,
+  } = useDriverDashboard();
 
-  // Animations
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  const slideUpAnim = useRef(new Animated.Value(height)).current;
-  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const [countdown, setCountdownState] = useState(countdownSeconds);
 
-  // ─── Location Tracking ───────────────────────────────────────────
-  const locationBufferRef = useRef<any[]>([]);
-
+  // Countdown timer effect
   useEffect(() => {
-    (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
-      const loc = await Location.getCurrentPositionAsync({});
-      setLocation(loc);
-    })();
-  }, []);
-
-  // ─── Batch Location Upload ────────────────────────────────────────────
-  const uploadLocationBatch = useCallback(async () => {
-    if (locationBufferRef.current.length === 0) return;
-
-    const pointsToUpload = [...locationBufferRef.current];
-    locationBufferRef.current = [];
-
-    try {
-      await api.post('/drivers/location-batch', {
-        points: pointsToUpload,
-      });
-      console.log(`Uploaded ${pointsToUpload.length} location points`);
-    } catch (err) {
-      console.log('Location batch upload failed:', err);
-      // Re-add points to buffer on failure
-      locationBufferRef.current = [...pointsToUpload, ...locationBufferRef.current];
-    }
-  }, []);
-
-  // Upload batch every 30 seconds
-  useEffect(() => {
-    if (!isOnline) return;
-
-    const interval = setInterval(uploadLocationBatch, 30000);
-    return () => clearInterval(interval);
-  }, [isOnline, uploadLocationBatch]);
-
-  useEffect(() => {
-    if (!isOnline) {
-      if (locationSubRef.current) {
-        locationSubRef.current.remove();
-        locationSubRef.current = null;
-      }
-      return;
-    }
-    (async () => {
-      const sub = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.High,
-          timeInterval: 5000,
-          distanceInterval: 10,
-        },
-        (loc) => {
-          setLocation(loc);
-
-          // Build payload with full GPS data + ride context
-          const { rideState: currentRideState, activeRide: currentActiveRide } = useDriverStore.getState();
-          const rideId = currentActiveRide?.ride?.id || null;
-          const phaseMap: Record<string, string> = {
-            idle: 'online_idle',
-            ride_offered: 'online_idle',
-            navigating_to_pickup: 'navigating_to_pickup',
-            arrived_at_pickup: 'arrived_at_pickup',
-            trip_in_progress: 'trip_in_progress',
-            trip_completed: 'online_idle',
-          };
-
-          const payload = {
-            type: 'driver_location',
-            lat: loc.coords.latitude,
-            lng: loc.coords.longitude,
-            speed: loc.coords.speed ?? null,
-            heading: loc.coords.heading ?? null,
-            accuracy: loc.coords.accuracy ?? null,
-            altitude: loc.coords.altitude ?? null,
-            ride_id: rideId,
-            tracking_phase: phaseMap[currentRideState] || 'online_idle',
-          };
-
-          // Also send via WebSocket for real-time tracking
-          if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify(payload));
+    if (rideState === 'ride_offered' && countdown > 0) {
+      const interval = setInterval(() => {
+        setCountdownState((prev) => {
+          if (prev <= 1) {
+            clearInterval(interval);
+            setCountdown(0);
+            return 0;
           }
-
-          // Always buffer for batch upload
-          locationBufferRef.current.push({
-            ...payload,
-            timestamp: new Date().toISOString(),
-          });
-
-          // Cap the buffer at 500 points (~40 min at 5s intervals)
-          if (locationBufferRef.current.length > 500) {
-            locationBufferRef.current = locationBufferRef.current.slice(-500);
-          }
-        }
-      );
-      locationSubRef.current = sub;
-    })();
-
-    return () => {
-      if (locationSubRef.current) {
-        locationSubRef.current.remove();
-        locationSubRef.current = null;
-      }
-    };
-  }, [isOnline, uploadLocationBatch]);
-
-  // ─── WebSocket Message Handler ─────────────────────────────────────
-  const handleWSMessage = useCallback((data: any) => {
-    switch (data.type) {
-      case 'new_ride_assignment':
-        Vibration.vibrate([0, 500, 200, 500]);
-        setIncomingRide({
-          ride_id: data.ride_id,
-          pickup_address: data.pickup_address,
-          dropoff_address: data.dropoff_address,
-          pickup_lat: data.pickup_lat || 0,
-          pickup_lng: data.pickup_lng || 0,
-          dropoff_lat: data.dropoff_lat || 0,
-          dropoff_lng: data.dropoff_lng || 0,
-          fare: data.fare || 0,
-          distance_km: data.distance_km,
-          duration_minutes: data.duration_minutes,
-          rider_name: data.rider_name,
-          rider_rating: data.rider_rating,
+          return prev - 1;
         });
-        break;
-      case 'ride_cancelled':
-        Alert.alert('Ride Cancelled', 'The rider has cancelled this ride.');
-        resetRideState();
-        break;
-    }
-  }, [setIncomingRide, resetRideState]);
-
-  // ─── WebSocket Connection with Reconnection ────────────────────────
-  const connectWebSocket = useCallback(() => {
-    if (!isOnline || !user) return;
-
-    const token = useAuthStore.getState().token;
-    if (!token) {
-      console.log('Cannot connect WebSocket: No auth token');
-      return;
-    }
-
-    // WebSocket URL must match backend route: /ws/{client_type}/{client_id}
-    const wsUrl = `${API_URL.replace('http', 'ws')}/ws/driver/${user.id}`;
-    console.log('Connecting to WebSocket:', wsUrl);
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      console.log('WebSocket connected, sending auth...');
-      reconnectAttemptRef.current = 0; // Reset reconnect attempts
-      const token = useAuthStore.getState().token;
-      console.log('Auth token exists:', !!token, 'User ID:', user?.id);
-      ws.send(JSON.stringify({
-        type: 'auth',
-        token: token,
-        client_type: 'driver',
-      }));
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        // Log any error messages from server
-        if (data.type === 'error') {
-          console.log('WebSocket auth error:', data.message);
-        }
-        handleWSMessage(data);
-      } catch { }
-    };
-
-    ws.onerror = (error) => {
-      console.log('WebSocket error:', error);
-    };
-
-    ws.onclose = (event) => {
-      console.log('WebSocket closed:', event.code, event.reason);
-      // Attempt reconnection with exponential backoff
-      if (isOnline && user) {
-        const delay = RECONNECT_DELAYS[Math.min(reconnectAttemptRef.current, RECONNECT_DELAYS.length - 1)];
-        console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttemptRef.current + 1})`);
-        reconnectTimeoutRef.current = setTimeout(() => {
-          reconnectAttemptRef.current++;
-          connectWebSocket();
-        }, delay);
-      }
-    };
-  }, [isOnline, user, handleWSMessage]);
-
-  useEffect(() => {
-    if (!isOnline || !user) {
-      // Clean up on offline
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-      return;
-    }
-
-    connectWebSocket();
-
-    return () => {
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-    };
-  }, [isOnline, user, connectWebSocket, handleWSMessage]);
-
-  // ─── Countdown Timer ─────────────────────────────────────────────
-  useEffect(() => {
-    if (rideState === 'ride_offered' && countdownSeconds > 0) {
-      countdownRef.current = setInterval(() => {
-        const current = useDriverStore.getState().countdownSeconds;
-        if (current <= 1) {
-          clearInterval(countdownRef.current!);
-          setCountdown(0);
-        } else {
-          setCountdown(current - 1);
-        }
       }, 1000);
-
-      return () => {
-        if (countdownRef.current) clearInterval(countdownRef.current);
-      };
+      return () => clearInterval(interval);
     }
   }, [rideState]);
 
-  // ─── Slide-up animation for panels ───────────────────────────────
+  // Sync with store countdown
   useEffect(() => {
-    const shouldShow = rideState !== 'idle';
-    Animated.timing(slideUpAnim, {
-      toValue: shouldShow ? 0 : height * 0.4,
-      duration: 350,
-      useNativeDriver: true,
-    }).start();
-    Animated.timing(fadeAnim, {
-      toValue: shouldShow ? 1 : 0,
-      duration: 250,
-      useNativeDriver: true,
-    }).start();
-  }, [rideState]);
+    setCountdownState(countdownSeconds);
+  }, [countdownSeconds]);
 
-  // ─── Pulse animation for online indicator ────────────────────────
+  // Error handling
   useEffect(() => {
-    if (isOnline) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, { toValue: 1.3, duration: 1000, useNativeDriver: true }),
-          Animated.timing(pulseAnim, { toValue: 1, duration: 1000, useNativeDriver: true }),
-        ])
-      ).start();
-    } else {
-      pulseAnim.setValue(1);
+    const { error } = useDriverStore.getState();
+    if (error) {
+      Alert.alert('Error', error, [{ text: 'OK', onPress: clearError }]);
     }
-  }, [isOnline]);
+  }, [useDriverStore.getState().error]);
 
-  // ─── Fetch active ride on mount ──────────────────────────────────
-  useEffect(() => {
-    if (isOnline) {
-      fetchActiveRide();
-      fetchEarnings('today');
-    }
-  }, [isOnline]);
-
-  // ─── Push Notifications Setup ────────────────────────────────────────
-  useEffect(() => {
-    if (!isOnline) return;
-
-    const setupNotifications = async () => {
-      const { status: existingStatus } = await Notifications.getPermissionsAsync();
-      let finalStatus = existingStatus;
-
-      if (existingStatus !== 'granted') {
-        const { status } = await Notifications.requestPermissionsAsync();
-        finalStatus = status;
-      }
-
-      if (finalStatus !== 'granted') {
-        console.log('Push notification permission not granted');
-        return;
-      }
-
-      // Get push token
-      const token = await Notifications.getExpoPushTokenAsync();
-      console.log('Push token:', token.data);
-
-      // Send token to backend to associate with driver
-      try {
-        await api.post('/drivers/push-token', {
-          push_token: token.data,
-          platform: Platform.OS,
-        });
-      } catch (err) {
-        console.log('Failed to register push token:', err);
-      }
-    };
-
-    setupNotifications();
-
-    // Listen for notifications
-    const notificationListener = Notifications.addNotificationReceivedListener((notification: any) => {
-      const data = notification.request.content.data;
-      console.log('Push notification received:', data);
-
-      if (data?.type === 'new_ride_offer') {
-        Vibration.vibrate([0, 500, 200, 500]);
-        // Fetch the latest ride offer
-        fetchActiveRide();
-      }
-    });
-
-    // Listen for notification responses (tap)
-    const responseListener = Notifications.addNotificationResponseReceivedListener((response: any) => {
-      const data = response.notification.request.content.data;
-      console.log('Notification tapped:', data);
-
-      if (data?.ride_id) {
-        fetchActiveRide();
-      }
-    });
-
-    return () => {
-      notificationListener.remove();
-      responseListener.remove();
-    };
-  }, [isOnline]);
-
-  // ─── Toggle Online/Offline ───────────────────────────────────────
-  const toggleOnline = async () => {
-    // Check for vehicle info
-    if (!driverData?.vehicle_make || !driverData?.license_plate) {
-      Alert.alert(
-        "Profile Incomplete",
-        "You must provide vehicle details before going online.",
-        [
-          {
-            text: "Add Vehicle Info",
-            onPress: () => router.push('/vehicle-info' as any)
-          },
-          { text: "Cancel", style: "cancel" }
-        ]
-      );
-      return;
-    }
-
-    // Check if driver is verified before allowing to go online
-    if (!driverData?.is_verified) {
-      Alert.alert(
-        "Account Not Verified",
-        "Your account is not verified yet. Please complete your profile and wait for admin approval before going online.",
-        [
-          {
-            text: "Check Status",
-            onPress: () => router.push('/driver/profile' as any)
-          },
-          { text: "OK", style: "default" }
-        ]
-      );
-      return;
-    }
-
-    const next = !isOnline;
-    setIsOnline(next);
-    try {
-      await updateDriverStatus(next);
-    } catch (err: any) {
-      console.log('Toggle online error:', err);
-      setIsOnline(!next);
-      Alert.alert(
-        "Cannot Go Online",
-        err.response?.data?.detail || "Failed to update status. Please try again."
-      );
-    }
-  };
-
-  // ─── Navigate to pickup/dropoff ──────────────────────────────────
-  const openNavigation = (lat: number, lng: number, label: string) => {
-    const url = Platform.select({
-      ios: `maps:0,0?q=${label}@${lat},${lng}`,
-      android: `google.navigation:q=${lat},${lng}`,
-    });
-    if (url) Linking.openURL(url);
-  };
-
-  // ─── Map Markers ─────────────────────────────────────────────────
+  // Map markers
   const getMapMarkers = () => {
     const markers: any[] = [];
     const ride = activeRide?.ride || incomingRide;
@@ -519,7 +122,7 @@ export default function DriverDashboard() {
           description={ride.dropoff_address}
         >
           <View style={styles.markerContainer}>
-            <View style={[styles.markerDot, { backgroundColor: COLORS.danger }]}>
+            <View style={[styles.markerDot, { backgroundColor: '#FF4757' }]}>
               <Ionicons name="flag" size={16} color="#fff" />
             </View>
           </View>
@@ -530,444 +133,52 @@ export default function DriverDashboard() {
     return markers;
   };
 
-  // ═══════════════════════════════════════════════════════════════════
-  //  RENDER PANELS BY STATE
-  // ═══════════════════════════════════════════════════════════════════
-
-  const renderStatsRow = () => (
-    <View style={styles.statsGrid}>
-      <View style={styles.statBox}>
-        <Text style={styles.statValue}>{driverData?.acceptance_rate || '100'}%</Text>
-        <Text style={styles.statLabel}>Acceptance</Text>
-      </View>
-      <View style={styles.statBox}>
-        <Text style={styles.statValue}>${(earnings?.total_earnings || 0).toFixed(2)}</Text>
-        <Text style={styles.statLabel}>Earnings</Text>
-      </View>
-      <View style={styles.statBox}>
-        <Text style={styles.statValue}>{driverData?.total_rides || '0'}</Text>
-        <Text style={styles.statLabel}>Rides</Text>
-      </View>
-    </View>
-  );
-
-  const renderIdlePanel = () => (
-    <View style={styles.idlePanel}>
-      <TouchableOpacity
-        style={[
-          styles.onlineToggle,
-          !driverData?.is_verified ? styles.onlineDisabled : (isOnline ? styles.onlineActive : styles.onlineInactive)
-        ]}
-        onPress={toggleOnline}
-        activeOpacity={driverData?.is_verified ? 0.8 : 1}
-        disabled={!driverData?.is_verified}
-      >
-        <Animated.View style={[styles.pulseIndicator, { transform: [{ scale: pulseAnim }] }]}>
-          <View style={[
-            styles.statusDot,
-            !driverData?.is_verified ? { backgroundColor: COLORS.orange } : (isOnline ? { backgroundColor: COLORS.success } : { backgroundColor: COLORS.danger })
-          ]} />
-        </Animated.View>
-        <View style={styles.toggleText}>
-          <Text style={styles.toggleLabel}>
-            {!driverData?.is_verified ? 'Account Not Verified' : (isOnline ? 'You\'re Online' : 'You\'re Offline')}
-          </Text>
-          <Text style={styles.toggleSub}>
-            {!driverData?.is_verified
-              ? 'Complete your profile and wait for admin approval'
-              : (isOnline ? 'Waiting for ride requests...' : 'Go online to start earning')}
-          </Text>
-        </View>
-        <View style={[
-          styles.toggleSwitch,
-          !driverData?.is_verified ? styles.toggleSwitchDisabled : (isOnline && styles.toggleSwitchOn)
-        ]}>
-          <View style={[
-            styles.toggleKnob,
-            !driverData?.is_verified ? styles.toggleKnobDisabled : (isOnline && styles.toggleKnobOn)
-          ]} />
-        </View>
-      </TouchableOpacity>
-
-      {/* Stats Row */}
-      {renderStatsRow()}
-    </View>
-  );
-
+  // Ride Offer Panel
   const renderRideOfferPanel = () => {
     if (!incomingRide) return null;
-    const progress = countdownSeconds / 15;
+    const progress = countdown / 15;
 
     return (
       <View style={styles.rideOfferOverlay}>
-        <LinearGradient colors={['rgba(10,14,33,0.95)', COLORS.primary]} style={styles.rideOfferGradient}>
-          {/* Countdown Ring */}
+        {/* Countdown and ride details */}
+        <View style={styles.rideOfferContent}>
           <View style={styles.countdownContainer}>
-            <View style={styles.countdownCircle}>
-              <Text style={styles.countdownText}>{countdownSeconds}</Text>
+            <View style={[styles.countdownCircle, { borderColor: COLORS.accent }]}>
+              <Text style={[styles.countdownText, { color: COLORS.accent }]}>{countdown}</Text>
             </View>
-            <View style={[styles.countdownBar, { width: `${progress * 100}%` }]} />
+            <View style={[styles.countdownBar, { width: `${progress * 100}%`, backgroundColor: COLORS.accent }]} />
           </View>
-
-          {/* Ride Info */}
-          <View style={styles.rideOfferInfo}>
-            <View style={styles.fareHighlight}>
-              <Text style={styles.fareLabel}>ESTIMATED FARE</Text>
-              <Text style={styles.fareAmount}>${(incomingRide.fare || 0).toFixed(2)}</Text>
-            </View>
-
-            <View style={styles.addressRow}>
-              <View style={styles.addressDot}>
-                <View style={[styles.dot, { backgroundColor: COLORS.accent }]} />
-                <View style={styles.dottedLine} />
-                <View style={[styles.dot, { backgroundColor: COLORS.danger }]} />
-              </View>
-              <View style={styles.addresses}>
-                <Text style={styles.addressText} numberOfLines={1}>
-                  {incomingRide.pickup_address}
-                </Text>
-                <View style={styles.addressDivider} />
-                <Text style={styles.addressText} numberOfLines={1}>
-                  {incomingRide.dropoff_address}
-                </Text>
-              </View>
-            </View>
-
-            {incomingRide.rider_name && (
-              <View style={styles.riderInfo}>
-                <View style={styles.riderAvatar}>
-                  <Ionicons name="person" size={20} color={COLORS.textDim} />
-                </View>
-                <Text style={styles.riderName}>{incomingRide.rider_name}</Text>
-                {incomingRide.rider_rating && (
-                  <View style={styles.ratingBadge}>
-                    <Ionicons name="star" size={12} color={COLORS.gold} />
-                    <Text style={styles.ratingText}>{incomingRide.rider_rating.toFixed(1)}</Text>
-                  </View>
-                )}
-              </View>
-            )}
-          </View>
-
-          {/* Action Buttons */}
+          <Text style={styles.rideOfferTitle}>New Ride Offer!</Text>
+          <Text style={styles.rideOfferFare}>${(incomingRide.fare || 0).toFixed(2)}</Text>
+          <Text style={styles.rideOfferAddress}>{incomingRide.pickup_address}</Text>
           <View style={styles.offerActions}>
             <TouchableOpacity
               style={styles.declineBtn}
               onPress={() => declineRide(incomingRide.ride_id)}
             >
-              <Ionicons name="close" size={28} color={COLORS.danger} />
+              <Ionicons name="close" size={28} color="#FF4757" />
               <Text style={styles.declineText}>Decline</Text>
             </TouchableOpacity>
-
             <TouchableOpacity
               style={styles.acceptBtn}
               onPress={() => acceptRide(incomingRide.ride_id)}
-              disabled={isLoading}
             >
-              <LinearGradient
-                colors={[COLORS.accent, COLORS.accentDim]}
-                style={styles.acceptGradient}
-              >
-                {isLoading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <>
-                    <Ionicons name="checkmark" size={28} color="#fff" />
-                    <Text style={styles.acceptText}>Accept</Text>
-                  </>
-                )}
-              </LinearGradient>
+              <Ionicons name="checkmark" size={28} color="#fff" />
+              <Text style={styles.acceptText}>Accept</Text>
             </TouchableOpacity>
           </View>
-        </LinearGradient>
+        </View>
       </View>
     );
   };
 
-  const renderActiveRidePanel = () => {
-    const ride = activeRide?.ride;
-    const rider = activeRide?.rider;
-    if (!ride) return null;
-
-    return (
-      <Animated.View
-        style={[styles.activePanel, { transform: [{ translateY: slideUpAnim }], opacity: fadeAnim }]}
-      >
-        <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={styles.activePanelInner}>
-          {/* Status */}
-          <View style={styles.rideStatusBar}>
-            <View style={[styles.statusIndicator, {
-              backgroundColor:
-                rideState === 'trip_in_progress' ? COLORS.accent :
-                  rideState === 'arrived_at_pickup' ? COLORS.orange :
-                    COLORS.gold
-            }]} />
-            <Text style={styles.rideStatusText}>
-              {rideState === 'navigating_to_pickup' && 'Navigating to Pickup'}
-              {rideState === 'arrived_at_pickup' && 'Waiting for Rider'}
-              {rideState === 'trip_in_progress' && 'Trip in Progress'}
-            </Text>
-            {ride.total_fare && (
-              <Text style={styles.rideFare}>${ride.total_fare.toFixed(2)}</Text>
-            )}
-          </View>
-
-          {/* Rider Info */}
-          {rider && (
-            <View style={styles.riderCard}>
-              <View style={styles.riderAvatar}>
-                <Ionicons name="person" size={24} color={COLORS.textDim} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.riderCardName}>{rider.first_name || rider.name || 'Rider'}</Text>
-                {rider.rating && (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                    <Ionicons name="star" size={12} color={COLORS.gold} />
-                    <Text style={styles.textDim}>{rider.rating}</Text>
-                  </View>
-                )}
-              </View>
-              <TouchableOpacity style={styles.contactBtn}>
-                <Ionicons name="chatbubble-ellipses" size={20} color={COLORS.accent} />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.contactBtn}>
-                <Ionicons name="call" size={20} color={COLORS.accent} />
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {/* Addresses */}
-          <View style={styles.addressRow}>
-            <View style={styles.addressDot}>
-              <View style={[styles.dot, { backgroundColor: COLORS.accent }]} />
-              <View style={styles.dottedLine} />
-              <View style={[styles.dot, { backgroundColor: COLORS.danger }]} />
-            </View>
-            <View style={styles.addresses}>
-              <Text style={styles.addressTextSm} numberOfLines={1}>
-                {ride.pickup_address}
-              </Text>
-              <View style={styles.addressDivider} />
-              <Text style={styles.addressTextSm} numberOfLines={1}>
-                {ride.dropoff_address}
-              </Text>
-            </View>
-          </View>
-
-          {/* OTP Input for arrived state */}
-          {rideState === 'arrived_at_pickup' && (
-            <View style={styles.otpSection}>
-              <Text style={styles.otpLabel}>Enter Rider's PIN</Text>
-              <View style={styles.otpRow}>
-                {[0, 1, 2, 3].map((i) => (
-                  <TouchableOpacity
-                    key={i}
-                    style={[styles.otpBox, otpInput.length > i && styles.otpBoxFilled]}
-                  >
-                    <Text style={styles.otpDigit}>{otpInput[i] || ''}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <View style={styles.otpKeypad}>
-                {[1, 2, 3, 4, 5, 6, 7, 8, 9, null, 0, 'del'].map((key) => (
-                  <TouchableOpacity
-                    key={String(key)}
-                    style={styles.keypadBtn}
-                    onPress={() => {
-                      if (key === 'del') {
-                        setOtpInput((prev) => prev.slice(0, -1));
-                      } else if (key !== null && otpInput.length < 4) {
-                        const newOtp = otpInput + String(key);
-                        setOtpInput(newOtp);
-                        if (newOtp.length === 4) {
-                          verifyOTP(ride.id, newOtp).then((ok) => {
-                            if (!ok) setOtpInput('');
-                          });
-                        }
-                      }
-                    }}
-                  >
-                    {key === 'del' ? (
-                      <Ionicons name="backspace" size={22} color={COLORS.text} />
-                    ) : key !== null ? (
-                      <Text style={styles.keypadText}>{key}</Text>
-                    ) : (
-                      <View />
-                    )}
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-          )}
-
-          {/* Action Buttons */}
-          <View style={styles.rideActions}>
-            {rideState === 'navigating_to_pickup' && (
-              <>
-                <TouchableOpacity
-                  style={styles.navBtn}
-                  onPress={() => openNavigation(ride.pickup_lat, ride.pickup_lng, 'Pickup')}
-                >
-                  <Ionicons name="navigate" size={20} color="#fff" />
-                  <Text style={styles.navBtnText}>Navigate</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.arriveBtn}
-                  onPress={() => arriveAtPickup(ride.id)}
-                  disabled={isLoading}
-                >
-                  <LinearGradient colors={[COLORS.accent, COLORS.accentDim]} style={styles.actionGradient}>
-                    {isLoading ? <ActivityIndicator color="#fff" /> : (
-                      <Text style={styles.actionBtnText}>I've Arrived</Text>
-                    )}
-                  </LinearGradient>
-                </TouchableOpacity>
-              </>
-            )}
-
-            {rideState === 'arrived_at_pickup' && (
-              <TouchableOpacity
-                style={styles.startBtn}
-                onPress={() => startRide(ride.id)}
-                disabled={isLoading}
-              >
-                <LinearGradient colors={[COLORS.orange, '#FF6B35']} style={styles.actionGradient}>
-                  {isLoading ? <ActivityIndicator color="#fff" /> : (
-                    <Text style={styles.actionBtnText}>Start Without PIN</Text>
-                  )}
-                </LinearGradient>
-              </TouchableOpacity>
-            )}
-
-            {rideState === 'trip_in_progress' && (
-              <>
-                <TouchableOpacity
-                  style={styles.navBtn}
-                  onPress={() => openNavigation(ride.dropoff_lat, ride.dropoff_lng, 'Dropoff')}
-                >
-                  <Ionicons name="navigate" size={20} color="#fff" />
-                  <Text style={styles.navBtnText}>Navigate</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.completeBtn}
-                  onPress={() => {
-                    Alert.alert(
-                      'Complete Ride',
-                      'Are you sure you want to complete this trip?',
-                      [
-                        { text: 'Cancel', style: 'cancel' },
-                        { text: 'Complete', onPress: () => completeRide(ride.id) },
-                      ]
-                    );
-                  }}
-                  disabled={isLoading}
-                >
-                  <LinearGradient colors={[COLORS.accent, COLORS.accentDim]} style={styles.actionGradient}>
-                    {isLoading ? <ActivityIndicator color="#fff" /> : (
-                      <Text style={styles.actionBtnText}>Complete Trip</Text>
-                    )}
-                  </LinearGradient>
-                </TouchableOpacity>
-              </>
-            )}
-
-            {/* Cancel button (for navigating & arrived states only) */}
-            {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup') && (
-              <TouchableOpacity
-                style={styles.cancelRideBtn}
-                onPress={() => {
-                  Alert.alert(
-                    'Cancel Ride',
-                    'Are you sure you want to cancel? This may affect your rating.',
-                    [
-                      { text: 'No', style: 'cancel' },
-                      { text: 'Yes, Cancel', style: 'destructive', onPress: () => cancelRide(ride.id) },
-                    ]
-                  );
-                }}
-              >
-                <Text style={styles.cancelRideText}>Cancel Ride</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </LinearGradient>
-      </Animated.View>
-    );
-  };
-
-  const renderTripCompletedPanel = () => {
-    if (!completedRide) return null;
-    return (
-      <View style={styles.completedOverlay}>
-        <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={styles.completedPanel}>
-          <View style={styles.completedIcon}>
-            <Ionicons name="checkmark-circle" size={60} color={COLORS.accent} />
-          </View>
-          <Text style={styles.completedTitle}>Trip Completed!</Text>
-
-          <View style={styles.fareBreakdown}>
-            <View style={styles.fareRow}>
-              <Text style={styles.fareItemLabel}>Base Fare</Text>
-              <Text style={styles.fareItemValue}>${(completedRide.base_fare || 0).toFixed(2)}</Text>
-            </View>
-            <View style={styles.fareRow}>
-              <Text style={styles.fareItemLabel}>Distance</Text>
-              <Text style={styles.fareItemValue}>${(completedRide.distance_fare || 0).toFixed(2)}</Text>
-            </View>
-            <View style={styles.fareRow}>
-              <Text style={styles.fareItemLabel}>Time</Text>
-              <Text style={styles.fareItemValue}>${(completedRide.time_fare || 0).toFixed(2)}</Text>
-            </View>
-            <View style={styles.fareDivider} />
-            <View style={styles.fareRow}>
-              <Text style={styles.fareEarningsLabel}>Your Earnings</Text>
-              <Text style={styles.fareEarningsValue}>
-                ${(completedRide.driver_earnings || 0).toFixed(2)}
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.tripStats}>
-            <View style={styles.tripStat}>
-              <Ionicons name="speedometer" size={18} color={COLORS.textDim} />
-              <Text style={styles.tripStatValue}>{(completedRide.distance_km || 0).toFixed(1)} km</Text>
-            </View>
-            <View style={styles.tripStat}>
-              <Ionicons name="time" size={18} color={COLORS.textDim} />
-              <Text style={styles.tripStatValue}>{completedRide.duration_minutes || 0} min</Text>
-            </View>
-          </View>
-
-          <TouchableOpacity
-            style={styles.doneBtn}
-            onPress={resetRideState}
-          >
-            <LinearGradient colors={[COLORS.accent, COLORS.accentDim]} style={styles.actionGradient}>
-              <Text style={styles.actionBtnText}>Done</Text>
-            </LinearGradient>
-          </TouchableOpacity>
-        </LinearGradient>
-      </View>
-    );
-  };
-
-  // ─── Error Toast ─────────────────────────────────────────────────
-  useEffect(() => {
-    if (error) {
-      Alert.alert('Error', error, [{ text: 'OK', onPress: clearError }]);
-    }
-  }, [error]);
-
-  // ═══════════════════════════════════════════════════════════════════
-  //  MAIN RENDER
-  // ═══════════════════════════════════════════════════════════════════
   return (
     <View style={styles.container}>
       {/* Map */}
       <MapView
         ref={mapRef}
         style={styles.map}
-        provider={PROVIDER_GOOGLE}
+        provider={MAP_PROVIDER}
         initialRegion={{
           latitude: location?.coords.latitude || 52.1332,
           longitude: location?.coords.longitude || -106.6700,
@@ -976,76 +187,66 @@ export default function DriverDashboard() {
         }}
         showsUserLocation
         showsMyLocationButton={false}
-        customMapStyle={[]}
+        onRegionChange={(region) => {
+          currentRegionRef.current = {
+            latitudeDelta: region.latitudeDelta,
+            longitudeDelta: region.longitudeDelta,
+          };
+        }}
       >
         {getMapMarkers()}
       </MapView>
 
       {/* Top Bar */}
-      <View style={styles.topBar}>
-        <View style={styles.topBarInner}>
-          <View style={styles.driverInfo}>
-            <View style={styles.avatarSmall}>
-              <Ionicons name="person" size={18} color={COLORS.textDim} />
-            </View>
-            <View>
-              <Text style={styles.driverName}>{driverData?.name || user?.first_name || 'Driver'}</Text>
-              <Text style={styles.vehicleInfo}>
-                {driverData?.vehicle_make} {driverData?.vehicle_model} · {driverData?.license_plate}
-              </Text>
-            </View>
-          </View>
-          <View style={[styles.onlineBadge, isOnline && styles.onlineBadgeActive]}>
-            <View style={[styles.onlineDot, { backgroundColor: isOnline ? COLORS.success : COLORS.textDim }]} />
-            <Text style={[styles.onlineBadgeText, isOnline && { color: COLORS.success }]}>
-              {isOnline ? 'ONLINE' : 'OFFLINE'}
-            </Text>
-          </View>
-        </View>
-      </View>
+      <DriverTopBar driverData={driverData} user={user} isOnline={isOnline} />
 
-      {/* My Location Button */}
-      <TouchableOpacity
-        style={styles.myLocationBtn}
-        onPress={() => {
-          if (location && mapRef.current) {
-            mapRef.current.animateToRegion({
-              latitude: location.coords.latitude,
-              longitude: location.coords.longitude,
-              latitudeDelta: 0.01,
-              longitudeDelta: 0.01,
-            }, 500);
-          }
-        }}
-      >
-        <Ionicons name="locate" size={22} color={COLORS.accent} />
-      </TouchableOpacity>
+      {/* Map Controls */}
+      <MapControls
+        mapRef={mapRef}
+        location={location}
+        currentRegionRef={currentRegionRef}
+      />
 
       {/* Bottom Panels */}
-      {rideState === 'idle' && renderIdlePanel()}
+      {rideState === 'idle' && (
+        <DriverIdlePanel
+          isOnline={isOnline}
+          driverData={driverData}
+          earnings={earnings}
+          onToggleOnline={toggleOnline}
+          pulseAnim={pulseAnim}
+        />
+      )}
       {rideState === 'ride_offered' && renderRideOfferPanel()}
-      {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && renderActiveRidePanel()}
-      {rideState === 'trip_completed' && renderTripCompletedPanel()}
+      {(rideState === 'navigating_to_pickup' ||
+        rideState === 'arrived_at_pickup' ||
+        rideState === 'trip_in_progress') && (
+        <ActiveRidePanel
+          rideState={rideState}
+          ride={activeRide?.ride || null}
+          rider={activeRide?.rider || null}
+          isLoading={false}
+          otpInput={otpInput}
+          setOtpInput={setOtpInput}
+          onVerifyOTP={(otp) => verifyOTP(activeRide!.ride.id, otp)}
+          onNavigate={openNavigation}
+          onArriveAtPickup={() => arriveAtPickup(activeRide!.ride.id)}
+          onStartRide={() => startRide(activeRide!.ride.id)}
+          onCompleteRide={() => completeRide(activeRide!.ride.id)}
+          onCancelRide={() => cancelRide(activeRide!.ride.id)}
+          slideUpAnim={slideUpAnim}
+          fadeAnim={fadeAnim}
+        />
+      )}
+      {rideState === 'trip_completed' && (
+        <TripCompletedPanel
+          completedRide={completedRide}
+          onDone={resetRideState}
+        />
+      )}
     </View>
   );
 }
-
-// ─── Dark Map Style ────────────────────────────────────────────────
-const mapDarkStyle = [
-  { elementType: 'geometry', stylers: [{ color: '#1d2c4d' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#8ec3b9' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#1a3646' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#304a7d' }] },
-  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#255763' }] },
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#2c6675' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#0e1626' }] },
-  { featureType: 'poi', elementType: 'geometry', stylers: [{ color: '#283d6a' }] },
-  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#2f3948' }] },
-];
-
-// ═══════════════════════════════════════════════════════════════════
-//  STYLES
-// ═══════════════════════════════════════════════════════════════════
 
 const styles = StyleSheet.create({
   container: {
@@ -1055,680 +256,6 @@ const styles = StyleSheet.create({
   map: {
     ...StyleSheet.absoluteFillObject,
   },
-
-  // ── Top Bar ──────────────────────────────────────────────────────
-  topBar: {
-    position: 'absolute',
-    top: Platform.OS === 'ios' ? 50 : 35,
-    left: 16,
-    right: 16,
-    zIndex: 10,
-  },
-  topBarInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: COLORS.overlay,
-    borderRadius: 16,
-    padding: 12,
-    paddingHorizontal: 16,
-  },
-  driverInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  avatarSmall: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: COLORS.surfaceLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  driverName: {
-    color: COLORS.text,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  vehicleInfo: {
-    color: COLORS.textDim,
-    fontSize: 11,
-  },
-  onlineBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: COLORS.surfaceLight,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 20,
-  },
-  onlineBadgeActive: {
-    backgroundColor: 'rgba(0, 230, 118, 0.12)',
-  },
-  onlineDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
-  onlineBadgeText: {
-    color: COLORS.textDim,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.8,
-  },
-
-  // ── My Location ──────────────────────────────────────────────────
-  myLocationBtn: {
-    position: 'absolute',
-    right: 16,
-    bottom: 320,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.overlay,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-  },
-
-  // ── Idle Panel ───────────────────────────────────────────────────
-  idlePanel: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    paddingBottom: Platform.OS === 'ios' ? 30 : 20,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-  },
-  onlineToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 20,
-    borderRadius: 16,
-    gap: 14,
-    backgroundColor: COLORS.surface,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 5,
-    marginBottom: 16,
-    borderWidth: 1,
-  },
-  onlineActive: {
-    borderColor: COLORS.success,
-  },
-  onlineInactive: {
-    borderColor: 'transparent',
-  },
-  onlineDisabled: {
-    opacity: 0.7,
-    borderColor: COLORS.border,
-  },
-  pulseIndicator: {
-    marginRight: 0,
-  },
-  statusDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-  },
-  toggleText: {
-    flex: 1,
-  },
-  toggleLabel: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginBottom: 4,
-  },
-  toggleSub: {
-    fontSize: 13,
-    color: COLORS.textDim,
-  },
-  toggleSwitch: {
-    width: 50,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: COLORS.surfaceLight,
-    padding: 2,
-    justifyContent: 'center',
-  },
-  toggleSwitchOn: {
-    backgroundColor: COLORS.success,
-    alignItems: 'flex-end',
-  },
-  toggleSwitchDisabled: {
-    backgroundColor: COLORS.border,
-  },
-  toggleKnob: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: '#fff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  toggleKnobOn: {
-    marginRight: 0,
-  },
-  toggleKnobDisabled: {
-    backgroundColor: '#f5f5f5',
-  },
-  statsGrid: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 16,
-  },
-  statBox: {
-    flex: 1,
-    backgroundColor: COLORS.surface,
-    padding: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  statValue: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginBottom: 4,
-  },
-  statLabel: {
-    fontSize: 11,
-    color: COLORS.textDim,
-    fontWeight: '600',
-    textTransform: 'uppercase',
-  },
-  statsRow: {
-    marginTop: 0,
-  },
-  earningsCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: 16,
-    padding: 20,
-    width: '100%',
-    alignItems: 'center',
-    gap: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
-  },
-  earningsHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: COLORS.surfaceLight,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-  },
-  earningsLabel: {
-    color: COLORS.textDim,
-    fontSize: 12,
-    fontWeight: '600',
-    letterSpacing: 1,
-  },
-  earningsAmount: {
-    color: COLORS.text,
-    fontSize: 48,
-    fontWeight: '800',
-    letterSpacing: -1,
-  },
-  earningsTips: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(255, 215, 0, 0.1)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 12,
-  },
-  earningsTipsText: {
-    color: COLORS.gold,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  rideOfferOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: height * 0.75, // Taller for better map visibility behind
-    justifyContent: 'flex-end',
-  },
-  rideOfferGradient: {
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    padding: 20,
-    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
-  },
-  countdownContainer: {
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  countdownCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    borderWidth: 3,
-    borderColor: COLORS.accent,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  countdownText: {
-    color: COLORS.accent,
-    fontSize: 24,
-    fontWeight: '800',
-  },
-  countdownBar: {
-    height: 3,
-    backgroundColor: COLORS.accent,
-    borderRadius: 2,
-    alignSelf: 'flex-start',
-  },
-  rideOfferInfo: {
-    marginBottom: 16,
-  },
-  fareHighlight: {
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  fareLabel: {
-    color: COLORS.textDim,
-    fontSize: 10,
-    letterSpacing: 1.5,
-    fontWeight: '600',
-  },
-  fareAmount: {
-    color: COLORS.accent,
-    fontSize: 36,
-    fontWeight: '800',
-    marginTop: 4,
-  },
-  addressRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  addressDot: {
-    alignItems: 'center',
-    width: 20,
-    paddingTop: 4,
-  },
-  dot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  dottedLine: {
-    width: 2,
-    height: 20,
-    backgroundColor: COLORS.surfaceLight,
-    marginVertical: 4,
-  },
-  addresses: {
-    flex: 1,
-  },
-  addressText: {
-    color: COLORS.text,
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  addressTextSm: {
-    color: COLORS.text,
-    fontSize: 13,
-    fontWeight: '500',
-  },
-  addressDivider: {
-    height: 1,
-    backgroundColor: COLORS.surfaceLight,
-    marginVertical: 8,
-  },
-  riderInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginTop: 14,
-    paddingTop: 14,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.surfaceLight,
-  },
-  riderAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: COLORS.surfaceLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  riderName: {
-    color: COLORS.text,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  ratingBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: COLORS.surfaceLight,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
-  },
-  ratingText: {
-    color: COLORS.gold,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  offerActions: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 4,
-  },
-  declineBtn: {
-    flex: 0.35,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 14,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 71, 87, 0.3)',
-    backgroundColor: 'rgba(255, 71, 87, 0.08)',
-    gap: 4,
-  },
-  declineText: {
-    color: COLORS.danger,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  acceptBtn: {
-    flex: 0.65,
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  acceptGradient: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
-    gap: 8,
-  },
-  acceptText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '700',
-  },
-
-  // ── Active Ride Panel ────────────────────────────────────────────
-  activePanel: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-  },
-  activePanelInner: {
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    padding: 20,
-    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
-  },
-  rideStatusBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  statusIndicator: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 10,
-  },
-  rideStatusText: {
-    color: COLORS.text,
-    fontSize: 16,
-    fontWeight: '700',
-    flex: 1,
-  },
-  rideFare: {
-    color: COLORS.accent,
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  riderCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: COLORS.surfaceLight,
-    borderRadius: 14,
-    padding: 12,
-    marginBottom: 14,
-  },
-  riderCardName: {
-    color: COLORS.text,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  textDim: {
-    color: COLORS.textDim,
-    fontSize: 12,
-  },
-  contactBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0, 212, 170, 0.1)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  // ── OTP Section ──────────────────────────────────────────────────
-  otpSection: {
-    alignItems: 'center',
-    marginTop: 10,
-    marginBottom: 6,
-  },
-  otpLabel: {
-    color: COLORS.textDim,
-    fontSize: 13,
-    fontWeight: '600',
-    letterSpacing: 0.5,
-    marginBottom: 12,
-  },
-  otpRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 16,
-  },
-  otpBox: {
-    width: 50,
-    height: 56,
-    borderRadius: 14,
-    backgroundColor: COLORS.surfaceLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: 'transparent',
-  },
-  otpBoxFilled: {
-    borderColor: COLORS.accent,
-    backgroundColor: 'rgba(0, 212, 170, 0.08)',
-  },
-  otpDigit: {
-    color: COLORS.text,
-    fontSize: 22,
-    fontWeight: '700',
-  },
-  otpKeypad: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    width: 240,
-    gap: 8,
-    justifyContent: 'center',
-  },
-  keypadBtn: {
-    width: 72,
-    height: 48,
-    borderRadius: 12,
-    backgroundColor: COLORS.surfaceLight,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  keypadText: {
-    color: COLORS.text,
-    fontSize: 20,
-    fontWeight: '600',
-  },
-
-  // ── Action Buttons ───────────────────────────────────────────────
-  rideActions: {
-    gap: 10,
-    marginTop: 8,
-  },
-  navBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    padding: 14,
-    borderRadius: 14,
-    backgroundColor: COLORS.surfaceLight,
-  },
-  navBtnText: {
-    color: COLORS.text,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  arriveBtn: {
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-  startBtn: {
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-  completeBtn: {
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-  actionGradient: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
-    gap: 8,
-  },
-  actionBtnText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  cancelRideBtn: {
-    alignItems: 'center',
-    padding: 10,
-  },
-  cancelRideText: {
-    color: COLORS.danger,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-
-  // ── Completed Panel ──────────────────────────────────────────────
-  completedOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-  },
-  completedPanel: {
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    padding: 24,
-    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
-    alignItems: 'center',
-  },
-  completedIcon: {
-    marginBottom: 10,
-  },
-  completedTitle: {
-    color: COLORS.text,
-    fontSize: 22,
-    fontWeight: '800',
-    marginBottom: 20,
-  },
-  fareBreakdown: {
-    width: '100%',
-    backgroundColor: COLORS.surfaceLight,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 16,
-  },
-  fareRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  fareItemLabel: {
-    color: COLORS.textDim,
-    fontSize: 14,
-  },
-  fareItemValue: {
-    color: COLORS.text,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  fareDivider: {
-    height: 1,
-    backgroundColor: COLORS.primary,
-    marginVertical: 8,
-  },
-  fareEarningsLabel: {
-    color: COLORS.accent,
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  fareEarningsValue: {
-    color: COLORS.accent,
-    fontSize: 20,
-    fontWeight: '800',
-  },
-  tripStats: {
-    flexDirection: 'row',
-    gap: 30,
-    marginBottom: 20,
-  },
-  tripStat: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  tripStatValue: {
-    color: COLORS.textDim,
-    fontSize: 14,
-  },
-  doneBtn: {
-    width: '100%',
-    borderRadius: 14,
-    overflow: 'hidden',
-  },
-
-  // ── Markers ──────────────────────────────────────────────────────
   markerContainer: {
     alignItems: 'center',
   },
@@ -1740,10 +267,95 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 2,
     borderColor: '#fff',
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
+  },
+  rideOfferOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: '50%',
+    justifyContent: 'flex-end',
+  },
+  rideOfferContent: {
+    backgroundColor: COLORS.primary,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 24,
+    alignItems: 'center',
+  },
+  countdownContainer: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  countdownCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    borderWidth: 3,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  countdownText: {
+    fontSize: 24,
+    fontWeight: '800',
+  },
+  countdownBar: {
+    height: 3,
+    borderRadius: 2,
+    alignSelf: 'flex-start',
+  },
+  rideOfferTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: COLORS.text,
+    marginBottom: 8,
+  },
+  rideOfferFare: {
+    fontSize: 36,
+    fontWeight: '800',
+    color: COLORS.accent,
+    marginBottom: 16,
+  },
+  rideOfferAddress: {
+    fontSize: 14,
+    color: COLORS.textDim,
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  offerActions: {
+    flexDirection: 'row',
+    gap: 16,
+    width: '100%',
+  },
+  declineBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 71, 87, 0.1)',
+    borderRadius: 16,
+    paddingVertical: 16,
+    gap: 8,
+  },
+  declineText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FF4757',
+  },
+  acceptBtn: {
+    flex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.accent,
+    borderRadius: 16,
+    paddingVertical: 16,
+    gap: 8,
+  },
+  acceptText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
   },
 });

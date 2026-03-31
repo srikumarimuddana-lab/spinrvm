@@ -81,8 +81,7 @@ export default function DriverLayout() {
       <Tabs.Screen name="payout-history" options={{ href: null }} />
       <Tabs.Screen name="tax-documents" options={{ href: null }} />
       <Tabs.Screen name="referral" options={{ href: null }} />
-      <Tabs.Screen name="vehicle-info" options={{ href: null }} />
-      <Tabs.Screen name="documents" options={{ href: null }} />
+      <Tabs.Screen name="addresses" options={{ href: null }} />
     </Tabs>
   );
 }

@@ -100,13 +100,20 @@ async def get_driver_earnings(
     
     # Calculate date range
     now = datetime.utcnow()
-    if period == 'day':
+    # 'today' and 'day' both mean since midnight today
+    # 'all' means no date restriction — fetch all-time
+    use_date_filter = True
+    if period in ('today', 'day'):
         start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
     elif period == 'week':
         start_date = now - timedelta(days=7)
     elif period == 'month':
         start_date = now - timedelta(days=30)
+    elif period == 'all':
+        use_date_filter = False
+        start_date = None
     else:
+        # Fallback: treat unknown period as 'week'
         start_date = now - timedelta(days=7)
     
     # Use Supabase RPC or manual calculation instead of aggregate
@@ -118,9 +125,15 @@ async def get_driver_earnings(
             supabase = create_client(supabase_url, supabase_key)
             
             # Fetch completed rides in the period
-            rides_res = supabase.table('rides').select(
+            q = supabase.table('rides').select(
                 'driver_earnings, tip_amount, distance_km, duration_minutes'
-            ).eq('driver_id', driver['id']).eq('status', 'completed').gte('ride_completed_at', start_date.isoformat()).execute()
+            ).eq('driver_id', driver['id']).eq('status', 'completed')
+            
+            # Only apply date filter when not fetching all-time
+            if use_date_filter and start_date:
+                q = q.gte('ride_completed_at', start_date.isoformat())
+            
+            rides_res = q.execute()
             
             rides = rides_res.data or []
             
@@ -538,9 +551,7 @@ async def delete_bank_account(current_user: dict = Depends(get_current_user)):
     await db.bank_accounts.delete_many({'driver_id': driver['id']})
     return {'success': True}
 
-@api_router.get("/balance")
-async def get_balance_alias(current_user: dict = Depends(get_current_user)):
-    return await get_driver_balance(current_user)
+
 
 @api_router.post("/payouts")
 async def request_payout(req: PayoutRequest, current_user: dict = Depends(get_current_user)):
@@ -1108,5 +1119,114 @@ async def rate_rider(ride_id: str, rating_data: RideRatingRequest, current_user:
             'updated_at': datetime.utcnow()
         }}
     )
-    
+
     return {'success': True}
+
+
+# ============ Referral Program Endpoints ============
+
+class ApplyReferralCodeRequest(BaseModel):
+    referral_code: str
+
+@api_router.get("/referral")
+async def get_driver_referral_info(current_user: dict = Depends(get_current_user)):
+    """Get driver's referral code and earnings from referrals."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver not found')
+
+    # Get or create referral code (use driver ID as default code)
+    referral_code = driver.get('referral_code', f"DRIVER{driver['id'][:8].upper()}")
+
+    # Find users who used this referral code
+    referred_users_cursor = db.users.find({'referral_code_used': referral_code})
+    referred_users = await referred_users_cursor.to_list(100) if hasattr(referred_users_cursor, 'to_list') else list(referred_users_cursor)
+
+    # Calculate referral earnings (e.g., $10 per referred driver who completes 10 rides)
+    total_referrals = len(referred_users)
+    referral_earnings = 0
+
+    # Check how many referred drivers have completed rides
+    for user in referred_users:
+        # Check if user became a driver and completed rides
+        referred_driver = await db.drivers.find_one({'user_id': user['id']})
+        if referred_driver:
+            completed_rides = await db.rides.count_documents({
+                'driver_id': referred_driver['id'],
+                'status': 'completed'
+            })
+            if completed_rides >= 10:
+                referral_earnings += 10  # $10 bonus
+
+    return {
+        'referral_code': referral_code,
+        'referral_link': f"https://spinr.app/join/{referral_code}",
+        'total_referrals': total_referrals,
+        'referral_earnings': referral_earnings,
+        'terms': 'Earn $10 for each driver who signs up with your code and completes 10 rides.',
+    }
+
+@api_router.post("/referral/apply")
+async def apply_referral_code(req: ApplyReferralCodeRequest, current_user: dict = Depends(get_current_user)):
+    """Apply a referral code during driver onboarding."""
+    code = req.referral_code.strip().upper()
+
+    # Check if user already has a referral code applied
+    user = await db.users.find_one({'id': current_user['id']})
+    if user and user.get('referral_code_used'):
+        raise HTTPException(status_code=400, detail='Referral code already applied')
+
+    # Validate referral code exists (check if any driver has this code)
+    ref_driver = await db.drivers.find_one({'referral_code': code})
+    if not ref_driver:
+        # Check if code matches driver ID pattern
+        potential_id = code.replace('DRIVER', '')
+        if len(potential_id) == 8:
+            ref_driver = await db.drivers.find_one({'id': {'$regex': f".*{potential_id}.*"}})
+
+    if not ref_driver:
+        raise HTTPException(status_code=404, detail='Invalid referral code')
+
+    # Apply referral code to user
+    await db.users.update_one(
+        {'id': current_user['id']},
+        {'$set': {'referral_code_used': code, 'referred_by': ref_driver['id']}}
+    )
+
+    return {'success': True, 'referral_code': code}
+
+@api_router.get("/referrals")
+async def get_referred_drivers(
+    limit: int = Query(50),
+    offset: int = Query(0),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get list of drivers referred by current driver."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver not found')
+
+    referral_code = driver.get('referral_code', f"DRIVER{driver['id'][:8].upper()}")
+
+    # Find users who used this referral code and became drivers
+    referred_users_cursor = db.users.find({'referral_code_used': referral_code})
+    referred_users = await referred_users_cursor.to_list(100) if hasattr(referred_users_cursor, 'to_list') else list(referred_users_cursor)
+
+    referred_drivers = []
+    for user in referred_users:
+        referred_driver = await db.drivers.find_one({'user_id': user['id']})
+        if referred_driver:
+            # Get completed rides count
+            completed_rides = await db.rides.count_documents({
+                'driver_id': referred_driver['id'],
+                'status': 'completed'
+            })
+            referred_drivers.append({
+                'name': f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or 'Driver',
+                'email': user.get('email', ''),
+                'referred_at': user.get('created_at', ''),
+                'total_trips': completed_rides,
+                'status': 'active' if completed_rides > 0 else 'pending',
+            })
+
+    return {'referred_drivers': referred_drivers[:limit]}

@@ -2,32 +2,55 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
 const getBackendUrl = () => {
-  // 1. Prefer Environment Variable (Prod / CI)
-  if (process.env.EXPO_PUBLIC_BACKEND_URL) {
-    return process.env.EXPO_PUBLIC_BACKEND_URL;
+  // Safely access environment variables (compatible with Expo SDK 55)
+  const getEnvVar = (key: string): string | undefined => {
+    try {
+      return process.env[key];
+    } catch {
+      return undefined;
+    }
+  };
+
+  // 1. Prefer explicit env var — set EXPO_PUBLIC_BACKEND_URL in your .env file
+  const backendUrl = getEnvVar('EXPO_PUBLIC_BACKEND_URL');
+  if (backendUrl) {
+    console.log('Backend URL from env:', backendUrl);
+    return backendUrl;
   }
 
-  // 2. Fallback to API URL or Base URL generically
-  if (process.env.EXPO_PUBLIC_API_URL) {
-    return process.env.EXPO_PUBLIC_API_URL;
+  // 2. Generic API URL fallback
+  const apiUrl = getEnvVar('EXPO_PUBLIC_API_URL');
+  if (apiUrl) {
+    console.log('Backend URL from EXPO_PUBLIC_API_URL:', apiUrl);
+    return apiUrl;
   }
 
-  // 3. Expo Go / Dev Client (Physical Device or Emulator)
-  // This automatically grabs the IP of the machine running `npx expo start`
-  let host = 'localhost';
+  // 3. Expo Go / Dev Client: auto-detect the host machine's IP from Expo's metadata.
+  // Constants.expoConfig.hostUri is set by `npx expo start` and contains the LAN IP,
+  // so this works on physical devices without needing a hardcoded IP.
   if (Constants.expoConfig?.hostUri) {
-    host = Constants.expoConfig.hostUri.split(':')[0];
+    let host = Constants.expoConfig.hostUri.split(':')[0];
+    // On Android emulator, the special alias 10.0.2.2 routes to the host machine.
     if (Platform.OS === 'android' && (host === '127.0.0.1' || host === 'localhost')) {
       host = '10.0.2.2';
     }
-  } else if (Platform.OS === 'android') {
-    // 10.0.2.2 is the special alias for the host loopback interface on Android Emulator
-    host = '10.0.2.2';
+    const generatedUrl = `http://${host}:8000`;
+    console.log('Backend URL auto-detected from Expo hostUri:', generatedUrl);
+    return generatedUrl;
   }
 
-  const generatedUrl = `http://${host}:8000`;
-  console.log("Using generated backend URL:", generatedUrl);
-  return generatedUrl;
+  // 4. Last resort for Android emulator when no hostUri is available.
+  if (Platform.OS === 'android') {
+    console.warn('Backend URL: falling back to Android emulator alias 10.0.2.2');
+    return 'http://10.0.2.2:8000';
+  }
+
+  // 5. Nothing worked — log a clear error so it's obvious something is misconfigured.
+  console.error(
+    '[SpinrConfig] Could not determine backend URL! ' +
+    'Set EXPO_PUBLIC_BACKEND_URL in your .env file (e.g. http://192.168.x.x:8000).'
+  );
+  return 'http://localhost:8000'; // web-only fallback, fails on real devices — fix your .env!
 };
 
 export const SpinrConfig = {

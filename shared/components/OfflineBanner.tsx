@@ -72,7 +72,7 @@ export function OfflineBanner({
   // If explicitly controlled via prop
   const isVisible = propVisible !== undefined ? propVisible : isOffline;
 
-  if (!isVisible && slideAnim._value === 0) {
+  if (!isVisible && !isOffline) {
     // Don't render if not visible and not animating
     return null;
   }

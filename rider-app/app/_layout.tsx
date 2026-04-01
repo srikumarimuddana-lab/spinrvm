@@ -76,14 +76,18 @@ export default function RootLayout() {
                 animation: 'slide_from_right',
               }}
             >
+              {/* Auth */}
               <Stack.Screen name="index" />
               <Stack.Screen name="login" />
               <Stack.Screen name="otp" />
-              <Stack.Screen name="forgot-password" />
-              <Stack.Screen name="reset-password" />
-              <Stack.Screen name="profile-setup" options={{ gestureEnabled: false, headerBackVisible: false }} />
+              <Stack.Screen name="profile-setup" options={{ headerShown: false }} />
+
+              {/* Main */}
               <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
+
+              {/* Ride flow */}
               <Stack.Screen name="search-destination" options={{ animation: 'slide_from_bottom' }} />
+              <Stack.Screen name="pick-on-map" options={{ animation: 'slide_from_bottom', headerShown: false }} />
               <Stack.Screen name="ride-options" />
               <Stack.Screen name="payment-confirm" />
               <Stack.Screen name="ride-status" options={{ gestureEnabled: false }} />
@@ -91,16 +95,21 @@ export default function RootLayout() {
               <Stack.Screen name="driver-arrived" options={{ gestureEnabled: false }} />
               <Stack.Screen name="ride-in-progress" options={{ gestureEnabled: false }} />
               <Stack.Screen name="ride-completed" options={{ gestureEnabled: false }} />
-              <Stack.Screen name="chat-driver" />
               <Stack.Screen name="rate-ride" />
+              <Stack.Screen name="chat-driver" />
+
+              {/* Account */}
+              <Stack.Screen name="manage-cards" />
+              <Stack.Screen name="saved-places" />
+              <Stack.Screen name="promotions" />
+              <Stack.Screen name="privacy-settings" />
+              <Stack.Screen name="emergency-contacts" />
+              <Stack.Screen name="report-safety" />
+              <Stack.Screen name="support" />
+              <Stack.Screen name="legal" />
               <Stack.Screen name="become-driver" />
-              <Stack.Screen name="support-chat" />
-              <Stack.Screen name="emergency-contact" />
-              <Stack.Screen name="settings" />
-              <Stack.Screen name="payment-methods" />
-              <Stack.Screen name="promo-codes" />
-              <Stack.Screen name="ride-history" />
               <Stack.Screen name="ride-details" />
+              <Stack.Screen name="settings" />
             </Stack>
           </SafeAreaProvider>
         </View>

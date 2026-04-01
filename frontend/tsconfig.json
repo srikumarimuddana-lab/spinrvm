@@ -9,6 +9,9 @@
       "@shared/*": [
         "../shared/*"
       ],
+      "react": [
+        "./node_modules/react"
+      ],
       "zustand": [
         "./node_modules/zustand"
       ],
@@ -21,14 +24,23 @@
       "firebase/*": [
         "./node_modules/firebase/*"
       ],
-      "react": [
-        "./node_modules/react"
-      ],
       "react-native-maps": [
         "./node_modules/react-native-maps"
       ],
       "expo-constants": [
         "./node_modules/expo-constants"
+      ],
+      "expo-router": [
+        "./node_modules/expo-router"
+      ],
+      "@react-native-community/netinfo": [
+        "./node_modules/@react-native-community/netinfo"
+      ],
+      "@supabase/supabase-js": [
+        "./node_modules/@supabase/supabase-js"
+      ],
+      "zustand/middleware": [
+        "./node_modules/zustand/middleware"
       ]
     }
   },
@@ -39,5 +51,8 @@
     "expo-env.d.ts",
     "../shared/**/*.ts",
     "../shared/**/*.tsx"
+  ],
+  "exclude": [
+    "e2e/**"
   ]
 }

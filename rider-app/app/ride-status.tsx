@@ -6,11 +6,14 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Animated,
+  Alert,
+  BackHandler,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
+import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 
 export default function RideStatusScreen() {
@@ -47,11 +50,54 @@ export default function RideStatusScreen() {
     ).start();
   }, [currentRide?.status]);
 
-  const handleCancel = async () => {
-    await cancelRide();
-    clearRide();
-    router.replace('/(tabs)');
+  const handleBackPress = () => {
+    if (!currentRide) {
+      router.back();
+      return;
+    }
+
+    const fare = currentRide.total_fare || 0;
+    const cancellationFee = Math.min(5, fare * 0.2);
+    const status = currentRide.status;
+
+    if (status === 'driver_arrived') {
+      Alert.alert(
+        'Driver is waiting',
+        `Your driver has arrived. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`,
+        [
+          { text: 'Keep Ride', style: 'cancel' },
+          { text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive', onPress: async () => { await cancelRide(); clearRide(); router.replace('/ride-options' as any); } },
+        ]
+      );
+    } else if (status === 'driver_assigned' || status === 'driver_accepted') {
+      Alert.alert(
+        'Cancel ride?',
+        'Your driver is on the way. You can cancel for free right now.',
+        [
+          { text: 'Keep Ride', style: 'cancel' },
+          { text: 'Cancel (Free)', style: 'destructive', onPress: async () => { await cancelRide(); clearRide(); router.replace('/ride-options' as any); } },
+        ]
+      );
+    } else {
+      Alert.alert(
+        'Cancel search?',
+        'Stop looking for a driver? No charge.',
+        [
+          { text: 'Keep searching', style: 'cancel' },
+          { text: 'Cancel', onPress: async () => { await cancelRide(); clearRide(); router.replace('/ride-options' as any); } },
+        ]
+      );
+    }
   };
+
+  // Handle hardware back button (Android)
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      handleBackPress();
+      return true; // prevent default back
+    });
+    return () => sub.remove();
+  }, [currentRide?.status]);
 
   // handleSimulateArrival and handleRideComplete removed for production
 
@@ -161,12 +207,13 @@ export default function RideStatusScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={handleCancel}>
+        <TouchableOpacity style={styles.backButton} onPress={handleBackPress}>
           <Ionicons name="close" size={24} color="#1A1A1A" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>
+          {!currentRide && 'Loading...'}
           {currentRide?.status === 'searching' && 'Finding driver...'}
-          {currentRide?.status === 'driver_assigned' && 'Driver on the way'}
+          {(currentRide?.status === 'driver_assigned' || currentRide?.status === 'driver_accepted') && 'Driver on the way'}
           {currentRide?.status === 'driver_arrived' && 'Driver arrived'}
         </Text>
         <View style={{ width: 44 }} />
@@ -180,15 +227,54 @@ export default function RideStatusScreen() {
 
       {/* Bottom Sheet */}
       <View style={styles.bottomSheet}>
-        {currentRide?.status === 'searching' && renderSearching()}
-        {currentRide?.status === 'driver_assigned' && renderDriverAssigned()}
-        {currentRide?.status === 'driver_arrived' && renderDriverArrived()}
+        {!currentRide ? (
+          <View style={styles.statusContainer}>
+            <ActivityIndicator size="large" color={SpinrConfig.theme.colors.primary} />
+            <Text style={styles.statusTitle}>Loading ride details...</Text>
+          </View>
+        ) : (
+          <>
+            {currentRide.status === 'searching' && renderSearching()}
+            {(currentRide.status === 'driver_assigned' || currentRide.status === 'driver_accepted') && renderDriverAssigned()}
+            {currentRide.status === 'driver_arrived' && renderDriverArrived()}
 
-        {/* Cancel Button */}
-        {currentRide?.status !== 'driver_arrived' && (
-          <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}>
-            <Text style={styles.cancelButtonText}>Cancel Ride</Text>
-          </TouchableOpacity>
+            {/* Cancel Button */}
+            <TouchableOpacity style={styles.cancelButton} onPress={handleBackPress}>
+              <Text style={styles.cancelButtonText}>
+                {currentRide.status === 'searching' ? 'Cancel Search' : 'Cancel Ride'}
+              </Text>
+            </TouchableOpacity>
+
+            {/* DEV CONTROLS — remove in production */}
+            {__DEV__ && (
+              <View style={styles.devBar}>
+                <Text style={styles.devLabel}>DEV: {currentRide.status}</Text>
+                {currentRide.status === 'searching' && (
+                  <TouchableOpacity style={styles.devBtn} onPress={async () => {
+                    try { await simulateDriverArrival(); } catch {}
+                    if (rideId) fetchRide(rideId);
+                  }}>
+                    <Text style={styles.devBtnText}>Assign Driver</Text>
+                  </TouchableOpacity>
+                )}
+                {(currentRide.status === 'driver_assigned' || currentRide.status === 'driver_accepted') && (
+                  <TouchableOpacity style={styles.devBtn} onPress={async () => {
+                    try { await api.post(`/drivers/rides/${currentRide.id}/arrive`); } catch {}
+                    if (rideId) fetchRide(rideId);
+                  }}>
+                    <Text style={styles.devBtnText}>Arrive at Pickup</Text>
+                  </TouchableOpacity>
+                )}
+                {currentRide.status === 'driver_arrived' && (
+                  <TouchableOpacity style={styles.devBtn} onPress={() => {
+                    router.replace({ pathname: '/driver-arriving', params: { rideId: currentRide.id } } as any);
+                  }}>
+                    <Text style={styles.devBtnText}>Go to Arriving Screen</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+          </>
         )}
       </View>
     </SafeAreaView>
@@ -453,5 +539,34 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: SpinrConfig.theme.colors.primary,
+  },
+  devBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 16,
+    padding: 12,
+    backgroundColor: '#FEF3C7',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+  },
+  devLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#92400E',
+    marginRight: 4,
+  },
+  devBtn: {
+    backgroundColor: '#F59E0B',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  devBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFF',
   },
 });

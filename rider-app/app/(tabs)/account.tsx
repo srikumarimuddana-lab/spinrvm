@@ -1,13 +1,7 @@
 import React, { useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  Alert,
-  Image,
-  ActivityIndicator,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView,
+  Alert, Image, ActivityIndicator, Linking, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -15,419 +9,300 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
-import Constants from 'expo-constants';
 
-const getBackendUrl = () => {
-  if (process.env.EXPO_PUBLIC_BACKEND_URL) return process.env.EXPO_PUBLIC_BACKEND_URL;
-  if (process.env.EXPO_PUBLIC_API_URL) return process.env.EXPO_PUBLIC_API_URL;
-  if (Constants.expoConfig?.hostUri) {
-    const host = Constants.expoConfig.hostUri.split(':')[0];
-    return `http://${host}:8000`;
-  }
-  return '';
-};
+const COLORS = SpinrConfig.theme.colors;
 
 export default function AccountScreen() {
   const router = useRouter();
-  const { user, logout, toggleDriverMode, updateProfileImage, isLoading } = useAuthStore();
+  const { user, logout, updateProfileImage } = useAuthStore();
   const [uploading, setUploading] = useState(false);
 
   const handleLogout = () => {
-    Alert.alert(
-      'Logout',
-      'Are you sure you want to logout?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Logout',
-          style: 'destructive',
-          onPress: async () => {
-            await logout();
-            router.replace('/login');
-          },
-        },
-      ]
-    );
+    Alert.alert('Logout', 'Are you sure you want to logout?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Logout', style: 'destructive', onPress: async () => { await logout(); router.replace('/login'); } },
+    ]);
   };
 
   const handlePickImage = async () => {
-    Alert.alert(
-      'Upload Profile Picture',
-      'Choose an option',
-      [
-        {
-          text: 'Take Photo',
-          onPress: async () => {
-            try {
-              const { status } = await ImagePicker.requestCameraPermissionsAsync();
-              if (status !== 'granted') {
-                Alert.alert('Permission needed', 'Please allow camera access to take a photo.');
-                return;
-              }
-
-              const result = await ImagePicker.launchCameraAsync({
-                allowsEditing: true,
-                aspect: [1, 1],
-                quality: 0.8,
-              });
-
-              if (!result.canceled && result.assets[0]) {
-                setUploading(true);
-                try {
-                  await updateProfileImage(result.assets[0].uri);
-                } catch (error: any) {
-                  Alert.alert('Upload Failed', error.message || 'Could not upload profile picture.');
-                } finally {
-                  setUploading(false);
-                }
-              }
-            } catch (error) {
-              Alert.alert('Error', 'Could not open camera.');
-            }
-          },
+    Alert.alert('Profile Picture', 'Choose an option', [
+      {
+        text: 'Take Photo',
+        onPress: async () => {
+          const { status } = await ImagePicker.requestCameraPermissionsAsync();
+          if (status !== 'granted') { Alert.alert('Permission needed', 'Allow camera access.'); return; }
+          const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, aspect: [1, 1], quality: 0.8 });
+          if (!result.canceled && result.assets[0]) {
+            setUploading(true);
+            try { await updateProfileImage(result.assets[0].uri); } catch { Alert.alert('Error', 'Upload failed.'); }
+            finally { setUploading(false); }
+          }
         },
-        {
-          text: 'Choose from Library',
-          onPress: async () => {
-            try {
-              const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-              if (status !== 'granted') {
-                Alert.alert('Permission needed', 'Please allow access to your photo library.');
-                return;
-              }
-
-              const result = await ImagePicker.launchImageLibraryAsync({
-                mediaTypes: ['images'],
-                allowsEditing: true,
-                aspect: [1, 1],
-                quality: 0.8,
-              });
-
-              if (!result.canceled && result.assets[0]) {
-                setUploading(true);
-                try {
-                  await updateProfileImage(result.assets[0].uri);
-                } catch (error: any) {
-                  Alert.alert('Upload Failed', error.message || 'Could not upload profile picture.');
-                } finally {
-                  setUploading(false);
-                }
-              }
-            } catch (error) {
-              Alert.alert('Error', 'Could not open photo library.');
-            }
-          },
+      },
+      {
+        text: 'Choose from Library',
+        onPress: async () => {
+          const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+          if (status !== 'granted') { Alert.alert('Permission needed', 'Allow photo library access.'); return; }
+          const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.8 });
+          if (!result.canceled && result.assets[0]) {
+            setUploading(true);
+            try { await updateProfileImage(result.assets[0].uri); } catch { Alert.alert('Error', 'Upload failed.'); }
+            finally { setUploading(false); }
+          }
         },
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-      ]
-    );
-  };
-
-  const handleDriverSwitch = () => {
-    if (user?.is_driver || user?.role === 'driver') {
-      toggleDriverMode();
-      router.replace('/(driver)' as any);
-    } else {
-      router.push('/become-driver');
-    }
+      },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
   };
 
   const formatPhone = (phone: string) => {
     if (!phone) return '';
     const cleaned = phone.replace(/\D/g, '');
     if (cleaned.length === 11 && cleaned.startsWith('1')) {
-      return `+1(${cleaned.slice(1, 4)}) ${cleaned.slice(4, 7)}-${cleaned.slice(7)}`;
+      return `+1 (${cleaned.slice(1, 4)}) ${cleaned.slice(4, 7)}-${cleaned.slice(7)}`;
     }
     return phone;
   };
 
-  const menuItems = [
-    {
-      icon: 'person-outline',
-      title: 'My Account',
-      subtitle: 'Payment, security, language',
-      action: () => Alert.alert('Coming Soon', 'Account settings will be available in the next update.')
-    },
-    {
-      icon: 'shield-outline',
-      title: 'Safety',
-      subtitle: 'Trusted contacts, emergency assist',
-      action: () => router.push('/emergency-contacts' as any)
-    },
-    {
-      icon: 'headset-outline',
-      title: 'Support',
-      subtitle: 'Help center, report an issue',
-      action: () => router.push('/support' as any)
-    },
-    {
-      icon: 'information-circle-outline',
-      title: 'About',
-      subtitle: 'T&C, privacy policy',
-      action: () => router.push('/legal?type=tos' as any)
-    },
-  ];
-
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.headerTitle}>Profile</Text>
-        </View>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
 
-        {/* Profile Card */}
-        <View style={styles.profileCard}>
-          <View style={styles.avatarContainer}>
+        {/* Profile Header */}
+        <View style={styles.profileSection}>
+          <View style={styles.avatarWrap}>
             <View style={styles.avatar}>
               {user?.profile_image ? (
-                <Image
-                  source={{ uri: user.profile_image }}
-                  style={styles.avatarImage}
-                />
+                <Image source={{ uri: user.profile_image }} style={styles.avatarImg} />
               ) : (
-                <Ionicons name="person" size={40} color="#666" />
+                <Ionicons name="person" size={40} color="#999" />
               )}
               {uploading && (
-                <View style={styles.uploadingOverlay}>
+                <View style={styles.uploadOverlay}>
                   <ActivityIndicator size="small" color="#FFF" />
                 </View>
               )}
             </View>
-            <TouchableOpacity style={styles.editAvatarButton} onPress={handlePickImage} disabled={uploading}>
+            <TouchableOpacity style={styles.cameraBtn} onPress={handlePickImage} disabled={uploading}>
               <Ionicons name="camera" size={14} color="#FFF" />
             </TouchableOpacity>
           </View>
-          <Text style={styles.userName}>
-            {user?.first_name} {user?.last_name}
-          </Text>
-          <View style={styles.userInfo}>
-            <View style={styles.ratingContainer}>
-              <Ionicons name="star" size={14} color={SpinrConfig.theme.colors.primary} />
-              <Text style={styles.ratingText}>{user?.rating ? user.rating.toFixed(1) : '5.0'}</Text>
+
+          <Text style={styles.userName}>{user?.first_name} {user?.last_name}</Text>
+
+          <View style={styles.metaRow}>
+            <View style={styles.metaChip}>
+              <Ionicons name="star" size={12} color="#FFB800" />
+              <Text style={styles.metaText}>{user?.rating ? user.rating.toFixed(1) : '5.0'}</Text>
             </View>
-            <Text style={styles.userInfoDivider}>•</Text>
-            <Text style={styles.phoneText}>{formatPhone(user?.phone || '')}</Text>
+            <View style={styles.metaChip}>
+              <Ionicons name="call" size={12} color={COLORS.primary} />
+              <Text style={styles.metaText}>{formatPhone(user?.phone || '')}</Text>
+            </View>
+            {user?.email && (
+              <View style={styles.metaChip}>
+                <Ionicons name="mail" size={12} color={COLORS.primary} />
+                <Text style={styles.metaText} numberOfLines={1}>{user.email}</Text>
+              </View>
+            )}
           </View>
         </View>
 
-        {/* Menu Items */}
-        <View style={styles.menuContainer}>
-          {menuItems.map((item, index) => (
-            <TouchableOpacity
-              key={index}
-              style={styles.menuItem}
-              activeOpacity={0.7}
-              onPress={item.action}
-            >
-              <View style={styles.menuIconContainer}>
-                <Ionicons
-                  name={item.icon as any}
-                  size={22}
-                  color={SpinrConfig.theme.colors.primary}
-                />
-              </View>
-              <View style={styles.menuContent}>
-                <Text style={styles.menuTitle}>{item.title}</Text>
-                <Text style={styles.menuSubtitle}>{item.subtitle}</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={20} color="#CCC" />
-            </TouchableOpacity>
-          ))}
+        {/* Quick Actions */}
+        <View style={styles.quickRow}>
+          <TouchableOpacity style={styles.quickCard} onPress={() => router.push('/manage-cards' as any)}>
+            <View style={[styles.quickIcon, { backgroundColor: '#EDE9FE' }]}>
+              <Ionicons name="card" size={22} color="#7C3AED" />
+            </View>
+            <Text style={styles.quickLabel}>Payment</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.quickCard} onPress={() => router.push('/emergency-contacts' as any)}>
+            <View style={[styles.quickIcon, { backgroundColor: '#FEE2E2' }]}>
+              <Ionicons name="shield-checkmark" size={22} color="#DC2626" />
+            </View>
+            <Text style={styles.quickLabel}>Safety</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.quickCard} onPress={() => router.push('/support' as any)}>
+            <View style={[styles.quickIcon, { backgroundColor: '#DBEAFE' }]}>
+              <Ionicons name="headset" size={22} color="#2563EB" />
+            </View>
+            <Text style={styles.quickLabel}>Support</Text>
+          </TouchableOpacity>
         </View>
 
+        {/* Account Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Account</Text>
 
-        {/* Driver Switch */}
-        <TouchableOpacity style={styles.driverButton} onPress={handleDriverSwitch}>
-          <Ionicons name="car-sport" size={22} color="#FFFFFF" />
-          <Text style={styles.driverButtonText}>
-            {user?.is_driver || user?.role === 'driver' ? 'Switch to Driver Mode' : 'Drive with Spinr'}
-          </Text>
-        </TouchableOpacity>
+          <MenuItem
+            icon="person-outline" iconColor={COLORS.primary} iconBg="#FEF2F2"
+            title="Edit Profile" subtitle="Name, email, phone"
+            onPress={() => router.push('/profile-setup' as any)}
+          />
+          <MenuItem
+            icon="card-outline" iconColor="#7C3AED" iconBg="#EDE9FE"
+            title="Payment Methods" subtitle="Add or manage your cards"
+            onPress={() => router.push('/manage-cards' as any)}
+          />
+          <MenuItem
+            icon="location-outline" iconColor="#F59E0B" iconBg="#FEF3C7"
+            title="Saved Places" subtitle="Home, work, favourites"
+            onPress={() => router.push('/saved-places' as any)}
+          />
+          <MenuItem
+            icon="pricetag-outline" iconColor="#10B981" iconBg="#ECFDF5"
+            title="Promotions" subtitle="Promo codes & rewards"
+            onPress={() => router.push('/promotions' as any)}
+          />
+        </View>
 
-        {/* Logout Button */}
-        <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-          <Ionicons name="log-out-outline" size={22} color="#1A1A1A" />
-          <Text style={styles.logoutText}>Log out</Text>
+        {/* Safety & Privacy */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Safety & Privacy</Text>
+
+          <MenuItem
+            icon="shield-outline" iconColor="#DC2626" iconBg="#FEE2E2"
+            title="Emergency Contacts" subtitle="Trusted contacts for safety alerts"
+            onPress={() => router.push('/emergency-contacts' as any)}
+          />
+          <MenuItem
+            icon="alert-circle-outline" iconColor="#F59E0B" iconBg="#FEF3C7"
+            title="Report a Safety Issue" subtitle="Report an incident from a ride"
+            onPress={() => router.push('/report-safety' as any)}
+          />
+          <MenuItem
+            icon="lock-closed-outline" iconColor="#6B7280" iconBg="#F3F4F6"
+            title="Privacy & Settings" subtitle="Data, notifications, permissions"
+            onPress={() => router.push('/privacy-settings' as any)}
+          />
+        </View>
+
+        {/* Legal & Help */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Legal & Help</Text>
+
+          <MenuItem
+            icon="help-circle-outline" iconColor="#2563EB" iconBg="#DBEAFE"
+            title="Help Center" subtitle="FAQ, contact us"
+            onPress={() => router.push('/support' as any)}
+          />
+          <MenuItem
+            icon="document-text-outline" iconColor="#6B7280" iconBg="#F3F4F6"
+            title="Legal" subtitle="Terms of service, privacy policy"
+            onPress={() => router.push('/legal?type=tos' as any)}
+          />
+        </View>
+
+        {/* Logout */}
+        <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+          <Ionicons name="log-out-outline" size={20} color={COLORS.primary} />
+          <Text style={styles.logoutText}>Log Out</Text>
         </TouchableOpacity>
 
         {/* Version */}
-        <Text style={styles.versionText}>
-          Spinr v1.0.2 • Proudly Saskatchewan 🌾
-        </Text>
+        <Text style={styles.version}>Spinr v1.0.2 · Saskatchewan, Canada</Text>
+
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+// Reusable menu item component
+function MenuItem({ icon, iconColor, iconBg, title, subtitle, onPress, badge }: {
+  icon: string; iconColor: string; iconBg: string;
+  title: string; subtitle: string; onPress: () => void; badge?: string;
+}) {
+  return (
+    <TouchableOpacity style={miStyles.row} onPress={onPress} activeOpacity={0.7}>
+      <View style={[miStyles.icon, { backgroundColor: iconBg }]}>
+        <Ionicons name={icon as any} size={20} color={iconColor} />
+      </View>
+      <View style={miStyles.content}>
+        <Text style={miStyles.title}>{title}</Text>
+        <Text style={miStyles.subtitle}>{subtitle}</Text>
+      </View>
+      {badge && (
+        <View style={miStyles.badge}>
+          <Text style={miStyles.badgeText}>{badge}</Text>
+        </View>
+      )}
+      <Ionicons name="chevron-forward" size={18} color="#CCC" />
+    </TouchableOpacity>
+  );
+}
+
+const miStyles = StyleSheet.create({
+  row: {
+    flexDirection: 'row', alignItems: 'center', paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: '#F5F5F5',
+  },
+  icon: {
+    width: 40, height: 40, borderRadius: 12,
+    justifyContent: 'center', alignItems: 'center', marginRight: 14,
+  },
+  content: { flex: 1 },
+  title: { fontSize: 15, fontWeight: '600', color: '#1A1A1A' },
+  subtitle: { fontSize: 12, color: '#999', marginTop: 1 },
+  badge: {
+    backgroundColor: COLORS.primary, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2, marginRight: 8,
+  },
+  badgeText: { fontSize: 10, fontWeight: '700', color: '#FFF' },
+});
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  scrollView: {
-    flex: 1,
-  },
-  header: {
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
-  },
-  profileCard: {
-    alignItems: 'center',
-    paddingVertical: 24,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
-  },
-  avatarContainer: {
-    position: 'relative',
-    marginBottom: 16,
-  },
+  container: { flex: 1, backgroundColor: '#FFF' },
+
+  // Profile
+  profileSection: { alignItems: 'center', paddingTop: 20, paddingBottom: 24 },
+  avatarWrap: { position: 'relative', marginBottom: 14 },
   avatar: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: '#E8E8E8',
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
+    width: 90, height: 90, borderRadius: 45, backgroundColor: '#F0F0F0',
+    justifyContent: 'center', alignItems: 'center', overflow: 'hidden',
   },
-  avatarImage: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+  avatarImg: { width: 90, height: 90, borderRadius: 45 },
+  uploadOverlay: {
+    ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)',
+    borderRadius: 45, justifyContent: 'center', alignItems: 'center',
   },
-  uploadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    borderRadius: 50,
-    justifyContent: 'center',
-    alignItems: 'center',
+  cameraBtn: {
+    position: 'absolute', bottom: 0, right: -2,
+    width: 30, height: 30, borderRadius: 15, backgroundColor: COLORS.primary,
+    justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#FFF',
   },
-  editAvatarButton: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 3,
-    borderColor: '#FFFFFF',
+  userName: { fontSize: 22, fontWeight: '800', color: '#1A1A1A', marginBottom: 8 },
+  metaRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8 },
+  metaChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: '#F5F5F5', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 16,
   },
-  userName: {
-    fontSize: 22,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
-    marginBottom: 8,
+  metaText: { fontSize: 12, fontWeight: '500', color: '#666' },
+
+  // Quick Actions
+  quickRow: { flexDirection: 'row', paddingHorizontal: 20, gap: 12, marginBottom: 8 },
+  quickCard: {
+    flex: 1, alignItems: 'center', paddingVertical: 16,
+    backgroundColor: '#F9F9F9', borderRadius: 16,
   },
-  userInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  quickIcon: {
+    width: 48, height: 48, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginBottom: 8,
   },
-  ratingContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  ratingText: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
-  },
-  userInfoDivider: {
-    fontSize: 14,
-    color: '#CCC',
-    marginHorizontal: 12,
-  },
-  phoneText: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666',
-  },
-  menuContainer: {
-    paddingHorizontal: 24,
-    paddingTop: 16,
-  },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F5F5F5',
-  },
-  menuIconContainer: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFF0F0',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 16,
-  },
-  menuContent: {
-    flex: 1,
-  },
-  menuTitle: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
-    marginBottom: 2,
-  },
-  menuSubtitle: {
-    fontSize: 13,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666',
+  quickLabel: { fontSize: 12, fontWeight: '600', color: '#1A1A1A' },
+
+  // Sections
+  section: { paddingHorizontal: 20, marginTop: 16 },
+  sectionTitle: {
+    fontSize: 13, fontWeight: '700', color: '#999', letterSpacing: 0.5,
+    textTransform: 'uppercase', marginBottom: 8,
   },
 
-  driverButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    marginHorizontal: 24,
-    marginTop: 24,
-    paddingVertical: 16,
-    borderRadius: 28,
-    gap: 8,
+  // Logout
+  logoutBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    marginHorizontal: 20, marginTop: 20, paddingVertical: 14,
+    backgroundColor: '#FEF2F2', borderRadius: 14,
   },
-  driverButtonText: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#FFFFFF',
-  },
-  logoutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F5F5F5',
-    marginHorizontal: 24,
-    marginTop: 32,
-    paddingVertical: 16,
-    borderRadius: 28,
-    gap: 8,
-  },
-  logoutText: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
-  },
-  versionText: {
-    fontSize: 13,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#999',
-    textAlign: 'center',
-    marginTop: 24,
-    marginBottom: 32,
-  },
+  logoutText: { fontSize: 15, fontWeight: '600', color: COLORS.primary },
+
+  version: { fontSize: 12, color: '#BBB', textAlign: 'center', marginTop: 20 },
 });

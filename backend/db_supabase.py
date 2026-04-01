@@ -311,6 +311,8 @@ async def insert_ride(payload: Dict[str, Any]):
 async def update_ride(ride_id: str, updates: Dict[str, Any]):
     if not supabase:
         return None
+    # Strip MongoDB-style $set wrapper if present
+    updates = updates.get('$set', updates)
     updates = _serialize_for_api(updates)
     return await run_sync(lambda: _single_row_from_res(
         supabase.table('rides').update(updates).eq('id', ride_id).execute()

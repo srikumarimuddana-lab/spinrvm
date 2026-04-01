@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Animated } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
+import { useRideStore } from '../store/rideStore';
 import SpinrConfig from '@shared/config/spinr.config';
 
 export default function Index() {
@@ -28,13 +29,35 @@ export default function Index() {
   useEffect(() => {
     if (!isInitialized) return;
 
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
       if (!token) {
         router.replace('/login');
       } else if (user && !user.profile_complete) {
         router.replace('/profile-setup');
       } else {
-        // Default / Rider App flow
+        // Check for active/pending ride before going to home
+        try {
+          const result = await useRideStore.getState().fetchActiveRide();
+          if (result?.active && result.ride) {
+            const status = result.ride.status;
+            const rideId = result.ride.id;
+            if (status === 'completed') {
+              router.replace({ pathname: '/ride-completed', params: { rideId } } as any);
+              return;
+            } else if (status === 'in_progress') {
+              router.replace({ pathname: '/ride-in-progress', params: { rideId } } as any);
+              return;
+            } else if (status === 'driver_arrived') {
+              router.replace({ pathname: '/driver-arrived', params: { rideId } } as any);
+              return;
+            } else if (status === 'driver_assigned' || status === 'driver_accepted' || status === 'searching') {
+              router.replace({ pathname: '/driver-arriving', params: { rideId } } as any);
+              return;
+            }
+          }
+        } catch {
+          // If check fails, just go to home
+        }
         router.replace('/(tabs)');
       }
     }, 1500);

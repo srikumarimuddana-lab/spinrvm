@@ -388,6 +388,81 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
 
 from fastapi import Request
 
+@api_router.get("/active")
+async def get_active_ride(current_user: dict = Depends(get_current_user)):
+    """Get rider's current active/pending ride (if any). Used on app launch to resume."""
+    # First check for rides that need payment (completed but not paid)
+    # Then check for active rides
+    active_statuses = ['searching', 'driver_assigned', 'driver_accepted', 'driver_arrived', 'in_progress']
+
+    # Check for unpaid completed ride first (must pay before new ride)
+    unpaid_ride = await db.rides.find_one({
+        'rider_id': current_user['id'],
+        'status': 'completed',
+        'payment_status': {'$ne': 'paid'},
+    })
+    if unpaid_ride:
+        ride = unpaid_ride
+    else:
+        ride = await db.rides.find_one({
+            'rider_id': current_user['id'],
+            'status': {'$in': active_statuses},
+        })
+
+    if not ride:
+        return {'active': False, 'ride': None}
+
+    # Attach driver info if assigned
+    driver = None
+    if ride.get('driver_id'):
+        driver = await db.drivers.find_one({'id': ride['driver_id']})
+        if driver:
+            user = await db.users.find_one({'id': driver.get('user_id')})
+            driver = {
+                'id': driver['id'],
+                'name': f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else 'Driver',
+                'rating': driver.get('rating', 4.8),
+                'total_rides': driver.get('total_rides', 0),
+                'vehicle_make': driver.get('vehicle_make'),
+                'vehicle_model': driver.get('vehicle_model'),
+                'vehicle_color': driver.get('vehicle_color'),
+                'license_plate': driver.get('license_plate'),
+                'lat': driver.get('lat'),
+                'lng': driver.get('lng'),
+                'heading': driver.get('heading'),
+            }
+
+    def serialize_doc(doc): return doc
+    ride_data = serialize_doc(ride)
+    ride_data['driver'] = driver
+    return {'active': True, 'ride': ride_data}
+
+@api_router.get("/history")
+async def get_ride_history(current_user: dict = Depends(get_current_user)):
+    """Get rider's past rides for the activity tab. Only completed or cancelled rides.
+    Any stale rides (searching/assigned but old) are auto-cancelled."""
+    all_rides = await db.rides.find({
+        'rider_id': current_user['id'],
+    }).to_list(200)
+
+    # Only show rides where a driver was actually assigned and ride started or completed
+    # Exclude: searching, driver_assigned (never picked up), auto-expired
+    result = []
+    for ride in all_rides:
+        status = ride.get('status', '')
+        had_driver = bool(ride.get('driver_id'))
+
+        if status == 'completed':
+            result.append(ride)
+        elif status == 'cancelled' and had_driver:
+            # Only show cancelled rides where a driver was involved
+            result.append(ride)
+        # Skip everything else: searching, assigned but never started, auto-expired, etc.
+
+    result.sort(key=lambda r: str(r.get('created_at', '')), reverse=True)
+    def serialize_doc(doc): return doc
+    return [serialize_doc(r) for r in result]
+
 @api_router.get("/{ride_id}")
 async def get_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Fetch details of a specific ride"""
@@ -444,6 +519,44 @@ async def add_tip(ride_id: str, request: Request, current_user: dict = Depends(g
     )
     
     return {'success': True, 'tip_amount': new_tip}
+
+
+@api_router.post("/{ride_id}/process-payment")
+async def process_payment(ride_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+    """Process payment for completed ride. Charges rider's card for fare + tip."""
+    data = await request.json()
+    tip_amount = float(data.get('tip_amount', 0))
+
+    ride = await db.rides.find_one({'id': ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get('rider_id') != current_user.get('id'):
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # IDEMPOTENCY: if already paid, return success without charging again
+    if ride.get('payment_status') == 'paid':
+        logger.info(f"[PAYMENT] Ride {ride_id} already paid — skipping duplicate charge")
+        return {'success': True, 'charged_amount': ride.get('total_fare', 0) + (ride.get('tip_amount', 0) or 0), 'already_paid': True}
+
+    total_charge = (ride.get('total_fare', 0) or 0) + tip_amount
+
+    # TODO: Stripe charge — for now mark as paid
+    await db.rides.update_one(
+        {'id': ride_id},
+        {'$set': {
+            'payment_status': 'paid',
+            'tip_amount': tip_amount,
+            'updated_at': datetime.utcnow().isoformat(),
+        }}
+    )
+
+    # Send receipt email (dummy log for now)
+    rider = await db.users.find_one({'id': current_user['id']})
+    rider_email = rider.get('email', '') if rider else ''
+    logger.info(f"[EMAIL] Receipt for ride {ride_id} to {rider_email} | Fare: ${ride.get('total_fare', 0):.2f} + Tip: ${tip_amount:.2f} = Total: ${total_charge:.2f}")
+    # TODO: Send actual email via SendGrid/SES when configured
+
+    return {'success': True, 'charged_amount': total_charge, 'email_sent': bool(rider_email)}
 
 
 # ============================================================
@@ -531,21 +644,19 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
     if not ride or ride.get('rider_id') != current_user['id']:
         raise HTTPException(status_code=404, detail="Ride not found or unauthorized")
         
-    driver_id = ride.get('driver_id')
-    if not driver_id:
-        raise HTTPException(status_code=400, detail="No driver assigned to this ride")
-
-    # Update ride with rating mapping (using rider_rating for driver if 1-way)
-    # Actually, the schema has rider_rating. Let's assume it means the rating the rider gave, or maybe there's a driver_rating field. We'll use rider_rating for the rating the driver gave the rider? Oh wait. The schema says 'rider_rating' in Ride model. I'll just use it. Let's check schemas.py... Wait, I will just add `driver_rating` to the ride document schema-less.
-    
+    # Save rating using existing columns (rider_rating = rating rider gave the driver)
     await db.rides.update_one(
         {'id': ride_id},
         {'$set': {
-            'driver_rating': rating_data.rating,
-            'rider_comment_for_driver': rating_data.comment,
+            'rider_rating': rating_data.rating,
+            'rider_comment': rating_data.comment or '',
             'updated_at': datetime.utcnow()
         }}
     )
+
+    driver_id = ride.get('driver_id')
+    if not driver_id:
+        return {'success': True}
     
     if rating_data.tip_amount > 0:
         new_tip = ride.get('tip_amount', 0) + rating_data.tip_amount

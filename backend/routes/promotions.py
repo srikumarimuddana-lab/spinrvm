@@ -152,6 +152,70 @@ async def apply_promo(
     }
 
 
+@api_router.get("/available")
+async def get_available_promos(
+    ride_fare: float = Query(0.0),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get all promos available to this user, sorted by best discount first."""
+    now = datetime.utcnow()
+    promos = await db.promotions.find({"is_active": True}).to_list(100)
+
+    available = []
+    for p in promos:
+        # Check expiry
+        expiry = p.get("expiry_date")
+        if expiry:
+            if isinstance(expiry, str):
+                try:
+                    expiry_dt = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+                    if expiry_dt.tzinfo:
+                        expiry_dt = expiry_dt.replace(tzinfo=None)
+                    if expiry_dt < now:
+                        continue
+                except ValueError:
+                    pass
+
+        # Check total usage
+        if p.get("uses", 0) >= p.get("max_uses", 100):
+            continue
+
+        # Check per-user usage
+        max_per_user = p.get("max_uses_per_user", 1)
+        user_uses = await db.promo_applications.count_documents({
+            "promo_id": p["id"],
+            "user_id": current_user["id"],
+        })
+        if user_uses >= max_per_user:
+            continue
+
+        # Calculate discount for this fare
+        discount_type = p.get("discount_type", "flat")
+        discount_value = float(p.get("discount_value", 0))
+        if discount_type == "percentage":
+            discount = round(ride_fare * (discount_value / 100), 2) if ride_fare > 0 else 0
+            max_cap = p.get("max_discount")
+            if max_cap and discount > max_cap:
+                discount = max_cap
+        else:
+            discount = min(discount_value, ride_fare) if ride_fare > 0 else discount_value
+
+        available.append({
+            "promo_id": p["id"],
+            "code": p.get("code"),
+            "discount_type": discount_type,
+            "discount_value": discount_value,
+            "max_discount": p.get("max_discount"),
+            "discount_amount": discount,
+            "description": p.get("description", ""),
+            "expiry_date": p.get("expiry_date"),
+        })
+
+    # Sort by biggest discount first
+    available.sort(key=lambda x: x["discount_amount"], reverse=True)
+    return available
+
+
 # ============ Admin Promo Code CRUD ============
 
 admin_router = APIRouter(prefix="/admin/promo-codes", tags=["Admin Promotions"])

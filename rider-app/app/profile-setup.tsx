@@ -23,10 +23,13 @@ export default function ProfileSetupScreen() {
   const router = useRouter();
   const { user, createProfile, logout, isLoading: authLoading, error: authError } = useAuthStore();
 
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [email, setEmail] = useState('');
-  const [gender, setGender] = useState('');
+  // Detect if editing existing profile vs first-time setup
+  const isEditing = !!(user?.profile_complete || user?.first_name);
+
+  const [firstName, setFirstName] = useState(user?.first_name || '');
+  const [lastName, setLastName] = useState(user?.last_name || '');
+  const [email, setEmail] = useState(user?.email || '');
+  const [gender, setGender] = useState(user?.gender || '');
   const [showGenderPicker, setShowGenderPicker] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -56,9 +59,13 @@ export default function ProfileSetupScreen() {
         email: email.trim().toLowerCase(),
         gender,
       });
-      router.replace('/(tabs)');
+      if (isEditing) {
+        router.back();
+      } else {
+        router.replace('/(tabs)');
+      }
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to create profile');
+      Alert.alert('Error', err.message || 'Failed to save profile');
     } finally {
       setIsSubmitting(false);
     }
@@ -92,9 +99,18 @@ export default function ProfileSetupScreen() {
           >
             {/* Header */}
             <View style={styles.header}>
-              <Text style={styles.title}>Complete your{"\n"}profile</Text>
+              {isEditing && (
+                <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+                  <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+                </TouchableOpacity>
+              )}
+              <Text style={styles.title}>
+                {isEditing ? 'Edit Profile' : 'Complete your\nprofile'}
+              </Text>
               <Text style={styles.subtitle}>
-                We need a few details to get you started with Spinr.
+                {isEditing
+                  ? 'Update your personal details.'
+                  : 'We need a few details to get you started with Spinr.'}
               </Text>
             </View>
 
@@ -200,18 +216,22 @@ export default function ProfileSetupScreen() {
               {isSubmitting || authLoading ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
-                <Text style={styles.submitButtonText}>Get Started</Text>
+                <Text style={styles.submitButtonText}>
+                  {isEditing ? 'Save Changes' : 'Get Started'}
+                </Text>
               )}
             </TouchableOpacity>
 
-            {/* Logout / Change Number Button */}
-            <TouchableOpacity
-              style={styles.logoutButton}
-              onPress={handleLogout}
-              disabled={isSubmitting || authLoading}
-            >
-              <Text style={styles.logoutButtonText}>Not you? Change phone number</Text>
-            </TouchableOpacity>
+            {/* Logout / Change Number Button — only on first setup */}
+            {!isEditing && (
+              <TouchableOpacity
+                style={styles.logoutButton}
+                onPress={handleLogout}
+                disabled={isSubmitting || authLoading}
+              >
+                <Text style={styles.logoutButtonText}>Not you? Change phone number</Text>
+              </TouchableOpacity>
+            )}
           </ScrollView>
         </TouchableWithoutFeedback>
       </KeyboardAvoidingView>
@@ -234,6 +254,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 40,
     paddingBottom: 40,
+  },
+  backBtn: {
+    width: 44, height: 44, borderRadius: 22, backgroundColor: '#F5F5F5',
+    justifyContent: 'center', alignItems: 'center', marginBottom: 12,
   },
   header: {
     marginBottom: 40,

@@ -1,191 +1,345 @@
 import React, { useEffect, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  Dimensions,
-  Alert,
-  TextInput,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput,
+  Alert, Platform, ActivityIndicator, BackHandler,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapViewDirections from 'react-native-maps-directions';
 import { useRideStore } from '../store/rideStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import api from '@shared/api/client';
 
-const { width } = Dimensions.get('window');
+const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+
+const COLORS = SpinrConfig.theme.colors;
 
 export default function RideCompletedScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
-  const { currentRide, clearRide } = useRideStore();
+  const { currentRide, currentDriver, fetchRide, rateRide, clearRide } = useRideStore();
+
+  const [rating, setRating] = useState(5);
+  const [comment, setComment] = useState('');
   const [selectedTip, setSelectedTip] = useState<number | null>(null);
   const [customTip, setCustomTip] = useState('');
   const [tipSent, setTipSent] = useState(false);
-  const [sendingTip, setSendingTip] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [alreadyPaid, setAlreadyPaid] = useState(false);
+  const [paymentProcessed, setPaymentProcessed] = useState(false);
+
+  const [routeCoords, setRouteCoords] = useState<any[]>([]);
+  const mapRef = React.useRef<MapView>(null);
 
   const tipOptions = [2, 5, 10];
+  const fare = currentRide?.total_fare || 0;
+  const duration = currentRide?.duration_minutes || 0;
+  const distance = currentRide?.distance_km || 0;
+
+  useEffect(() => {
+    if (rideId) fetchRide(rideId);
+  }, [rideId]);
+
+  // Check if ride was already paid (e.g. coming back to this screen)
+  useEffect(() => {
+    if (currentRide?.payment_status === 'paid') {
+      setAlreadyPaid(true);
+    }
+  }, [currentRide?.payment_status]);
+
+  // Block back navigation — must complete rating & payment
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => sub.remove();
+  }, []);
+
+  // Payment is processed when rider taps "Done" — includes tip amount
 
   const handleSendTip = async (amount: number) => {
-    if (amount <= 0 || sendingTip) return;
-    setSendingTip(true);
+    if (amount <= 0 || tipSent) return;
     try {
       await api.post(`/rides/${rideId}/tip`, { amount });
       setTipSent(true);
       setSelectedTip(amount);
-    } catch (error) {
-      Alert.alert('Error', 'Could not send tip. Please try again.');
+    } catch {
+      Alert.alert('Error', 'Could not send tip.');
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (isSubmitting) return; // prevent double tap
+    setIsSubmitting(true);
+    try {
+      const tipAmount = selectedTip || (customTip ? parseFloat(customTip) : 0);
+
+      // 1. Rate the driver (always, even if already paid)
+      try {
+        await rateRide(rideId as string, rating, comment || undefined, tipAmount > 0 ? tipAmount : undefined);
+      } catch { /* rating may fail if already rated */ }
+
+      // 2. Process payment only if not already paid
+      if (!alreadyPaid) {
+        try {
+          await api.post(`/rides/${rideId}/process-payment`, { tip_amount: tipAmount });
+        } catch { /* backend handles idempotency */ }
+      }
+
+      clearRide();
+      router.replace('/(tabs)');
+    } catch {
+      Alert.alert('Error', 'Failed to submit. Please try again.');
     } finally {
-      setSendingTip(false);
+      setIsSubmitting(false);
     }
   };
-
-  const handleCustomTip = () => {
-    const amount = parseFloat(customTip);
-    if (isNaN(amount) || amount <= 0) {
-      Alert.alert('Invalid Amount', 'Please enter a valid tip amount.');
-      return;
-    }
-    handleSendTip(amount);
-  };
-
-  const handleHelp = () => {
-    // Open help
-  };
-
-  const handleProceedToRating = () => {
-    router.replace({ pathname: '/rate-ride', params: { rideId } });
-  };
-
-  const fare = currentRide?.total_fare || 14.50;
-  const duration = currentRide?.duration_minutes || 12;
-  const distance = currentRide?.distance_km || 5.2;
-  const destination = currentRide?.dropoff_address || '123 Saskatchewan Crescent E';
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      {/* Help Link */}
-      <View style={styles.header}>
-        <View style={{ width: 50 }} />
-        <View style={{ flex: 1 }} />
-        <TouchableOpacity onPress={handleHelp}>
-          <Text style={styles.helpText}>Help</Text>
-        </TouchableOpacity>
-      </View>
-
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Success Icon */}
-        <View style={styles.successIcon}>
-          <View style={styles.successCircle}>
-            <Ionicons name="checkmark" size={48} color={SpinrConfig.theme.colors.primary} />
+
+        {/* Success Header */}
+        <View style={styles.successSection}>
+          <View style={styles.checkCircle}>
+            <Ionicons name="checkmark" size={36} color={COLORS.primary} />
           </View>
+          <Text style={styles.title}>Ride Complete!</Text>
+          <Text style={styles.subtitle} numberOfLines={1}>
+            {currentRide?.dropoff_address || 'Destination'}
+          </Text>
         </View>
 
-        {/* Arrival Message */}
-        <Text style={styles.title}>You have arrived!</Text>
-        <Text style={styles.destination}>at {destination}</Text>
+        {/* Route Map */}
+        {currentRide?.pickup_lat && currentRide?.dropoff_lat && (
+          <View style={styles.mapCard}>
+            <MapView
+              ref={mapRef}
+              style={styles.map}
+              provider={MAP_PROVIDER}
+              scrollEnabled={false}
+              zoomEnabled={false}
+              rotateEnabled={false}
+              pitchEnabled={false}
+              initialRegion={{
+                latitude: (currentRide.pickup_lat + currentRide.dropoff_lat) / 2,
+                longitude: (currentRide.pickup_lng + currentRide.dropoff_lng) / 2,
+                latitudeDelta: Math.abs(currentRide.pickup_lat - currentRide.dropoff_lat) * 2 + 0.01,
+                longitudeDelta: Math.abs(currentRide.pickup_lng - currentRide.dropoff_lng) * 2 + 0.01,
+              }}
+            >
+              {/* Fetch route */}
+              {GOOGLE_MAPS_API_KEY && (
+                <MapViewDirections
+                  origin={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
+                  destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
+                  apikey={GOOGLE_MAPS_API_KEY}
+                  strokeWidth={0}
+                  strokeColor="transparent"
+                  onReady={(result: any) => {
+                    setRouteCoords(result.coordinates);
+                    if (mapRef.current && result.coordinates?.length > 1) {
+                      mapRef.current.fitToCoordinates(result.coordinates, {
+                        edgePadding: { top: 30, right: 30, bottom: 30, left: 30 },
+                        animated: false,
+                      });
+                    }
+                  }}
+                />
+              )}
 
-        {/* Fare */}
-        <Text style={styles.fare}>${fare.toFixed(2)}</Text>
-        
-        {/* Payment Method */}
-        <View style={styles.paymentMethod}>
-          <Ionicons name="card" size={18} color="#666" />
-          <Text style={styles.paymentText}>APPLE PAY</Text>
-        </View>
+              {/* Orange → Red gradient route */}
+              {routeCoords.length > 1 && (() => {
+                const total = routeCoords.length;
+                const SEGS = 15;
+                const chunk = Math.max(1, Math.floor(total / SEGS));
+                const segments: { coords: any[]; color: string }[] = [];
+                for (let i = 0; i < total - 1; i += chunk) {
+                  const end = Math.min(i + chunk + 1, total);
+                  const t = i / Math.max(total - 1, 1);
+                  const r = Math.round(255 + (238 - 255) * t);
+                  const g = Math.round(149 + (43 - 149) * t);
+                  const b = Math.round(0 + (43 - 0) * t);
+                  segments.push({ coords: routeCoords.slice(i, end), color: `rgb(${r},${g},${b})` });
+                }
+                return segments.map((seg, idx) => (
+                  <Polyline
+                    key={`seg-${idx}`}
+                    coordinates={seg.coords}
+                    strokeWidth={4}
+                    strokeColor={seg.color}
+                    lineCap="round"
+                    lineJoin="round"
+                  />
+                ));
+              })()}
 
-        {/* Stats */}
-        <View style={styles.statsContainer}>
-          <View style={styles.statCard}>
-            <View style={styles.statIconContainer}>
-              <Ionicons name="time" size={24} color={SpinrConfig.theme.colors.primary} />
+              {/* Pickup marker */}
+              <Marker
+                coordinate={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
+                anchor={{ x: 0.5, y: 0.5 }}
+              >
+                <View style={styles.mapPin}>
+                  <Ionicons name="location" size={14} color="#FFF" />
+                </View>
+              </Marker>
+
+              {/* Dropoff marker */}
+              <Marker
+                coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
+                anchor={{ x: 0.5, y: 0.5 }}
+              >
+                <View style={[styles.mapPin, { backgroundColor: COLORS.primary }]}>
+                  <Ionicons name="flag" size={14} color="#FFF" />
+                </View>
+              </Marker>
+            </MapView>
+
+            {/* Route label overlay */}
+            <View style={styles.mapLabel}>
+              <Text style={styles.mapLabelText}>YOUR ROUTE</Text>
             </View>
-            <Text style={styles.statValue}>{duration} min</Text>
-            <Text style={styles.statLabel}>DURATION</Text>
           </View>
-          
-          <View style={styles.statCard}>
-            <View style={styles.statIconContainer}>
-              <Ionicons name="location" size={24} color={SpinrConfig.theme.colors.primary} />
+        )}
+
+        {/* Fare Card */}
+        <View style={styles.fareCard}>
+          <Text style={styles.fareAmount}>${fare.toFixed(2)}</Text>
+          <View style={styles.paymentBadge}>
+            <Ionicons name="card" size={14} color="#666" />
+            <Text style={styles.paymentText}>
+              Card ending •••• {currentRide?.card_last4 || '4242'}
+            </Text>
+            {alreadyPaid && (
+              <>
+                <Ionicons name="checkmark-circle" size={14} color="#10B981" />
+                <Text style={{ fontSize: 11, fontWeight: '700', color: '#10B981' }}>PAID</Text>
+              </>
+            )}
+          </View>
+
+          {/* Stats */}
+          <View style={styles.statsRow}>
+            <View style={styles.stat}>
+              <Ionicons name="time-outline" size={18} color="#999" />
+              <Text style={styles.statVal}>{duration} min</Text>
+              <Text style={styles.statLbl}>Duration</Text>
             </View>
-            <Text style={styles.statValue}>{distance} km</Text>
-            <Text style={styles.statLabel}>DISTANCE</Text>
+            <View style={styles.statDivider} />
+            <View style={styles.stat}>
+              <Ionicons name="speedometer-outline" size={18} color="#999" />
+              <Text style={styles.statVal}>{distance.toFixed(1)} km</Text>
+              <Text style={styles.statLbl}>Distance</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.stat}>
+              <Ionicons name="cash-outline" size={18} color="#999" />
+              <Text style={styles.statVal}>${fare.toFixed(2)}</Text>
+              <Text style={styles.statLbl}>Total</Text>
+            </View>
           </View>
         </View>
 
-        {/* Route Recap */}
-        <View style={styles.routeRecap}>
-          <View style={styles.routeMapPlaceholder}>
-            <Text style={styles.routeLabel}>ROUTE RECAP</Text>
-            {/* Simulated route line */}
-            <View style={styles.routeLine} />
-            {/* Start marker */}
-            <View style={[styles.routeMarker, styles.startMarker]} />
-            {/* End marker */}
-            <View style={[styles.routeMarker, styles.endMarker]} />
-          </View>
-        </View>
-
-        {/* Tip Your Driver */}
-        <View style={styles.tipSection}>
-          <Text style={styles.tipTitle}>Tip your driver</Text>
-          {tipSent ? (
-            <View style={styles.tipConfirmation}>
-              <Ionicons name="checkmark-circle" size={24} color="#10B981" />
-              <Text style={styles.tipConfirmText}>
-                ${selectedTip?.toFixed(2)} tip added! 🎉
+        {/* Rate Driver */}
+        <View style={styles.rateCard}>
+          <View style={styles.driverRow}>
+            <View style={styles.driverAvatar}>
+              <Ionicons name="person" size={24} color="#888" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.driverName}>{currentDriver?.name || 'Your Driver'}</Text>
+              <Text style={styles.driverMeta}>
+                {currentDriver?.vehicle_color} {currentDriver?.vehicle_make} · {currentDriver?.license_plate}
               </Text>
             </View>
+          </View>
+
+          <Text style={styles.rateLabel}>How was your ride?</Text>
+          <View style={styles.starsRow}>
+            {[1, 2, 3, 4, 5].map((star) => (
+              <TouchableOpacity key={star} onPress={() => setRating(star)} style={styles.starBtn}>
+                <Ionicons
+                  name={star <= rating ? 'star' : 'star-outline'}
+                  size={36}
+                  color={star <= rating ? '#FFB800' : '#DDD'}
+                />
+              </TouchableOpacity>
+            ))}
+          </View>
+          <Text style={styles.ratingText}>
+            {rating === 5 ? 'Excellent!' : rating === 4 ? 'Great' : rating === 3 ? 'Good' : rating === 2 ? 'Fair' : 'Poor'}
+          </Text>
+
+          {/* Comment */}
+          <TextInput
+            style={styles.commentInput}
+            placeholder="Leave a comment (optional)"
+            placeholderTextColor="#BBB"
+            value={comment}
+            onChangeText={setComment}
+            multiline
+            maxLength={200}
+          />
+        </View>
+
+        {/* Tip Section */}
+        <View style={styles.tipCard}>
+          <Text style={styles.tipTitle}>Add a tip for {currentDriver?.name?.split(' ')[0] || 'your driver'}</Text>
+          {tipSent ? (
+            <View style={styles.tipDone}>
+              <Ionicons name="heart" size={20} color="#10B981" />
+              <Text style={styles.tipDoneText}>${selectedTip?.toFixed(2)} tip sent!</Text>
+            </View>
           ) : (
-            <>
-              <View style={styles.tipButtons}>
-                {tipOptions.map((amount) => (
-                  <TouchableOpacity
-                    key={amount}
-                    style={[
-                      styles.tipButton,
-                      selectedTip === amount && styles.tipButtonSelected,
-                    ]}
-                    onPress={() => handleSendTip(amount)}
-                    disabled={sendingTip}
-                  >
-                    <Text
-                      style={[
-                        styles.tipButtonText,
-                        selectedTip === amount && styles.tipButtonTextSelected,
-                      ]}
-                    >
-                      ${amount}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-                <View style={styles.customTipContainer}>
-                  <Text style={styles.dollarSign}>$</Text>
-                  <TextInput
-                    style={styles.customTipInput}
-                    placeholder="Other"
-                    placeholderTextColor="#999"
-                    keyboardType="decimal-pad"
-                    value={customTip}
-                    onChangeText={setCustomTip}
-                    onSubmitEditing={handleCustomTip}
-                    returnKeyType="send"
-                  />
-                </View>
+            <View style={styles.tipRow}>
+              {tipOptions.map((amt) => (
+                <TouchableOpacity
+                  key={amt}
+                  style={[styles.tipBtn, selectedTip === amt && styles.tipBtnActive]}
+                  onPress={() => { setSelectedTip(amt); setCustomTip(''); }}
+                >
+                  <Text style={[styles.tipBtnText, selectedTip === amt && styles.tipBtnTextActive]}>${amt}</Text>
+                </TouchableOpacity>
+              ))}
+              <View style={[styles.tipCustom, customTip ? styles.tipCustomActive : null]}>
+                <Text style={styles.tipDollar}>$</Text>
+                <TextInput
+                  style={styles.tipCustomInput}
+                  placeholder="Other"
+                  placeholderTextColor="#BBB"
+                  keyboardType="decimal-pad"
+                  value={customTip}
+                  onChangeText={(t) => { setCustomTip(t); setSelectedTip(null); }}
+                />
               </View>
-            </>
+            </View>
           )}
         </View>
+
       </ScrollView>
 
-      {/* Bottom Button */}
-      <View style={styles.bottomContainer}>
-        <TouchableOpacity style={styles.ratingButton} onPress={handleProceedToRating}>
-          <Text style={styles.ratingButtonText}>Proceed to Rating</Text>
-          <Ionicons name="arrow-forward" size={20} color="#FFF" />
+      {/* Submit Button */}
+      <View style={styles.bottomBar}>
+        <TouchableOpacity
+          style={styles.submitBtn}
+          onPress={handleSubmit}
+          disabled={isSubmitting}
+          activeOpacity={0.8}
+        >
+          {isSubmitting ? (
+            <ActivityIndicator size="small" color="#FFF" />
+          ) : (
+            <>
+              <Text style={styles.submitBtnText}>
+                {alreadyPaid
+                  ? 'Rate & Done'
+                  : `Pay $${(fare + (selectedTip || (customTip ? parseFloat(customTip) || 0 : 0))).toFixed(2)} & Done`
+                }
+              </Text>
+              <Ionicons name={alreadyPaid ? 'checkmark' : 'card'} size={18} color="#FFF" />
+            </>
+          )}
         </TouchableOpacity>
       </View>
     </SafeAreaView>
@@ -193,249 +347,108 @@ export default function RideCompletedScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FFF',
+  container: { flex: 1, backgroundColor: '#FFF' },
+  content: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 20 },
+
+  // Success
+  successSection: { alignItems: 'center', marginBottom: 20 },
+  checkCircle: {
+    width: 80, height: 80, borderRadius: 40, backgroundColor: '#FEF2F2',
+    justifyContent: 'center', alignItems: 'center', marginBottom: 14,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+  title: { fontSize: 24, fontWeight: '800', color: '#1A1A1A', marginBottom: 4 },
+  subtitle: { fontSize: 14, color: '#888' },
+
+  // Route Map
+  mapCard: {
+    width: '100%', height: 180, borderRadius: 18, overflow: 'hidden',
+    marginBottom: 16, backgroundColor: '#F0F0F0',
   },
-  helpText: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: SpinrConfig.theme.colors.primary,
+  map: { flex: 1 },
+  mapPin: {
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: '#10B981', justifyContent: 'center', alignItems: 'center',
+    borderWidth: 2, borderColor: '#FFF',
+    elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2,
   },
-  content: {
-    flexGrow: 1,
-    alignItems: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 20,
+  mapLabel: {
+    position: 'absolute', bottom: 8, left: 8,
+    backgroundColor: 'rgba(255,255,255,0.9)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
   },
-  successIcon: {
-    marginBottom: 24,
+  mapLabelText: { fontSize: 10, fontWeight: '700', color: '#1A1A1A', letterSpacing: 0.5 },
+
+  // Fare Card
+  fareCard: {
+    backgroundColor: '#F9F9F9', borderRadius: 20, padding: 20, alignItems: 'center', marginBottom: 16,
   },
-  successCircle: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: '#FFF0F0',
-    justifyContent: 'center',
-    alignItems: 'center',
+  fareAmount: { fontSize: 42, fontWeight: '800', color: COLORS.primary, marginBottom: 8 },
+  paymentBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#FFF', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20,
+    marginBottom: 16,
   },
-  title: {
-    fontSize: 28,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
-    marginBottom: 8,
+  paymentText: { fontSize: 12, fontWeight: '600', color: '#666' },
+  statsRow: { flexDirection: 'row', width: '100%' },
+  stat: { flex: 1, alignItems: 'center' },
+  statVal: { fontSize: 16, fontWeight: '700', color: '#1A1A1A', marginTop: 4 },
+  statLbl: { fontSize: 10, color: '#999', marginTop: 2 },
+  statDivider: { width: 1, backgroundColor: '#E8E8E8' },
+
+  // Rate Card
+  rateCard: {
+    backgroundColor: '#F9F9F9', borderRadius: 20, padding: 20, marginBottom: 16,
   },
-  destination: {
-    fontSize: 15,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666',
-    marginBottom: 24,
+  driverRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+  driverAvatar: {
+    width: 48, height: 48, borderRadius: 24, backgroundColor: '#E8E8E8',
+    justifyContent: 'center', alignItems: 'center', marginRight: 12,
   },
-  fare: {
-    fontSize: 48,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: SpinrConfig.theme.colors.primary,
-    marginBottom: 8,
+  driverName: { fontSize: 16, fontWeight: '700', color: '#1A1A1A' },
+  driverMeta: { fontSize: 12, color: '#888', marginTop: 2 },
+  rateLabel: { fontSize: 15, fontWeight: '600', color: '#1A1A1A', textAlign: 'center', marginBottom: 12 },
+  starsRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 6 },
+  starBtn: { padding: 4 },
+  ratingText: { fontSize: 13, color: '#888', textAlign: 'center', marginBottom: 14 },
+  commentInput: {
+    backgroundColor: '#FFF', borderRadius: 14, padding: 14, fontSize: 14, color: '#1A1A1A',
+    minHeight: 60, textAlignVertical: 'top', borderWidth: 1, borderColor: '#ECECEC',
   },
-  paymentMethod: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F5F5F5',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    marginBottom: 32,
+
+  // Tip
+  tipCard: {
+    backgroundColor: '#F9F9F9', borderRadius: 20, padding: 20,
   },
-  paymentText: {
-    fontSize: 13,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#666',
-    marginLeft: 8,
-    letterSpacing: 0.5,
+  tipTitle: { fontSize: 15, fontWeight: '600', color: '#1A1A1A', marginBottom: 14, textAlign: 'center' },
+  tipRow: { flexDirection: 'row', gap: 10, justifyContent: 'center' },
+  tipBtn: {
+    paddingHorizontal: 20, paddingVertical: 12, borderRadius: 14,
+    backgroundColor: '#FFF', borderWidth: 1.5, borderColor: '#E5E5E5',
   },
-  statsContainer: {
-    flexDirection: 'row',
-    gap: 16,
-    marginBottom: 24,
-    width: '100%',
+  tipBtnActive: { backgroundColor: `${COLORS.primary}15`, borderColor: COLORS.primary },
+  tipBtnText: { fontSize: 16, fontWeight: '700', color: '#1A1A1A' },
+  tipBtnTextActive: { color: COLORS.primary },
+  tipCustom: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#FFF', borderRadius: 14, borderWidth: 1.5, borderColor: '#E5E5E5',
+    paddingHorizontal: 12, minWidth: 80,
   },
-  statCard: {
-    flex: 1,
-    backgroundColor: '#F9F9F9',
-    borderRadius: 16,
-    padding: 20,
-    alignItems: 'center',
+  tipCustomActive: { borderColor: COLORS.primary },
+  tipDollar: { fontSize: 16, fontWeight: '600', color: '#999' },
+  tipCustomInput: { fontSize: 16, fontWeight: '600', color: '#1A1A1A', paddingVertical: 12, paddingHorizontal: 4, minWidth: 44 },
+  tipDone: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    paddingVertical: 12, backgroundColor: '#F0FFF4', borderRadius: 12,
   },
-  statIconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#FFF0F0',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 12,
+  tipDoneText: { fontSize: 15, fontWeight: '600', color: '#059669' },
+
+  // Bottom
+  bottomBar: {
+    paddingHorizontal: 20, paddingVertical: 14,
+    borderTopWidth: 1, borderTopColor: '#F0F0F0',
   },
-  statValue: {
-    fontSize: 24,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
-    marginBottom: 4,
+  submitBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: COLORS.primary, paddingVertical: 16, borderRadius: 28,
   },
-  statLabel: {
-    fontSize: 11,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#999',
-    letterSpacing: 0.5,
-  },
-  routeRecap: {
-    width: '100%',
-    marginBottom: 20,
-  },
-  routeMapPlaceholder: {
-    height: 160,
-    backgroundColor: '#F0F0F0',
-    borderRadius: 16,
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  routeLabel: {
-    position: 'absolute',
-    bottom: 12,
-    left: 12,
-    fontSize: 11,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
-    backgroundColor: '#FFF',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 4,
-    letterSpacing: 0.5,
-  },
-  routeLine: {
-    position: 'absolute',
-    top: '30%',
-    left: '15%',
-    width: 200,
-    height: 3,
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    transform: [{ rotate: '20deg' }],
-  },
-  routeMarker: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    position: 'absolute',
-  },
-  startMarker: {
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    top: '25%',
-    left: '12%',
-  },
-  endMarker: {
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    top: '40%',
-    right: '15%',
-  },
-  bottomContainer: {
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#F0F0F0',
-  },
-  ratingButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    paddingVertical: 18,
-    borderRadius: 32,
-    gap: 8,
-  },
-  ratingButtonText: {
-    fontSize: 17,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#FFF',
-  },
-  tipSection: {
-    width: '100%',
-    marginBottom: 20,
-    paddingHorizontal: 4,
-  },
-  tipTitle: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
-    marginBottom: 12,
-    textAlign: 'center',
-  },
-  tipButtons: {
-    flexDirection: 'row',
-    gap: 10,
-    justifyContent: 'center',
-  },
-  tipButton: {
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderRadius: 16,
-    backgroundColor: '#F5F5F5',
-    borderWidth: 1.5,
-    borderColor: '#E5E5E5',
-    minWidth: 64,
-    alignItems: 'center',
-  },
-  tipButtonSelected: {
-    backgroundColor: SpinrConfig.theme.colors.primary + '15',
-    borderColor: SpinrConfig.theme.colors.primary,
-  },
-  tipButtonText: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
-  },
-  tipButtonTextSelected: {
-    color: SpinrConfig.theme.colors.primary,
-  },
-  customTipContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F5F5F5',
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: '#E5E5E5',
-    paddingHorizontal: 12,
-    minWidth: 80,
-  },
-  dollarSign: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#999',
-  },
-  customTipInput: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#1A1A1A',
-    paddingVertical: 14,
-    paddingHorizontal: 4,
-    minWidth: 50,
-  },
-  tipConfirmation: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    backgroundColor: '#F0FFF4',
-    borderRadius: 12,
-  },
-  tipConfirmText: {
-    fontSize: 15,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#059669',
-  },
+  submitBtnText: { fontSize: 17, fontWeight: '700', color: '#FFF' },
 });

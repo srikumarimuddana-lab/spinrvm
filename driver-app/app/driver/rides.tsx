@@ -80,7 +80,7 @@ export default function RidesScreen() {
       : '';
 
     return (
-      <TouchableOpacity style={styles.rideCard} onPress={() => router.push(`/(driver)/ride-detail?id=${item.id}` as any)}>
+      <TouchableOpacity style={styles.rideCard} onPress={() => router.push(`/driver/ride-detail?id=${item.id}` as any)}>
         {/* Status and Date */}
         <View style={styles.cardHeader}>
           <View style={[styles.statusBadge, { backgroundColor: `${statusColor}15` }]}>

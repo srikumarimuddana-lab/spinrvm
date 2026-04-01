@@ -9,8 +9,10 @@ const COLORS = {
   accent: SpinrConfig.theme.colors.primary,
   accentDim: SpinrConfig.theme.colors.primaryDark,
   surface: SpinrConfig.theme.colors.surface,
+  surfaceLight: SpinrConfig.theme.colors.surfaceLight,
   text: SpinrConfig.theme.colors.text,
   textDim: SpinrConfig.theme.colors.textDim,
+  border: SpinrConfig.theme.colors.border,
 };
 
 interface CompletedRide {

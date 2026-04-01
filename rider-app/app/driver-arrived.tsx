@@ -1,26 +1,54 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Dimensions,
-  Share,
-  Alert,
+  View, Text, StyleSheet, TouchableOpacity, Share, Alert, Platform, BackHandler,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapViewDirections from 'react-native-maps-directions';
+import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useRideStore } from '../store/rideStore';
+import { CarMarker } from '@shared/components/CarMarker';
+import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 
-const { width } = Dimensions.get('window');
+const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
+const COLORS = SpinrConfig.theme.colors;
 
 export default function DriverArrivedScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
-  const { currentRide, currentDriver, fetchRide } = useRideStore();
+  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide } = useRideStore();
+  const mapRef = React.useRef<MapView>(null);
+  const bottomSheetRef = React.useRef<BottomSheet>(null);
+  const snapPoints = useMemo(() => ['42%', '70%', '92%'], []);
+  const [routeCoords, setRouteCoords] = React.useState<any[]>([]);
+  const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+
+  const fare = currentRide?.total_fare || 0;
+  const cancellationFee = Math.min(5, fare * 0.2);
+  const pickupOtp = currentRide?.pickup_otp || '----';
+
+  const handleCancelPress = () => {
+    Alert.alert(
+      'Driver is waiting',
+      `Your driver has arrived. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`,
+      [
+        { text: 'Keep Ride', style: 'cancel' },
+        {
+          text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive',
+          onPress: async () => { await cancelRide(); clearRide(); router.replace('/ride-options' as any); },
+        },
+      ]
+    );
+  };
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => { handleCancelPress(); return true; });
+    return () => sub.remove();
+  }, [currentRide?.total_fare]);
 
   useEffect(() => {
     if (rideId) {
@@ -32,521 +60,426 @@ export default function DriverArrivedScreen() {
 
   useEffect(() => {
     if (currentRide?.status === 'in_progress') {
-      router.replace({ pathname: '/ride-in-progress', params: { rideId } });
+      router.replace({ pathname: '/ride-in-progress', params: { rideId } } as any);
     }
   }, [currentRide?.status]);
 
-  const handleBack = () => {
-    router.back();
-  };
+  useEffect(() => {
+    if (currentRide && mapRef.current) {
+      const coords = [{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }];
+      if (currentDriver?.lat && currentDriver?.lng) {
+        coords.push({ latitude: currentDriver.lat, longitude: currentDriver.lng });
+      }
+      mapRef.current.fitToCoordinates(coords, {
+        edgePadding: { top: 100, right: 60, bottom: 320, left: 60 },
+        animated: true,
+      });
+    }
+  }, [currentRide?.pickup_lat, currentDriver?.lat]);
 
-  const handleMessage = () => {
-    router.push({ pathname: '/chat-driver', params: { rideId } });
-  };
-
-  const handleCall = () => {
-    // Initiate call
-  };
+  const handleMessage = () => router.push({ pathname: '/chat-driver', params: { rideId } } as any);
 
   const handleShareTrip = async () => {
-    const driverInfo = `
-🚗 SPINR RIDE - DRIVER ARRIVED!
-
-👤 DRIVER: ${currentDriver?.name || 'Unknown'}
-⭐ RATING: ${currentDriver?.rating || 'New'}
-🚙 TOTAL TRIPS: ${currentDriver?.total_rides || 0}
-
-🚙 VEHICLE: ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || 'Unknown'} ${currentDriver?.vehicle_model || 'Vehicle'}
-📋 LICENSE PLATE: ${currentDriver?.license_plate || 'Pending'}
-
-📍 PICKUP: ${currentRide?.pickup_address || 'University of Saskatchewan'}
-🔑 PICKUP OTP: ${pickupOtp}
-
-I'm sharing this ride for safety. Screenshot this info!
-    `.trim();
-
-    try {
-      await Share.share({
-        message: driverInfo,
-        title: 'My Spinr Ride - Driver Arrived',
-      });
-    } catch (error) {
-      console.log('Share error:', error);
-    }
+    const info = [
+      `🚗 Spinr Ride — Driver Arrived`,
+      ``,
+      `Driver: ${currentDriver?.name || 'Unknown'}`,
+      `Rating: ${currentDriver?.rating || 'New'} ⭐`,
+      `Vehicle: ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || ''} ${currentDriver?.vehicle_model || ''}`,
+      `Plate: ${currentDriver?.license_plate || 'N/A'}`,
+      ``,
+      `📍 Pickup: ${currentRide?.pickup_address || ''}`,
+      `📍 Dropoff: ${currentRide?.dropoff_address || ''}`,
+      `🔑 OTP: ${pickupOtp}`,
+    ].join('\n');
+    try { await Share.share({ message: info }); } catch {}
   };
 
-  const handleCopyDetails = async () => {
-    const details = `Driver: ${currentDriver?.name || 'Unknown'} | Vehicle: ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || 'Unknown'} ${currentDriver?.vehicle_model || 'Vehicle'} | Plate: ${currentDriver?.license_plate || 'Pending'} | OTP: ${pickupOtp}`;
-    await Clipboard.setStringAsync(details);
-    Alert.alert('Copied!', 'Driver details copied to clipboard');
+  const handleCopyOtp = async () => {
+    await Clipboard.setStringAsync(pickupOtp);
+    Alert.alert('Copied!', 'OTP copied to clipboard');
   };
-
-  // handleStartRide removed for production; handled automatically via status updates
-
-  const pickupOtp = currentRide?.pickup_otp || '1234';
 
   return (
     <View style={styles.container}>
+      {/* Full-screen Map */}
+      {currentRide ? (
+        <MapView
+          ref={mapRef}
+          style={StyleSheet.absoluteFillObject}
+          provider={MAP_PROVIDER}
+          initialRegion={{
+            latitude: currentRide.pickup_lat,
+            longitude: currentRide.pickup_lng,
+            latitudeDelta: 0.004,
+            longitudeDelta: 0.004,
+          }}
+          showsUserLocation
+          showsMyLocationButton={false}
+        >
+          {/* Route: pickup → dropoff */}
+          {GOOGLE_MAPS_API_KEY && (
+            <MapViewDirections
+              origin={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
+              destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
+              apikey={GOOGLE_MAPS_API_KEY}
+              strokeWidth={0}
+              strokeColor="transparent"
+              onReady={(result: any) => {
+                setRouteCoords(result.coordinates);
+                if (mapRef.current && result.coordinates?.length > 1) {
+                  mapRef.current.fitToCoordinates(result.coordinates, {
+                    edgePadding: { top: 100, right: 60, bottom: 320, left: 60 },
+                    animated: true,
+                  });
+                }
+              }}
+            />
+          )}
+          {/* Orange → Red gradient */}
+          {routeCoords.length > 1 && (() => {
+            const total = routeCoords.length;
+            const SEGS = 15;
+            const chunk = Math.max(1, Math.floor(total / SEGS));
+            const segs: { c: any[]; color: string }[] = [];
+            for (let i = 0; i < total - 1; i += chunk) {
+              const end = Math.min(i + chunk + 1, total);
+              const t = i / Math.max(total - 1, 1);
+              const r = Math.round(255 + (238 - 255) * t);
+              const g = Math.round(149 + (43 - 149) * t);
+              const b = Math.round(0 + (43 - 0) * t);
+              segs.push({ c: routeCoords.slice(i, end), color: `rgb(${r},${g},${b})` });
+            }
+            return segs.map((s, idx) => (
+              <Polyline key={`rs-${idx}`} coordinates={s.c} strokeWidth={4} strokeColor={s.color} lineCap="round" lineJoin="round" />
+            ));
+          })()}
+
+          {/* Pickup pin with pulse */}
+          <Marker coordinate={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
+            <View style={styles.pickupMarkerWrap}>
+              <View style={styles.pickupPulse} />
+              <View style={styles.pickupPin}>
+                <Ionicons name="location" size={18} color="#FFF" />
+              </View>
+            </View>
+          </Marker>
+
+          {/* Dropoff pin */}
+          <Marker coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
+            <View style={styles.dropoffPin}>
+              <Ionicons name="flag" size={16} color="#FFF" />
+            </View>
+          </Marker>
+
+          {/* Driver car at pickup */}
+          {currentDriver?.lat && currentDriver?.lng && (
+            <CarMarker
+              coordinate={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}
+              heading={(currentDriver as any).heading}
+              size={6}
+              zIndex={100}
+            />
+          )}
+        </MapView>
+      ) : null}
+
       {/* Header */}
-      <SafeAreaView edges={['top']} style={styles.headerSafeArea}>
+      <SafeAreaView edges={['top']} style={styles.headerOverlay}>
         <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={handleBack}>
-            <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+          <TouchableOpacity style={styles.hBtn} onPress={handleCancelPress}>
+            <Ionicons name="arrow-back" size={22} color="#1A1A1A" />
           </TouchableOpacity>
-
-          <View style={styles.arrivedPill}>
-            <View style={styles.greenDot} />
-            <Text style={styles.arrivedText}>Driver has arrived</Text>
+          <View style={styles.arrivedChip}>
+            <View style={styles.pulseGreen} />
+            <Text style={styles.arrivedChipText}>Driver has arrived</Text>
           </View>
-
-          <TouchableOpacity style={styles.emergencyButton}>
-            <Ionicons name="shield" size={20} color={SpinrConfig.theme.colors.primary} />
+          <TouchableOpacity style={styles.hBtn}>
+            <Ionicons name="shield-checkmark" size={20} color={COLORS.primary} />
           </TouchableOpacity>
         </View>
       </SafeAreaView>
 
-      {/* Map Area */}
-      <View style={styles.mapContainer}>
-        <View style={styles.mapPlaceholder}>
-          {/* Pickup marker */}
-          <View style={styles.pickupMarker}>
-            <View style={styles.pickupMarkerInner}>
-              <Ionicons name="location" size={20} color="#FFF" />
+      {/* Bottom Sheet */}
+      <BottomSheet
+        ref={bottomSheetRef}
+        index={1}
+        snapPoints={snapPoints}
+        backgroundStyle={styles.sheetBg}
+        handleIndicatorStyle={styles.sheetHandle}
+      >
+        <BottomSheetScrollView contentContainerStyle={styles.sheetContent}>
+
+          {/* OTP Card */}
+          <View style={styles.otpCard}>
+            <View style={styles.otpHeader}>
+              <Ionicons name="key" size={18} color="rgba(255,255,255,0.8)" />
+              <Text style={styles.otpTitle}>Pickup PIN</Text>
+            </View>
+            <TouchableOpacity onPress={handleCopyOtp} activeOpacity={0.8}>
+              <View style={styles.otpDigits}>
+                {pickupOtp.split('').map((d, i) => (
+                  <View key={i} style={styles.otpBox}>
+                    <Text style={styles.otpNum}>{d}</Text>
+                  </View>
+                ))}
+              </View>
+            </TouchableOpacity>
+            <Text style={styles.otpSub}>Tap to copy · Share this with your driver to start the trip</Text>
+          </View>
+
+          {/* Driver Card */}
+          <View style={styles.driverCard}>
+            <View style={styles.driverTop}>
+              <View style={styles.avatar}>
+                <Ionicons name="person" size={26} color="#888" />
+                {currentDriver?.rating && (
+                  <View style={styles.ratingPill}>
+                    <Ionicons name="star" size={9} color="#FFB800" />
+                    <Text style={styles.ratingNum}>{currentDriver.rating}</Text>
+                  </View>
+                )}
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.driverName}>{currentDriver?.name || 'Your Driver'}</Text>
+                <Text style={styles.driverMeta}>
+                  {currentDriver?.total_rides || 0} trips · Arrived at pickup
+                </Text>
+              </View>
+              <TouchableOpacity style={styles.msgBtn} onPress={handleMessage}>
+                <Ionicons name="chatbubble" size={18} color={COLORS.primary} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Vehicle */}
+            <View style={styles.vehicleBar}>
+              <View style={styles.vehicleIcon}>
+                <Ionicons name="car" size={16} color={COLORS.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.vehicleName}>
+                  {currentDriver?.vehicle_color} {currentDriver?.vehicle_make} {currentDriver?.vehicle_model}
+                </Text>
+              </View>
+              <View style={styles.plateBadge}>
+                <Text style={styles.plateNum}>{currentDriver?.license_plate || 'N/A'}</Text>
+              </View>
             </View>
           </View>
 
-          {/* Car at pickup */}
-          <View style={styles.carAtPickup}>
-            <Ionicons name="car" size={16} color="#FFF" />
-          </View>
-        </View>
-      </View>
-
-      {/* Bottom Sheet */}
-      <View style={styles.bottomSheet}>
-        <View style={styles.sheetHandle} />
-
-        {/* OTP Section */}
-        <View style={styles.otpSection}>
-          <Text style={styles.otpLabel}>Share this PIN with your driver</Text>
-          <View style={styles.otpContainer}>
-            {pickupOtp.split('').map((digit, index) => (
-              <View key={index} style={styles.otpDigit}>
-                <Text style={styles.otpDigitText}>{digit}</Text>
+          {/* Trip Summary */}
+          <View style={styles.tripCard}>
+            <View style={styles.tripRow}>
+              <View style={styles.tripDots}>
+                <View style={[styles.tripDot, { backgroundColor: '#10B981' }]} />
+                <View style={styles.tripLine} />
+                <View style={[styles.tripDot, { backgroundColor: COLORS.primary }]} />
               </View>
-            ))}
-          </View>
-          <Text style={styles.otpHint}>Driver will enter this to start the trip</Text>
-        </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.tripLabel}>PICKUP</Text>
+                <Text style={styles.tripAddr} numberOfLines={1}>{currentRide?.pickup_address || 'Pickup location'}</Text>
+                <View style={{ height: 18 }} />
+                <Text style={styles.tripLabel}>DROPOFF</Text>
+                <Text style={styles.tripAddr} numberOfLines={1}>{currentRide?.dropoff_address || 'Destination'}</Text>
+              </View>
+            </View>
 
-        {/* Driver Details Card - Comprehensive for Screenshot */}
-        <View style={styles.driverDetailsCard}>
-          <View style={styles.driverCardHeader}>
-            <Text style={styles.driverCardTitle}>DRIVER DETAILS</Text>
-            <TouchableOpacity style={styles.copyButton} onPress={handleCopyDetails}>
-              <Ionicons name="copy-outline" size={14} color="#666" />
-              <Text style={styles.copyText}>Copy</Text>
+            {/* Fare Row */}
+            <View style={styles.fareRow}>
+              <View style={styles.fareItem}>
+                <Text style={styles.fareVal}>${fare.toFixed(2)}</Text>
+                <Text style={styles.fareLbl}>Fare</Text>
+              </View>
+              <View style={styles.fareDivider} />
+              <View style={styles.fareItem}>
+                <Text style={styles.fareVal}>{(currentRide?.distance_km || 0).toFixed(1)} km</Text>
+                <Text style={styles.fareLbl}>Distance</Text>
+              </View>
+              <View style={styles.fareDivider} />
+              <View style={styles.fareItem}>
+                <Text style={styles.fareVal}>{currentRide?.duration_minutes || '--'} min</Text>
+                <Text style={styles.fareLbl}>Est. Time</Text>
+              </View>
+            </View>
+          </View>
+
+          {/* Actions */}
+          <View style={styles.actionsRow}>
+            <TouchableOpacity style={styles.actionPrimary} onPress={handleMessage}>
+              <Ionicons name="chatbubble" size={18} color="#FFF" />
+              <Text style={styles.actionPrimaryText}>Message Driver</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionIcon} onPress={handleShareTrip}>
+              <Ionicons name="share-outline" size={20} color="#1A1A1A" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionIcon} onPress={handleCopyOtp}>
+              <Ionicons name="copy-outline" size={20} color="#1A1A1A" />
             </TouchableOpacity>
           </View>
 
-          <View style={styles.driverSection}>
-            <View style={styles.driverAvatar}>
-              <Ionicons name="person" size={28} color="#666" />
-              <View style={styles.ratingBadge}>
-                <Ionicons name="star" size={10} color="#FFB800" />
-                <Text style={styles.ratingText}>{currentDriver?.rating || 'New'}</Text>
-              </View>
-            </View>
-
-            <View style={styles.driverInfo}>
-              <Text style={styles.driverName}>{currentDriver?.name || 'Unknown'}</Text>
-              <Text style={styles.totalTrips}>{currentDriver?.total_rides || 0} trips completed</Text>
-              <View style={styles.arrivedIndicator}>
-                <Ionicons name="checkmark-circle" size={14} color="#10B981" />
-                <Text style={styles.arrivedIndicatorText}>Arrived at pickup</Text>
-              </View>
-            </View>
-          </View>
-
-          {/* Vehicle Details */}
-          <View style={styles.vehicleSection}>
-            <View style={styles.vehicleRow}>
-              <Ionicons name="car" size={18} color={SpinrConfig.theme.colors.primary} />
-              <View style={styles.vehicleTextContainer}>
-                <Text style={styles.vehicleLabel}>VEHICLE</Text>
-                <Text style={styles.vehicleValue}>
-                  {currentDriver?.vehicle_color || ''} {currentDriver?.vehicle_make || 'Unknown'} {currentDriver?.vehicle_model || 'Vehicle'}
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.plateRow}>
-              <Text style={styles.plateEmoji}>🪪</Text>
-              <View style={styles.vehicleTextContainer}>
-                <Text style={styles.vehicleLabel}>LICENSE PLATE</Text>
-                <Text style={styles.plateValue}>{currentDriver?.license_plate || 'Pending'}</Text>
-              </View>
-            </View>
-          </View>
-        </View>
-
-        {/* Action Buttons */}
-        <View style={styles.actionButtons}>
-          <TouchableOpacity style={styles.messageButton} onPress={handleMessage}>
-            <Ionicons name="chatbubble" size={18} color="#FFF" />
-            <Text style={styles.messageButtonText}>Message</Text>
+          {/* Cancel link */}
+          <TouchableOpacity style={styles.cancelLink} onPress={handleCancelPress}>
+            <Text style={styles.cancelLinkText}>
+              Cancel Ride (fee: ${cancellationFee.toFixed(2)})
+            </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.callButton} onPress={handleCall}>
-            <Ionicons name="call" size={20} color={SpinrConfig.theme.colors.primary} />
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.shareIconButton} onPress={handleShareTrip}>
-            <Ionicons name="share-outline" size={20} color="#1A1A1A" />
-          </TouchableOpacity>
-        </View>
-
-        {/* Demo Button removed for production */}
-      </View>
+          {/* DEV */}
+          {__DEV__ && (
+            <View style={styles.devBar}>
+              <Text style={styles.devLabel}>DEV: {currentRide?.status}</Text>
+              <TouchableOpacity style={styles.devBtn} onPress={async () => {
+                try { await api.post(`/drivers/rides/${currentRide?.id}/start`); } catch(e) { console.log(e); }
+                if (rideId) fetchRide(rideId);
+              }}>
+                <Text style={styles.devBtnText}>Start Ride (skip OTP)</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </BottomSheetScrollView>
+      </BottomSheet>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#E8E8E8',
+  container: { flex: 1, backgroundColor: '#E8E8E8' },
+
+  // Map markers
+  pickupMarkerWrap: { alignItems: 'center', justifyContent: 'center', width: 56, height: 56 },
+  pickupPulse: {
+    position: 'absolute', width: 56, height: 56, borderRadius: 28,
+    backgroundColor: 'rgba(238, 43, 43, 0.12)',
   },
-  headerSafeArea: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 10,
+  pickupPin: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center',
+    borderWidth: 3, borderColor: '#FFF',
+    elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4,
   },
+
+  dropoffPin: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center',
+    borderWidth: 2, borderColor: '#FFF',
+    elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3,
+  },
+
+  // Header
+  headerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 10,
   },
-  backButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+  hBtn: {
+    width: 44, height: 44, borderRadius: 22, backgroundColor: '#FFF',
+    justifyContent: 'center', alignItems: 'center',
+    elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 4,
   },
-  arrivedPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFF',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+  arrivedChip: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#FFF', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24,
+    elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 4,
   },
-  greenDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#10B981',
-    marginRight: 8,
+  pulseGreen: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#10B981', marginRight: 8 },
+  arrivedChipText: { fontSize: 14, fontWeight: '700', color: '#1A1A1A' },
+
+  // Sheet
+  sheetBg: { borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  sheetHandle: { backgroundColor: '#DDD', width: 40, height: 4, borderRadius: 2 },
+  sheetContent: { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 4 },
+
+  // OTP Card
+  otpCard: {
+    backgroundColor: COLORS.primary, borderRadius: 20, padding: 20,
+    alignItems: 'center', marginBottom: 16,
   },
-  arrivedText: {
-    fontSize: 15,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
+  otpHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 },
+  otpTitle: { fontSize: 14, fontWeight: '600', color: 'rgba(255,255,255,0.85)' },
+  otpDigits: { flexDirection: 'row', gap: 10, marginBottom: 12 },
+  otpBox: {
+    width: 52, height: 60, backgroundColor: 'rgba(255,255,255,0.18)',
+    borderRadius: 14, justifyContent: 'center', alignItems: 'center',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
   },
-  emergencyButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+  otpNum: { fontSize: 28, fontWeight: '800', color: '#FFF' },
+  otpSub: { fontSize: 12, color: 'rgba(255,255,255,0.6)', textAlign: 'center' },
+
+  // Driver Card
+  driverCard: { backgroundColor: '#F9F9F9', borderRadius: 18, padding: 16, marginBottom: 14 },
+  driverTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
+  avatar: {
+    width: 50, height: 50, borderRadius: 25, backgroundColor: '#E8E8E8',
+    justifyContent: 'center', alignItems: 'center', marginRight: 12, position: 'relative',
   },
-  mapContainer: {
-    flex: 1,
+  ratingPill: {
+    position: 'absolute', bottom: -3, left: -3,
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#FFF', paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 2,
   },
-  mapPlaceholder: {
-    flex: 1,
-    backgroundColor: '#D4E4D4',
-    position: 'relative',
-    justifyContent: 'center',
-    alignItems: 'center',
+  ratingNum: { fontSize: 10, fontWeight: '700', color: '#1A1A1A', marginLeft: 2 },
+  driverName: { fontSize: 17, fontWeight: '700', color: '#1A1A1A' },
+  driverMeta: { fontSize: 12, color: '#888', marginTop: 2 },
+  msgBtn: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: `${COLORS.primary}12`, justifyContent: 'center', alignItems: 'center',
   },
-  pickupMarker: {
-    alignItems: 'center',
+
+  vehicleBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingTop: 14, borderTopWidth: 1, borderTopColor: '#ECECEC',
   },
-  pickupMarkerInner: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 3,
-    borderColor: '#FFF',
+  vehicleIcon: {
+    width: 32, height: 32, borderRadius: 8, backgroundColor: `${COLORS.primary}12`,
+    justifyContent: 'center', alignItems: 'center',
   },
-  carAtPickup: {
-    position: 'absolute',
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#1A1A1A',
-    justifyContent: 'center',
-    alignItems: 'center',
-    top: '45%',
-    left: '55%',
+  vehicleName: { fontSize: 13, fontWeight: '500', color: '#444' },
+  plateBadge: {
+    backgroundColor: '#1A1A1A', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5,
   },
-  bottomSheet: {
-    backgroundColor: '#FFF',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 30,
+  plateNum: { fontSize: 13, fontWeight: '800', color: '#FFF', letterSpacing: 1.5 },
+
+  // Trip Card
+  tripCard: { backgroundColor: '#F9F9F9', borderRadius: 18, padding: 16, marginBottom: 14 },
+  tripRow: { flexDirection: 'row' },
+  tripDots: { alignItems: 'center', marginRight: 12, paddingTop: 2 },
+  tripDot: { width: 10, height: 10, borderRadius: 5 },
+  tripLine: { width: 2, flex: 1, backgroundColor: '#DDD', marginVertical: 3 },
+  tripLabel: { fontSize: 10, fontWeight: '600', color: '#999', letterSpacing: 0.5, marginBottom: 2 },
+  tripAddr: { fontSize: 14, fontWeight: '500', color: '#1A1A1A' },
+
+  fareRow: {
+    flexDirection: 'row', marginTop: 14, paddingTop: 14,
+    borderTopWidth: 1, borderTopColor: '#ECECEC',
   },
-  sheetHandle: {
-    width: 40,
-    height: 4,
-    backgroundColor: '#E0E0E0',
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginBottom: 20,
+  fareItem: { flex: 1, alignItems: 'center' },
+  fareVal: { fontSize: 15, fontWeight: '700', color: '#1A1A1A' },
+  fareLbl: { fontSize: 10, color: '#999', marginTop: 2 },
+  fareDivider: { width: 1, backgroundColor: '#ECECEC' },
+
+  // Actions
+  actionsRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
+  actionPrimary: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: COLORS.primary, paddingVertical: 15, borderRadius: 16,
   },
-  otpSection: {
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    borderRadius: 16,
-    padding: 20,
-    alignItems: 'center',
-    marginBottom: 20,
+  actionPrimaryText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+  actionIcon: {
+    width: 50, height: 50, borderRadius: 14,
+    backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center',
   },
-  otpLabel: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: 'rgba(255,255,255,0.8)',
-    marginBottom: 12,
+
+  cancelLink: { alignItems: 'center', paddingVertical: 10, marginBottom: 4 },
+  cancelLinkText: { fontSize: 13, fontWeight: '500', color: '#999' },
+
+  // Dev
+  devBar: {
+    flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8,
+    marginTop: 8, padding: 12, backgroundColor: '#FEF3C7', borderRadius: 12,
+    borderWidth: 1, borderColor: '#F59E0B',
   },
-  otpContainer: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 10,
-  },
-  otpDigit: {
-    width: 50,
-    height: 56,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  otpDigitText: {
-    fontSize: 26,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#FFF',
-  },
-  otpHint: {
-    fontSize: 12,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: 'rgba(255,255,255,0.7)',
-  },
-  driverDetailsCard: {
-    backgroundColor: '#F9F9F9',
-    borderRadius: 16,
-    padding: 14,
-    marginBottom: 16,
-  },
-  driverCardHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  driverCardTitle: {
-    fontSize: 11,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: SpinrConfig.theme.colors.primary,
-    letterSpacing: 0.5,
-  },
-  copyButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFF',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    gap: 4,
-  },
-  copyText: {
-    fontSize: 11,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#666',
-  },
-  driverSection: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  driverAvatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: '#E8E8E8',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-    position: 'relative',
-  },
-  ratingBadge: {
-    position: 'absolute',
-    bottom: -4,
-    left: -4,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFF',
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-    borderRadius: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-  },
-  ratingText: {
-    fontSize: 10,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
-    marginLeft: 2,
-  },
-  driverInfo: {
-    flex: 1,
-  },
-  driverName: {
-    fontSize: 17,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
-  },
-  totalTrips: {
-    fontSize: 12,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666',
-    marginTop: 1,
-  },
-  arrivedIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  arrivedIndicatorText: {
-    fontSize: 12,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#10B981',
-    marginLeft: 4,
-  },
-  vehicleSection: {
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#E8E8E8',
-  },
-  vehicleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-  vehicleTextContainer: {
-    marginLeft: 10,
-    flex: 1,
-  },
-  vehicleLabel: {
-    fontSize: 9,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#999',
-    letterSpacing: 0.5,
-    marginBottom: 1,
-  },
-  vehicleValue: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
-  },
-  plateRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  plateEmoji: {
-    fontSize: 16,
-    width: 18,
-  },
-  plateValue: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
-    letterSpacing: 2,
-  },
-  callButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFF0F0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  shareIconButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 1.5,
-    borderColor: '#E0E0E0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  actionButtons: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 12,
-  },
-  messageButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    paddingVertical: 14,
-    borderRadius: 28,
-    gap: 6,
-  },
-  messageButtonText: {
-    fontSize: 15,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#FFF',
-  },
-  demoButton: {
-    backgroundColor: '#10B981',
-    borderRadius: 12,
-    padding: 14,
-    alignItems: 'center',
-  },
-  demoButtonText: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#FFF',
-  },
+  devLabel: { fontSize: 11, fontWeight: '700', color: '#92400E', marginRight: 4 },
+  devBtn: { backgroundColor: '#F59E0B', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
+  devBtnText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
 });

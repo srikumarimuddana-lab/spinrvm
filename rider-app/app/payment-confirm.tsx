@@ -18,7 +18,6 @@ import api from '@shared/api/client';
 
 const PAYMENT_METHODS = [
   { id: 'card', name: 'Credit Card', icon: 'card', last4: '4242' },
-  { id: 'cash', name: 'Cash', icon: 'cash', last4: null },
 ];
 
 export default function PaymentConfirmScreen() {
@@ -197,7 +196,7 @@ export default function PaymentConfirmScreen() {
             </TouchableOpacity>
           ))}
 
-          <TouchableOpacity style={styles.addPaymentButton}>
+          <TouchableOpacity style={styles.addPaymentButton} onPress={() => router.push('/manage-cards' as any)}>
             <Ionicons name="add" size={20} color={SpinrConfig.theme.colors.primary} />
             <Text style={styles.addPaymentText}>Add Payment Method</Text>
           </TouchableOpacity>

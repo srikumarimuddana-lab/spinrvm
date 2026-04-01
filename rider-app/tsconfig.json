@@ -21,14 +21,17 @@
       "firebase/*": [
         "./node_modules/firebase/*"
       ],
-      "react": [
-        "./node_modules/react"
-      ],
       "react-native-maps": [
         "./node_modules/react-native-maps"
       ],
       "expo-constants": [
         "./node_modules/expo-constants"
+      ],
+      "@react-native-community/netinfo": [
+        "./node_modules/@react-native-community/netinfo"
+      ],
+      "zustand/middleware": [
+        "./node_modules/zustand/middleware"
       ]
     }
   },

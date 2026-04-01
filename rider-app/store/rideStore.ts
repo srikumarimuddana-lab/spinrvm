@@ -72,8 +72,12 @@ interface Ride {
   base_fare: number;
   total_fare: number;
   payment_method: string;
+  payment_status?: string;
+  card_last4?: string;
   status: string;
   pickup_otp: string;
+  tip_amount?: number;
+  corporate_account_id?: string | null;
   is_scheduled?: boolean;
   scheduled_time?: string;
   created_at: string;
@@ -103,6 +107,8 @@ interface RideState {
   scheduledTime: Date | null;
   scheduledRides: Ride[];
   userLocation: { latitude: number; longitude: number } | null;
+  availablePromos: any[];
+  appliedPromo: any | null;
   isLoading: boolean;
   error: string | null;
 
@@ -112,6 +118,7 @@ interface RideState {
   addStop: (location: Location) => void;
   removeStop: (index: number) => void;
   updateStop: (index: number, location: Location) => void;
+  fetchActiveRide: () => Promise<{ active: boolean; ride: any } | null>;
   fetchEstimates: () => Promise<void>;
   fetchNearbyDrivers: () => Promise<void>;
   selectVehicle: (vehicle: VehicleType) => void;
@@ -135,6 +142,8 @@ interface RideState {
   fetchScheduledRides: () => Promise<void>;
   cancelScheduledRide: (rideId: string) => Promise<void>;
   setUserLocation: (loc: { latitude: number; longitude: number } | null) => void;
+  fetchAvailablePromos: (rideFare?: number) => Promise<void>;
+  applyPromo: (promo: any | null) => void;
 }
 
 export const useRideStore = create<RideState>((set, get) => ({
@@ -148,6 +157,8 @@ export const useRideStore = create<RideState>((set, get) => ({
   currentDriver: null,
   savedAddresses: [],
   recentSearches: [],
+  availablePromos: [],
+  appliedPromo: null,
   scheduledTime: null,
   scheduledRides: [],
   userLocation: null,
@@ -165,6 +176,22 @@ export const useRideStore = create<RideState>((set, get) => ({
     newStops[index] = location;
     return { stops: newStops };
   }),
+
+  fetchActiveRide: async () => {
+    try {
+      const response = await api.get('/rides/active');
+      if (response.data?.active && response.data.ride) {
+        set({
+          currentRide: response.data.ride,
+          currentDriver: response.data.ride.driver || null,
+        });
+        return response.data;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  },
 
   fetchEstimates: async () => {
     console.log('fetchEstimates store action started');
@@ -189,10 +216,14 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
 
   fetchNearbyDrivers: async () => {
-    const { pickup } = get();
+    const { pickup, selectedVehicle } = get();
     if (!pickup) return;
     try {
-      const response = await api.get(`/drivers/nearby?lat=${pickup.lat}&lng=${pickup.lng}`);
+      let url = `/drivers/nearby?lat=${pickup.lat}&lng=${pickup.lng}`;
+      if (selectedVehicle?.id) {
+        url += `&vehicle_type=${selectedVehicle.id}`;
+      }
+      const response = await api.get(url);
       set({ nearbyDrivers: response.data });
     } catch (error) {
       console.log('Error fetching nearby drivers', error);
@@ -200,6 +231,24 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
 
   selectVehicle: (vehicle) => set({ selectedVehicle: vehicle }),
+
+  fetchAvailablePromos: async (rideFare?: number) => {
+    try {
+      const fare = rideFare ?? 0;
+      const response = await api.get(`/promo/available?ride_fare=${fare}`);
+      const promos = response.data || [];
+      set({ availablePromos: promos });
+      // Auto-apply best promo (first one, already sorted by biggest discount)
+      if (promos.length > 0 && !get().appliedPromo) {
+        set({ appliedPromo: promos[0] });
+      }
+    } catch (error) {
+      console.log('Error fetching promos:', error);
+      set({ availablePromos: [] });
+    }
+  },
+
+  applyPromo: (promo) => set({ appliedPromo: promo }),
 
   createRide: async (paymentMethod) => {
     const { pickup, dropoff, selectedVehicle, stops, scheduledTime } = get();
@@ -237,17 +286,20 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   fetchRide: async (rideId) => {
     try {
-      set({ isLoading: true });
+      // Only set isLoading on first fetch (when no ride data yet)
+      if (!get().currentRide) {
+        set({ isLoading: true });
+      }
       const response = await api.get(`/rides/${rideId}`);
-      // Backend returns the ride object directly, with driver embedded inside
-      // response.data is the ride object, response.data.driver is the driver (if assigned)
       set({
         currentRide: response.data,
         currentDriver: response.data.driver || null,
         isLoading: false,
       });
     } catch (error: any) {
-      set({ isLoading: false, error: error.message });
+      console.log('fetchRide error:', error.message);
+      // Don't clear currentRide on poll errors — keep showing last known state
+      set({ isLoading: false });
     }
   },
 

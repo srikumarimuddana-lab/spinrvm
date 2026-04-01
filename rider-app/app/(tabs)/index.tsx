@@ -237,11 +237,25 @@ export default function HomeScreen() {
       <View style={styles.bottomSheet}>
         <View style={styles.sheetHandle} />
 
-        {/* Search Bar */}
-        <TouchableOpacity style={styles.searchBar} onPress={handleSearchPress}>
-          <Ionicons name="search" size={22} color={SpinrConfig.theme.colors.primary} />
-          <Text style={styles.searchPlaceholder}>Where to?</Text>
-        </TouchableOpacity>
+        {/* Search Bar + AI Button */}
+        <View style={styles.searchRow}>
+          <TouchableOpacity style={styles.searchBar} onPress={handleSearchPress}>
+            <Ionicons name="search" size={22} color={SpinrConfig.theme.colors.primary} />
+            <Text style={styles.searchPlaceholder}>Where to?</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.aiButton}
+            onPress={() => {
+              // Coming soon
+              alert('AI Ride Booking is coming soon! Book rides by just talking or texting.');
+            }}
+            activeOpacity={0.8}
+          >
+            <View style={styles.aiIconGlow} />
+            <Ionicons name="sparkles" size={20} color="#FFFFFF" />
+            <Text style={styles.aiButtonText}>AI</Text>
+          </TouchableOpacity>
+        </View>
 
         {/* Quick Actions */}
         <View style={styles.quickActions}>
@@ -474,20 +488,56 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     marginBottom: 16,
   },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 20,
+  },
   searchBar: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#F5F5F5',
     borderRadius: 28,
     paddingHorizontal: 20,
     paddingVertical: 16,
-    marginBottom: 20,
   },
   searchPlaceholder: {
     fontSize: 16,
     fontFamily: 'PlusJakartaSans_500Medium',
     color: '#999',
     marginLeft: 12,
+  },
+  aiButton: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: SpinrConfig.theme.colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: SpinrConfig.theme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    overflow: 'hidden',
+  },
+  aiIconGlow: {
+    position: 'absolute',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    top: 4,
+    left: 4,
+  },
+  aiButtonText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    marginTop: 1,
   },
   quickActions: {
     flexDirection: 'row',

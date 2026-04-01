@@ -37,6 +37,19 @@ async def get_my_driver(current_user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail='Driver not found')
     return serialize_doc(driver)
 
+@api_router.put("/me")
+async def update_my_driver(body: dict = Body(...), current_user: dict = Depends(get_current_user)):
+    """Update the current user's driver profile (e.g., gst_number)."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver not found')
+    allowed_fields = {'gst_number', 'preferred_language'}
+    updates = {k: v for k, v in body.items() if k in allowed_fields}
+    if updates:
+        updates['updated_at'] = datetime.utcnow().isoformat()
+        await db.drivers.update_one({'id': driver['id']}, {'$set': updates})
+    return {'success': True}
+
 @api_router.get("/balance")
 async def get_driver_balance(current_user: dict = Depends(get_current_user)):
     """Get driver's current balance/earnings summary."""
@@ -283,17 +296,21 @@ async def get_nearby_drivers_public(
         
     drivers = await db.drivers.find(query).to_list(100)
     
-    # Optional manual filtering by distance
-    try:
-        from ..utils import calculate_distance
-    except ImportError:
-        from utils import calculate_distance
+    # Manual filtering by distance using haversine
+    import math
+    def _haversine_km(lat1, lng1, lat2, lng2):
+        R = 6371
+        dlat = math.radians(lat2 - lat1)
+        dlng = math.radians(lng2 - lng1)
+        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng/2)**2
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
     nearby = []
     for d in drivers:
         d_lat = d.get('lat')
         d_lng = d.get('lng')
         if d_lat and d_lng:
-            dist = calculate_distance(lat, lng, d_lat, d_lng)
+            dist = _haversine_km(lat, lng, d_lat, d_lng)
             if dist <= radius:
                 # hide personal info for riders
                 safe_driver = {
@@ -383,63 +400,6 @@ async def update_location_batch(
         
     return {'success': True}
 
-@api_router.get("/{driver_id}")
-async def get_driver(driver_id: str, current_user: dict = Depends(get_current_user)):
-    driver = await db.drivers.find_one({'id': driver_id})
-    if not driver:
-        raise HTTPException(status_code=404, detail='Driver not found')
-    return serialize_doc(driver)
-
-@api_router.put("/{driver_id}/status")
-async def update_driver_status(
-    driver_id: str, 
-    is_online: bool, 
-    current_user: dict = Depends(get_current_user)
-):
-    driver = await db.drivers.find_one({'id': driver_id})
-    if not driver:
-        raise HTTPException(status_code=404, detail='Driver not found')
-    
-    # Ensure user owns this driver profile
-    if driver.get('user_id') != current_user['id']:
-        raise HTTPException(status_code=403, detail='Not authorized')
-
-    # GAP FIX: Check driver document expiry before allowing online
-    if is_online:
-        now = datetime.utcnow()
-        expiry_checks = [
-            ('license_expiry_date', 'Driving license'),
-            ('insurance_expiry_date', 'Vehicle insurance'),
-            ('vehicle_inspection_expiry_date', 'Vehicle inspection'),
-            ('background_check_expiry_date', 'Background check'),
-        ]
-        for field, label in expiry_checks:
-            expiry_val = driver.get(field)
-            if expiry_val:
-                if isinstance(expiry_val, str):
-                    try:
-                        expiry_val = datetime.fromisoformat(expiry_val.replace('Z', '+00:00').replace('+00:00', ''))
-                    except ValueError:
-                        continue
-                if expiry_val < now:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f'{label} has expired ({field}). Please update your documents before going online.'
-                    )
-
-        # Check if driver is verified
-        if not driver.get('is_verified', False):
-            raise HTTPException(
-                status_code=400,
-                detail='Your driver profile has not been verified yet. Please wait for admin approval.'
-            )
-
-    await db.drivers.update_one(
-        {'id': driver_id}, 
-        {'$set': {'is_online': is_online, 'updated_at': datetime.utcnow()}}
-    )
-    return {'success': True, 'is_online': is_online}
-
 import uuid
 
 class BankAccountCreate(BaseModel):
@@ -475,7 +435,10 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
     if not driver or not user:
         raise HTTPException(status_code=404, detail="Driver/User profile not found")
         
-    from ..settings_loader import get_app_settings
+    try:
+        from ..settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings
     settings = await get_app_settings()
     stripe_secret = settings.get('stripe_secret_key', '')
     
@@ -569,7 +532,10 @@ async def request_payout(req: PayoutRequest, current_user: dict = Depends(get_cu
     if not stripe_account_id and not account:
         raise HTTPException(status_code=400, detail="No bank account linked")
     
-    from ..settings_loader import get_app_settings
+    try:
+        from ..settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings
     settings = await get_app_settings()
     stripe_secret = settings.get('stripe_secret_key', '')
     
@@ -808,10 +774,13 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
 
     # GAP FIX: Geofence check - verify driver is within 200m of pickup location
     ARRIVAL_RADIUS_KM = 0.2  # 200 meters
-    try:
-        from ..utils import calculate_distance
-    except ImportError:
-        from utils import calculate_distance
+    import math
+    def _haversine_arrive(lat1, lng1, lat2, lng2):
+        R = 6371
+        dlat = math.radians(lat2 - lat1)
+        dlng = math.radians(lng2 - lng1)
+        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng/2)**2
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
 
     driver_lat = driver.get('lat', 0)
     driver_lng = driver.get('lng', 0)
@@ -819,7 +788,7 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
     pickup_lng = ride.get('pickup_lng', 0)
 
     if driver_lat and driver_lng and pickup_lat and pickup_lng:
-        distance_to_pickup = calculate_distance(driver_lat, driver_lng, pickup_lat, pickup_lng)
+        distance_to_pickup = _haversine_arrive(driver_lat, driver_lng, pickup_lat, pickup_lng)
         if distance_to_pickup > ARRIVAL_RADIUS_KM:
             raise HTTPException(
                 status_code=400,
@@ -926,12 +895,15 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         raise HTTPException(status_code=404, detail='Ride not found')
 
     # GAP FIX: Recalculate fare based on actual GPS distance from location history
-    actual_distance_km = ride.get('distance_km', 0)
-    try:
-        from ..utils import calculate_distance
-    except ImportError:
-        from utils import calculate_distance
+    import math
+    def _haversine(lat1, lng1, lat2, lng2):
+        R = 6371
+        dlat = math.radians(lat2 - lat1)
+        dlng = math.radians(lng2 - lng1)
+        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng/2)**2
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
 
+    actual_distance_km = ride.get('distance_km', 0)
     try:
         breadcrumbs = await db.driver_location_history.find({
             'ride_id': ride_id,
@@ -939,16 +911,13 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         }).to_list(10000)
 
         if breadcrumbs and len(breadcrumbs) >= 2:
-            # Sort by timestamp
             breadcrumbs.sort(key=lambda b: str(b.get('timestamp', '')))
             total_dist = 0.0
             for i in range(1, len(breadcrumbs)):
                 prev = breadcrumbs[i - 1]
                 curr = breadcrumbs[i]
                 if prev.get('lat') and prev.get('lng') and curr.get('lat') and curr.get('lng'):
-                    total_dist += calculate_distance(
-                        prev['lat'], prev['lng'], curr['lat'], curr['lng']
-                    )
+                    total_dist += _haversine(prev['lat'], prev['lng'], curr['lat'], curr['lng'])
             if total_dist > 0:
                 actual_distance_km = round(total_dist, 2)
                 logger.info(f"Ride {ride_id}: Recalculated distance = {actual_distance_km}km (estimated was {ride.get('distance_km', 0)}km)")
@@ -1230,3 +1199,60 @@ async def get_referred_drivers(
             })
 
     return {'referred_drivers': referred_drivers[:limit]}
+
+
+# ─── Catch-all driver ID routes MUST be last to avoid shadowing named routes ───
+
+@api_router.get("/{driver_id}")
+async def get_driver(driver_id: str, current_user: dict = Depends(get_current_user)):
+    driver = await db.drivers.find_one({'id': driver_id})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver not found')
+    return serialize_doc(driver)
+
+@api_router.put("/{driver_id}/status")
+async def update_driver_status(
+    driver_id: str,
+    is_online: bool,
+    current_user: dict = Depends(get_current_user)
+):
+    driver = await db.drivers.find_one({'id': driver_id})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver not found')
+
+    if driver.get('user_id') != current_user['id']:
+        raise HTTPException(status_code=403, detail='Not authorized')
+
+    if is_online:
+        now = datetime.utcnow()
+        expiry_checks = [
+            ('license_expiry_date', 'Driving license'),
+            ('insurance_expiry_date', 'Vehicle insurance'),
+            ('vehicle_inspection_expiry_date', 'Vehicle inspection'),
+            ('background_check_expiry_date', 'Background check'),
+        ]
+        for field, label in expiry_checks:
+            expiry_val = driver.get(field)
+            if expiry_val:
+                if isinstance(expiry_val, str):
+                    try:
+                        expiry_val = datetime.fromisoformat(expiry_val.replace('Z', '+00:00').replace('+00:00', ''))
+                    except ValueError:
+                        continue
+                if expiry_val < now:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f'{label} has expired ({field}). Please update your documents before going online.'
+                    )
+
+        if not driver.get('is_verified', False):
+            raise HTTPException(
+                status_code=400,
+                detail='Your driver profile has not been verified yet. Please wait for admin approval.'
+            )
+
+    await db.drivers.update_one(
+        {'id': driver_id},
+        {'$set': {'is_online': is_online, 'updated_at': datetime.utcnow()}}
+    )
+    return {'success': True, 'is_online': is_online}

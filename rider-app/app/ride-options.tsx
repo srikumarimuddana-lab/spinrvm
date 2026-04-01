@@ -16,10 +16,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Circle, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Circle, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { useRideStore } from '../store/rideStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import { CarMarker } from '@shared/components/CarMarker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -41,6 +42,10 @@ export default function RideOptionsScreen() {
     isLoading,
     scheduledTime,
     setScheduledTime,
+    availablePromos,
+    appliedPromo,
+    fetchAvailablePromos,
+    applyPromo,
   } = useRideStore();
 
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -67,6 +72,14 @@ export default function RideOptionsScreen() {
       return () => clearInterval(interval);
     }
   }, [pickup, dropoff]);
+
+  // Fetch promos when estimates are ready
+  useEffect(() => {
+    if (estimates.length > 0) {
+      const selectedFare = estimates[selectedIndex]?.total_fare || estimates[0]?.total_fare || 0;
+      fetchAvailablePromos(selectedFare);
+    }
+  }, [estimates]);
 
   useEffect(() => {
     // Auto-select first AVAILABLE vehicle
@@ -106,6 +119,9 @@ export default function RideOptionsScreen() {
 
   // Helper to trigger map fit when directions are ready
   const onReadyDirections = (result: any) => {
+    if (result.coordinates) {
+      setRouteCoordinates(result.coordinates);
+    }
     if (mapRef.current && mapReady) {
       mapRef.current.fitToCoordinates(result.coordinates, {
         edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
@@ -118,6 +134,10 @@ export default function RideOptionsScreen() {
     if (!estimates[index].available) return;
     setSelectedIndex(index);
     selectVehicle(estimates[index].vehicle_type);
+    // Re-fetch nearby drivers filtered by this vehicle type
+    setTimeout(() => fetchNearbyDrivers(), 100);
+    // Re-calculate promo discount for new fare
+    fetchAvailablePromos(estimates[index].total_fare);
   };
 
   const handleConfirm = () => {
@@ -232,19 +252,61 @@ export default function RideOptionsScreen() {
               longitudeDelta: 0.05,
             }}
           >
-            {/* MapViewDirections to display real route natively */}
+            {/* Fetch route via MapViewDirections (hidden stroke) */}
             {GOOGLE_MAPS_API_KEY && (
               <MapViewDirections
                 origin={{ latitude: pickup.lat, longitude: pickup.lng }}
                 destination={{ latitude: dropoff.lat, longitude: dropoff.lng }}
                 waypoints={stops.filter(s => s.lat && s.lng).map(s => ({ latitude: s.lat, longitude: s.lng }))}
                 apikey={GOOGLE_MAPS_API_KEY}
-                strokeWidth={5}
-                strokeColor="#2196F3"
+                strokeWidth={0}
+                strokeColor="transparent"
                 onReady={onReadyDirections}
                 optimizeWaypoints={true}
               />
             )}
+
+            {/* Gradient route polyline — red to orange */}
+            {routeCoordinates.length > 1 && (() => {
+              // Split route into segments with interpolated colors for iOS + Android
+              const total = routeCoordinates.length;
+              const segments: { coords: any[]; color: string }[] = [];
+              const SEGMENT_COUNT = 30;
+              const chunkSize = Math.max(1, Math.floor(total / SEGMENT_COUNT));
+
+              for (let i = 0; i < total - 1; i += chunkSize) {
+                const end = Math.min(i + chunkSize + 1, total);
+                const t = i / Math.max(total - 1, 1);
+                // Interpolate: #FF9500 (orange) → #FF6B35 (orange-red) → #ee2b2b (red)
+                const r = Math.round(255 + (238 - 255) * t);
+                const g = Math.round(149 + (43 - 149) * t);
+                const b = Math.round(0 + (43 - 0) * t);
+                const color = `rgb(${r},${g},${b})`;
+                segments.push({ coords: routeCoordinates.slice(i, end), color });
+              }
+
+              return (
+                <>
+                  {/* Outer glow */}
+                  <Polyline
+                    coordinates={routeCoordinates}
+                    strokeWidth={9}
+                    strokeColor="rgba(238, 43, 43, 0.12)"
+                  />
+                  {/* Gradient segments — works on both iOS and Android */}
+                  {segments.map((seg, idx) => (
+                    <Polyline
+                      key={`route-seg-${idx}`}
+                      coordinates={seg.coords}
+                      strokeWidth={5}
+                      strokeColor={seg.color}
+                      lineCap="round"
+                      lineJoin="round"
+                    />
+                  ))}
+                </>
+              );
+            })()}
 
             {/* Pickup Marker */}
             <Marker coordinate={{ latitude: pickup.lat, longitude: pickup.lng }} anchor={{ x: 0.5, y: 0.5 }} zIndex={103}>
@@ -269,25 +331,20 @@ export default function RideOptionsScreen() {
               </Marker>
             ))}
 
-            {/* Nearby Drivers Markers - Filtered by selected vehicle type */}
+            {/* Nearby Drivers - 3D car markers filtered by selected vehicle type */}
             {nearbyDrivers.filter(d =>
               typeof d.lat === 'number' && !isNaN(d.lat) &&
               typeof d.lng === 'number' && !isNaN(d.lng) &&
-              Math.abs(d.lat) > 0.1 && Math.abs(d.lng) > 0.1 &&
-              (!selectedVehicle || d.vehicle_type_id === selectedVehicle.id)
+              Math.abs(d.lat) > 0.1 && Math.abs(d.lng) > 0.1
             ).map((driver) => (
-              <Marker
+              <CarMarker
                 key={driver.id}
+                identifier={driver.id}
                 coordinate={{ latitude: driver.lat, longitude: driver.lng }}
-                rotation={0}
-                flat={true}
-                anchor={{ x: 0.5, y: 0.5 }}
+                heading={(driver as any).heading ?? Math.random() * 360}
+                size={36}
                 zIndex={101}
-              >
-                <View style={styles.markerContainer}>
-                  <Ionicons name="car" size={20} color={SpinrConfig.theme.colors.primary} />
-                </View>
-              </Marker>
+              />
             ))}
           </MapView>
         ) : (
@@ -296,6 +353,28 @@ export default function RideOptionsScreen() {
           </View>
         )}
       </View>
+
+      {/* Promo Banner */}
+      {appliedPromo && (
+        <TouchableOpacity
+          style={styles.promoBanner}
+          onPress={() => router.push('/payment-confirm')}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="pricetag" size={16} color="#10B981" />
+          <Text style={styles.promoBannerText}>
+            {appliedPromo.discount_type === 'percentage'
+              ? `Save ${appliedPromo.discount_value}% off${appliedPromo.max_discount ? ` ($${appliedPromo.max_discount} max)` : ''}`
+              : `Save $${appliedPromo.discount_value.toFixed(2)} off`}
+            {' · '}
+            <Text style={{ fontWeight: '800' }}>{appliedPromo.code}</Text>
+          </Text>
+          {availablePromos.length > 1 && (
+            <Text style={styles.promoBannerMore}>{availablePromos.length - 1} more</Text>
+          )}
+          <Ionicons name="chevron-forward" size={14} color="#999" />
+        </TouchableOpacity>
+      )}
 
       {/* Options Header */}
       <View style={styles.sectionHeader}>
@@ -372,9 +451,18 @@ export default function RideOptionsScreen() {
                   )}
                 </View>
 
-                {/* Price */}
+                {/* Price — with promo struck-through */}
                 <View style={[styles.optionPriceContainer, !isAvailable && { opacity: 0.4 }]}>
-                  <Text style={styles.optionPrice}>${estimate.total_fare.toFixed(2)}</Text>
+                  {appliedPromo && appliedPromo.discount_amount > 0 && isSelected ? (
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={styles.optionPriceStruck}>${estimate.total_fare.toFixed(2)}</Text>
+                      <Text style={styles.optionPriceDiscounted}>
+                        ${Math.max(0, estimate.total_fare - appliedPromo.discount_amount).toFixed(2)}
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text style={styles.optionPrice}>${estimate.total_fare.toFixed(2)}</Text>
+                  )}
                   {isSelected && isAvailable && (
                     <View style={styles.selectedCheck}>
                       <Ionicons name="checkmark-circle" size={22} color={SpinrConfig.theme.colors.primary} />
@@ -695,6 +783,40 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontFamily: 'PlusJakartaSans_700Bold',
     color: '#1A1A1A',
+  },
+  optionPriceStruck: {
+    fontSize: 13,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    color: '#999',
+    textDecorationLine: 'line-through',
+  },
+  optionPriceDiscounted: {
+    fontSize: 18,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: '#10B981',
+  },
+  promoBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 20,
+    marginTop: 8,
+    marginBottom: 4,
+    backgroundColor: '#ECFDF5',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    gap: 8,
+  },
+  promoBannerText: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#065F46',
+  },
+  promoBannerMore: {
+    fontSize: 12,
+    fontFamily: 'PlusJakartaSans_500Medium',
+    color: '#10B981',
   },
   selectedCheck: {
     marginTop: 4,

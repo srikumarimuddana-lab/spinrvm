@@ -56,7 +56,7 @@ export default function ProfileSetupScreen() {
         email: email.trim().toLowerCase(),
         gender,
       });
-      router.replace('/(tabs)');
+      router.replace('/driver' as any);
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to create profile');
     } finally {

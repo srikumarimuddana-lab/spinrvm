@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useRideStore } from '../store/rideStore';
@@ -30,6 +30,7 @@ interface PlacePrediction {
 
 export default function SearchDestinationScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ mapPickField?: string; mapPickLat?: string; mapPickLng?: string; mapPickAddress?: string }>();
   const { user } = useAuthStore();
   const {
     pickup, dropoff, stops,
@@ -50,6 +51,26 @@ export default function SearchDestinationScreen() {
   const dropoffRef = useRef<TextInput>(null);
   const stopRefs = useRef<(TextInput | null)[]>([]);
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Handle return from map picker
+  useEffect(() => {
+    if (params.mapPickLat && params.mapPickLng && params.mapPickAddress) {
+      const location = {
+        address: params.mapPickAddress,
+        lat: parseFloat(params.mapPickLat),
+        lng: parseFloat(params.mapPickLng),
+      };
+      addRecentSearch(location);
+      if (params.mapPickField === 'pickup') {
+        setPickup(location);
+        setPickupText(location.address);
+        if (!dropoff) setActiveField('dropoff');
+      } else {
+        setDropoff(location);
+        setDropoffText(location.address);
+      }
+    }
+  }, [params.mapPickLat, params.mapPickLng]);
 
   useEffect(() => {
     fetchSavedAddresses();
@@ -408,7 +429,7 @@ export default function SearchDestinationScreen() {
               keyboardShouldPersistTaps="handled"
               ListHeaderComponent={
                 <View>
-                  {/* Current Location option for pickup */}
+                  {/* Quick Access: Current Location, Set on Map */}
                   {activeField === 'pickup' && userLocation && (
                     <TouchableOpacity
                       style={styles.predictionRow}
@@ -434,43 +455,115 @@ export default function SearchDestinationScreen() {
                     </TouchableOpacity>
                   )}
 
-                  {/* Saved Places */}
-                  {savedAddresses.length > 0 && (
+                  {/* Set Location on Map */}
+                  <TouchableOpacity
+                    style={styles.predictionRow}
+                    onPress={() => {
+                      router.push({ pathname: '/pick-on-map', params: { field: activeField === 'pickup' ? 'pickup' : 'dropoff' } } as any);
+                    }}
+                  >
+                    <View style={[styles.predictionIcon, { backgroundColor: '#EDE9FE' }]}>
+                      <Ionicons name="map" size={20} color="#7C3AED" />
+                    </View>
+                    <View style={styles.predictionContent}>
+                      <Text style={styles.predictionMainText}>Set location on map</Text>
+                      <Text style={styles.predictionSecondaryText}>Choose a point on the map</Text>
+                    </View>
+                  </TouchableOpacity>
+
+                  {/* Home & Work Quick Buttons */}
+                  <View style={styles.quickChips}>
+                    {(() => {
+                      const homeAddr = savedAddresses.find(a => a.name?.toLowerCase() === 'home');
+                      return (
+                        <TouchableOpacity
+                          style={styles.quickChip}
+                          onPress={() => {
+                            if (homeAddr) {
+                              handleSelectLocation({ address: homeAddr.address, lat: homeAddr.lat, lng: homeAddr.lng });
+                            } else {
+                              alert('Set your home address in Account > Saved Places');
+                            }
+                          }}
+                        >
+                          <Ionicons name="home" size={18} color={homeAddr ? SpinrConfig.theme.colors.primary : '#BBB'} />
+                          <Text style={[styles.quickChipText, !homeAddr && { color: '#BBB' }]}>Home</Text>
+                          {homeAddr && <Ionicons name="chevron-forward" size={14} color="#CCC" />}
+                        </TouchableOpacity>
+                      );
+                    })()}
+                    {(() => {
+                      const workAddr = savedAddresses.find(a => a.name?.toLowerCase() === 'work');
+                      return (
+                        <TouchableOpacity
+                          style={styles.quickChip}
+                          onPress={() => {
+                            if (workAddr) {
+                              handleSelectLocation({ address: workAddr.address, lat: workAddr.lat, lng: workAddr.lng });
+                            } else {
+                              alert('Set your work address in Account > Saved Places');
+                            }
+                          }}
+                        >
+                          <Ionicons name="briefcase" size={18} color={workAddr ? '#3B82F6' : '#BBB'} />
+                          <Text style={[styles.quickChipText, !workAddr && { color: '#BBB' }]}>Work</Text>
+                          {workAddr && <Ionicons name="chevron-forward" size={14} color="#CCC" />}
+                        </TouchableOpacity>
+                      );
+                    })()}
+                  </View>
+
+                  {/* Favourites */}
+                  {savedAddresses.filter(a => a.name?.toLowerCase() !== 'home' && a.name?.toLowerCase() !== 'work').length > 0 && (
                     <View>
-                      <Text style={styles.sectionTitle}>Saved places</Text>
-                      {savedAddresses.map((addr, index) => (
+                      <Text style={styles.sectionTitle}>Favourites</Text>
+                      {savedAddresses
+                        .filter(a => a.name?.toLowerCase() !== 'home' && a.name?.toLowerCase() !== 'work')
+                        .map((addr, index) => (
+                        <TouchableOpacity
+                          key={`fav-${index}`}
+                          style={styles.predictionRow}
+                          onPress={() => {
+                            handleSelectLocation({ address: addr.address, lat: addr.lat, lng: addr.lng });
+                          }}
+                        >
+                          <View style={[styles.predictionIcon, { backgroundColor: '#FFF7ED' }]}>
+                            <Ionicons name="star" size={20} color="#F59E0B" />
+                          </View>
+                          <View style={styles.predictionContent}>
+                            <Text style={styles.predictionMainText}>{addr.name || 'Saved'}</Text>
+                            <Text style={styles.predictionSecondaryText} numberOfLines={1}>{addr.address}</Text>
+                          </View>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+
+                  {/* Home & Work (if set, show as list items too) */}
+                  {savedAddresses.filter(a => a.name?.toLowerCase() === 'home' || a.name?.toLowerCase() === 'work').length > 0 && (
+                    <View>
+                      <Text style={styles.sectionTitle}>Saved Places</Text>
+                      {savedAddresses
+                        .filter(a => a.name?.toLowerCase() === 'home' || a.name?.toLowerCase() === 'work')
+                        .map((addr, index) => (
                         <TouchableOpacity
                           key={`saved-${index}`}
                           style={styles.predictionRow}
                           onPress={() => {
-                            const location = { address: addr.address, lat: addr.lat, lng: addr.lng };
-                            addRecentSearch(location);
-                            if (activeField === 'pickup') {
-                              setPickup(location);
-                              setPickupText(addr.address);
-                              setActiveField('dropoff');
-                            } else if (activeField === 'dropoff') {
-                              setDropoff(location);
-                              setDropoffText(addr.address);
-                              if (pickup) router.push('/ride-options');
-                            } else if (typeof activeField === 'number') {
-                              updateStop(activeField, location);
-                              const newTexts = [...stopTexts];
-                              newTexts[activeField] = addr.address;
-                              setStopTexts(newTexts);
-                            }
-                            setPredictions([]);
+                            handleSelectLocation({ address: addr.address, lat: addr.lat, lng: addr.lng });
                           }}
                         >
-                          <View style={styles.predictionIcon}>
+                          <View style={[styles.predictionIcon, {
+                            backgroundColor: addr.name?.toLowerCase() === 'home' ? '#FEE2E2' : '#DBEAFE',
+                          }]}>
                             <Ionicons
-                              name={addr.name?.toLowerCase() === 'home' ? 'home' : addr.name?.toLowerCase() === 'work' ? 'briefcase' : 'star'}
+                              name={addr.name?.toLowerCase() === 'home' ? 'home' : 'briefcase'}
                               size={20}
-                              color={SpinrConfig.theme.colors.primary}
+                              color={addr.name?.toLowerCase() === 'home' ? SpinrConfig.theme.colors.primary : '#3B82F6'}
                             />
                           </View>
                           <View style={styles.predictionContent}>
-                            <Text style={styles.predictionMainText}>{addr.name || 'Saved'}</Text>
+                            <Text style={styles.predictionMainText}>{addr.name}</Text>
                             <Text style={styles.predictionSecondaryText} numberOfLines={1}>{addr.address}</Text>
                           </View>
                         </TouchableOpacity>
@@ -487,25 +580,10 @@ export default function SearchDestinationScreen() {
                           key={`recent-${index}`}
                           style={styles.predictionRow}
                           onPress={() => {
-                            const location = { address: search.address, lat: search.lat, lng: search.lng };
-                            if (activeField === 'pickup') {
-                              setPickup(location);
-                              setPickupText(search.address);
-                              setActiveField('dropoff');
-                            } else if (activeField === 'dropoff') {
-                              setDropoff(location);
-                              setDropoffText(search.address);
-                              if (pickup) router.push('/ride-options');
-                            } else if (typeof activeField === 'number') {
-                              updateStop(activeField, location);
-                              const newTexts = [...stopTexts];
-                              newTexts[activeField] = search.address;
-                              setStopTexts(newTexts);
-                            }
-                            setPredictions([]);
+                            handleSelectLocation({ address: search.address, lat: search.lat, lng: search.lng });
                           }}
                         >
-                          <View style={styles.predictionIcon}>
+                          <View style={[styles.predictionIcon, { backgroundColor: '#F5F5F5' }]}>
                             <Ionicons name="time-outline" size={20} color="#999" />
                           </View>
                           <View style={styles.predictionContent}>
@@ -676,6 +754,28 @@ const styles = StyleSheet.create({
     fontFamily: 'PlusJakartaSans_400Regular',
     color: '#999',
     marginTop: 2,
+  },
+  quickChips: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+    marginBottom: 6,
+  },
+  quickChip: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    gap: 8,
+  },
+  quickChipText: {
+    flex: 1,
+    fontSize: 15,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: '#1A1A1A',
   },
   searchButtonContainer: {
     paddingHorizontal: 20,

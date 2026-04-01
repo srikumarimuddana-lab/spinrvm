@@ -25,6 +25,7 @@ interface RideHistory {
   status: string;
   vehicle_type_id: string;
   created_at: string;
+  corporate_account_id?: string | null;
 }
 
 type FilterType = 'all' | 'personal' | 'business';
@@ -41,8 +42,8 @@ export default function ActivityScreen() {
   const fetchData = async () => {
     try {
       const [ridesRes, typesRes] = await Promise.all([
-        api.get('/rides'),
-        api.get('/fares/vehicle-types').catch(() => ({ data: [] }))
+        api.get('/rides/history').catch(() => ({ data: [] })),
+        api.get('/vehicle-types').catch(() => ({ data: [] }))
       ]);
 
       setRides(ridesRes.data || []);
@@ -85,7 +86,7 @@ export default function ActivityScreen() {
     }
   };
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = (status: string): string => {
     switch (status) {
       case 'completed':
         return '#10B981';
@@ -100,26 +101,15 @@ export default function ActivityScreen() {
 
   const getStatusText = (status: string) => {
     switch (status) {
-      case 'completed':
-        return 'Completed';
-      case 'cancelled':
-        return 'CANCELLED';
-      case 'in_progress':
-        return 'In Progress';
-      case 'driver_assigned':
-        return 'Driver On Way';
-      case 'driver_arrived':
-        return 'Driver Arrived';
-      default:
-        return status;
+      case 'completed': return 'Completed';
+      case 'cancelled': return 'Cancelled';
+      default: return 'Completed';
     }
   };
 
   const getRideIcon = (status: string) => {
-    if (status === 'cancelled') {
-      return 'arrow-down-outline';
-    }
-    return 'car';
+    if (status === 'cancelled') return 'close-circle-outline';
+    return 'checkmark-circle';
   };
 
   const getRideIconBg = (status: string) => {
@@ -153,13 +143,17 @@ export default function ActivityScreen() {
     return groups;
   };
 
-  const groupedRides = groupRidesByMonth(rides);
+  const filteredRides = rides.filter(ride => {
+    if (filter === 'all') return true;
+    if (filter === 'business') return !!ride.corporate_account_id;
+    if (filter === 'personal') return !ride.corporate_account_id;
+    return true;
+  });
+
+  const groupedRides = groupRidesByMonth(filteredRides);
 
   const handleRidePress = (ride: RideHistory) => {
-    // Navigate to ride details
-    if (ride.status === 'in_progress' || ride.status === 'driver_assigned') {
-      router.push({ pathname: '/ride-in-progress', params: { rideId: ride.id } });
-    }
+    router.push({ pathname: '/ride-details', params: { rideId: ride.id } } as any);
   };
 
   return (

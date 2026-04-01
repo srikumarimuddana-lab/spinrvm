@@ -88,6 +88,28 @@ export default function SupportScreen() {
                             {submitting ? 'Submitting...' : 'Submit Report'}
                         </Text>
                     </TouchableOpacity>
+
+                    {/* Company Info */}
+                    <View style={styles.companyCard}>
+                        <Text style={styles.companyTitle}>SPINR TECHNOLOGIES INC.</Text>
+                        <View style={styles.companyRow}>
+                            <Ionicons name="location-outline" size={16} color="#999" />
+                            <Text style={styles.companyText}>Saskatoon, SK, Canada</Text>
+                        </View>
+                        <View style={styles.companyRow}>
+                            <Ionicons name="mail-outline" size={16} color="#999" />
+                            <Text style={styles.companyText}>support@spinr.ca</Text>
+                        </View>
+                        <View style={styles.companyRow}>
+                            <Ionicons name="call-outline" size={16} color="#999" />
+                            <Text style={styles.companyText}>+1 (306) 555-0199</Text>
+                        </View>
+                        <View style={styles.companyRow}>
+                            <Ionicons name="globe-outline" size={16} color="#999" />
+                            <Text style={styles.companyText}>www.spinr.ca</Text>
+                        </View>
+                        <Text style={styles.companyHours}>Mon–Fri 9am–6pm CST</Text>
+                    </View>
                 </View>
             </KeyboardAvoidingView>
         </SafeAreaView>
@@ -160,5 +182,34 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 16,
         fontWeight: '600',
+    },
+    companyCard: {
+        marginTop: 32,
+        backgroundColor: '#F9F9F9',
+        borderRadius: 16,
+        padding: 20,
+    },
+    companyTitle: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: THEME.primary,
+        letterSpacing: 0.5,
+        marginBottom: 14,
+    },
+    companyRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        marginBottom: 10,
+    },
+    companyText: {
+        fontSize: 14,
+        color: '#444',
+    },
+    companyHours: {
+        fontSize: 12,
+        color: '#999',
+        marginTop: 8,
+        fontStyle: 'italic',
     },
 });

@@ -88,7 +88,7 @@ export default function EarningsScreen() {
           <Text style={styles.headerTitle}>Earnings</Text>
           <TouchableOpacity
             style={styles.payoutBtn}
-            onPress={() => router.push('/(driver)/payout' as any)}
+            onPress={() => router.push('/driver/payout' as any)}
           >
             <Ionicons name="wallet" size={18} color={COLORS.accent} />
             <Text style={styles.payoutBtnText}>Payout</Text>

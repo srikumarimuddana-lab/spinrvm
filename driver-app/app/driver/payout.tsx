@@ -9,11 +9,14 @@ import {
     TextInput,
     Alert,
     ActivityIndicator,
+    Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useDriverStore } from '../../store/driverStore';
+import { useAuthStore } from '@shared/store/authStore';
+import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 
 const THEME = SpinrConfig.theme.colors;
@@ -40,8 +43,6 @@ export default function PayoutScreen() {
         bankAccount,
         fetchDriverBalance,
         fetchBankAccount,
-        setBankAccount,
-        deleteBankAccount,
         requestPayout,
         isLoading,
         error,
@@ -49,20 +50,52 @@ export default function PayoutScreen() {
     } = useDriverStore();
 
     const [payoutAmount, setPayoutAmount] = useState('');
-    const [showAddBank, setShowAddBank] = useState(false);
-
-    // Bank account form
-    const [bankName, setBankName] = useState('');
-    const [institutionNumber, setInstitutionNumber] = useState('');
-    const [transitNumber, setTransitNumber] = useState('');
-    const [accountNumber, setAccountNumber] = useState('');
-    const [accountHolderName, setAccountHolderName] = useState('');
-    const [accountType, setAccountType] = useState('checking');
+    const [stripeOnboarding, setStripeOnboarding] = useState(false);
+    const [gstNumber, setGstNumber] = useState('');
+    const [showGstForm, setShowGstForm] = useState(false);
+    const [savingGst, setSavingGst] = useState(false);
+    const [stripeAccountStatus, setStripeAccountStatus] = useState<string | null>(null);
+    const [initialLoading, setInitialLoading] = useState(true);
 
     useEffect(() => {
-        fetchDriverBalance();
-        fetchBankAccount();
+        loadData();
     }, []);
+
+    const loadData = async () => {
+        setInitialLoading(true);
+        try {
+            await Promise.all([
+                fetchDriverBalance(),
+                fetchBankAccount(),
+                loadStripeStatus(),
+                loadGstNumber(),
+            ]);
+        } catch (err) {
+            // Errors are handled individually in each function
+        } finally {
+            setInitialLoading(false);
+        }
+    };
+
+    const loadStripeStatus = async () => {
+        try {
+            const res = await api.get('/drivers/balance');
+            setStripeAccountStatus(
+                res.data.stripe_account_onboarded ? 'active' : 'not_onboarded'
+            );
+        } catch {
+            setStripeAccountStatus('not_onboarded');
+        }
+    };
+
+    const loadGstNumber = async () => {
+        try {
+            const res = await api.get('/drivers/me');
+            setGstNumber(res.data.gst_number || '');
+        } catch {
+            // Not critical
+        }
+    };
 
     useEffect(() => {
         if (error) {
@@ -71,50 +104,45 @@ export default function PayoutScreen() {
         }
     }, [error]);
 
-    const handleAddBankAccount = async () => {
-        if (!bankName || !institutionNumber || !transitNumber || !accountNumber || !accountHolderName) {
-            Alert.alert('Error', 'Please fill in all fields');
-            return;
-        }
-        if (institutionNumber.length !== 3) {
-            Alert.alert('Error', 'Institution number must be 3 digits');
-            return;
-        }
-        if (transitNumber.length !== 5) {
-            Alert.alert('Error', 'Transit number must be 5 digits');
-            return;
-        }
-        if (accountNumber.length < 7 || accountNumber.length > 12) {
-            Alert.alert('Error', 'Account number must be 7-12 digits');
-            return;
-        }
+    const handleStripeOnboarding = async () => {
+        setStripeOnboarding(true);
+        try {
+            const res = await api.post('/drivers/stripe-onboard');
+            const { url, mock } = res.data;
 
-        const success = await setBankAccount({
-            bank_name: bankName,
-            institution_number: institutionNumber,
-            transit_number: transitNumber,
-            account_number: accountNumber,
-            account_holder_name: accountHolderName,
-            account_type: accountType,
-            is_verified: false,
-        });
-
-        if (success) {
-            setShowAddBank(false);
-            resetForm();
-            Alert.alert('Success', 'Bank account added successfully');
+            if (mock) {
+                Alert.alert(
+                    'Demo Mode',
+                    'Stripe is not configured yet. In production, you will be redirected to Stripe to complete identity verification and add your bank account.',
+                );
+            } else if (url) {
+                await Linking.openURL(url);
+            }
+        } catch (err: any) {
+            Alert.alert('Error', err.response?.data?.detail || 'Failed to start Stripe onboarding');
+        } finally {
+            setStripeOnboarding(false);
         }
     };
 
-    const handleDeleteBankAccount = () => {
-        Alert.alert(
-            'Delete Bank Account',
-            'Are you sure you want to remove this bank account?',
-            [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Delete', style: 'destructive', onPress: deleteBankAccount },
-            ]
-        );
+    const handleSaveGst = async () => {
+        // Validate GST/BN format: 9 digits or 15 chars (9-digit BN + RT0001)
+        const cleaned = gstNumber.replace(/\s/g, '');
+        if (cleaned && !/^\d{9}(RT\d{4})?$/.test(cleaned)) {
+            Alert.alert('Invalid Format', 'Enter your 9-digit Business Number (BN) or full GST number (e.g., 123456789RT0001)');
+            return;
+        }
+
+        setSavingGst(true);
+        try {
+            await api.put('/drivers/me', { gst_number: cleaned || null });
+            setShowGstForm(false);
+            Alert.alert('Saved', 'GST/BN number updated successfully');
+        } catch (err: any) {
+            Alert.alert('Error', err.response?.data?.detail || 'Failed to save GST number');
+        } finally {
+            setSavingGst(false);
+        }
     };
 
     const handleRequestPayout = async () => {
@@ -135,20 +163,21 @@ export default function PayoutScreen() {
         const result = await requestPayout(amount);
         if (result.success) {
             setPayoutAmount('');
-            Alert.alert('Success', 'Payout request submitted successfully');
+            Alert.alert('Success', 'Payout request submitted. Funds will arrive in 2-3 business days.');
         }
     };
 
-    const resetForm = () => {
-        setBankName('');
-        setInstitutionNumber('');
-        setTransitNumber('');
-        setAccountNumber('');
-        setAccountHolderName('');
-        setAccountType('checking');
-    };
-
     const formatCurrency = (amount: number) => `$${amount.toFixed(2)}`;
+
+    const isStripeReady = stripeAccountStatus === 'active' || hasBankAccount;
+
+    if (initialLoading) {
+        return (
+            <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+                <ActivityIndicator size="large" color={COLORS.accent} />
+            </View>
+        );
+    }
 
     return (
         <View style={styles.container}>
@@ -159,7 +188,7 @@ export default function PayoutScreen() {
                         <Ionicons name="arrow-back" size={22} color={COLORS.text} />
                     </TouchableOpacity>
                     <Text style={styles.headerTitle}>Payouts</Text>
-                    <TouchableOpacity onPress={() => router.push('/(driver)/payout-history' as any)}>
+                    <TouchableOpacity onPress={() => router.push('/driver/payout-history' as any)}>
                         <Ionicons name="time" size={22} color={COLORS.text} />
                     </TouchableOpacity>
                 </View>
@@ -170,35 +199,160 @@ export default function PayoutScreen() {
                 <View style={styles.balanceCard}>
                     <Text style={styles.balanceLabel}>AVAILABLE BALANCE</Text>
                     <Text style={styles.balanceAmount}>
-                        {driverBalance ? formatCurrency(driverBalance.available_balance) : '--'}
+                        {driverBalance ? formatCurrency(driverBalance.available_balance) : '$0.00'}
                     </Text>
 
                     <View style={styles.balanceDetails}>
                         <View style={styles.balanceItem}>
                             <Text style={styles.balanceItemLabel}>Total Earnings</Text>
                             <Text style={styles.balanceItemValue}>
-                                {driverBalance ? formatCurrency(driverBalance.total_earnings) : '--'}
+                                {driverBalance ? formatCurrency(driverBalance.total_earnings) : '$0.00'}
                             </Text>
                         </View>
                         <View style={styles.balanceDivider} />
                         <View style={styles.balanceItem}>
                             <Text style={styles.balanceItemLabel}>Pending</Text>
                             <Text style={styles.balanceItemValue}>
-                                {driverBalance ? formatCurrency(driverBalance.pending_payouts) : '--'}
+                                {driverBalance ? formatCurrency(driverBalance.pending_payouts) : '$0.00'}
                             </Text>
                         </View>
                         <View style={styles.balanceDivider} />
                         <View style={styles.balanceItem}>
                             <Text style={styles.balanceItemLabel}>Paid Out</Text>
                             <Text style={styles.balanceItemValue}>
-                                {driverBalance ? formatCurrency(driverBalance.total_paid_out) : '--'}
+                                {driverBalance ? formatCurrency(driverBalance.total_paid_out) : '$0.00'}
                             </Text>
                         </View>
                     </View>
                 </View>
 
+                {/* Stripe Connect Setup */}
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Payment Account</Text>
+                    {stripeAccountStatus === 'active' ? (
+                        <View style={styles.stripeCard}>
+                            <View style={styles.stripeIconContainer}>
+                                <Ionicons name="checkmark-circle" size={28} color={COLORS.success} />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.stripeTitle}>Stripe Connected</Text>
+                                <Text style={styles.stripeSubtitle}>
+                                    Identity verified. Bank account linked.
+                                </Text>
+                            </View>
+                            <TouchableOpacity onPress={handleStripeOnboarding}>
+                                <Text style={{ color: COLORS.accent, fontSize: 13, fontWeight: '600' }}>Update</Text>
+                            </TouchableOpacity>
+                        </View>
+                    ) : (
+                        <TouchableOpacity
+                            style={styles.stripeSetupCard}
+                            onPress={handleStripeOnboarding}
+                            disabled={stripeOnboarding}
+                        >
+                            {stripeOnboarding ? (
+                                <ActivityIndicator size="small" color={COLORS.accent} />
+                            ) : (
+                                <>
+                                    <View style={styles.stripeSetupIcon}>
+                                        <Ionicons name="shield-checkmark" size={32} color={COLORS.accent} />
+                                    </View>
+                                    <Text style={styles.stripeSetupTitle}>Set Up Payouts with Stripe</Text>
+                                    <Text style={styles.stripeSetupDesc}>
+                                        Stripe will securely verify your identity and collect your banking details. This includes:
+                                    </Text>
+                                    <View style={styles.requirementsList}>
+                                        <View style={styles.requirementItem}>
+                                            <Ionicons name="person" size={16} color={COLORS.textDim} />
+                                            <Text style={styles.requirementText}>Government-issued photo ID</Text>
+                                        </View>
+                                        <View style={styles.requirementItem}>
+                                            <Ionicons name="camera" size={16} color={COLORS.textDim} />
+                                            <Text style={styles.requirementText}>Selfie for proof of liveness</Text>
+                                        </View>
+                                        <View style={styles.requirementItem}>
+                                            <Ionicons name="home" size={16} color={COLORS.textDim} />
+                                            <Text style={styles.requirementText}>Home address verification</Text>
+                                        </View>
+                                        <View style={styles.requirementItem}>
+                                            <Ionicons name="card" size={16} color={COLORS.textDim} />
+                                            <Text style={styles.requirementText}>Bank account or debit card</Text>
+                                        </View>
+                                    </View>
+                                    <View style={styles.stripeSetupBtn}>
+                                        <Text style={styles.stripeSetupBtnText}>Continue to Stripe</Text>
+                                        <Ionicons name="arrow-forward" size={18} color="#fff" />
+                                    </View>
+                                </>
+                            )}
+                        </TouchableOpacity>
+                    )}
+                </View>
+
+                {/* GST / Business Number */}
+                <View style={styles.section}>
+                    <View style={styles.sectionHeader}>
+                        <Text style={styles.sectionTitle}>Tax Information</Text>
+                        {!showGstForm && (
+                            <TouchableOpacity onPress={() => setShowGstForm(true)}>
+                                <Text style={styles.addLink}>{gstNumber ? 'Edit' : 'Add'}</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
+
+                    {showGstForm ? (
+                        <View style={styles.gstForm}>
+                            <Text style={styles.inputLabel}>GST/HST Number (Business Number)</Text>
+                            <Text style={styles.gstHelpText}>
+                                If you're registered for GST/HST, enter your 9-digit Business Number (BN) or full program account (e.g., 123456789RT0001). Leave blank if not registered.
+                            </Text>
+                            <TextInput
+                                style={styles.textInput}
+                                placeholder="123456789RT0001"
+                                placeholderTextColor={COLORS.textDim}
+                                value={gstNumber}
+                                onChangeText={setGstNumber}
+                                autoCapitalize="characters"
+                                maxLength={15}
+                            />
+                            <Text style={styles.gstNote}>
+                                Drivers earning over $30,000/year must register for GST/HST with CRA.
+                            </Text>
+                            <View style={styles.gstFormButtons}>
+                                <TouchableOpacity
+                                    style={styles.cancelBtn}
+                                    onPress={() => setShowGstForm(false)}
+                                >
+                                    <Text style={styles.cancelBtnText}>Cancel</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={styles.saveBtn}
+                                    onPress={handleSaveGst}
+                                    disabled={savingGst}
+                                >
+                                    {savingGst ? (
+                                        <ActivityIndicator size="small" color="#fff" />
+                                    ) : (
+                                        <Text style={styles.saveBtnText}>Save</Text>
+                                    )}
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    ) : (
+                        <View style={styles.gstCard}>
+                            <Ionicons name="document-text" size={22} color={COLORS.textDim} />
+                            <View style={{ flex: 1, marginLeft: 12 }}>
+                                <Text style={styles.gstLabel}>GST/HST Number</Text>
+                                <Text style={styles.gstValue}>
+                                    {gstNumber || 'Not provided'}
+                                </Text>
+                            </View>
+                        </View>
+                    )}
+                </View>
+
                 {/* Payout Request */}
-                {hasBankAccount && driverBalance && driverBalance.available_balance > 0 && (
+                {isStripeReady && driverBalance && driverBalance.available_balance > 0 && (
                     <View style={styles.section}>
                         <Text style={styles.sectionTitle}>Request Payout</Text>
                         <View style={styles.payoutCard}>
@@ -238,187 +392,11 @@ export default function PayoutScreen() {
                     </View>
                 )}
 
-                {/* Bank Account Section */}
-                <View style={styles.section}>
-                    <View style={styles.sectionHeader}>
-                        <Text style={styles.sectionTitle}>Bank Account</Text>
-                        {!showAddBank && (
-                            <TouchableOpacity onPress={() => setShowAddBank(true)}>
-                                <Text style={styles.addLink}>
-                                    {hasBankAccount ? 'Update' : 'Add'}
-                                </Text>
-                            </TouchableOpacity>
-                        )}
-                    </View>
-
-                    {showAddBank ? (
-                        <View style={styles.bankForm}>
-                            <View style={styles.inputGroup}>
-                                <Text style={styles.inputLabel}>Bank Name</Text>
-                                <TextInput
-                                    style={styles.textInput}
-                                    placeholder="e.g., Royal Bank of Canada"
-                                    placeholderTextColor={COLORS.textDim}
-                                    value={bankName}
-                                    onChangeText={setBankName}
-                                />
-                            </View>
-
-                            <View style={styles.inputRow}>
-                                <View style={[styles.inputGroup, { flex: 1 }]}>
-                                    <Text style={styles.inputLabel}>Institution #</Text>
-                                    <TextInput
-                                        style={styles.textInput}
-                                        placeholder="3 digits"
-                                        placeholderTextColor={COLORS.textDim}
-                                        keyboardType="number-pad"
-                                        maxLength={3}
-                                        value={institutionNumber}
-                                        onChangeText={setInstitutionNumber}
-                                    />
-                                </View>
-                                <View style={[styles.inputGroup, { flex: 1 }]}>
-                                    <Text style={styles.inputLabel}>Transit #</Text>
-                                    <TextInput
-                                        style={styles.textInput}
-                                        placeholder="5 digits"
-                                        placeholderTextColor={COLORS.textDim}
-                                        keyboardType="number-pad"
-                                        maxLength={5}
-                                        value={transitNumber}
-                                        onChangeText={setTransitNumber}
-                                    />
-                                </View>
-                            </View>
-
-                            <View style={styles.inputGroup}>
-                                <Text style={styles.inputLabel}>Account Number</Text>
-                                <TextInput
-                                    style={styles.textInput}
-                                    placeholder="7-12 digits"
-                                    placeholderTextColor={COLORS.textDim}
-                                    keyboardType="number-pad"
-                                    value={accountNumber}
-                                    onChangeText={setAccountNumber}
-                                />
-                            </View>
-
-                            <View style={styles.inputGroup}>
-                                <Text style={styles.inputLabel}>Account Holder Name</Text>
-                                <TextInput
-                                    style={styles.textInput}
-                                    placeholder="Name as shown on account"
-                                    placeholderTextColor={COLORS.textDim}
-                                    value={accountHolderName}
-                                    onChangeText={setAccountHolderName}
-                                />
-                            </View>
-
-                            <View style={styles.inputGroup}>
-                                <Text style={styles.inputLabel}>Account Type</Text>
-                                <View style={styles.typeSelector}>
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.typeOption,
-                                            accountType === 'checking' && styles.typeOptionActive,
-                                        ]}
-                                        onPress={() => setAccountType('checking')}
-                                    >
-                                        <Text
-                                            style={[
-                                                styles.typeOptionText,
-                                                accountType === 'checking' && styles.typeOptionTextActive,
-                                            ]}
-                                        >
-                                            Checking
-                                        </Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.typeOption,
-                                            accountType === 'savings' && styles.typeOptionActive,
-                                        ]}
-                                        onPress={() => setAccountType('savings')}
-                                    >
-                                        <Text
-                                            style={[
-                                                styles.typeOptionText,
-                                                accountType === 'savings' && styles.typeOptionTextActive,
-                                            ]}
-                                        >
-                                            Savings
-                                        </Text>
-                                    </TouchableOpacity>
-                                </View>
-                            </View>
-
-                            <View style={styles.formButtons}>
-                                {hasBankAccount && (
-                                    <TouchableOpacity
-                                        style={styles.deleteButton}
-                                        onPress={handleDeleteBankAccount}
-                                    >
-                                        <Text style={styles.deleteButtonText}>Remove Account</Text>
-                                    </TouchableOpacity>
-                                )}
-                                <TouchableOpacity
-                                    style={styles.saveButton}
-                                    onPress={handleAddBankAccount}
-                                    disabled={isLoading}
-                                >
-                                    {isLoading ? (
-                                        <ActivityIndicator size="small" color="#fff" />
-                                    ) : (
-                                        <Text style={styles.saveButtonText}>Save Account</Text>
-                                    )}
-                                </TouchableOpacity>
-                            </View>
-
-                            <TouchableOpacity
-                                style={styles.cancelButton}
-                                onPress={() => {
-                                    setShowAddBank(false);
-                                    resetForm();
-                                }}
-                            >
-                                <Text style={styles.cancelButtonText}>Cancel</Text>
-                            </TouchableOpacity>
-                        </View>
-                    ) : hasBankAccount ? (
-                        <View style={styles.bankCard}>
-                            <View style={styles.bankIcon}>
-                                <Ionicons name="card" size={24} color={COLORS.accent} />
-                            </View>
-                            <View style={styles.bankInfo}>
-                                <Text style={styles.bankName}>{bankAccount?.bank_name}</Text>
-                                <Text style={styles.bankAccount}>
-                                    {bankAccount?.account_type === 'checking' ? 'Checking' : 'Savings'} ••••{' '}
-                                    {bankAccount?.account_number?.slice(-4)}
-                                </Text>
-                                <Text style={styles.bankHolder}>{bankAccount?.account_holder_name}</Text>
-                            </View>
-                            {bankAccount?.is_verified && (
-                                <View style={styles.verifiedBadge}>
-                                    <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
-                                </View>
-                            )}
-                        </View>
-                    ) : (
-                        <TouchableOpacity style={styles.addBankCard} onPress={() => setShowAddBank(true)}>
-                            <Ionicons name="add-circle-outline" size={32} color={COLORS.accent} />
-                            <Text style={styles.addBankText}>Add Bank Account</Text>
-                            <Text style={styles.addBankSubtext}>
-                                Required for receiving payouts
-                            </Text>
-                        </TouchableOpacity>
-                    )}
-                </View>
-
                 {/* Info Note */}
                 <View style={styles.infoNote}>
                     <Ionicons name="information-circle" size={20} color={COLORS.textDim} />
                     <Text style={styles.infoText}>
-                        Payouts are processed within 2-3 business days. Minimum payout is $10.
+                        Payouts are processed via Stripe within 2-3 business days. Minimum payout is $10. Stripe handles all identity verification and banking securely.
                     </Text>
                 </View>
             </ScrollView>
@@ -506,13 +484,162 @@ const styles = StyleSheet.create({
         color: COLORS.text,
         fontSize: 17,
         fontWeight: '700',
+        marginBottom: 12,
     },
     addLink: {
         color: COLORS.accent,
         fontSize: 14,
         fontWeight: '600',
+        marginBottom: 12,
     },
 
+    // Stripe Connected Card
+    stripeCard: {
+        backgroundColor: COLORS.surface,
+        borderRadius: 16,
+        padding: 16,
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    stripeIconContainer: { marginRight: 12 },
+    stripeTitle: { color: COLORS.text, fontSize: 16, fontWeight: '600' },
+    stripeSubtitle: { color: COLORS.textDim, fontSize: 13, marginTop: 2 },
+
+    // Stripe Setup Card
+    stripeSetupCard: {
+        backgroundColor: COLORS.surface,
+        borderRadius: 16,
+        padding: 20,
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: COLORS.border,
+    },
+    stripeSetupIcon: {
+        width: 64,
+        height: 64,
+        borderRadius: 32,
+        backgroundColor: `${COLORS.accent}15`,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 12,
+    },
+    stripeSetupTitle: {
+        color: COLORS.text,
+        fontSize: 18,
+        fontWeight: '700',
+        marginBottom: 8,
+        textAlign: 'center',
+    },
+    stripeSetupDesc: {
+        color: COLORS.textDim,
+        fontSize: 13,
+        textAlign: 'center',
+        lineHeight: 18,
+        marginBottom: 16,
+    },
+    requirementsList: {
+        width: '100%',
+        marginBottom: 20,
+    },
+    requirementItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 6,
+        gap: 10,
+    },
+    requirementText: {
+        color: COLORS.text,
+        fontSize: 14,
+    },
+    stripeSetupBtn: {
+        backgroundColor: COLORS.accent,
+        paddingHorizontal: 28,
+        paddingVertical: 14,
+        borderRadius: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    stripeSetupBtnText: {
+        color: '#fff',
+        fontSize: 16,
+        fontWeight: '700',
+    },
+
+    // GST Form
+    gstForm: {
+        backgroundColor: COLORS.surface,
+        borderRadius: 16,
+        padding: 16,
+    },
+    gstCard: {
+        backgroundColor: COLORS.surface,
+        borderRadius: 16,
+        padding: 16,
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    gstLabel: {
+        color: COLORS.textDim,
+        fontSize: 12,
+    },
+    gstValue: {
+        color: COLORS.text,
+        fontSize: 15,
+        fontWeight: '500',
+        marginTop: 2,
+    },
+    gstHelpText: {
+        color: COLORS.textDim,
+        fontSize: 12,
+        lineHeight: 17,
+        marginBottom: 12,
+        marginTop: 4,
+    },
+    gstNote: {
+        color: COLORS.textDim,
+        fontSize: 11,
+        marginTop: 8,
+        fontStyle: 'italic',
+    },
+    gstFormButtons: {
+        flexDirection: 'row',
+        gap: 12,
+        marginTop: 16,
+    },
+    cancelBtn: {
+        flex: 1,
+        paddingVertical: 12,
+        borderRadius: 10,
+        backgroundColor: COLORS.surfaceLight,
+        alignItems: 'center',
+    },
+    cancelBtnText: { color: COLORS.textDim, fontSize: 14, fontWeight: '600' },
+    saveBtn: {
+        flex: 2,
+        paddingVertical: 12,
+        borderRadius: 10,
+        backgroundColor: COLORS.accent,
+        alignItems: 'center',
+    },
+    saveBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+
+    inputLabel: {
+        color: COLORS.text,
+        fontSize: 13,
+        marginBottom: 4,
+        fontWeight: '600',
+    },
+    textInput: {
+        backgroundColor: COLORS.surfaceLight,
+        borderRadius: 12,
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        fontSize: 15,
+        color: COLORS.text,
+    },
+
+    // Payout
     payoutCard: {
         backgroundColor: COLORS.surface,
         borderRadius: 16,
@@ -553,150 +680,6 @@ const styles = StyleSheet.create({
         color: COLORS.accent,
         fontSize: 13,
         marginTop: 8,
-    },
-
-    bankForm: {
-        backgroundColor: COLORS.surface,
-        borderRadius: 16,
-        padding: 16,
-    },
-    inputGroup: {
-        marginBottom: 16,
-    },
-    inputLabel: {
-        color: COLORS.textDim,
-        fontSize: 12,
-        marginBottom: 6,
-        fontWeight: '500',
-    },
-    textInput: {
-        backgroundColor: COLORS.surfaceLight,
-        borderRadius: 12,
-        paddingHorizontal: 14,
-        paddingVertical: 12,
-        fontSize: 15,
-        color: COLORS.text,
-    },
-    inputRow: {
-        flexDirection: 'row',
-        gap: 12,
-    },
-    typeSelector: {
-        flexDirection: 'row',
-        gap: 12,
-    },
-    typeOption: {
-        flex: 1,
-        paddingVertical: 12,
-        borderRadius: 12,
-        backgroundColor: COLORS.surfaceLight,
-        alignItems: 'center',
-    },
-    typeOptionActive: {
-        backgroundColor: COLORS.accent,
-    },
-    typeOptionText: {
-        color: COLORS.text,
-        fontSize: 14,
-        fontWeight: '600',
-    },
-    typeOptionTextActive: {
-        color: '#fff',
-    },
-    formButtons: {
-        flexDirection: 'row',
-        gap: 12,
-        marginTop: 8,
-    },
-    deleteButton: {
-        flex: 1,
-        paddingVertical: 14,
-        borderRadius: 12,
-        backgroundColor: 'rgba(255,71,87,0.1)',
-        alignItems: 'center',
-    },
-    deleteButtonText: {
-        color: COLORS.danger,
-        fontSize: 14,
-        fontWeight: '600',
-    },
-    saveButton: {
-        flex: 2,
-        paddingVertical: 14,
-        borderRadius: 12,
-        backgroundColor: COLORS.accent,
-        alignItems: 'center',
-    },
-    saveButtonText: {
-        color: '#fff',
-        fontSize: 14,
-        fontWeight: '600',
-    },
-    cancelButton: {
-        alignItems: 'center',
-        marginTop: 12,
-        padding: 8,
-    },
-    cancelButtonText: {
-        color: COLORS.textDim,
-        fontSize: 14,
-    },
-
-    bankCard: {
-        backgroundColor: COLORS.surface,
-        borderRadius: 16,
-        padding: 16,
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    bankIcon: {
-        width: 48,
-        height: 48,
-        borderRadius: 12,
-        backgroundColor: 'rgba(0,212,170,0.1)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginRight: 14,
-    },
-    bankInfo: { flex: 1 },
-    bankName: {
-        color: COLORS.text,
-        fontSize: 16,
-        fontWeight: '600',
-    },
-    bankAccount: {
-        color: COLORS.textDim,
-        fontSize: 13,
-        marginTop: 2,
-    },
-    bankHolder: {
-        color: COLORS.textDim,
-        fontSize: 12,
-        marginTop: 2,
-    },
-    verifiedBadge: {
-        marginLeft: 8,
-    },
-
-    addBankCard: {
-        backgroundColor: COLORS.surface,
-        borderRadius: 16,
-        padding: 24,
-        alignItems: 'center',
-        borderWidth: 2,
-        borderColor: COLORS.accent,
-        borderStyle: 'dashed',
-    },
-    addBankText: {
-        color: COLORS.accent,
-        fontSize: 16,
-        fontWeight: '600',
-        marginTop: 8,
-    },
-    addBankSubtext: {
-        color: COLORS.textDim,
-        fontSize: 13,
-        marginTop: 4,
     },
 
     infoNote: {

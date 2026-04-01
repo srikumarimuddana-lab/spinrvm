@@ -12,8 +12,26 @@
       "react-native": [
         "./node_modules/react-native"
       ],
+      "react-native-maps": [
+        "./node_modules/react-native-maps"
+      ],
       "expo-constants": [
         "./node_modules/expo-constants"
+      ],
+      "expo-clipboard": [
+        "./node_modules/expo-clipboard"
+      ],
+      "expo-router": [
+        "./node_modules/expo-router"
+      ],
+      "firebase/*": [
+        "./node_modules/firebase/*"
+      ],
+      "@react-native-community/netinfo": [
+        "./node_modules/@react-native-community/netinfo"
+      ],
+      "@supabase/supabase-js": [
+        "./node_modules/@supabase/supabase-js"
       ],
       "expo-notifications": [
         "./node_modules/expo-notifications"
@@ -23,6 +41,9 @@
       ],
       "zustand": [
         "./node_modules/zustand"
+      ],
+      "zustand/middleware": [
+        "./node_modules/zustand/middleware"
       ],
       "expo-secure-store": [
         "./node_modules/expo-secure-store"

@@ -16,6 +16,7 @@ const COLORS = {
   orange: '#FF9500',
   gold: '#FFD700',
   danger: SpinrConfig.theme.colors.error,
+  border: SpinrConfig.theme.colors.border,
 };
 
 interface Rider {
@@ -167,7 +168,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                   style={styles.keypadBtn}
                   onPress={() => {
                     if (key === 'del') {
-                      setOtpInput((prev) => prev.slice(0, -1));
+                      setOtpInput(otpInput.slice(0, -1));
                     } else if (key !== null && otpInput.length < 4) {
                       const newOtp = otpInput + String(key);
                       setOtpInput(newOtp);

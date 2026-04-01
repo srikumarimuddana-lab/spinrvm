@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Alert, Platform, Linking, Animated } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Alert, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { useDriverStore } from '../../store/driverStore';
@@ -11,6 +11,7 @@ import {
   MapControls,
 } from '../../components/dashboard';
 import { useDriverDashboard } from '../../hooks/useDriverDashboard';
+import { CarMarker } from '../../components/CarMarker';
 import SpinrConfig from '@shared/config/spinr.config';
 
 // Use Google Maps on Android, Apple Maps (native) on iOS
@@ -24,7 +25,8 @@ const COLORS = {
 };
 
 export default function DriverDashboard() {
-  const { user, driver: driverData } = useDriverStore();
+  const driverData = (useDriverStore() as any).driver ?? null;
+  const user = (useDriverStore() as any).user ?? null;
   const {
     rideState,
     incomingRide,
@@ -59,7 +61,6 @@ export default function DriverDashboard() {
   } = useDriverDashboard();
 
   const [countdown, setCountdownState] = useState(countdownSeconds);
-
   // Countdown timer effect
   useEffect(() => {
     if (rideState === 'ride_offered' && countdown > 0) {
@@ -172,6 +173,15 @@ export default function DriverDashboard() {
     );
   };
 
+  if (!location?.coords) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color={COLORS.accent} />
+        <Text style={{ color: COLORS.text, marginTop: 12, fontSize: 15 }}>Getting your location...</Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       {/* Map */}
@@ -180,12 +190,12 @@ export default function DriverDashboard() {
         style={styles.map}
         provider={MAP_PROVIDER}
         initialRegion={{
-          latitude: location?.coords.latitude || 52.1332,
-          longitude: location?.coords.longitude || -106.6700,
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
           latitudeDelta: 0.04,
           longitudeDelta: 0.04,
         }}
-        showsUserLocation
+        showsUserLocation={false}
         showsMyLocationButton={false}
         onRegionChange={(region) => {
           currentRegionRef.current = {
@@ -194,6 +204,17 @@ export default function DriverDashboard() {
           };
         }}
       >
+        {/* Driver car marker */}
+        {location?.coords && (
+          <CarMarker
+            coordinate={{
+              latitude: location.coords.latitude,
+              longitude: location.coords.longitude,
+            }}
+            heading={location.coords.heading}
+            isOnline={isOnline}
+          />
+        )}
         {getMapMarkers()}
       </MapView>
 
@@ -212,7 +233,7 @@ export default function DriverDashboard() {
         <DriverIdlePanel
           isOnline={isOnline}
           driverData={driverData}
-          earnings={earnings}
+          earnings={earnings ?? undefined}
           onToggleOnline={toggleOnline}
           pulseAnim={pulseAnim}
         />

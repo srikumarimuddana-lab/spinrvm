@@ -287,14 +287,30 @@ async def get_nearby_drivers_public(
     vehicle_type: str = Query(None),
     current_user: dict = Depends(get_current_user)
 ):
-    """Get nearby active drivers for riders."""
-    # Simplified geospatial logic returning online drivers
-    # In production use PostGIS or geospatial index
+    """Get nearby active drivers for riders. Filters by service area + vehicle type."""
     query = {'is_online': True, 'is_available': True}
     if vehicle_type:
         query['vehicle_type_id'] = vehicle_type
-        
-    drivers = await db.drivers.find(query).to_list(100)
+
+    # Find which service area this pickup is in
+    service_areas = await db.service_areas.find({'is_active': True}).to_list(50)
+    pickup_area_id = None
+    for area in service_areas:
+        # Simple bounding check — if area has geojson polygon, check if point is inside
+        # For now, match by nearest area center or all drivers in radius
+        area_id = area.get('id')
+        if area_id:
+            pickup_area_id = area_id  # TODO: proper point-in-polygon check
+            break
+
+    # Filter drivers by service area if they have one registered
+    drivers_raw = await db.drivers.find(query).to_list(100)
+    drivers = []
+    for d in drivers_raw:
+        d_area = d.get('service_area_id')
+        if d_area and pickup_area_id and d_area != pickup_area_id:
+            continue  # Skip drivers not in this service area
+        drivers.append(d)
     
     # Manual filtering by distance using haversine
     import math

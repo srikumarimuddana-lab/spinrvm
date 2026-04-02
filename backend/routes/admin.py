@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Query, HTTPException, Header  # type: ignore
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pydantic import BaseModel  # type: ignore
 from datetime import datetime, timedelta
 import jwt

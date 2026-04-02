@@ -138,13 +138,26 @@ export default function ServiceAreasPage() {
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={createForm.is_active} onChange={e => setCreateForm({...createForm, is_active: e.target.checked})} className="accent-red-500" /> Active</label>
           </div>
 
-          {createForm.polygon.length > 0 && (
-            <div className="h-48 rounded-xl overflow-hidden mb-4 border">
+          {/* Geofence Map — always visible, draw polygon or select preset */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-600 mb-2">
+              Service Area Boundary {createForm.polygon.length === 0 && <span className="text-red-500">(select a preset or draw on the map)</span>}
+            </label>
+            <div className="h-64 rounded-xl overflow-hidden border">
               <Suspense fallback={<div className="h-full bg-gray-100 flex items-center justify-center text-gray-400">Loading map...</div>}>
-                <GeofenceMap key={mapKey} polygon={createForm.polygon} center={CITY_PRESETS[createForm.preset]?.center} onPolygonChange={(p: any) => setCreateForm({...createForm, polygon: p, polygonText: polygonToText(p)})} />
+                <GeofenceMap
+                  key={mapKey}
+                  polygon={createForm.polygon}
+                  center={CITY_PRESETS[createForm.preset]?.center || { lat: 52.13, lng: -106.67 }}
+                  zoom={createForm.polygon.length > 0 ? 11 : 5}
+                  onPolygonChange={(p: any) => setCreateForm({...createForm, polygon: p, polygonText: polygonToText(p)})}
+                />
               </Suspense>
             </div>
-          )}
+            {createForm.polygon.length > 0 && (
+              <p className="text-xs text-green-600 mt-1">{createForm.polygon.length} points defined</p>
+            )}
+          </div>
 
           <div className="flex gap-3">
             <button onClick={handleCreate} className="bg-red-500 text-white px-6 py-2.5 rounded-xl font-semibold hover:bg-red-600">Create</button>

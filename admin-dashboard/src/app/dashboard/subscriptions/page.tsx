@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getSubscriptionPlans, createSubscriptionPlan, updateSubscriptionPlan, deleteSubscriptionPlan, getDriverSubscriptions } from "@/lib/api";
-import { CreditCard, Plus, Edit, Trash2, Users, Infinity, ToggleLeft, ToggleRight } from "lucide-react";
+import { getSubscriptionPlans, createSubscriptionPlan, updateSubscriptionPlan, deleteSubscriptionPlan, getDriverSubscriptions, getServiceAreas } from "@/lib/api";
+import { CreditCard, Plus, Edit, Trash2, Users, Infinity, ToggleLeft, ToggleRight, MapPin, X } from "lucide-react";
 
 interface Plan {
   id: string;
@@ -28,15 +28,18 @@ const DURATION_OPTIONS = [
 export default function SubscriptionsPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [subs, setSubs] = useState<any[]>([]);
+  const [areas, setAreas] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"plans" | "subscribers">("plans");
+  const [areaSearch, setAreaSearch] = useState("");
 
   // Form
   const [form, setForm] = useState({
     name: "", price: "", duration_days: 30, rides_per_day: -1,
-    description: "", features: "" as string, service_areas: "" as string,
+    description: "", features: "" as string,
+    selectedAreaIds: [] as string[],
     is_active: true,
   });
 
@@ -45,8 +48,8 @@ export default function SubscriptionsPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const [p, s] = await Promise.all([getSubscriptionPlans(), getDriverSubscriptions()]);
-      setPlans(p); setSubs(s);
+      const [p, s, a] = await Promise.all([getSubscriptionPlans(), getDriverSubscriptions(), getServiceAreas().catch(() => [])]);
+      setPlans(p); setSubs(s); setAreas(a);
     } catch {}
     setLoading(false);
   };
@@ -60,7 +63,7 @@ export default function SubscriptionsPage() {
       rides_per_day: form.rides_per_day,
       description: form.description,
       features: form.features ? form.features.split(",").map(f => f.trim()).filter(Boolean) : [],
-      service_areas: form.service_areas ? form.service_areas.split(",").map(a => a.trim()).filter(Boolean) : null,
+      service_areas: form.selectedAreaIds.length > 0 ? form.selectedAreaIds : null,
       is_active: form.is_active,
     };
     try {
@@ -81,7 +84,7 @@ export default function SubscriptionsPage() {
       name: p.name, price: String(p.price), duration_days: p.duration_days,
       rides_per_day: p.rides_per_day, description: p.description || "",
       features: (p.features || []).join(", "),
-      service_areas: (p.service_areas || []).join(", "),
+      selectedAreaIds: p.service_areas || [],
       is_active: p.is_active,
     });
     setShowForm(true);
@@ -99,7 +102,7 @@ export default function SubscriptionsPage() {
 
   const resetForm = () => {
     setShowForm(false); setEditingId(null);
-    setForm({ name: "", price: "", duration_days: 30, rides_per_day: -1, description: "", features: "", service_areas: "", is_active: true });
+    setForm({ name: "", price: "", duration_days: 30, rides_per_day: -1, description: "", features: "", selectedAreaIds: [], is_active: true }); setAreaSearch("");
   };
 
   const getDurationLabel = (days: number) => DURATION_OPTIONS.find(d => d.value === days)?.label || `${days} days`;
@@ -179,8 +182,46 @@ export default function SubscriptionsPage() {
               <input className="w-full border rounded-xl px-4 py-2.5 text-sm" placeholder="Priority support, Surge protection, Earnings boost" value={form.features} onChange={e => setForm({...form, features: e.target.value})} />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-600 mb-1">Service Areas (IDs, comma-separated — leave blank for all)</label>
-              <input className="w-full border rounded-xl px-4 py-2.5 text-sm" placeholder="Leave blank for all areas" value={form.service_areas} onChange={e => setForm({...form, service_areas: e.target.value})} />
+              <label className="block text-sm font-medium text-gray-600 mb-1">Service Areas (leave empty for all)</label>
+              {/* Selected areas */}
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {form.selectedAreaIds.map(id => {
+                  const area = areas.find(a => a.id === id);
+                  return (
+                    <span key={id} className="flex items-center gap-1 bg-red-50 text-red-700 px-2.5 py-1 rounded-lg text-xs font-semibold">
+                      <MapPin className="h-3 w-3" />
+                      {area?.name || id.slice(0,8)}
+                      <button onClick={() => setForm({...form, selectedAreaIds: form.selectedAreaIds.filter(a => a !== id)})} className="hover:text-red-900">
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  );
+                })}
+                {form.selectedAreaIds.length === 0 && <span className="text-xs text-gray-400">All areas (no restriction)</span>}
+              </div>
+              {/* Search + dropdown */}
+              <div className="relative">
+                <input className="w-full border rounded-xl px-4 py-2.5 text-sm" placeholder="Search city or area name..."
+                  value={areaSearch} onChange={e => setAreaSearch(e.target.value)} />
+                {areaSearch && (
+                  <div className="absolute z-10 top-full left-0 right-0 mt-1 bg-white border rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                    {areas.filter(a =>
+                      a.name?.toLowerCase().includes(areaSearch.toLowerCase()) ||
+                      a.city?.toLowerCase().includes(areaSearch.toLowerCase())
+                    ).filter(a => !form.selectedAreaIds.includes(a.id)).map(a => (
+                      <button key={a.id} onClick={() => { setForm({...form, selectedAreaIds: [...form.selectedAreaIds, a.id]}); setAreaSearch(""); }}
+                        className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center gap-2 border-b last:border-0">
+                        <MapPin className="h-3.5 w-3.5 text-gray-400" />
+                        <span className="font-medium">{a.name}</span>
+                        {a.city && <span className="text-gray-400 text-xs">{a.city}, {a.province}</span>}
+                      </button>
+                    ))}
+                    {areas.filter(a => a.name?.toLowerCase().includes(areaSearch.toLowerCase())).filter(a => !form.selectedAreaIds.includes(a.id)).length === 0 && (
+                      <p className="px-4 py-3 text-sm text-gray-400">No matching areas</p>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 

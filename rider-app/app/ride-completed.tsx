@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput,
-  Alert, Platform, ActivityIndicator, BackHandler,
+  Alert, Platform, ActivityIndicator, BackHandler, Share,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -55,6 +55,42 @@ export default function RideCompletedScreen() {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
     return () => sub.remove();
   }, []);
+
+  const handleShareInvoice = async () => {
+    const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
+    const total = fare + tipAmount;
+    const invoice = [
+      `SPINR RIDE RECEIPT`,
+      `──────────────────`,
+      `Date: ${currentRide?.ride_completed_at ? new Date(currentRide.ride_completed_at).toLocaleString() : new Date().toLocaleString()}`,
+      ``,
+      `Pickup: ${currentRide?.pickup_address || '—'}`,
+      `Dropoff: ${currentRide?.dropoff_address || '—'}`,
+      `Distance: ${distance.toFixed(1)} km`,
+      `Duration: ${duration} min`,
+      ``,
+      `Base fare:     $${(currentRide?.base_fare || 0).toFixed(2)}`,
+      `Distance:      $${(currentRide?.distance_fare || 0).toFixed(2)}`,
+      `Time:          $${(currentRide?.time_fare || 0).toFixed(2)}`,
+      `Booking fee:   $${(currentRide?.booking_fee || 0).toFixed(2)}`,
+      tipAmount > 0 ? `Tip:           $${tipAmount.toFixed(2)}` : '',
+      `──────────────────`,
+      `TOTAL:         $${total.toFixed(2)} CAD`,
+      ``,
+      `Payment: Card •••• ${currentRide?.card_last4 || '4242'}`,
+      ``,
+      `Driver: ${currentDriver?.name || 'Driver'}`,
+      `Vehicle: ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || ''} ${currentDriver?.vehicle_model || ''}`,
+      `Plate: ${currentDriver?.license_plate || '—'}`,
+      ``,
+      `Spinr Technologies Inc. · Saskatoon, SK`,
+      `support@spinr.ca`,
+    ].filter(Boolean).join('\n');
+
+    try {
+      await Share.share({ message: invoice, title: 'Spinr Ride Receipt' });
+    } catch {}
+  };
 
   // Payment is processed when rider taps "Done" — includes tip amount
 
@@ -111,8 +147,15 @@ export default function RideCompletedScreen() {
           </Text>
         </View>
 
+        {/* Invoice Button */}
+        <TouchableOpacity style={styles.invoiceBtn} onPress={handleShareInvoice}>
+          <Ionicons name="receipt-outline" size={18} color={COLORS.primary} />
+          <Text style={styles.invoiceBtnText}>Download / Share Invoice</Text>
+          <Ionicons name="share-outline" size={16} color="#999" />
+        </TouchableOpacity>
+
         {/* Route Map */}
-        {currentRide?.pickup_lat && currentRide?.dropoff_lat && (
+        {currentRide && Number(currentRide.pickup_lat) && Number(currentRide.dropoff_lat) && (
           <View style={styles.mapCard}>
             <MapView
               ref={mapRef}
@@ -123,10 +166,10 @@ export default function RideCompletedScreen() {
               rotateEnabled={false}
               pitchEnabled={false}
               initialRegion={{
-                latitude: (currentRide.pickup_lat + currentRide.dropoff_lat) / 2,
-                longitude: (currentRide.pickup_lng + currentRide.dropoff_lng) / 2,
-                latitudeDelta: Math.abs(currentRide.pickup_lat - currentRide.dropoff_lat) * 2 + 0.01,
-                longitudeDelta: Math.abs(currentRide.pickup_lng - currentRide.dropoff_lng) * 2 + 0.01,
+                latitude: (Number(currentRide.pickup_lat) + Number(currentRide.dropoff_lat)) / 2,
+                longitude: (Number(currentRide.pickup_lng) + Number(currentRide.dropoff_lng)) / 2,
+                latitudeDelta: Math.abs(Number(currentRide.pickup_lat) - Number(currentRide.dropoff_lat)) * 2.5 + 0.01,
+                longitudeDelta: Math.abs(Number(currentRide.pickup_lng) - Number(currentRide.dropoff_lng)) * 2.5 + 0.01,
               }}
             >
               {/* Fetch route */}
@@ -359,9 +402,17 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: '800', color: '#1A1A1A', marginBottom: 4 },
   subtitle: { fontSize: 14, color: '#888' },
 
+  // Invoice
+  invoiceBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',
+    backgroundColor: '#F9F9F9', borderRadius: 14, padding: 14, marginBottom: 16,
+    borderWidth: 1, borderColor: '#ECECEC',
+  },
+  invoiceBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#1A1A1A' },
+
   // Route Map
   mapCard: {
-    width: '100%', height: 180, borderRadius: 18, overflow: 'hidden',
+    width: '100%', height: 220, borderRadius: 18, overflow: 'hidden',
     marginBottom: 16, backgroundColor: '#F0F0F0',
   },
   map: { flex: 1 },

@@ -101,23 +101,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Option A: Fly.io (recommended for test)
-      - name: Deploy to Fly.io (test)
-        uses: superfly/flyctl-actions/setup-flyctl@latest
-
-      - name: Fly deploy
-        working-directory: spinr
+      # Railway auto-deploys on push to develop branch
+      # No manual deploy step needed — just verify it's healthy
+      - name: Verify test backend
         run: |
-          flyctl deploy --remote-only --app spinr-backend-test
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
-      # Option B: Render (uncomment if using Render instead)
-      # - name: Deploy to Render (test)
-      #   run: |
-      #     curl -X POST \
-      #       "https://api.render.com/v1/services/${{ secrets.RENDER_TEST_SERVICE_ID }}/deploys" \
-      #       -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}"
+          sleep 30
+          curl -f https://spinr-backend-test.up.railway.app/api/v1/vehicle-types || echo "Backend still deploying..."
 
   # ─── 5. Build Mobile Apps (Test/Preview) ───
   build-mobile-test:

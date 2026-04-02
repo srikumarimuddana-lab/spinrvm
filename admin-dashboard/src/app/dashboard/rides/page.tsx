@@ -70,7 +70,7 @@ export default function RidesPage() {
                         <h1 className="text-2xl font-bold">Rides</h1>
                         <p className="text-sm text-muted-foreground">{rides.length} total rides</p>
                     </div>
-                    <button onClick={() => exportToCsv("rides", filtered, ["id","pickup_address","dropoff_address","status","total_fare","created_at"])}
+                    <button onClick={() => exportToCsv("rides", filtered, [{key:"id",label:"ID"},{key:"pickup_address",label:"Pickup"},{key:"dropoff_address",label:"Dropoff"},{key:"status",label:"Status"},{key:"total_fare",label:"Fare"},{key:"created_at",label:"Date"}])}
                         className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition px-3 py-1.5 rounded-lg hover:bg-muted">
                         <Download className="h-4 w-4" /> Export
                     </button>

@@ -148,7 +148,8 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
 async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict:
     """Require the caller to be an authenticated admin."""
-    if current_user.get('role') != 'admin':
+    role = current_user.get('role', '')
+    if role not in ('admin', 'super_admin', 'operations', 'support', 'finance', 'custom'):
         raise HTTPException(status_code=403, detail='Admin access required')
     return current_user
 

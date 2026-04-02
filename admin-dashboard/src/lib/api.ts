@@ -422,3 +422,35 @@ export const updateHeatMapSettings = (data: Partial<HeatMapSettings>) =>
         method: "PUT",
         body: JSON.stringify(data),
     });
+
+/* ── Staff Management ──────────────────────── */
+export const getStaff = () =>
+    request<any[]>("/api/admin/staff");
+
+export const createStaff = (data: { email: string; password: string; first_name: string; last_name: string; role: string; modules?: string[] }) =>
+    request<any>("/api/admin/staff", { method: "POST", body: JSON.stringify(data) });
+
+export const updateStaff = (id: string, data: any) =>
+    request<any>(`/api/admin/staff/${id}`, { method: "PUT", body: JSON.stringify(data) });
+
+export const deleteStaff = (id: string) =>
+    request<any>(`/api/admin/staff/${id}`, { method: "DELETE" });
+
+export const getStaffModules = () =>
+    request<{ modules: string[]; role_presets: Record<string, string[]> }>("/api/admin/staff/modules/list");
+
+/* ── Spinr Pass — Subscription Plans ──────── */
+export const getSubscriptionPlans = () =>
+    request<any[]>("/api/admin/subscription-plans");
+
+export const createSubscriptionPlan = (data: any) =>
+    request<any>("/api/admin/subscription-plans", { method: "POST", body: JSON.stringify(data) });
+
+export const updateSubscriptionPlan = (id: string, data: any) =>
+    request<any>(`/api/admin/subscription-plans/${id}`, { method: "PUT", body: JSON.stringify(data) });
+
+export const deleteSubscriptionPlan = (id: string) =>
+    request<any>(`/api/admin/subscription-plans/${id}`, { method: "DELETE" });
+
+export const getDriverSubscriptions = (status?: string) =>
+    request<any[]>(`/api/admin/driver-subscriptions${status ? `?status=${status}` : ''}`);

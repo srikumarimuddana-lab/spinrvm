@@ -8,6 +8,7 @@ interface User {
     first_name?: string;
     last_name?: string;
     role: string;
+    modules?: string[];
     profile_complete?: boolean;
 }
 

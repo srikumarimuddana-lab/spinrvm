@@ -322,10 +322,23 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     } catch (err: any) {
       console.log('Toggle online error:', err);
       setIsOnline(!next);
-      Alert.alert(
-        "Cannot Go Online",
-        err.response?.data?.detail || "Failed to update status. Please try again."
-      );
+
+      // 402 = no subscription
+      if (err.response?.status === 402) {
+        Alert.alert(
+          "Spinr Pass Required",
+          err.response?.data?.detail || "You need an active subscription to go online.",
+          [
+            { text: "Subscribe", onPress: () => router.push('/driver/subscription' as any) },
+            { text: "Cancel", style: "cancel" },
+          ]
+        );
+      } else {
+        Alert.alert(
+          "Cannot Go Online",
+          err.response?.data?.detail || "Failed to update status. Please try again."
+        );
+      }
     }
   };
 

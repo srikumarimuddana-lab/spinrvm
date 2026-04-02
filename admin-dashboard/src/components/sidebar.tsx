@@ -24,36 +24,42 @@ import {
     Menu,
     FileText,
     X,
+    CreditCard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import { useAuthStore } from "@/store/authStore";
 
+// Each nav item maps to a module key for access control
 const NAV = [
-    { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-    { href: "/dashboard/drivers", label: "Drivers", icon: Users },
-    { href: "/dashboard/corporate-accounts", label: "Corporate Accounts", icon: Building2 },
-    { href: "/dashboard/rides", label: "Rides", icon: Car },
-    { href: "/dashboard/earnings", label: "Earnings", icon: DollarSign },
-    { href: "/dashboard/promotions", label: "Promotions", icon: Ticket },
-    { href: "/dashboard/disputes", label: "Disputes", icon: HelpCircle },
-    { href: "/dashboard/users", label: "Users", icon: Users },
-    { href: "/dashboard/surge", label: "Surge Pricing", icon: TrendingUp },
-    { href: "/dashboard/heatmap", label: "Heat Map", icon: Flame },
-    { href: "/dashboard/pricing", label: "Pricing", icon: Banknote },
-    { href: "/dashboard/service-areas", label: "Service Areas", icon: MapPin },
-    { href: "/dashboard/vehicle-types", label: "Vehicle Types", icon: Car },
-    { href: "/dashboard/support", label: "Support", icon: LifeBuoy },
-    { href: "/dashboard/documents", label: "Documents", icon: FileText },
-    { href: "/dashboard/notifications", label: "Notifications", icon: Bell },
-    { href: "/dashboard/settings", label: "Settings", icon: Settings },
+    { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, module: "dashboard" },
+    { href: "/dashboard/users", label: "Users", icon: Users, module: "users" },
+    { href: "/dashboard/drivers", label: "Drivers", icon: Users, module: "drivers" },
+    { href: "/dashboard/rides", label: "Rides", icon: Car, module: "rides" },
+    { href: "/dashboard/earnings", label: "Earnings", icon: DollarSign, module: "earnings" },
+    { href: "/dashboard/service-areas", label: "Service Areas", icon: MapPin, module: "service_areas" },
+    { href: "/dashboard/subscriptions", label: "Spinr Pass", icon: CreditCard, module: "pricing" },
+    { href: "/dashboard/promotions", label: "Promotions", icon: Ticket, module: "promotions" },
+    { href: "/dashboard/corporate-accounts", label: "Corporate", icon: Building2, module: "corporate_accounts" },
+    { href: "/dashboard/heatmap", label: "Heat Map", icon: Flame, module: "heatmap" },
+    { href: "/dashboard/support", label: "Support", icon: LifeBuoy, module: "support" },
+    { href: "/dashboard/disputes", label: "Disputes", icon: HelpCircle, module: "disputes" },
+    { href: "/dashboard/documents", label: "Documents", icon: FileText, module: "documents" },
+    { href: "/dashboard/notifications", label: "Notifications", icon: Bell, module: "notifications" },
+    { href: "/dashboard/settings", label: "Settings", icon: Settings, module: "settings" },
+    { href: "/dashboard/staff", label: "Staff", icon: Users, module: "staff" },
 ];
 
 export function Sidebar() {
     const pathname = usePathname();
     const router = useRouter();
     const [open, setOpen] = useState(false);
-    const { logout } = useAuthStore();
+    const { logout, user } = useAuthStore();
+
+    // Filter nav items based on user's module access
+    const userModules = user?.modules || [];
+    const isSuperAdmin = user?.role === 'super_admin' || user?.role === 'admin';
+    const filteredNav = isSuperAdmin ? NAV : NAV.filter(item => userModules.includes(item.module));
 
     const handleLogout = () => {
         logout();
@@ -100,7 +106,7 @@ export function Sidebar() {
                 {/* Nav links */}
                 <div className="flex-1 overflow-y-auto">
                     <nav className="flex flex-col gap-1 p-3">
-                        {NAV.map((item) => {
+                        {filteredNav.map((item) => {
                         const active =
                             pathname === item.href ||
                             (item.href !== "/dashboard" && pathname.startsWith(item.href));

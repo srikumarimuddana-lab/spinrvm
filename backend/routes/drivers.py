@@ -1251,8 +1251,187 @@ async def update_driver_status(
                 detail='Your driver profile has not been verified yet. Please wait for admin approval.'
             )
 
+        # Check active Spinr Pass subscription
+        sub = await db.driver_subscriptions.find_one({
+            'driver_id': driver_id,
+            'status': 'active',
+        })
+        if not sub:
+            raise HTTPException(
+                status_code=402,
+                detail='You need an active Spinr Pass subscription to go online. Subscribe from your dashboard.'
+            )
+        # Check expiry
+        if sub.get('expires_at'):
+            try:
+                exp = datetime.fromisoformat(str(sub['expires_at']).replace('Z', '+00:00').replace('+00:00', ''))
+                if exp < datetime.utcnow():
+                    await db.driver_subscriptions.update_one({'id': sub['id']}, {'$set': {'status': 'expired'}})
+                    raise HTTPException(status_code=402, detail='Your Spinr Pass has expired. Please renew to go online.')
+            except HTTPException:
+                raise
+            except:
+                pass
+
     await db.drivers.update_one(
         {'id': driver_id},
         {'$set': {'is_online': is_online, 'updated_at': datetime.utcnow()}}
     )
     return {'success': True, 'is_online': is_online}
+
+
+# ============================================================
+# Spinr Pass — Driver Subscription
+# ============================================================
+
+@api_router.get("/subscription/plans")
+async def get_subscription_plans(current_user: dict = Depends(get_current_user)):
+    """Get available subscription plans for the driver's service area."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+
+    plans = await db.subscription_plans.find({'is_active': True}).to_list(50)
+
+    # Filter by driver's service area if plans have area restrictions
+    if driver:
+        driver_area = driver.get('service_area_id')
+        filtered = []
+        for p in plans:
+            plan_areas = p.get('service_areas')
+            if plan_areas is None or (driver_area and driver_area in plan_areas):
+                filtered.append(p)
+            elif not plan_areas:  # empty list = all areas
+                filtered.append(p)
+        plans = filtered
+
+    return plans
+
+
+@api_router.get("/subscription/current")
+async def get_current_subscription(current_user: dict = Depends(get_current_user)):
+    """Get driver's active subscription."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        return {'has_subscription': False, 'subscription': None}
+
+    sub = await db.driver_subscriptions.find_one({
+        'driver_id': driver['id'],
+        'status': 'active',
+    })
+
+    if not sub:
+        return {'has_subscription': False, 'subscription': None}
+
+    # Check if expired
+    if sub.get('expires_at'):
+        from datetime import datetime
+        try:
+            exp = datetime.fromisoformat(str(sub['expires_at']).replace('Z', '+00:00'))
+            if exp.tzinfo:
+                exp = exp.replace(tzinfo=None)
+            if exp < datetime.utcnow():
+                await db.driver_subscriptions.update_one(
+                    {'id': sub['id']},
+                    {'$set': {'status': 'expired'}}
+                )
+                return {'has_subscription': False, 'subscription': None, 'expired': True}
+        except:
+            pass
+
+    # Get today's ride count
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_rides = await db.rides.count_documents({
+        'driver_id': driver['id'],
+        'status': 'completed',
+        'ride_completed_at': {'$gte': today_start.isoformat()},
+    })
+
+    rides_per_day = sub.get('rides_per_day', -1)
+    rides_remaining = 'unlimited' if rides_per_day == -1 else max(0, rides_per_day - today_rides)
+
+    return {
+        'has_subscription': True,
+        'subscription': sub,
+        'today_rides': today_rides,
+        'rides_remaining': rides_remaining,
+        'can_accept_rides': rides_per_day == -1 or today_rides < rides_per_day,
+    }
+
+
+@api_router.post("/subscription/subscribe")
+async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_current_user)):
+    """Subscribe driver to a plan."""
+    data = await request.json()
+    plan_id = data.get('plan_id')
+
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    plan = await db.subscription_plans.find_one({'id': plan_id, 'is_active': True})
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found or inactive")
+
+    # Check for existing active subscription
+    existing = await db.driver_subscriptions.find_one({
+        'driver_id': driver['id'],
+        'status': 'active',
+    })
+    if existing:
+        # Cancel old subscription
+        await db.driver_subscriptions.update_one(
+            {'id': existing['id']},
+            {'$set': {'status': 'cancelled', 'cancelled_at': datetime.utcnow().isoformat()}}
+        )
+
+    # Create new subscription
+    now = datetime.utcnow()
+    expires = now + timedelta(days=plan.get('duration_days', 30))
+
+    subscription = {
+        'id': str(uuid.uuid4()),
+        'driver_id': driver['id'],
+        'plan_id': plan['id'],
+        'plan_name': plan['name'],
+        'price': plan['price'],
+        'rides_per_day': plan.get('rides_per_day', -1),
+        'duration_days': plan.get('duration_days', 30),
+        'status': 'active',
+        'started_at': now.isoformat(),
+        'expires_at': expires.isoformat(),
+        'payment_status': 'paid',  # TODO: Stripe charge
+        'created_at': now.isoformat(),
+    }
+
+    await db.driver_subscriptions.insert_one(subscription)
+
+    # Update plan subscriber count
+    await db.subscription_plans.update_one(
+        {'id': plan_id},
+        {'$set': {'subscriber_count': (plan.get('subscriber_count', 0) or 0) + 1}}
+    )
+
+    logger.info(f"Driver {driver['id']} subscribed to {plan['name']} (${plan['price']})")
+
+    return {'success': True, 'subscription': subscription}
+
+
+@api_router.post("/subscription/cancel")
+async def cancel_subscription(current_user: dict = Depends(get_current_user)):
+    """Cancel driver's active subscription."""
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    sub = await db.driver_subscriptions.find_one({
+        'driver_id': driver['id'],
+        'status': 'active',
+    })
+    if not sub:
+        raise HTTPException(status_code=400, detail="No active subscription")
+
+    await db.driver_subscriptions.update_one(
+        {'id': sub['id']},
+        {'$set': {'status': 'cancelled', 'cancelled_at': datetime.utcnow().isoformat()}}
+    )
+
+    return {'success': True}

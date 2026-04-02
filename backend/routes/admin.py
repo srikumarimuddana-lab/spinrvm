@@ -61,12 +61,14 @@ async def get_session(authorization: Optional[str] = Header(None)):
             return SessionResponse(user=None, authenticated=False)
         
         # Return authenticated user info
+        modules = payload.get("modules", [])
         return SessionResponse(
             user={
                 "id": user_id,
                 "email": email,
                 "phone": phone,
-                "role": role or "admin"
+                "role": role or "admin",
+                "modules": modules,
             },
             authenticated=True
         )
@@ -78,26 +80,34 @@ async def get_session(authorization: Optional[str] = Header(None)):
 
 @admin_auth_router.post("/login")
 async def admin_login(request: LoginRequest):
-    """Admin login endpoint"""
-    # Validate credentials from settings
+    """Admin login — supports super admin + staff members with module access."""
+    import hashlib
+    ALL_MODULES = ['dashboard','users','drivers','rides','earnings','promotions','surge','service_areas','vehicle_types','pricing','support','disputes','notifications','settings','corporate_accounts','documents','heatmap','staff']
+
+    # 1. Super admin from env
     if request.email == settings.ADMIN_EMAIL and request.password == settings.ADMIN_PASSWORD:
-        # Include user_id claim for get_current_user to work properly
         token = jwt.encode({
-            "user_id": "admin-001",
-            "email": request.email,
-            "role": "admin",
-            "phone": request.email  # Use email as phone for admin users
+            "user_id": "admin-001", "email": request.email,
+            "role": "super_admin", "modules": ALL_MODULES, "phone": request.email
         }, settings.JWT_SECRET, algorithm=settings.ALGORITHM)
-        return {
-            "user": {
-                "id": "admin-001",
-                "email": request.email,
-                "role": "admin"
-            },
-            "token": token
-        }
-    else:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        return {"user": {"id": "admin-001", "email": request.email, "role": "super_admin", "first_name": "Super", "last_name": "Admin", "modules": ALL_MODULES}, "token": token}
+
+    # 2. Staff member
+    staff = await db.admin_staff.find_one({'email': request.email.lower()})
+    if staff:
+        pw_hash = hashlib.sha256(request.password.encode()).hexdigest()
+        if staff.get('password_hash') == pw_hash:
+            if not staff.get('is_active', True):
+                raise HTTPException(status_code=403, detail="Account is deactivated")
+            await db.admin_staff.update_one({'id': staff['id']}, {'$set': {'last_login': datetime.utcnow().isoformat()}})
+            modules = staff.get('modules', ['dashboard'])
+            token = jwt.encode({
+                "user_id": staff['id'], "email": staff['email'],
+                "role": staff.get('role', 'custom'), "modules": modules, "phone": staff['email']
+            }, settings.JWT_SECRET, algorithm=settings.ALGORITHM)
+            return {"user": {"id": staff['id'], "email": staff['email'], "role": staff.get('role', 'custom'), "first_name": staff.get('first_name', ''), "last_name": staff.get('last_name', ''), "modules": modules}, "token": token}
+
+    raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
 @admin_auth_router.post("/logout")
@@ -148,29 +158,61 @@ async def admin_get_service_areas():
 
 @admin_router.post("/service-areas")
 async def admin_create_service_area(area: Dict[str, Any]):
-    """Create service area."""
+    """Create service area with full configuration."""
     doc = {
+        "id": str(uuid.uuid4()),
         "name": area.get("name"),
+        "city": area.get("city", ""),
+        "province": area.get("province", "SK"),
         "geojson": area.get("geojson"),
         "is_active": area.get("is_active", True),
+
+        # Fees & Taxes
+        "platform_fee": area.get("platform_fee", 0),
+        "city_fee": area.get("city_fee", 0),
+        "airport_fee": area.get("airport_fee", 0),
+        "is_airport": area.get("is_airport", False),
+        "gst_rate": area.get("gst_rate", 5.0),
+        "pst_rate": area.get("pst_rate", 6.0),
+        "insurance_fee_percent": area.get("insurance_fee_percent", 2.0),
+
+        # Vehicle type pricing (list of {vehicle_type_id, base_fare, per_km, per_min, min_fare, booking_fee})
+        "vehicle_pricing": area.get("vehicle_pricing", []),
+
+        # Spinr Pass — which subscription plans are available here
+        "subscription_plan_ids": area.get("subscription_plan_ids", []),
+        "spinr_pass_enabled": area.get("spinr_pass_enabled", True),
+
+        # Surge
+        "surge_enabled": area.get("surge_enabled", False),
+        "surge_multiplier": area.get("surge_multiplier", 1.0),
+
+        # Operational
+        "max_pickup_radius_km": area.get("max_pickup_radius_km", 5.0),
+        "currency": area.get("currency", "CAD"),
+
         "created_at": datetime.utcnow().isoformat(),
     }
     row = await db.service_areas.insert_one(doc)
-    return {"area_id": str(row.get("id") if isinstance(row, dict) else "")}
+    return {"area_id": doc["id"]}
 
 
 @admin_router.put("/service-areas/{area_id}")
 async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
-    """Update service area."""
-    update_payload = {}
-    if area.get("name") is not None:
-        update_payload["name"] = area.get("name")
-    if area.get("geojson") is not None:
-        update_payload["geojson"] = area.get("geojson")
-    if area.get("is_active") is not None:
-        update_payload["is_active"] = area.get("is_active")
-    
+    """Update service area — accepts any field."""
+    # Accept all fields that were sent
+    allowed = [
+        'name', 'city', 'province', 'geojson', 'is_active',
+        'platform_fee', 'city_fee', 'airport_fee', 'is_airport',
+        'gst_rate', 'pst_rate', 'insurance_fee_percent',
+        'vehicle_pricing', 'subscription_plan_ids', 'spinr_pass_enabled',
+        'surge_enabled', 'surge_multiplier',
+        'max_pickup_radius_km', 'currency',
+    ]
+    update_payload = {k: v for k, v in area.items() if k in allowed and v is not None}
+
     if update_payload:
+        update_payload['updated_at'] = datetime.utcnow().isoformat()
         await db.service_areas.update_one(
             {"id": area_id},
             {"$set": update_payload}
@@ -1253,3 +1295,226 @@ async def admin_update_heatmap_settings(data: Dict[str, Any]):
 # in /api/admin/corporate-accounts to ensure consistency and proper validation
 # See routes/corporate_accounts.py for implementation
 
+
+
+# ============================================================
+# Staff Management — Multi-admin with role-based module access
+# ============================================================
+
+AVAILABLE_MODULES = [
+    'dashboard', 'users', 'drivers', 'rides', 'earnings',
+    'promotions', 'surge', 'service_areas', 'vehicle_types',
+    'pricing', 'support', 'disputes', 'notifications',
+    'settings', 'corporate_accounts', 'documents', 'heatmap',
+    'staff',  # Only super_admin can access this
+]
+
+ROLE_PRESETS = {
+    'super_admin': AVAILABLE_MODULES,
+    'operations': ['dashboard', 'rides', 'drivers', 'surge', 'service_areas', 'vehicle_types', 'heatmap'],
+    'support': ['dashboard', 'support', 'disputes', 'notifications', 'users'],
+    'finance': ['dashboard', 'earnings', 'promotions', 'corporate_accounts', 'pricing'],
+}
+
+
+class StaffCreateRequest(BaseModel):
+    email: str
+    password: str
+    first_name: str
+    last_name: str
+    role: str = 'custom'  # super_admin, operations, support, finance, custom
+    modules: Optional[List[str]] = None  # Only used if role=custom
+
+
+class StaffUpdateRequest(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    role: Optional[str] = None
+    modules: Optional[List[str]] = None
+    is_active: Optional[bool] = None
+
+
+@admin_router.get("/staff")
+async def list_staff(authorization: Optional[str] = Header(None)):
+    """List all staff members."""
+    staff = await db.get_rows('admin_staff', limit=100)
+    # Remove passwords from response
+    for s in staff:
+        s.pop('password_hash', None)
+        s.pop('password', None)
+    return staff
+
+
+@admin_router.post("/staff")
+async def create_staff(req: StaffCreateRequest, authorization: Optional[str] = Header(None)):
+    """Create a new staff member with role-based module access."""
+    import hashlib
+
+    # Check if email already exists
+    existing = await db.admin_staff.find_one({'email': req.email.lower()})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered as staff")
+
+    # Determine modules based on role
+    if req.role in ROLE_PRESETS:
+        modules = ROLE_PRESETS[req.role]
+    elif req.role == 'custom' and req.modules:
+        modules = [m for m in req.modules if m in AVAILABLE_MODULES]
+    else:
+        modules = ['dashboard']
+
+    staff = {
+        'id': str(uuid.uuid4()),
+        'email': req.email.lower(),
+        'password_hash': hashlib.sha256(req.password.encode()).hexdigest(),
+        'first_name': req.first_name,
+        'last_name': req.last_name,
+        'role': req.role,
+        'modules': modules,
+        'is_active': True,
+        'created_at': datetime.utcnow().isoformat(),
+        'last_login': None,
+    }
+
+    await db.admin_staff.insert_one(staff)
+    staff.pop('password_hash')
+    return staff
+
+
+@admin_router.get("/staff/{staff_id}")
+async def get_staff(staff_id: str):
+    """Get a single staff member."""
+    s = await db.admin_staff.find_one({'id': staff_id})
+    if not s:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+    s.pop('password_hash', None)
+    s.pop('password', None)
+    return s
+
+
+@admin_router.put("/staff/{staff_id}")
+async def update_staff(staff_id: str, req: StaffUpdateRequest):
+    """Update staff member role/modules/status."""
+    s = await db.admin_staff.find_one({'id': staff_id})
+    if not s:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+
+    updates = {}
+    if req.first_name is not None:
+        updates['first_name'] = req.first_name
+    if req.last_name is not None:
+        updates['last_name'] = req.last_name
+    if req.is_active is not None:
+        updates['is_active'] = req.is_active
+    if req.role is not None:
+        updates['role'] = req.role
+        if req.role in ROLE_PRESETS:
+            updates['modules'] = ROLE_PRESETS[req.role]
+    if req.modules is not None:
+        updates['modules'] = [m for m in req.modules if m in AVAILABLE_MODULES]
+
+    if updates:
+        updates['updated_at'] = datetime.utcnow().isoformat()
+        await db.admin_staff.update_one({'id': staff_id}, {'$set': updates})
+
+    return {'success': True}
+
+
+@admin_router.delete("/staff/{staff_id}")
+async def delete_staff(staff_id: str):
+    """Delete a staff member."""
+    await db.admin_staff.delete_many({'id': staff_id})
+    return {'success': True}
+
+
+@admin_router.get("/staff/modules/list")
+async def list_modules():
+    """List available modules and role presets."""
+    return {
+        'modules': AVAILABLE_MODULES,
+        'role_presets': {k: v for k, v in ROLE_PRESETS.items()},
+    }
+
+
+# ============================================================
+# Spinr Pass — Driver Subscription Plans
+# ============================================================
+
+class SubscriptionPlanCreate(BaseModel):
+    name: str                          # "Basic", "Pro", "Unlimited"
+    price: float                       # 19.99, 49.99
+    duration_days: int = 30            # 1=daily, 7=weekly, 30=monthly
+    rides_per_day: int = -1            # -1 = unlimited, or 4, 8, etc.
+    description: Optional[str] = None
+    features: Optional[List[str]] = None  # ["Priority support", "Surge protection"]
+    vehicle_types: Optional[List[str]] = None  # restrict to vehicle type IDs, null=all
+    service_areas: Optional[List[str]] = None  # restrict to area IDs, null=all
+    is_active: bool = True
+
+
+class SubscriptionPlanUpdate(BaseModel):
+    name: Optional[str] = None
+    price: Optional[float] = None
+    duration_days: Optional[int] = None
+    rides_per_day: Optional[int] = None
+    description: Optional[str] = None
+    features: Optional[List[str]] = None
+    vehicle_types: Optional[List[str]] = None
+    service_areas: Optional[List[str]] = None
+    is_active: Optional[bool] = None
+
+
+@admin_router.get("/subscription-plans")
+async def list_subscription_plans():
+    """List all Spinr Pass subscription plans."""
+    plans = await db.get_rows('subscription_plans', limit=50)
+    return plans
+
+
+@admin_router.post("/subscription-plans")
+async def create_subscription_plan(req: SubscriptionPlanCreate):
+    """Create a new driver subscription plan."""
+    plan = {
+        'id': str(uuid.uuid4()),
+        'name': req.name,
+        'price': req.price,
+        'duration_days': req.duration_days,
+        'rides_per_day': req.rides_per_day,
+        'description': req.description or '',
+        'features': req.features or [],
+        'vehicle_types': req.vehicle_types,
+        'service_areas': req.service_areas,
+        'is_active': req.is_active,
+        'subscriber_count': 0,
+        'created_at': datetime.utcnow().isoformat(),
+    }
+    await db.subscription_plans.insert_one(plan)
+    return plan
+
+
+@admin_router.put("/subscription-plans/{plan_id}")
+async def update_subscription_plan(plan_id: str, req: SubscriptionPlanUpdate):
+    """Update a subscription plan."""
+    updates = {k: v for k, v in req.dict().items() if v is not None}
+    if updates:
+        updates['updated_at'] = datetime.utcnow().isoformat()
+        await db.subscription_plans.update_one({'id': plan_id}, {'$set': updates})
+    return {'success': True}
+
+
+@admin_router.delete("/subscription-plans/{plan_id}")
+async def delete_subscription_plan(plan_id: str):
+    """Delete a subscription plan."""
+    await db.subscription_plans.delete_many({'id': plan_id})
+    return {'success': True}
+
+
+# ─── Driver Subscription Management ───
+
+@admin_router.get("/driver-subscriptions")
+async def list_driver_subscriptions(status: Optional[str] = Query(None)):
+    """List all driver subscriptions, optionally filtered by status."""
+    subs = await db.driver_subscriptions.find({}).to_list(200)
+    if status:
+        subs = [s for s in subs if s.get('status') == status]
+    return subs

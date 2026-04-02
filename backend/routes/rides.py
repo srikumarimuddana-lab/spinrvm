@@ -550,13 +550,24 @@ async def process_payment(ride_id: str, request: Request, current_user: dict = D
         }}
     )
 
-    # Send receipt email (dummy log for now)
+    # Send receipt email (SendGrid when configured, logs otherwise)
     rider = await db.users.find_one({'id': current_user['id']})
-    rider_email = rider.get('email', '') if rider else ''
-    logger.info(f"[EMAIL] Receipt for ride {ride_id} to {rider_email} | Fare: ${ride.get('total_fare', 0):.2f} + Tip: ${tip_amount:.2f} = Total: ${total_charge:.2f}")
-    # TODO: Send actual email via SendGrid/SES when configured
+    driver_info = None
+    if ride.get('driver_id'):
+        drv = await db.drivers.find_one({'id': ride['driver_id']})
+        if drv:
+            du = await db.users.find_one({'id': drv.get('user_id')})
+            if du:
+                driver_info = {**du, 'name': f"{du.get('first_name','')} {du.get('last_name','')}".strip()}
 
-    return {'success': True, 'charged_amount': total_charge, 'email_sent': bool(rider_email)}
+    email_sent = False
+    try:
+        from utils.email_receipt import send_receipt_email
+        email_sent = await send_receipt_email(ride, rider or {}, driver_info, tip_amount)
+    except Exception as e:
+        logger.warning(f"Receipt email error: {e}")
+
+    return {'success': True, 'charged_amount': total_charge, 'email_sent': email_sent}
 
 
 # ============================================================

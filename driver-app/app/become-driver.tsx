@@ -19,6 +19,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useAuthStore } from '@shared/store/authStore';
+import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import { uploadFile } from '@shared/api/upload';
 
@@ -51,6 +52,27 @@ export default function BecomeDriverScreen() {
   const [email, setEmail] = useState(user?.email || '');
   const [gender, setGender] = useState(user?.gender || '');
   const [city, setCity] = useState(user?.city || 'Saskatoon');
+  const [serviceAreaId, setServiceAreaId] = useState('');
+  const [serviceAreas, setServiceAreas] = useState<any[]>([]);
+
+  // Load service areas on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api.get('/vehicle-types');  // just to verify API works
+        const areasRes = await api.get('/admin/service-areas');
+        const active = (areasRes.data || []).filter((a: any) => a.is_active);
+        setServiceAreas(active);
+        if (active.length > 0 && !serviceAreaId) setServiceAreaId(active[0].id);
+      } catch (e) {
+        // Fallback — hardcode areas if API fails
+        setServiceAreas([
+          { id: 'saskatoon', name: 'Saskatoon, SK' },
+          { id: 'regina', name: 'Regina, SK' },
+        ]);
+      }
+    })();
+  }, []);
 
   // Vehicle Info
   const [vehicleMake, setVehicleMake] = useState('');
@@ -309,7 +331,7 @@ export default function BecomeDriverScreen() {
   const validateStep = (step: number) => {
     switch (step) {
       case 1: // Personal
-        return !!(firstName && lastName && email && gender && city);
+        return !!(firstName && lastName && email && gender && serviceAreaId);
       case 2: // Vehicle
         // Determine if user has entered ANY vehicle info
         const hasVehicleInfo = vehicleMake || vehicleModel || vehicleColor || vehicleYear || licensePlate || vehicleVin || vehicleType;
@@ -396,6 +418,7 @@ export default function BecomeDriverScreen() {
         email,
         gender,
         city,
+        service_area_id: serviceAreaId || undefined,
         // Vehicle (send undefined if empty to avoid validation errors or "None" strings)
         vehicle_make: vehicleMake || undefined,
         vehicle_model: vehicleModel || undefined,
@@ -500,7 +523,24 @@ export default function BecomeDriverScreen() {
                 ))}
               </View>
 
-              {renderInput('City', city, setCity, 'Saskatoon')}
+              {/* Service Area Selector */}
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Service Area *</Text>
+                <View style={styles.serviceAreaList}>
+                  {serviceAreas.map((area) => (
+                    <TouchableOpacity
+                      key={area.id}
+                      style={[styles.serviceAreaChip, serviceAreaId === area.id && styles.serviceAreaChipActive]}
+                      onPress={() => { setServiceAreaId(area.id); setCity(area.city || area.name); }}
+                    >
+                      <Ionicons name="location" size={16} color={serviceAreaId === area.id ? '#FFF' : '#888'} />
+                      <Text style={[styles.serviceAreaChipText, serviceAreaId === area.id && { color: '#FFF' }]}>{area.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <Text style={styles.serviceAreaHint}>You can only operate in your selected service area</Text>
+              </View>
+
               <TouchableOpacity style={styles.primaryButton} onPress={nextStep}>
                 <Text style={styles.primaryButtonText}>Next: Vehicle</Text>
               </TouchableOpacity>
@@ -715,6 +755,18 @@ const styles = StyleSheet.create({
   typeSelected: { backgroundColor: SpinrConfig.theme.colors.primary, borderColor: SpinrConfig.theme.colors.primary },
   typeText: { color: '#333' },
   typeTextSelected: { color: '#fff', fontWeight: 'bold' },
+
+  serviceAreaList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
+  serviceAreaChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12,
+    backgroundColor: '#F5F5F5', borderWidth: 1.5, borderColor: '#E5E5E5',
+  },
+  serviceAreaChipActive: {
+    backgroundColor: SpinrConfig.theme.colors.primary, borderColor: SpinrConfig.theme.colors.primary,
+  },
+  serviceAreaChipText: { fontSize: 14, fontWeight: '600', color: '#444' },
+  serviceAreaHint: { fontSize: 11, color: '#999', marginTop: 6, fontStyle: 'italic' },
 
   primaryButton: {
     backgroundColor: SpinrConfig.theme.colors.primary, borderRadius: 30, padding: 18,

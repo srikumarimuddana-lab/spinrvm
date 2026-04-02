@@ -20,6 +20,7 @@ import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useRideStore } from '../store/rideStore';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
+import { SOSButton } from '@shared/components/SOSButton';
 import { CarMarker } from '@shared/components/CarMarker';
 
 const { width } = Dimensions.get('window');
@@ -397,10 +398,10 @@ I've shared my live location with you for safety.
                 <Ionicons name="share-outline" size={20} color="#1A1A1A" />
                 <Text style={styles.actionBtnText}>Share Trip</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.actionBtn} onPress={handleSafety}>
-                <Ionicons name="shield-checkmark" size={20} color={SpinrConfig.theme.colors.primary} />
-                <Text style={styles.actionBtnText}>Safety</Text>
-              </TouchableOpacity>
+              <View style={styles.actionBtn}>
+                <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} />
+                <Text style={styles.actionBtnText}>SOS</Text>
+              </View>
               <TouchableOpacity style={styles.actionBtn} onPress={() => {
                 Alert.alert(
                   'End ride early?',

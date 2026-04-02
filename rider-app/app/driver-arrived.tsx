@@ -13,6 +13,7 @@ import { useRideStore } from '../store/rideStore';
 import { CarMarker } from '@shared/components/CarMarker';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
+import { SOSButton } from '@shared/components/SOSButton';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 const COLORS = SpinrConfig.theme.colors;
@@ -194,9 +195,9 @@ export default function DriverArrivedScreen() {
             <View style={styles.pulseGreen} />
             <Text style={styles.arrivedChipText}>Driver has arrived</Text>
           </View>
-          <TouchableOpacity style={styles.hBtn}>
-            <Ionicons name="shield-checkmark" size={20} color={COLORS.primary} />
-          </TouchableOpacity>
+          <SOSButton rideId={rideId as string} onTrigger={async (id, lat, lng) => {
+            try { await api.post(`/rides/${id}/emergency`, { latitude: lat, longitude: lng }); } catch {}
+          }} />
         </View>
       </SafeAreaView>
 

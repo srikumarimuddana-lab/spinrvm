@@ -2,7 +2,7 @@
 
 import { useEffect, useState, lazy, Suspense } from "react";
 import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans } from "@/lib/api";
-import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight } from "lucide-react";
+import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, X, FileText } from "lucide-react";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
@@ -195,6 +195,7 @@ export default function ServiceAreasPage() {
                         { key: 'pricing', label: 'Vehicle Pricing', icon: Car },
                         { key: 'fees', label: 'Fees & Taxes', icon: DollarSign },
                         { key: 'subscriptions', label: 'Spinr Pass', icon: CreditCard },
+                        { key: 'documents', label: 'Documents', icon: Settings },
                       ].map(tab => (
                         <button key={tab.key} onClick={() => setEditTab(tab.key)}
                           className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold rounded-t-lg transition ${editTab === tab.key ? 'bg-white text-red-500 border-t-2 border-red-500' : 'text-gray-500 hover:text-gray-700'}`}>
@@ -226,13 +227,31 @@ export default function ServiceAreasPage() {
 
                       {/* Fees & Taxes Tab */}
                       {editTab === 'fees' && (
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                          <FieldInput label="Platform Fee ($)" value={area.platform_fee || 0} type="number" onSave={v => handleFieldUpdate(area.id, 'platform_fee', parseFloat(v))} />
-                          <FieldInput label="City Fee ($)" value={area.city_fee || 0} type="number" onSave={v => handleFieldUpdate(area.id, 'city_fee', parseFloat(v))} />
-                          <FieldInput label="Airport Fee ($)" value={area.airport_fee || 0} type="number" onSave={v => handleFieldUpdate(area.id, 'airport_fee', parseFloat(v))} />
-                          <FieldInput label="GST Rate (%)" value={area.gst_rate || 5} type="number" onSave={v => handleFieldUpdate(area.id, 'gst_rate', parseFloat(v))} />
-                          <FieldInput label="PST Rate (%)" value={area.pst_rate || 0} type="number" onSave={v => handleFieldUpdate(area.id, 'pst_rate', parseFloat(v))} />
-                          <FieldInput label="Insurance Fee (%)" value={area.insurance_fee_percent || 2} type="number" onSave={v => handleFieldUpdate(area.id, 'insurance_fee_percent', parseFloat(v))} />
+                        <div>
+                          <h4 className="font-bold text-gray-800 mb-3">Fees</h4>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                            <FieldInput label="Platform Fee ($)" value={area.platform_fee || 0} type="number" onSave={v => handleFieldUpdate(area.id, 'platform_fee', parseFloat(v))} />
+                            <FieldInput label="City Fee ($)" value={area.city_fee || 0} type="number" onSave={v => handleFieldUpdate(area.id, 'city_fee', parseFloat(v))} />
+                            <FieldInput label="Airport Fee ($)" value={area.airport_fee || 0} type="number" onSave={v => handleFieldUpdate(area.id, 'airport_fee', parseFloat(v))} />
+                          </div>
+
+                          <h4 className="font-bold text-gray-800 mb-3">Taxes</h4>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                            <FieldInput label="GST Rate (%)" value={area.gst_rate || 5} type="number" onSave={v => handleFieldUpdate(area.id, 'gst_rate', parseFloat(v))} />
+                            <FieldInput label="PST Rate (%)" value={area.pst_rate || 0} type="number" onSave={v => handleFieldUpdate(area.id, 'pst_rate', parseFloat(v))} />
+                            <FieldInput label="Insurance Fee (%)" value={area.insurance_fee_percent || 2} type="number" onSave={v => handleFieldUpdate(area.id, 'insurance_fee_percent', parseFloat(v))} />
+                          </div>
+
+                          <h4 className="font-bold text-gray-800 mb-3">Cancellation Fees</h4>
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <FieldInput label="Rider cancel — driver on the way ($)" value={area.rider_cancel_fee_before_driver || 0} type="number" onSave={v => handleFieldUpdate(area.id, 'rider_cancel_fee_before_driver', parseFloat(v))} />
+                            <FieldInput label="Rider cancel — driver arrived (total $)" value={area.rider_cancel_fee_after_arrival || 4.50} type="number" onSave={v => handleFieldUpdate(area.id, 'rider_cancel_fee_after_arrival', parseFloat(v))} />
+                            <FieldInput label="↳ Driver gets ($)" value={area.cancel_fee_driver_share || 4.00} type="number" onSave={v => handleFieldUpdate(area.id, 'cancel_fee_driver_share', parseFloat(v))} />
+                            <FieldInput label="↳ Admin gets ($)" value={area.cancel_fee_admin_share || 0.50} type="number" onSave={v => handleFieldUpdate(area.id, 'cancel_fee_admin_share', parseFloat(v))} />
+                            <FieldInput label="Rider cancel — ride started" value="Full fare" type="text" onSave={() => {}} />
+                            <FieldInput label="Driver cancel penalty ($)" value={area.driver_cancel_fee || 0} type="number" onSave={v => handleFieldUpdate(area.id, 'driver_cancel_fee', parseFloat(v))} />
+                            <FieldInput label="Free cancel window (seconds)" value={area.free_cancel_window_seconds || 120} type="number" onSave={v => handleFieldUpdate(area.id, 'free_cancel_window_seconds', parseInt(v))} />
+                          </div>
                         </div>
                       )}
 
@@ -267,6 +286,14 @@ export default function ServiceAreasPage() {
                             {plans.length === 0 && <p className="text-gray-400 text-sm col-span-2">No subscription plans created yet. Go to Spinr Pass to create plans.</p>}
                           </div>
                         </div>
+                      )}
+
+                      {/* Documents Tab */}
+                      {editTab === 'documents' && (
+                        <DocumentsEditor
+                          docs={area.required_documents || []}
+                          onSave={d => handleFieldUpdate(area.id, 'required_documents', d)}
+                        />
                       )}
                     </div>
                   </div>
@@ -373,6 +400,52 @@ function VehiclePricingEditor({ pricing, onSave }: { pricing: any[]; onSave: (p:
       <div className="flex gap-3 mt-3">
         <button onClick={addRow} className="text-sm text-red-500 font-semibold hover:underline">+ Add vehicle type</button>
         <button onClick={() => onSave(rows)} className="bg-red-500 text-white px-5 py-2 rounded-xl text-sm font-semibold hover:bg-red-600">Save Pricing</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Documents Editor ───
+
+function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => void }) {
+  const [rows, setRows] = useState(docs.length > 0 ? docs : [
+    { key: 'drivers_license', label: "Driver's License", has_expiry: true, required: true },
+    { key: 'vehicle_insurance', label: 'Vehicle Insurance', has_expiry: true, required: true },
+    { key: 'vehicle_registration', label: 'Vehicle Registration', has_expiry: true, required: true },
+    { key: 'background_check', label: 'Background Check', has_expiry: true, required: true },
+    { key: 'vehicle_inspection', label: 'Vehicle Inspection', has_expiry: true, required: true },
+  ]);
+
+  const update = (idx: number, field: string, val: any) => {
+    const next = [...rows];
+    next[idx] = { ...next[idx], [field]: val };
+    setRows(next);
+  };
+
+  const addDoc = () => setRows([...rows, { key: '', label: '', has_expiry: false, required: true }]);
+  const removeDoc = (i: number) => setRows(rows.filter((_, idx) => idx !== i));
+
+  return (
+    <div>
+      <p className="text-sm text-gray-500 mb-4">Define which documents drivers must upload to operate in this area.</p>
+      <div className="space-y-3">
+        {rows.map((r, i) => (
+          <div key={i} className="flex items-center gap-3 bg-gray-50 rounded-xl p-3">
+            <input className="flex-1 border rounded-lg px-3 py-2 text-sm" placeholder="Document label" value={r.label} onChange={e => update(i, 'label', e.target.value)} />
+            <input className="w-36 border rounded-lg px-3 py-2 text-sm" placeholder="Key (e.g. sin_card)" value={r.key} onChange={e => update(i, 'key', e.target.value)} />
+            <label className="flex items-center gap-1 text-sm whitespace-nowrap">
+              <input type="checkbox" checked={r.has_expiry} onChange={e => update(i, 'has_expiry', e.target.checked)} className="accent-red-500" /> Expiry
+            </label>
+            <label className="flex items-center gap-1 text-sm whitespace-nowrap">
+              <input type="checkbox" checked={r.required !== false} onChange={e => update(i, 'required', e.target.checked)} className="accent-red-500" /> Required
+            </label>
+            <button onClick={() => removeDoc(i)} className="text-gray-400 hover:text-red-500"><X className="h-4 w-4" /></button>
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-3 mt-3">
+        <button onClick={addDoc} className="text-sm text-red-500 font-semibold hover:underline">+ Add document type</button>
+        <button onClick={() => onSave(rows)} className="bg-red-500 text-white px-5 py-2 rounded-xl text-sm font-semibold hover:bg-red-600">Save Documents</button>
       </div>
     </div>
   );

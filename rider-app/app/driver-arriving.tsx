@@ -22,6 +22,7 @@ import BottomSheet, { BottomSheetScrollView, BottomSheetView } from '@gorhom/bot
 import { useRideStore } from '../store/rideStore';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
+import { SOSButton } from '@shared/components/SOSButton';
 import { CarMarker } from '@shared/components/CarMarker';
 
 const { width } = Dimensions.get('window');
@@ -245,9 +246,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
             <Text style={styles.etaText}>Arriving in {eta} min</Text>
           </View>
 
-          <TouchableOpacity style={styles.emergencyButton} onPress={handleEmergency}>
-            <Ionicons name="shield" size={20} color={SpinrConfig.theme.colors.primary} />
-          </TouchableOpacity>
+          <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} />
         </View>
       </SafeAreaView>
 

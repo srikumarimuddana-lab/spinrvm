@@ -454,3 +454,7 @@ export const deleteSubscriptionPlan = (id: string) =>
 
 export const getDriverSubscriptions = (status?: string) =>
     request<any[]>(`/api/admin/driver-subscriptions${status ? `?status=${status}` : ''}`);
+
+/* ── Audit Logs ──────────────────────────── */
+export const getAuditLogs = (limit = 50) =>
+    request<any[]>(`/api/admin/audit-logs?limit=${limit}`);

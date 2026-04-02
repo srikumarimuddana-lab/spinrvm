@@ -38,7 +38,7 @@ export default function DashboardLayout({
     return (
         <div className="min-h-screen bg-background">
             <Sidebar />
-            <main className="md:ml-64">
+            <main className="transition-all duration-200" style={{ marginLeft: 'var(--sidebar-width, 256px)' }}>
                 <div className="p-6 md:p-8">{children}</div>
             </main>
         </div>

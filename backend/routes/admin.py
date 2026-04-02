@@ -176,7 +176,25 @@ async def admin_create_service_area(area: Dict[str, Any]):
         "pst_rate": area.get("pst_rate", 6.0),
         "insurance_fee_percent": area.get("insurance_fee_percent", 2.0),
 
-        # Vehicle type pricing (list of {vehicle_type_id, base_fare, per_km, per_min, min_fare, booking_fee})
+        # Cancellation fees (with driver/admin split)
+        "rider_cancel_fee_before_driver": area.get("rider_cancel_fee_before_driver", 0),
+        "rider_cancel_fee_after_arrival": area.get("rider_cancel_fee_after_arrival", 4.50),
+        "cancel_fee_driver_share": area.get("cancel_fee_driver_share", 4.00),
+        "cancel_fee_admin_share": area.get("cancel_fee_admin_share", 0.50),
+        "rider_cancel_fee_after_start": area.get("rider_cancel_fee_after_start", 0),  # 0 = full fare
+        "driver_cancel_fee": area.get("driver_cancel_fee", 0),
+        "free_cancel_window_seconds": area.get("free_cancel_window_seconds", 120),
+
+        # Required driver documents
+        "required_documents": area.get("required_documents", [
+            {"key": "drivers_license", "label": "Driver's License", "has_expiry": True},
+            {"key": "vehicle_insurance", "label": "Vehicle Insurance", "has_expiry": True},
+            {"key": "vehicle_registration", "label": "Vehicle Registration", "has_expiry": True},
+            {"key": "background_check", "label": "Background Check", "has_expiry": True},
+            {"key": "vehicle_inspection", "label": "Vehicle Inspection", "has_expiry": True},
+        ]),
+
+        # Vehicle type pricing
         "vehicle_pricing": area.get("vehicle_pricing", []),
 
         # Spinr Pass — which subscription plans are available here
@@ -205,6 +223,10 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
         'name', 'city', 'province', 'geojson', 'is_active',
         'platform_fee', 'city_fee', 'airport_fee', 'is_airport',
         'gst_rate', 'pst_rate', 'insurance_fee_percent',
+        'rider_cancel_fee_before_driver', 'rider_cancel_fee_after_arrival',
+        'cancel_fee_driver_share', 'cancel_fee_admin_share',
+        'rider_cancel_fee_after_start', 'driver_cancel_fee', 'free_cancel_window_seconds',
+        'required_documents',
         'vehicle_pricing', 'subscription_plan_ids', 'spinr_pass_enabled',
         'surge_enabled', 'surge_multiplier',
         'max_pickup_radius_km', 'currency',
@@ -668,28 +690,51 @@ async def admin_create_promotion(promotion: Dict[str, Any]):
     doc = {
         "code": (promotion.get("code") or "").strip().upper(),
         "description": promotion.get("description", ""),
-        "promo_type": promotion.get("promo_type", "discount"),
-        "discount_type": promotion.get("discount_type", "flat"),
+        "promo_type": promotion.get("promo_type", "discount"),  # discount, referral, reward, private
+        "discount_type": promotion.get("discount_type", "flat"),  # flat | percentage
         "discount_value": promotion.get("discount_value", 0),
-        "max_discount": promotion.get("max_discount"),
-        "max_uses": promotion.get("max_uses", 100),
-        "max_uses_per_user": promotion.get("max_uses_per_user", 1),
+        "max_discount": promotion.get("max_discount"),  # cap for percentage
+
+        # Usage limits
+        "max_uses": promotion.get("max_uses", 0),  # 0 = unlimited total uses
+        "max_uses_per_user": promotion.get("max_uses_per_user", 1),  # 0 = unlimited per user
         "uses": 0,
+
+        # Validity
         "valid_from": promotion.get("valid_from", datetime.utcnow().isoformat()),
         "expiry_date": promotion.get("expiry_date"),
-        "min_ride_fare": promotion.get("min_ride_fare", 0),
+
+        # Ride requirements
+        "min_ride_fare": promotion.get("min_ride_fare", 0),  # minimum fare to apply
+
+        # User targeting
         "first_ride_only": promotion.get("first_ride_only", False),
-        "new_user_days": promotion.get("new_user_days", 0),
-        "applicable_areas": promotion.get("applicable_areas", []),
-        "applicable_vehicles": promotion.get("applicable_vehicles", []),
-        "user_segments": promotion.get("user_segments", []),
-        "total_budget": promotion.get("total_budget", 0),
+        "new_user_days": promotion.get("new_user_days", 0),  # 0 = no restriction, 7 = users < 7 days old
+        "inactive_days": promotion.get("inactive_days", 0),  # target users with no rides in X days
+        "min_total_rides": promotion.get("min_total_rides", 0),  # user must have at least X completed rides
+        "max_total_rides": promotion.get("max_total_rides", 0),  # user must have less than X rides (0=no limit)
+
+        # Private coupon (specific user only)
+        "assigned_user_ids": promotion.get("assigned_user_ids", []),  # empty = available to all
+
+        # Area & vehicle targeting
+        "applicable_areas": promotion.get("applicable_areas", []),  # empty = all areas
+        "applicable_vehicles": promotion.get("applicable_vehicles", []),  # empty = all vehicles
+        "user_segments": promotion.get("user_segments", []),  # tags like "vip", "corporate"
+
+        # Budget
+        "total_budget": promotion.get("total_budget", 0),  # 0 = no budget limit
         "budget_used": 0,
-        "valid_days": promotion.get("valid_days", []),
-        "valid_hours_start": promotion.get("valid_hours_start"),
-        "valid_hours_end": promotion.get("valid_hours_end"),
+
+        # Schedule
+        "valid_days": promotion.get("valid_days", []),  # empty = all days, ["mon","tue"]
+        "valid_hours_start": promotion.get("valid_hours_start"),  # e.g. "08:00"
+        "valid_hours_end": promotion.get("valid_hours_end"),  # e.g. "22:00"
+
+        # Referral
         "referrer_user_id": promotion.get("referrer_user_id"),
         "referrer_reward": promotion.get("referrer_reward", 0),
+
         "is_active": promotion.get("is_active", True),
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
@@ -1518,3 +1563,27 @@ async def list_driver_subscriptions(status: Optional[str] = Query(None)):
     if status:
         subs = [s for s in subs if s.get('status') == status]
     return subs
+
+
+# ============================================================
+# Audit Logs
+# ============================================================
+
+@admin_router.get("/audit-logs")
+async def get_audit_logs(limit: int = Query(50), offset: int = Query(0)):
+    """Get audit log entries."""
+    logs = await db.get_rows('audit_logs', order='created_at', desc=True, limit=limit)
+    return logs
+
+
+async def log_audit(action: str, entity_type: str, entity_id: str, user_email: str, details: str = ""):
+    """Record an audit log entry. Call from admin endpoints."""
+    await db.audit_logs.insert_one({
+        'id': str(uuid.uuid4()),
+        'action': action,           # created, updated, deleted, login, status_change
+        'entity_type': entity_type,  # driver, user, ride, promotion, service_area, staff, setting
+        'entity_id': entity_id,
+        'user_email': user_email,
+        'details': details,
+        'created_at': datetime.utcnow().isoformat(),
+    })

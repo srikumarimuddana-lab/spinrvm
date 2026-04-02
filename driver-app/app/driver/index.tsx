@@ -12,6 +12,8 @@ import {
 } from '../../components/dashboard';
 import { useDriverDashboard } from '../../hooks/useDriverDashboard';
 import { CarMarker } from '../../components/CarMarker';
+import { SOSButton } from '@shared/components/SOSButton';
+import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 
 // Use Google Maps on Android, Apple Maps (native) on iOS
@@ -220,6 +222,18 @@ export default function DriverDashboard() {
 
       {/* Top Bar */}
       <DriverTopBar driverData={driverData} user={user} isOnline={isOnline} />
+
+      {/* SOS Button — visible during active ride */}
+      {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && activeRide?.ride?.id && (
+        <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 100 : 80, right: 16, zIndex: 50 }}>
+          <SOSButton
+            rideId={activeRide.ride.id}
+            onTrigger={async (rideId, lat, lng) => {
+              try { await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng }); } catch {}
+            }}
+          />
+        </View>
+      )}
 
       {/* Map Controls */}
       <MapControls

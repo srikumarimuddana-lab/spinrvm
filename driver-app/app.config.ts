@@ -14,6 +14,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     scheme: SCHEME,
     userInterfaceStyle: 'automatic',
     newArchEnabled: true,
+    updates: {
+        url: 'https://u.expo.dev/9fb3b288-3036-442c-98aa-d18987008cef',
+    },
+    runtimeVersion: {
+        policy: 'appVersion',
+    },
     splash: {
         backgroundColor: '#ee2b2b',
         resizeMode: 'contain',
@@ -23,6 +29,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     ios: {
         supportsTablet: true,
         bundleIdentifier: BUNDLE_ID,
+        googleServicesFile: './GoogleService-Info.plist',
         config: {
             googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
         }
@@ -34,6 +41,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         },
         edgeToEdgeEnabled: true,
         package: BUNDLE_ID,
+        googleServicesFile: './google-services.json',
         config: {
             googleMaps: {
                 apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY

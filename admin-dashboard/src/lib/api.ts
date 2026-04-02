@@ -330,12 +330,7 @@ export const updateFaq = (id: string, data: any) =>
 export const deleteFaq = (id: string) =>
     request<any>(`/api/admin/faqs/${id}`, { method: "DELETE" });
 
-/* ── Notifications ──────────────────────────── */
-export const sendNotification = (data: { user_id: string; title: string; body: string }) =>
-    request<any>("/api/admin/notifications/send", {
-        method: "POST",
-        body: JSON.stringify(data),
-    });
+/* ── Notifications (uses sendNotification defined above) ── */
 
 /* ── Area Management (Pricing, Tax, Vehicle Pricing) ─────────────────── */
 export const getAreaFees = (areaId: string) =>

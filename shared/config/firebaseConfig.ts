@@ -1,43 +1,26 @@
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, Auth } from 'firebase/auth';
 
 const firebaseConfig = {
-  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
+  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY || "AIzaSyByTO6NI8BAxe7x478-CBkVIhDHkyRlGLI",
+  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN || "spinrapp-6e464.firebaseapp.com",
+  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID || "spinrapp-6e464",
+  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET || "spinrapp-6e464.firebasestorage.app",
+  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "879808882715",
+  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID || "1:879808882715:web:83c466424c80fcefcb30be",
+  measurementId: process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID || "G-QX0JQ6DH53",
 };
 
-// Initialize Firebase
-// Check if already initialized to avoid hot reload errors
+// Initialize Firebase (avoid duplicate init on hot reload)
 let app;
 let auth: Auth;
 
-if (firebaseConfig.apiKey) {
-  try {
-    app = initializeApp(firebaseConfig);
-  } catch (error: any) {
-    // If the app is already initialized, we can ignore this error
-    // and let getAuth() use the default app instance.
-    if (!/already exists/.test(error.message)) {
-      console.error('Firebase initialization error', error.stack);
-    }
-  }
-
-  try {
-    // If app is undefined (e.g. "already exists" error), getAuth() uses the default app.
-    // If initialization failed completely, this might throw, so we catch it.
-    auth = getAuth(app);
-  } catch (error) {
-    console.warn('Failed to get Firebase Auth instance, using mock:', error);
-    auth = {} as Auth;
-  }
-} else {
-  console.warn('Firebase API key is missing. Skipping initialization.');
-  // Mock auth object to prevent build failures when env vars are missing
+try {
+  app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+  auth = getAuth(app);
+} catch (error: any) {
+  console.warn('Firebase init error:', error.message);
   auth = {} as Auth;
 }
 
-export { auth };
+export { app, auth, firebaseConfig };

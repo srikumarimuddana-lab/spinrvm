@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 from typing import Optional, Dict, Any
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from pydantic import BaseModel
 
 try:
@@ -35,6 +35,40 @@ class PreferencesUpdate(BaseModel):
     ride_updates: Optional[bool] = None
     promotions: Optional[bool] = None
     safety_alerts: Optional[bool] = None
+
+
+@api_router.post("/register-token")
+async def register_push_token(request: Request, current_user: dict = Depends(get_current_user)):
+    """Save FCM push token for this user/device."""
+    data = await request.json()
+    token = data.get('token')
+    platform = data.get('platform', 'unknown')
+
+    if not token:
+        raise HTTPException(status_code=400, detail="Token is required")
+
+    # Upsert: one token per user per platform
+    existing = await db.push_tokens.find_one({
+        'user_id': current_user['id'],
+        'platform': platform,
+    })
+
+    if existing:
+        await db.push_tokens.update_one(
+            {'id': existing['id']},
+            {'$set': {'token': token, 'updated_at': datetime.utcnow().isoformat()}}
+        )
+    else:
+        await db.push_tokens.insert_one({
+            'id': str(uuid.uuid4()),
+            'user_id': current_user['id'],
+            'token': token,
+            'platform': platform,
+            'created_at': datetime.utcnow().isoformat(),
+        })
+
+    logger.info(f"FCM token registered for user {current_user['id']} ({platform})")
+    return {'success': True}
 
 
 @api_router.get("")

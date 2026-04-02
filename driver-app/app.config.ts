@@ -64,7 +64,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 defaultChannel: 'default',
                 sounds: []
             }
-        ]
+        ],
+        '@react-native-firebase/app',
+        '@react-native-firebase/messaging',
+        '@react-native-firebase/crashlytics',
+        '@react-native-firebase/app-check',
     ],
     experiments: {
         typedRoutes: true

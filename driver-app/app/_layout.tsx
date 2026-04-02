@@ -10,6 +10,7 @@ import { useLocationStore } from '@shared/store/locationStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
+import { initFirebaseServices, requestPushPermissionAndGetToken, onForegroundMessage } from '@shared/services/firebase';
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
@@ -27,6 +28,19 @@ export default function RootLayout() {
     const init = async () => {
       try {
         await Promise.all([initializeAuth(), initializeLocation()]);
+
+        // Firebase: FCM, Crashlytics, App Check
+        await initFirebaseServices();
+        const fcmToken = await requestPushPermissionAndGetToken();
+        if (fcmToken) {
+          try {
+            const api = (await import('@shared/api/client')).default;
+            await api.post('/notifications/register-token', { token: fcmToken, platform: Platform.OS });
+          } catch (e) { console.log('FCM token reg failed:', e); }
+        }
+        onForegroundMessage((msg: any) => {
+          console.log('[Push] Driver foreground:', msg.notification?.title);
+        });
       } catch (err: any) {
         console.error('Initialization error:', err);
       }

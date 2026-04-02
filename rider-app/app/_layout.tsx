@@ -11,6 +11,7 @@ import SpinrConfig from '@shared/config/spinr.config';
 import Constants from 'expo-constants';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
+import { initFirebaseServices, requestPushPermissionAndGetToken, onForegroundMessage, setCrashlyticsUser } from '@shared/services/firebase';
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
@@ -28,6 +29,26 @@ export default function RootLayout() {
     const init = async () => {
       try {
         await Promise.all([initializeAuth(), initializeLocation()]);
+
+        // Initialize Firebase (FCM, Crashlytics, App Check)
+        await initFirebaseServices();
+
+        // Request push permission and register FCM token
+        const fcmToken = await requestPushPermissionAndGetToken();
+        if (fcmToken) {
+          try {
+            const api = (await import('@shared/api/client')).default;
+            await api.post('/notifications/register-token', { token: fcmToken, platform: Platform.OS });
+          } catch (e) {
+            console.log('FCM token registration failed:', e);
+          }
+        }
+
+        // Handle foreground push messages
+        onForegroundMessage((message: any) => {
+          console.log('[Push] Foreground message:', message.notification?.title);
+          // Could show in-app toast here
+        });
       } catch (err: any) {
         console.error('Initialization error:', err);
       }

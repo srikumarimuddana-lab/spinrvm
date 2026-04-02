@@ -60,7 +60,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 resizeMode: 'contain',
                 backgroundColor: '#ee2b2b'
             }
-        ]
+        ],
+        '@react-native-firebase/app',
+        '@react-native-firebase/messaging',
+        '@react-native-firebase/crashlytics',
+        '@react-native-firebase/app-check',
     ],
     experiments: {
         typedRoutes: false

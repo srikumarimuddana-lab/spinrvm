@@ -77,10 +77,36 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // ─── Location Tracking ───────────────────────────────────────────
   useEffect(() => {
     (async () => {
+      // 0. Load cached location from previous session
+      try {
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        const saved = await AsyncStorage.getItem('spinr_driver_last_location');
+        if (saved) {
+          const { lat, lng } = JSON.parse(saved);
+          setLocation({ coords: { latitude: lat, longitude: lng, heading: 0, speed: 0, accuracy: 100, altitude: 0 }, timestamp: Date.now() } as any);
+        }
+      } catch {}
+
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return;
-      const loc = await Location.getCurrentPositionAsync({});
-      setLocation(loc);
+
+      // 1. Fast: OS cached location
+      try {
+        const lastKnown = await Location.getLastKnownPositionAsync();
+        if (lastKnown) setLocation(lastKnown);
+      } catch {}
+
+      // 2. Accurate position (non-blocking)
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+        .then(loc => {
+          setLocation(loc);
+          // Save for next cold start
+          try {
+            const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+            AsyncStorage.setItem('spinr_driver_last_location', JSON.stringify({ lat: loc.coords.latitude, lng: loc.coords.longitude }));
+          } catch {}
+        })
+        .catch(() => {});
     })();
   }, []);
 

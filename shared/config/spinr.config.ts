@@ -39,13 +39,20 @@ const getBackendUrl = () => {
     return generatedUrl;
   }
 
-  // 4. Last resort for Android emulator when no hostUri is available.
+  // 4. Expo extra config (set in app.config.ts extra field)
+  const extraUrl = Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || Constants.expoConfig?.extra?.backendUrl;
+  if (extraUrl) {
+    console.log('Backend URL from app.config extra:', extraUrl);
+    return extraUrl;
+  }
+
+  // 5. Last resort for Android emulator when no hostUri is available.
   if (Platform.OS === 'android') {
     console.warn('Backend URL: falling back to Android emulator alias 10.0.2.2');
     return 'http://10.0.2.2:8000';
   }
 
-  // 5. Nothing worked — log a clear error so it's obvious something is misconfigured.
+  // 6. Nothing worked — log a clear error so it's obvious something is misconfigured.
   console.error(
     '[SpinrConfig] Could not determine backend URL! ' +
     'Set EXPO_PUBLIC_BACKEND_URL in your .env file (e.g. http://192.168.x.x:8000).'

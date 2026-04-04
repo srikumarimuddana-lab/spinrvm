@@ -10,6 +10,7 @@ import {
     TextInput,
     Modal,
     Pressable,
+    KeyboardAvoidingView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -123,7 +124,8 @@ export default function ReferralScreen() {
                 <View style={{ width: 40 }} />
             </View>
 
-            <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+            <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+            <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: 120 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
                 {/* Hero Section */}
                 <LinearGradient
                     colors={['#E53935', '#C62828']}
@@ -228,6 +230,7 @@ export default function ReferralScreen() {
                     </View>
                 )}
             </ScrollView>
+            </KeyboardAvoidingView>
 
             {/* Apply Referral Modal */}
             <Modal
@@ -236,6 +239,10 @@ export default function ReferralScreen() {
                 animationType="slide"
                 onRequestClose={() => setShowApplyModal(false)}
             >
+                <KeyboardAvoidingView
+                    style={{ flex: 1 }}
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                >
                 <Pressable style={styles.modalOverlay} onPress={() => setShowApplyModal(false)}>
                     <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
                         <View style={styles.modalHeader}>
@@ -259,6 +266,7 @@ export default function ReferralScreen() {
                         </View>
                     </Pressable>
                 </Pressable>
+                </KeyboardAvoidingView>
             </Modal>
         </View>
     );

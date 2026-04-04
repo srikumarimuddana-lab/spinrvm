@@ -1,6 +1,7 @@
 import React from 'react';
-import { View, Text, StyleSheet, Platform } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import SpinrConfig from '@shared/config/spinr.config';
 
 const COLORS = {
@@ -29,8 +30,9 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
   user,
   isOnline,
 }) => {
+  const insets = useSafeAreaInsets();
   return (
-    <View style={styles.topBar}>
+    <View style={[styles.topBar, { top: insets.top + 8 }]}>
       <View style={styles.topBarInner}>
         <View style={styles.driverInfo}>
           <View style={styles.avatarSmall}>
@@ -59,7 +61,6 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
 const styles = StyleSheet.create({
   topBar: {
     position: 'absolute',
-    top: Platform.OS === 'ios' ? 50 : 35,
     left: 16,
     right: 16,
     zIndex: 10,

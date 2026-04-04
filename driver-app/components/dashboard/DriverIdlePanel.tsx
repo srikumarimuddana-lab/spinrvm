@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import SpinrConfig from '@shared/config/spinr.config';
 
 const COLORS = {
@@ -45,6 +46,7 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   onToggleOnline,
   pulseAnim,
 }) => {
+  const insets = useSafeAreaInsets();
   const renderStatsRow = () => (
     <View style={styles.statsGrid}>
       <View style={styles.statBox}>
@@ -63,7 +65,7 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   );
 
   return (
-    <View style={styles.idlePanel}>
+    <View style={[styles.idlePanel, { paddingBottom: Math.max(insets.bottom + 12, 24) }]}>
       <TouchableOpacity
         style={[
           styles.onlineToggle,
@@ -111,7 +113,6 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    paddingBottom: 30,
     paddingHorizontal: 16,
     paddingTop: 16,
   },

@@ -11,6 +11,7 @@ import {
     Modal,
     Pressable,
     Platform,
+    KeyboardAvoidingView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -198,8 +199,12 @@ export default function AddressesScreen() {
                 animationType="slide"
                 onRequestClose={() => setShowAddModal(false)}
             >
+                <KeyboardAvoidingView
+                    style={{ flex: 1 }}
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                >
                 <Pressable style={styles.modalOverlay} onPress={() => setShowAddModal(false)}>
-                    <View style={styles.modalContent}>
+                    <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
                         <Text style={styles.modalTitle}>Add New Address</Text>
 
                         <View style={styles.inputGroup}>
@@ -239,8 +244,9 @@ export default function AddressesScreen() {
                                 <Text style={styles.saveBtnText}>Save</Text>
                             </TouchableOpacity>
                         </View>
-                    </View>
+                    </Pressable>
                 </Pressable>
+                </KeyboardAvoidingView>
             </Modal>
         </View>
     );

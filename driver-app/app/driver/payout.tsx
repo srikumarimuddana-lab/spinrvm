@@ -10,6 +10,7 @@ import {
     Alert,
     ActivityIndicator,
     Linking,
+    KeyboardAvoidingView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -194,7 +195,8 @@ export default function PayoutScreen() {
                 </View>
             </LinearGradient>
 
-            <ScrollView contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+            <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+            <ScrollView contentContainerStyle={{ paddingBottom: 160 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
                 {/* Balance Card */}
                 <View style={styles.balanceCard}>
                     <Text style={styles.balanceLabel}>AVAILABLE BALANCE</Text>
@@ -400,6 +402,7 @@ export default function PayoutScreen() {
                     </Text>
                 </View>
             </ScrollView>
+            </KeyboardAvoidingView>
         </View>
     );
 }

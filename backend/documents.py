@@ -258,8 +258,62 @@ async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
 # --- File Serving Router ---
 files_router = APIRouter(prefix="/documents", tags=["Files"])
 
+# --- Generic Upload Router (no prefix so it mounts at /api/v1/upload) ---
+upload_router = APIRouter(tags=["Upload"])
+
 from fastapi import Response
 import base64
+
+
+@upload_router.post("/upload")
+async def upload_file(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Generic file upload endpoint.
+
+    Stores the file as base64 in the `document_files` collection and returns a URL
+    that can be served by GET /api/documents/{file_id}. Works on Railway's
+    ephemeral filesystem because nothing is written to disk.
+    """
+    try:
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Empty file")
+
+        # 10 MB hard cap — documents are usually photos/PDFs
+        if len(content) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="File too large (max 10MB)")
+
+        file_id = str(uuid.uuid4())
+        record = {
+            'id': file_id,
+            'filename': file.filename or 'upload',
+            'content_type': file.content_type or 'application/octet-stream',
+            'data': base64.b64encode(content).decode('utf-8'),
+            'size': len(content),
+            'uploaded_by': current_user.get('id'),
+            'created_at': datetime.utcnow(),
+        }
+
+        await db.document_files.insert_one(record)
+
+        # Relative URL served by files_router (GET /api/documents/{file_id})
+        url = f"/api/documents/{file_id}"
+        return {
+            'success': True,
+            'url': url,
+            'file_id': file_id,
+            'filename': record['filename'],
+            'content_type': record['content_type'],
+            'size': record['size'],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Upload failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
 
 @files_router.get("/{file_id}")
 async def get_document_file(file_id: str):

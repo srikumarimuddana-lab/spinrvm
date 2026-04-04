@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput,
-  Alert, Platform, ActivityIndicator, BackHandler, Share,
+  Alert, Platform, ActivityIndicator, BackHandler, Share, KeyboardAvoidingView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -134,7 +134,8 @@ export default function RideCompletedScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
         {/* Success Header */}
         <View style={styles.successSection}>
@@ -361,6 +362,7 @@ export default function RideCompletedScreen() {
         </View>
 
       </ScrollView>
+      </KeyboardAvoidingView>
 
       {/* Submit Button */}
       <View style={styles.bottomBar}>

@@ -41,40 +41,64 @@ export default function HomeScreen() {
   const [temperature, setTemperature] = useState<number | null>(null);
   const mapRef = useRef<any>(null);
 
+  // Save/load last location from AsyncStorage for instant map on cold start
+  const saveLastLocation = async (lat: number, lng: number) => {
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      await AsyncStorage.setItem('spinr_last_location', JSON.stringify({ lat, lng }));
+    } catch {}
+  };
+
+  const loadLastLocation = async () => {
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      const saved = await AsyncStorage.getItem('spinr_last_location');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return null;
+  };
+
   useEffect(() => {
     (async () => {
+      // 0. Load cached location INSTANTLY (from previous session)
+      const cached = await loadLastLocation();
+      if (cached) {
+        const cachedLoc = { coords: { latitude: cached.lat, longitude: cached.lng } };
+        setLocation(cachedLoc);
+        setUserLocation({ latitude: cached.lat, longitude: cached.lng });
+      }
+
       let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        // Handle permission denied
-        return;
-      }
+      if (status !== 'granted') return;
 
-      let loc;
+      // 1. Get last known from OS (cached GPS, faster than full fix)
       try {
-        loc = await Location.getCurrentPositionAsync({});
-      } catch (error) {
-        console.warn('Could not get current location, using fallback:', error);
-        loc = { coords: { latitude: 43.6532, longitude: -79.3832 } };
-      }
-      setLocation(loc);
-      // Save to shared store so search-destination has it instantly
-      setUserLocation({
-        latitude: loc.coords.latitude,
-        longitude: loc.coords.longitude,
-      });
-
-      // Fetch temperature from Open-Meteo (free, no API key needed)
-      try {
-        const weatherRes = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${loc.coords.latitude}&longitude=${loc.coords.longitude}&current_weather=true`
-        );
-        const weatherData = await weatherRes.json();
-        if (weatherData?.current_weather?.temperature !== undefined) {
-          setTemperature(Math.round(weatherData.current_weather.temperature));
+        const lastKnown = await Location.getLastKnownPositionAsync();
+        if (lastKnown) {
+          setLocation(lastKnown);
+          setUserLocation({ latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude });
+          saveLastLocation(lastKnown.coords.latitude, lastKnown.coords.longitude);
         }
-      } catch (e) {
-        console.log('Weather fetch failed:', e);
-      }
+      } catch {}
+
+      // 2. Get accurate position in background
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+        .then(loc => {
+          setLocation(loc);
+          setUserLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+          saveLastLocation(loc.coords.latitude, loc.coords.longitude);
+
+          // 3. Weather in parallel
+          fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.coords.latitude}&longitude=${loc.coords.longitude}&current_weather=true`)
+            .then(r => r.json())
+            .then(data => {
+              if (data?.current_weather?.temperature !== undefined) {
+                setTemperature(Math.round(data.current_weather.temperature));
+              }
+            })
+            .catch(() => {});
+        })
+        .catch(() => {});
     })();
   }, []);
 

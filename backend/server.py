@@ -12,7 +12,7 @@ from core.security import init_firebase
 from routes.rides import api_router as rides_router
 from routes.drivers import api_router as drivers_router
 from routes.admin import admin_router as admin_router, admin_auth_router
-from documents import documents_router, admin_documents_router, files_router
+from documents import documents_router, admin_documents_router, files_router, upload_router
 from routes.corporate_accounts import router as corporate_accounts_router
 from routes.auth import api_router as auth_router
 from routes.users import api_router as users_router
@@ -53,6 +53,7 @@ v1_api_router.include_router(fares_router)
 v1_api_router.include_router(promotions_router)
 v1_api_router.include_router(disputes_router)
 v1_api_router.include_router(webhooks_router)
+v1_api_router.include_router(upload_router)
 
 # Include API routers
 app.include_router(v1_api_router, prefix="/api/v1")

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Platform } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Platform, KeyboardAvoidingView, ScrollView } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import api from '@shared/api/client';
@@ -23,6 +24,7 @@ const storage = {
 
 export default function OtpScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ verificationId?: string, phoneNumber: string, mode?: string }>();
   const { phoneNumber, verificationId, mode } = params;
   const isBackendMode = mode === 'backend' || !verificationId;
@@ -89,43 +91,48 @@ export default function OtpScreen() {
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Enter verification code</Text>
-      <Text style={styles.subtitle}>Sent to {phoneNumber}</Text>
-
-      <TextInput
-        style={styles.input}
-        placeholder={isBackendMode ? '1234' : '000000'}
-        placeholderTextColor="#ccc"
-        keyboardType="number-pad"
-        value={code}
-        onChangeText={setCode}
-        maxLength={codeLength}
-        autoFocus
-        textAlign="center"
-      />
-
-      <TouchableOpacity
-        style={[styles.button, verifying && styles.buttonDisabled]}
-        onPress={handleVerify}
-        disabled={verifying}
+    <KeyboardAvoidingView style={{ flex: 1, backgroundColor: '#fff' }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <ScrollView
+        contentContainerStyle={[styles.container, { paddingTop: insets.top + 40, paddingBottom: insets.bottom + 24 }]}
+        keyboardShouldPersistTaps="handled"
       >
-        {verifying ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>Verify</Text>
-        )}
-      </TouchableOpacity>
+        <Text style={styles.title}>Enter verification code</Text>
+        <Text style={styles.subtitle}>Sent to {phoneNumber}</Text>
 
-      <TouchableOpacity onPress={() => router.back()} style={styles.resendLink}>
-        <Text style={styles.resendText}>Change phone number</Text>
-      </TouchableOpacity>
-    </View>
+        <TextInput
+          style={styles.input}
+          placeholder={isBackendMode ? '1234' : '000000'}
+          placeholderTextColor="#ccc"
+          keyboardType="number-pad"
+          value={code}
+          onChangeText={setCode}
+          maxLength={codeLength}
+          autoFocus
+          textAlign="center"
+        />
+
+        <TouchableOpacity
+          style={[styles.button, verifying && styles.buttonDisabled]}
+          onPress={handleVerify}
+          disabled={verifying}
+        >
+          {verifying ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.buttonText}>Verify</Text>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity onPress={() => router.back()} style={styles.resendLink}>
+          <Text style={styles.resendText}>Change phone number</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff', padding: 24, paddingTop: 80 },
+  container: { flexGrow: 1, backgroundColor: '#fff', padding: 24 },
   title: { fontSize: 24, fontWeight: 'bold', marginBottom: 8, color: '#333', textAlign: 'center' },
   subtitle: { fontSize: 16, color: '#666', marginBottom: 32, textAlign: 'center' },
   input: {

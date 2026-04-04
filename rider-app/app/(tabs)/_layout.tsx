@@ -1,9 +1,11 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import SpinrConfig from '@shared/config/spinr.config';
 
 export default function TabLayout() {
+  const insets = useSafeAreaInsets();
   return (
     <Tabs
       screenOptions={{
@@ -15,8 +17,8 @@ export default function TabLayout() {
           borderTopWidth: 1,
           borderTopColor: '#F0F0F0',
           paddingTop: 8,
-          paddingBottom: 8,
-          height: 70,
+          paddingBottom: Math.max(insets.bottom, 8),
+          height: 62 + Math.max(insets.bottom, 8),
         },
         tabBarLabelStyle: {
           fontFamily: 'PlusJakartaSans_500Medium',

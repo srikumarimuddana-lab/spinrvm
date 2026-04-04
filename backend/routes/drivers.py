@@ -50,6 +50,94 @@ async def update_my_driver(body: dict = Body(...), current_user: dict = Depends(
         await db.drivers.update_one({'id': driver['id']}, {'$set': updates})
     return {'success': True}
 
+@api_router.post("/register")
+async def register_driver(
+    body: dict = Body(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Create or update the driver row for the authenticated user (become-driver flow).
+
+    Called by the driver app's `registerDriver()` in authStore after the user
+    submits vehicle + document info. Upsert so re-submission updates the row
+    rather than erroring.
+    """
+    user_id = current_user['id']
+
+    # Build name/phone from user if not supplied
+    first_name = body.get('first_name') or ''
+    last_name = body.get('last_name') or ''
+    full_name = (f"{first_name} {last_name}".strip()
+                 or current_user.get('name')
+                 or current_user.get('full_name')
+                 or 'Driver')
+
+    existing = await db.drivers.find_one({'user_id': user_id})
+
+    # Fields the client is allowed to set on register
+    allowed = {
+        'first_name', 'last_name', 'email', 'gender', 'city', 'service_area_id',
+        'vehicle_type_id', 'vehicle_make', 'vehicle_model', 'vehicle_color',
+        'vehicle_year', 'license_plate', 'vehicle_vin',
+        'license_number', 'license_expiry_date', 'insurance_expiry_date',
+        'vehicle_inspection_expiry_date', 'background_check_expiry_date',
+        'work_eligibility_expiry_date', 'documents', 'photo_url',
+    }
+    payload = {k: v for k, v in body.items() if k in allowed and v is not None}
+
+    if existing:
+        payload['updated_at'] = datetime.utcnow().isoformat()
+        payload['submitted_at'] = datetime.utcnow().isoformat()
+        await db.drivers.update_one({'id': existing['id']}, {'$set': payload})
+        driver = await db.drivers.find_one({'id': existing['id']})
+        return serialize_doc(driver)
+
+    # Create new row
+    import uuid as _uuid
+    new_driver = {
+        'id': str(_uuid.uuid4()),
+        'user_id': user_id,
+        'name': full_name,
+        'phone': current_user.get('phone', ''),
+        'rating': 5.0,
+        'total_rides': 0,
+        'is_online': False,
+        'is_available': False,
+        'is_verified': False,
+        'lat': 0.0,
+        'lng': 0.0,
+        'created_at': datetime.utcnow().isoformat(),
+        'submitted_at': datetime.utcnow().isoformat(),
+        **payload,
+    }
+    await db.drivers.insert_one(new_driver)
+    return serialize_doc(new_driver)
+
+
+@api_router.post("/status")
+async def update_driver_status_self(
+    is_online: bool = Query(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Toggle the authenticated driver's online status.
+
+    Called by `updateDriverStatus()` in the shared authStore when the driver
+    flips the Go Online switch.
+    """
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    if not driver:
+        raise HTTPException(status_code=404, detail='Driver not found')
+
+    updates = {
+        'is_online': is_online,
+        'is_available': is_online,
+        'updated_at': datetime.utcnow().isoformat(),
+    }
+    await db.drivers.update_one({'id': driver['id']}, {'$set': updates})
+    return {'success': True, 'is_online': is_online}
+
+
 @api_router.get("/balance")
 async def get_driver_balance(current_user: dict = Depends(get_current_user)):
     """Get driver's current balance/earnings summary."""
@@ -292,25 +380,8 @@ async def get_nearby_drivers_public(
     if vehicle_type:
         query['vehicle_type_id'] = vehicle_type
 
-    # Find which service area this pickup is in
-    service_areas = await db.service_areas.find({'is_active': True}).to_list(50)
-    pickup_area_id = None
-    for area in service_areas:
-        # Simple bounding check — if area has geojson polygon, check if point is inside
-        # For now, match by nearest area center or all drivers in radius
-        area_id = area.get('id')
-        if area_id:
-            pickup_area_id = area_id  # TODO: proper point-in-polygon check
-            break
-
-    # Filter drivers by service area if they have one registered
-    drivers_raw = await db.drivers.find(query).to_list(100)
-    drivers = []
-    for d in drivers_raw:
-        d_area = d.get('service_area_id')
-        if d_area and pickup_area_id and d_area != pickup_area_id:
-            continue  # Skip drivers not in this service area
-        drivers.append(d)
+    # Get all matching drivers — service area filtering by distance (not polygon yet)
+    drivers = await db.drivers.find(query).to_list(100)
     
     # Manual filtering by distance using haversine
     import math
@@ -1268,15 +1339,19 @@ async def update_driver_status(
             )
 
         # Check active Spinr Pass subscription
+        # TODO: Re-enable after testing
         sub = await db.driver_subscriptions.find_one({
             'driver_id': driver_id,
             'status': 'active',
         })
         if not sub:
-            raise HTTPException(
-                status_code=402,
-                detail='You need an active Spinr Pass subscription to go online. Subscribe from your dashboard.'
-            )
+            # For now, allow going online without subscription (dev/testing mode)
+            import os
+            if os.environ.get('ENV') != 'development' and os.environ.get('ENV') != 'test':
+                raise HTTPException(
+                    status_code=402,
+                    detail='You need an active Spinr Pass subscription to go online. Subscribe from your dashboard.'
+                )
         # Check expiry
         if sub.get('expires_at'):
             try:
@@ -1291,7 +1366,7 @@ async def update_driver_status(
 
     await db.drivers.update_one(
         {'id': driver_id},
-        {'$set': {'is_online': is_online, 'updated_at': datetime.utcnow()}}
+        {'$set': {'is_online': is_online, 'is_available': is_online, 'updated_at': datetime.utcnow()}}
     )
     return {'success': True, 'is_online': is_online}
 

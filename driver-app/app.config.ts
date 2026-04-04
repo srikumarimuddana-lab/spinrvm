@@ -64,15 +64,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 backgroundColor: '#ee2b2b'
             }
         ],
-        [
-            'expo-notifications',
-            {
-                icon: './assets/images/icon.png',
-                color: '#ee2b2b',
-                defaultChannel: 'default',
-                sounds: []
-            }
-        ],
         '@react-native-firebase/app',
         '@react-native-firebase/messaging',
         '@react-native-firebase/crashlytics',
@@ -84,6 +75,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     extra: {
         eas: {
             projectId: "9fb3b288-3036-442c-98aa-d18987008cef"
-        }
+        },
+        EXPO_PUBLIC_BACKEND_URL: process.env.EXPO_PUBLIC_BACKEND_URL,
+        backendUrl: process.env.EXPO_PUBLIC_BACKEND_URL,
     }
 });

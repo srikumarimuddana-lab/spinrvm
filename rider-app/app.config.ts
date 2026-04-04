@@ -81,6 +81,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         eas: {
             projectId: "63b5d645-e787-4f47-8289-d879ca6c51a4"
         },
+        EXPO_PUBLIC_BACKEND_URL: process.env.EXPO_PUBLIC_BACKEND_URL,
+        backendUrl: process.env.EXPO_PUBLIC_BACKEND_URL,
         googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
     }
 });

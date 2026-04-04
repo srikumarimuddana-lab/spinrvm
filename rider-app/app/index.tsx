@@ -30,9 +30,14 @@ export default function Index() {
     if (!isInitialized) return;
 
     const timer = setTimeout(async () => {
+      // Derive profile-complete from row data, not the stored flag alone.
+      // See driver-app/app/index.tsx for rationale.
+      const hasProfileData = !!(user?.first_name && user?.last_name && user?.email);
+      const profileComplete = !!user?.profile_complete || hasProfileData;
+
       if (!token) {
         router.replace('/login');
-      } else if (user && !user.profile_complete) {
+      } else if (user && !profileComplete) {
         router.replace('/profile-setup');
       } else {
         // Check for active/pending ride before going to home

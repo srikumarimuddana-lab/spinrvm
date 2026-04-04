@@ -35,7 +35,9 @@ export default function OtpScreen() {
 
   useEffect(() => {
     if (user) {
-      if (user.profile_complete) {
+      const hasProfileData = !!(user.first_name && user.last_name && user.email);
+      const profileComplete = !!user.profile_complete || hasProfileData;
+      if (profileComplete) {
         router.replace('/(tabs)/activity');
       } else {
         router.replace('/profile-setup');

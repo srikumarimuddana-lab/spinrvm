@@ -39,7 +39,17 @@ export default function OtpScreen() {
     // Only navigate if we've attempted verification AND user is now set
     // This prevents redirecting when user was restored from a previous session
     if (hasAttemptedVerification && user) {
-      if (user.profile_complete) {
+      // Prefer the server-derived onboarding state if present.
+      const status = user.driver_onboarding_status;
+      if (status) {
+        const next = user.driver_onboarding_next_screen || '/driver';
+        router.replace(next as any);
+        return;
+      }
+      // Legacy fallback.
+      const hasProfileData = !!(user.first_name && user.last_name && user.email);
+      const profileComplete = !!user.profile_complete || hasProfileData;
+      if (profileComplete) {
         router.replace('/driver');
       } else {
         router.replace('/profile-setup');

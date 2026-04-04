@@ -2,7 +2,9 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
 import SpinrConfig from '@shared/config/spinr.config';
+import { useAuthStore, DriverOnboardingStatus } from '@shared/store/authStore';
 
 const COLORS = {
   primary: SpinrConfig.theme.colors.background,
@@ -39,6 +41,75 @@ interface IdlePanelProps {
   pulseAnim: any;
 }
 
+// Maps the onboarding state to the banner shown above the Go Online toggle.
+// Only rendered when the driver is NOT in the verified state — a verified
+// driver sees no banner, just the normal online/offline toggle.
+const STATE_BANNERS: Record<Exclude<DriverOnboardingStatus, 'verified'>, {
+  title: string;
+  subtitle: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  tone: 'warning' | 'danger' | 'info';
+  cta: string;
+  target: string;
+}> = {
+  profile_incomplete: {
+    title: 'Finish your profile',
+    subtitle: 'Add your personal details to continue.',
+    icon: 'person-circle-outline',
+    tone: 'info',
+    cta: 'Complete Profile',
+    target: '/profile-setup',
+  },
+  vehicle_required: {
+    title: 'Add your vehicle',
+    subtitle: 'Tell us what you drive to finish onboarding.',
+    icon: 'car-outline',
+    tone: 'info',
+    cta: 'Add Vehicle',
+    target: '/become-driver',
+  },
+  documents_required: {
+    title: 'Documents required',
+    subtitle: 'Upload your mandatory documents to get verified.',
+    icon: 'document-text-outline',
+    tone: 'warning',
+    cta: 'Upload Now',
+    target: '/documents',
+  },
+  documents_rejected: {
+    title: 'Document rejected',
+    subtitle: 'One or more documents were rejected. Please re-upload.',
+    icon: 'alert-circle-outline',
+    tone: 'danger',
+    cta: 'Re-upload',
+    target: '/documents',
+  },
+  documents_expired: {
+    title: 'Documents expired',
+    subtitle: 'One or more documents have expired. Please re-upload.',
+    icon: 'time-outline',
+    tone: 'warning',
+    cta: 'Re-upload',
+    target: '/documents',
+  },
+  pending_review: {
+    title: 'Under review',
+    subtitle: 'Your profile is being reviewed. We\u2019ll notify you once approved.',
+    icon: 'hourglass-outline',
+    tone: 'info',
+    cta: 'View Documents',
+    target: '/documents',
+  },
+  suspended: {
+    title: 'Account suspended',
+    subtitle: 'Your account is suspended. Contact support for help.',
+    icon: 'ban-outline',
+    tone: 'danger',
+    cta: 'Contact Support',
+    target: '/driver/settings',
+  },
+};
+
 export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   isOnline,
   driverData,
@@ -47,6 +118,19 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   pulseAnim,
 }) => {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const onboardingStatus = useAuthStore(
+    (s) => s.user?.driver_onboarding_status ?? null
+  );
+  const banner =
+    onboardingStatus && onboardingStatus !== 'verified'
+      ? STATE_BANNERS[onboardingStatus]
+      : null;
+  // When banner is shown we hard-gate the Go Online toggle, regardless of
+  // the legacy is_verified flag. That way any non-verified state correctly
+  // prevents the driver from going online.
+  const canGoOnline = !banner && !!driverData?.is_verified;
+
   const renderStatsRow = () => (
     <View style={styles.statsGrid}>
       <View style={styles.statBox}>
@@ -66,38 +150,73 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
 
   return (
     <View style={[styles.idlePanel, { paddingBottom: Math.max(insets.bottom + 12, 24) }]}>
+      {banner && (
+        <TouchableOpacity
+          style={[
+            styles.stateBanner,
+            banner.tone === 'danger' && styles.stateBannerDanger,
+            banner.tone === 'warning' && styles.stateBannerWarning,
+            banner.tone === 'info' && styles.stateBannerInfo,
+          ]}
+          onPress={() => router.push(banner.target as any)}
+          activeOpacity={0.85}
+        >
+          <View style={styles.stateBannerIcon}>
+            <Ionicons
+              name={banner.icon}
+              size={22}
+              color={
+                banner.tone === 'danger'
+                  ? '#DC2626'
+                  : banner.tone === 'warning'
+                  ? '#D97706'
+                  : COLORS.accent
+              }
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.stateBannerTitle}>{banner.title}</Text>
+            <Text style={styles.stateBannerSub}>{banner.subtitle}</Text>
+          </View>
+          <View style={styles.stateBannerCta}>
+            <Text style={styles.stateBannerCtaText}>{banner.cta}</Text>
+            <Ionicons name="chevron-forward" size={16} color={COLORS.text} />
+          </View>
+        </TouchableOpacity>
+      )}
+
       <TouchableOpacity
         style={[
           styles.onlineToggle,
-          !driverData?.is_verified ? styles.onlineDisabled : (isOnline ? styles.onlineActive : styles.onlineInactive)
+          !canGoOnline ? styles.onlineDisabled : (isOnline ? styles.onlineActive : styles.onlineInactive)
         ]}
         onPress={onToggleOnline}
-        activeOpacity={driverData?.is_verified ? 0.8 : 1}
-        disabled={!driverData?.is_verified}
+        activeOpacity={canGoOnline ? 0.8 : 1}
+        disabled={!canGoOnline}
       >
         <Animated.View style={[styles.pulseIndicator, { transform: [{ scale: pulseAnim }] }]}>
           <View style={[
             styles.statusDot,
-            !driverData?.is_verified ? { backgroundColor: COLORS.orange } : (isOnline ? { backgroundColor: COLORS.success } : { backgroundColor: '#FF4757' })
+            !canGoOnline ? { backgroundColor: COLORS.orange } : (isOnline ? { backgroundColor: COLORS.success } : { backgroundColor: '#FF4757' })
           ]} />
         </Animated.View>
         <View style={styles.toggleText}>
           <Text style={styles.toggleLabel}>
-            {!driverData?.is_verified ? 'Account Not Verified' : (isOnline ? "You're Online" : "You're Offline")}
+            {!canGoOnline ? 'Not Ready to Drive' : (isOnline ? "You're Online" : "You're Offline")}
           </Text>
           <Text style={styles.toggleSub}>
-            {!driverData?.is_verified
-              ? 'Complete your profile and wait for admin approval'
+            {!canGoOnline
+              ? (banner?.subtitle || 'Complete verification to go online')
               : (isOnline ? 'Waiting for ride requests...' : 'Go online to start earning')}
           </Text>
         </View>
         <View style={[
           styles.toggleSwitch,
-          !driverData?.is_verified ? styles.toggleSwitchDisabled : (isOnline && styles.toggleSwitchOn)
+          !canGoOnline ? styles.toggleSwitchDisabled : (isOnline && styles.toggleSwitchOn)
         ]}>
           <View style={[
             styles.toggleKnob,
-            !driverData?.is_verified ? styles.toggleKnobDisabled : (isOnline && styles.toggleKnobOn)
+            !canGoOnline ? styles.toggleKnobDisabled : (isOnline && styles.toggleKnobOn)
           ]} />
         </View>
       </TouchableOpacity>
@@ -115,6 +234,61 @@ const styles = StyleSheet.create({
     right: 0,
     paddingHorizontal: 16,
     paddingTop: 16,
+  },
+  // Onboarding state banner shown above the Go Online toggle.
+  stateBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderRadius: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  stateBannerInfo: {
+    backgroundColor: 'rgba(255,59,48,0.06)',
+    borderColor: 'rgba(255,59,48,0.15)',
+  },
+  stateBannerWarning: {
+    backgroundColor: 'rgba(217,119,6,0.08)',
+    borderColor: 'rgba(217,119,6,0.2)',
+  },
+  stateBannerDanger: {
+    backgroundColor: 'rgba(220,38,38,0.08)',
+    borderColor: 'rgba(220,38,38,0.2)',
+  },
+  stateBannerIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  stateBannerTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  stateBannerSub: {
+    fontSize: 12,
+    color: COLORS.textDim,
+    marginTop: 2,
+  },
+  stateBannerCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  stateBannerCtaText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.text,
   },
   onlineToggle: {
     flexDirection: 'row',

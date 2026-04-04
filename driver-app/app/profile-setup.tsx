@@ -21,7 +21,25 @@ import SpinrConfig from '@shared/config/spinr.config';
 
 export default function ProfileSetupScreen() {
   const router = useRouter();
-  const { user, createProfile, isLoading: authLoading, error: authError } = useAuthStore();
+  const { user, createProfile, logout, isLoading: authLoading, error: authError } = useAuthStore();
+
+  const handleChangeNumber = () => {
+    Alert.alert(
+      'Change phone number?',
+      'This will sign you out and return to the phone entry screen. Any progress here will be lost.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Change Number',
+          style: 'destructive',
+          onPress: async () => {
+            await logout();
+            router.replace('/login' as any);
+          },
+        },
+      ]
+    );
+  };
 
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -85,6 +103,20 @@ export default function ProfileSetupScreen() {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
+            {/* Signed-in-as pill + Change number */}
+            <View style={styles.signedInRow}>
+              <View style={styles.signedInInfo}>
+                <Ionicons name="call" size={14} color="#666" />
+                <Text style={styles.signedInText} numberOfLines={1}>
+                  Signed in as{' '}
+                  <Text style={styles.signedInPhone}>{user?.phone || 'your number'}</Text>
+                </Text>
+              </View>
+              <TouchableOpacity onPress={handleChangeNumber} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Text style={styles.changeNumberLink}>Change</Text>
+              </TouchableOpacity>
+            </View>
+
             {/* Header */}
             <View style={styles.header}>
               <Text style={styles.title}>Complete your{"\n"}profile</Text>
@@ -220,6 +252,37 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 40,
     paddingBottom: 40,
+  },
+  signedInRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#F5F5F5',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    marginBottom: 24,
+    gap: 8,
+  },
+  signedInInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+  },
+  signedInText: {
+    fontSize: 13,
+    color: '#666',
+    flex: 1,
+  },
+  signedInPhone: {
+    color: '#1A1A1A',
+    fontWeight: '700',
+  },
+  changeNumberLink: {
+    fontSize: 13,
+    color: SpinrConfig.theme.colors.primary,
+    fontWeight: '700',
   },
   header: {
     marginBottom: 40,

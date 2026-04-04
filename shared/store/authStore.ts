@@ -67,6 +67,16 @@ export interface Driver {
   [key: string]: any;
 }
 
+export type DriverOnboardingStatus =
+  | 'profile_incomplete'
+  | 'vehicle_required'
+  | 'documents_required'
+  | 'documents_rejected'
+  | 'documents_expired'
+  | 'pending_review'
+  | 'verified'
+  | 'suspended';
+
 export interface User {
   id: string;
   phone: string;
@@ -81,6 +91,11 @@ export interface User {
   is_driver?: boolean;
   profile_image?: string;  // Base64 data URI
   rating?: number;
+  // Driver onboarding state machine (computed server-side on every /auth/me).
+  // Null for riders. Clients should route on this rather than profile_complete.
+  driver_onboarding_status?: DriverOnboardingStatus | null;
+  driver_onboarding_detail?: string | null;
+  driver_onboarding_next_screen?: string | null;
 }
 
 interface AuthState {

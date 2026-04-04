@@ -1,9 +1,22 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Animated } from 'react-native';
 import * as Location from 'expo-location';
-import * as Notifications from 'expo-notifications';
 import { Platform, Alert, Vibration, Linking } from 'react-native';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { router } from 'expo-router';
+
+// expo-notifications throws at import time inside Expo Go since SDK 53 because
+// push-token APIs were removed from Expo Go. Lazy-load it only in real builds
+// (standalone / dev-client) so the dashboard still mounts in Expo Go.
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+let Notifications: any = null;
+if (!isExpoGo) {
+  try {
+    Notifications = require('expo-notifications');
+  } catch (e) {
+    console.log('expo-notifications unavailable:', e);
+  }
+}
 import { useAuthStore } from '@shared/store/authStore';
 import { useDriverStore } from '../store/driverStore';
 import api from '@shared/api/client';
@@ -388,6 +401,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // ─── Push Notifications Setup ────────────────────────────────────
   useEffect(() => {
     if (!isOnline) return;
+    // Skip entirely in Expo Go — push APIs were removed from Expo Go in SDK 53.
+    if (!Notifications) {
+      console.log('[Push] Skipping — Notifications not available (Expo Go)');
+      return;
+    }
 
     const setupNotifications = async () => {
       const { status: existingStatus } = await Notifications.getPermissionsAsync();

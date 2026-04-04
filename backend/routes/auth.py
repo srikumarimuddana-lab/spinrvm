@@ -202,4 +202,48 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
 
 @api_router.get("/me", response_model=UserProfile)
 async def get_me(current_user: dict = Depends(get_current_user)):
+    """
+    Return the current user plus the derived driver onboarding state.
+
+    `profile_complete` is derived from the row data — if first_name/last_name/
+    email are populated we treat the profile as complete, regardless of the
+    stored flag. This protects against:
+      - silent write failures where the column never flipped to true
+      - expired driver documents (which are unrelated to profile completion)
+      - legacy rows migrated without the flag set
+
+    `driver_onboarding_status` is the full state machine (profile_incomplete,
+    vehicle_required, documents_required, documents_rejected, documents_expired,
+    pending_review, verified, suspended). Clients should route on this rather
+    than the legacy boolean.
+    """
+    has_profile_data = bool(
+        (current_user.get('first_name') or '').strip()
+        and (current_user.get('last_name') or '').strip()
+        and (current_user.get('email') or '').strip()
+    )
+    if has_profile_data and not current_user.get('profile_complete'):
+        # Self-heal the column so the next login is fast and consistent.
+        try:
+            await db.users.update_one(
+                {'id': current_user['id']},
+                {'$set': {'profile_complete': True}},
+            )
+        except Exception as e:
+            logger.warning(f"Could not self-heal profile_complete for {current_user.get('id')}: {e}")
+        current_user['profile_complete'] = True
+
+    # Derive driver onboarding status (None for non-drivers).
+    try:
+        from onboarding_status import derive_driver_onboarding_status  # type: ignore
+    except ImportError:
+        from ..onboarding_status import derive_driver_onboarding_status  # type: ignore
+    try:
+        status, detail, next_screen = await derive_driver_onboarding_status(current_user)
+        current_user['driver_onboarding_status'] = status
+        current_user['driver_onboarding_detail'] = detail
+        current_user['driver_onboarding_next_screen'] = next_screen
+    except Exception as e:
+        logger.warning(f"Could not derive onboarding status for {current_user.get('id')}: {e}")
+
     return UserProfile(**current_user)

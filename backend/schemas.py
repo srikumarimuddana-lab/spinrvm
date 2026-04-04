@@ -31,6 +31,13 @@ class UserProfile(BaseModel):
     created_at: datetime
     profile_complete: bool = False
     is_driver: bool = False
+    # Driver onboarding state machine — derived each request from user + driver
+    # + documents rows. One of: profile_incomplete | vehicle_required |
+    # documents_required | documents_rejected | documents_expired |
+    # pending_review | verified | suspended. None for non-drivers.
+    driver_onboarding_status: Optional[str] = None
+    driver_onboarding_detail: Optional[str] = None  # human-readable explanation
+    driver_onboarding_next_screen: Optional[str] = None  # route hint for the app
 
 class OTPRecord(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))

@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   RefreshControl,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -36,6 +37,7 @@ type Filter = 'all' | 'completed' | 'cancelled' | 'scheduled';
 
 export default function RidesScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { rideHistory, historyTotal, fetchRideHistory } = useDriverStore();
   const [filter, setFilter] = useState<Filter>('all');
   const [loading, setLoading] = useState(true);
@@ -142,7 +144,7 @@ export default function RidesScreen() {
       {/* Header */}
       <LinearGradient
         colors={[COLORS.surface, COLORS.primary]}
-        style={styles.header}
+        style={[styles.header, { paddingTop: insets.top + 12 }]}
       >
         <Text style={styles.headerTitle}>Ride History</Text>
 
@@ -178,7 +180,7 @@ export default function RidesScreen() {
           data={filteredRides}
           renderItem={renderRideCard}
           keyExtractor={(item) => item.id || Math.random().toString()}
-          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 100 }}
+          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 90 }}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />
@@ -202,7 +204,6 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primary,
   },
   header: {
-    paddingTop: Platform.OS === 'ios' ? 60 : 45,
     paddingHorizontal: 20,
     paddingBottom: 20,
   },

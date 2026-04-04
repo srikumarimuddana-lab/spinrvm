@@ -248,6 +248,20 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
             headers: { Authorization: `Bearer ${storedToken}` }
           });
           const userData = response.data as User;
+          // Diagnostic: log exactly what the backend is telling us about the
+          // current user's profile state. Helpful for debugging cases where
+          // the app shows "complete your profile" for a user whose row is
+          // already populated in the DB.
+          console.log('[Auth] /auth/me →', {
+            phone: userData?.phone,
+            first_name: userData?.first_name,
+            last_name: userData?.last_name,
+            email: userData?.email,
+            profile_complete: userData?.profile_complete,
+            is_driver: userData?.is_driver,
+            driver_onboarding_status: userData?.driver_onboarding_status,
+            driver_onboarding_next_screen: userData?.driver_onboarding_next_screen,
+          });
 
           // Cache the fresh data for faster subsequent loads
           await appCache.set(CACHE_KEYS.USER_PROFILE, userData, CACHE_CONFIG.USER_PROFILE_TTL);
@@ -397,8 +411,12 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
         type,
       } as any);
 
+      // Do NOT set Content-Type — axios must auto-append the boundary for RN
+      // FormData uploads, otherwise the server sees "multipart/form-data" with
+      // no boundary and rejects the request.
       const response = await api.put('/users/profile-image', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+        headers: { 'Content-Type': undefined },
+        transformRequest: (data) => data,
       });
       set({ user: response.data, isLoading: false });
 

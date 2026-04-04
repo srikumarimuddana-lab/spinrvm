@@ -12,6 +12,7 @@ import {
     Pressable,
     KeyboardAvoidingView,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -52,6 +53,7 @@ interface ReferredDriver {
 
 export default function ReferralScreen() {
     const router = useRouter();
+    const insets = useSafeAreaInsets();
     const { t } = useLanguageStore();
     const [referralInfo, setReferralInfo] = useState<ReferralInfo | null>(null);
     const [referredDrivers, setReferredDrivers] = useState<ReferredDriver[]>([]);
@@ -116,7 +118,7 @@ export default function ReferralScreen() {
     return (
         <View style={styles.container}>
             {/* Header */}
-            <View style={styles.header}>
+            <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
                     <Ionicons name="arrow-back" size={24} color={COLORS.text} />
                 </TouchableOpacity>
@@ -125,7 +127,7 @@ export default function ReferralScreen() {
             </View>
 
             <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-            <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: 120 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: insets.bottom + 60 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
                 {/* Hero Section */}
                 <LinearGradient
                     colors={['#E53935', '#C62828']}
@@ -244,7 +246,7 @@ export default function ReferralScreen() {
                     behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                 >
                 <Pressable style={styles.modalOverlay} onPress={() => setShowApplyModal(false)}>
-                    <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
+                    <Pressable style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, 20) }]} onPress={(e) => e.stopPropagation()}>
                         <View style={styles.modalHeader}>
                             <Text style={styles.modalTitle}>Apply Referral Code</Text>
                             <TouchableOpacity onPress={() => setShowApplyModal(false)}>
@@ -281,7 +283,6 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingTop: Platform.OS === 'ios' ? 55 : 35,
         paddingBottom: 15,
         paddingHorizontal: 16,
         borderBottomWidth: 1,
@@ -523,7 +524,6 @@ const styles = StyleSheet.create({
         backgroundColor: COLORS.primary,
         borderTopLeftRadius: 20,
         borderTopRightRadius: 20,
-        paddingBottom: Platform.OS === 'ios' ? 40 : 20,
     },
     modalHeader: {
         flexDirection: 'row',

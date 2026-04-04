@@ -27,6 +27,20 @@ export default function RootLayout() {
   useEffect(() => {
     const init = async () => {
       try {
+        // Session flow (driver app):
+        //   - On cold start, call initializeAuth() — it reads the stored
+        //     JWT from SecureStore and calls /auth/me to hydrate the user.
+        //   - If there's a valid session AND the user row has a profile,
+        //     index.tsx routes straight to /driver (home).
+        //   - If there's no session, index.tsx routes to /login (phone).
+        //   - After OTP, otp.tsx routes to /driver or /profile-setup based
+        //     on whether the backend returned a profile-complete user.
+        //
+        // The routing decision itself lives in driver-app/app/index.tsx and
+        // uses BOTH `user.profile_complete` AND a fallback check on
+        // first_name/last_name/email, so a stale `profile_complete=false`
+        // flag can't push a user with existing profile data back into
+        // onboarding.
         await Promise.all([initializeAuth(), initializeLocation()]);
 
         // Firebase: FCM, Crashlytics, App Check

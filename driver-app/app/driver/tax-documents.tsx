@@ -9,6 +9,7 @@ import {
     ActivityIndicator,
     Alert,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -41,6 +42,7 @@ interface T4AYear {
 
 export default function TaxDocumentsScreen() {
     const router = useRouter();
+    const insets = useSafeAreaInsets();
     const [years, setYears] = useState<number[]>([]);
     const [selectedYear, setSelectedYear] = useState<number | null>(null);
     const [t4aData, setT4aData] = useState<T4AYear | null>(null);
@@ -100,7 +102,7 @@ export default function TaxDocumentsScreen() {
     return (
         <View style={styles.container}>
             {/* Header */}
-            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={styles.header}>
+            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <View style={styles.headerRow}>
                     <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
                         <Ionicons name="arrow-back" size={22} color={COLORS.text} />
@@ -110,7 +112,7 @@ export default function TaxDocumentsScreen() {
                 </View>
             </LinearGradient>
 
-            <ScrollView contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+            <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 40 }} showsVerticalScrollIndicator={false}>
                 {/* T4A Info Card */}
                 <View style={styles.infoCard}>
                     <View style={styles.infoIcon}>
@@ -267,7 +269,6 @@ export default function TaxDocumentsScreen() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.primary },
     header: {
-        paddingTop: Platform.OS === 'ios' ? 55 : 35,
         paddingBottom: 12,
         paddingHorizontal: 16,
     },

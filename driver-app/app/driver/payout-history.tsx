@@ -7,6 +7,7 @@ import {
     Platform,
     RefreshControl,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -28,6 +29,7 @@ const COLORS = {
 
 export default function PayoutHistoryScreen() {
     const router = useRouter();
+    const insets = useSafeAreaInsets();
     const { payoutHistory, fetchPayoutHistory, isLoading } = useDriverStore();
 
     useEffect(() => {
@@ -134,7 +136,7 @@ export default function PayoutHistoryScreen() {
 
     return (
         <View style={styles.container}>
-            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={styles.header}>
+            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <View style={styles.headerRow}>
                     <View style={styles.backBtn} />
                     <Text style={styles.headerTitle}>Payout History</Text>
@@ -146,7 +148,7 @@ export default function PayoutHistoryScreen() {
                 data={payoutHistory}
                 renderItem={renderPayoutItem}
                 keyExtractor={(item) => item.id}
-                contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 100 }}
+                contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 40 }}
                 showsVerticalScrollIndicator={false}
                 ListEmptyComponent={renderEmpty}
                 refreshControl={
@@ -164,7 +166,6 @@ export default function PayoutHistoryScreen() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.primary },
     header: {
-        paddingTop: Platform.OS === 'ios' ? 55 : 35,
         paddingBottom: 12,
         paddingHorizontal: 16,
     },

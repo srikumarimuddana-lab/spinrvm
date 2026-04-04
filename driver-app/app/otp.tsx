@@ -39,14 +39,10 @@ export default function OtpScreen() {
     // Only navigate if we've attempted verification AND user is now set
     // This prevents redirecting when user was restored from a previous session
     if (hasAttemptedVerification && user) {
-      // Prefer the server-derived onboarding state if present.
-      const status = user.driver_onboarding_status;
-      if (status) {
-        const next = user.driver_onboarding_next_screen || '/driver';
-        router.replace(next as any);
-        return;
-      }
-      // Legacy fallback.
+      // Same rule as driver-app/app/index.tsx: profile complete → home.
+      // Document / vehicle / verification state is shown as a banner on
+      // the home screen, not as a redirect. Only brand-new users with no
+      // profile data get routed to /profile-setup.
       const hasProfileData = !!(user.first_name && user.last_name && user.email);
       const profileComplete = !!user.profile_complete || hasProfileData;
       if (profileComplete) {

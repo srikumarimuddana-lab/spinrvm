@@ -9,6 +9,7 @@ import {
     Platform,
     KeyboardAvoidingView,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -50,6 +51,7 @@ const QUICK_MESSAGES = [
 
 export default function ChatScreen() {
     const router = useRouter();
+    const insets = useSafeAreaInsets();
     const { user, driver } = useAuthStore();
     const { activeRide } = useDriverStore();
     const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -158,7 +160,7 @@ export default function ChatScreen() {
             keyboardVerticalOffset={0}
         >
             {/* Header */}
-            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={styles.header}>
+            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <View style={styles.headerRow}>
                     <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
                         <Ionicons name="arrow-back" size={22} color={COLORS.text} />
@@ -214,7 +216,7 @@ export default function ChatScreen() {
             )}
 
             {/* Input */}
-            <View style={styles.inputContainer}>
+            <View style={[styles.inputContainer, { paddingBottom: Math.max(insets.bottom, 14) }]}>
                 <TouchableOpacity
                     style={styles.quickToggle}
                     onPress={() => setShowQuickReplies(!showQuickReplies)}
@@ -248,7 +250,6 @@ export default function ChatScreen() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.primary },
     header: {
-        paddingTop: Platform.OS === 'ios' ? 55 : 35,
         paddingBottom: 12,
         paddingHorizontal: 16,
     },
@@ -344,7 +345,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingHorizontal: 12,
         paddingVertical: 10,
-        paddingBottom: Platform.OS === 'ios' ? 30 : 14,
         backgroundColor: COLORS.surface,
         borderTopWidth: 1,
         borderTopColor: 'rgba(255,255,255,0.06)',

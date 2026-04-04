@@ -12,6 +12,7 @@ import {
     Linking,
     KeyboardAvoidingView,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -38,6 +39,7 @@ const COLORS = {
 
 export default function PayoutScreen() {
     const router = useRouter();
+    const insets = useSafeAreaInsets();
     const {
         driverBalance,
         hasBankAccount,
@@ -183,7 +185,7 @@ export default function PayoutScreen() {
     return (
         <View style={styles.container}>
             {/* Header */}
-            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={styles.header}>
+            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <View style={styles.headerRow}>
                     <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
                         <Ionicons name="arrow-back" size={22} color={COLORS.text} />
@@ -196,7 +198,7 @@ export default function PayoutScreen() {
             </LinearGradient>
 
             <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-            <ScrollView contentContainerStyle={{ paddingBottom: 160 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 140 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
                 {/* Balance Card */}
                 <View style={styles.balanceCard}>
                     <Text style={styles.balanceLabel}>AVAILABLE BALANCE</Text>
@@ -410,7 +412,6 @@ export default function PayoutScreen() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.primary },
     header: {
-        paddingTop: Platform.OS === 'ios' ? 55 : 35,
         paddingBottom: 12,
         paddingHorizontal: 16,
     },

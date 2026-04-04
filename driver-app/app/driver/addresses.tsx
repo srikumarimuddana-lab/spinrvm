@@ -13,6 +13,7 @@ import {
     Platform,
     KeyboardAvoidingView,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -44,6 +45,7 @@ interface SavedAddress {
 
 export default function AddressesScreen() {
     const router = useRouter();
+    const insets = useSafeAreaInsets();
     const { t } = useLanguageStore();
     const [addresses, setAddresses] = useState<SavedAddress[]>([]);
     const [loading, setLoading] = useState(true);
@@ -125,7 +127,7 @@ export default function AddressesScreen() {
     return (
         <View style={styles.container}>
             {/* Header */}
-            <View style={styles.header}>
+            <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
                     <Ionicons name="arrow-back" size={24} color={COLORS.text} />
                 </TouchableOpacity>
@@ -204,7 +206,7 @@ export default function AddressesScreen() {
                     behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                 >
                 <Pressable style={styles.modalOverlay} onPress={() => setShowAddModal(false)}>
-                    <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
+                    <Pressable style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, 24) }]} onPress={(e) => e.stopPropagation()}>
                         <Text style={styles.modalTitle}>Add New Address</Text>
 
                         <View style={styles.inputGroup}>
@@ -262,7 +264,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'space-between',
         paddingHorizontal: 16,
-        paddingTop: Platform.OS === 'ios' ? 50 : 35,
         paddingBottom: 16,
         borderBottomWidth: 1,
         borderBottomColor: COLORS.border,
@@ -388,7 +389,6 @@ const styles = StyleSheet.create({
         borderTopLeftRadius: 24,
         borderTopRightRadius: 24,
         padding: 24,
-        paddingBottom: Platform.OS === 'ios' ? 40 : 24,
     },
     modalTitle: {
         fontSize: 20,

@@ -33,46 +33,28 @@ export default function Index() {
 
     hasNavigated.current = true;
 
-    if (!token) {
-      router.replace('/login' as any);
-      return;
-    }
-    if (!user) {
+    if (!token || !user) {
       router.replace('/login' as any);
       return;
     }
 
-    // Route based on the driver onboarding state machine returned by the
-    // backend in /auth/me. This is the authoritative source — the client
-    // should not second-guess it. Each state has a canonical next screen.
+    // Routing rule (product decision, 2026-04-04):
     //
-    //   profile_incomplete  → /profile-setup
-    //   vehicle_required    → /become-driver
-    //   documents_required  → /documents
-    //   documents_rejected  → /documents  (banner inside explains)
-    //   documents_expired   → /documents  (banner inside explains)
-    //   pending_review      → /driver     (dashboard, "under review" state)
-    //   verified            → /driver     (fully unlocked)
-    //   suspended           → /driver     (dashboard, suspended banner)
+    //   1. New user (no first_name/last_name/email)  → /profile-setup
+    //   2. Anyone who has already completed profile  → /driver/ (home)
     //
-    // If the backend didn't send a status (non-driver, legacy build, or
-    // error), fall back to the legacy boolean + is_driver branching.
-    const status = user.driver_onboarding_status;
-    if (status) {
-      const next = user.driver_onboarding_next_screen || '/driver';
-      router.replace(next as any);
-      return;
-    }
-
-    // Legacy fallback (rider / pre-state-machine backend).
+    // The driver onboarding state (documents_required, documents_expired,
+    // pending_review, suspended, etc.) is displayed as a BANNER on the home
+    // screen — not as a redirect. A driver whose document expired should
+    // still land on home and see the re-upload banner there; we never push
+    // them out of the dashboard against their will.
     const hasProfileData = !!(user.first_name && user.last_name && user.email);
     const profileComplete = !!user.profile_complete || hasProfileData;
+
     if (!profileComplete) {
       router.replace('/profile-setup' as any);
-    } else if (user.is_driver) {
-      router.replace('/driver/' as any);
     } else {
-      router.replace('/become-driver' as any);
+      router.replace('/driver/' as any);
     }
   }, [isInitialized, token, user, navigationRef.isReady()]);
 

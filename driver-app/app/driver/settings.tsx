@@ -11,6 +11,7 @@ import {
     Modal,
     Pressable,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -38,6 +39,7 @@ const COLORS = {
 
 export default function SettingsScreen() {
     const router = useRouter();
+    const insets = useSafeAreaInsets();
     const { logout } = useAuthStore();
     const { language, setLanguage, loadLanguage, t } = useLanguageStore();
     const [showLanguageModal, setShowLanguageModal] = useState(false);
@@ -108,7 +110,7 @@ export default function SettingsScreen() {
     return (
         <View style={styles.container}>
             {/* Header */}
-            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={styles.header}>
+            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <View style={styles.headerRow}>
                     <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
                         <Ionicons name="arrow-back" size={22} color={COLORS.text} />
@@ -118,7 +120,7 @@ export default function SettingsScreen() {
                 </View>
             </LinearGradient>
 
-            <ScrollView contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+            <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 40 }} showsVerticalScrollIndicator={false}>
                 {/* Notifications Section */}
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>Notifications</Text>
@@ -276,7 +278,7 @@ export default function SettingsScreen() {
                 onRequestClose={() => setShowLanguageModal(false)}
             >
                 <Pressable style={styles.modalOverlay} onPress={() => setShowLanguageModal(false)}>
-                    <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
+                    <Pressable style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, 20) }]} onPress={(e) => e.stopPropagation()}>
                         <View style={styles.modalHeader}>
                             <Text style={styles.modalTitle}>{t('settings.language')}</Text>
                             <TouchableOpacity onPress={() => setShowLanguageModal(false)}>
@@ -321,7 +323,6 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.primary },
     header: {
-        paddingTop: Platform.OS === 'ios' ? 55 : 35,
         paddingBottom: 12,
         paddingHorizontal: 16,
     },
@@ -439,7 +440,6 @@ const styles = StyleSheet.create({
         backgroundColor: COLORS.primary,
         borderTopLeftRadius: 20,
         borderTopRightRadius: 20,
-        paddingBottom: Platform.OS === 'ios' ? 40 : 20,
     },
     modalHeader: {
         flexDirection: 'row',

@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   RefreshControl,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -39,6 +40,7 @@ type Period = 'today' | 'week' | 'month' | 'all';
 
 export default function EarningsScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const {
     earnings,
     dailyEarnings,
@@ -82,7 +84,7 @@ export default function EarningsScreen() {
       {/* Header */}
       <LinearGradient
         colors={[COLORS.surface, COLORS.primary]}
-        style={styles.header}
+        style={[styles.header, { paddingTop: insets.top + 12 }]}
       >
         <View style={styles.headerRow}>
           <Text style={styles.headerTitle}>Earnings</Text>
@@ -127,7 +129,7 @@ export default function EarningsScreen() {
 
       <ScrollView
         style={styles.content}
-        contentContainerStyle={{ paddingBottom: 100 }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 90 }}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />}
       >
@@ -259,7 +261,6 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primary,
   },
   header: {
-    paddingTop: Platform.OS === 'ios' ? 60 : 45,
     paddingHorizontal: 20,
     paddingBottom: 20,
   },

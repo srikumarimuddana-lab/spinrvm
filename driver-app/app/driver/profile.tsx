@@ -10,6 +10,7 @@ import {
   Alert,
   StatusBar,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
@@ -19,6 +20,7 @@ const THEME = SpinrConfig.theme.colors;
 
 export default function ProfileScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { user, driver: driverData, logout } = useAuthStore();
 
   const handleLogout = () => {
@@ -54,9 +56,9 @@ export default function ProfileScreen() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
-      <ScrollView contentContainerStyle={{ paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 90 }} showsVerticalScrollIndicator={false}>
         {/* Header / Avatar - White Background */}
-        <View style={styles.header}>
+        <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
           <View style={styles.avatarContainer}>
             {user?.profile_image ? (
               <Image source={{ uri: user.profile_image }} style={styles.avatar} />
@@ -255,7 +257,6 @@ const styles = StyleSheet.create({
     backgroundColor: THEME.background,
   },
   header: {
-    paddingTop: Platform.OS === 'ios' ? 60 : 45,
     paddingBottom: 24,
     alignItems: 'center',
     backgroundColor: '#fff',

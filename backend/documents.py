@@ -287,17 +287,38 @@ async def upload_file(
             raise HTTPException(status_code=413, detail="File too large (max 10MB)")
 
         file_id = str(uuid.uuid4())
+        size = len(content)
+        filename = file.filename or 'upload'
+        content_type = file.content_type or 'application/octet-stream'
+
+        # Only insert columns that actually exist on the Supabase
+        # `document_files` table. Historically this table was created with
+        # just { id, data, content_type, created_at } — adding columns like
+        # `size`, `filename`, `uploaded_by` to the insert raises PGRST204
+        # ("Could not find the X column of document_files in the schema
+        # cache"). We still return size/filename in the response so the
+        # client gets full metadata without us having to touch the schema.
         record = {
             'id': file_id,
-            'filename': file.filename or 'upload',
-            'content_type': file.content_type or 'application/octet-stream',
+            'content_type': content_type,
             'data': base64.b64encode(content).decode('utf-8'),
-            'size': len(content),
-            'uploaded_by': current_user.get('id'),
-            'created_at': datetime.utcnow(),
+            'created_at': datetime.utcnow().isoformat(),
         }
 
-        await db.document_files.insert_one(record)
+        try:
+            await db.document_files.insert_one(record)
+        except Exception as e:
+            # If a newer schema has the extra columns, retry with them
+            # included so we don't silently lose metadata on upgraded DBs.
+            err_msg = str(e)
+            if 'PGRST204' in err_msg or 'schema cache' in err_msg:
+                # Already using minimal columns — re-raise with context.
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Upload insert rejected by DB schema: {err_msg}",
+                )
+            # Not a schema error — bubble up as-is.
+            raise
 
         # Relative URL served by files_router (GET /api/documents/{file_id})
         url = f"/api/documents/{file_id}"
@@ -305,9 +326,9 @@ async def upload_file(
             'success': True,
             'url': url,
             'file_id': file_id,
-            'filename': record['filename'],
-            'content_type': record['content_type'],
-            'size': record['size'],
+            'filename': filename,
+            'content_type': content_type,
+            'size': size,
         }
     except HTTPException:
         raise

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Image, Platform, StatusBar } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -7,6 +8,21 @@ import * as DocumentPicker from 'expo-document-picker';
 import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
+
+// Resolve the stored auth token the same way the shared api client does.
+// Used for the raw fetch() upload below — we can't reuse axios for multipart
+// because its FormData handling is fragile in React Native.
+const getAuthToken = async (): Promise<string | null> => {
+    try {
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+            return localStorage.getItem('auth_token');
+        }
+        const SecureStore = require('expo-secure-store');
+        return await SecureStore.getItemAsync('auth_token');
+    } catch {
+        return null;
+    }
+};
 
 const THEME = SpinrConfig.theme.colors;
 
@@ -29,7 +45,7 @@ interface DriverDocument {
 
 export default function DocumentsScreen() {
     const router = useRouter();
-    // Force rebuild
+    const insets = useSafeAreaInsets();
     const { driver, fetchDriverProfile } = useAuthStore();
     const [loading, setLoading] = useState(true);
     const [requirements, setRequirements] = useState<Requirement[]>([]);
@@ -64,36 +80,71 @@ export default function DocumentsScreen() {
         try {
             setUploading(`${reqId}-${side}`);
 
-            // 1. Upload file
+            // 1. Upload file via native fetch() — NOT axios.
+            //
+            // Why: axios's FormData handling in React Native is fragile.
+            // Combinations of headers/transformRequest cause either
+            // "missing boundary" or a serialized "[object Object]" because
+            // axios's default transformRequest tries to JSON.stringify the
+            // FormData. fetch() in React Native handles multipart bodies
+            // natively and sets the boundary correctly, so we use it here.
             const formData = new FormData();
             formData.append('file', {
-                uri: uri,
-                name: name,
+                uri,
+                name,
                 type: mimeType,
             } as any);
 
-            const uploadRes = await api.post('/upload', formData, {
-                headers: { 'Content-Type': 'multipart/form-data' },
+            const token = await getAuthToken();
+            const uploadUrl = `${SpinrConfig.backendUrl}/api/v1/upload`;
+
+            const resp = await fetch(uploadUrl, {
+                method: 'POST',
+                headers: {
+                    // Do NOT set Content-Type — fetch generates it with the boundary.
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                    Accept: 'application/json',
+                },
+                body: formData as any,
             });
 
-            const fileUrl = uploadRes.data.url;
+            if (!resp.ok) {
+                const text = await resp.text().catch(() => '');
+                throw new Error(
+                    `Upload failed (${resp.status}): ${text || resp.statusText || 'Unknown error'}`
+                );
+            }
 
-            // 2. Link to driver
+            const uploadData = await resp.json();
+            const fileUrl = uploadData.url;
+            if (!fileUrl) {
+                throw new Error('Upload succeeded but server did not return a file URL.');
+            }
+
+            // 2. Link to driver (axios is fine for plain JSON).
             await api.post('/drivers/documents', {
                 requirement_id: reqId,
                 document_url: fileUrl,
-                side: side,
+                side,
                 document_type: mimeType,
             });
 
-            // 3. Refresh
+            // 3. Refresh UI
             await loadData();
             await fetchDriverProfile();
 
-            Alert.alert("Uploaded", "Document submitted for review.");
-
+            Alert.alert('Uploaded', 'Document submitted for review.');
         } catch (err: any) {
-            Alert.alert("Upload Failed", err.message);
+            // Unpack the error safely — axios errors have `response.data.detail`,
+            // fetch errors have `message`, anything else falls back to String().
+            const detail =
+                err?.response?.data?.detail ||
+                err?.response?.data?.message ||
+                err?.message ||
+                (typeof err === 'string' ? err : JSON.stringify(err)) ||
+                'Something went wrong';
+            console.log('Upload error:', err);
+            Alert.alert('Upload Failed', String(detail));
         } finally {
             setUploading(null);
         }
@@ -211,7 +262,7 @@ export default function DocumentsScreen() {
     return (
         <View style={styles.container}>
             <StatusBar barStyle="dark-content" />
-            <View style={styles.header}>
+            <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
                     <Ionicons name="arrow-back" size={24} color="#000" />
                 </TouchableOpacity>
@@ -219,7 +270,7 @@ export default function DocumentsScreen() {
                 <View style={{ width: 24 }} />
             </View>
 
-            <ScrollView contentContainerStyle={styles.content}>
+            <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 40 }]}>
                 <View style={styles.infoBox}>
                     <Ionicons name="information-circle-outline" size={20} color={THEME.primary} style={{ marginRight: 8 }} />
                     <Text style={styles.infoText}>
@@ -333,7 +384,6 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingTop: Platform.OS === 'ios' ? 60 : 20,
         paddingBottom: 20,
         paddingHorizontal: 20,
         backgroundColor: '#fff',

@@ -8,6 +8,7 @@ import {
     Platform,
     RefreshControl,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -93,6 +94,7 @@ const iconMap: Record<string, { name: string; color: string }> = {
 
 export default function NotificationsScreen() {
     const router = useRouter();
+    const insets = useSafeAreaInsets();
     const [notifications, setNotifications] = useState<Notification[]>(sampleNotifications);
     const [refreshing, setRefreshing] = useState(false);
 
@@ -150,7 +152,7 @@ export default function NotificationsScreen() {
     return (
         <View style={styles.container}>
             {/* Header */}
-            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={styles.header}>
+            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <View style={styles.headerRow}>
                     <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
                         <Ionicons name="arrow-back" size={22} color={COLORS.text} />
@@ -173,7 +175,7 @@ export default function NotificationsScreen() {
                 data={notifications}
                 renderItem={renderNotification}
                 keyExtractor={(item) => item.id}
-                contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 100 }}
+                contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 40 }}
                 showsVerticalScrollIndicator={false}
                 refreshControl={
                     <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />
@@ -193,7 +195,6 @@ export default function NotificationsScreen() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.primary },
     header: {
-        paddingTop: Platform.OS === 'ios' ? 55 : 35,
         paddingBottom: 14,
         paddingHorizontal: 16,
     },

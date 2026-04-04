@@ -17,6 +17,7 @@ build/
 
 # Metro cache
 rider-app/.metro-cache/
+driver-app/.metro-cache/
 
 # Logs
 *.log

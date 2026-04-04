@@ -3,7 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import { auth } from '../config/firebaseConfig';
 import { PhoneAuthProvider, signInWithCredential, signOut, User as FirebaseUser } from 'firebase/auth';
-import api from '../api/client';
+import api, { setInMemoryToken } from '../api/client';
 import { appCache, CACHE_KEYS, CACHE_CONFIG } from '../cache';
 
 // Platform-safe secure storage
@@ -90,6 +90,7 @@ export interface User {
   profile_complete: boolean;
   is_driver?: boolean;
   profile_image?: string;  // Base64 data URI
+  profile_image_status?: 'pending_review' | 'approved' | 'rejected' | null;
   rating?: number;
   // Driver onboarding state machine (computed server-side on every /auth/me).
   // Null for riders. Clients should route on this rather than profile_complete.
@@ -133,39 +134,96 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
     console.log('Auth initializing...');
     set({ isLoading: true });
 
-    // Safety timeout: if Firebase doesn't respond within 4s, force init to prevent splash screen hang
-    setTimeout(() => {
-      const state = get();
-      if (!state.isInitialized) {
-        console.log('Auth init timed out - forcing completion');
-        set({ isInitialized: true, isLoading: false });
-      }
-    }, 4000);
+    // Strategy:
+    //   1. ALWAYS check for a stored backend JWT first.
+    //   2. Only fall through to Firebase if there's no stored token.
+    //   This prevents Firebase onAuthStateChanged (which fires with null
+    //   when no Firebase phone-auth session exists) from deleting a
+    //   perfectly valid backend JWT.
 
-    // Check if Firebase Auth is actually available
+    const storedToken = await storage.getItem('auth_token');
+    console.log('[Auth] Stored token:', storedToken ? 'EXISTS' : 'NULL');
+
+    if (storedToken) {
+      // ── Stored backend JWT path ──
+      try {
+        const response = await api.get('/auth/me', {
+          headers: { Authorization: `Bearer ${storedToken}` }
+        });
+        const userData = response.data as User;
+
+        console.log('[Auth] /auth/me →', {
+          phone: userData?.phone,
+          first_name: userData?.first_name,
+          last_name: userData?.last_name,
+          email: userData?.email,
+          profile_complete: userData?.profile_complete,
+          is_driver: userData?.is_driver,
+          driver_onboarding_status: userData?.driver_onboarding_status,
+          driver_onboarding_next_screen: userData?.driver_onboarding_next_screen,
+        });
+
+        await appCache.set(CACHE_KEYS.USER_PROFILE, userData, CACHE_CONFIG.USER_PROFILE_TTL);
+
+        let driverData: Driver | null = null;
+        if (userData.is_driver || userData.role === 'driver') {
+          try {
+            const driverRes = await api.get('/drivers/me', {
+              headers: { Authorization: `Bearer ${storedToken}` }
+            });
+            driverData = driverRes.data as Driver;
+            await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, CACHE_CONFIG.USER_PROFILE_TTL);
+          } catch (e) {
+            console.log('Failed to fetch driver data on init');
+          }
+        }
+
+        setInMemoryToken(storedToken);
+        set({
+          user: userData,
+          driver: driverData,
+          token: storedToken,
+          isInitialized: true,
+          isLoading: false
+        });
+        return; // Done — valid session restored
+      } catch (error: any) {
+        console.log('[Auth] Stored token invalid or expired:', error.message);
+        await storage.deleteItem('auth_token');
+        // Fall through to no-session state below
+      }
+    }
+
+    // ── No valid stored token ──
+    // Check Firebase as a secondary auth source (only useful when firebase
+    // phone-auth is actively configured and the user signed in via it).
     if (typeof auth.onAuthStateChanged === 'function') {
-      // Listen for Firebase Auth changes
+      // Safety timeout: if Firebase doesn't respond within 4s, force init
+      setTimeout(() => {
+        const state = get();
+        if (!state.isInitialized) {
+          console.log('[Auth] Firebase init timed out - forcing completion with no session');
+          set({ user: null, driver: null, token: null, isInitialized: true, isLoading: false });
+        }
+      }, 4000);
+
       auth.onAuthStateChanged(async (firebaseUser: any) => {
+        if (get().isInitialized) return; // Already resolved by timeout or previous call
+
         if (firebaseUser) {
           try {
             const token = await firebaseUser.getIdToken();
-            console.log('Got Firebase token');
+            console.log('[Auth] Got Firebase token');
 
-            // Always fetch fresh user data from backend for auth state
-            // Don't rely on cache for authentication decisions
             let userData: User | null = null;
             let driverData: Driver | null = null;
 
             try {
-              // Fetch fresh user data from backend
               const response = await api.get('/auth/me');
               userData = response.data as User;
-
-              // Also cache the fresh data for faster UI updates later
               if (userData) {
                 await appCache.set(CACHE_KEYS.USER_PROFILE, userData, CACHE_CONFIG.USER_PROFILE_TTL);
               }
-
               if (userData?.is_driver || userData?.role === 'driver') {
                 try {
                   const driverRes = await api.get('/drivers/me');
@@ -175,128 +233,27 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
                   console.log('Failed to fetch driver data on init');
                 }
               }
-
-              set({
-                user: userData,
-                driver: driverData,
-                token,
-                isInitialized: true,
-                isLoading: false
-              });
-
+              set({ user: userData, driver: driverData, token, isInitialized: true, isLoading: false });
               await storage.setItem('auth_token', token);
-
             } catch (err) {
-              console.log('Failed to fetch user profile, but have valid firebase token');
-              // If backend fails but we have firebase token, we might still want to let them in
-              // or handle it gracefully. For now, we'll try to use cached data as fallback if backend is down
-              const cachedUser = await appCache.get<User>(CACHE_KEYS.USER_PROFILE);
-              if (cachedUser) {
-                set({
-                  user: cachedUser,
-                  driver: await appCache.get<Driver>(CACHE_KEYS.DRIVER_PROFILE),
-                  token,
-                  isInitialized: true,
-                  isLoading: false
-                });
-              } else {
-                throw err; // Re-throw to trigger error state
-              }
+              console.log('[Auth] Firebase user but backend fetch failed');
+              set({ isLoading: false, isInitialized: true, error: 'Failed to sync user' });
             }
-
           } catch (error: any) {
-            console.log('Failed to sync user with backend:', error);
+            console.log('[Auth] Failed to get Firebase token:', error);
             set({ isLoading: false, isInitialized: true, error: 'Failed to sync user' });
           }
         } else {
-          // No firebase user, but check if we have a stored token before giving up
-          const storedToken = await storage.getItem('auth_token');
-          if (storedToken) {
-            console.log('No Firebase user, but found stored token. Attempting to restore session...');
-            // We'll let the "fallback" block below handle this if we weren't using onAuthStateChanged
-            // But since we are, we can verify the token here or just wait.
-            // Actually, if onAuthStateChanged fires with null, it means Firebase explicitly thinks we are logged out.
-            // However, sometimes it takes a moment.
-
-            // If we rely purely on Firebase, then null means logged out.
-            // But if we support custom backend tokens, we should check them.
-          }
-
-          console.log('No user logged in (state changed)');
-          // Only clear if we really don't have a token in storage or if firebase explicitly signed out
-          // For now, consistent behavior:
-          await storage.deleteItem('auth_token');
+          // No Firebase user AND no stored token → truly logged out
+          console.log('[Auth] No Firebase user, no stored token → logged out');
           await appCache.clearUserCache();
-          set({
-            user: null,
-            driver: null,
-            token: null,
-            isInitialized: true,
-            isLoading: false
-          });
+          set({ user: null, driver: null, token: null, isInitialized: true, isLoading: false });
         }
       });
     } else {
-      // Firebase not configured — fall back to stored JWT token
-      console.log('Firebase not configured, using stored token auth');
-      const storedToken = await storage.getItem('auth_token');
-
-      if (storedToken) {
-        try {
-          // Always fetch fresh user data for auth state
-          const response = await api.get('/auth/me', {
-            headers: { Authorization: `Bearer ${storedToken}` }
-          });
-          const userData = response.data as User;
-          // Diagnostic: log exactly what the backend is telling us about the
-          // current user's profile state. Helpful for debugging cases where
-          // the app shows "complete your profile" for a user whose row is
-          // already populated in the DB.
-          console.log('[Auth] /auth/me →', {
-            phone: userData?.phone,
-            first_name: userData?.first_name,
-            last_name: userData?.last_name,
-            email: userData?.email,
-            profile_complete: userData?.profile_complete,
-            is_driver: userData?.is_driver,
-            driver_onboarding_status: userData?.driver_onboarding_status,
-            driver_onboarding_next_screen: userData?.driver_onboarding_next_screen,
-          });
-
-          // Cache the fresh data for faster subsequent loads
-          await appCache.set(CACHE_KEYS.USER_PROFILE, userData, CACHE_CONFIG.USER_PROFILE_TTL);
-
-          let driverData: Driver | null = null;
-          if (userData.is_driver || userData.role === 'driver') {
-            try {
-              const driverRes = await api.get('/drivers/me', {
-                headers: { Authorization: `Bearer ${storedToken}` }
-              });
-              driverData = driverRes.data as Driver;
-              await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, CACHE_CONFIG.USER_PROFILE_TTL);
-            } catch (e) {
-              console.log('Failed to fetch driver data on init');
-            }
-          }
-
-          set({
-            user: userData,
-            driver: driverData,
-            token: storedToken,
-            isInitialized: true,
-            isLoading: false
-          });
-        } catch (error: any) {
-          // If token is invalid, try to use cached data as a last resort before logging out?
-          // No, if token is invalid, we must log out.
-          console.log('Stored token invalid or expired:', error.message);
-          await storage.deleteItem('auth_token');
-          set({ user: null, driver: null, token: null, isInitialized: true, isLoading: false });
-        }
-      } else {
-        console.log('No stored token found');
-        set({ user: null, driver: null, token: null, isInitialized: true, isLoading: false });
-      }
+      // Firebase not available at all
+      console.log('[Auth] No stored token, no Firebase → logged out');
+      set({ user: null, driver: null, token: null, isInitialized: true, isLoading: false });
     }
   },
 
@@ -391,6 +348,7 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
     } catch (error) {
       console.log('Logout error:', error);
     }
+    setInMemoryToken(null);
     await storage.deleteItem('auth_token');
     // Clear user cache on logout
     await appCache.clearUserCache();

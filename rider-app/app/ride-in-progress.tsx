@@ -257,7 +257,7 @@ I've shared my live location with you for safety.
               <CarMarker
                 coordinate={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}
                 heading={(currentDriver as any).heading}
-                size={6}
+                size={44}
                 zIndex={100}
               />
             )}

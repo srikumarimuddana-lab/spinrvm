@@ -26,6 +26,7 @@ class UserProfile(BaseModel):
     email: Optional[str] = None
     gender: Optional[str] = None
     profile_image: Optional[str] = None  # Base64 encoded image
+    profile_image_status: Optional[str] = None  # pending_review | approved | rejected
     role: str = 'rider'
     corporate_account_id: Optional[str] = None
     created_at: datetime

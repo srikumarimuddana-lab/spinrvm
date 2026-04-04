@@ -7,7 +7,7 @@ import SpinrConfig from '@shared/config/spinr.config';
 export default function Index() {
   const router = useRouter();
   const navigationRef = useNavigationContainerRef();
-  const { isInitialized, token, user } = useAuthStore();
+  const { isInitialized, token, user, logout } = useAuthStore();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.5)).current;
   const hasNavigated = useRef(false);
@@ -38,21 +38,29 @@ export default function Index() {
       return;
     }
 
-    // Routing rule (product decision, 2026-04-04):
+    // Routing rule:
+    //   1. Profile complete → /driver/ (home)
+    //   2. Profile incomplete → clear session → /login (phone screen)
     //
-    //   1. New user (no first_name/last_name/email)  → /profile-setup
-    //   2. Anyone who has already completed profile  → /driver/ (home)
+    // This ensures the phone number screen is ALWAYS the first screen
+    // for users who haven't completed their profile. After phone + OTP
+    // verification, otp.tsx routes to /profile-setup or /driver based
+    // on the profile state.
     //
     // The driver onboarding state (documents_required, documents_expired,
     // pending_review, suspended, etc.) is displayed as a BANNER on the home
-    // screen — not as a redirect. A driver whose document expired should
-    // still land on home and see the re-upload banner there; we never push
-    // them out of the dashboard against their will.
+    // screen — not as a redirect.
     const hasProfileData = !!(user.first_name && user.last_name && user.email);
     const profileComplete = !!user.profile_complete || hasProfileData;
 
     if (!profileComplete) {
-      router.replace('/profile-setup' as any);
+      // Profile incomplete — clear stale session and send to login.
+      // The user will enter their phone, verify OTP, then get routed
+      // to /profile-setup by otp.tsx.
+      console.log('[Index] Profile incomplete, clearing session → /login');
+      logout().then(() => {
+        router.replace('/login' as any);
+      });
     } else {
       router.replace('/driver/' as any);
     }

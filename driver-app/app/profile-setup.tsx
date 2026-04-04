@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,57 +10,114 @@ import {
   Keyboard,
   TouchableWithoutFeedback,
   ActivityIndicator,
-  Alert,
   ScrollView,
+  Animated,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@shared/store/authStore';
+import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
+
+const THEME = SpinrConfig.theme.colors;
 
 export default function ProfileSetupScreen() {
   const router = useRouter();
-  const { user, createProfile, logout, isLoading: authLoading, error: authError } = useAuthStore();
+  const insets = useSafeAreaInsets();
+  const [isCheckingExisting, setIsCheckingExisting] = useState(true);
+  
+  const { user, token, createProfile, logout, isLoading: authLoading } = useAuthStore();
+
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
+  const [gender, setGender] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Focus states for animations
+  const [focusedField, setFocusedField] = useState<string | null>(null);
+
+  // Alert state
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: { text: string; style: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
+  }>({ visible: false, title: '', message: '', variant: 'info' });
+
+  // ── Auth guard ──
+  useEffect(() => {
+    if (!token && !user) {
+      router.replace('/login' as any);
+    }
+  }, [token, user]);
+
+  useEffect(() => {
+    if (!token && !user) return;
+    let cancelled = false;
+    (async () => {
+      if (user?.first_name && user?.last_name && user?.email) {
+        router.replace('/driver' as any);
+        return;
+      }
+      try {
+        const res = await api.get('/auth/me');
+        const fresh = res.data;
+        if (cancelled) return;
+        if (fresh?.first_name && fresh?.last_name && fresh?.email) {
+          useAuthStore.setState({ user: fresh });
+          router.replace('/driver' as any);
+          return;
+        }
+      } catch (err: any) {
+        console.log('[ProfileSetup] /auth/me refetch failed:', err?.message || err);
+      }
+      if (!cancelled) setIsCheckingExisting(false);
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const handleChangeNumber = () => {
-    Alert.alert(
-      'Change phone number?',
-      'This will sign you out and return to the phone entry screen. Any progress here will be lost.',
-      [
+    setAlertState({
+      visible: true,
+      title: 'Change phone number?',
+      message: 'This will sign you out and return to the login screen. Any progress here will be lost.',
+      variant: 'warning',
+      buttons: [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Change Number',
+          text: 'Sign Out',
           style: 'destructive',
           onPress: async () => {
             await logout();
             router.replace('/login' as any);
           },
         },
-      ]
-    );
+      ],
+    });
   };
-
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [email, setEmail] = useState('');
-  const [gender, setGender] = useState('');
-  const [showGenderPicker, setShowGenderPicker] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const validateEmail = (email: string): boolean => {
     const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return re.test(email);
   };
 
-  const handleSubmit = async () => {
-    if (!firstName.trim() || !lastName.trim() || !email.trim() || !gender) {
-      Alert.alert('Missing Info', 'Please fill in all fields');
-      return;
-    }
+  const isEmailValid = email.length > 0 && validateEmail(email);
+  const isFirstNameValid = firstName.trim().length > 1;
+  const isLastNameValid = lastName.trim().length > 1;
+  const isFormValid = isFirstNameValid && isLastNameValid && isEmailValid && gender;
 
-    if (!validateEmail(email)) {
-      Alert.alert('Invalid Email', 'Please enter a valid email address');
+  const handleSubmit = async () => {
+    if (!isFormValid) {
+      setAlertState({
+        visible: true,
+        title: 'Missing Info',
+        message: 'Please complete all required fields.',
+        variant: 'warning',
+      });
       return;
     }
 
@@ -76,164 +133,188 @@ export default function ProfileSetupScreen() {
       });
       router.replace('/driver' as any);
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to create profile');
+      setAlertState({
+        visible: true,
+        title: 'Error',
+        message: err.message || 'Failed to create profile. Please try again.',
+        variant: 'danger',
+      });
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const isFormValid = firstName.trim() && lastName.trim() && email.trim() && gender;
+  const renderInput = (
+    label: string, 
+    value: string, 
+    setValue: (val: string) => void, 
+    placeholder: string, 
+    icon: keyof typeof Ionicons.glyphMap,
+    fieldKey: string,
+    isValid: boolean,
+    keyboardType: 'default' | 'email-address' = 'default'
+  ) => {
+    const isFocused = focusedField === fieldKey;
+    return (
+      <View style={styles.inputGroup}>
+        <Text style={styles.label}>{label}</Text>
+        <View style={[
+          styles.inputContainer,
+          isFocused && styles.inputContainerFocused,
+          value.length > 0 && isValid && styles.inputContainerValid
+        ]}>
+          <View style={styles.inputIconContainer}>
+            <Ionicons 
+              name={icon} 
+              size={20} 
+              color={isFocused ? THEME.primary : (value ? THEME.text : '#A0A0A0')} 
+            />
+          </View>
+          <TextInput
+            style={styles.input}
+            value={value}
+            onChangeText={setValue}
+            placeholder={placeholder}
+            placeholderTextColor="#B0B0B0"
+            autoCapitalize={keyboardType === 'email-address' ? 'none' : 'words'}
+            keyboardType={keyboardType}
+            autoCorrect={false}
+            onFocus={() => setFocusedField(fieldKey)}
+            onBlur={() => setFocusedField(null)}
+          />
+          {value.length > 0 && isValid && (
+            <View style={styles.checkIcon}>
+              <Ionicons name="checkmark-circle" size={20} color={THEME.success} />
+            </View>
+          )}
+        </View>
+      </View>
+    );
+  };
 
-  const genderOptions = [
-    { label: 'Male', value: 'Male' },
-    { label: 'Female', value: 'Female' },
-    { label: 'Other', value: 'Other' },
-  ];
+  if (isCheckingExisting) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color={THEME.primary} />
+      </View>
+    );
+  }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
-      >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-          <ScrollView
-            style={styles.scrollView}
-            contentContainerStyle={styles.scrollContent}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-            {/* Signed-in-as pill + Change number */}
-            <View style={styles.signedInRow}>
-              <View style={styles.signedInInfo}>
-                <Ionicons name="call" size={14} color="#666" />
-                <Text style={styles.signedInText} numberOfLines={1}>
-                  Signed in as{' '}
-                  <Text style={styles.signedInPhone}>{user?.phone || 'your number'}</Text>
-                </Text>
-              </View>
-              <TouchableOpacity onPress={handleChangeNumber} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                <Text style={styles.changeNumberLink}>Change</Text>
-              </TouchableOpacity>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={styles.container}
+    >
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 40 }]}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Top pill for logged in status */}
+          <View style={styles.signedInRow}>
+            <View style={styles.signedInAvatar}>
+              <Ionicons name="call" size={12} color={THEME.primary} />
             </View>
-
-            {/* Header */}
-            <View style={styles.header}>
-              <Text style={styles.title}>Complete your{"\n"}profile</Text>
-              <Text style={styles.subtitle}>
-                We need a few details to get you started with Spinr.
-              </Text>
+            <View style={styles.signedInInfo}>
+              <Text style={styles.signedInLabel}>Signed in with</Text>
+              <Text style={styles.signedInPhone}>{user?.phone || 'Unknown'}</Text>
             </View>
-
-            {/* Form */}
-            <View style={styles.form}>
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>First Name</Text>
-                <TextInput
-                  style={styles.input}
-                  value={firstName}
-                  onChangeText={setFirstName}
-                  placeholder="Enter your first name"
-                  placeholderTextColor="#999"
-                  autoCapitalize="words"
-                />
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Last Name</Text>
-                <TextInput
-                  style={styles.input}
-                  value={lastName}
-                  onChangeText={setLastName}
-                  placeholder="Enter your last name"
-                  placeholderTextColor="#999"
-                  autoCapitalize="words"
-                />
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Email</Text>
-                <TextInput
-                  style={styles.input}
-                  value={email}
-                  onChangeText={setEmail}
-                  placeholder="email@example.com"
-                  placeholderTextColor="#999"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>Gender</Text>
-                <TouchableOpacity
-                  style={styles.citySelector}
-                  onPress={() => setShowGenderPicker(!showGenderPicker)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.citySelectorText, !gender && styles.placeholder]}>
-                    {gender || 'Select your gender'}
-                  </Text>
-                  <Ionicons
-                    name={showGenderPicker ? 'chevron-up' : 'chevron-down'}
-                    size={20}
-                    color="#666"
-                  />
-                </TouchableOpacity>
-
-                {showGenderPicker && (
-                  <View style={styles.cityDropdown}>
-                    {genderOptions.map((g) => (
-                      <TouchableOpacity
-                        key={g.value}
-                        style={[
-                          styles.cityOption,
-                          gender === g.value && styles.cityOptionSelected,
-                        ]}
-                        onPress={() => {
-                          setGender(g.value);
-                          setShowGenderPicker(false);
-                        }}
-                      >
-                        <Text
-                          style={[
-                            styles.cityOptionText,
-                            gender === g.value && styles.cityOptionTextSelected,
-                          ]}
-                        >
-                          {g.label}
-                        </Text>
-                        {gender === g.value && (
-                          <Ionicons name="checkmark" size={20} color={SpinrConfig.theme.colors.primary} />
-                        )}
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-              </View>
-            </View>
-
-            {/* Submit Button */}
-            <TouchableOpacity
-              style={[
-                styles.submitButton,
-                !isFormValid && styles.submitButtonDisabled,
-              ]}
-              onPress={handleSubmit}
-              disabled={!isFormValid || isSubmitting || authLoading}
-              activeOpacity={0.8}
-            >
-              {isSubmitting || authLoading ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <Text style={styles.submitButtonText}>Get Started</Text>
-              )}
+            <TouchableOpacity onPress={handleChangeNumber} style={styles.changeBtn}>
+              <Text style={styles.changeBtnText}>Change</Text>
             </TouchableOpacity>
-          </ScrollView>
-        </TouchableWithoutFeedback>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+          </View>
+
+          {/* Header */}
+          <View style={styles.header}>
+            <Text style={styles.title}>Welcome! 🎉</Text>
+            <Text style={styles.subtitle}>
+              Let's get to know you better. This info will be shown to your riders.
+            </Text>
+          </View>
+
+          {/* Form */}
+          <View style={styles.form}>
+            <View style={styles.row}>
+              <View style={{ flex: 1, marginRight: 12 }}>
+                {renderInput('First Name', firstName, setFirstName, 'John', 'person-outline', 'fn', isFirstNameValid)}
+              </View>
+              <View style={{ flex: 1 }}>
+                {renderInput('Last Name', lastName, setLastName, 'Doe', 'person-outline', 'ln', isLastNameValid)}
+              </View>
+            </View>
+
+            {renderInput('Email Address', email, setEmail, 'john.doe@example.com', 'mail-outline', 'email', isEmailValid, 'email-address')}
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Gender</Text>
+              <View style={styles.genderOptions}>
+                {['Male', 'Female', 'Other'].map((option) => (
+                  <TouchableOpacity
+                    key={option}
+                    style={[
+                      styles.genderOption,
+                      gender === option && styles.genderOptionSelected
+                    ]}
+                    onPress={() => setGender(option)}
+                    activeOpacity={0.8}
+                  >
+                    {gender === option && (
+                      <Ionicons name="checkmark" size={16} color={THEME.primary} style={{ marginRight: 4 }} />
+                    )}
+                    <Text style={[
+                      styles.genderOptionText,
+                      gender === option && styles.genderOptionTextSelected
+                    ]}>
+                      {option}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </View>
+
+          {/* Submit Button */}
+          <TouchableOpacity
+            style={[
+              styles.submitButton,
+              !isFormValid && styles.submitButtonDisabled,
+              (isSubmitting || authLoading) && styles.submitButtonLoading
+            ]}
+            onPress={handleSubmit}
+            disabled={!isFormValid || isSubmitting || authLoading}
+            activeOpacity={0.85}
+          >
+            {isSubmitting || authLoading ? (
+              <ActivityIndicator color="#FFFFFF" size="small" />
+            ) : (
+              <View style={styles.submitBtnContent}>
+                <Text style={[styles.submitButtonText, !isFormValid && styles.submitButtonTextDisabled]}>
+                  Create Profile
+                </Text>
+                <Ionicons name="arrow-forward" size={20} color={isFormValid ? '#fff' : '#999'} />
+              </View>
+            )}
+          </TouchableOpacity>
+          
+          <View style={styles.footer}>
+            <Ionicons name="shield-checkmark" size={14} color="#A0A0A0" />
+            <Text style={styles.footerText}>Your data is securely encrypted</Text>
+          </View>
+
+        </ScrollView>
+      </TouchableWithoutFeedback>
+
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
+    </KeyboardAvoidingView>
   );
 }
 
@@ -242,146 +323,208 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#FFFFFF',
   },
-  keyboardView: {
-    flex: 1,
-  },
   scrollView: {
     flex: 1,
   },
   scrollContent: {
     paddingHorizontal: 24,
-    paddingTop: 40,
-    paddingBottom: 40,
   },
+  // Signed In Pill
   signedInRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#F5F5F5',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 12,
-    marginBottom: 24,
-    gap: 8,
+    backgroundColor: '#F8F9FA',
+    padding: 12,
+    borderRadius: 16,
+    marginBottom: 32,
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
+  },
+  signedInAvatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: `${THEME.primary}1A`,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
   },
   signedInInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
     flex: 1,
   },
-  signedInText: {
-    fontSize: 13,
-    color: '#666',
-    flex: 1,
+  signedInLabel: {
+    fontSize: 11,
+    color: THEME.textDim,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    fontWeight: '700',
   },
   signedInPhone: {
-    color: '#1A1A1A',
+    fontSize: 14,
+    color: THEME.text,
     fontWeight: '700',
+    marginTop: 2,
   },
-  changeNumberLink: {
+  changeBtn: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  changeBtnText: {
     fontSize: 13,
-    color: SpinrConfig.theme.colors.primary,
-    fontWeight: '700',
+    color: THEME.text,
+    fontWeight: '600',
   },
+  // Header
   header: {
-    marginBottom: 40,
+    marginBottom: 36,
   },
   title: {
     fontSize: 32,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
-    lineHeight: 40,
+    fontWeight: '800',
+    color: THEME.text,
+    letterSpacing: -0.5,
+    marginBottom: 10,
   },
   subtitle: {
     fontSize: 15,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666666',
-    marginTop: 12,
+    color: THEME.textDim,
     lineHeight: 22,
   },
+  // Form elements
   form: {
     marginBottom: 32,
+  },
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
   },
   inputGroup: {
     marginBottom: 20,
   },
   label: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
+    fontSize: 13,
+    fontWeight: '700',
+    color: THEME.text,
     marginBottom: 8,
+    paddingLeft: 4,
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8F9FA',
+    borderWidth: 1.5,
+    borderColor: '#F0F0F0',
+    borderRadius: 16,
+    height: 56,
+  },
+  inputContainerFocused: {
+    borderColor: THEME.primary,
+    backgroundColor: '#fff',
+    shadowColor: THEME.primary,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  inputContainerValid: {
+    borderColor: '#EFEFEF',
+    backgroundColor: '#FDFDFD',
+  },
+  inputIconContainer: {
+    width: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   input: {
-    borderWidth: 1.5,
-    borderColor: '#E0E0E0',
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    flex: 1,
+    height: '100%',
     fontSize: 16,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#1A1A1A',
+    fontWeight: '600',
+    color: THEME.text,
   },
-  citySelector: {
+  checkIcon: {
+    paddingRight: 16,
+  },
+  // Gender Toggle
+  genderOptions: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1.5,
-    borderColor: '#E0E0E0',
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    gap: 8,
   },
-  citySelectorText: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#1A1A1A',
-  },
-  placeholder: {
-    color: '#999',
-  },
-  cityDropdown: {
-    marginTop: 8,
-    backgroundColor: '#FFF',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    overflow: 'hidden',
-  },
-  cityOption: {
+  genderOption: {
+    flex: 1,
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
-  },
-  cityOptionSelected: {
-    backgroundColor: '#FFF5F5',
-  },
-  cityOptionText: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#1A1A1A',
-  },
-  cityOptionTextSelected: {
-    color: SpinrConfig.theme.colors.primary,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-  },
-  submitButton: {
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    borderRadius: 28,
-    paddingVertical: 18,
     alignItems: 'center',
     justifyContent: 'center',
+    height: 50,
+    backgroundColor: '#F8F9FA',
+    borderWidth: 1.5,
+    borderColor: '#F0F0F0',
+    borderRadius: 16,
+  },
+  genderOptionSelected: {
+    backgroundColor: `${THEME.primary}0D`,
+    borderColor: THEME.primary,
+  },
+  genderOptionText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: THEME.textDim,
+  },
+  genderOptionTextSelected: {
+    color: THEME.primary,
+    fontWeight: '700',
+  },
+  // Submit
+  submitButton: {
+    backgroundColor: THEME.primary,
+    borderRadius: 16,
+    height: 58,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: THEME.primary,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 6,
+    marginBottom: 24,
   },
   submitButtonDisabled: {
-    backgroundColor: '#FFAAAA',
+    backgroundColor: '#F0F0F0',
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  submitButtonLoading: {
+    backgroundColor: THEME.primaryDark,
+  },
+  submitBtnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   submitButtonText: {
-    fontSize: 18,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
+    fontSize: 16,
+    fontWeight: '700',
     color: '#FFFFFF',
+  },
+  submitButtonTextDisabled: {
+    color: '#999',
+  },
+  footer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  footerText: {
+    fontSize: 13,
+    color: '#A0A0A0',
+    fontWeight: '500',
   },
 });

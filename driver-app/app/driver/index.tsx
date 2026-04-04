@@ -140,34 +140,103 @@ export default function DriverDashboard() {
   const renderRideOfferPanel = () => {
     if (!incomingRide) return null;
     const progress = countdown / 15;
+    const fare = (incomingRide.fare || 0).toFixed(2);
 
     return (
       <View style={styles.rideOfferOverlay}>
-        {/* Countdown and ride details */}
         <View style={styles.rideOfferContent}>
-          <View style={styles.countdownContainer}>
-            <View style={[styles.countdownCircle, { borderColor: COLORS.accent }]}>
-              <Text style={[styles.countdownText, { color: COLORS.accent }]}>{countdown}</Text>
-            </View>
-            <View style={[styles.countdownBar, { width: `${progress * 100}%`, backgroundColor: COLORS.accent }]} />
+          {/* Countdown timer bar at top */}
+          <View style={styles.timerBarContainer}>
+            <View style={[styles.timerBar, { width: `${progress * 100}%` }]} />
           </View>
-          <Text style={styles.rideOfferTitle}>New Ride Offer!</Text>
-          <Text style={styles.rideOfferFare}>${(incomingRide.fare || 0).toFixed(2)}</Text>
-          <Text style={styles.rideOfferAddress}>{incomingRide.pickup_address}</Text>
+
+          {/* Header: Countdown + Title */}
+          <View style={styles.offerHeader}>
+            <View style={styles.countdownCircle}>
+              <Text style={styles.countdownText}>{countdown}</Text>
+            </View>
+            <View style={{ flex: 1, marginLeft: 14 }}>
+              <Text style={styles.rideOfferTitle}>New Ride Request!</Text>
+              <View style={styles.rideTypeBadge}>
+                <Ionicons name="car-sport" size={12} color={COLORS.accent} />
+                <Text style={styles.rideTypeText}>Standard Ride</Text>
+              </View>
+            </View>
+            <View style={styles.fareContainer}>
+              <Text style={styles.fareLabel}>Fare</Text>
+              <Text style={styles.fareAmount}>${fare}</Text>
+            </View>
+          </View>
+
+          {/* Route: Pickup & Dropoff */}
+          <View style={styles.routeContainer}>
+            <View style={styles.routeIconColumn}>
+              <View style={[styles.routeDot, { backgroundColor: COLORS.accent }]} />
+              <View style={styles.routeLine} />
+              <View style={[styles.routeDot, { backgroundColor: '#FF4757' }]} />
+            </View>
+            <View style={styles.routeDetails}>
+              <View style={styles.routeRow}>
+                <Text style={styles.routeLabel}>PICKUP</Text>
+                <Text style={styles.routeAddress} numberOfLines={1}>
+                  {incomingRide.pickup_address || 'Pickup location'}
+                </Text>
+              </View>
+              <View style={styles.routeDivider} />
+              <View style={styles.routeRow}>
+                <Text style={styles.routeLabel}>DROP-OFF</Text>
+                <Text style={styles.routeAddress} numberOfLines={1}>
+                  {incomingRide.dropoff_address || 'Dropoff location'}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          {/* Trip info badges */}
+          <View style={styles.tripInfoRow}>
+            {incomingRide.distance_km && (
+              <View style={styles.tripInfoBadge}>
+                <Ionicons name="navigate-outline" size={14} color={COLORS.accent} />
+                <Text style={styles.tripInfoText}>{incomingRide.distance_km.toFixed(1)} km</Text>
+              </View>
+            )}
+            {incomingRide.duration_minutes && (
+              <View style={styles.tripInfoBadge}>
+                <Ionicons name="time-outline" size={14} color={COLORS.accent} />
+                <Text style={styles.tripInfoText}>{Math.round(incomingRide.duration_minutes)} min</Text>
+              </View>
+            )}
+            {incomingRide.rider_name && (
+              <View style={styles.tripInfoBadge}>
+                <Ionicons name="person-outline" size={14} color={COLORS.accent} />
+                <Text style={styles.tripInfoText}>{incomingRide.rider_name}</Text>
+                {incomingRide.rider_rating && (
+                  <>
+                    <Ionicons name="star" size={12} color="#FFD700" />
+                    <Text style={styles.tripInfoText}>{incomingRide.rider_rating.toFixed(1)}</Text>
+                  </>
+                )}
+              </View>
+            )}
+          </View>
+
+          {/* Accept / Decline buttons */}
           <View style={styles.offerActions}>
             <TouchableOpacity
               style={styles.declineBtn}
               onPress={() => declineRide(incomingRide.ride_id)}
+              activeOpacity={0.8}
             >
-              <Ionicons name="close" size={28} color="#FF4757" />
+              <Ionicons name="close-circle" size={24} color="#FF4757" />
               <Text style={styles.declineText}>Decline</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.acceptBtn}
               onPress={() => acceptRide(incomingRide.ride_id)}
+              activeOpacity={0.8}
             >
-              <Ionicons name="checkmark" size={28} color="#fff" />
-              <Text style={styles.acceptText}>Accept</Text>
+              <Ionicons name="checkmark-circle" size={24} color="#fff" />
+              <Text style={styles.acceptText}>Accept Ride</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -303,78 +372,182 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: '#fff',
   },
+  // ── Rich Ride Offer Panel ──
   rideOfferOverlay: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    height: '50%',
     justifyContent: 'flex-end',
   },
   rideOfferContent: {
     backgroundColor: COLORS.primary,
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    padding: 24,
-    alignItems: 'center',
+    paddingBottom: 34,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 20,
+    elevation: 20,
   },
-  countdownContainer: {
+  timerBarContainer: {
+    height: 4,
+    backgroundColor: '#F3F4F6',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    overflow: 'hidden',
+  },
+  timerBar: {
+    height: '100%',
+    backgroundColor: COLORS.accent,
+    borderRadius: 4,
+  },
+  offerHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 14,
   },
   countdownCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     borderWidth: 3,
+    borderColor: COLORS.accent,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 8,
+    backgroundColor: 'rgba(0,212,170,0.06)',
   },
   countdownText: {
-    fontSize: 24,
-    fontWeight: '800',
-  },
-  countdownBar: {
-    height: 3,
-    borderRadius: 2,
-    alignSelf: 'flex-start',
-  },
-  rideOfferTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginBottom: 8,
-  },
-  rideOfferFare: {
-    fontSize: 36,
+    fontSize: 22,
     fontWeight: '800',
     color: COLORS.accent,
+  },
+  rideOfferTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: COLORS.text,
+  },
+  rideTypeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 3,
+  },
+  rideTypeText: {
+    fontSize: 12,
+    color: COLORS.accent,
+    fontWeight: '600',
+  },
+  fareContainer: {
+    alignItems: 'flex-end',
+  },
+  fareLabel: {
+    fontSize: 11,
+    color: COLORS.textDim,
+    fontWeight: '500',
+  },
+  fareAmount: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: COLORS.accent,
+    letterSpacing: -1,
+  },
+  // Route display
+  routeContainer: {
+    flexDirection: 'row',
+    marginHorizontal: 20,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 12,
+  },
+  routeIconColumn: {
+    alignItems: 'center',
+    width: 20,
+    paddingTop: 4,
+  },
+  routeDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  routeLine: {
+    width: 2,
+    flex: 1,
+    backgroundColor: '#D1D5DB',
+    marginVertical: 4,
+  },
+  routeDetails: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  routeRow: {
+    paddingVertical: 2,
+  },
+  routeLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: COLORS.textDim,
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  routeAddress: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: COLORS.text,
+  },
+  routeDivider: {
+    height: 1,
+    backgroundColor: '#E5E7EB',
+    marginVertical: 8,
+  },
+  // Trip info badges
+  tripInfoRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingHorizontal: 20,
     marginBottom: 16,
   },
-  rideOfferAddress: {
-    fontSize: 14,
-    color: COLORS.textDim,
-    textAlign: 'center',
-    marginBottom: 24,
+  tripInfoBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#F0FDF9',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#D1FAE5',
   },
+  tripInfoText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.text,
+  },
+  // Action buttons
   offerActions: {
     flexDirection: 'row',
-    gap: 16,
-    width: '100%',
+    gap: 12,
+    paddingHorizontal: 20,
   },
   declineBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255, 71, 87, 0.1)',
+    backgroundColor: '#FEF2F2',
     borderRadius: 16,
     paddingVertical: 16,
     gap: 8,
+    borderWidth: 1,
+    borderColor: '#FECACA',
   },
   declineText: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
     color: '#FF4757',
   },
@@ -387,6 +560,11 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     paddingVertical: 16,
     gap: 8,
+    shadowColor: COLORS.accent,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 6,
   },
   acceptText: {
     fontSize: 16,

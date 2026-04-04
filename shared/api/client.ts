@@ -39,6 +39,18 @@ const fetchWithTimeout = async (
   }
 };
 
+// ── In-memory token ──
+// SecureStore can be unreliable on some devices/emulators (writes succeed but
+// reads return null in the same session). We keep a module-level copy so that
+// all API calls within the current app session have instant access to the
+// token regardless of SecureStore's state.
+let _inMemoryToken: string | null = null;
+
+export function setInMemoryToken(token: string | null) {
+  _inMemoryToken = token;
+  console.log('[API] In-memory token:', token ? 'SET' : 'CLEARED');
+}
+
 // Helper to get stored token
 const getStoredToken = async (): Promise<string | null> => {
   try {
@@ -47,27 +59,29 @@ const getStoredToken = async (): Promise<string | null> => {
     } else {
       const SecureStore = require('expo-secure-store');
       const token = await SecureStore.getItemAsync('auth_token');
-      console.log('DEBUG: Token from SecureStore:', token ? 'EXISTS' : 'NULL');
       return token;
     }
   } catch (e: any) {
-    console.error('DEBUG: SecureStore error:', e?.message || e);
+    console.error('[API] SecureStore error:', e?.message || e);
     return null;
   }
 };
 
-// Helper to get auth header
+// Helper to get auth header — checks in-memory first, then SecureStore
 const getAuthHeader = async (): Promise<string | null> => {
   try {
-    if (isFirebaseConfigured && auth.currentUser) {
-      console.log('DEBUG: Using Firebase token');
-      return await auth.currentUser.getIdToken();
-    } else {
-      console.log('DEBUG: Using stored JWT token');
-      return await getStoredToken();
+    // 1. In-memory token (most reliable — set during current session)
+    if (_inMemoryToken) {
+      return _inMemoryToken;
     }
+    // 2. Firebase token
+    if (isFirebaseConfigured && auth.currentUser) {
+      return await auth.currentUser.getIdToken();
+    }
+    // 3. SecureStore fallback (for cold starts where in-memory is empty)
+    return await getStoredToken();
   } catch (error: any) {
-    console.error('DEBUG: Error getting auth token:', error?.message || error);
+    console.error('[API] Error getting auth token:', error?.message || error);
     return null;
   }
 };

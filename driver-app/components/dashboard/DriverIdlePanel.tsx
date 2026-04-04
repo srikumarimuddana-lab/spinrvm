@@ -1,29 +1,25 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Animated } from 'react-native';
+import React, { useRef, useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Animated, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
+import { BlurView } from 'expo-blur';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useAuthStore, DriverOnboardingStatus } from '@shared/store/authStore';
 
 const COLORS = {
   primary: SpinrConfig.theme.colors.background,
   accent: SpinrConfig.theme.colors.primary,
+  accentDark: SpinrConfig.theme.colors.primaryDark,
   success: SpinrConfig.theme.colors.success,
   surface: SpinrConfig.theme.colors.surface,
-  surfaceLight: SpinrConfig.theme.colors.surfaceLight,
   text: SpinrConfig.theme.colors.text,
   textDim: SpinrConfig.theme.colors.textDim,
-  border: SpinrConfig.theme.colors.border,
   orange: '#FF9500',
 };
 
 interface DriverData {
-  name?: string;
-  vehicle_make?: string;
-  vehicle_model?: string;
-  license_plate?: string;
-  is_online?: boolean;
   acceptance_rate?: string;
   total_rides?: string;
   is_verified?: boolean;
@@ -41,73 +37,14 @@ interface IdlePanelProps {
   pulseAnim: any;
 }
 
-// Maps the onboarding state to the banner shown above the Go Online toggle.
-// Only rendered when the driver is NOT in the verified state — a verified
-// driver sees no banner, just the normal online/offline toggle.
-const STATE_BANNERS: Record<Exclude<DriverOnboardingStatus, 'verified'>, {
-  title: string;
-  subtitle: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  tone: 'warning' | 'danger' | 'info';
-  cta: string;
-  target: string;
-}> = {
-  profile_incomplete: {
-    title: 'Finish your profile',
-    subtitle: 'Add your personal details to continue.',
-    icon: 'person-circle-outline',
-    tone: 'info',
-    cta: 'Complete Profile',
-    target: '/profile-setup',
-  },
-  vehicle_required: {
-    title: 'Add your vehicle',
-    subtitle: 'Tell us what you drive to finish onboarding.',
-    icon: 'car-outline',
-    tone: 'info',
-    cta: 'Add Vehicle',
-    target: '/become-driver',
-  },
-  documents_required: {
-    title: 'Documents required',
-    subtitle: 'Upload your mandatory documents to get verified.',
-    icon: 'document-text-outline',
-    tone: 'warning',
-    cta: 'Upload Now',
-    target: '/documents',
-  },
-  documents_rejected: {
-    title: 'Document rejected',
-    subtitle: 'One or more documents were rejected. Please re-upload.',
-    icon: 'alert-circle-outline',
-    tone: 'danger',
-    cta: 'Re-upload',
-    target: '/documents',
-  },
-  documents_expired: {
-    title: 'Documents expired',
-    subtitle: 'One or more documents have expired. Please re-upload.',
-    icon: 'time-outline',
-    tone: 'warning',
-    cta: 'Re-upload',
-    target: '/documents',
-  },
-  pending_review: {
-    title: 'Under review',
-    subtitle: 'Your profile is being reviewed. We\u2019ll notify you once approved.',
-    icon: 'hourglass-outline',
-    tone: 'info',
-    cta: 'View Documents',
-    target: '/documents',
-  },
-  suspended: {
-    title: 'Account suspended',
-    subtitle: 'Your account is suspended. Contact support for help.',
-    icon: 'ban-outline',
-    tone: 'danger',
-    cta: 'Contact Support',
-    target: '/driver/settings',
-  },
+const STATE_BANNERS = {
+  profile_incomplete: { title: 'Finish profile', icon: 'person', tone: 'info', target: '/profile-setup' },
+  vehicle_required: { title: 'Add vehicle', icon: 'car', tone: 'info', target: '/become-driver' },
+  documents_required: { title: 'Upload docs', icon: 'document-text', tone: 'warning', target: '/documents' },
+  documents_rejected: { title: 'Docs rejected', icon: 'alert-circle', tone: 'danger', target: '/documents' },
+  documents_expired: { title: 'Docs expired', icon: 'time', tone: 'warning', target: '/documents' },
+  pending_review: { title: 'Under review', icon: 'hourglass', tone: 'info', target: '/documents' },
+  suspended: { title: 'Suspended', icon: 'ban', tone: 'danger', target: '/driver/settings' },
 };
 
 export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
@@ -115,277 +52,312 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   driverData,
   earnings,
   onToggleOnline,
-  pulseAnim,
 }) => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const onboardingStatus = useAuthStore(
-    (s) => s.user?.driver_onboarding_status ?? null
-  );
-  const banner =
-    onboardingStatus && onboardingStatus !== 'verified'
-      ? STATE_BANNERS[onboardingStatus]
-      : null;
-  // When banner is shown we hard-gate the Go Online toggle, regardless of
-  // the legacy is_verified flag. That way any non-verified state correctly
-  // prevents the driver from going online.
+  const onboardingStatus = useAuthStore(s => s.user?.driver_onboarding_status ?? null);
+  
+  const banner = onboardingStatus && onboardingStatus !== 'verified' 
+    ? STATE_BANNERS[onboardingStatus as keyof typeof STATE_BANNERS] 
+    : null;
+    
   const canGoOnline = !banner && !!driverData?.is_verified;
 
-  const renderStatsRow = () => (
-    <View style={styles.statsGrid}>
-      <View style={styles.statBox}>
-        <Text style={styles.statValue}>{driverData?.acceptance_rate || '100'}%</Text>
-        <Text style={styles.statLabel}>Acceptance</Text>
-      </View>
-      <View style={styles.statBox}>
-        <Text style={styles.statValue}>${(earnings?.total_earnings || 0).toFixed(2)}</Text>
-        <Text style={styles.statLabel}>Earnings</Text>
-      </View>
-      <View style={styles.statBox}>
-        <Text style={styles.statValue}>{driverData?.total_rides || '0'}</Text>
-        <Text style={styles.statLabel}>Rides</Text>
-      </View>
-    </View>
-  );
+  const goAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    if (canGoOnline && !isOnline) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(goAnim, { toValue: 1.05, duration: 1000, useNativeDriver: true }),
+          Animated.timing(goAnim, { toValue: 1, duration: 1000, useNativeDriver: true })
+        ])
+      ).start();
+    } else {
+      goAnim.setValue(1);
+    }
+  }, [canGoOnline, isOnline]);
 
   return (
-    <View style={[styles.idlePanel, { paddingBottom: Math.max(insets.bottom + 12, 24) }]}>
-      {banner && (
+    <View style={[styles.idlePanelContainer, { paddingBottom: Math.max(insets.bottom, 20) }]} pointerEvents="box-none">
+      
+      {/* HUD Info Area */}
+      <View style={styles.hudArea} pointerEvents="box-none">
+        
+        {/* Banner (if any) */}
+        {banner && (
+          <TouchableOpacity
+            style={[styles.hudBannerWrapper, banner.tone === 'danger' && styles.hudBannerDanger, banner.tone === 'warning' && styles.hudBannerWarning]}
+            onPress={() => router.push(banner.target as any)}
+            activeOpacity={0.8}
+          >
+            <BlurView intensity={80} tint="light" style={styles.hudBannerBlur}>
+              <Ionicons 
+                name={banner.icon as keyof typeof Ionicons.glyphMap} 
+                size={20} 
+                color={banner.tone === 'danger' ? '#DC2626' : banner.tone === 'warning' ? '#D97706' : COLORS.accent} 
+              />
+              <Text style={styles.hudBannerText}>{banner.title}</Text>
+              <Ionicons name="chevron-forward" size={16} color={COLORS.textDim} />
+            </BlurView>
+          </TouchableOpacity>
+        )}
+
+        {/* Stats Glass Bar */}
+        {!banner && (
+          <View style={styles.statsGlassWrapper}>
+            <BlurView intensity={Platform.OS === 'ios' ? 40 : 100} tint="light" style={styles.statsGlassBar}>
+              <View style={styles.statItem}>
+                <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
+                <Text style={styles.statValue}>{driverData?.acceptance_rate || '100'}%</Text>
+              </View>
+              <View style={styles.statDivider} />
+              <View style={styles.statItemCenter}>
+                <Ionicons name="cash" size={20} color={COLORS.accent} />
+                <Text style={styles.statValueLarge}>${(earnings?.total_earnings || 0).toFixed(2)}</Text>
+              </View>
+              <View style={styles.statDivider} />
+              <View style={styles.statItem}>
+                <Ionicons name="car-sport" size={16} color="#007AFF" />
+                <Text style={styles.statValue}>{driverData?.total_rides || '0'}</Text>
+              </View>
+            </BlurView>
+          </View>
+        )}
+
+        {/* Status Indicator Pill */}
+        <View style={styles.statusPillWrapper}>
+            {isOnline ? (
+                <View style={styles.statusPillOnline}>
+                    <Ionicons name="pulse" size={14} color="#059669" />
+                    <Text style={styles.statusPillTextOnline}>Finding rides...</Text>
+                </View>
+            ) : (
+                <View style={styles.statusPillOffline}>
+                    <View style={styles.offlineDot} />
+                    <Text style={styles.statusPillTextOffline}>Offline</Text>
+                </View>
+            )}
+        </View>
+
+      </View>
+
+      {/* Floating GO Button */}
+      <View style={styles.goButtonArea} pointerEvents="box-none">
         <TouchableOpacity
-          style={[
-            styles.stateBanner,
-            banner.tone === 'danger' && styles.stateBannerDanger,
-            banner.tone === 'warning' && styles.stateBannerWarning,
-            banner.tone === 'info' && styles.stateBannerInfo,
-          ]}
-          onPress={() => router.push(banner.target as any)}
-          activeOpacity={0.85}
+          activeOpacity={0.9}
+          disabled={!canGoOnline}
+          onPress={onToggleOnline}
+          style={styles.goButtonOuterContainer}
         >
-          <View style={styles.stateBannerIcon}>
-            <Ionicons
-              name={banner.icon}
-              size={22}
-              color={
-                banner.tone === 'danger'
-                  ? '#DC2626'
-                  : banner.tone === 'warning'
-                  ? '#D97706'
-                  : COLORS.accent
+          <Animated.View style={[
+            styles.goButtonShadow, 
+            !canGoOnline && styles.goButtonShadowDisabled,
+            isOnline && styles.goButtonShadowOnline,
+            { transform: [{ scale: goAnim }] }
+          ]}>
+            <LinearGradient
+              colors={
+                !canGoOnline 
+                  ? ['#E5E7EB', '#D1D5DB'] 
+                  : (isOnline ? ['#059669', '#10B981'] : [COLORS.accent, COLORS.accentDark])
               }
-            />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.stateBannerTitle}>{banner.title}</Text>
-            <Text style={styles.stateBannerSub}>{banner.subtitle}</Text>
-          </View>
-          <View style={styles.stateBannerCta}>
-            <Text style={styles.stateBannerCtaText}>{banner.cta}</Text>
-            <Ionicons name="chevron-forward" size={16} color={COLORS.text} />
-          </View>
+              style={styles.goButtonInner}
+            >
+              <Text style={[styles.goButtonText, !canGoOnline && styles.goButtonTextDisabled]}>
+                {isOnline ? 'STOP' : 'GO'}
+              </Text>
+            </LinearGradient>
+          </Animated.View>
         </TouchableOpacity>
-      )}
+      </View>
 
-      <TouchableOpacity
-        style={[
-          styles.onlineToggle,
-          !canGoOnline ? styles.onlineDisabled : (isOnline ? styles.onlineActive : styles.onlineInactive)
-        ]}
-        onPress={onToggleOnline}
-        activeOpacity={canGoOnline ? 0.8 : 1}
-        disabled={!canGoOnline}
-      >
-        <Animated.View style={[styles.pulseIndicator, { transform: [{ scale: pulseAnim }] }]}>
-          <View style={[
-            styles.statusDot,
-            !canGoOnline ? { backgroundColor: COLORS.orange } : (isOnline ? { backgroundColor: COLORS.success } : { backgroundColor: '#FF4757' })
-          ]} />
-        </Animated.View>
-        <View style={styles.toggleText}>
-          <Text style={styles.toggleLabel}>
-            {!canGoOnline ? 'Not Ready to Drive' : (isOnline ? "You're Online" : "You're Offline")}
-          </Text>
-          <Text style={styles.toggleSub}>
-            {!canGoOnline
-              ? (banner?.subtitle || 'Complete verification to go online')
-              : (isOnline ? 'Waiting for ride requests...' : 'Go online to start earning')}
-          </Text>
-        </View>
-        <View style={[
-          styles.toggleSwitch,
-          !canGoOnline ? styles.toggleSwitchDisabled : (isOnline && styles.toggleSwitchOn)
-        ]}>
-          <View style={[
-            styles.toggleKnob,
-            !canGoOnline ? styles.toggleKnobDisabled : (isOnline && styles.toggleKnobOn)
-          ]} />
-        </View>
-      </TouchableOpacity>
-
-      {renderStatsRow()}
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  idlePanel: {
+  idlePanelContainer: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-  },
-  // Onboarding state banner shown above the Go Online toggle.
-  stateBanner: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    padding: 14,
-    borderRadius: 14,
-    marginBottom: 12,
-    borderWidth: 1,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 2,
+    justifyContent: 'flex-end',
   },
-  stateBannerInfo: {
-    backgroundColor: 'rgba(255,59,48,0.06)',
-    borderColor: 'rgba(255,59,48,0.15)',
-  },
-  stateBannerWarning: {
-    backgroundColor: 'rgba(217,119,6,0.08)',
-    borderColor: 'rgba(217,119,6,0.2)',
-  },
-  stateBannerDanger: {
-    backgroundColor: 'rgba(220,38,38,0.08)',
-    borderColor: 'rgba(220,38,38,0.2)',
-  },
-  stateBannerIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.8)',
-    justifyContent: 'center',
+  hudArea: {
+    width: '100%',
     alignItems: 'center',
+    paddingHorizontal: 20,
+    marginBottom: 20,
   },
-  stateBannerTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  stateBannerSub: {
-    fontSize: 12,
-    color: COLORS.textDim,
-    marginTop: 2,
-  },
-  stateBannerCta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-  },
-  stateBannerCtaText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  onlineToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 20,
-    borderRadius: 16,
-    gap: 14,
-    backgroundColor: COLORS.surface,
+  // Hud Banner
+  hudBannerWrapper: {
+    borderRadius: 24,
+    overflow: 'hidden',
     marginBottom: 16,
-    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 4,
   },
-  onlineActive: {
-    borderColor: COLORS.success,
+  hudBannerDanger: {
+    shadowColor: '#DC2626',
   },
-  onlineInactive: {
-    borderColor: 'transparent',
+  hudBannerWarning: {
+    shadowColor: '#D97706',
   },
-  onlineDisabled: {
-    opacity: 0.7,
-    borderColor: COLORS.border,
+  hudBannerBlur: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    gap: 10,
   },
-  pulseIndicator: {
-    marginRight: 0,
+  hudBannerText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: COLORS.text,
   },
-  statusDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
+  // Stats Glass Bar
+  statsGlassWrapper: {
+    width: '100%',
+    borderRadius: 24,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 6,
+    marginBottom: 16,
   },
-  toggleText: {
+  statsGlassBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(255, 255, 255, 0.75)',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+  },
+  statItem: {
+    alignItems: 'center',
     flex: 1,
   },
-  toggleLabel: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: COLORS.text,
-    marginBottom: 4,
+  statItemCenter: {
+    alignItems: 'center',
+    flex: 1.5,
   },
-  toggleSub: {
-    fontSize: 13,
-    color: COLORS.textDim,
-  },
-  toggleSwitch: {
-    width: 50,
+  statDivider: {
+    width: 1,
     height: 30,
-    borderRadius: 15,
-    backgroundColor: COLORS.surfaceLight,
-    padding: 2,
-    justifyContent: 'center',
-  },
-  toggleSwitchOn: {
-    backgroundColor: COLORS.success,
-    alignItems: 'flex-end',
-  },
-  toggleSwitchDisabled: {
-    backgroundColor: COLORS.border,
-  },
-  toggleKnob: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: '#fff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  toggleKnobOn: {
-    marginRight: 0,
-  },
-  toggleKnobDisabled: {
-    backgroundColor: '#f5f5f5',
-  },
-  statsGrid: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 16,
-  },
-  statBox: {
-    flex: 1,
-    backgroundColor: COLORS.surface,
-    padding: 12,
-    borderRadius: 12,
-    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.08)',
   },
   statValue: {
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '800',
     color: COLORS.text,
-    marginBottom: 4,
+    marginTop: 4,
   },
-  statLabel: {
-    fontSize: 11,
-    color: COLORS.textDim,
-    fontWeight: '600',
-    textTransform: 'uppercase',
+  statValueLarge: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: COLORS.accent,
+    marginTop: 2,
+  },
+  // Status Pill
+  statusPillWrapper: {
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.1,
+      shadowRadius: 4,
+      elevation: 3,
+  },
+  statusPillOnline: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: '#ECFDF5',
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      borderRadius: 20,
+      borderWidth: 1,
+      borderColor: '#A7F3D0',
+      gap: 6,
+  },
+  statusPillOffline: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: '#F3F4F6',
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      borderRadius: 20,
+      borderWidth: 1,
+      borderColor: '#E5E7EB',
+      gap: 6,
+  },
+  offlineDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      backgroundColor: '#9CA3AF',
+  },
+  statusPillTextOnline: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: '#065F46',
+  },
+  statusPillTextOffline: {
+      fontSize: 13,
+      fontWeight: '600',
+      color: '#6B7280',
+  },
+  // GO Button Area
+  goButtonArea: {
+    alignItems: 'center',
+  },
+  goButtonOuterContainer: {
+    width: 100,
+    height: 100,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  goButtonShadow: {
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    backgroundColor: '#fff',
+    shadowColor: COLORS.accent,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.4,
+    shadowRadius: 16,
+    elevation: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 6,
+  },
+  goButtonShadowOnline: {
+    shadowColor: '#10B981',
+  },
+  goButtonShadowDisabled: {
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+  },
+  goButtonInner: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 36,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  goButtonText: {
+    fontSize: 24,
+    fontWeight: '900',
+    color: '#fff',
+    letterSpacing: 1,
+  },
+  goButtonTextDisabled: {
+    color: '#9CA3AF',
   },
 });
 

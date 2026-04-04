@@ -93,6 +93,9 @@ export default function RootLayout() {
               animation: 'slide_from_right',
             }}
           >
+            <Stack.Screen name="index" />
+            <Stack.Screen name="login" />
+            <Stack.Screen name="otp" />
             <Stack.Screen name="profile-setup" options={{ gestureEnabled: false }} />
             <Stack.Screen name="become-driver" options={{ gestureEnabled: false }} />
             <Stack.Screen name="driver" options={{ animation: "fade", gestureEnabled: false }} />

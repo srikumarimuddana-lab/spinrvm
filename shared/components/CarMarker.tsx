@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, StyleSheet } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Image } from 'react-native';
 import { Marker } from 'react-native-maps';
 
 interface CarMarkerProps {
@@ -14,18 +14,34 @@ interface CarMarkerProps {
 }
 
 /**
- * Top-down white car marker — clean, minimal, works inside map Markers.
- * Pure View-based (no images/SVGs) for reliable rendering.
+ * Top-down car marker using the transparent PNG from shared/assets.
+ *
+ * Renders the car image via a child <View><Image/></View> (not the native
+ * `image` prop) so `size` controls the rendered dimensions — the native
+ * prop renders at the PNG's physical size which is far too large.
+ *
+ * Transparent backgrounds are set on every wrapper layer (and on the Marker
+ * itself) to kill the default Android callout-style bubble that
+ * react-native-maps otherwise draws around custom child views.
+ *
+ * `tracksViewChanges` starts `true` so the native view catches the image
+ * after it loads, then flips to `false` to avoid per-frame re-snapshots.
  */
 export const CarMarker: React.FC<CarMarkerProps> = ({
     coordinate,
     heading,
-    size = 5,
+    size = 40,
     zIndex = 1,
     identifier,
 }) => {
-    const w = size * 2;
-    const h = size * 3.2;
+    // See driver-app CarMarker for why we keep tracking briefly instead of
+    // flipping on Image.onLoad: flipping too fast races the Android
+    // Marker snapshot and leaves an invisible marker.
+    const [tracksViewChanges, setTracksViewChanges] = useState(true);
+    useEffect(() => {
+        const t = setTimeout(() => setTracksViewChanges(false), 800);
+        return () => clearTimeout(t);
+    }, []);
 
     return (
         <Marker
@@ -33,58 +49,32 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
             anchor={{ x: 0.5, y: 0.5 }}
             flat
             rotation={heading ?? 0}
-            tracksViewChanges={false}
+            tracksViewChanges={tracksViewChanges}
             zIndex={zIndex}
             identifier={identifier}
+            style={{ backgroundColor: 'transparent' }}
         >
-            <View style={{ width: w + 12, height: h + 12, alignItems: 'center', justifyContent: 'center' }}>
-                {/* Shadow */}
-                <View style={[styles.shadow, { width: w - 2, height: h - 2, borderRadius: w * 0.38 }]} />
-                {/* Body */}
-                <View style={[styles.body, { width: w, height: h, borderRadius: w * 0.4, backgroundColor: '#FFFFFF' }]}>
-                    {/* Headlights */}
-                    <View style={[styles.hl, { top: 3, left: 3 }]} />
-                    <View style={[styles.hl, { top: 3, right: 3 }]} />
-                    {/* Windshield */}
-                    <View style={[styles.glass, { top: h * 0.16, width: w * 0.65, height: h * 0.22, borderRadius: w * 0.15 }]} />
-                    {/* Roof */}
-                    <View style={[styles.roof, { top: h * 0.42, width: w * 0.72, height: h * 0.22, borderRadius: w * 0.1 }]} />
-                    {/* Rear window */}
-                    <View style={[styles.rearGlass, { bottom: h * 0.14, width: w * 0.58, height: h * 0.15, borderRadius: w * 0.12 }]} />
-                    {/* Taillights */}
-                    <View style={[styles.tl, { bottom: 3, left: 4 }]} />
-                    <View style={[styles.tl, { bottom: 3, right: 4 }]} />
-                    {/* Mirrors */}
-                    <View style={[styles.mirror, { top: h * 0.32, left: -3, backgroundColor: '#FFFFFF' }]} />
-                    <View style={[styles.mirror, { top: h * 0.32, right: -3, backgroundColor: '#FFFFFF' }]} />
-                </View>
+            <View
+                style={{
+                    width: size,
+                    height: size,
+                    backgroundColor: 'transparent',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                }}
+            >
+                <Image
+                    source={require('../assets/car_marker.png')}
+                    style={{
+                        width: size,
+                        height: size,
+                        resizeMode: 'contain',
+                        backgroundColor: 'transparent',
+                    }}
+                />
             </View>
         </Marker>
     );
 };
-
-const styles = StyleSheet.create({
-    shadow: {
-        position: 'absolute',
-        backgroundColor: 'rgba(0,0,0,0.25)',
-        transform: [{ translateY: 2 }],
-    },
-    body: {
-        alignItems: 'center',
-        elevation: 6,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 3 },
-        shadowOpacity: 0.3,
-        shadowRadius: 4,
-        borderWidth: 0.5,
-        borderColor: 'rgba(0,0,0,0.1)',
-    },
-    glass: { position: 'absolute', backgroundColor: '#5BADE6', alignSelf: 'center' },
-    rearGlass: { position: 'absolute', backgroundColor: '#5BADE6', opacity: 0.8, alignSelf: 'center' },
-    roof: { position: 'absolute', backgroundColor: 'rgba(0,0,0,0.04)', alignSelf: 'center' },
-    hl: { position: 'absolute', width: 5, height: 3, borderRadius: 1.5, backgroundColor: '#F5D560' },
-    tl: { position: 'absolute', width: 5, height: 3, borderRadius: 1.5, backgroundColor: '#E05050' },
-    mirror: { position: 'absolute', width: 4, height: 7, borderRadius: 2, elevation: 2, borderWidth: 0.3, borderColor: 'rgba(0,0,0,0.1)' },
-});
 
 export default CarMarker;

@@ -354,7 +354,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
               <CarMarker
                 coordinate={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}
                 heading={(currentDriver as any).heading}
-                size={6}
+                size={44}
                 zIndex={100}
               />
             )}

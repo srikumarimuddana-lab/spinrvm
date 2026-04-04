@@ -8,6 +8,7 @@ import {
   Platform,
   ActivityIndicator,
   RefreshControl,
+  Animated,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,27 +20,29 @@ import SpinrConfig from '@shared/config/spinr.config';
 
 const THEME = SpinrConfig.theme.colors;
 const COLORS = {
-  primary: THEME.background, // Background (white)
-  accent: THEME.primary,     // Action/brand color (red)
-  accentDim: THEME.primaryDark,
-  surface: THEME.surface,   // Card background (white)
-  surfaceLight: THEME.surfaceLight, // Light gray for subtle elements
+  primary: THEME.background,
+  accent: THEME.primary,
+  accentDark: THEME.primaryDark,
+  surface: THEME.surface,
+  surfaceLight: THEME.surfaceLight,
   text: THEME.text,
   textDim: THEME.textDim,
-  success: THEME.success,
+  success: '#10B981',
   gold: '#FFD700',
-  orange: '#FF9500',
-  danger: THEME.error,
+  danger: '#EF4444',
+  warning: '#F59E0B',
   border: THEME.border,
 };
 
 type Filter = 'all' | 'completed' | 'cancelled' | 'scheduled';
+type PeriodFilter = 'today' | 'week' | 'month' | 'all';
 
 export default function RidesScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { rideHistory, historyTotal, fetchRideHistory } = useDriverStore();
+  const { rideHistory, fetchRideHistory } = useDriverStore();
   const [filter, setFilter] = useState<Filter>('all');
+  const [period, setPeriod] = useState<PeriodFilter>('all');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -60,15 +63,67 @@ export default function RidesScreen() {
   };
 
   const filteredRides = rideHistory.filter((r) => {
-    if (filter === 'all') return true;
-    if (filter === 'scheduled') return r.status === 'scheduled';
-    return r.status === filter;
+    // Status Filter
+    if (filter !== 'all') {
+      if (filter === 'scheduled' && r.status !== 'scheduled') return false;
+      if (filter !== 'scheduled' && r.status !== filter) return false;
+    }
+
+    // Period Filter
+    if (period !== 'all') {
+      const dateStr = r.ride_completed_at || r.cancelled_at || r.created_at;
+      if (!dateStr) return false; 
+      
+      const date = new Date(dateStr);
+      const today = new Date();
+      
+      if (period === 'today') {
+        if (
+          date.getDate() !== today.getDate() ||
+          date.getMonth() !== today.getMonth() ||
+          date.getFullYear() !== today.getFullYear()
+        ) {
+          return false;
+        }
+      } else if (period === 'week') {
+        const diffDays = (today.getTime() - date.getTime()) / (1000 * 3600 * 24);
+        if (diffDays > 7 || diffDays < 0) return false;
+      } else if (period === 'month') {
+        if (
+          date.getMonth() !== today.getMonth() ||
+          date.getFullYear() !== today.getFullYear()
+        ) {
+          return false;
+        }
+      }
+    }
+    
+    return true;
   });
 
-  const renderRideCard = ({ item }: { item: any }) => {
+  const periodCompletedRides = filteredRides.filter((r) => r.status === 'completed').length;
+
+  const renderRideCard = ({ item, index }: { item: any; index: number }) => {
     const isCompleted = item.status === 'completed';
-    const statusColor = isCompleted ? COLORS.accent : COLORS.danger;
-    const statusLabel = isCompleted ? 'Completed' : 'Cancelled';
+    const isScheduled = item.status === 'scheduled';
+    const isCancelled = item.status === 'cancelled';
+    
+    let statusColor = COLORS.warning;
+    let statusBg = 'rgba(245, 158, 11, 0.1)';
+    let statusLabel = 'Scheduled';
+    let statusIcon = 'time';
+
+    if (isCompleted) {
+      statusColor = COLORS.success;
+      statusBg = 'rgba(16, 185, 129, 0.1)';
+      statusLabel = 'Completed';
+      statusIcon = 'checkmark-circle';
+    } else if (isCancelled) {
+      statusColor = COLORS.danger;
+      statusBg = 'rgba(239, 68, 68, 0.1)';
+      statusLabel = 'Cancelled';
+      statusIcon = 'close-circle';
+    }
 
     const date = item.ride_completed_at || item.cancelled_at || item.created_at;
     const formattedDate = date
@@ -82,58 +137,81 @@ export default function RidesScreen() {
       : '';
 
     return (
-      <TouchableOpacity style={styles.rideCard} onPress={() => router.push(`/driver/ride-detail?id=${item.id}` as any)}>
-        {/* Status and Date */}
+      <TouchableOpacity 
+        style={styles.rideCard} 
+        activeOpacity={0.8}
+        onPress={() => router.push(`/driver/ride-detail?id=${item.id}` as any)}
+      >
+        {/* Top Header */}
         <View style={styles.cardHeader}>
-          <View style={[styles.statusBadge, { backgroundColor: `${statusColor}15` }]}>
-            <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+          <View style={[styles.statusBadge, { backgroundColor: statusBg }]}>
+            <Ionicons name={statusIcon as any} size={14} color={statusColor} />
             <Text style={[styles.statusText, { color: statusColor }]}>{statusLabel}</Text>
           </View>
-          <Text style={styles.dateText}>{formattedDate}</Text>
+          <View style={{ alignItems: 'flex-end' }}>
+            <Text style={styles.dateText}>{formattedDate}</Text>
+            <Text style={styles.bookingIdText}>ID: #{String(item.id).substring(0, 8).toUpperCase()}</Text>
+          </View>
         </View>
 
-        {/* Route */}
-        <View style={styles.routeRow}>
-          <View style={styles.routeDots}>
+        {/* Route Timeline */}
+        <View style={styles.routeContainer}>
+          <View style={styles.timelineIndicators}>
             <View style={[styles.dot, { backgroundColor: COLORS.accent }]} />
-            <View style={styles.dotLine} />
+            <View style={styles.timelineLine} />
             <View style={[styles.dot, { backgroundColor: COLORS.danger }]} />
           </View>
-          <View style={styles.routeTexts}>
-            <Text style={styles.routeAddress} numberOfLines={1}>
-              {item.pickup_address || 'Pickup location'}
-            </Text>
-            <Text style={styles.routeAddress} numberOfLines={1}>
-              {item.dropoff_address || 'Dropoff location'}
-            </Text>
+          
+          <View style={styles.routeDetails}>
+            <View style={styles.routePoint}>
+              <Text style={styles.routeLabel}>PICKUP</Text>
+              <Text style={styles.routeAddress} numberOfLines={1}>
+                {item.pickup_address || 'Unknown Pickup Location'}
+              </Text>
+            </View>
+            <View style={styles.routePointSpacer} />
+            <View style={styles.routePoint}>
+              <Text style={styles.routeLabel}>DROP-OFF</Text>
+              <Text style={styles.routeAddress} numberOfLines={1}>
+                {item.dropoff_address || 'Unknown Dropoff Location'}
+              </Text>
+            </View>
           </View>
         </View>
 
-        {/* Fare and Trip Info */}
+        {/* Footer info breakdown */}
         <View style={styles.cardFooter}>
-          <View style={styles.tripMeta}>
+          <View style={styles.tripMetaRow}>
             {item.distance_km && (
-              <Text style={styles.metaText}>{item.distance_km.toFixed(1)} km</Text>
+              <View style={styles.metaBadge}>
+                <Ionicons name="map-outline" size={14} color={COLORS.textDim} />
+                <Text style={styles.metaText}>{item.distance_km.toFixed(1)} km</Text>
+              </View>
             )}
             {item.duration_minutes && (
-              <>
-                <Text style={styles.metaDivider}>·</Text>
+              <View style={styles.metaBadge}>
+                <Ionicons name="time-outline" size={14} color={COLORS.textDim} />
                 <Text style={styles.metaText}>{item.duration_minutes} min</Text>
-              </>
-            )}
-            {item.rider_rating !== null && item.rider_rating !== undefined && (
-              <>
-                <Text style={styles.metaDivider}>·</Text>
-                <Ionicons name="star" size={12} color={COLORS.gold} />
-                <Text style={styles.metaText}>{item.rider_rating}</Text>
-              </>
+              </View>
             )}
           </View>
-          {isCompleted && (
-            <Text style={styles.fareText}>
-              ${(item.driver_earnings || item.total_fare || 0).toFixed(2)}
-            </Text>
-          )}
+          
+          <View style={styles.fareContainer}>
+            {isCompleted ? (
+              <>
+                <Text style={styles.fareLabel}>Earned</Text>
+                <Text style={styles.fareText}>
+                  ${(item.driver_earnings || item.total_fare || 0).toFixed(2)}
+                </Text>
+              </>
+            ) : isCancelled ? (
+                <Text style={[styles.fareText, { color: COLORS.textDim, fontSize: 16 }]}>$0.00</Text>
+            ) : (
+                <Text style={styles.fareText}>
+                  Est. ${(item.total_fare || 0).toFixed(2)}
+                </Text>
+            )}
+          </View>
         </View>
       </TouchableOpacity>
     );
@@ -141,55 +219,97 @@ export default function RidesScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
+      {/* Rich Header Background */}
       <LinearGradient
-        colors={[COLORS.surface, COLORS.primary]}
-        style={[styles.header, { paddingTop: insets.top + 12 }]}
+        colors={[COLORS.accent, COLORS.accentDark]}
+        style={[styles.headerHero, { paddingTop: insets.top + 20 }]}
       >
-        <Text style={styles.headerTitle}>Ride History</Text>
+        <View style={styles.headerTop}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+            <Ionicons name="arrow-back" size={24} color="#fff" />
+          </TouchableOpacity>
+          <Text style={styles.headerHeroTitle}>My Rides</Text>
+          <View style={{ width: 40 }} />
+        </View>
 
-        {/* Total Rides */}
-        <View style={styles.totalContainer}>
-          <Text style={styles.totalLabel}>TOTAL RIDES</Text>
-          <Text style={styles.totalAmount}>
-            {loading ? '--' : historyTotal}
-          </Text>
+        <View style={styles.summaryBox}>
+          <View style={styles.summaryItem}>
+            <Text style={styles.summaryLabel}>TOTAL COMPLETED</Text>
+            <Text style={styles.summaryValue}>{loading ? '--' : periodCompletedRides}</Text>
+          </View>
+          <View style={styles.summaryDivider} />
+          <View style={styles.summaryItem}>
+            <Text style={styles.summaryLabel}>IN PERIOD</Text>
+            <Text style={styles.summaryValue}>{loading ? '--' : filteredRides.length}</Text>
+          </View>
         </View>
       </LinearGradient>
 
-      {/* Filter Tabs */}
-      <View style={styles.filterRow}>
-        {(['all', 'scheduled', 'completed', 'cancelled'] as Filter[]).map((f) => (
-          <TouchableOpacity
-            key={f}
-            style={[styles.filterBtn, filter === f && styles.filterBtnActive]}
-            onPress={() => setFilter(f)}
-          >
-            <Text style={[styles.filterText, filter === f && styles.filterTextActive]}>
-              {f === 'all' ? 'All' : f === 'scheduled' ? 'Scheduled' : f === 'completed' ? 'Completed' : 'Cancelled'}
-            </Text>
-          </TouchableOpacity>
-        ))}
+      {/* Modern Pill Filters */}
+      <View style={styles.filterWrapper}>
+        <FlatList
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          data={['today', 'week', 'month', 'all'] as PeriodFilter[]}
+          contentContainerStyle={[styles.filterListContent, { marginBottom: 12 }]}
+          keyExtractor={(item) => item}
+          renderItem={({ item }) => (
+            <TouchableOpacity
+              style={[styles.filterPill, period === item && styles.filterPillActive]}
+              onPress={() => setPeriod(item)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.filterPillText, period === item && styles.filterPillTextActive]}>
+                {item === 'all' ? 'All Time' : item === 'today' ? 'Today' : item === 'week' ? 'This Week' : 'This Month'}
+              </Text>
+            </TouchableOpacity>
+          )}
+        />
+        <FlatList
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          data={['all', 'completed', 'scheduled', 'cancelled'] as Filter[]}
+          contentContainerStyle={styles.filterListContent}
+          keyExtractor={(item) => item}
+          renderItem={({ item }) => (
+            <TouchableOpacity
+              style={[styles.filterPill, filter === item && styles.filterPillActive]}
+              onPress={() => setFilter(item)}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.filterPillText, filter === item && styles.filterPillTextActive]}>
+                {item === 'all' ? 'All Status' : item.charAt(0).toUpperCase() + item.slice(1)}
+              </Text>
+            </TouchableOpacity>
+          )}
+        />
       </View>
 
-      {/* Rides List */}
+      {/* Content List */}
       {loading ? (
-        <ActivityIndicator color={COLORS.accent} style={{ marginTop: 40 }} />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={COLORS.accent} />
+          <Text style={styles.loadingText}>Fetching rides...</Text>
+        </View>
       ) : (
         <FlatList
           data={filteredRides}
           renderItem={renderRideCard}
           keyExtractor={(item) => item.id || Math.random().toString()}
-          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 90 }}
+          contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />
           }
           ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Ionicons name="car-outline" size={56} color={COLORS.surfaceLight} />
-              <Text style={styles.emptyTitle}>No rides yet</Text>
-              <Text style={styles.emptySub}>Your completed rides will appear here</Text>
+            <View style={styles.emptyStateContainer}>
+              <View style={styles.emptyIconCircle}>
+                <Ionicons name="car-sport-outline" size={48} color={COLORS.accent} />
+              </View>
+              <Text style={styles.emptyStateTitle}>No Rides Found</Text>
+              <Text style={styles.emptyStateDesc}>
+                There are no rides matching this filter criteria at the moment.
+              </Text>
             </View>
           }
         />
@@ -201,166 +321,279 @@ export default function RidesScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: COLORS.primary,
+    backgroundColor: '#F3F4F6',
   },
-  header: {
+  // Header Hero
+  headerHero: {
     paddingHorizontal: 20,
-    paddingBottom: 20,
+    paddingBottom: 30,
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
+    shadowColor: COLORS.accentDark,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 10,
+    zIndex: 10,
   },
-  headerTitle: {
-    color: COLORS.text,
-    fontSize: 26,
-    fontWeight: '800',
-    marginBottom: 16,
-  },
-  totalContainer: {
-    alignItems: 'center',
-  },
-  totalLabel: {
-    color: COLORS.textDim,
-    fontSize: 11,
-    letterSpacing: 1.5,
-    fontWeight: '600',
-  },
-  totalAmount: {
-    color: COLORS.text,
-    fontSize: 44,
-    fontWeight: '800',
-    marginTop: 4,
-  },
-  filterRow: {
+  headerTop: {
     flexDirection: 'row',
-    backgroundColor: COLORS.surfaceLight,
-    borderRadius: 12,
-    padding: 3,
-    marginHorizontal: 16,
-    marginBottom: 16,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 24,
   },
-  filterBtn: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 10,
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  filterBtnActive: {
-    backgroundColor: COLORS.accent,
+  headerHeroTitle: {
+    color: '#fff',
+    fontSize: 22,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
-  filterText: {
+  summaryBox: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 20,
+    paddingVertical: 20,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  summaryItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  summaryDivider: {
+    width: 1,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    marginHorizontal: 10,
+  },
+  summaryLabel: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    marginBottom: 6,
+  },
+  summaryValue: {
+    color: '#fff',
+    fontSize: 28,
+    fontWeight: '900',
+  },
+  // Filters
+  filterWrapper: {
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  filterListContent: {
+    paddingHorizontal: 16,
+    gap: 10,
+  },
+  filterPill: {
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+    borderRadius: 24,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  filterPillActive: {
+    backgroundColor: COLORS.accent,
+    borderColor: COLORS.accent,
+  },
+  filterPillText: {
     color: COLORS.textDim,
     fontSize: 13,
     fontWeight: '600',
   },
-  filterTextActive: {
+  filterPillTextActive: {
     color: '#fff',
+    fontWeight: '700',
   },
+  // List Area
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 40,
+  },
+  loadingText: {
+    marginTop: 12,
+    color: COLORS.textDim,
+    fontSize: 15,
+    fontWeight: '500',
+  },
+  listContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 40,
+    paddingTop: 8,
+  },
+  // Ride Card Modern
   rideCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: 18,
-    padding: 16,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.04)',
+    backgroundColor: '#fff',
+    borderRadius: 24,
+    padding: 20,
+    marginBottom: 16,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.04,
+    shadowRadius: 16,
     elevation: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.02)',
   },
   cardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 14,
+    marginBottom: 20,
   },
   statusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
   },
   statusText: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
   dateText: {
     color: COLORS.textDim,
-    fontSize: 11,
-  },
-  routeRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginBottom: 12,
-  },
-  routeDots: {
-    alignItems: 'center',
-    width: 12,
-    paddingTop: 3,
-  },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  dotLine: {
-    width: 2,
-    height: 16,
-    backgroundColor: COLORS.surfaceLight,
-    marginVertical: 2,
-  },
-  routeTexts: {
-    flex: 1,
-    gap: 10,
-  },
-  routeAddress: {
-    color: COLORS.text,
     fontSize: 13,
     fontWeight: '500',
   },
+  bookingIdText: {
+    color: '#9CA3AF',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 2,
+    letterSpacing: 0.5,
+  },
+  // Timeline
+  routeContainer: {
+    flexDirection: 'row',
+    marginBottom: 20,
+  },
+  timelineIndicators: {
+    alignItems: 'center',
+    width: 24,
+    paddingTop: 4,
+  },
+  dot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  timelineLine: {
+    width: 2,
+    flex: 1,
+    backgroundColor: '#E5E7EB',
+    marginVertical: 4,
+  },
+  routeDetails: {
+    flex: 1,
+  },
+  routePoint: {
+    justifyContent: 'center',
+  },
+  routePointSpacer: {
+    height: 24,
+  },
+  routeLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: COLORS.textDim,
+    letterSpacing: 1,
+    marginBottom: 2,
+  },
+  routeAddress: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: COLORS.text,
+  },
+  // Footer
   cardFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 12,
+    alignItems: 'flex-end',
+    paddingTop: 16,
     borderTopWidth: 1,
-    borderTopColor: COLORS.surfaceLight,
+    borderTopColor: '#F3F4F6',
   },
-  tripMeta: {
+  tripMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  metaBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+    backgroundColor: '#F9FAFB',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
   },
   metaText: {
     color: COLORS.textDim,
-    fontSize: 12,
-  },
-  metaDivider: {
-    color: COLORS.surfaceLight,
-    fontSize: 12,
-  },
-  fareText: {
-    color: COLORS.accent,
-    fontSize: 18,
-    fontWeight: '800',
-  },
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: 60,
-    gap: 8,
-  },
-  emptyTitle: {
-    color: COLORS.textDim,
-    fontSize: 18,
+    fontSize: 13,
     fontWeight: '600',
   },
-  emptySub: {
-    color: COLORS.surfaceLight,
-    fontSize: 13,
+  fareContainer: {
+    alignItems: 'flex-end',
+  },
+  fareLabel: {
+    fontSize: 11,
+    color: COLORS.textDim,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  fareText: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: COLORS.accent,
+    letterSpacing: -0.5,
+  },
+  // Empty state
+  emptyStateContainer: {
+    alignItems: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 30,
+  },
+  emptyIconCircle: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    backgroundColor: 'rgba(255,255,255,1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+    shadowColor: COLORS.accent,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+  emptyStateTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: COLORS.text,
+    marginBottom: 10,
+  },
+  emptyStateDesc: {
+    fontSize: 14,
+    color: COLORS.textDim,
+    textAlign: 'center',
+    lineHeight: 22,
   },
 });

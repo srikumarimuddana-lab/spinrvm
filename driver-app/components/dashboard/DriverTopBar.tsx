@@ -1,15 +1,17 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
 import SpinrConfig from '@shared/config/spinr.config';
 
 const COLORS = {
-  overlay: 'rgba(255, 255, 255, 0.95)',
+  overlay: 'rgba(255, 255, 255, 0.75)',
   text: SpinrConfig.theme.colors.text,
   textDim: SpinrConfig.theme.colors.textDim,
   surfaceLight: SpinrConfig.theme.colors.surfaceLight,
   success: SpinrConfig.theme.colors.success,
+  primary: SpinrConfig.theme.colors.primary,
 };
 
 interface DriverData {
@@ -31,93 +33,141 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
   isOnline,
 }) => {
   const insets = useSafeAreaInsets();
+  
   return (
-    <View style={[styles.topBar, { top: insets.top + 8 }]}>
-      <View style={styles.topBarInner}>
-        <View style={styles.driverInfo}>
-          <View style={styles.avatarSmall}>
-            <Ionicons name="person" size={18} color={COLORS.textDim} />
+    <View style={[styles.topBarContainer, { top: Math.max(insets.top, 20) }]}>
+      <BlurView intensity={Platform.OS === 'ios' ? 60 : 100} tint="light" style={styles.blurContainer}>
+        <View style={styles.topBarInner}>
+          <View style={styles.driverInfo}>
+            <View style={styles.avatarWrapper}>
+              <View style={styles.avatarSmall}>
+                <Ionicons name="person" size={20} color={COLORS.primary} />
+              </View>
+              {isOnline && (
+                <View style={styles.onlineDotIndicatorOuter}>
+                  <View style={styles.onlineDotIndicatorInner} />
+                </View>
+              )}
+            </View>
+            <View>
+              <Text style={styles.driverName}>
+                {driverData?.name || user?.first_name || 'Driver'}
+              </Text>
+              <Text style={styles.vehicleInfo}>
+                {driverData?.vehicle_make || 'Vehicle'} {driverData?.vehicle_model || 'Info'} • <Text style={styles.plate}>{driverData?.license_plate || 'PLATE'}</Text>
+              </Text>
+            </View>
           </View>
-          <View>
-            <Text style={styles.driverName}>
-              {driverData?.name || user?.first_name || 'Driver'}
-            </Text>
-            <Text style={styles.vehicleInfo}>
-              {driverData?.vehicle_make} {driverData?.vehicle_model} · {driverData?.license_plate}
+          <View style={[styles.onlineBadge, isOnline ? styles.onlineBadgeActive : styles.onlineBadgeInactive]}>
+            <Text style={[styles.onlineBadgeText, isOnline ? styles.onlineBadgeTextActive : styles.onlineBadgeTextInactive]}>
+              {isOnline ? 'ONLINE' : 'OFFLINE'}
             </Text>
           </View>
         </View>
-        <View style={[styles.onlineBadge, isOnline && styles.onlineBadgeActive]}>
-          <View style={[styles.onlineDot, { backgroundColor: isOnline ? COLORS.success : COLORS.textDim }]} />
-          <Text style={[styles.onlineBadgeText, isOnline && { color: COLORS.success }]}>
-            {isOnline ? 'ONLINE' : 'OFFLINE'}
-          </Text>
-        </View>
-      </View>
+      </BlurView>
     </View>
   );
 };
 
 const styles = StyleSheet.create({
-  topBar: {
+  topBarContainer: {
     position: 'absolute',
     left: 16,
     right: 16,
     zIndex: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  blurContainer: {
+    borderRadius: 24,
+    overflow: 'hidden',
+    backgroundColor: COLORS.overlay,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.8)',
   },
   topBarInner: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: COLORS.overlay,
-    borderRadius: 16,
-    padding: 12,
-    paddingHorizontal: 16,
+    padding: 10,
+    paddingRight: 16,
   },
   driverInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
+  },
+  avatarWrapper: {
+    position: 'relative',
   },
   avatarSmall: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: COLORS.surfaceLight,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 59, 48, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
   },
+  onlineDotIndicatorOuter: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  onlineDotIndicatorInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: COLORS.success,
+  },
   driverName: {
     color: COLORS.text,
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: -0.3,
   },
   vehicleInfo: {
     color: COLORS.textDim,
-    fontSize: 11,
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  plate: {
+    fontWeight: '700',
+    color: COLORS.text,
   },
   onlineBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: COLORS.surfaceLight,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
     borderRadius: 20,
+    borderWidth: 1.5,
   },
   onlineBadgeActive: {
     backgroundColor: 'rgba(0, 230, 118, 0.12)',
+    borderColor: 'rgba(0, 230, 118, 0.3)',
   },
-  onlineDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
+  onlineBadgeInactive: {
+    backgroundColor: 'rgba(0, 0, 0, 0.04)',
+    borderColor: 'rgba(0,0,0,0.08)',
   },
   onlineBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  onlineBadgeTextActive: {
+    color: COLORS.success,
+  },
+  onlineBadgeTextInactive: {
     color: COLORS.textDim,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.8,
   },
 });
 

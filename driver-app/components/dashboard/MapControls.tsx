@@ -1,11 +1,12 @@
 import React from 'react';
-import { View, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import MapView from 'react-native-maps';
+import { BlurView } from 'expo-blur';
 import SpinrConfig from '@shared/config/spinr.config';
 
 const COLORS = {
-  overlay: 'rgba(255, 255, 255, 0.95)',
+  overlay: 'rgba(255, 255, 255, 0.8)',
   text: SpinrConfig.theme.colors.text,
   border: SpinrConfig.theme.colors.border,
   accent: SpinrConfig.theme.colors.primary,
@@ -56,66 +57,74 @@ export const MapControls: React.FC<MapControlsProps> = ({
   };
 
   return (
-    <>
+    <View style={styles.controlsContainer}>
       {/* Zoom Controls */}
-      <View style={styles.zoomControls}>
-        <TouchableOpacity style={styles.zoomBtn} onPress={handleZoomIn}>
-          <Ionicons name="add" size={22} color={COLORS.text} />
-        </TouchableOpacity>
-        <View style={styles.zoomDivider} />
-        <TouchableOpacity style={styles.zoomBtn} onPress={handleZoomOut}>
-          <Ionicons name="remove" size={22} color={COLORS.text} />
-        </TouchableOpacity>
+      <View style={styles.shadowWrapper}>
+        <BlurView intensity={Platform.OS === 'ios' ? 40 : 100} tint="light" style={styles.blurContainer}>
+          <TouchableOpacity style={styles.zoomBtn} onPress={handleZoomIn} activeOpacity={0.7}>
+            <Ionicons name="add" size={24} color={COLORS.text} />
+          </TouchableOpacity>
+          <View style={styles.zoomDivider} />
+          <TouchableOpacity style={styles.zoomBtn} onPress={handleZoomOut} activeOpacity={0.7}>
+            <Ionicons name="remove" size={24} color={COLORS.text} />
+          </TouchableOpacity>
+        </BlurView>
       </View>
 
       {/* My Location Button */}
-      <TouchableOpacity style={styles.myLocationBtn} onPress={handleRecenter}>
-        <Ionicons name="locate" size={22} color={COLORS.accent} />
-      </TouchableOpacity>
-    </>
+      <View style={[styles.shadowWrapper, { marginTop: 12 }]}>
+        <BlurView intensity={Platform.OS === 'ios' ? 40 : 100} tint="light" style={[styles.blurContainer, styles.myLocationBtn]}>
+          <TouchableOpacity style={styles.btnInner} onPress={handleRecenter} activeOpacity={0.7}>
+            <Ionicons name="locate" size={24} color={COLORS.accent} />
+          </TouchableOpacity>
+        </BlurView>
+      </View>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
-  zoomControls: {
+  controlsContainer: {
     position: 'absolute',
     right: 16,
-    bottom: 380,
-    borderRadius: 14,
-    backgroundColor: COLORS.overlay,
-    elevation: 4,
+    bottom: 160, // Relocated lower since idle panel is now transparent HUD
+    alignItems: 'flex-end',
+  },
+  shadowWrapper: {
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  blurContainer: {
+    borderRadius: 16,
     overflow: 'hidden',
+    backgroundColor: COLORS.overlay,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.7)',
   },
   zoomBtn: {
-    width: 44,
-    height: 44,
+    width: 48,
+    height: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  btnInner: {
+    width: '100%',
+    height: '100%',
     justifyContent: 'center',
     alignItems: 'center',
   },
   zoomDivider: {
     height: 1,
-    backgroundColor: COLORS.border,
-    marginHorizontal: 8,
+    backgroundColor: 'rgba(0,0,0,0.06)',
+    marginHorizontal: 10,
   },
   myLocationBtn: {
-    position: 'absolute',
-    right: 16,
-    bottom: 320,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.overlay,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
   },
 });
 

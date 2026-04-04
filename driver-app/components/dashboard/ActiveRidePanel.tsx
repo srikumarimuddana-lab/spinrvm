@@ -1,22 +1,21 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, Animated } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { Animated } from 'react-native';
 import SpinrConfig from '@shared/config/spinr.config';
 
 const COLORS = {
-  primary: SpinrConfig.theme.colors.background,
+  primary: '#0B0F19', // Deep dark blue/black for contrast
+  surface: '#1A2138', // Lighter dark for cards
   accent: SpinrConfig.theme.colors.primary,
   accentDim: SpinrConfig.theme.colors.primaryDark,
-  surface: SpinrConfig.theme.colors.surface,
-  surfaceLight: SpinrConfig.theme.colors.surfaceLight,
-  text: SpinrConfig.theme.colors.text,
-  textDim: SpinrConfig.theme.colors.textDim,
+  success: SpinrConfig.theme.colors.success,
+  text: '#FFFFFF',
+  textDim: '#A0AEC0',
   orange: '#FF9500',
-  gold: '#FFD700',
+  gold: '#F6E05E',
   danger: SpinrConfig.theme.colors.error,
-  border: SpinrConfig.theme.colors.border,
+  border: 'rgba(255,255,255,0.1)',
 };
 
 interface Rider {
@@ -73,99 +72,80 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
 
   const getStatusText = () => {
     switch (rideState) {
-      case 'navigating_to_pickup':
-        return 'Navigating to Pickup';
-      case 'arrived_at_pickup':
-        return 'Waiting for Rider';
-      case 'trip_in_progress':
-        return 'Trip in Progress';
+      case 'navigating_to_pickup': return 'Navigating to Pickup';
+      case 'arrived_at_pickup': return 'Waiting for Rider';
+      case 'trip_in_progress': return 'Trip in Progress';
     }
   };
 
-  const getStatusColor = () => {
+  const getStatusIndicator = () => {
     switch (rideState) {
-      case 'trip_in_progress':
-        return COLORS.accent;
-      case 'arrived_at_pickup':
-        return COLORS.orange;
-      default:
-        return COLORS.gold;
+      case 'trip_in_progress': 
+        return <View style={[styles.pulseDot, { backgroundColor: COLORS.success }]} />;
+      case 'arrived_at_pickup': 
+        return <Ionicons name="time" size={16} color={COLORS.orange} />;
+      default: 
+        return <Ionicons name="navigate-circle" size={18} color={COLORS.accent} />;
     }
   };
 
   return (
     <Animated.View
-      style={[styles.activePanel, { transform: [{ translateY: slideUpAnim }], opacity: fadeAnim }]}
+      style={[styles.activePanelContainer, { transform: [{ translateY: slideUpAnim }], opacity: fadeAnim }]}
     >
-      <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={styles.activePanelInner}>
-        {/* Status Bar */}
-        <View style={styles.rideStatusBar}>
-          <View style={[styles.statusIndicator, { backgroundColor: getStatusColor() }]} />
-          <Text style={styles.rideStatusText}>{getStatusText()}</Text>
-          {ride.total_fare && <Text style={styles.rideFare}>${ride.total_fare.toFixed(2)}</Text>}
+      {/* Floating Header Card */}
+      <View style={styles.floatingHeader}>
+        <View style={styles.statusRow}>
+          {getStatusIndicator()}
+          <Text style={styles.statusText}>{getStatusText()}</Text>
         </View>
+        <Text style={styles.fareHighlight}>
+          ${ride.total_fare ? ride.total_fare.toFixed(2) : '0.00'}
+        </Text>
+      </View>
 
-        {/* Rider Info */}
+      <View style={styles.mainBottomSheet}>
+        
+        {/* Rider Info Card */}
         {rider && (
           <View style={styles.riderCard}>
             <View style={styles.riderAvatar}>
               <Ionicons name="person" size={24} color={COLORS.textDim} />
             </View>
             <View style={styles.riderInfo}>
-              <Text style={styles.riderCardName}>{rider.first_name || rider.name || 'Rider'}</Text>
+              <Text style={styles.riderName}>{rider.first_name || rider.name || 'Rider'}</Text>
               {rider.rating && (
                 <View style={styles.riderRating}>
                   <Ionicons name="star" size={12} color={COLORS.gold} />
-                  <Text style={styles.textDim}>{rider.rating}</Text>
+                  <Text style={styles.ratingNumber}>{rider.rating.toFixed(1)}</Text>
                 </View>
               )}
             </View>
-            <TouchableOpacity style={styles.contactBtn}>
-              <Ionicons name="chatbubble-ellipses" size={20} color={COLORS.accent} />
+            <TouchableOpacity style={styles.contactBtnActive}>
+              <Ionicons name="chatbubble" size={20} color="#fff" />
             </TouchableOpacity>
             <TouchableOpacity style={styles.contactBtn}>
-              <Ionicons name="call" size={20} color={COLORS.accent} />
+              <Ionicons name="call" size={20} color={COLORS.textDim} />
             </TouchableOpacity>
           </View>
         )}
 
-        {/* Addresses */}
-        <View style={styles.addressRow}>
-          <View style={styles.addressDots}>
-            <View style={[styles.dot, { backgroundColor: COLORS.accent }]} />
-            <View style={styles.dottedLine} />
-            <View style={[styles.dot, { backgroundColor: '#FF4757' }]} />
-          </View>
-          <View style={styles.addresses}>
-            <Text style={styles.addressTextSm} numberOfLines={1}>
-              {ride.pickup_address}
-            </Text>
-            <View style={styles.addressDivider} />
-            <Text style={styles.addressTextSm} numberOfLines={1}>
-              {ride.dropoff_address}
-            </Text>
-          </View>
-        </View>
-
-        {/* OTP Input for arrived state */}
+        {/* Dynamic OTP Section */}
         {rideState === 'arrived_at_pickup' && (
           <View style={styles.otpSection}>
-            <Text style={styles.otpLabel}>Enter Rider's PIN</Text>
+            <Text style={styles.otpLabel}>Ask rider for their 4-digit PIN</Text>
             <View style={styles.otpRow}>
               {[0, 1, 2, 3].map((i) => (
-                <TouchableOpacity
-                  key={i}
-                  style={[styles.otpBox, otpInput.length > i && styles.otpBoxFilled]}
-                >
+                <View key={i} style={[styles.otpBox, otpInput.length > i && styles.otpBoxFilled]}>
                   <Text style={styles.otpDigit}>{otpInput[i] || ''}</Text>
-                </TouchableOpacity>
+                </View>
               ))}
             </View>
             <View style={styles.otpKeypad}>
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, null, 0, 'del'].map((key) => (
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9, null, 0, 'del'].map((key, idx) => (
                 <TouchableOpacity
-                  key={String(key)}
-                  style={styles.keypadBtn}
+                  key={idx}
+                  style={[styles.keypadBtn, key === null && { backgroundColor: 'transparent', elevation: 0 }]}
                   onPress={() => {
                     if (key === 'del') {
                       setOtpInput(otpInput.slice(0, -1));
@@ -177,14 +157,14 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                       }
                     }
                   }}
+                  activeOpacity={0.7}
+                  disabled={key === null}
                 >
                   {key === 'del' ? (
-                    <Ionicons name="backspace" size={22} color={COLORS.text} />
+                    <Ionicons name="backspace" size={24} color={COLORS.text} />
                   ) : key !== null ? (
                     <Text style={styles.keypadText}>{key}</Text>
-                  ) : (
-                    <View />
-                  )}
+                  ) : null}
                 </TouchableOpacity>
               ))}
             </View>
@@ -196,74 +176,52 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           {rideState === 'navigating_to_pickup' && (
             <>
               <TouchableOpacity
-                style={styles.navBtn}
+                style={[styles.actionBtn, { backgroundColor: COLORS.surface }]}
                 onPress={() => onNavigate(ride.pickup_lat, ride.pickup_lng, 'Pickup')}
               >
-                <Ionicons name="navigate" size={20} color="#fff" />
-                <Text style={styles.navBtnText}>Navigate</Text>
+                <Ionicons name="navigate" size={20} color="#63B3ED" />
+                <Text style={styles.actionBtnTextOutline}>Navigate</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.arriveBtn}
+                style={[styles.actionBtn, styles.primaryBtn]}
                 onPress={onArriveAtPickup}
                 disabled={isLoading}
               >
-                <LinearGradient colors={[COLORS.accent, COLORS.accentDim]} style={styles.actionGradient}>
-                  {isLoading ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={styles.actionBtnText}>I've Arrived</Text>
-                  )}
-                </LinearGradient>
+                {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>I've Arrived</Text>}
               </TouchableOpacity>
             </>
           )}
 
           {rideState === 'arrived_at_pickup' && (
             <TouchableOpacity
-              style={styles.startBtn}
+              style={[styles.actionBtn, { backgroundColor: 'rgba(255,255,255,0.1)' }]}
               onPress={onStartRide}
               disabled={isLoading}
             >
-              <LinearGradient colors={[COLORS.orange, '#FF6B35']} style={styles.actionGradient}>
-                {isLoading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.actionBtnText}>Start Without PIN</Text>
-                )}
-              </LinearGradient>
+              {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.actionBtnTextOutline}>Start Without PIN</Text>}
             </TouchableOpacity>
           )}
 
           {rideState === 'trip_in_progress' && (
             <>
               <TouchableOpacity
-                style={styles.navBtn}
+                style={[styles.actionBtn, { backgroundColor: COLORS.surface }]}
                 onPress={() => onNavigate(ride.dropoff_lat, ride.dropoff_lng, 'Dropoff')}
               >
-                <Ionicons name="navigate" size={20} color="#fff" />
-                <Text style={styles.navBtnText}>Navigate</Text>
+                <Ionicons name="navigate" size={20} color="#63B3ED" />
+                <Text style={styles.actionBtnTextOutline}>Navigate</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={styles.completeBtn}
+                style={[styles.actionBtn, styles.primaryBtn, { backgroundColor: COLORS.success }]}
                 onPress={() => {
-                  Alert.alert(
-                    'Complete Ride',
-                    'Are you sure you want to complete this trip?',
-                    [
-                      { text: 'Cancel', style: 'cancel' },
-                      { text: 'Complete', onPress: onCompleteRide },
-                    ]
-                  );
+                  Alert.alert('Complete Ride', 'Are you sure you want to complete this trip?', [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Complete', onPress: onCompleteRide },
+                  ]);
                 }}
                 disabled={isLoading}
               >
-                <LinearGradient colors={[COLORS.accent, COLORS.accentDim]} style={styles.actionGradient}>
-                  {isLoading ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={styles.actionBtnText}>Complete Trip</Text>
-                  )}
-                </LinearGradient>
+                {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Complete Trip</Text>}
               </TouchableOpacity>
             </>
           )}
@@ -272,173 +230,176 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
             <TouchableOpacity
               style={styles.cancelRideBtn}
               onPress={() => {
-                Alert.alert(
-                  'Cancel Ride',
-                  'Are you sure you want to cancel? This may affect your rating.',
-                  [
-                    { text: 'No', style: 'cancel' },
-                    { text: 'Yes, Cancel', style: 'destructive', onPress: onCancelRide },
-                  ]
-                );
+                Alert.alert('Cancel Ride', 'Are you sure you want to cancel? This may affect your rating.', [
+                  { text: 'No', style: 'cancel' },
+                  { text: 'Yes, Cancel', style: 'destructive', onPress: onCancelRide },
+                ]);
               }}
             >
               <Text style={styles.cancelRideText}>Cancel Ride</Text>
             </TouchableOpacity>
           )}
         </View>
-      </LinearGradient>
+
+      </View>
     </Animated.View>
   );
 };
 
 const styles = StyleSheet.create({
-  activePanel: {
+  activePanelContainer: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    height: '70%',
+    zIndex: 100,
   },
-  activePanelInner: {
-    flex: 1,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    padding: 20,
-    paddingBottom: 40,
-  },
-  rideStatusBar: {
+  // Floating top status pill
+  floatingHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    marginBottom: 16,
+    justifyContent: 'space-between',
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderRadius: 24,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 8,
   },
-  statusIndicator: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
-  rideStatusText: {
-    flex: 1,
+  pulseDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  statusText: {
     fontSize: 16,
     fontWeight: '700',
-    color: COLORS.text,
+    color: '#fff',
   },
-  rideFare: {
+  fareHighlight: {
     fontSize: 18,
-    fontWeight: '800',
-    color: COLORS.accent,
+    fontWeight: '900',
+    color: COLORS.success,
   },
+  // Dark bottom sheet
+  mainBottomSheet: {
+    backgroundColor: COLORS.primary,
+    borderTopLeftRadius: 32,
+    borderTopRightRadius: 32,
+    padding: 24,
+    paddingBottom: 40,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -5 },
+    shadowOpacity: 0.3,
+    shadowRadius: 15,
+    elevation: 10,
+  },
+  // Rider profile card
   riderCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.surfaceLight,
-    borderRadius: 16,
+    backgroundColor: COLORS.surface,
+    borderRadius: 20,
     padding: 16,
-    marginBottom: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   riderAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: 'rgba(255,255,255,0.5)',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(255,255,255,0.1)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
+    marginRight: 14,
   },
   riderInfo: {
     flex: 1,
   },
-  riderCardName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: COLORS.text,
+  riderName: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#fff',
+    marginBottom: 4,
   },
   riderRating: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    marginTop: 4,
   },
-  textDim: {
+  ratingNumber: {
     color: COLORS.textDim,
-    fontSize: 14,
+    fontSize: 13,
+    fontWeight: '600',
   },
   contactBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: COLORS.surface,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.05)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginLeft: 8,
+    marginLeft: 10,
   },
-  addressRow: {
-    flexDirection: 'row',
-    marginBottom: 16,
-  },
-  addressDots: {
+  contactBtnActive: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: COLORS.accent,
+    justifyContent: 'center',
     alignItems: 'center',
-    width: 24,
-    marginRight: 12,
+    marginLeft: 10,
   },
-  dot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-  },
-  dottedLine: {
-    width: 2,
-    flex: 1,
-    backgroundColor: COLORS.surfaceLight,
-    marginVertical: 4,
-  },
-  addresses: {
-    flex: 1,
-  },
-  addressTextSm: {
-    fontSize: 14,
-    color: COLORS.text,
-    paddingVertical: 8,
-    fontWeight: '500',
-  },
-  addressDivider: {
-    height: 1,
-    backgroundColor: COLORS.surfaceLight,
-  },
+  // OTP Section
   otpSection: {
-    marginBottom: 16,
+    backgroundColor: COLORS.surface,
+    borderRadius: 24,
+    padding: 20,
+    alignItems: 'center',
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: COLORS.border,
   },
   otpLabel: {
-    fontSize: 14,
+    fontSize: 15,
+    color: COLORS.textDim,
     fontWeight: '600',
-    color: COLORS.text,
-    marginBottom: 12,
-    textAlign: 'center',
+    marginBottom: 16,
   },
   otpRow: {
     flexDirection: 'row',
-    justifyContent: 'center',
     gap: 12,
-    marginBottom: 16,
+    marginBottom: 24,
   },
   otpBox: {
-    width: 50,
-    height: 60,
-    borderRadius: 12,
+    width: 55,
+    height: 65,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0,0,0,0.2)',
     borderWidth: 2,
-    borderColor: COLORS.border,
-    backgroundColor: COLORS.surface,
+    borderColor: 'transparent',
     justifyContent: 'center',
     alignItems: 'center',
   },
   otpBoxFilled: {
     borderColor: COLORS.accent,
-    backgroundColor: 'rgba(255, 71, 87, 0.05)',
+    backgroundColor: 'rgba(255, 71, 87, 0.1)',
   },
   otpDigit: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: COLORS.text,
+    fontSize: 32,
+    fontWeight: '800',
+    color: '#fff',
   },
   otpKeypad: {
     flexDirection: 'row',
@@ -447,66 +408,51 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   keypadBtn: {
-    width: 70,
-    height: 55,
-    borderRadius: 14,
-    backgroundColor: COLORS.surfaceLight,
+    width: '28%',
+    aspectRatio: 1.5,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
   },
   keypadText: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: '600',
-    color: COLORS.text,
+    color: '#fff',
   },
+  // Actions
   rideActions: {
     gap: 12,
   },
-  navBtn: {
+  actionBtn: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.text,
+    height: 56,
     borderRadius: 16,
-    paddingVertical: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
     gap: 8,
   },
-  navBtnText: {
+  actionBtnTextOutline: {
     fontSize: 16,
     fontWeight: '700',
     color: '#fff',
   },
-  arriveBtn: {
-    borderRadius: 16,
-    overflow: 'hidden',
+  primaryBtn: {
+    backgroundColor: COLORS.accent,
   },
-  startBtn: {
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  completeBtn: {
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  actionGradient: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 16,
-    gap: 8,
-  },
-  actionBtnText: {
-    fontSize: 16,
-    fontWeight: '700',
+  primaryBtnText: {
+    fontSize: 18,
+    fontWeight: '800',
     color: '#fff',
+    letterSpacing: 0.5,
   },
   cancelRideBtn: {
-    paddingVertical: 12,
+    paddingVertical: 14,
     alignItems: 'center',
   },
   cancelRideText: {
-    fontSize: 14,
     color: COLORS.danger,
+    fontSize: 15,
     fontWeight: '600',
   },
 });

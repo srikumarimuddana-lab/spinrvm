@@ -18,6 +18,8 @@ import { useRouter } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
 import { languages, Language } from '../../i18n';
+import api from '@shared/api/client';
+import CustomAlert from '@shared/components/CustomAlert';
 
 import SpinrConfig from '@shared/config/spinr.config';
 
@@ -44,6 +46,16 @@ export default function SettingsScreen() {
     const { language, setLanguage, loadLanguage, t } = useLanguageStore();
     const [showLanguageModal, setShowLanguageModal] = useState(false);
 
+    // Custom alert states
+    const [showDeleteStep1, setShowDeleteStep1] = useState(false);
+    const [showDeleteStep2, setShowDeleteStep2] = useState(false);
+    const [deleteInput, setDeleteInput] = useState('');
+    const [showEmergencyAlert, setShowEmergencyAlert] = useState(false);
+    const [feedbackAlert, setFeedbackAlert] = useState<{
+        visible: boolean; title: string; message?: string;
+        variant: 'info' | 'success' | 'danger' | 'warning';
+    }>({ visible: false, title: '', variant: 'info' });
+
     useEffect(() => {
         loadLanguage();
     }, []);
@@ -57,29 +69,40 @@ export default function SettingsScreen() {
     const [vibration, setVibration] = useState(true);
     const [navApp, setNavApp] = useState<'default' | 'google' | 'waze'>('default');
 
-    const handleLogout = () => {
-        Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
-            { text: 'Cancel', style: 'cancel' },
-            {
-                text: 'Sign Out',
-                style: 'destructive',
-                onPress: () => {
-                    logout();
-                    router.replace('/');
-                },
-            },
-        ]);
+    const handleDeleteAccount = () => {
+        setShowDeleteStep1(true);
     };
 
-    const handleDeleteAccount = () => {
-        Alert.alert(
-            'Delete Account',
-            'This action is permanent. All your data, earnings history, and account information will be deleted. Are you sure?',
-            [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Delete', style: 'destructive', onPress: () => { } },
-            ]
-        );
+    const handleDeleteStep2 = () => {
+        setShowDeleteStep1(false);
+        setDeleteInput('');
+        setShowDeleteStep2(true);
+    };
+
+    const executeDelete = async () => {
+        if (deleteInput.trim().toUpperCase() !== 'DELETE') {
+            setFeedbackAlert({
+                visible: true,
+                title: 'Not Confirmed',
+                message: 'You must type DELETE to confirm account deletion.',
+                variant: 'warning',
+            });
+            return;
+        }
+        try {
+            await api.delete('/users/profile');
+            setShowDeleteStep2(false);
+            await logout();
+            router.replace('/login' as any);
+        } catch (err: any) {
+            setShowDeleteStep2(false);
+            setFeedbackAlert({
+                visible: true,
+                title: 'Error',
+                message: err.message || 'Failed to delete account. Please contact support.',
+                variant: 'danger',
+            });
+        }
     };
 
     const renderToggle = (
@@ -226,16 +249,7 @@ export default function SettingsScreen() {
                     <View style={styles.card}>
                         <TouchableOpacity
                             style={styles.actionRow}
-                            onPress={() => {
-                                Alert.alert(
-                                    'Emergency Services',
-                                    'Call 911 for immediate emergency assistance.',
-                                    [
-                                        { text: 'Cancel', style: 'cancel' },
-                                        { text: 'Call 911', style: 'destructive', onPress: () => { } },
-                                    ]
-                                );
-                            }}
+                            onPress={() => setShowEmergencyAlert(true)}
                         >
                             <View style={[styles.settingIcon, { backgroundColor: 'rgba(239,68,68,0.1)' }]}>
                                 <Ionicons name="call" size={18} color="#EF4444" />
@@ -256,12 +270,8 @@ export default function SettingsScreen() {
 
                 {/* Danger Zone */}
                 <View style={styles.section}>
-                    <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-                        <Ionicons name="log-out" size={20} color={COLORS.danger} />
-                        <Text style={styles.logoutText}>Sign Out</Text>
-                    </TouchableOpacity>
-
                     <TouchableOpacity style={styles.deleteBtn} onPress={handleDeleteAccount}>
+                        <Ionicons name="trash-outline" size={16} color={COLORS.danger} />
                         <Text style={styles.deleteText}>Delete Account</Text>
                     </TouchableOpacity>
                 </View>
@@ -316,6 +326,59 @@ export default function SettingsScreen() {
                     </Pressable>
                 </Pressable>
             </Modal>
+
+            {/* Custom Alert Modals */}
+            <CustomAlert
+                visible={showDeleteStep1}
+                title="Delete Account"
+                message={'This action is PERMANENT and cannot be undone.\n\nAll your data, earnings history, ride records, and account information will be permanently deleted.'}
+                variant="danger"
+                icon="trash-outline"
+                buttons={[
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Yes, Continue', style: 'destructive', onPress: handleDeleteStep2 },
+                ]}
+                onClose={() => setShowDeleteStep1(false)}
+            />
+
+            <CustomAlert
+                visible={showDeleteStep2}
+                title="Confirm Deletion"
+                message='Type "DELETE" below to permanently delete your account.'
+                variant="danger"
+                icon="alert-circle"
+                showInput
+                inputPlaceholder="Type DELETE"
+                inputValue={deleteInput}
+                onInputChange={setDeleteInput}
+                buttons={[
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Delete Forever', style: 'destructive', onPress: executeDelete },
+                ]}
+                onClose={() => setShowDeleteStep2(false)}
+            />
+
+            <CustomAlert
+                visible={showEmergencyAlert}
+                title="Emergency Services"
+                message="Call 911 for immediate emergency assistance."
+                variant="danger"
+                icon="call"
+                buttons={[
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Call 911', style: 'destructive' },
+                ]}
+                onClose={() => setShowEmergencyAlert(false)}
+            />
+
+            <CustomAlert
+                visible={feedbackAlert.visible}
+                title={feedbackAlert.title}
+                message={feedbackAlert.message}
+                variant={feedbackAlert.variant}
+                buttons={[{ text: 'OK', style: 'default' }]}
+                onClose={() => setFeedbackAlert(prev => ({ ...prev, visible: false }))}
+            />
         </View>
     );
 }
@@ -421,8 +484,18 @@ const styles = StyleSheet.create({
         borderColor: 'rgba(255,71,87,0.2)',
     },
     logoutText: { color: COLORS.danger, fontSize: 16, fontWeight: '600' },
-    deleteBtn: { alignItems: 'center', marginTop: 14, padding: 10 },
-    deleteText: { color: COLORS.textDim, fontSize: 13 },
+    deleteBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        padding: 16,
+        backgroundColor: 'rgba(255,71,87,0.08)',
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: 'rgba(255,71,87,0.2)',
+    },
+    deleteText: { color: COLORS.danger, fontSize: 14, fontWeight: '600' },
     version: {
         color: COLORS.surfaceLight,
         textAlign: 'center',

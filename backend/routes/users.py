@@ -55,6 +55,30 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
 
     return UserProfile(**updated_user)
 
+@api_router.delete("/profile")
+async def delete_account(current_user: dict = Depends(get_current_user)):
+    """Permanently delete the current user's account and all associated data."""
+    user_id = current_user['id']
+    logger.info(f"Account deletion requested for user {user_id}")
+    
+    try:
+        # Delete associated driver record
+        await db.drivers.delete_many({'user_id': user_id})
+        # Delete driver documents
+        await db.driver_documents.delete_many({'driver_id': user_id})
+        # Delete emergency contacts
+        await db.emergency_contacts.delete_many({'user_id': user_id})
+        # Delete saved addresses
+        await db.saved_addresses.delete_many({'user_id': user_id})
+        # Delete the user record
+        await db.users.delete_one({'id': user_id})
+        
+        logger.info(f"Account deleted successfully for user {user_id}")
+        return {'success': True, 'message': 'Account permanently deleted'}
+    except Exception as e:
+        logger.error(f"Account deletion failed for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete account. Please contact support.")
+
 from pydantic import BaseModel  # type: ignore
 
 class UpdatePhoneRequest(BaseModel):
@@ -109,7 +133,10 @@ async def upload_profile_image(
     
     await db.users.update_one(
         {'id': current_user['id']},
-        {'$set': {'profile_image': data_uri}}
+        {'$set': {
+            'profile_image': data_uri,
+            'profile_image_status': 'pending_review',
+        }}
     )
     updated_user = await db.users.find_one({'id': current_user['id']})
     

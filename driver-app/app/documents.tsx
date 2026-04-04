@@ -251,6 +251,36 @@ export default function DocumentsScreen() {
         return <View style={[styles.badge, { backgroundColor: '#F3F4F6' }]}><Text style={[styles.badgeText, { color: '#666' }]}>Missing</Text></View>;
     };
 
+    // ── Derive document expiry status from driver data ──
+    const getExpiryInfo = (key: string) => {
+        const expiry = driver?.[key as keyof typeof driver];
+        if (!expiry) return { status: 'none', label: '', expiresIn: null };
+        const expiryDate = new Date(expiry as string);
+        const now = new Date();
+        const daysLeft = Math.ceil((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+        const isExpired = daysLeft < 0;
+        const isExpiringSoon = !isExpired && daysLeft < 30;
+        return {
+            status: isExpired ? 'expired' : isExpiringSoon ? 'expiring_soon' : 'valid',
+            label: isExpired ? 'EXPIRED' : isExpiringSoon ? `Expires in ${daysLeft} days` : 'Valid',
+            date: expiryDate.toLocaleDateString(),
+            expiresIn: daysLeft,
+        };
+    };
+
+    // Map requirement name → driver expiry date key using keyword matching
+    // (requirement names are set by the admin and may vary)
+    const getExpiryKey = (reqName: string): string => {
+        const n = reqName.toLowerCase();
+        if (n.includes('licen'))     return 'license_expiry_date';
+        if (n.includes('insurance')) return 'insurance_expiry_date';
+        if (n.includes('background'))return 'background_check_expiry_date';
+        if (n.includes('inspection'))return 'vehicle_inspection_expiry_date';
+        if (n.includes('vehicle') && !n.includes('inspection')) return 'vehicle_inspection_expiry_date';
+        if (n.includes('eligib') || n.includes('work permit')) return 'work_eligibility_expiry_date';
+        return '';
+    };
+
     if (loading) {
         return (
             <View style={[styles.container, styles.center]}>
@@ -278,71 +308,136 @@ export default function DocumentsScreen() {
                     </Text>
                 </View>
 
-                {requirements.map((req) => (
-                    <View key={req.id} style={styles.card}>
-                        <View style={styles.cardHeader}>
-                            <Text style={styles.cardTitle}>{req.name}</Text>
-                            {req.is_mandatory && <Text style={styles.mandatory}>Required</Text>}
-                        </View>
-                        <Text style={styles.cardDesc}>{req.description}</Text>
+                {requirements.map((req) => {
+                    // Find the matching expiry key for this requirement
+                    const expiryKey = getExpiryKey(req.name);
+                    const expiryInfo = expiryKey ? getExpiryInfo(expiryKey) : null;
 
-                        {/* Front Side */}
-                        <View style={styles.uploadRow}>
-                            <View style={{ flex: 1, marginRight: 10 }}>
-                                <Text style={styles.sideLabel}>Front Side / Main Document</Text>
+                    // Get the overall document upload status
+                    const frontDoc = getDocStatus(req.id, 'front');
+                    const frontStatus = frontDoc === 'missing' ? 'missing' : frontDoc.status;
+
+                    // Determine card border color based on overall state
+                    const cardBorderColor = frontStatus === 'approved' && expiryInfo?.status === 'valid'
+                        ? THEME.success
+                        : frontStatus === 'approved' && expiryInfo?.status === 'expired'
+                            ? THEME.error
+                            : frontStatus === 'rejected'
+                                ? THEME.error
+                                : frontStatus === 'pending'
+                                    ? THEME.warning
+                                    : '#E5E7EB';
+
+                    return (
+                        <View key={req.id} style={[styles.card, { borderColor: cardBorderColor }]}>
+                            <View style={styles.cardHeader}>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={styles.cardTitle}>{req.name}</Text>
+                                </View>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                    {req.is_mandatory && <Text style={styles.mandatory}>Required</Text>}
+                                    {/* Overall status icon */}
+                                    {frontStatus === 'approved' && expiryInfo?.status === 'valid' && (
+                                        <Ionicons name="checkmark-circle" size={20} color={THEME.success} />
+                                    )}
+                                    {frontStatus === 'approved' && expiryInfo?.status === 'expiring_soon' && (
+                                        <Ionicons name="alert-circle" size={20} color={THEME.warning} />
+                                    )}
+                                    {frontStatus === 'approved' && expiryInfo?.status === 'expired' && (
+                                        <Ionicons name="warning" size={20} color={THEME.error} />
+                                    )}
+                                    {frontStatus === 'pending' && (
+                                        <Ionicons name="time-outline" size={20} color={THEME.warning} />
+                                    )}
+                                    {frontStatus === 'rejected' && (
+                                        <Ionicons name="close-circle" size={20} color={THEME.error} />
+                                    )}
+                                    {frontStatus === 'missing' && (
+                                        <Ionicons name="document-outline" size={20} color={THEME.textDim || '#999'} />
+                                    )}
+                                </View>
+                            </View>
+
+                            <Text style={styles.cardDesc}>{req.description}</Text>
+
+                            {/* Expiry & Verification Status Row */}
+                            <View style={styles.statusRow}>
+                                {/* Verification status badge */}
                                 {(() => {
-                                    const doc = getDocStatus(req.id, 'front');
-                                    if (doc === 'missing') return renderStatusBadge('missing');
+                                    if (frontStatus === 'approved') return (
+                                        <View style={[styles.statusBadge, { backgroundColor: '#ECFDF5' }]}>
+                                            <Ionicons name="checkmark-circle" size={12} color={THEME.success} />
+                                            <Text style={[styles.statusBadgeText, { color: THEME.success }]}>Verified</Text>
+                                        </View>
+                                    );
+                                    if (frontStatus === 'pending') return (
+                                        <View style={[styles.statusBadge, { backgroundColor: '#FFFBEB' }]}>
+                                            <Ionicons name="time-outline" size={12} color={THEME.warning} />
+                                            <Text style={[styles.statusBadgeText, { color: THEME.warning }]}>Pending Review</Text>
+                                        </View>
+                                    );
+                                    if (frontStatus === 'rejected') return (
+                                        <View style={[styles.statusBadge, { backgroundColor: '#FEF2F2' }]}>
+                                            <Ionicons name="close-circle" size={12} color={THEME.error} />
+                                            <Text style={[styles.statusBadgeText, { color: THEME.error }]}>Rejected</Text>
+                                        </View>
+                                    );
                                     return (
-                                        <View>
-                                            {renderStatusBadge(doc.status, doc.rejection_reason)}
-                                            {doc.document_url && (
-                                                <TouchableOpacity
-                                                    style={styles.previewContainer}
-                                                    onPress={() => {
-                                                        // TODO: Full screen preview
-                                                    }}
-                                                >
-                                                    <Image
-                                                        source={{ uri: doc.document_url.startsWith('http') ? doc.document_url : `${SpinrConfig.backendUrl}${doc.document_url}` }}
-                                                        style={styles.docPreview}
-                                                        resizeMode="cover"
-                                                    />
-                                                </TouchableOpacity>
-                                            )}
+                                        <View style={[styles.statusBadge, { backgroundColor: '#F3F4F6' }]}>
+                                            <Ionicons name="document-outline" size={12} color="#666" />
+                                            <Text style={[styles.statusBadgeText, { color: '#666' }]}>Not Submitted</Text>
                                         </View>
                                     );
                                 })()}
-                            </View>
-                            <TouchableOpacity
-                                style={styles.uploadBtn}
-                                onPress={() => handleUpload(req.id, 'front')}
-                                disabled={!!uploading}
-                            >
-                                {uploading === `${req.id}-front` ? (
-                                    <ActivityIndicator color={THEME.primary} />
-                                ) : (
-                                    <View style={styles.uploadIconContainer}>
-                                        <Ionicons name="cloud-upload-outline" size={20} color={THEME.primary} />
-                                        <Text style={{ fontSize: 10, color: THEME.primary, fontWeight: '600' }}>UPLOAD</Text>
+
+                                {/* Expiry badge */}
+                                {expiryInfo && expiryInfo.status !== 'none' && (
+                                    <View style={[styles.statusBadge, {
+                                        backgroundColor: expiryInfo.status === 'expired' ? '#FEF2F2'
+                                            : expiryInfo.status === 'expiring_soon' ? '#FFFBEB'
+                                            : '#ECFDF5',
+                                    }]}>
+                                        <Ionicons name="calendar-outline" size={12} color={
+                                            expiryInfo.status === 'expired' ? THEME.error
+                                                : expiryInfo.status === 'expiring_soon' ? THEME.warning
+                                                : THEME.success
+                                        } />
+                                        <Text style={[styles.statusBadgeText, {
+                                            color: expiryInfo.status === 'expired' ? THEME.error
+                                                : expiryInfo.status === 'expiring_soon' ? THEME.warning
+                                                : THEME.success,
+                                        }]}>
+                                            {expiryInfo.label} • {expiryInfo.date}
+                                        </Text>
                                     </View>
                                 )}
-                            </TouchableOpacity>
-                        </View>
+                            </View>
 
-                        {/* Back Side */}
-                        {req.requires_back_side && (
-                            <View style={[styles.uploadRow, { marginTop: 15, borderTopWidth: 1, borderTopColor: '#F3F4F6', paddingTop: 15 }]}>
+                            {/* Rejection reason */}
+                            {frontStatus === 'rejected' && frontDoc !== 'missing' && frontDoc.rejection_reason && (
+                                <View style={styles.rejectionRow}>
+                                    <Ionicons name="alert-circle" size={14} color={THEME.error} />
+                                    <Text style={styles.rejectReason}>{frontDoc.rejection_reason}</Text>
+                                </View>
+                            )}
+
+                            {/* Front Side */}
+                            <View style={styles.uploadRow}>
                                 <View style={{ flex: 1, marginRight: 10 }}>
-                                    <Text style={styles.sideLabel}>Back Side</Text>
+                                    <Text style={styles.sideLabel}>Front Side / Main Document</Text>
                                     {(() => {
-                                        const doc = getDocStatus(req.id, 'back');
+                                        const doc = getDocStatus(req.id, 'front');
                                         if (doc === 'missing') return renderStatusBadge('missing');
                                         return (
                                             <View>
                                                 {renderStatusBadge(doc.status, doc.rejection_reason)}
                                                 {doc.document_url && (
-                                                    <TouchableOpacity style={styles.previewContainer}>
+                                                    <TouchableOpacity
+                                                        style={styles.previewContainer}
+                                                        onPress={() => {
+                                                            // TODO: Full screen preview
+                                                        }}
+                                                    >
                                                         <Image
                                                             source={{ uri: doc.document_url.startsWith('http') ? doc.document_url : `${SpinrConfig.backendUrl}${doc.document_url}` }}
                                                             style={styles.docPreview}
@@ -356,10 +451,10 @@ export default function DocumentsScreen() {
                                 </View>
                                 <TouchableOpacity
                                     style={styles.uploadBtn}
-                                    onPress={() => handleUpload(req.id, 'back')}
+                                    onPress={() => handleUpload(req.id, 'front')}
                                     disabled={!!uploading}
                                 >
-                                    {uploading === `${req.id}-back` ? (
+                                    {uploading === `${req.id}-front` ? (
                                         <ActivityIndicator color={THEME.primary} />
                                     ) : (
                                         <View style={styles.uploadIconContainer}>
@@ -369,9 +464,50 @@ export default function DocumentsScreen() {
                                     )}
                                 </TouchableOpacity>
                             </View>
-                        )}
-                    </View>
-                ))}
+
+                            {/* Back Side */}
+                            {req.requires_back_side && (
+                                <View style={[styles.uploadRow, { marginTop: 15, borderTopWidth: 1, borderTopColor: '#F3F4F6', paddingTop: 15 }]}>
+                                    <View style={{ flex: 1, marginRight: 10 }}>
+                                        <Text style={styles.sideLabel}>Back Side</Text>
+                                        {(() => {
+                                            const doc = getDocStatus(req.id, 'back');
+                                            if (doc === 'missing') return renderStatusBadge('missing');
+                                            return (
+                                                <View>
+                                                    {renderStatusBadge(doc.status, doc.rejection_reason)}
+                                                    {doc.document_url && (
+                                                        <TouchableOpacity style={styles.previewContainer}>
+                                                            <Image
+                                                                source={{ uri: doc.document_url.startsWith('http') ? doc.document_url : `${SpinrConfig.backendUrl}${doc.document_url}` }}
+                                                                style={styles.docPreview}
+                                                                resizeMode="cover"
+                                                            />
+                                                        </TouchableOpacity>
+                                                    )}
+                                                </View>
+                                            );
+                                        })()}
+                                    </View>
+                                    <TouchableOpacity
+                                        style={styles.uploadBtn}
+                                        onPress={() => handleUpload(req.id, 'back')}
+                                        disabled={!!uploading}
+                                    >
+                                        {uploading === `${req.id}-back` ? (
+                                            <ActivityIndicator color={THEME.primary} />
+                                        ) : (
+                                            <View style={styles.uploadIconContainer}>
+                                                <Ionicons name="cloud-upload-outline" size={20} color={THEME.primary} />
+                                                <Text style={{ fontSize: 10, color: THEME.primary, fontWeight: '600' }}>UPLOAD</Text>
+                                            </View>
+                                        )}
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+                        </View>
+                    );
+                })}
             </ScrollView>
         </View>
     );
@@ -425,7 +561,35 @@ const styles = StyleSheet.create({
     sideLabel: { color: '#374151', fontSize: 13, marginBottom: 4, fontWeight: '500' },
     badge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, alignSelf: 'flex-start' },
     badgeText: { color: '#fff', fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-    rejectReason: { color: THEME.error, fontSize: 11, marginTop: 2 },
+    rejectReason: { color: THEME.error, fontSize: 11, marginTop: 2, flex: 1 },
+    statusRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+        marginBottom: 14,
+    },
+    statusBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingHorizontal: 10,
+        paddingVertical: 5,
+        borderRadius: 8,
+    },
+    statusBadgeText: {
+        fontSize: 11,
+        fontWeight: '600',
+    },
+    rejectionRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        backgroundColor: '#FEF2F2',
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 8,
+        marginBottom: 14,
+    },
     uploadBtn: {
         padding: 8,
         borderRadius: 8,

@@ -184,7 +184,10 @@ async def link_driver_document(
     # driver back to unverified so admin re-reviews this upload.
     await _supersede_and_flag_pending_review(driver['id'], doc_data.requirement_id, doc_data.side)
 
-    # Create document record
+    # Create document record.
+    # NOTE: Only columns that exist on the Supabase driver_documents table —
+    # writing `expiry_date` here raises PGRST204. Expiry is stored on the
+    # drivers row via admin approval in the legacy *_expiry_date columns.
     doc_record = {
         'id': str(uuid.uuid4()),
         'driver_id': driver['id'],
@@ -193,12 +196,15 @@ async def link_driver_document(
         'document_url': doc_data.document_url,
         'side': doc_data.side,
         'status': 'pending',
-        'expiry_date': doc_data.expiry_date.isoformat() if doc_data.expiry_date else None,
         'uploaded_at': datetime.utcnow(),
         'updated_at': datetime.utcnow()
     }
 
     await db.driver_documents.insert_one(doc_record)
+    # Stash the admin-facing expiry on the response so the caller can
+    # display it back, without persisting a non-existent column.
+    if doc_data.expiry_date:
+        doc_record['expiry_date'] = doc_data.expiry_date.isoformat()
     return doc_record
 
 @documents_router.post("/documents/upload")
@@ -230,7 +236,11 @@ async def upload_driver_document(
     # so admin panel resurfaces this driver for re-review.
     await _supersede_and_flag_pending_review(driver_id, requirement_id, side)
 
-    # Create document record
+    # Create document record.
+    # NOTE: Only columns that exist on the Supabase driver_documents table —
+    # `expiry_date` is intentionally NOT written to this row (column doesn't
+    # exist, would cause PGRST204). Expiry lives in the drivers row legacy
+    # columns, refreshed on admin approval.
     doc_record = {
         'id': str(uuid.uuid4()),
         'driver_id': driver_id,
@@ -239,13 +249,16 @@ async def upload_driver_document(
         'document_url': url,
         'side': side,
         'status': 'pending',
-        'expiry_date': expiry_iso,
         'uploaded_at': datetime.utcnow(),
         'updated_at': datetime.utcnow()
     }
 
     await db.driver_documents.insert_one(doc_record)
 
+    # Return the admin-facing expiry as part of the response without
+    # persisting it to a non-existent column.
+    if expiry_iso:
+        doc_record['expiry_date'] = expiry_iso
     return doc_record
 
 
@@ -327,14 +340,15 @@ async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
     if not existing:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    # Only write columns that exist on the driver_documents Supabase table.
+    # `expiry_date` is NOT a column — we propagate it to the legacy
+    # drivers.*_expiry_date column below instead.
     update_data: Dict[str, Any] = {
         'status': req.status,
         'updated_at': datetime.utcnow()
     }
     if req.rejection_reason is not None:
         update_data['rejection_reason'] = req.rejection_reason
-    if req.expiry_date is not None:
-        update_data['expiry_date'] = req.expiry_date.isoformat()
 
     await db.driver_documents.update_one({'id': doc_id}, {'$set': update_data})
 
@@ -343,13 +357,6 @@ async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
     # this driver based on stale onboarding-time values.
     if req.status == 'approved':
         effective_expiry = req.expiry_date
-        if effective_expiry is None and existing.get('expiry_date'):
-            try:
-                effective_expiry = datetime.fromisoformat(
-                    str(existing['expiry_date']).replace('Z', '+00:00')
-                )
-            except ValueError:
-                effective_expiry = None
 
         req_row = await db.document_requirements.find_one({'id': existing.get('requirement_id')})
         legacy_field = _legacy_expiry_field_for_requirement(req_row.get('name') if req_row else None)

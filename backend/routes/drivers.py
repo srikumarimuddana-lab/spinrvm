@@ -114,6 +114,48 @@ async def register_driver(
     return serialize_doc(new_driver)
 
 
+class PushTokenPayload(BaseModel):
+    push_token: str
+    platform: Optional[str] = None
+
+
+@api_router.post("/push-token")
+async def register_driver_push_token(
+    payload: PushTokenPayload,
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Register the driver-app's push token so the dispatch path can deliver
+    `new_ride_offer` push notifications as a fallback when the WebSocket
+    isn't connected.
+
+    The driver-app's useDriverDashboard.ts calls this with an Expo push
+    token from Notifications.getExpoPushTokenAsync(). We store it on the
+    user row. Note: features.py:send_push_notification currently uses
+    Firebase Admin SDK and expects a native FCM token, so Expo push tokens
+    won't deliver via that path. TODO: add Expo push service support or
+    convert Expo tokens server-side via Expo's /push/send API.
+    """
+    diag_logger.info(
+        f"[PUSH-TOKEN] register user_id={current_user.get('id')} "
+        f"platform={payload.platform} "
+        f"token_prefix={(payload.push_token or '')[:20]}..."
+    )
+    try:
+        await db.users.update_one(
+            {'id': current_user['id']},
+            {'$set': {
+                'fcm_token': payload.push_token,
+                'push_platform': payload.platform,
+            }}
+        )
+    except Exception as e:
+        diag_logger.info(f"[PUSH-TOKEN] update failed: {e}")
+        raise HTTPException(status_code=500, detail='Failed to store push token')
+
+    return {'success': True}
+
+
 @api_router.post("/status")
 async def update_driver_status_self(
     is_online: bool = Query(...),

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Animated } from 'react-native';
 import * as Location from 'expo-location';
-import { Platform, Alert, Vibration, Linking } from 'react-native';
+import { Platform, Alert, Vibration, Linking, AppState } from 'react-native';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { router } from 'expo-router';
 
@@ -55,7 +55,7 @@ interface UseDriverDashboardReturn {
 }
 
 export const useDriverDashboard = (): UseDriverDashboardReturn => {
-  const { user, driver: driverData, updateDriverStatus } = useAuthStore();
+  const { user, driver: driverData, updateDriverStatus, refreshProfile } = useAuthStore();
   const {
     rideState,
     incomingRide,
@@ -86,6 +86,20 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const slideUpAnim = useRef(new Animated.Value(height)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  // ─── Refresh user + driver profile on mount and on foreground ────
+  // The Zustand store only pulls /auth/me on app init, so admin-side
+  // changes (e.g. flipping is_verified or the derived onboarding status)
+  // never reach a long-running session. That stale state silently
+  // disables the GO button because canGoOnline depends on
+  // driver_onboarding_status === 'verified' AND driver.is_verified.
+  useEffect(() => {
+    refreshProfile();
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') refreshProfile();
+    });
+    return () => sub.remove();
+  }, [refreshProfile]);
 
   // ─── Location Tracking ───────────────────────────────────────────
   useEffect(() => {

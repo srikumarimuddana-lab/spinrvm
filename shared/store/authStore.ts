@@ -113,6 +113,7 @@ interface AuthState {
   verifyOTP: (verificationId: string, code: string) => Promise<void>;
   createProfile: (data: { first_name: string; last_name: string; email: string; gender: string }) => Promise<void>;
   fetchDriverProfile: () => Promise<void>;
+  refreshProfile: () => Promise<void>;
   registerDriver: (data: any) => Promise<void>;
   toggleDriverMode: () => void;
   updateDriverStatus: (isOnline: boolean) => Promise<void>;
@@ -295,6 +296,29 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
     }
   },
 
+  // Re-pulls /auth/me (which recomputes driver_onboarding_status on the
+  // server) and /drivers/me so the UI reflects admin-side changes — e.g. a
+  // driver flipping from pending_review to verified. Safe to call at any
+  // time after init; no-op if there's no user/token yet.
+  refreshProfile: async () => {
+    if (!get().token) return;
+    try {
+      const meRes = await api.get('/auth/me');
+      const userData = meRes.data as User;
+      set({ user: userData });
+      if (userData?.is_driver || userData?.role === 'driver') {
+        try {
+          const driverRes = await api.get('/drivers/me');
+          set({ driver: driverRes.data as Driver });
+        } catch (e) {
+          console.log('refreshProfile: driver fetch failed', e);
+        }
+      }
+    } catch (e) {
+      console.log('refreshProfile: /auth/me failed', e);
+    }
+  },
+
   registerDriver: async (data: any) => {
     try {
       set({ isLoading: true, error: null });
@@ -329,14 +353,16 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
   },
 
   updateDriverStatus: async (isOnline: boolean) => {
+    const driver = get().driver;
+    if (!driver?.id) {
+      throw new Error('Driver ID not found');
+    }
     try {
-      await api.post(`/drivers/status?is_online=${isOnline}`);
-      const driver = get().driver;
-      if (driver) {
-        set({ driver: { ...driver, is_online: isOnline } });
-      }
-    } catch (error) {
+      await api.put(`/drivers/${driver.id}/status`, { is_online: isOnline });
+      set({ driver: { ...driver, is_online: isOnline } });
+    } catch (error: any) {
       console.log('Failed to update status');
+      throw error;
     }
   },
 

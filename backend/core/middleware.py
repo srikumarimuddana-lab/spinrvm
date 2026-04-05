@@ -7,8 +7,17 @@ from utils.rate_limiter import default_limiter, rate_limit_exceeded_handler
 def init_middleware(app):
     """Initialize all middleware components"""
     # CORS Middleware
-    origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",")]
+    origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
     
+    # Always allow the admin and default apps explicitly regardless of env variables
+    always_allowed = [
+        "https://spinr-admin.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:3001"
+    ]
+    origins.extend(always_allowed)
+    # Remove empty strings
+    origins = list(set([o for o in origins if o]))
     # Validate origins in production
     if settings.DEBUG == False:  # Production mode
         if "*" in origins:

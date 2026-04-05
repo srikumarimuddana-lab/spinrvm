@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Animated, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Animated, Platform, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -56,12 +56,65 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const onboardingStatus = useAuthStore(s => s.user?.driver_onboarding_status ?? null);
-  
-  const banner = onboardingStatus && onboardingStatus !== 'verified' 
-    ? STATE_BANNERS[onboardingStatus as keyof typeof STATE_BANNERS] 
+
+  const banner = onboardingStatus && onboardingStatus !== 'verified'
+    ? STATE_BANNERS[onboardingStatus as keyof typeof STATE_BANNERS]
     : null;
-    
-  const canGoOnline = !banner && !!driverData?.is_verified;
+
+  // `is_verified` is the authoritative admin-approved flag. The onboarding
+  // state machine describes sub-states of pre-verification, so once admin
+  // sets is_verified=true the only legitimate hard-block is `suspended`.
+  // Don't gate GO on the full state machine — that causes false negatives
+  // when an edge case in derive_driver_onboarding_status (e.g. a missing
+  // first_name on the user row, an empty driver_requirements collection
+  // read that throws) returns a non-verified status for a driver the
+  // admin has already approved. The backend still has the final say via
+  // PUT /drivers/{id}/status (402 = no subscription, etc).
+  const canGoOnline =
+    !!driverData?.is_verified && onboardingStatus !== 'suspended';
+
+  // ─── DIAGNOSTIC LOGGING ──────────────────────────────────────────
+  // Logs every render so we can see exactly what state the gate sees.
+  // Filter Metro logs for "[GO-DEBUG]" to trace this.
+  console.log('[GO-DEBUG] render', {
+    is_verified: driverData?.is_verified,
+    onboarding_status: onboardingStatus,
+    banner_title: banner?.title ?? null,
+    canGoOnline,
+    isOnline,
+    driverData_keys: driverData ? Object.keys(driverData as any) : null,
+  });
+
+  // Always-fires press handler. If the gate blocks, we show an alert
+  // explaining which field is the problem instead of silently doing
+  // nothing — so there is no such thing as a "dead tap" anymore.
+  const handlePress = () => {
+    console.log('[GO-DEBUG] press', {
+      canGoOnline,
+      is_verified: driverData?.is_verified,
+      onboarding_status: onboardingStatus,
+      isOnline,
+    });
+    if (!canGoOnline) {
+      const reasons: string[] = [];
+      if (!driverData) reasons.push('driverData is null (not loaded)');
+      else if (!driverData.is_verified) reasons.push('driver.is_verified = false');
+      if (onboardingStatus === 'suspended') reasons.push('account suspended');
+      Alert.alert(
+        'GO blocked (debug)',
+        [
+          `is_verified: ${String(driverData?.is_verified)}`,
+          `onboarding_status: ${String(onboardingStatus)}`,
+          `banner: ${banner?.title ?? 'none'}`,
+          '',
+          'Reason(s):',
+          ...(reasons.length ? reasons : ['(unknown)']),
+        ].join('\n'),
+      );
+      return;
+    }
+    onToggleOnline();
+  };
 
   const goAnim = useRef(new Animated.Value(1)).current;
 
@@ -125,8 +178,7 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
       <View style={styles.goButtonArea} pointerEvents="box-none">
         <TouchableOpacity
           activeOpacity={0.9}
-          disabled={!canGoOnline}
-          onPress={onToggleOnline}
+          onPress={handlePress}
           style={styles.goButtonOuterContainer}
         >
           <Animated.View style={[

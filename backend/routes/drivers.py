@@ -1300,8 +1300,13 @@ async def get_driver(driver_id: str, current_user: dict = Depends(get_current_us
 @api_router.put("/{driver_id}/status")
 async def update_driver_status(
     driver_id: str,
-    is_online: bool,
-    current_user: dict = Depends(get_current_user)
+    # `embed=True` so FastAPI accepts `{"is_online": true}` as the JSON body
+    # instead of interpreting a bare primitive as the whole body. Without the
+    # explicit Body() wrapper, FastAPI treats non-Pydantic primitives as
+    # query parameters, and the mobile client (which posts it as body) got
+    # a 422 and surfaced it as "Request failed".
+    is_online: bool = Body(..., embed=True),
+    current_user: dict = Depends(get_current_user),
 ):
     driver = await db.drivers.find_one({'id': driver_id})
     if not driver:
@@ -1414,13 +1419,19 @@ async def update_driver_status(
         if not sub:
             # For now, allow going online without subscription (dev/testing mode)
             import os
-            if os.environ.get('ENV') != 'development' and os.environ.get('ENV') != 'test':
+            env = os.environ.get('ENV')
+            if env != 'development' and env != 'test':
                 raise HTTPException(
                     status_code=402,
                     detail='You need an active Spinr Pass subscription to go online. Subscribe from your dashboard.'
                 )
-        # Check expiry
-        if sub.get('expires_at'):
+            # In dev/test with no subscription, skip the expiry check entirely
+            # — sub is None so there's nothing to expire.
+        elif sub.get('expires_at'):
+            # Only runs when we actually have a subscription row. Previously
+            # this called sub.get(...) unconditionally, which crashed with
+            # AttributeError in dev/test mode (no subscription) and escaped
+            # as a bare 500 "Internal Server Error".
             try:
                 exp = datetime.fromisoformat(str(sub['expires_at']).replace('Z', '+00:00').replace('+00:00', ''))
                 if exp < datetime.utcnow():
@@ -1428,7 +1439,7 @@ async def update_driver_status(
                     raise HTTPException(status_code=402, detail='Your Spinr Pass has expired. Please renew to go online.')
             except HTTPException:
                 raise
-            except:
+            except Exception:
                 pass
 
     await db.drivers.update_one(

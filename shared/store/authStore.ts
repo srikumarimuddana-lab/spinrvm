@@ -167,7 +167,14 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
         await appCache.set(CACHE_KEYS.USER_PROFILE, userData, CACHE_CONFIG.USER_PROFILE_TTL);
 
         let driverData: Driver | null = null;
-        if (userData.is_driver || userData.role === 'driver') {
+        // See refreshProfile for why we also gate on driver_onboarding_status:
+        // it's the reliable "driver row exists" signal when is_driver/role
+        // flags are stale on legacy user rows.
+        const looksLikeDriver =
+          !!(userData as any).is_driver ||
+          (userData as any).role === 'driver' ||
+          !!(userData as any).driver_onboarding_status;
+        if (looksLikeDriver) {
           try {
             const driverRes = await api.get('/drivers/me', {
               headers: { Authorization: `Bearer ${storedToken}` }
@@ -225,7 +232,11 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
               if (userData) {
                 await appCache.set(CACHE_KEYS.USER_PROFILE, userData, CACHE_CONFIG.USER_PROFILE_TTL);
               }
-              if (userData?.is_driver || userData?.role === 'driver') {
+              const looksLikeDriver2 =
+                !!(userData as any)?.is_driver ||
+                (userData as any)?.role === 'driver' ||
+                !!(userData as any)?.driver_onboarding_status;
+              if (looksLikeDriver2) {
                 try {
                   const driverRes = await api.get('/drivers/me');
                   driverData = driverRes.data as Driver;
@@ -301,21 +312,63 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
   // driver flipping from pending_review to verified. Safe to call at any
   // time after init; no-op if there's no user/token yet.
   refreshProfile: async () => {
-    if (!get().token) return;
+    if (!get().token) {
+      console.log('[GO-DEBUG] refreshProfile: no token, skipping');
+      return;
+    }
     try {
       const meRes = await api.get('/auth/me');
       const userData = meRes.data as User;
+      console.log('[GO-DEBUG] refreshProfile /auth/me', {
+        id: (userData as any)?.id,
+        first_name: (userData as any)?.first_name,
+        last_name: (userData as any)?.last_name,
+        email: (userData as any)?.email,
+        role: (userData as any)?.role,
+        is_driver: (userData as any)?.is_driver,
+        driver_onboarding_status: (userData as any)?.driver_onboarding_status,
+        driver_onboarding_detail: (userData as any)?.driver_onboarding_detail,
+      });
       set({ user: userData });
-      if (userData?.is_driver || userData?.role === 'driver') {
+      // A driver row exists iff the server returned a driver_onboarding_status
+      // — that derivation only runs when there's a driver row (or role=driver).
+      // This signal is more reliable than `is_driver` / `role`, which can be
+      // stale on legacy user rows whose driver was created without flipping
+      // those flags. Without this, /drivers/me is never called and the GO
+      // button stays disabled because `driver` is null in the store.
+      const looksLikeDriver =
+        !!(userData as any)?.is_driver ||
+        (userData as any)?.role === 'driver' ||
+        !!(userData as any)?.driver_onboarding_status;
+      if (looksLikeDriver) {
         try {
           const driverRes = await api.get('/drivers/me');
-          set({ driver: driverRes.data as Driver });
-        } catch (e) {
-          console.log('refreshProfile: driver fetch failed', e);
+          const d = driverRes.data as any;
+          console.log('[GO-DEBUG] refreshProfile /drivers/me', {
+            id: d?.id,
+            is_verified: d?.is_verified,
+            is_online: d?.is_online,
+            is_suspended: d?.is_suspended,
+            vehicle_make: d?.vehicle_make,
+            license_plate: d?.license_plate,
+          });
+          set({ driver: d as Driver });
+        } catch (e: any) {
+          console.log('[GO-DEBUG] refreshProfile /drivers/me FAILED', {
+            status: e?.response?.status,
+            data: e?.response?.data,
+            message: e?.message,
+          });
         }
+      } else {
+        console.log('[GO-DEBUG] refreshProfile: user is not a driver, skipping /drivers/me');
       }
-    } catch (e) {
-      console.log('refreshProfile: /auth/me failed', e);
+    } catch (e: any) {
+      console.log('[GO-DEBUG] refreshProfile /auth/me FAILED', {
+        status: e?.response?.status,
+        data: e?.response?.data,
+        message: e?.message,
+      });
     }
   },
 

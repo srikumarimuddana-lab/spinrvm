@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Alert, Platform, Linking, Animated, TouchableOp
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { useDriverStore } from '../../store/driverStore';
+import { useAuthStore } from '@shared/store/authStore';
 import {
   DriverTopBar,
   DriverIdlePanel,
@@ -27,8 +28,11 @@ const COLORS = {
 };
 
 export default function DriverDashboard() {
-  const driverData = (useDriverStore() as any).driver ?? null;
-  const user = (useDriverStore() as any).user ?? null;
+  // Driver + user live on the shared auth store — useDriverStore does not
+  // hold these fields, so reading them from there always returned null and
+  // left the GO button permanently disabled.
+  const driverData = useAuthStore(s => s.driver);
+  const user = useAuthStore(s => s.user);
   const {
     rideState,
     incomingRide,

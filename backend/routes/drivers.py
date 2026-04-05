@@ -722,16 +722,44 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
     """Get the driver's current active ride."""
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     if not driver:
+        logger.warning(
+            f"[ACTIVE] no driver row for user_id={current_user.get('id')}"
+        )
         raise HTTPException(status_code=404, detail='Driver not found')
-    
+
+    logger.info(
+        f"[ACTIVE] lookup user_id={current_user.get('id')} "
+        f"driver_id={driver.get('id')}"
+    )
+
     # improved query to catch any active state
     ride = await db.rides.find_one({
         'driver_id': driver['id'],
         'status': {'$in': ['driver_assigned', 'driver_accepted', 'driver_arrived', 'in_progress']}
     })
-    
+
     if not ride:
+        # Help diagnose: list the driver's most recent rides regardless of
+        # status so we can see whether the $in filter missed something, or
+        # the driver_id on the latest ride doesn't match.
+        try:
+            recent = await db.rides.find({'driver_id': driver['id']}).to_list(5)
+            recent_summary = [
+                {'id': r.get('id'), 'status': r.get('status'), 'driver_id': r.get('driver_id')}
+                for r in (recent or [])
+            ]
+        except Exception as e:
+            recent_summary = f"(failed to load recent: {e})"
+        logger.warning(
+            f"[ACTIVE] no active ride for driver_id={driver['id']}. "
+            f"recent_rides_by_driver={recent_summary}"
+        )
         return {'ride': None}
+
+    logger.info(
+        f"[ACTIVE] found ride_id={ride.get('id')} status={ride.get('status')} "
+        f"driver_id={ride.get('driver_id')} rider_id={ride.get('rider_id')}"
+    )
 
     # Get rider info. `db.user_profiles` does not exist as a registered
     # collection in db.py — the rider is a row in `users`. The old name
@@ -800,20 +828,30 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     if not driver:
         raise HTTPException(status_code=404, detail='Driver not found')
-        
+
     ride = await db.rides.find_one({'id': ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail='Ride not found')
-        
+
+    logger.info(
+        f"[ACCEPT] entry ride_id={ride_id} driver_id={driver.get('id')} "
+        f"pre_status={ride.get('status')} pre_driver_id={ride.get('driver_id')}"
+    )
+
     # Verify this driver was assigned
     if ride.get('driver_id') != driver['id']:
-        # Check if it's open (searching) and we can claim it? 
-        # For now assume mostly assigned flow. 
+        # Check if it's open (searching) and we can claim it?
+        # For now assume mostly assigned flow.
         # If status is searching, we might allow claim if using broadcast.
         if ride['status'] == 'searching':
              # Allow claim
              pass
         else:
+             logger.warning(
+                 f"[ACCEPT] ride_id={ride_id} not assigned to this driver: "
+                 f"ride.driver_id={ride.get('driver_id')} != this_driver.id={driver['id']} "
+                 f"and status={ride.get('status')} != 'searching'"
+             )
              raise HTTPException(status_code=400, detail='Ride not assigned to you')
 
     await db.rides.update_one(
@@ -825,6 +863,32 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             'updated_at': datetime.utcnow()
         }}
     )
+
+    # Verify the update landed. The RideCollection.update_one wrapper routes
+    # to db_supabase.update_ride which returns None on zero-rows-affected
+    # silently, and this handler would otherwise return {success: true} while
+    # the ride is still in its previous state — causing /drivers/rides/active
+    # to still see 'driver_assigned' (or similar) and the driver-app to render
+    # the wrong state, OR worse if some column silently blocks the write.
+    try:
+        verify_ride = await db.rides.find_one({'id': ride_id})
+    except Exception as e:
+        verify_ride = None
+        logger.warning(f"[ACCEPT] verify re-read failed: {e}")
+
+    logger.info(
+        f"[ACCEPT] post-update ride_id={ride_id} "
+        f"post_status={verify_ride.get('status') if verify_ride else 'ROW_GONE'} "
+        f"post_driver_id={verify_ride.get('driver_id') if verify_ride else 'ROW_GONE'} "
+        f"post_driver_accepted_at={verify_ride.get('driver_accepted_at') if verify_ride else 'ROW_GONE'}"
+    )
+
+    if not verify_ride or verify_ride.get('status') != 'driver_accepted':
+        logger.error(
+            f"[ACCEPT] silent no-op: ride_id={ride_id} did not flip to "
+            f"'driver_accepted'. This will cause the driver-app to render a "
+            f"blank state because /drivers/rides/active query will mismatch."
+        )
     
     # Notify rider
     if ride.get('rider_id'):

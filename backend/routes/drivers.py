@@ -394,6 +394,11 @@ async def get_nearby_drivers_public(
 
     nearby = []
     for d in drivers:
+        # Exclude orphan/demo driver rows (no user_id → cannot be dispatched).
+        # Showing them as map pins would be misleading because a rider tapping
+        # them or seeing them counted as "available" would never get matched.
+        if not d.get('user_id'):
+            continue
         d_lat = d.get('lat')
         d_lng = d.get('lng')
         if d_lat and d_lng:
@@ -409,7 +414,7 @@ async def get_nearby_drivers_public(
                     'vehicle_model': d.get('vehicle_model')
                 }
                 nearby.append(safe_driver)
-                
+
     return nearby
 
 @api_router.get("")

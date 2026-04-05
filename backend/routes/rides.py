@@ -6,6 +6,7 @@ try:
     from ..utils import calculate_distance
     from ..socket_manager import manager
     from ..settings_loader import get_app_settings
+    from ..features import send_push_notification
 except ImportError:
     from dependencies import get_current_user, generate_otp
     from schemas import CreateRideRequest, Ride, UserProfile, RideRatingRequest
@@ -13,6 +14,7 @@ except ImportError:
     from geo_utils import calculate_distance
     from socket_manager import manager
     from settings_loader import get_app_settings
+    from features import send_push_notification
 from .fares import get_fares_for_location
 import asyncio
 from loguru import logger
@@ -24,107 +26,88 @@ from pydantic import BaseModel
 api_router = APIRouter(prefix="/rides", tags=["Rides"])
 
 async def create_demo_drivers(vehicle_type_id: str, lat: float, lng: float):
-    # This was implicitly present in original but not fully defined in the viewed snippet.
-    # Assuming it creates mock drivers for demo purposes.
-    # For now, I'll implement a simple placeholder or skip if not strictly required,
-    # but the matching logic calls it. I'll add a minimal implementation.
-    import random
-    
-    for i in range(3):
-        driver_id = str(uuid.uuid4())
-        # Random offset
-        d_lat = lat + (random.random() - 0.5) * 0.01
-        d_lng = lng + (random.random() - 0.5) * 0.01
-        
-        driver = {
-            'id': driver_id,
-            'name': f"Demo Driver {i+1}",
-            'phone': f"555000{i}",
-            'vehicle_type_id': vehicle_type_id,
-            'lat': d_lat,
-            'lng': d_lng,
-            'is_online': True,
-            'is_available': True,
-            'rating': 4.8 + (0.1 * random.random()),
-            'total_rides': random.randint(10, 500)
-        }
-        await db.drivers.insert_one(driver)
-    logger.info("Created demo drivers")
+    """DEPRECATED — intentionally a no-op.
+
+    This used to insert 3 fake driver rows with user_id=NULL whenever the
+    dispatch RPC returned zero drivers. That turned the `drivers` table into
+    a junkyard of orphan rows that polluted the rider-app's home-map pins,
+    inflated `/rides/estimate` driver counts for vehicle types where no real
+    driver was online, and wasted dispatch cycles on drivers that could
+    never be notified (no user_id = no WebSocket key = no push token).
+
+    The dispatch path no longer calls this function. Keeping the symbol
+    exported as a no-op so any stale import from callers outside this file
+    still resolves and short-circuits instead of inserting garbage rows.
+    Delete entirely once you've confirmed no other module references it.
+    """
+    logger.warning(
+        "[DISPATCH] create_demo_drivers was called but is deprecated and does nothing. "
+        f"vehicle_type_id={vehicle_type_id} pickup=({lat},{lng})"
+    )
+    return
 
 async def match_driver_to_ride(ride_id: str):
     ride = await db.rides.find_one({'id': ride_id})
     if not ride:
+        logger.warning(f"[DISPATCH] match_driver_to_ride: ride {ride_id} not found")
         return
-    
+
     settings = await get_app_settings()
     algorithm = settings.get('driver_matching_algorithm', 'nearest')
     min_rating = settings.get('min_driver_rating', 4.0)
     search_radius = settings.get('search_radius_km', 10.0)
-    
-    # Use PostGIS to find nearby drivers
-    # Note: radius in meters for RPC
-    try:
-        nearby_drivers = await db.rpc('find_nearby_drivers', {
-            'lat': ride['pickup_lat'],
-            'lng': ride['pickup_lng'],
-            'radius_meters': search_radius * 1000
-        })
-    except Exception as e:
-        logger.warning(f"find_nearby_drivers RPC not available in match_driver: {e}")
-        nearby_drivers = []
-    
-    if not nearby_drivers:
-        nearby_drivers = []
-    
-    # Filter by vehicle type (rpc returns all types nearby)
-    drivers = [d for d in nearby_drivers if d.get('vehicle_type_id') == ride['vehicle_type_id']]
 
-    if not drivers:
-        # Create demo drivers if none found (for testing)
-        await create_demo_drivers(ride['vehicle_type_id'], ride['pickup_lat'], ride['pickup_lng'])
-        # Try finding again
-        try:
-            nearby_drivers = await db.rpc('find_nearby_drivers', {
-                'lat': ride['pickup_lat'],
-                'lng': ride['pickup_lng'],
-                'radius_meters': search_radius * 1000
-            })
-        except Exception as e:
-            logger.warning(f"find_nearby_drivers RPC retry failed: {e}")
-            nearby_drivers = []
-        if not nearby_drivers:
-            nearby_drivers = []
-        drivers = [d for d in nearby_drivers if d.get('vehicle_type_id') == ride['vehicle_type_id']]
-    
-    if not drivers:
-        return
+    logger.info(
+        f"[DISPATCH] match start ride_id={ride_id} "
+        f"pickup=({ride['pickup_lat']},{ride['pickup_lng']}) "
+        f"vehicle_type_id={ride['vehicle_type_id']} algorithm={algorithm} "
+        f"radius_km={search_radius}"
+    )
 
-    if algorithm in ['rating_based', 'combined']:
-        driver_ids = [d['id'] for d in drivers]
-        # Fetch full details
-        full_drivers = await db.drivers.find({'id': {'$in': driver_ids}}).to_list(len(driver_ids))
-        # Filter by rating
-        full_drivers = [d for d in full_drivers if d.get('rating', 5.0) >= min_rating]
+    # Find candidate drivers. We read the drivers table directly and filter
+    # in Python using the legacy lat/lng columns — same pattern as /rides/estimate.
+    # We deliberately DO NOT use the find_nearby_drivers RPC because it reads
+    # the PostGIS `location` column, which update_driver_location does not
+    # populate, so the RPC would always return zero drivers.
+    #
+    # We also require user_id IS NOT NULL to skip legacy "demo" driver rows
+    # that lack a real user and can never be notified.
+    all_drivers = await db.drivers.find({
+        'is_online': True,
+        'is_available': True,
+        'vehicle_type_id': ride['vehicle_type_id'],
+    }).to_list(500)
 
-        # Map distance back
-        dist_map = {d['id']: d['distance_meters'] / 1000.0 for d in drivers} # Convert m to km
-        drivers_with_distance = []
-        for d in full_drivers:
-            if d['id'] in dist_map:
-                drivers_with_distance.append((d, dist_map[d['id']]))
+    logger.info(
+        f"[DISPATCH] candidate pool (pre-filter): {len(all_drivers)} drivers "
+        f"matching vehicle_type_id + online + available"
+    )
 
-    else:
-        # RPC result is partial. Let's fetch full objects.
-        driver_ids = [d['id'] for d in drivers]
-        full_drivers = await db.drivers.find({'id': {'$in': driver_ids}}).to_list(len(driver_ids))
-        dist_map = {d['id']: d['distance_meters'] / 1000.0 for d in drivers}
+    drivers_with_distance = []
+    for d in all_drivers:
+        # Skip orphan/demo drivers that cannot be notified.
+        if not d.get('user_id'):
+            continue
+        d_lat = d.get('lat')
+        d_lng = d.get('lng')
+        if d_lat is None or d_lng is None:
+            continue
+        # Rating floor for rating-based / combined algorithms.
+        if algorithm in ('rating_based', 'combined'):
+            if float(d.get('rating') or 5.0) < min_rating:
+                continue
+        dist_km = calculate_distance(ride['pickup_lat'], ride['pickup_lng'], d_lat, d_lng)
+        if dist_km <= search_radius:
+            drivers_with_distance.append((d, dist_km))
 
-        drivers_with_distance = []
-        for d in full_drivers:
-             if d['id'] in dist_map:
-                drivers_with_distance.append((d, dist_map[d['id']]))
+    logger.info(
+        f"[DISPATCH] candidate pool (post-filter): {len(drivers_with_distance)} "
+        f"real drivers within {search_radius}km with valid lat/lng and "
+        f"rating>={min_rating if algorithm in ('rating_based','combined') else 'n/a'}"
+    )
 
     if not drivers_with_distance:
+        logger.info(f"[DISPATCH] no eligible drivers for ride {ride_id} — ride stays in searching")
         return
     
     selected_driver = None
@@ -182,6 +165,11 @@ async def match_driver_to_ride(ride_id: str):
             }}
         )
 
+        logger.info(
+            f"[DISPATCH] ride {ride_id} assigned to driver_id={selected_driver['id']} "
+            f"user_id={selected_driver.get('user_id')} name={selected_driver.get('name')}"
+        )
+
         # Notify rider via WebSocket
         await manager.send_personal_message(
             {
@@ -192,17 +180,87 @@ async def match_driver_to_ride(ride_id: str):
             f"rider_{ride['rider_id']}"
         )
 
-        # Notify driver via WebSocket
+        # Look up the rider so we can include name/rating in the dispatch
+        # payload sent to the driver-app. Missing fields are fine — the
+        # driver-app has fallbacks — but sending them avoids an empty popup.
+        rider_user = None
+        try:
+            rider_user = await db.users.find_one({'id': ride['rider_id']})
+        except Exception as e:
+            logger.warning(f"[DISPATCH] could not load rider user {ride['rider_id']}: {e}")
+
+        rider_display_name = None
+        if rider_user:
+            first = rider_user.get('first_name') or ''
+            last = rider_user.get('last_name') or ''
+            rider_display_name = (first + ' ' + last).strip() or rider_user.get('name') or None
+
+        # Build the full dispatch payload. Keys MUST match what the driver
+        # app consumes in useDriverDashboard.ts handleWSMessage:
+        # ride_id, pickup_address, dropoff_address, pickup_lat, pickup_lng,
+        # dropoff_lat, dropoff_lng, fare, distance_km, duration_minutes,
+        # rider_name, rider_rating.
+        dispatch_payload = {
+            'type': 'new_ride_assignment',
+            'ride_id': ride_id,
+            'pickup_address': ride.get('pickup_address'),
+            'dropoff_address': ride.get('dropoff_address'),
+            'pickup_lat': ride.get('pickup_lat'),
+            'pickup_lng': ride.get('pickup_lng'),
+            'dropoff_lat': ride.get('dropoff_lat'),
+            'dropoff_lng': ride.get('dropoff_lng'),
+            'fare': ride.get('driver_earnings'),
+            'distance_km': ride.get('distance_km'),
+            'duration_minutes': ride.get('duration_minutes'),
+            'rider_name': rider_display_name,
+            'rider_rating': (rider_user or {}).get('rating'),
+        }
+
+        # Notify driver via WebSocket (only reaches the driver if they have
+        # an open WS connection — silent no-op otherwise).
         if selected_driver.get('user_id'):
-             await manager.send_personal_message(
-                {
-                    'type': 'new_ride_assignment',
-                    'ride_id': ride_id,
-                    'pickup': ride['pickup_address'],
-                    'dropoff': ride['dropoff_address'],
-                    'fare': ride['driver_earnings']
-                },
+            logger.info(
+                f"[DISPATCH] sending WS new_ride_assignment to "
+                f"driver_{selected_driver['user_id']} payload_keys="
+                f"{list(dispatch_payload.keys())}"
+            )
+            await manager.send_personal_message(
+                dispatch_payload,
                 f"driver_{selected_driver['user_id']}"
+            )
+
+            # Push-notification fallback. The driver-app listens for
+            # data.type == 'new_ride_offer' (useDriverDashboard.ts:457) and
+            # refetches the active ride via HTTP when this arrives, so we
+            # don't need to put the full ride data in the push — just
+            # a wake-up with the ride id.
+            try:
+                await send_push_notification(
+                    selected_driver['user_id'],
+                    'New ride request',
+                    (
+                        f"{ride.get('pickup_address') or 'Nearby pickup'} "
+                        f"→ {ride.get('dropoff_address') or 'destination'}"
+                    ),
+                    {
+                        'type': 'new_ride_offer',
+                        'ride_id': ride_id,
+                    },
+                )
+                logger.info(
+                    f"[DISPATCH] push new_ride_offer sent to user_id="
+                    f"{selected_driver['user_id']}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[DISPATCH] push notification failed for "
+                    f"user_id={selected_driver['user_id']}: {e}"
+                )
+        else:
+            logger.warning(
+                f"[DISPATCH] selected_driver has no user_id — cannot notify. "
+                f"driver_id={selected_driver.get('id')} name={selected_driver.get('name')}. "
+                f"This row is likely an orphan demo driver; clean up the drivers table."
             )
 
 
@@ -228,11 +286,16 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
         'is_online': True,
         'is_available': True,
     }).to_list(200)
-    
-    # Filter to drivers within 10km radius and group by vehicle_type_id
+
+    # Filter to drivers within 10km radius and group by vehicle_type_id.
+    # Exclude drivers without a user_id — those are orphan/demo rows that
+    # cannot be dispatched to, and counting them would inflate the rider's
+    # "X drivers available" badge and cause rides to fail at dispatch time.
     from collections import defaultdict
     drivers_by_type = defaultdict(list)
     for d in all_drivers:
+        if not d.get('user_id'):
+            continue
         d_lat = d.get('lat')
         d_lng = d.get('lng')
         if d_lat and d_lng:

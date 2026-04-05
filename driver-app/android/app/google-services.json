@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "879808882715",
+    "project_id": "spinrapp-6e464",
+    "storage_bucket": "spinrapp-6e464.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:879808882715:android:1bb8188887003b54cb30be",
+        "android_client_info": {
+          "package_name": "com.spinr.driver"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBAgdgMULZ3Ct_Nq-W4joEZM_4mlaBGU3M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:879808882715:android:150f53e023204c47cb30be",
+        "android_client_info": {
+          "package_name": "com.spinr.user"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBAgdgMULZ3Ct_Nq-W4joEZM_4mlaBGU3M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

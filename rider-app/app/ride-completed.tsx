@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput,
-  Alert, Platform, ActivityIndicator, BackHandler, Share, KeyboardAvoidingView,
+  Platform, ActivityIndicator, BackHandler, Share, KeyboardAvoidingView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -10,6 +10,7 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { useRideStore } from '../store/rideStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
 import api from '@shared/api/client';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
@@ -32,6 +33,13 @@ export default function RideCompletedScreen() {
   const [paymentProcessed, setPaymentProcessed] = useState(false);
 
   const [routeCoords, setRouteCoords] = useState<any[]>([]);
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = React.useRef<MapView>(null);
 
   const tipOptions = [2, 5, 10];
@@ -101,7 +109,7 @@ export default function RideCompletedScreen() {
       setTipSent(true);
       setSelectedTip(amount);
     } catch {
-      Alert.alert('Error', 'Could not send tip.');
+      setAlertState({ visible: true, title: 'Error', message: 'Could not send tip.', variant: 'danger' });
     }
   };
 
@@ -126,7 +134,7 @@ export default function RideCompletedScreen() {
       clearRide();
       router.replace('/(tabs)');
     } catch {
-      Alert.alert('Error', 'Failed to submit. Please try again.');
+      setAlertState({ visible: true, title: 'Error', message: 'Failed to submit. Please try again.', variant: 'danger' });
     } finally {
       setIsSubmitting(false);
     }
@@ -387,6 +395,14 @@ export default function RideCompletedScreen() {
           )}
         </TouchableOpacity>
       </View>
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }

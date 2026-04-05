@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Share, Alert, Platform, BackHandler,
+  View, Text, StyleSheet, TouchableOpacity, Share, Platform, BackHandler,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -13,6 +13,7 @@ import { useRideStore } from '../store/rideStore';
 import { CarMarker } from '@shared/components/CarMarker';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
 import { SOSButton } from '@shared/components/SOSButton';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
@@ -26,6 +27,13 @@ export default function DriverArrivedScreen() {
   const bottomSheetRef = React.useRef<BottomSheet>(null);
   const snapPoints = useMemo(() => ['42%', '70%', '92%'], []);
   const [routeCoords, setRouteCoords] = React.useState<any[]>([]);
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
   const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
   const fare = currentRide?.total_fare || 0;
@@ -33,17 +41,19 @@ export default function DriverArrivedScreen() {
   const pickupOtp = currentRide?.pickup_otp || '----';
 
   const handleCancelPress = () => {
-    Alert.alert(
-      'Driver is waiting',
-      `Your driver has arrived. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`,
-      [
+    setAlertState({
+      visible: true,
+      title: 'Driver is waiting',
+      message: `Your driver has arrived. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`,
+      variant: 'warning',
+      buttons: [
         { text: 'Keep Ride', style: 'cancel' },
         {
           text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive',
           onPress: async () => { await cancelRide(); clearRide(); router.replace('/ride-options' as any); },
         },
-      ]
-    );
+      ],
+    });
   };
 
   useEffect(() => {
@@ -98,7 +108,7 @@ export default function DriverArrivedScreen() {
 
   const handleCopyOtp = async () => {
     await Clipboard.setStringAsync(pickupOtp);
-    Alert.alert('Copied!', 'OTP copied to clipboard');
+    setAlertState({ visible: true, title: 'Copied!', message: 'OTP copied to clipboard', variant: 'success' });
   };
 
   return (
@@ -339,6 +349,14 @@ export default function DriverArrivedScreen() {
           )}
         </BottomSheetScrollView>
       </BottomSheet>
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </View>
   );
 }

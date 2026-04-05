@@ -1474,10 +1474,56 @@ async def update_driver_status(
                     # the driver go online rather than blocking on a data bug.
                     pass
 
+    logger.info(
+        f"[GO-ONLINE] handler CALL update_one driver_id={driver_id} "
+        f"requested_is_online={is_online} "
+        f"pre_update_row_is_online={driver.get('is_online')} "
+        f"pre_update_row_is_available={driver.get('is_available')}"
+    )
     await db.drivers.update_one(
         {'id': driver_id},
-        {'$set': {'is_online': is_online, 'is_available': is_online, 'updated_at': datetime.utcnow()}}
+        {'$set': {'is_online': is_online, 'is_available': is_online, 'updated_at': datetime.utcnow().isoformat()}}
     )
+
+    # Verify the update actually landed. db_supabase.update_one silently
+    # returns None if the write matched zero rows (RLS deny, schema cache miss,
+    # wrong key role, etc.), which would otherwise leak out as a fake
+    # {success: true} response and a driver-app that claims "You're online"
+    # while the DB row never changes. Re-read the row and raise loudly if the
+    # flag did not flip.
+    verify = await db.drivers.find_one({'id': driver_id})
+    logger.info(
+        f"[GO-ONLINE] handler VERIFY driver_id={driver_id} "
+        f"post_update_is_online={verify.get('is_online') if verify else 'ROW_GONE'} "
+        f"post_update_is_available={verify.get('is_available') if verify else 'ROW_GONE'} "
+        f"post_update_updated_at={verify.get('updated_at') if verify else 'ROW_GONE'}"
+    )
+    if verify is None:
+        logger.error(
+            f"[go-online] driver row disappeared immediately after update: "
+            f"driver_id={driver_id}"
+        )
+        raise HTTPException(
+            status_code=500,
+            detail='Driver row missing after status update.'
+        )
+    if bool(verify.get('is_online')) != bool(is_online):
+        logger.error(
+            f"[go-online] silent no-op: driver_id={driver_id} "
+            f"requested is_online={is_online} but DB still shows "
+            f"is_online={verify.get('is_online')}. "
+            f"Likely causes: SUPABASE_SERVICE_ROLE_KEY in backend .env is "
+            f"the anon key (not service_role), or RLS is enabled on drivers "
+            f"with no permissive UPDATE policy for the role in use."
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                'Status update did not apply. Backend Supabase credentials '
+                'may be misconfigured — verify SUPABASE_SERVICE_ROLE_KEY.'
+            )
+        )
+
     return {'success': True, 'is_online': is_online}
 
 

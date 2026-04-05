@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Animated,
-  Alert,
   BackHandler,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -15,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
 
 export default function RideStatusScreen() {
   const router = useRouter();
@@ -23,6 +23,13 @@ export default function RideStatusScreen() {
 
   const [pulseAnim] = useState(new Animated.Value(1));
   const [dotAnim] = useState(new Animated.Value(0));
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   useEffect(() => {
     if (rideId) {
@@ -61,32 +68,38 @@ export default function RideStatusScreen() {
     const status = currentRide.status;
 
     if (status === 'driver_arrived') {
-      Alert.alert(
-        'Driver is waiting',
-        `Your driver has arrived. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`,
-        [
+      setAlertState({
+        visible: true,
+        title: 'Driver is waiting',
+        message: `Your driver has arrived. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`,
+        variant: 'warning',
+        buttons: [
           { text: 'Keep Ride', style: 'cancel' },
           { text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive', onPress: async () => { await cancelRide(); clearRide(); router.replace('/ride-options' as any); } },
-        ]
-      );
+        ],
+      });
     } else if (status === 'driver_assigned' || status === 'driver_accepted') {
-      Alert.alert(
-        'Cancel ride?',
-        'Your driver is on the way. You can cancel for free right now.',
-        [
+      setAlertState({
+        visible: true,
+        title: 'Cancel ride?',
+        message: 'Your driver is on the way. You can cancel for free right now.',
+        variant: 'warning',
+        buttons: [
           { text: 'Keep Ride', style: 'cancel' },
           { text: 'Cancel (Free)', style: 'destructive', onPress: async () => { await cancelRide(); clearRide(); router.replace('/ride-options' as any); } },
-        ]
-      );
+        ],
+      });
     } else {
-      Alert.alert(
-        'Cancel search?',
-        'Stop looking for a driver? No charge.',
-        [
+      setAlertState({
+        visible: true,
+        title: 'Cancel search?',
+        message: 'Stop looking for a driver? No charge.',
+        variant: 'info',
+        buttons: [
           { text: 'Keep searching', style: 'cancel' },
           { text: 'Cancel', onPress: async () => { await cancelRide(); clearRide(); router.replace('/ride-options' as any); } },
-        ]
-      );
+        ],
+      });
     }
   };
 
@@ -277,6 +290,14 @@ export default function RideStatusScreen() {
           </>
         )}
       </View>
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }

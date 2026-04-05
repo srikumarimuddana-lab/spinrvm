@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   Dimensions,
   Share,
-  Alert,
   Linking,
   Platform,
   ActivityIndicator,
@@ -22,6 +21,7 @@ import BottomSheet, { BottomSheetScrollView, BottomSheetView } from '@gorhom/bot
 import { useRideStore } from '../store/rideStore';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
 import { SOSButton } from '@shared/components/SOSButton';
 import { CarMarker } from '@shared/components/CarMarker';
 
@@ -35,6 +35,13 @@ export default function DriverArrivingScreen() {
   const [mapError, setMapError] = useState<string | null>(null);
   const [driverRouteCoords, setDriverRouteCoords] = useState<any[]>([]);
   const [rideRouteCoords, setRideRouteCoords] = useState<any[]>([]);
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = React.useRef<MapView>(null);
   const bottomSheetRef = React.useRef<BottomSheet>(null);
 
@@ -90,10 +97,12 @@ export default function DriverArrivingScreen() {
 
     if (status === 'in_progress') {
       // Ride started — full fare
-      Alert.alert(
-        'Ride in progress',
-        `Your ride is in progress. If you cancel now, you will be charged the full fare of $${fare.toFixed(2)}.`,
-        [
+      setAlertState({
+        visible: true,
+        title: 'Ride in progress',
+        message: `Your ride is in progress. If you cancel now, you will be charged the full fare of $${fare.toFixed(2)}.`,
+        variant: 'warning',
+        buttons: [
           { text: 'Continue Ride', style: 'cancel' },
           {
             text: `Cancel & Pay $${fare.toFixed(2)}`, style: 'destructive',
@@ -103,14 +112,16 @@ export default function DriverArrivingScreen() {
               router.replace('/ride-options' as any);
             },
           },
-        ]
-      );
+        ],
+      });
     } else if (status === 'driver_arrived') {
       // Driver at pickup — cancellation fee
-      Alert.alert(
-        'Driver is waiting',
-        `Your driver has arrived at the pickup. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`,
-        [
+      setAlertState({
+        visible: true,
+        title: 'Driver is waiting',
+        message: `Your driver has arrived at the pickup. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`,
+        variant: 'warning',
+        buttons: [
           { text: 'Keep Ride', style: 'cancel' },
           {
             text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive',
@@ -120,14 +131,16 @@ export default function DriverArrivingScreen() {
               router.replace('/ride-options' as any);
             },
           },
-        ]
-      );
+        ],
+      });
     } else if (status === 'driver_assigned' || status === 'driver_accepted') {
       // Driver on the way — free cancel
-      Alert.alert(
-        'Cancel ride?',
-        'Your driver is on the way. You can cancel for free right now.',
-        [
+      setAlertState({
+        visible: true,
+        title: 'Cancel ride?',
+        message: 'Your driver is on the way. You can cancel for free right now.',
+        variant: 'warning',
+        buttons: [
           { text: 'Keep Ride', style: 'cancel' },
           {
             text: 'Cancel (Free)', style: 'destructive',
@@ -137,14 +150,16 @@ export default function DriverArrivingScreen() {
               router.replace('/ride-options' as any);
             },
           },
-        ]
-      );
+        ],
+      });
     } else {
       // Still searching — free cancel
-      Alert.alert(
-        'Cancel search?',
-        'Stop looking for a driver? No charge.',
-        [
+      setAlertState({
+        visible: true,
+        title: 'Cancel search?',
+        message: 'Stop looking for a driver? No charge.',
+        variant: 'info',
+        buttons: [
           { text: 'Keep searching', style: 'cancel' },
           {
             text: 'Cancel',
@@ -154,8 +169,8 @@ export default function DriverArrivingScreen() {
               router.replace('/ride-options' as any);
             },
           },
-        ]
-      );
+        ],
+      });
     }
   };
 
@@ -169,10 +184,12 @@ export default function DriverArrivingScreen() {
   }, [currentRide?.status]);
 
   const handleEmergency = () => {
-    Alert.alert(
-      'Emergency',
-      'Are you sure you want to contact emergency services?',
-      [
+    setAlertState({
+      visible: true,
+      title: 'Emergency',
+      message: 'Are you sure you want to contact emergency services?',
+      variant: 'danger',
+      buttons: [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Call 911',
@@ -180,10 +197,10 @@ export default function DriverArrivingScreen() {
           onPress: () => {
             if (rideId) triggerEmergency(rideId as string);
             Linking.openURL('tel:911');
-          }
-        }
-      ]
-    );
+          },
+        },
+      ],
+    });
   };
 
   const handleMessage = () => {
@@ -227,7 +244,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
   const handleCopyDetails = async () => {
     const details = `Driver: ${currentDriver?.name || 'Assigning...'} | Vehicle: ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || 'Unknown'} ${currentDriver?.vehicle_model || 'Vehicle'} | Plate: ${currentDriver?.license_plate || 'Pending'} | Rating: ${currentDriver?.rating || 'New'}`;
     await Clipboard.setStringAsync(details);
-    Alert.alert('Copied!', 'Driver details copied to clipboard');
+    setAlertState({ visible: true, title: 'Copied!', message: 'Driver details copied to clipboard', variant: 'success' });
   };
 
   // simulateDriverArrival demo function removed for production
@@ -531,6 +548,14 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
           </BottomSheetView>
         </BottomSheetScrollView>
       </BottomSheet>
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </View>
   );
 }

@@ -16,6 +16,7 @@ import * as Location from 'expo-location';
 import { useRideStore } from '../store/rideStore';
 import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
@@ -46,6 +47,13 @@ export default function SearchDestinationScreen() {
   const [stopTexts, setStopTexts] = useState<string[]>(stops.map(s => s.address || ''));
   const [predictions, setPredictions] = useState<PlacePrediction[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const pickupRef = useRef<TextInput>(null);
   const dropoffRef = useRef<TextInput>(null);
@@ -482,7 +490,7 @@ export default function SearchDestinationScreen() {
                             if (homeAddr) {
                               handleSelectLocation({ address: homeAddr.address, lat: homeAddr.lat, lng: homeAddr.lng });
                             } else {
-                              alert('Set your home address in Account > Saved Places');
+                              setAlertState({ visible: true, title: 'No Home Address', message: 'Set your home address in Account > Saved Places', variant: 'info' });
                             }
                           }}
                         >
@@ -501,7 +509,7 @@ export default function SearchDestinationScreen() {
                             if (workAddr) {
                               handleSelectLocation({ address: workAddr.address, lat: workAddr.lat, lng: workAddr.lng });
                             } else {
-                              alert('Set your work address in Account > Saved Places');
+                              setAlertState({ visible: true, title: 'No Work Address', message: 'Set your work address in Account > Saved Places', variant: 'info' });
                             }
                           }}
                         >
@@ -612,6 +620,14 @@ export default function SearchDestinationScreen() {
           <Text style={styles.searchRideButtonText}>Search Ride</Text>
         </TouchableOpacity>
       </View>
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }

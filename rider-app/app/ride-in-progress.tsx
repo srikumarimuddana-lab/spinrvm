@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   Dimensions,
   Share,
-  Alert,
   Linking,
   Platform,
 } from 'react-native';
@@ -20,6 +19,7 @@ import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useRideStore } from '../store/rideStore';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
 import { SOSButton } from '@shared/components/SOSButton';
 import { CarMarker } from '@shared/components/CarMarker';
 
@@ -34,6 +34,13 @@ export default function RideInProgressScreen() {
   const [currentLocation, setCurrentLocation] = useState('4th Avenue North');
   const [isSharingLocation, setIsSharingLocation] = useState(false);
   const [tripRouteCoords, setTripRouteCoords] = useState<any[]>([]);
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = React.useRef<MapView>(null);
   const bottomSheetRef = React.useRef<BottomSheet>(null);
 
@@ -86,21 +93,23 @@ export default function RideInProgressScreen() {
   }, [currentRide?.status]);
 
   const handleSafety = () => {
-    Alert.alert(
-      'Emergency',
-      'Are you sure you want to contact emergency services?',
-      [
+    setAlertState({
+      visible: true,
+      title: 'Emergency',
+      message: 'Are you sure you want to contact emergency services?',
+      variant: 'danger',
+      buttons: [
         { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Call 911', 
+        {
+          text: 'Call 911',
           style: 'destructive',
           onPress: () => {
             if (rideId) triggerEmergency(rideId as string);
             Linking.openURL('tel:911');
-          }
-        }
-      ]
-    );
+          },
+        },
+      ],
+    });
   };
 
   const handleShareTrip = async () => {
@@ -131,10 +140,12 @@ I've shared my live location with you for safety.
         title: 'Track My Spinr Ride',
       });
       setIsSharingLocation(true);
-      Alert.alert(
-        'Trip Shared!',
-        'Your live location is now being shared. They can track your journey in real-time.'
-      );
+      setAlertState({
+        visible: true,
+        title: 'Trip Shared!',
+        message: 'Your live location is now being shared. They can track your journey in real-time.',
+        variant: 'success',
+      });
     } catch (error) {
       console.log(error);
     }
@@ -143,7 +154,7 @@ I've shared my live location with you for safety.
   const handleCopyTrackingLink = async () => {
     const trackingLink = `https://spinr-track.app/${rideId || 'demo'}`;
     await Clipboard.setStringAsync(trackingLink);
-    Alert.alert('Copied!', 'Live tracking link copied to clipboard');
+    setAlertState({ visible: true, title: 'Copied!', message: 'Live tracking link copied to clipboard', variant: 'success' });
   };
 
   // No free cancel during ride — rider pays full fare if they end early
@@ -403,10 +414,12 @@ I've shared my live location with you for safety.
                 <Text style={styles.actionBtnText}>SOS</Text>
               </View>
               <TouchableOpacity style={styles.actionBtn} onPress={() => {
-                Alert.alert(
-                  'End ride early?',
-                  `You will be charged the full agreed fare of $${(currentRide?.total_fare || 0).toFixed(2)}. This cannot be undone.`,
-                  [
+                setAlertState({
+                  visible: true,
+                  title: 'End ride early?',
+                  message: `You will be charged the full agreed fare of $${(currentRide?.total_fare || 0).toFixed(2)}. This cannot be undone.`,
+                  variant: 'warning',
+                  buttons: [
                     { text: 'Continue Ride', style: 'cancel' },
                     {
                       text: 'End & Pay Full Fare', style: 'destructive',
@@ -416,8 +429,8 @@ I've shared my live location with you for safety.
                         if (rideId) fetchRide(rideId);
                       },
                     },
-                  ]
-                );
+                  ],
+                });
               }}>
                 <Ionicons name="stop-circle-outline" size={20} color="#999" />
                 <Text style={styles.actionBtnText}>End Ride</Text>
@@ -440,6 +453,14 @@ I've shared my live location with you for safety.
           </View>
         </BottomSheetScrollView>
       </BottomSheet>
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </View>
   );
 }

@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  Alert,
   TextInput,
   KeyboardAvoidingView,
   Platform,
@@ -16,6 +15,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import SpinrConfig from '@shared/config/spinr.config';
 import api from '@shared/api/client';
+import CustomAlert from '@shared/components/CustomAlert';
 
 const THEME = SpinrConfig.theme.colors;
 const MAX_CONTACTS = 3;
@@ -42,6 +42,13 @@ export default function EmergencyContactsScreen() {
   const [phone, setPhone] = useState('');
   const [relationship, setRelationship] = useState('Friend');
   const [saving, setSaving] = useState(false);
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const fetchContacts = useCallback(async () => {
     try {
@@ -63,11 +70,11 @@ export default function EmergencyContactsScreen() {
     const trimmedPhone = phone.trim().replace(/\D/g, '');
 
     if (!trimmedName) {
-      Alert.alert('Missing Name', 'Please enter a contact name.');
+      setAlertState({ visible: true, title: 'Missing Name', message: 'Please enter a contact name.', variant: 'warning' });
       return;
     }
     if (trimmedPhone.length < 10) {
-      Alert.alert('Invalid Phone', 'Please enter a valid phone number (at least 10 digits).');
+      setAlertState({ visible: true, title: 'Invalid Phone', message: 'Please enter a valid phone number (at least 10 digits).', variant: 'warning' });
       return;
     }
 
@@ -83,20 +90,22 @@ export default function EmergencyContactsScreen() {
       setPhone('');
       setRelationship('Friend');
       await fetchContacts();
-      Alert.alert('Contact Added', `${trimmedName} has been added as an emergency contact.`);
+      setAlertState({ visible: true, title: 'Contact Added', message: `${trimmedName} has been added as an emergency contact.`, variant: 'success' });
     } catch (error: any) {
       const msg = error?.response?.data?.detail || 'Could not add contact.';
-      Alert.alert('Error', msg);
+      setAlertState({ visible: true, title: 'Error', message: msg, variant: 'danger' });
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = (contact: EmergencyContact) => {
-    Alert.alert(
-      'Remove Contact',
-      `Remove ${contact.name} as an emergency contact?`,
-      [
+    setAlertState({
+      visible: true,
+      title: 'Remove Contact',
+      message: `Remove ${contact.name} as an emergency contact?`,
+      variant: 'warning',
+      buttons: [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Remove',
@@ -106,12 +115,12 @@ export default function EmergencyContactsScreen() {
               await api.delete(`/users/emergency-contacts/${contact.id}`);
               await fetchContacts();
             } catch {
-              Alert.alert('Error', 'Could not remove contact.');
+              setAlertState({ visible: true, title: 'Error', message: 'Could not remove contact.', variant: 'danger' });
             }
           },
         },
-      ]
-    );
+      ],
+    });
   };
 
   const formatPhone = (raw: string) => {
@@ -286,6 +295,14 @@ export default function EmergencyContactsScreen() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }

@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput,
-  Alert, Platform, ActivityIndicator, KeyboardAvoidingView,
+  Platform, ActivityIndicator, KeyboardAvoidingView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
 
 const COLORS = SpinrConfig.theme.colors;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -41,6 +42,13 @@ export default function SavedPlacesScreen() {
   const [selectedPlace, setSelectedPlace] = useState<{ address: string; lat: number; lng: number } | null>(null);
   const [searching, setSearching] = useState(false);
   const searchTimeout = React.useRef<any>(null);
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   useEffect(() => {
     loadData();
@@ -91,7 +99,7 @@ export default function SavedPlacesScreen() {
   };
 
   const handleSave = async () => {
-    if (!selectedPlace) { Alert.alert('Error', 'Search and select an address'); return; }
+    if (!selectedPlace) { setAlertState({ visible: true, title: 'Error', message: 'Search and select an address', variant: 'warning' }); return; }
     const name = placeName.trim() || selectedType;
     setSaving(true);
     try {
@@ -105,15 +113,21 @@ export default function SavedPlacesScreen() {
       setShowAdd(false);
       resetForm();
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to save place');
+      setAlertState({ visible: true, title: 'Error', message: err.message || 'Failed to save place', variant: 'danger' });
     } finally { setSaving(false); }
   };
 
   const handleDelete = (id: string, name: string) => {
-    Alert.alert('Remove Place', `Remove "${name}" from saved places?`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Remove', style: 'destructive', onPress: () => deleteSavedAddress(id) },
-    ]);
+    setAlertState({
+      visible: true,
+      title: 'Remove Place',
+      message: `Remove "${name}" from saved places?`,
+      variant: 'warning',
+      buttons: [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Remove', style: 'destructive', onPress: () => deleteSavedAddress(id) },
+      ],
+    });
   };
 
   const resetForm = () => {
@@ -252,6 +266,14 @@ export default function SavedPlacesScreen() {
           />
         </KeyboardAvoidingView>
       )}
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }

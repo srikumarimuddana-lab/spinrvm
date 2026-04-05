@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   TextInput,
   Dimensions,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -16,6 +15,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
 
 const { width } = Dimensions.get('window');
 
@@ -36,6 +36,13 @@ export default function RateRideScreen() {
   const [customTip, setCustomTip] = useState('');
   const [showCustomTip, setShowCustomTip] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   useEffect(() => {
     if (rideId) {
@@ -72,20 +79,22 @@ export default function RateRideScreen() {
       const tipAmount = getTipAmount();
       await rateRide(rideId, rating, comment, tipAmount);
 
-      Alert.alert(
-        'Thank you!',
-        tipAmount > 0
+      setAlertState({
+        visible: true,
+        title: 'Thank you!',
+        message: tipAmount > 0
           ? `Your ${rating}-star rating and $${tipAmount.toFixed(2)} tip have been submitted.`
           : `Your ${rating}-star rating has been submitted.`,
-        [
+        variant: 'success',
+        buttons: [
           {
             text: 'Done',
-            onPress: () => router.replace('/(tabs)')
-          }
-        ]
-      );
+            onPress: () => router.replace('/(tabs)'),
+          },
+        ],
+      });
     } catch (error) {
-      Alert.alert('Error', 'Failed to submit rating. Please try again.');
+      setAlertState({ visible: true, title: 'Error', message: 'Failed to submit rating. Please try again.', variant: 'danger' });
     } finally {
       setIsSubmitting(false);
     }
@@ -273,6 +282,14 @@ export default function RateRideScreen() {
           </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }

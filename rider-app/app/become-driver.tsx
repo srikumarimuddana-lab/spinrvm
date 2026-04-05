@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
-  Alert,
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
@@ -18,6 +17,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { uploadFile } from '@shared/api/upload';
+import CustomAlert from '@shared/components/CustomAlert';
 
 // Steps: 0=Intro, 1=Personal, 2=Vehicle, 3=Docs, 4=Review
 const STEPS = ['Intro', 'Personal', 'Vehicle', 'Documents', 'Review'];
@@ -66,6 +66,13 @@ export default function BecomeDriverScreen() {
   const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
   const [loadingTypes, setLoadingTypes] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState<string | null>(null); // reqId_side
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   useEffect(() => {
     fetchVehicleTypes();
@@ -118,9 +125,9 @@ export default function BecomeDriverScreen() {
           [side]: url
         }
       }));
-      Alert.alert('Success', 'Document uploaded successfully');
+      setAlertState({ visible: true, title: 'Success', message: 'Document uploaded successfully', variant: 'success' });
     } catch (err: any) {
-      Alert.alert('Upload Failed', err.message);
+      setAlertState({ visible: true, title: 'Upload Failed', message: err.message, variant: 'danger' });
     } finally {
       setUploadingDoc(null);
     }
@@ -134,7 +141,7 @@ export default function BecomeDriverScreen() {
         const year = parseInt(vehicleYear);
         const currentYear = new Date().getFullYear();
         if (!vehicleYear || isNaN(year) || year < currentYear - 9) {
-          Alert.alert('Invalid Year', 'Vehicle must be 9 years old or newer.');
+          setAlertState({ visible: true, title: 'Invalid Year', message: 'Vehicle must be 9 years old or newer.', variant: 'warning' });
           return false;
         }
         return vehicleMake && vehicleModel && vehicleColor && licensePlate && vehicleVin && vehicleType;
@@ -160,7 +167,7 @@ export default function BecomeDriverScreen() {
         });
 
         if (missing.length > 0) {
-          Alert.alert('Missing Documents', `Please provide: ${missing.join(', ')}`);
+          setAlertState({ visible: true, title: 'Missing Documents', message: `Please provide: ${missing.join(', ')}`, variant: 'warning' });
           return false;
         }
         return true;
@@ -238,11 +245,15 @@ export default function BecomeDriverScreen() {
         documents: documentsPayload,
       });
 
-      Alert.alert('Success', 'Application submitted! Waiting for approval.', [
-        { text: 'OK', onPress: () => router.replace('/(driver)' as any) }
-      ]);
+      setAlertState({
+        visible: true,
+        title: 'Success',
+        message: 'Application submitted! Waiting for approval.',
+        variant: 'success',
+        buttons: [{ text: 'OK', onPress: () => router.replace('/(driver)' as any) }],
+      });
     } catch (err: any) {
-      Alert.alert('Registration Failed', err.message);
+      setAlertState({ visible: true, title: 'Registration Failed', message: err.message, variant: 'danger' });
     }
   };
 
@@ -435,6 +446,14 @@ export default function BecomeDriverScreen() {
 
         </ScrollView>
       </KeyboardAvoidingView>
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }
@@ -454,11 +473,11 @@ const styles = StyleSheet.create({
   subLabel: { fontSize: 12, color: '#666', marginBottom: 5 },
   input: {
     borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 12, padding: 12,
-    fontSize: 16, color: '#000', fontFamily: 'PlusJakartaSans'
+    fontSize: 16, color: '#1A1A1A', fontFamily: 'PlusJakartaSans'
   },
   dateInput: {
     borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, padding: 10,
-    fontSize: 14, color: '#000'
+    fontSize: 14, color: '#1A1A1A'
   },
 
   docContainer: {

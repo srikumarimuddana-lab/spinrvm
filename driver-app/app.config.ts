@@ -17,9 +17,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     updates: {
         url: 'https://u.expo.dev/9fb3b288-3036-442c-98aa-d18987008cef',
     },
-    runtimeVersion: {
-        policy: 'appVersion',
-    },
+    // Bare workflow (after `expo prebuild`) does not support runtime version
+    // policies like { policy: 'appVersion' } — EAS Update requires a literal
+    // string. Bump this manually when you ship native changes that break
+    // JS-bundle compatibility. Keeping it in sync with `version` above is a
+    // reasonable default.
+    runtimeVersion: '1.0.0',
     splash: {
         backgroundColor: '#ee2b2b',
         resizeMode: 'contain',

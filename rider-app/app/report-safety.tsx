@@ -7,12 +7,12 @@ import {
     TouchableOpacity,
     KeyboardAvoidingView,
     Platform,
-    Alert,
-    SafeAreaView
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SpinrConfig } from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
 
 const THEME = SpinrConfig.theme.colors;
 
@@ -20,10 +20,17 @@ export default function ReportSafetyScreen() {
     const router = useRouter();
     const [issue, setIssue] = useState('');
     const [submitting, setSubmitting] = useState(false);
+    const [alertState, setAlertState] = useState<{
+        visible: boolean;
+        title: string;
+        message: string;
+        variant: 'info' | 'warning' | 'danger' | 'success';
+        buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+    }>({ visible: false, title: '', message: '', variant: 'info' });
 
     const handleSubmit = async () => {
         if (!issue.trim()) {
-            Alert.alert('Error', 'Please describe the safety issue before submitting.');
+            setAlertState({ visible: true, title: 'Error', message: 'Please describe the safety issue before submitting.', variant: 'warning' });
             return;
         }
 
@@ -37,13 +44,15 @@ export default function ReportSafetyScreen() {
             });
 
 
-            Alert.alert(
-                'Report Submitted',
-                'Your safety report has been submitted. Our trust and safety team will review it immediately.',
-                [{ text: 'OK', onPress: () => router.back() }]
-            );
+            setAlertState({
+                visible: true,
+                title: 'Report Submitted',
+                message: 'Your safety report has been submitted. Our trust and safety team will review it immediately.',
+                variant: 'success',
+                buttons: [{ text: 'OK', onPress: () => router.back() }],
+            });
         } catch (e) {
-            Alert.alert('Error', 'Failed to submit report. Please try again.');
+            setAlertState({ visible: true, title: 'Error', message: 'Failed to submit report. Please try again.', variant: 'danger' });
             setSubmitting(false);
         }
     };
@@ -98,6 +107,14 @@ export default function ReportSafetyScreen() {
                     </TouchableOpacity>
                 </View>
             </KeyboardAvoidingView>
+            <CustomAlert
+                visible={alertState.visible}
+                title={alertState.title}
+                message={alertState.message}
+                variant={alertState.variant}
+                buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+                onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+            />
         </SafeAreaView>
     );
 }

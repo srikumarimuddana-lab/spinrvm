@@ -259,12 +259,23 @@ async def update_driver_location(driver_id: str, lat: float, lng: float):
 
 async def set_driver_available(driver_id: str, available: bool = True, total_rides_inc: int = 0):
     if not supabase:
+        logger.warning("[GO-ONLINE] set_driver_available: supabase client is None!")
         return None
 
     def _update():
         payload: Dict[str, Any] = {'is_available': available}
+        logger.info(
+            f"[GO-ONLINE] set_driver_available CALLED driver_id={driver_id} "
+            f"available={available} total_rides_inc={total_rides_inc} "
+            f"payload={payload} (NOTE: only writes is_available, drops any "
+            f"other fields the caller may have passed)"
+        )
         if total_rides_inc == 0:
             res = supabase.table('drivers').update(payload).eq('id', driver_id).execute()
+            logger.info(
+                f"[GO-ONLINE] set_driver_available executed, "
+                f"res.data={getattr(res, 'data', None)}"
+            )
             return _single_row_from_res(res)
 
         # If increment needed, read then write (simulated atomic)
@@ -438,11 +449,19 @@ async def insert_one(table: str, doc: Dict[str, Any]):
 
 async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any], upsert: bool = False):
     if not supabase:
+        if table == 'drivers':
+            logger.warning("[GO-ONLINE] db_supabase.update_one: supabase client is None!")
         return None
 
     def _fn():
         update_data = update.get('$set', update)
         update_data = _serialize_for_api(update_data)
+
+        if table == 'drivers':
+            logger.info(
+                f"[GO-ONLINE] db_supabase.update_one about to execute: "
+                f"table={table} filters={filters} payload={update_data} upsert={upsert}"
+            )
 
         if upsert:
             # Upsert requires merging filters and update data
@@ -452,6 +471,18 @@ async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any]
             q = supabase.table(table).update(update_data)
             q = _apply_filters(q, filters)
             res = q.execute()
+
+        if table == 'drivers':
+            raw_data = None
+            try:
+                raw_data = getattr(res, 'data', None) if res else None
+            except Exception:
+                raw_data = '<error reading res.data>'
+            logger.info(
+                f"[GO-ONLINE] db_supabase.update_one executed: "
+                f"res_type={type(res).__name__ if res else 'None'} "
+                f"res_data={raw_data}"
+            )
 
         return _single_row_from_res(res)
 

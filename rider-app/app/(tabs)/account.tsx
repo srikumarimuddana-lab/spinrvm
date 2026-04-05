@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  Alert, Image, ActivityIndicator, Linking, Platform,
+  Image, ActivityIndicator, Linking, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
 
 const COLORS = SpinrConfig.theme.colors;
 
@@ -16,44 +17,69 @@ export default function AccountScreen() {
   const router = useRouter();
   const { user, logout, updateProfileImage } = useAuthStore();
   const [uploading, setUploading] = useState(false);
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const handleLogout = () => {
-    Alert.alert('Logout', 'Are you sure you want to logout?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Logout', style: 'destructive', onPress: async () => { await logout(); router.replace('/login'); } },
-    ]);
+    setAlertState({
+      visible: true,
+      title: 'Logout',
+      message: 'Are you sure you want to logout?',
+      variant: 'warning',
+      buttons: [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Logout', style: 'destructive', onPress: async () => { await logout(); router.replace('/login'); } },
+      ],
+    });
+  };
+
+  const takePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      setAlertState({ visible: true, title: 'Permission needed', message: 'Allow camera access.', variant: 'warning' });
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, aspect: [1, 1], quality: 0.8 });
+    if (!result.canceled && result.assets[0]) {
+      setUploading(true);
+      try { await updateProfileImage(result.assets[0].uri); }
+      catch { setAlertState({ visible: true, title: 'Error', message: 'Upload failed.', variant: 'danger' }); }
+      finally { setUploading(false); }
+    }
+  };
+
+  const pickFromLibrary = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      setAlertState({ visible: true, title: 'Permission needed', message: 'Allow photo library access.', variant: 'warning' });
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.8 });
+    if (!result.canceled && result.assets[0]) {
+      setUploading(true);
+      try { await updateProfileImage(result.assets[0].uri); }
+      catch { setAlertState({ visible: true, title: 'Error', message: 'Upload failed.', variant: 'danger' }); }
+      finally { setUploading(false); }
+    }
   };
 
   const handlePickImage = async () => {
-    Alert.alert('Profile Picture', 'Choose an option', [
-      {
-        text: 'Take Photo',
-        onPress: async () => {
-          const { status } = await ImagePicker.requestCameraPermissionsAsync();
-          if (status !== 'granted') { Alert.alert('Permission needed', 'Allow camera access.'); return; }
-          const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, aspect: [1, 1], quality: 0.8 });
-          if (!result.canceled && result.assets[0]) {
-            setUploading(true);
-            try { await updateProfileImage(result.assets[0].uri); } catch { Alert.alert('Error', 'Upload failed.'); }
-            finally { setUploading(false); }
-          }
-        },
-      },
-      {
-        text: 'Choose from Library',
-        onPress: async () => {
-          const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-          if (status !== 'granted') { Alert.alert('Permission needed', 'Allow photo library access.'); return; }
-          const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.8 });
-          if (!result.canceled && result.assets[0]) {
-            setUploading(true);
-            try { await updateProfileImage(result.assets[0].uri); } catch { Alert.alert('Error', 'Upload failed.'); }
-            finally { setUploading(false); }
-          }
-        },
-      },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+    setAlertState({
+      visible: true,
+      title: 'Profile Picture',
+      message: 'Choose an option',
+      variant: 'info',
+      buttons: [
+        { text: 'Take Photo', onPress: takePhoto },
+        { text: 'Choose from Library', onPress: pickFromLibrary },
+        { text: 'Cancel', style: 'cancel' },
+      ],
+    });
   };
 
   const formatPhone = (phone: string) => {
@@ -204,6 +230,14 @@ export default function AccountScreen() {
         <Text style={styles.version}>Spinr v1.0.2 · Saskatchewan, Canada</Text>
 
       </ScrollView>
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }

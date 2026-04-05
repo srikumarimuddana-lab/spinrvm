@@ -18,6 +18,7 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useRideStore } from '../../store/rideStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import AppMap from '@shared/components/AppMap';
+import CustomAlert from '@shared/components/CustomAlert';
 
 const { width, height } = Dimensions.get('window');
 
@@ -39,6 +40,12 @@ export default function HomeScreen() {
   const [location, setLocation] = useState<any>(null);
   const [region, setRegion] = useState<any>(null);
   const [temperature, setTemperature] = useState<number | null>(null);
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+  }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = useRef<any>(null);
 
   // Save/load last location from AsyncStorage for instant map on cold start
@@ -220,7 +227,12 @@ export default function HomeScreen() {
         {/* SOS Button - Left Side */}
         <TouchableOpacity style={styles.sosButton} onPress={() => {
           // SOS Logic
-          alert('SOS Triggered');
+          setAlertState({
+            visible: true,
+            title: 'SOS Triggered',
+            message: 'Emergency services have been alerted. Stay calm and stay where you are.',
+            variant: 'danger',
+          });
         }}>
           <Ionicons name="shield-checkmark" size={24} color="#FFFFFF" />
           <Text style={styles.sosText}>SOS</Text>
@@ -271,7 +283,12 @@ export default function HomeScreen() {
             style={styles.aiButton}
             onPress={() => {
               // Coming soon
-              alert('AI Ride Booking is coming soon! Book rides by just talking or texting.');
+              setAlertState({
+                visible: true,
+                title: 'Coming Soon',
+                message: 'AI Ride Booking is coming soon! Book rides by just talking or texting.',
+                variant: 'info',
+              });
             }}
             activeOpacity={0.8}
           >
@@ -323,6 +340,14 @@ export default function HomeScreen() {
           </View>
         )}
       </View>
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={[{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </View>
   );
 }
@@ -473,7 +498,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 20,
     bottom: 20, // Move to bottom like location button
-    backgroundColor: '#FF3B30',
+    backgroundColor: SpinrConfig.theme.colors.primary,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,

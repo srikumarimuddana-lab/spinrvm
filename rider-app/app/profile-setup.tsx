@@ -10,7 +10,6 @@ import {
   Keyboard,
   TouchableWithoutFeedback,
   ActivityIndicator,
-  Alert,
   ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -18,6 +17,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
+
+const THEME = SpinrConfig.theme.colors;
 
 export default function ProfileSetupScreen() {
   const router = useRouter();
@@ -32,6 +34,14 @@ export default function ProfileSetupScreen() {
   const [gender, setGender] = useState(user?.gender || '');
   const [showGenderPicker, setShowGenderPicker] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [focusedField, setFocusedField] = useState<string | null>(null);
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
+  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const validateEmail = (email: string): boolean => {
     const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -40,12 +50,12 @@ export default function ProfileSetupScreen() {
 
   const handleSubmit = async () => {
     if (!firstName.trim() || !lastName.trim() || !email.trim() || !gender) {
-      Alert.alert('Missing Info', 'Please fill in all fields');
+      setAlertState({ visible: true, title: 'Missing Info', message: 'Please fill in all fields', variant: 'warning' });
       return;
     }
 
     if (!validateEmail(email)) {
-      Alert.alert('Invalid Email', 'Please enter a valid email address');
+      setAlertState({ visible: true, title: 'Invalid Email', message: 'Please enter a valid email address', variant: 'warning' });
       return;
     }
 
@@ -65,7 +75,7 @@ export default function ProfileSetupScreen() {
         router.replace('/(tabs)');
       }
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to save profile');
+      setAlertState({ visible: true, title: 'Error', message: err.message || 'Failed to save profile', variant: 'danger' });
     } finally {
       setIsSubmitting(false);
     }
@@ -109,10 +119,12 @@ export default function ProfileSetupScreen() {
                 </View>
                 <TouchableOpacity
                   onPress={() => {
-                    Alert.alert(
-                      'Change phone number?',
-                      'This will sign you out and return to the phone entry screen. Any progress here will be lost.',
-                      [
+                    setAlertState({
+                      visible: true,
+                      title: 'Change phone number?',
+                      message: 'This will sign you out and return to the phone entry screen. Any progress here will be lost.',
+                      variant: 'warning',
+                      buttons: [
                         { text: 'Cancel', style: 'cancel' },
                         {
                           text: 'Change Number',
@@ -122,8 +134,8 @@ export default function ProfileSetupScreen() {
                             router.replace('/login' as any);
                           },
                         },
-                      ]
-                    );
+                      ],
+                    });
                   }}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 >
@@ -152,45 +164,57 @@ export default function ProfileSetupScreen() {
             {/* Form */}
             <View style={styles.form}>
               <View style={styles.inputGroup}>
-                <Text style={styles.label}>First Name</Text>
-                <TextInput
-                  style={styles.input}
-                  value={firstName}
-                  onChangeText={setFirstName}
-                  placeholder="Enter your first name"
-                  placeholderTextColor="#999"
-                  autoCapitalize="words"
-                />
+                <Text style={styles.label}>FIRST NAME</Text>
+                <View style={[styles.inputWrapper, focusedField === 'firstName' && styles.inputWrapperFocused]}>
+                  <TextInput
+                    style={styles.input}
+                    value={firstName}
+                    onChangeText={setFirstName}
+                    placeholder="Enter your first name"
+                    placeholderTextColor="#999"
+                    autoCapitalize="words"
+                    onFocus={() => setFocusedField('firstName')}
+                    onBlur={() => setFocusedField(null)}
+                  />
+                </View>
               </View>
 
               <View style={styles.inputGroup}>
-                <Text style={styles.label}>Last Name</Text>
-                <TextInput
-                  style={styles.input}
-                  value={lastName}
-                  onChangeText={setLastName}
-                  placeholder="Enter your last name"
-                  placeholderTextColor="#999"
-                  autoCapitalize="words"
-                />
+                <Text style={styles.label}>LAST NAME</Text>
+                <View style={[styles.inputWrapper, focusedField === 'lastName' && styles.inputWrapperFocused]}>
+                  <TextInput
+                    style={styles.input}
+                    value={lastName}
+                    onChangeText={setLastName}
+                    placeholder="Enter your last name"
+                    placeholderTextColor="#999"
+                    autoCapitalize="words"
+                    onFocus={() => setFocusedField('lastName')}
+                    onBlur={() => setFocusedField(null)}
+                  />
+                </View>
               </View>
 
               <View style={styles.inputGroup}>
-                <Text style={styles.label}>Email</Text>
-                <TextInput
-                  style={styles.input}
-                  value={email}
-                  onChangeText={setEmail}
-                  placeholder="email@example.com"
-                  placeholderTextColor="#999"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
+                <Text style={styles.label}>EMAIL</Text>
+                <View style={[styles.inputWrapper, focusedField === 'email' && styles.inputWrapperFocused]}>
+                  <TextInput
+                    style={styles.input}
+                    value={email}
+                    onChangeText={setEmail}
+                    placeholder="email@example.com"
+                    placeholderTextColor="#999"
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    onFocus={() => setFocusedField('email')}
+                    onBlur={() => setFocusedField(null)}
+                  />
+                </View>
               </View>
 
               <View style={styles.inputGroup}>
-                <Text style={styles.label}>Gender</Text>
+                <Text style={styles.label}>GENDER</Text>
                 <TouchableOpacity
                   style={styles.citySelector}
                   onPress={() => setShowGenderPicker(!showGenderPicker)}
@@ -242,6 +266,7 @@ export default function ProfileSetupScreen() {
             <TouchableOpacity
               style={[
                 styles.submitButton,
+                (isSubmitting || authLoading) && styles.submitButtonLoading,
                 !isFormValid && styles.submitButtonDisabled,
               ]}
               onPress={handleSubmit}
@@ -251,9 +276,16 @@ export default function ProfileSetupScreen() {
               {isSubmitting || authLoading ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
-                <Text style={styles.submitButtonText}>
-                  {isEditing ? 'Save Changes' : 'Get Started'}
-                </Text>
+                <View style={styles.submitButtonContent}>
+                  <Text style={[styles.submitButtonText, !isFormValid && styles.submitButtonTextDisabled]}>
+                    {isEditing ? 'Save Changes' : 'Get Started'}
+                  </Text>
+                  <Ionicons
+                    name="arrow-forward"
+                    size={18}
+                    color={!isFormValid ? '#999' : '#fff'}
+                  />
+                </View>
               )}
             </TouchableOpacity>
 
@@ -270,6 +302,14 @@ export default function ProfileSetupScreen() {
           </ScrollView>
         </TouchableWithoutFeedback>
       </KeyboardAvoidingView>
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }
@@ -322,10 +362,12 @@ const styles = StyleSheet.create({
     marginBottom: 40,
   },
   title: {
-    fontSize: 32,
+    fontSize: 28,
+    fontWeight: '800',
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
-    lineHeight: 40,
+    color: THEME.text,
+    lineHeight: 36,
+    letterSpacing: -0.5,
   },
   subtitle: {
     fontSize: 15,
@@ -341,20 +383,37 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   label: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
+    fontSize: 11,
+    fontWeight: '700',
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: THEME.textDim,
+    letterSpacing: 1,
     marginBottom: 8,
   },
-  input: {
-    borderWidth: 1.5,
-    borderColor: '#E0E0E0',
+  inputWrapper: {
+    backgroundColor: '#F8F9FA',
     borderRadius: 16,
+    height: 60,
+    borderWidth: 1.5,
+    borderColor: '#F0F0F0',
+    justifyContent: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#1A1A1A',
+  },
+  inputWrapperFocused: {
+    borderColor: THEME.primary,
+    backgroundColor: '#fff',
+    shadowColor: THEME.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  input: {
+    fontSize: 18,
+    fontWeight: '600',
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: THEME.text,
+    padding: 0,
   },
   citySelector: {
     flexDirection: 'row',
@@ -404,19 +463,38 @@ const styles = StyleSheet.create({
     fontFamily: 'PlusJakartaSans_600SemiBold',
   },
   submitButton: {
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    borderRadius: 28,
-    paddingVertical: 18,
+    backgroundColor: THEME.primary,
+    borderRadius: 16,
+    height: 58,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: THEME.primary,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  submitButtonLoading: {
+    backgroundColor: THEME.primaryDark,
   },
   submitButtonDisabled: {
-    backgroundColor: '#FFAAAA',
+    backgroundColor: '#F0F0F0',
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  submitButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   submitButtonText: {
-    fontSize: 18,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: '#fff',
+  },
+  submitButtonTextDisabled: {
+    color: '#999',
   },
   logoutButton: {
     marginTop: 16,

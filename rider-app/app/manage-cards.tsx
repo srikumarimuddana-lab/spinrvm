@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput,
-  Alert, Platform, ActivityIndicator, KeyboardAvoidingView,
+  Platform, ActivityIndicator, KeyboardAvoidingView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
 
 const COLORS = SpinrConfig.theme.colors;
 
@@ -32,6 +33,13 @@ export default function ManageCardsScreen() {
   const [expiry, setExpiry] = useState('');
   const [cvc, setCvc] = useState('');
   const [cardName, setCardName] = useState('');
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   useEffect(() => {
     fetchCards();
@@ -79,12 +87,16 @@ export default function ManageCardsScreen() {
     }
   };
 
+  const showAlert = (title: string, message: string, variant: 'info' | 'warning' | 'danger' | 'success' = 'warning') => {
+    setAlertState({ visible: true, title, message, variant });
+  };
+
   const handleAddCard = async () => {
     const num = cardNumber.replace(/\s/g, '');
-    if (num.length < 15) { Alert.alert('Error', 'Enter a valid card number'); return; }
-    if (expiry.length < 5) { Alert.alert('Error', 'Enter expiry as MM/YY'); return; }
-    if (cvc.length < 3) { Alert.alert('Error', 'Enter a valid CVC'); return; }
-    if (!cardName.trim()) { Alert.alert('Error', 'Enter cardholder name'); return; }
+    if (num.length < 15) { showAlert('Error', 'Enter a valid card number'); return; }
+    if (expiry.length < 5) { showAlert('Error', 'Enter expiry as MM/YY'); return; }
+    if (cvc.length < 3) { showAlert('Error', 'Enter a valid CVC'); return; }
+    if (!cardName.trim()) { showAlert('Error', 'Enter cardholder name'); return; }
 
     setSaving(true);
     try {
@@ -98,9 +110,9 @@ export default function ManageCardsScreen() {
       setShowAdd(false);
       resetForm();
       fetchCards();
-      Alert.alert('Success', 'Card added successfully');
+      showAlert('Success', 'Card added successfully', 'success');
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.detail || 'Failed to add card');
+      showAlert('Error', err.response?.data?.detail || 'Failed to add card', 'danger');
     } finally {
       setSaving(false);
     }
@@ -111,25 +123,31 @@ export default function ManageCardsScreen() {
       await api.post(`/payments/cards/${cardId}/default`);
       fetchCards();
     } catch {
-      Alert.alert('Error', 'Failed to set default card');
+      showAlert('Error', 'Failed to set default card', 'danger');
     }
   };
 
   const handleDeleteCard = (cardId: string) => {
-    Alert.alert('Remove Card', 'Are you sure you want to remove this card?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Remove', style: 'destructive',
-        onPress: async () => {
-          try {
-            await api.delete(`/payments/cards/${cardId}`);
-            fetchCards();
-          } catch {
-            Alert.alert('Error', 'Failed to remove card');
-          }
+    setAlertState({
+      visible: true,
+      title: 'Remove Card',
+      message: 'Are you sure you want to remove this card?',
+      variant: 'warning',
+      buttons: [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove', style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.delete(`/payments/cards/${cardId}`);
+              fetchCards();
+            } catch {
+              showAlert('Error', 'Failed to remove card', 'danger');
+            }
+          },
         },
-      },
-    ]);
+      ],
+    });
   };
 
   const resetForm = () => {
@@ -280,6 +298,14 @@ export default function ManageCardsScreen() {
           />
         </KeyboardAvoidingView>
       )}
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }

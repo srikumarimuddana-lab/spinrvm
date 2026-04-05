@@ -75,5 +75,9 @@
     "@types/react": "~19.1.0"
   },
   "private": true,
-  "packageManager": "yarn@1.22.22"
+  "packageManager": "yarn@1.22.22",
+  "scripts": {
+    "android": "expo run:android",
+    "ios": "expo run:ios"
+  }
 }

@@ -13,7 +13,6 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Keyboard,
-  TouchableWithoutFeedback,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
@@ -482,58 +481,246 @@ export default function ProfileScreen() {
         </View>
       </ScrollView>
 
-      {/* Edit Profile Modal */}
-      <Modal visible={showEditModal} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowEditModal(false)}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1, backgroundColor: '#fff' }}>
-          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-            <View style={{ flex: 1 }}>
-              <View style={modalStyles.header}>
-                <TouchableOpacity onPress={() => setShowEditModal(false)}>
-                  <Text style={modalStyles.cancelText}>Cancel</Text>
-                </TouchableOpacity>
-                <Text style={modalStyles.headerTitle}>Edit Profile</Text>
-                <TouchableOpacity onPress={handleSaveProfile} disabled={isSaving}>
-                  {isSaving ? <ActivityIndicator size="small" color={COLORS.accent} /> : <Text style={modalStyles.saveText}>Save</Text>}
+      {/* Edit Profile Modal — mirrors vehicle-info.tsx visual language:
+          hero card, section-grouped cards with inline uppercase labels,
+          info banner, bottom-sheet gender picker, sticky save footer. */}
+      <Modal
+        visible={showEditModal}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowEditModal(false)}
+      >
+        <View style={modalStyles.container}>
+          <LinearGradient colors={[COLORS.primary, '#F8F9FA']} style={StyleSheet.absoluteFill} />
+
+          {/* Header */}
+          <View style={modalStyles.header}>
+            <TouchableOpacity onPress={() => setShowEditModal(false)} style={modalStyles.backBtn}>
+              <Ionicons name="arrow-back" size={24} color={COLORS.text} />
+            </TouchableOpacity>
+            <Text style={modalStyles.headerTitle}>Personal Information</Text>
+            <View style={{ width: 32 }} />
+          </View>
+
+          <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          >
+            <ScrollView
+              contentContainerStyle={[modalStyles.content, { paddingBottom: insets.bottom + 140 }]}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {/* Hero card — mirrors vehicle-info hero */}
+              <View style={modalStyles.heroCard}>
+                <View style={modalStyles.heroIconWrap}>
+                  <Ionicons name="person" size={28} color={COLORS.accent} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={modalStyles.heroTitle}>Your Profile</Text>
+                  <Text style={modalStyles.heroSub} numberOfLines={1}>
+                    {editFirstName || editLastName
+                      ? `${editFirstName} ${editLastName}`.trim()
+                      : 'Tell riders who you are'}
+                  </Text>
+                  {editEmail ? (
+                    <Text style={modalStyles.heroEmail} numberOfLines={1}>{editEmail}</Text>
+                  ) : null}
+                </View>
+              </View>
+
+              {/* Info banner */}
+              <View style={modalStyles.infoBox}>
+                <Ionicons name="information-circle" size={18} color={COLORS.accent} />
+                <Text style={modalStyles.infoText}>
+                  Your riders will see this info when you accept their rides.
+                  Changes save instantly and apply to all future rides.
+                </Text>
+              </View>
+
+              {/* Section: Name */}
+              <Text style={modalStyles.sectionTitle}>Your Name</Text>
+              <View style={modalStyles.card}>
+                <View style={modalStyles.field}>
+                  <Text style={modalStyles.fieldLabel}>First Name *</Text>
+                  <TextInput
+                    style={modalStyles.fieldInput}
+                    value={editFirstName}
+                    onChangeText={setEditFirstName}
+                    placeholder="John"
+                    placeholderTextColor="#B0B7C0"
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                  />
+                </View>
+                <View style={modalStyles.divider} />
+                <View style={modalStyles.field}>
+                  <Text style={modalStyles.fieldLabel}>Last Name *</Text>
+                  <TextInput
+                    style={modalStyles.fieldInput}
+                    value={editLastName}
+                    onChangeText={setEditLastName}
+                    placeholder="Doe"
+                    placeholderTextColor="#B0B7C0"
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                  />
+                </View>
+              </View>
+
+              {/* Section: Contact & Identity */}
+              <Text style={modalStyles.sectionTitle}>Contact & Identity</Text>
+              <View style={modalStyles.card}>
+                <View style={modalStyles.field}>
+                  <Text style={modalStyles.fieldLabel}>Email Address *</Text>
+                  <TextInput
+                    style={modalStyles.fieldInput}
+                    value={editEmail}
+                    onChangeText={setEditEmail}
+                    placeholder="john.doe@example.com"
+                    placeholderTextColor="#B0B7C0"
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  <Text style={modalStyles.fieldHelper}>
+                    Used for receipts, account recovery, and tax documents.
+                  </Text>
+                </View>
+                <View style={modalStyles.divider} />
+                <TouchableOpacity
+                  style={modalStyles.pickerBox}
+                  onPress={() => setShowGenderPicker(true)}
+                  activeOpacity={0.7}
+                >
+                  <View style={modalStyles.pickerIconBox}>
+                    <Ionicons
+                      name={
+                        editGender === 'Female'
+                          ? 'female'
+                          : editGender === 'Male'
+                          ? 'male'
+                          : 'person-outline'
+                      }
+                      size={22}
+                      color={COLORS.accent}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={modalStyles.pickerLabel}>Gender *</Text>
+                    <Text
+                      style={[
+                        modalStyles.pickerValue,
+                        !editGender && { color: '#B0B7C0', fontWeight: '500' },
+                      ]}
+                    >
+                      {editGender || 'Tap to select'}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color={COLORS.textDim} />
                 </TouchableOpacity>
               </View>
-              <ScrollView style={modalStyles.form} contentContainerStyle={{ paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
-                <View style={modalStyles.inputGroup}>
-                  <Text style={modalStyles.label}>First Name</Text>
-                  <TextInput style={modalStyles.input} value={editFirstName} onChangeText={setEditFirstName} placeholder="Your name" autoCapitalize="words" />
-                </View>
-                <View style={modalStyles.inputGroup}>
-                  <Text style={modalStyles.label}>Last Name</Text>
-                  <TextInput style={modalStyles.input} value={editLastName} onChangeText={setEditLastName} placeholder="Your last name" autoCapitalize="words" />
-                </View>
-                <View style={modalStyles.inputGroup}>
-                  <Text style={modalStyles.label}>Email</Text>
-                  <TextInput style={modalStyles.input} value={editEmail} onChangeText={setEditEmail} placeholder="email@example.com" keyboardType="email-address" autoCapitalize="none" autoCorrect={false} />
-                </View>
-                <View style={modalStyles.inputGroup}>
-                  <Text style={modalStyles.label}>Gender</Text>
-                  <TouchableOpacity style={modalStyles.selector} onPress={() => setShowGenderPicker(!showGenderPicker)} activeOpacity={0.7}>
-                    <Text style={[modalStyles.selectorText, !editGender && { color: '#999' }]}>{editGender || 'Select gender'}</Text>
-                    <Ionicons name={showGenderPicker ? 'chevron-up' : 'chevron-down'} size={20} color="#666" />
-                  </TouchableOpacity>
-                  {showGenderPicker && (
-                    <View style={modalStyles.dropdown}>
-                      {genderOptions.map((g) => (
-                        <TouchableOpacity
-                          key={g.value}
-                          style={[modalStyles.dropdownOption, editGender === g.value && modalStyles.dropdownOptionSelected]}
-                          onPress={() => { setEditGender(g.value); setShowGenderPicker(false); }}
-                        >
-                          <Text style={[modalStyles.dropdownOptionText, editGender === g.value && { color: COLORS.accent, fontWeight: '700' }]}>{g.label}</Text>
-                          {editGender === g.value && <Ionicons name="checkmark" size={20} color={COLORS.accent} />}
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  )}
-                </View>
-              </ScrollView>
+
+              <View style={{ height: 20 }} />
+            </ScrollView>
+
+            {/* Sticky save footer */}
+            <View
+              style={[
+                modalStyles.footer,
+                { paddingBottom: Math.max(insets.bottom, 12) + 8 },
+              ]}
+            >
+              <TouchableOpacity
+                style={[
+                  modalStyles.saveButton,
+                  (!editFirstName.trim() ||
+                    !editLastName.trim() ||
+                    !editEmail.trim() ||
+                    !editGender ||
+                    isSaving) &&
+                    modalStyles.saveButtonDisabled,
+                ]}
+                onPress={handleSaveProfile}
+                disabled={
+                  !editFirstName.trim() ||
+                  !editLastName.trim() ||
+                  !editEmail.trim() ||
+                  !editGender ||
+                  isSaving
+                }
+                activeOpacity={0.85}
+              >
+                {isSaving ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                    <Text style={modalStyles.saveButtonText}>Save Changes</Text>
+                  </>
+                )}
+              </TouchableOpacity>
             </View>
-          </TouchableWithoutFeedback>
-        </KeyboardAvoidingView>
+          </KeyboardAvoidingView>
+
+          {/* Gender picker bottom sheet — mirrors vehicle-type picker */}
+          <Modal
+            visible={showGenderPicker}
+            transparent
+            animationType="slide"
+            onRequestClose={() => setShowGenderPicker(false)}
+          >
+            <View style={modalStyles.sheetOverlay}>
+              <View style={[modalStyles.sheetContent, { paddingBottom: insets.bottom + 20 }]}>
+                <View style={modalStyles.sheetHandle} />
+                <View style={modalStyles.sheetHeader}>
+                  <Text style={modalStyles.sheetTitle}>Select Gender</Text>
+                  <TouchableOpacity
+                    onPress={() => setShowGenderPicker(false)}
+                    style={modalStyles.sheetCloseBtn}
+                  >
+                    <Ionicons name="close" size={22} color={COLORS.text} />
+                  </TouchableOpacity>
+                </View>
+                {genderOptions.map((g) => {
+                  const selected = editGender === g.value;
+                  return (
+                    <TouchableOpacity
+                      key={g.value}
+                      style={[
+                        modalStyles.sheetOption,
+                        selected && modalStyles.sheetOptionSelected,
+                      ]}
+                      onPress={() => {
+                        setEditGender(g.value);
+                        setShowGenderPicker(false);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <View style={modalStyles.sheetOptionIcon}>
+                        <Ionicons
+                          name={
+                            g.value === 'Female'
+                              ? 'female'
+                              : g.value === 'Male'
+                              ? 'male'
+                              : 'person-outline'
+                          }
+                          size={22}
+                          color={COLORS.accent}
+                        />
+                      </View>
+                      <Text style={modalStyles.sheetOptionName}>{g.label}</Text>
+                      {selected && (
+                        <Ionicons name="checkmark-circle" size={24} color={COLORS.accent} />
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          </Modal>
+        </View>
       </Modal>
 
       {/* Custom Alert Modals */}
@@ -837,101 +1024,210 @@ const styles = StyleSheet.create({
   },
 });
 
+// Mirrors vehicle-info.tsx visual language so personal-info editing and
+// vehicle-info editing feel like the same screen family. If you update one,
+// update the other — or extract a shared style module.
 const modalStyles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: COLORS.primary },
+
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 16,
+    paddingTop: 16,
+    paddingBottom: 16,
+    paddingHorizontal: 20,
+    backgroundColor: '#fff',
     borderBottomWidth: 1,
     borderBottomColor: '#F3F4F6',
   },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: COLORS.text,
+  backBtn: { padding: 4, width: 32 },
+  headerTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text, flex: 1, textAlign: 'center' },
+
+  content: { padding: 20 },
+
+  heroCard: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    padding: 18,
+    borderRadius: 18,
+    marginBottom: 16,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  cancelText: {
-    fontSize: 15,
-    color: COLORS.textDim,
-    fontWeight: '600',
+  heroIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,59,48,0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 14,
   },
-  saveText: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: COLORS.accent,
-  },
-  form: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 24,
-  },
-  inputGroup: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 13,
+  heroTitle: {
+    fontSize: 12,
     fontWeight: '700',
     color: COLORS.textDim,
-    letterSpacing: 0.5,
-    marginBottom: 8,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
-  input: {
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    backgroundColor: '#F9FAFB',
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    fontSize: 16,
-    color: COLORS.text,
-    fontWeight: '500',
-  },
-  selector: {
+  heroSub: { fontSize: 16, fontWeight: '600', color: COLORS.text, marginTop: 2 },
+  heroEmail: { fontSize: 13, color: COLORS.textDim, marginTop: 2 },
+
+  infoBox: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    backgroundColor: 'rgba(255,59,48,0.06)',
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 20,
+    alignItems: 'flex-start',
     borderWidth: 1,
-    borderColor: '#E5E7EB',
-    backgroundColor: '#F9FAFB',
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 16,
+    borderColor: 'rgba(255,59,48,0.15)',
+    gap: 8,
   },
-  selectorText: {
-    fontSize: 16,
-    color: COLORS.text,
-    fontWeight: '500',
+  infoText: { color: COLORS.accent, flex: 1, fontSize: 12, lineHeight: 16, fontWeight: '500' },
+
+  sectionTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.textDim,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginBottom: 8,
+    marginTop: 4,
+    paddingHorizontal: 4,
   },
-  dropdown: {
-    marginTop: 8,
+  card: {
     backgroundColor: '#fff',
     borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    overflow: 'hidden',
+    marginBottom: 20,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
+    overflow: 'hidden',
   },
-  dropdownOption: {
+  divider: { height: 1, backgroundColor: '#F3F4F6', marginHorizontal: 16 },
+
+  field: { paddingHorizontal: 16, paddingVertical: 12 },
+  fieldLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.textDim,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  fieldInput: { fontSize: 16, color: COLORS.text, padding: 0, fontWeight: '500' },
+  fieldHelper: { fontSize: 11, color: COLORS.textDim, marginTop: 4 },
+
+  pickerBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 12,
+  },
+  pickerIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,59,48,0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pickerLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: COLORS.textDim,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  pickerValue: { fontSize: 16, fontWeight: '600', color: COLORS.text, marginTop: 2 },
+
+  // Sticky footer
+  footer: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+  },
+  saveButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.accent,
+    borderRadius: 14,
     paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F3F4F6',
+    gap: 8,
+    shadowColor: COLORS.accent,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  dropdownOptionSelected: {
-    backgroundColor: 'rgba(239, 68, 68, 0.05)',
+  saveButtonDisabled: {
+    backgroundColor: '#D1D5DB',
+    shadowOpacity: 0,
+    elevation: 0,
   },
-  dropdownOptionText: {
-    fontSize: 16,
-    color: COLORS.text,
-    fontWeight: '500',
+  saveButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+
+  // Gender picker bottom sheet — mirrors vehicle-info vehicleTypePicker modal
+  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  sheetContent: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    maxHeight: '75%',
   },
+  sheetHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: '#E5E7EB',
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginTop: 10,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    paddingBottom: 12,
+  },
+  sheetTitle: { fontSize: 20, fontWeight: '700', color: COLORS.text },
+  sheetCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: COLORS.surfaceLight,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sheetOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    gap: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#F3F4F6',
+  },
+  sheetOptionSelected: { backgroundColor: 'rgba(255,59,48,0.04)' },
+  sheetOptionIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,59,48,0.08)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  sheetOptionName: { flex: 1, fontSize: 16, fontWeight: '700', color: COLORS.text },
 });

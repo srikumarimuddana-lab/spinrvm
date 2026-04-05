@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
 
 const COLORS = SpinrConfig.theme.colors;
 
@@ -15,16 +16,34 @@ export default function PrivacySettingsScreen() {
   const [shareRideData, setShareRideData] = useState(true);
   const [marketingEmails, setMarketingEmails] = useState(true);
   const [pushNotifications, setPushNotifications] = useState(true);
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const handleDeleteAccount = () => {
-    Alert.alert(
-      'Delete Account',
-      'This will permanently delete your account and all data. This cannot be undone.',
-      [
+    setAlertState({
+      visible: true,
+      title: 'Delete Account',
+      message: 'This will permanently delete your account and all data. This cannot be undone.',
+      variant: 'danger',
+      buttons: [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Delete My Account', style: 'destructive', onPress: () => Alert.alert('Submitted', 'Your account deletion request has been submitted. You will receive a confirmation email.') },
-      ]
-    );
+        {
+          text: 'Delete My Account',
+          style: 'destructive',
+          onPress: () => setAlertState({
+            visible: true,
+            title: 'Submitted',
+            message: 'Your account deletion request has been submitted. You will receive a confirmation email.',
+            variant: 'success',
+          }),
+        },
+      ],
+    });
   };
 
   return (
@@ -79,7 +98,7 @@ export default function PrivacySettingsScreen() {
             icon="download-outline" iconColor="#6B7280" iconBg="#F3F4F6"
             title="Download My Data"
             subtitle="Request a copy of your personal data"
-            onPress={() => Alert.alert('Requested', 'Your data export has been requested. You will receive an email with a download link.')}
+            onPress={() => setAlertState({ visible: true, title: 'Requested', message: 'Your data export has been requested. You will receive an email with a download link.', variant: 'success' })}
           />
           <SettingRow
             icon="trash-outline" iconColor="#DC2626" iconBg="#FEE2E2"
@@ -94,6 +113,14 @@ export default function PrivacySettingsScreen() {
           Your data is handled in accordance with our Privacy Policy. Spinr never sells your personal information.
         </Text>
       </ScrollView>
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }

@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   Image,
   Dimensions,
-  Alert,
   Platform,
   Switch,
   Modal,
@@ -20,6 +19,7 @@ import MapView, { Marker, Circle, Polyline, PROVIDER_GOOGLE } from 'react-native
 import MapViewDirections from 'react-native-maps-directions';
 import { useRideStore } from '../store/rideStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
 import { CarMarker } from '@shared/components/CarMarker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
@@ -56,6 +56,13 @@ export default function RideOptionsScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [tempDate, setTempDate] = useState<Date>(new Date(Date.now() + 30 * 60000)); // default 30 min from now
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = useRef<MapView>(null);
 
   useEffect(() => {
@@ -143,7 +150,7 @@ export default function RideOptionsScreen() {
   const handleConfirm = () => {
     if (!selectedVehicle) return;
     if (isScheduling && !scheduledTime) {
-      Alert.alert('Select Time', 'Please pick a date and time for your scheduled ride.');
+      setAlertState({ visible: true, title: 'Select Time', message: 'Please pick a date and time for your scheduled ride.', variant: 'warning' });
       return;
     }
     router.push('/payment-confirm');
@@ -209,7 +216,7 @@ export default function RideOptionsScreen() {
   const confirmTimeSelection = (timeToConfirm = tempDate) => {
     const minTime = new Date(Date.now() + 15 * 60000);
     if (timeToConfirm < minTime) {
-      Alert.alert('Invalid Time', 'Scheduled time must be at least 15 minutes from now.');
+      setAlertState({ visible: true, title: 'Invalid Time', message: 'Scheduled time must be at least 15 minutes from now.', variant: 'warning' });
       return;
     }
     setScheduledTime(timeToConfirm);
@@ -596,6 +603,14 @@ export default function RideOptionsScreen() {
           </TouchableOpacity>
         </View>
       )}
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }

@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
 
 const COLORS = SpinrConfig.theme.colors;
 
@@ -18,6 +19,13 @@ export default function SettingsScreen() {
   const [smsEnabled, setSmsEnabled] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
   const [language, setLanguage] = useState('English');
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -56,11 +64,17 @@ export default function SettingsScreen() {
         <Text style={styles.sectionTitle}>Language & Region</Text>
         <View style={styles.card}>
           <TouchableOpacity style={styles.row} onPress={() => {
-            Alert.alert('Language', 'Select your preferred language', [
-              { text: 'English', onPress: () => setLanguage('English') },
-              { text: 'French', onPress: () => setLanguage('French') },
-              { text: 'Cancel', style: 'cancel' },
-            ]);
+            setAlertState({
+              visible: true,
+              title: 'Language',
+              message: 'Select your preferred language',
+              variant: 'info',
+              buttons: [
+                { text: 'English', onPress: () => setLanguage('English') },
+                { text: 'French', onPress: () => setLanguage('French') },
+                { text: 'Cancel', style: 'cancel' },
+              ],
+            });
           }}>
             <View style={[styles.rowIcon, { backgroundColor: '#DBEAFE' }]}>
               <Ionicons name="globe" size={20} color="#3B82F6" />
@@ -136,6 +150,14 @@ export default function SettingsScreen() {
 
         <Text style={styles.version}>Spinr v1.0.2 · {user?.phone || ''}</Text>
       </ScrollView>
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }

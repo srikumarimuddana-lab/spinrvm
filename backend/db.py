@@ -1,9 +1,22 @@
 import os
+import logging
 from typing import Any, Dict, Optional, List, Union
 try:
     from . import db_supabase
 except ImportError:
     import db_supabase
+
+# [GO-ONLINE DEBUG] dedicated logger for tracing the update dispatch path.
+# Emits to stdout at INFO level so it shows up in Docker / Fly / Render logs
+# without needing log-level changes. Remove these lines once the bug is
+# confirmed resolved.
+_goonline_logger = logging.getLogger('goonline.debug')
+if not _goonline_logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter('[GO-ONLINE] %(message)s'))
+    _goonline_logger.addHandler(_h)
+    _goonline_logger.setLevel(logging.INFO)
+    _goonline_logger.propagate = False
 
 # Provide a db variable for backward compatibility
 # This will be set to DB instance after the class is defined
@@ -111,23 +124,59 @@ class Collection:
     async def update_one(self, _filter: Dict[str, Any], update: Dict[str, Any], upsert: bool = False):
         update_data = update.get('$set') if isinstance(update, dict) and '$set' in update else update
 
+        if self.name == 'drivers':
+            _goonline_logger.info(
+                f"Collection.update_one ENTRY table={self.name} "
+                f"filter={_filter} raw_update={update} "
+                f"unwrapped_update_data={update_data}"
+            )
+
         # Special RPC updates
         if self.name == 'drivers' and 'id' in _filter and 'lat' in update_data and 'lng' in update_data:
+            _goonline_logger.info(
+                f"Collection.update_one BRANCH=update_driver_location "
+                f"driver_id={_filter['id']}"
+            )
             return await db_supabase.update_driver_location(_filter['id'], update_data['lat'], update_data['lng'])
 
         if self.name == 'drivers' and 'id' in _filter:
             if 'is_available' in update_data:
-                # Check if we are doing atomic claim
+                # Atomic claim: is_available flip True -> False gated on
+                # current value == True. Dispatch layer depends on this
+                # race-safe path; keep as-is.
                 if update_data['is_available'] is False and _filter.get('is_available') is True:
+                     _goonline_logger.info(
+                         f"Collection.update_one BRANCH=atomic_claim "
+                         f"driver_id={_filter['id']}"
+                     )
                      success = await db_supabase.claim_driver_atomic(_filter['id'])
                      return type('Result', (), {'modified_count': 1 if success else 0, 'matched_count': 1 if success else 0})()
 
-                # Check for increment total_rides
-                inc_val = 0
-                if isinstance(update, dict) and '$inc' in update and 'total_rides' in update['$inc']:
-                    inc_val = update['$inc']['total_rides']
-
-                return await db_supabase.set_driver_available(_filter['id'], update_data['is_available'], total_rides_inc=inc_val)
+                # Only hijack into set_driver_available when the update is
+                # PURELY an is_available toggle (optionally with a total_rides
+                # increment). If the caller is also writing is_online,
+                # updated_at, or any other column (e.g. the go-online handler
+                # in routes/drivers.py), we MUST fall through to the generic
+                # update path — set_driver_available would silently drop
+                # those fields and only is_available would move, which caused
+                # a silent go-online failure.
+                other_keys = [k for k in update_data.keys() if k != 'is_available']
+                if not other_keys:
+                    _goonline_logger.info(
+                        f"Collection.update_one BRANCH=set_driver_available "
+                        f"(pure is_available toggle) driver_id={_filter['id']} "
+                        f"is_available={update_data['is_available']}"
+                    )
+                    inc_val = 0
+                    if isinstance(update, dict) and '$inc' in update and 'total_rides' in update['$inc']:
+                        inc_val = update['$inc']['total_rides']
+                    return await db_supabase.set_driver_available(_filter['id'], update_data['is_available'], total_rides_inc=inc_val)
+                # else: fall through to the generic update path below.
+                _goonline_logger.info(
+                    f"Collection.update_one BRANCH=fallthrough_generic "
+                    f"(is_available present but other keys also present: {other_keys}) "
+                    f"driver_id={_filter['id']}"
+                )
 
         if self.name == 'otp_records' and 'id' in _filter and 'verified' in update_data:
             res = await db_supabase.verify_otp_record(_filter['id'])
@@ -138,7 +187,17 @@ class Collection:
             return type('Result', (), {'modified_count': 1 if res else 0, 'matched_count': 1 if res else 0})()
 
         # Generic update
+        if self.name == 'drivers':
+            _goonline_logger.info(
+                f"Collection.update_one BRANCH=generic_update "
+                f"filter={_filter} update={update}"
+            )
         res = await db_supabase.update_one(self.name, _filter, update, upsert=upsert)
+        if self.name == 'drivers':
+            _goonline_logger.info(
+                f"Collection.update_one GENERIC_RESULT "
+                f"raw_res={res!r} (None/falsy => zero rows affected)"
+            )
         return type('Result', (), {'modified_count': 1 if res else 0, 'matched_count': 1 if res else 0})()
 
     async def update_many(self, _filter: Dict[str, Any], update: Dict[str, Any]):
@@ -277,16 +336,46 @@ class DriverCollection(BaseCollection):
         return await super().find_one(_filter)
 
     async def update_one(self, _filter: Dict[str, Any], update: Dict[str, Any], upsert: bool = False):
+        _goonline_logger.info(
+            f"DriverCollection.update_one ENTRY filter={_filter} update={update}"
+        )
+        # Note: callers typically wrap updates in {'$set': {...}}, in which case
+        # the checks below (which look at the outer dict) will not match and we
+        # fall through to the parent class's update_one, which does the $set
+        # unwrap and then handles the special cases. Only legacy callers that
+        # pass an unwrapped update dict hit these branches directly.
         if 'id' in _filter and 'lat' in update and 'lng' in update:
+            _goonline_logger.info(
+                f"DriverCollection.update_one BRANCH=update_driver_location"
+            )
             return await db_supabase.update_driver_location(_filter['id'], update['lat'], update['lng'])
         if 'id' in _filter and 'is_available' in update:
             if update['is_available'] is False and _filter.get('is_available') is True:
+                _goonline_logger.info(
+                    f"DriverCollection.update_one BRANCH=atomic_claim (unwrapped)"
+                )
                 success = await db_supabase.claim_driver_atomic(_filter['id'])
                 return type('Result', (), {'modified_count': 1 if success else 0, 'matched_count': 1 if success else 0})()
-            inc_val = 0
-            if isinstance(update, dict) and '$inc' in update and 'total_rides' in update['$inc']:
-                inc_val = update['$inc']['total_rides']
-            return await db_supabase.set_driver_available(_filter['id'], update['is_available'], total_rides_inc=inc_val)
+            # Same guard as the parent class's fix: only hijack into
+            # set_driver_available when the update is PURELY an is_available
+            # toggle. If the caller is also writing other columns, fall
+            # through to the parent's generic path so nothing gets dropped.
+            other_keys = [k for k in update.keys() if k != 'is_available' and not k.startswith('$')]
+            if not other_keys:
+                _goonline_logger.info(
+                    f"DriverCollection.update_one BRANCH=set_driver_available (unwrapped, pure toggle)"
+                )
+                inc_val = 0
+                if isinstance(update, dict) and '$inc' in update and 'total_rides' in update['$inc']:
+                    inc_val = update['$inc']['total_rides']
+                return await db_supabase.set_driver_available(_filter['id'], update['is_available'], total_rides_inc=inc_val)
+            _goonline_logger.info(
+                f"DriverCollection.update_one BRANCH=fallthrough_to_super "
+                f"(unwrapped, is_available + other keys: {other_keys})"
+            )
+        _goonline_logger.info(
+            f"DriverCollection.update_one BRANCH=super().update_one"
+        )
         return await super().update_one(_filter, update, upsert)
 
 class RideCollection(BaseCollection):

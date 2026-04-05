@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
-  Alert,
   TextInput,
   KeyboardAvoidingView,
   Platform,
@@ -16,6 +15,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
 import api from '@shared/api/client';
 
 const PAYMENT_METHODS = [
@@ -32,6 +32,13 @@ export default function PaymentConfirmScreen() {
   const [promoValidating, setPromoValidating] = useState(false);
   const [promoApplied, setPromoApplied] = useState(false);
   const [promoMessage, setPromoMessage] = useState('');
+  const [alertState, setAlertState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const selectedEstimate = estimates.find((e) => e.vehicle_type.id === selectedVehicle?.id);
 
@@ -40,7 +47,7 @@ export default function PaymentConfirmScreen() {
       const ride = await createRide(selectedPayment);
       router.replace('/driver-arriving?rideId=' + ride.id);
     } catch (error: any) {
-      Alert.alert('Error', error.message || 'Failed to book ride');
+      setAlertState({ visible: true, title: 'Error', message: error.message || 'Failed to book ride', variant: 'danger' });
     }
   };
 
@@ -294,6 +301,14 @@ export default function PaymentConfirmScreen() {
           )}
         </TouchableOpacity>
       </View>
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }

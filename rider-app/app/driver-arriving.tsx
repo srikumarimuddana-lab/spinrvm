@@ -407,54 +407,98 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
               <Ionicons name="chevron-forward" size={20} color={SpinrConfig.theme.colors.primary} />
             </TouchableOpacity>
 
-            {/* Driver Details Card - Comprehensive for Screenshot */}
-            <View style={styles.driverDetailsCard}>
-              <View style={styles.driverCardHeader}>
-                <Text style={styles.driverCardTitle}>YOUR DRIVER</Text>
-                <TouchableOpacity style={styles.copyButton} onPress={handleCopyDetails}>
-                  <Ionicons name="copy-outline" size={16} color="#666" />
-                  <Text style={styles.copyText}>Copy Details</Text>
-                </TouchableOpacity>
-              </View>
+            {/* Driver card — only shown AFTER the driver has actually
+                accepted the ride. Before that, we show a waiting placeholder
+                so the rider doesn't see a driver name/plate while the driver
+                is still deciding. The backend sets status='driver_assigned'
+                on dispatch and flips to 'driver_accepted' only when the
+                driver taps Accept in the driver-app. */}
+            {(currentRide?.status === 'driver_accepted' ||
+              currentRide?.status === 'driver_arrived' ||
+              currentRide?.status === 'in_progress') ? (
+              <>
+                <View style={styles.driverDetailsCard}>
+                  <View style={styles.driverCardHeader}>
+                    <Text style={styles.driverCardTitle}>YOUR DRIVER</Text>
+                    <TouchableOpacity style={styles.copyButton} onPress={handleCopyDetails}>
+                      <Ionicons name="copy-outline" size={16} color="#666" />
+                      <Text style={styles.copyText}>Copy Details</Text>
+                    </TouchableOpacity>
+                  </View>
 
-              <View style={styles.driverSection}>
-                <View style={styles.driverAvatar}>
-                  <Ionicons name="person" size={28} color="#666" />
-                  <View style={styles.ratingBadge}>
-                    <Ionicons name="star" size={10} color="#FFB800" />
-                    <Text style={styles.ratingText}>{currentDriver?.rating || 'New'}</Text>
+                  <View style={styles.driverSection}>
+                    <View style={styles.driverAvatar}>
+                      <Ionicons name="person" size={28} color="#666" />
+                      <View style={styles.ratingBadge}>
+                        <Ionicons name="star" size={10} color="#FFB800" />
+                        <Text style={styles.ratingText}>{currentDriver?.rating || 'New'}</Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.driverInfo}>
+                      <Text style={styles.driverName}>{currentDriver?.name || 'Assigning...'}</Text>
+                      <Text style={styles.totalTrips}>{currentDriver?.total_rides || 0} trips completed</Text>
+                    </View>
+                  </View>
+
+                  {/* Vehicle Details - Clear for Screenshot */}
+                  <View style={styles.vehicleSection}>
+                    <View style={styles.vehicleRow}>
+                      <Ionicons name="car" size={20} color={SpinrConfig.theme.colors.primary} />
+                      <View style={styles.vehicleTextContainer}>
+                        <Text style={styles.vehicleLabel}>VEHICLE</Text>
+                        <Text style={styles.vehicleValue}>
+                          {currentDriver?.vehicle_color || ''} {currentDriver?.vehicle_make || 'Unknown'} {currentDriver?.vehicle_model || 'Vehicle'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.plateRow}>
+                      <View style={styles.plateIconContainer}>
+                        <Text style={styles.plateIcon}>🪪</Text>
+                      </View>
+                      <View style={styles.vehicleTextContainer}>
+                        <Text style={styles.vehicleLabel}>LICENSE PLATE</Text>
+                        <Text style={styles.plateValue}>{currentDriver?.license_plate || 'Pending'}</Text>
+                      </View>
+                    </View>
                   </View>
                 </View>
 
-                <View style={styles.driverInfo}>
-                  <Text style={styles.driverName}>{currentDriver?.name || 'Assigning...'}</Text>
-                  <Text style={styles.totalTrips}>{currentDriver?.total_rides || 0} trips completed</Text>
-                </View>
-              </View>
-
-              {/* Vehicle Details - Clear for Screenshot */}
-              <View style={styles.vehicleSection}>
-                <View style={styles.vehicleRow}>
-                  <Ionicons name="car" size={20} color={SpinrConfig.theme.colors.primary} />
-                  <View style={styles.vehicleTextContainer}>
-                    <Text style={styles.vehicleLabel}>VEHICLE</Text>
-                    <Text style={styles.vehicleValue}>
-                      {currentDriver?.vehicle_color || ''} {currentDriver?.vehicle_make || 'Unknown'} {currentDriver?.vehicle_model || 'Vehicle'}
+                {/* Pickup PIN — shown after driver accepts so the rider can
+                    prepare to share it when the driver arrives. The driver
+                    enters this 4-digit code on their app to verify the right
+                    rider before starting the trip. */}
+                {currentRide?.pickup_otp && (
+                  <View style={styles.pinCard}>
+                    <Text style={styles.pinLabel}>SHARE THIS PIN WITH YOUR DRIVER</Text>
+                    <View style={styles.pinBoxes}>
+                      {[0, 1, 2, 3].map((i) => (
+                        <View key={i} style={styles.pinBox}>
+                          <Text style={styles.pinDigit}>
+                            {currentRide.pickup_otp?.[i] || '•'}
+                          </Text>
+                        </View>
+                      ))}
+                    </View>
+                    <Text style={styles.pinHint}>
+                      The driver will ask for this when they arrive at pickup
                     </Text>
                   </View>
-                </View>
-
-                <View style={styles.plateRow}>
-                  <View style={styles.plateIconContainer}>
-                    <Text style={styles.plateIcon}>🪪</Text>
-                  </View>
-                  <View style={styles.vehicleTextContainer}>
-                    <Text style={styles.vehicleLabel}>LICENSE PLATE</Text>
-                    <Text style={styles.plateValue}>{currentDriver?.license_plate || 'Pending'}</Text>
-                  </View>
+                )}
+              </>
+            ) : (
+              <View style={styles.waitingDriverCard}>
+                <ActivityIndicator size="small" color={SpinrConfig.theme.colors.primary} />
+                <View style={styles.waitingDriverTextContainer}>
+                  <Text style={styles.waitingDriverTitle}>Finding your driver</Text>
+                  <Text style={styles.waitingDriverSubtitle}>
+                    We're confirming a driver for your trip. Details will appear here
+                    as soon as they accept.
+                  </Text>
                 </View>
               </View>
-            </View>
+            )}
 
             {/* Action Buttons */}
             <View style={styles.actionButtons}>
@@ -1017,6 +1061,85 @@ const styles = StyleSheet.create({
     fontFamily: 'PlusJakartaSans_700Bold',
     color: '#1A1A1A',
     letterSpacing: 2,
+  },
+  // Waiting-for-driver-to-accept placeholder (shown before status=driver_accepted)
+  waitingDriverCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    backgroundColor: '#FFF',
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#EEE',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  waitingDriverTextContainer: {
+    flex: 1,
+  },
+  waitingDriverTitle: {
+    fontSize: 16,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: '#1A1A1A',
+    marginBottom: 4,
+  },
+  waitingDriverSubtitle: {
+    fontSize: 13,
+    color: '#666',
+    lineHeight: 18,
+  },
+  // Pickup-PIN display (shown after status=driver_accepted so rider can
+  // prepare to share the code when the driver arrives)
+  pinCard: {
+    backgroundColor: '#FFF',
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 16,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#EEE',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  pinLabel: {
+    fontSize: 11,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: SpinrConfig.theme.colors.primary,
+    letterSpacing: 1.2,
+    marginBottom: 14,
+  },
+  pinBoxes: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 12,
+  },
+  pinBox: {
+    width: 52,
+    height: 62,
+    borderRadius: 14,
+    backgroundColor: '#F8F9FA',
+    borderWidth: 1.5,
+    borderColor: SpinrConfig.theme.colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pinDigit: {
+    fontSize: 28,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: '#1A1A1A',
+  },
+  pinHint: {
+    fontSize: 12,
+    color: '#888',
+    textAlign: 'center',
   },
   shareButton: {
     width: 52,

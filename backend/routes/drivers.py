@@ -732,11 +732,24 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
     
     if not ride:
         return {'ride': None}
-    
-    # Get rider info
-    rider = await db.user_profiles.find_one({'id': ride['rider_id']})
-    vehicle_type = await db.vehicle_types.find_one({'id': ride['vehicle_type_id']})
-    
+
+    # Get rider info. `db.user_profiles` does not exist as a registered
+    # collection in db.py — the rider is a row in `users`. The old name
+    # raised AttributeError, which made this endpoint return 500 and
+    # silently broke the driver-app's active-ride fetch (activeRide stayed
+    # null → ActiveRidePanel returned null → driver saw a blank map after
+    # accepting).
+    try:
+        rider = await db.users.find_one({'id': ride['rider_id']})
+    except Exception as e:
+        logger.warning(f"get_active_ride: failed to load rider {ride['rider_id']}: {e}")
+        rider = None
+    try:
+        vehicle_type = await db.vehicle_types.find_one({'id': ride['vehicle_type_id']})
+    except Exception as e:
+        logger.warning(f"get_active_ride: failed to load vehicle_type {ride['vehicle_type_id']}: {e}")
+        vehicle_type = None
+
     return {
         'ride': serialize_doc(ride),
         'rider': serialize_doc(rider) if rider else None,

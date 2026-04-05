@@ -153,14 +153,18 @@ async def match_driver_to_ride(ride_id: str):
                 # No drivers could be claimed
                 return
 
-        # Update ride with selected driver
+        # Update ride with selected driver. Do NOT pre-populate
+        # driver_accepted_at here — that field is set by the
+        # /drivers/rides/{id}/accept endpoint when the driver actually taps
+        # Accept. Setting it at dispatch time was a "demo auto-accept" hack
+        # that made the rider-app show the driver card before the driver
+        # had actually agreed to the ride.
         await db.rides.update_one(
             {'id': ride_id},
             {'$set': {
                 'driver_id': selected_driver['id'],
                 'status': 'driver_assigned',
                 'driver_notified_at': datetime.utcnow(),
-                'driver_accepted_at': datetime.utcnow(),  # Auto-accept for demo
                 'updated_at': datetime.utcnow()
             }}
         )

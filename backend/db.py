@@ -1,4 +1,5 @@
 import os
+import sys
 import logging
 from typing import Any, Dict, Optional, List, Union
 try:
@@ -7,12 +8,14 @@ except ImportError:
     import db_supabase
 
 # [GO-ONLINE DEBUG] dedicated logger for tracing the update dispatch path.
-# Emits to stdout at INFO level so it shows up in Docker / Fly / Render logs
-# without needing log-level changes. Remove these lines once the bug is
-# confirmed resolved.
+# Emits to stdout at INFO level so it shows up in Docker / Fly / Render
+# logs without needing log-level changes, and so deploy platforms like
+# Railway do NOT tag it as severity=error (which they do for any stderr
+# output regardless of Python log level). Remove these lines once the bug
+# is confirmed resolved.
 _goonline_logger = logging.getLogger('goonline.debug')
 if not _goonline_logger.handlers:
-    _h = logging.StreamHandler()
+    _h = logging.StreamHandler(sys.stdout)
     _h.setFormatter(logging.Formatter('[GO-ONLINE] %(message)s'))
     _goonline_logger.addHandler(_h)
     _goonline_logger.setLevel(logging.INFO)
@@ -22,12 +25,13 @@ if not _goonline_logger.handlers:
 # `diag_logger` from this file instead of using the stdlib/loguru loggers,
 # which were being silently dropped by the deployment's log configuration
 # (uvicorn + default Python logging level = WARNING, so logger.info in
-# routes went nowhere). This logger has its own StreamHandler so it always
-# reaches stdout. Use the same "[TAG] message" convention so different
-# traces can be greped independently.
+# routes went nowhere). This logger has its own StreamHandler wired to
+# stdout so every line reaches the deploy log stream with the correct
+# severity. Use the "[TAG] message" convention so different traces can be
+# greped independently.
 diag_logger = logging.getLogger('spinr.diag')
 if not diag_logger.handlers:
-    _h2 = logging.StreamHandler()
+    _h2 = logging.StreamHandler(sys.stdout)
     _h2.setFormatter(logging.Formatter('%(message)s'))
     diag_logger.addHandler(_h2)
     diag_logger.setLevel(logging.INFO)

@@ -27,7 +27,7 @@ export default function ProfileSetupScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [isCheckingExisting, setIsCheckingExisting] = useState(true);
-  
+
   const { user, token, createProfile, logout, isLoading: authLoading } = useAuthStore();
 
   const [firstName, setFirstName] = useState('');
@@ -144,17 +144,34 @@ export default function ProfileSetupScreen() {
     }
   };
 
-  const renderInput = (
-    label: string, 
-    value: string, 
-    setValue: (val: string) => void, 
-    placeholder: string, 
-    icon: keyof typeof Ionicons.glyphMap,
-    fieldKey: string,
-    isValid: boolean,
-    keyboardType: 'default' | 'email-address' = 'default'
-  ) => {
+  // Memoized Input Component to prevent full re-mounts on every keystroke
+  const FormInput = React.memo(({
+    label,
+    value,
+    onChangeText,
+    placeholder,
+    icon,
+    fieldKey,
+    isValid,
+    keyboardType = 'default',
+    focusedField,
+    onFocus,
+    onBlur
+  }: {
+    label: string;
+    value: string;
+    onChangeText: (val: string) => void;
+    placeholder: string;
+    icon: keyof typeof Ionicons.glyphMap;
+    fieldKey: string;
+    isValid: boolean;
+    keyboardType?: 'default' | 'email-address';
+    focusedField: string | null;
+    onFocus: (field: string) => void;
+    onBlur: () => void;
+  }) => {
     const isFocused = focusedField === fieldKey;
+
     return (
       <View style={styles.inputGroup}>
         <Text style={styles.label}>{label}</Text>
@@ -164,33 +181,33 @@ export default function ProfileSetupScreen() {
           value.length > 0 && isValid && styles.inputContainerValid
         ]}>
           <View style={styles.inputIconContainer}>
-            <Ionicons 
-              name={icon} 
-              size={20} 
-              color={isFocused ? THEME.primary : (value ? THEME.text : '#A0A0A0')} 
+            <Ionicons
+              name={icon}
+              size={20}
+              color={isFocused ? THEME.primary : (value ? THEME.text : '#A0A0A0')}
             />
           </View>
           <TextInput
             style={styles.input}
             value={value}
-            onChangeText={setValue}
+            onChangeText={onChangeText}
             placeholder={placeholder}
             placeholderTextColor="#B0B0B0"
             autoCapitalize={keyboardType === 'email-address' ? 'none' : 'words'}
             keyboardType={keyboardType}
             autoCorrect={false}
-            onFocus={() => setFocusedField(fieldKey)}
-            onBlur={() => setFocusedField(null)}
+            onFocus={() => onFocus(fieldKey)}
+            onBlur={onBlur}
           />
-          {value.length > 0 && isValid && (
-            <View style={styles.checkIcon}>
+          <View style={styles.checkIconWrapper}>
+            {value.length > 0 && isValid ? (
               <Ionicons name="checkmark-circle" size={20} color={THEME.success} />
-            </View>
-          )}
+            ) : null}
+          </View>
         </View>
       </View>
     );
-  };
+  });
 
   if (isCheckingExisting) {
     return (
@@ -205,106 +222,138 @@ export default function ProfileSetupScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 40 }]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Top pill for logged in status */}
-          <View style={styles.signedInRow}>
-            <View style={styles.signedInAvatar}>
-              <Ionicons name="call" size={12} color={THEME.primary} />
-            </View>
-            <View style={styles.signedInInfo}>
-              <Text style={styles.signedInLabel}>Signed in with</Text>
-              <Text style={styles.signedInPhone}>{user?.phone || 'Unknown'}</Text>
-            </View>
-            <TouchableOpacity onPress={handleChangeNumber} style={styles.changeBtn}>
-              <Text style={styles.changeBtnText}>Change</Text>
-            </TouchableOpacity>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 40 }]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Top pill for logged in status */}
+        <View style={styles.signedInRow}>
+          <View style={styles.signedInAvatar}>
+            <Ionicons name="call" size={12} color={THEME.primary} />
           </View>
-
-          {/* Header */}
-          <View style={styles.header}>
-            <Text style={styles.title}>Welcome! 🎉</Text>
-            <Text style={styles.subtitle}>
-              Let's get to know you better. This info will be shown to your riders.
-            </Text>
+          <View style={styles.signedInInfo}>
+            <Text style={styles.signedInLabel}>Signed in with</Text>
+            <Text style={styles.signedInPhone}>{user?.phone || 'Unknown'}</Text>
           </View>
-
-          {/* Form */}
-          <View style={styles.form}>
-            <View style={styles.row}>
-              <View style={{ flex: 1, marginRight: 12 }}>
-                {renderInput('First Name', firstName, setFirstName, 'John', 'person-outline', 'fn', isFirstNameValid)}
-              </View>
-              <View style={{ flex: 1 }}>
-                {renderInput('Last Name', lastName, setLastName, 'Doe', 'person-outline', 'ln', isLastNameValid)}
-              </View>
-            </View>
-
-            {renderInput('Email Address', email, setEmail, 'john.doe@example.com', 'mail-outline', 'email', isEmailValid, 'email-address')}
-
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Gender</Text>
-              <View style={styles.genderOptions}>
-                {['Male', 'Female', 'Other'].map((option) => (
-                  <TouchableOpacity
-                    key={option}
-                    style={[
-                      styles.genderOption,
-                      gender === option && styles.genderOptionSelected
-                    ]}
-                    onPress={() => setGender(option)}
-                    activeOpacity={0.8}
-                  >
-                    {gender === option && (
-                      <Ionicons name="checkmark" size={16} color={THEME.primary} style={{ marginRight: 4 }} />
-                    )}
-                    <Text style={[
-                      styles.genderOptionText,
-                      gender === option && styles.genderOptionTextSelected
-                    ]}>
-                      {option}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-          </View>
-
-          {/* Submit Button */}
-          <TouchableOpacity
-            style={[
-              styles.submitButton,
-              !isFormValid && styles.submitButtonDisabled,
-              (isSubmitting || authLoading) && styles.submitButtonLoading
-            ]}
-            onPress={handleSubmit}
-            disabled={!isFormValid || isSubmitting || authLoading}
-            activeOpacity={0.85}
-          >
-            {isSubmitting || authLoading ? (
-              <ActivityIndicator color="#FFFFFF" size="small" />
-            ) : (
-              <View style={styles.submitBtnContent}>
-                <Text style={[styles.submitButtonText, !isFormValid && styles.submitButtonTextDisabled]}>
-                  Create Profile
-                </Text>
-                <Ionicons name="arrow-forward" size={20} color={isFormValid ? '#fff' : '#999'} />
-              </View>
-            )}
+          <TouchableOpacity onPress={handleChangeNumber} style={styles.changeBtn}>
+            <Text style={styles.changeBtnText}>Change</Text>
           </TouchableOpacity>
-          
-          <View style={styles.footer}>
-            <Ionicons name="shield-checkmark" size={14} color="#A0A0A0" />
-            <Text style={styles.footerText}>Your data is securely encrypted</Text>
+        </View>
+
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={styles.title}>Welcome! 🎉</Text>
+          <Text style={styles.subtitle}>
+            Let's get to know you better. This info will be shown to your riders.
+          </Text>
+        </View>
+
+        {/* Form */}
+        <View style={styles.form}>
+          <View style={styles.row}>
+            <View style={{ flex: 1, marginRight: 12 }}>
+              <FormInput
+                label="First Name"
+                value={firstName}
+                onChangeText={setFirstName}
+                placeholder="John"
+                icon="person-outline"
+                fieldKey="fn"
+                isValid={isFirstNameValid}
+                focusedField={focusedField}
+                onFocus={setFocusedField}
+                onBlur={() => setFocusedField(null)}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <FormInput
+                label="Last Name"
+                value={lastName}
+                onChangeText={setLastName}
+                placeholder="Doe"
+                icon="person-outline"
+                fieldKey="ln"
+                isValid={isLastNameValid}
+                focusedField={focusedField}
+                onFocus={setFocusedField}
+                onBlur={() => setFocusedField(null)}
+              />
+            </View>
           </View>
 
-        </ScrollView>
-      </TouchableWithoutFeedback>
+          <FormInput
+            label="Email Address"
+            value={email}
+            onChangeText={setEmail}
+            placeholder="john.doe@example.com"
+            icon="mail-outline"
+            fieldKey="email"
+            isValid={isEmailValid}
+            keyboardType="email-address"
+            focusedField={focusedField}
+            onFocus={setFocusedField}
+            onBlur={() => setFocusedField(null)}
+          />
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Gender</Text>
+            <View style={styles.genderOptions}>
+              {['Male', 'Female', 'Other'].map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  style={[
+                    styles.genderOption,
+                    gender === option && styles.genderOptionSelected
+                  ]}
+                  onPress={() => setGender(option)}
+                  activeOpacity={0.8}
+                >
+                  {gender === option && (
+                    <Ionicons name="checkmark" size={16} color={THEME.primary} style={{ marginRight: 4 }} />
+                  )}
+                  <Text style={[
+                    styles.genderOptionText,
+                    gender === option && styles.genderOptionTextSelected
+                  ]}>
+                    {option}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        </View>
+
+        {/* Submit Button */}
+        <TouchableOpacity
+          style={[
+            styles.submitButton,
+            !isFormValid && styles.submitButtonDisabled,
+            (isSubmitting || authLoading) && styles.submitButtonLoading
+          ]}
+          onPress={handleSubmit}
+          disabled={!isFormValid || isSubmitting || authLoading}
+          activeOpacity={0.85}
+        >
+          {isSubmitting || authLoading ? (
+            <ActivityIndicator color="#FFFFFF" size="small" />
+          ) : (
+            <View style={styles.submitBtnContent}>
+              <Text style={[styles.submitButtonText, !isFormValid && styles.submitButtonTextDisabled]}>
+                Create Profile
+              </Text>
+              <Ionicons name="arrow-forward" size={20} color={isFormValid ? '#fff' : '#999'} />
+            </View>
+          )}
+        </TouchableOpacity>
+
+        <View style={styles.footer}>
+          <Ionicons name="shield-checkmark" size={14} color="#A0A0A0" />
+          <Text style={styles.footerText}>Your data is securely encrypted</Text>
+        </View>
+
+      </ScrollView>
 
       <CustomAlert
         visible={alertState.visible}
@@ -449,8 +498,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: THEME.text,
   },
-  checkIcon: {
-    paddingRight: 16,
+  checkIconWrapper: {
+    width: 36,
+    justifyContent: 'center',
+    alignItems: 'flex-start',
   },
   // Gender Toggle
   genderOptions: {

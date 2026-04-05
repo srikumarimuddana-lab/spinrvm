@@ -298,7 +298,7 @@ export default function DriverDashboard() {
           <SOSButton
             rideId={activeRide.ride.id}
             onTrigger={async (rideId, lat, lng) => {
-              try { await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng }); } catch {}
+              try { await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng }); } catch { }
             }}
           />
         </View>
@@ -312,36 +312,28 @@ export default function DriverDashboard() {
       />
 
       {/* Bottom Panels */}
-      {rideState === 'idle' && (
-        <DriverIdlePanel
-          isOnline={isOnline}
-          driverData={driverData}
-          earnings={earnings ?? undefined}
-          onToggleOnline={toggleOnline}
-          pulseAnim={pulseAnim}
-        />
-      )}
+      {/* DriverIdlePanel REMOVED - No longer showing acceptance/earnings/rides stats bar */}
       {rideState === 'ride_offered' && renderRideOfferPanel()}
       {(rideState === 'navigating_to_pickup' ||
         rideState === 'arrived_at_pickup' ||
         rideState === 'trip_in_progress') && (
-        <ActiveRidePanel
-          rideState={rideState}
-          ride={activeRide?.ride || null}
-          rider={activeRide?.rider || null}
-          isLoading={false}
-          otpInput={otpInput}
-          setOtpInput={setOtpInput}
-          onVerifyOTP={(otp) => verifyOTP(activeRide!.ride.id, otp)}
-          onNavigate={openNavigation}
-          onArriveAtPickup={() => arriveAtPickup(activeRide!.ride.id)}
-          onStartRide={() => startRide(activeRide!.ride.id)}
-          onCompleteRide={() => completeRide(activeRide!.ride.id)}
-          onCancelRide={() => cancelRide(activeRide!.ride.id)}
-          slideUpAnim={slideUpAnim}
-          fadeAnim={fadeAnim}
-        />
-      )}
+          <ActiveRidePanel
+            rideState={rideState}
+            ride={activeRide?.ride || null}
+            rider={activeRide?.rider || null}
+            isLoading={false}
+            otpInput={otpInput}
+            setOtpInput={setOtpInput}
+            onVerifyOTP={(otp) => verifyOTP(activeRide!.ride.id, otp)}
+            onNavigate={openNavigation}
+            onArriveAtPickup={() => arriveAtPickup(activeRide!.ride.id)}
+            onStartRide={() => startRide(activeRide!.ride.id)}
+            onCompleteRide={() => completeRide(activeRide!.ride.id)}
+            onCancelRide={() => cancelRide(activeRide!.ride.id)}
+            slideUpAnim={slideUpAnim}
+            fadeAnim={fadeAnim}
+          />
+        )}
       {rideState === 'trip_completed' && (
         <TripCompletedPanel
           completedRide={completedRide}

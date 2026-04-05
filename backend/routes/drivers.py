@@ -1312,6 +1312,71 @@ async def update_driver_status(
 
     if is_online:
         now = datetime.utcnow()
+
+        # Prefer the dynamic driver_documents collection over the legacy
+        # top-level expiry fields on the drivers row. The legacy fields are
+        # only written once during onboarding and never refreshed when a
+        # driver re-uploads a document, which used to leave drivers stuck
+        # offline even after admin re-approval.
+        try:
+            approved_docs = await db.driver_documents.find({
+                'driver_id': driver_id,
+                'status': 'approved',
+            }).to_list(200)
+        except Exception:
+            approved_docs = []
+
+        def _parse_expiry(val):
+            if not val:
+                return None
+            if isinstance(val, datetime):
+                return val.replace(tzinfo=None) if val.tzinfo else val
+            if isinstance(val, str):
+                try:
+                    dt = datetime.fromisoformat(val.replace('Z', '+00:00').replace('+00:00', ''))
+                    return dt.replace(tzinfo=None) if dt.tzinfo else dt
+                except ValueError:
+                    return None
+            return None
+
+        # For each mandatory requirement, the latest approved doc wins. If
+        # it has an expiry and that expiry is in the past, block.
+        try:
+            requirements = await db.driver_requirements.find({}).to_list(100)
+        except Exception:
+            requirements = []
+        mandatory_reqs = [r for r in (requirements or []) if r.get('is_mandatory')]
+
+        covered_legacy_fields = set()
+        for req_row in mandatory_reqs:
+            req_id = req_row.get('id')
+            req_name = req_row.get('name') or 'Document'
+            # Pick the most recent approved doc for this requirement.
+            docs = [d for d in approved_docs if d.get('requirement_id') == req_id]
+            if not docs:
+                continue
+            docs.sort(key=lambda d: str(d.get('uploaded_at') or ''), reverse=True)
+            latest = docs[0]
+            exp = _parse_expiry(latest.get('expiry_date') or latest.get('expires_at'))
+            if exp and exp < now:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f'{req_name} has expired. Please update your documents before going online.',
+                )
+            # This requirement was covered by a fresh doc — do not re-check
+            # the legacy column for the same thing below.
+            nm = (req_name or '').lower()
+            if 'license' in nm or 'driving' in nm or 'permit' in nm:
+                covered_legacy_fields.add('license_expiry_date')
+            if 'insurance' in nm:
+                covered_legacy_fields.add('insurance_expiry_date')
+            if 'inspection' in nm:
+                covered_legacy_fields.add('vehicle_inspection_expiry_date')
+            if 'background' in nm:
+                covered_legacy_fields.add('background_check_expiry_date')
+
+        # Legacy fallback: only enforce top-level expiry columns that were
+        # NOT already satisfied by a fresh approved doc above.
         expiry_checks = [
             ('license_expiry_date', 'Driving license'),
             ('insurance_expiry_date', 'Vehicle insurance'),
@@ -1319,6 +1384,8 @@ async def update_driver_status(
             ('background_check_expiry_date', 'Background check'),
         ]
         for field, label in expiry_checks:
+            if field in covered_legacy_fields:
+                continue
             expiry_val = driver.get(field)
             if expiry_val:
                 if isinstance(expiry_val, str):

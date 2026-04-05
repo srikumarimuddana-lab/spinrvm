@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getDrivers } from "@/lib/api";
+import { getDrivers, getDriverDocuments, reviewDocument } from "@/lib/api";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -26,10 +26,73 @@ export default function DriversPage() {
     const [statusFilter, setStatusFilter] = useState("all");
     const [selected, setSelected] = useState<any>(null);
     const [verifying, setVerifying] = useState(false);
+    const [driverDocs, setDriverDocs] = useState<any[]>([]);
+    const [docsLoading, setDocsLoading] = useState(false);
+    const [docBusy, setDocBusy] = useState<string | null>(null);
 
     useEffect(() => {
         loadDrivers();
     }, []);
+
+    // Load the selected driver's uploaded documents whenever the selection
+    // changes. This lets admins see (and approve) a newly re-uploaded doc
+    // even if the driver is still flagged as verified overall.
+    useEffect(() => {
+        if (!selected?.id) {
+            setDriverDocs([]);
+            return;
+        }
+        setDocsLoading(true);
+        getDriverDocuments(selected.id)
+            .then((d) => setDriverDocs(Array.isArray(d) ? d : []))
+            .catch(() => setDriverDocs([]))
+            .finally(() => setDocsLoading(false));
+    }, [selected?.id]);
+
+    const reloadDriverDocs = async () => {
+        if (!selected?.id) return;
+        try {
+            const d = await getDriverDocuments(selected.id);
+            setDriverDocs(Array.isArray(d) ? d : []);
+        } catch {}
+    };
+
+    const handleReviewDoc = async (
+        docId: string,
+        status: "approved" | "rejected",
+    ) => {
+        setDocBusy(docId);
+        try {
+            let expiry: string | undefined;
+            let reason: string | undefined;
+            if (status === "approved") {
+                const input = window.prompt(
+                    "New expiry date for this document (YYYY-MM-DD). Leave blank if this document does not expire.",
+                    "",
+                );
+                if (input && input.trim()) {
+                    const d = new Date(input.trim());
+                    if (isNaN(d.getTime())) {
+                        alert("Invalid date. Use YYYY-MM-DD.");
+                        setDocBusy(null);
+                        return;
+                    }
+                    expiry = d.toISOString();
+                }
+            } else {
+                const r = window.prompt("Reason for rejection (optional):", "");
+                reason = r || undefined;
+            }
+            await reviewDocument(docId, status, reason, expiry);
+            await reloadDriverDocs();
+            // Refresh the drivers list so is_verified flips reflect in sidebar.
+            loadDrivers();
+        } catch (e: any) {
+            alert("Could not update document: " + (e?.message || "unknown error"));
+        } finally {
+            setDocBusy(null);
+        }
+    };
 
     const loadDrivers = () => {
         setLoading(true);
@@ -201,22 +264,26 @@ export default function DriversPage() {
                             </span>
                         </div>
 
-                        {/* Verify Actions */}
-                        {!selected.is_verified && (
-                            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-3">
-                                <p className="text-sm text-amber-800 dark:text-amber-300 mb-2 font-medium">This driver is pending verification</p>
-                                <div className="flex gap-2">
-                                    <button onClick={() => handleVerify(selected.id, true)} disabled={verifying}
-                                        className="flex-1 flex items-center justify-center gap-1 py-2 rounded-lg bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 transition">
-                                        <CheckCircle className="h-4 w-4" /> Approve
-                                    </button>
-                                    <button onClick={() => handleVerify(selected.id, false)} disabled={verifying}
-                                        className="flex-1 flex items-center justify-center gap-1 py-2 rounded-lg bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition">
-                                        <XCircle className="h-4 w-4" /> Reject
-                                    </button>
-                                </div>
+                        {/* Verify Actions — always available so admin can
+                            re-verify a driver whose documents were updated
+                            after an original approval. */}
+                        <div className={`${selected.is_verified ? "bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800" : "bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800"} border rounded-xl p-3`}>
+                            <p className={`text-sm mb-2 font-medium ${selected.is_verified ? "text-emerald-800 dark:text-emerald-300" : "text-amber-800 dark:text-amber-300"}`}>
+                                {selected.is_verified
+                                    ? "Driver is currently verified. You can un-verify to send them back for review."
+                                    : "This driver is pending verification"}
+                            </p>
+                            <div className="flex gap-2">
+                                <button onClick={() => handleVerify(selected.id, true)} disabled={verifying || selected.is_verified}
+                                    className="flex-1 flex items-center justify-center gap-1 py-2 rounded-lg bg-emerald-500 text-white text-sm font-semibold hover:bg-emerald-600 transition disabled:opacity-50">
+                                    <CheckCircle className="h-4 w-4" /> {selected.is_verified ? "Verified" : "Approve"}
+                                </button>
+                                <button onClick={() => handleVerify(selected.id, false)} disabled={verifying || !selected.is_verified}
+                                    className="flex-1 flex items-center justify-center gap-1 py-2 rounded-lg bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition disabled:opacity-50">
+                                    <XCircle className="h-4 w-4" /> Un-verify
+                                </button>
                             </div>
-                        )}
+                        </div>
 
                         {/* Contact Info */}
                         <Section title="Contact">
@@ -249,6 +316,82 @@ export default function DriversPage() {
                             <DocRow label="Insurance" expiry={selected.insurance_expiry_date} />
                             <DocRow label="Vehicle Inspection" expiry={selected.vehicle_inspection_expiry_date} />
                             <DocRow label="Background Check" expiry={selected.background_check_expiry_date} />
+                        </Section>
+
+                        {/* Uploaded Documents (dynamic, from driver_documents) */}
+                        <Section title="Uploaded Documents">
+                            {docsLoading ? (
+                                <p className="text-xs text-muted-foreground">Loading…</p>
+                            ) : driverDocs.length === 0 ? (
+                                <p className="text-xs text-muted-foreground">No documents uploaded.</p>
+                            ) : (
+                                <div className="space-y-2">
+                                    {driverDocs
+                                        .filter((d) => d.status !== "superseded")
+                                        .map((d) => {
+                                            const exp = d.expiry_date || d.expires_at;
+                                            const expired = exp && new Date(exp) < new Date();
+                                            const statusColor =
+                                                d.status === "approved" && !expired
+                                                    ? "text-emerald-600"
+                                                    : d.status === "rejected"
+                                                        ? "text-red-500"
+                                                        : expired
+                                                            ? "text-red-500"
+                                                            : "text-amber-600";
+                                            return (
+                                                <div key={d.id} className="bg-background rounded-lg p-2.5 border">
+                                                    <div className="flex items-start justify-between gap-2">
+                                                        <div className="min-w-0 flex-1">
+                                                            <p className="text-sm font-semibold truncate">
+                                                                {d.document_type || "Document"}{d.side ? ` (${d.side})` : ""}
+                                                            </p>
+                                                            <p className={`text-[11px] font-medium uppercase tracking-wider ${statusColor}`}>
+                                                                {expired && d.status === "approved" ? "EXPIRED" : d.status}
+                                                            </p>
+                                                            {exp && (
+                                                                <p className="text-[11px] text-muted-foreground">
+                                                                    Expires: {new Date(exp).toLocaleDateString("en-CA")}
+                                                                </p>
+                                                            )}
+                                                            {d.document_url && (
+                                                                <a
+                                                                    href={d.document_url}
+                                                                    target="_blank"
+                                                                    rel="noreferrer"
+                                                                    className="text-[11px] text-primary underline"
+                                                                >
+                                                                    View file
+                                                                </a>
+                                                            )}
+                                                            {d.rejection_reason && (
+                                                                <p className="text-[11px] text-red-500 mt-1">
+                                                                    Reason: {d.rejection_reason}
+                                                                </p>
+                                                            )}
+                                                        </div>
+                                                        <div className="flex flex-col gap-1 shrink-0">
+                                                            <button
+                                                                onClick={() => handleReviewDoc(d.id, "approved")}
+                                                                disabled={docBusy === d.id}
+                                                                className="px-2 py-1 rounded bg-emerald-500 text-white text-[11px] font-semibold hover:bg-emerald-600 transition disabled:opacity-50"
+                                                            >
+                                                                Approve
+                                                            </button>
+                                                            <button
+                                                                onClick={() => handleReviewDoc(d.id, "rejected")}
+                                                                disabled={docBusy === d.id}
+                                                                className="px-2 py-1 rounded bg-red-500 text-white text-[11px] font-semibold hover:bg-red-600 transition disabled:opacity-50"
+                                                            >
+                                                                Reject
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                </div>
+                            )}
                         </Section>
 
                         {/* Subscription */}

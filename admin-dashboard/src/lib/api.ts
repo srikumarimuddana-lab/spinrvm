@@ -197,10 +197,19 @@ export const deleteRequirement = (id: string) =>
 export const getDriverDocuments = (driverId: string) =>
     request<any[]>(`/api/admin/documents/drivers/${driverId}`);
 
-export const reviewDocument = (docId: string, status: string, reason?: string) =>
+export const reviewDocument = (
+    docId: string,
+    status: string,
+    reason?: string,
+    expiryDate?: string,
+) =>
     request<any>(`/api/admin/documents/${docId}/review`, {
         method: "POST",
-        body: JSON.stringify({ status, rejection_reason: reason }),
+        body: JSON.stringify({
+            status,
+            rejection_reason: reason,
+            expiry_date: expiryDate,
+        }),
     });
 
 /* ── Corporate Accounts ─────────────────────── */

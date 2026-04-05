@@ -369,13 +369,9 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
         type,
       } as any);
 
-      // Do NOT set Content-Type — axios must auto-append the boundary for RN
-      // FormData uploads, otherwise the server sees "multipart/form-data" with
-      // no boundary and rejects the request.
-      const response = await api.put('/users/profile-image', formData, {
-        headers: { 'Content-Type': undefined },
-        transformRequest: (data) => data,
-      });
+      // The api client detects FormData and lets fetch set the multipart
+      // boundary itself — do not pass a Content-Type header here.
+      const response = await api.put('/users/profile-image', formData);
       set({ user: response.data, isLoading: false });
 
       // Invalidate user cache to reflect the new profile image

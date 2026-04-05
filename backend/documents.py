@@ -48,6 +48,7 @@ class LinkDocumentRequest(BaseModel):
     document_url: str
     document_type: str = "image/jpeg"
     side: Optional[str] = "front"
+    expiry_date: Optional[datetime] = None
 
 class DriverDocument(BaseModel):
     id: str
@@ -64,6 +65,67 @@ class DriverDocument(BaseModel):
 # --- Helper: Upload Directory ---
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+
+# Map keywords in a requirement name to the legacy top-level expiry column on
+# the `drivers` row. Used so that approving a re-uploaded document refreshes
+# the expiry that `update_driver_status` (go-online) checks against.
+_REQUIREMENT_EXPIRY_FIELD_KEYWORDS = (
+    ('license',     'license_expiry_date'),
+    ('driving',     'license_expiry_date'),
+    ('permit',      'license_expiry_date'),
+    ('insurance',   'insurance_expiry_date'),
+    ('inspection',  'vehicle_inspection_expiry_date'),
+    ('background',  'background_check_expiry_date'),
+    ('work',        'work_eligibility_expiry_date'),
+    ('eligibility', 'work_eligibility_expiry_date'),
+)
+
+
+def _legacy_expiry_field_for_requirement(req_name: Optional[str]) -> Optional[str]:
+    if not req_name:
+        return None
+    name = req_name.lower()
+    for kw, field in _REQUIREMENT_EXPIRY_FIELD_KEYWORDS:
+        if kw in name:
+            return field
+    return None
+
+
+async def _supersede_and_flag_pending_review(
+    driver_id: str,
+    requirement_id: str,
+    side: Optional[str],
+) -> None:
+    """
+    When a driver (re-)uploads a document, mark any prior docs for the same
+    requirement+side as 'superseded' so they stop counting against the driver,
+    and flip the driver's `is_verified` back to False. This makes the driver
+    re-appear in the admin panel's "Unverified" queue so the Approve button
+    becomes actionable again.
+    """
+    try:
+        query: Dict[str, Any] = {
+            'driver_id': driver_id,
+            'requirement_id': requirement_id,
+            'status': {'$in': ['approved', 'pending']},
+        }
+        if side is not None:
+            query['side'] = side
+        await db.driver_documents.update_many(
+            query,
+            {'$set': {'status': 'superseded', 'updated_at': datetime.utcnow()}},
+        )
+    except Exception as e:
+        logger.warning(f"Could not supersede prior docs for driver {driver_id}: {e}")
+
+    try:
+        await db.drivers.update_one(
+            {'id': driver_id},
+            {'$set': {'is_verified': False, 'updated_at': datetime.utcnow()}},
+        )
+    except Exception as e:
+        logger.warning(f"Could not reset is_verified for driver {driver_id}: {e}")
 
 async def save_upload(file: UploadFile) -> str:
     file_ext = os.path.splitext(file.filename)[1]
@@ -118,6 +180,10 @@ async def link_driver_document(
     if not req:
         raise HTTPException(status_code=404, detail="Requirement not found")
 
+    # Supersede any prior docs for this requirement+side and flip the
+    # driver back to unverified so admin re-reviews this upload.
+    await _supersede_and_flag_pending_review(driver['id'], doc_data.requirement_id, doc_data.side)
+
     # Create document record
     doc_record = {
         'id': str(uuid.uuid4()),
@@ -126,14 +192,12 @@ async def link_driver_document(
         'document_type': doc_data.document_type,
         'document_url': doc_data.document_url,
         'side': doc_data.side,
-        'status': 'pending', 
+        'status': 'pending',
+        'expiry_date': doc_data.expiry_date.isoformat() if doc_data.expiry_date else None,
         'uploaded_at': datetime.utcnow(),
         'updated_at': datetime.utcnow()
     }
 
-    # Archive previous documents for this requirement/side?? 
-    # For now, just insert. The latest ONE is what we show.
-    
     await db.driver_documents.insert_one(doc_record)
     return doc_record
 
@@ -142,7 +206,8 @@ async def upload_driver_document(
     file: UploadFile = File(...),
     driver_id: str = Form(...),
     requirement_id: str = Form(...),
-    side: Optional[str] = Form(None)  # 'front' or 'back'
+    side: Optional[str] = Form(None),  # 'front' or 'back'
+    expiry_date: Optional[str] = Form(None),
 ):
     """Upload a specific document linked to a requirement."""
     # storage logic
@@ -153,6 +218,18 @@ async def upload_driver_document(
     if not req:
         raise HTTPException(status_code=404, detail="Requirement not found")
 
+    # Normalise expiry_date input — accept ISO string, store as ISO string.
+    expiry_iso: Optional[str] = None
+    if expiry_date:
+        try:
+            expiry_iso = datetime.fromisoformat(expiry_date.replace('Z', '+00:00')).isoformat()
+        except ValueError:
+            expiry_iso = None
+
+    # Supersede prior docs for same requirement+side and flip driver to unverified
+    # so admin panel resurfaces this driver for re-review.
+    await _supersede_and_flag_pending_review(driver_id, requirement_id, side)
+
     # Create document record
     doc_record = {
         'id': str(uuid.uuid4()),
@@ -162,16 +239,13 @@ async def upload_driver_document(
         'document_url': url,
         'side': side,
         'status': 'pending',
+        'expiry_date': expiry_iso,
         'uploaded_at': datetime.utcnow(),
         'updated_at': datetime.utcnow()
     }
 
-    # Check if existing doc for this requirement+side exists, if so, archive/delete it?
-    # For now, just insert new one. The latest one is considered active.
-    # Optionally: update old ones to 'archived'
-    
     await db.driver_documents.insert_one(doc_record)
-    
+
     return doc_record
 
 
@@ -234,25 +308,67 @@ async def admin_get_driver_documents(driver_id: str):
 class ReviewDocumentRequest(BaseModel):
     status: str
     rejection_reason: Optional[str] = None
+    expiry_date: Optional[datetime] = None
 
 @admin_documents_router.post("/{doc_id}/review")
 async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
-    """Approve or reject a driver document."""
+    """Approve or reject a driver document.
+
+    On approval, if an ``expiry_date`` is provided (or already stored on the
+    doc), we also refresh the corresponding legacy top-level expiry column on
+    the ``drivers`` row so that the go-online check in
+    ``update_driver_status`` sees the new date.
+    """
     if req.status not in ['approved', 'rejected']:
         raise HTTPException(status_code=400, detail="Status must be 'approved' or 'rejected'")
-    
-    update_data = {
+
+    # Pull the existing doc so we know which driver/requirement this is.
+    existing = await db.driver_documents.find_one({'id': doc_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    update_data: Dict[str, Any] = {
         'status': req.status,
         'updated_at': datetime.utcnow()
     }
     if req.rejection_reason is not None:
         update_data['rejection_reason'] = req.rejection_reason
+    if req.expiry_date is not None:
+        update_data['expiry_date'] = req.expiry_date.isoformat()
 
-    result = await db.driver_documents.update_one({'id': doc_id}, {'$set': update_data})
-    
-    if result.matched_count == 0:
-         raise HTTPException(status_code=404, detail="Document not found")
-         
+    await db.driver_documents.update_one({'id': doc_id}, {'$set': update_data})
+
+    # On approval, propagate the expiry to the legacy drivers.* column so the
+    # go-online check in routes/drivers.py update_driver_status stops blocking
+    # this driver based on stale onboarding-time values.
+    if req.status == 'approved':
+        effective_expiry = req.expiry_date
+        if effective_expiry is None and existing.get('expiry_date'):
+            try:
+                effective_expiry = datetime.fromisoformat(
+                    str(existing['expiry_date']).replace('Z', '+00:00')
+                )
+            except ValueError:
+                effective_expiry = None
+
+        req_row = await db.document_requirements.find_one({'id': existing.get('requirement_id')})
+        legacy_field = _legacy_expiry_field_for_requirement(req_row.get('name') if req_row else None)
+        if legacy_field:
+            # If admin didn't supply a new expiry, clear the stale legacy
+            # value (None) so the go-online check skips it instead of
+            # rejecting on a past date from original onboarding.
+            new_val = effective_expiry.isoformat() if effective_expiry else None
+            try:
+                await db.drivers.update_one(
+                    {'id': existing.get('driver_id')},
+                    {'$set': {legacy_field: new_val, 'updated_at': datetime.utcnow()}},
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Could not update legacy expiry field {legacy_field} "
+                    f"for driver {existing.get('driver_id')}: {e}"
+                )
+
     return await db.driver_documents.find_one({'id': doc_id})
 
 # --- File Serving Router ---

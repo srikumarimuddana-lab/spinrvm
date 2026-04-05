@@ -146,10 +146,15 @@ const client = {
 
   async put<T = any>(url: string, body?: any, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
+    const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
+      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       ...config?.headers,
     };
+    // Strip any Content-Type for FormData so fetch can set the multipart boundary itself.
+    if (isFormData) {
+      delete headers['Content-Type'];
+    }
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -157,7 +162,7 @@ const client = {
     const response = await fetch(`${API_URL}/api/v1${url}`, {
       method: 'PUT',
       headers,
-      body: body ? JSON.stringify(body) : undefined,
+      body: body === undefined || body === null ? undefined : (isFormData ? body : JSON.stringify(body)),
     });
 
     if (!response.ok) {

@@ -65,19 +65,6 @@ export default function RideOptionsScreen() {
   }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = useRef<MapView>(null);
 
-  // Guard: this screen requires pickup + dropoff in the store. If it mounts
-  // without them (e.g. after a cancelled ride cleared the trip state, or a
-  // deep link, or a stale router.replace), fetchEstimates can't run and the
-  // screen would get stuck in an infinite loading state. Bail to home so
-  // the rider can re-enter a destination from a clean state. Using replace,
-  // not push, so the stack doesn't accumulate broken entries that would
-  // also trigger "GO_BACK was not handled by any navigator".
-  useEffect(() => {
-    if (!pickup || !dropoff) {
-      router.replace('/(tabs)' as any);
-    }
-  }, [pickup, dropoff]);
-
   useEffect(() => {
     if (pickup && dropoff) {
       console.log('Platform:', Platform.OS, '| Fetching estimates & nearby drivers for:', pickup.address, 'to', dropoff.address);

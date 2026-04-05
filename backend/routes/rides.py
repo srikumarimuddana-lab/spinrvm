@@ -770,10 +770,28 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
 @api_router.post("/{ride_id}/cancel")
 async def cancel_ride_rider(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Rider cancels the ride"""
+    try:
+        from ..db import diag_logger  # type: ignore
+    except ImportError:
+        from db import diag_logger  # type: ignore
+
+    diag_logger.info(f"[CANCEL] called ride_id={ride_id} user_id={current_user.get('id')}")
+
     ride = await db.rides.find_one({'id': ride_id})
     if not ride or ride.get('rider_id') != current_user['id']:
+        diag_logger.info(
+            f"[CANCEL] not found or unauthorized ride_id={ride_id} "
+            f"ride_exists={ride is not None} "
+            f"ride_rider_id={ride.get('rider_id') if ride else None} "
+            f"caller_id={current_user['id']}"
+        )
         raise HTTPException(status_code=404, detail="Ride not found or unauthorized")
-        
+
+    diag_logger.info(
+        f"[CANCEL] entry ride_id={ride_id} pre_status={ride.get('status')} "
+        f"driver_id={ride.get('driver_id')}"
+    )
+
     if ride.get('status') in ['completed', 'cancelled']:
         raise HTTPException(status_code=400, detail="Ride already completed or cancelled")
 
@@ -819,7 +837,42 @@ async def cancel_ride_rider(ride_id: str, current_user: dict = Depends(get_curre
             'updated_at': datetime.utcnow()
         }}
     )
-    
+
+    # Verify the cancel actually landed in the database. Same class of
+    # silent-failure we hit with go-online and accept: the update_one wrapper
+    # returns None when zero rows are affected and the handler would
+    # otherwise return {success: true} while the ride is still in its prior
+    # state — the rider then reloads and sees the ride still "searching".
+    try:
+        verify_ride = await db.rides.find_one({'id': ride_id})
+    except Exception as e:
+        verify_ride = None
+        diag_logger.info(f"[CANCEL] verify re-read failed: {e}")
+
+    diag_logger.info(
+        f"[CANCEL] post-update ride_id={ride_id} "
+        f"post_status={verify_ride.get('status') if verify_ride else 'ROW_GONE'} "
+        f"post_cancelled_at={verify_ride.get('cancelled_at') if verify_ride else 'ROW_GONE'}"
+    )
+
+    if not verify_ride or verify_ride.get('status') != 'cancelled':
+        diag_logger.info(
+            f"[CANCEL] SILENT NO-OP: ride_id={ride_id} did not flip to "
+            f"'cancelled'. Likely a missing column in the rides table "
+            f"(e.g. cancelled_at / cancellation_fee_admin / "
+            f"cancellation_fee_driver) or a wrapper dispatching the "
+            f"update to the wrong path. Rider will see the ride as still "
+            f"active after reload."
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Cancel did not persist. Backend write returned successfully "
+                "but the ride row is unchanged. Check backend logs for "
+                "[CANCEL] lines."
+            ),
+        )
+
     if driver_id:
         await db.drivers.update_one(
             {'id': driver_id},

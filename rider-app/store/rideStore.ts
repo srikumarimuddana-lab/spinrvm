@@ -412,14 +412,16 @@ export const useRideStore = create<RideState>((set, get) => ({
     }
   },
 
+  // Clear ONLY the live-ride fields so the rider can immediately re-book
+  // using the same trip inputs after a cancellation. We deliberately keep
+  // pickup / dropoff / estimates / selectedVehicle / scheduledTime because
+  // those represent "what the user wants to do next", not "the in-flight
+  // trip". Wiping them caused the post-cancel flow to land on ride-options
+  // with no pickup → stuck loading → bounce back to home.
   clearRide: () => set({
-    pickup: null,
-    dropoff: null,
-    estimates: [],
-    selectedVehicle: null,
     currentRide: null,
     currentDriver: null,
-    scheduledTime: null,
+    error: null,
   }),
 
   clearError: () => set({ error: null }),

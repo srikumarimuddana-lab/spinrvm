@@ -9,6 +9,7 @@ from core.config import settings
 from core.middleware import init_middleware
 from core.lifespan import lifespan
 from core.security import init_firebase
+from utils.error_handling import register_exception_handlers
 from routes.rides import api_router as rides_router
 from routes.drivers import api_router as drivers_router
 from routes.admin import admin_router as admin_router, admin_auth_router
@@ -32,6 +33,11 @@ app = FastAPI(title="Spinr API", version="1.0.0", lifespan=lifespan)
 
 # Initialize middleware
 init_middleware(app)
+
+# Register exception handlers so unhandled errors return JSON (with CORS
+# headers) instead of falling through to Starlette's ServerErrorMiddleware,
+# which emits plain-text 500s that look like CORS failures in the browser.
+register_exception_handlers(app)
 
 # Create v1 API router
 v1_api_router = APIRouter()

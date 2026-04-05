@@ -40,7 +40,7 @@ async def get_session(authorization: Optional[str] = Header(None)):
     """Get current admin session - returns user if authenticated"""
     if not authorization:
         return SessionResponse(user=None, authenticated=False)
-    
+
     # Extract token from "Bearer <token>" format
     try:
         scheme, token = authorization.split()
@@ -48,18 +48,20 @@ async def get_session(authorization: Optional[str] = Header(None)):
             return SessionResponse(user=None, authenticated=False)
     except ValueError:
         return SessionResponse(user=None, authenticated=False)
-    
+
     # Verify the JWT token
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM]
+        )
         user_id = payload.get("user_id")
         role = payload.get("role")
         email = payload.get("email")
         phone = payload.get("phone")
-        
+
         if not user_id:
             return SessionResponse(user=None, authenticated=False)
-        
+
         # Return authenticated user info
         modules = payload.get("modules", [])
         return SessionResponse(
@@ -70,7 +72,7 @@ async def get_session(authorization: Optional[str] = Header(None)):
                 "role": role or "admin",
                 "modules": modules,
             },
-            authenticated=True
+            authenticated=True,
         )
     except jwt.ExpiredSignatureError:
         return SessionResponse(user=None, authenticated=False)
@@ -82,30 +84,90 @@ async def get_session(authorization: Optional[str] = Header(None)):
 async def admin_login(request: LoginRequest):
     """Admin login — supports super admin + staff members with module access."""
     import hashlib
-    ALL_MODULES = ['dashboard','users','drivers','rides','earnings','promotions','surge','service_areas','vehicle_types','pricing','support','disputes','notifications','settings','corporate_accounts','documents','heatmap','staff']
+
+    ALL_MODULES = [
+        "dashboard",
+        "users",
+        "drivers",
+        "rides",
+        "earnings",
+        "promotions",
+        "surge",
+        "service_areas",
+        "vehicle_types",
+        "pricing",
+        "support",
+        "disputes",
+        "notifications",
+        "settings",
+        "corporate_accounts",
+        "documents",
+        "heatmap",
+        "staff",
+    ]
 
     # 1. Super admin from env
-    if request.email == settings.ADMIN_EMAIL and request.password == settings.ADMIN_PASSWORD:
-        token = jwt.encode({
-            "user_id": "admin-001", "email": request.email,
-            "role": "super_admin", "modules": ALL_MODULES, "phone": request.email
-        }, settings.JWT_SECRET, algorithm=settings.ALGORITHM)
-        return {"user": {"id": "admin-001", "email": request.email, "role": "super_admin", "first_name": "Super", "last_name": "Admin", "modules": ALL_MODULES}, "token": token}
+    if (
+        request.email == settings.ADMIN_EMAIL
+        and request.password == settings.ADMIN_PASSWORD
+    ):
+        token = jwt.encode(
+            {
+                "user_id": "admin-001",
+                "email": request.email,
+                "role": "super_admin",
+                "modules": ALL_MODULES,
+                "phone": request.email,
+            },
+            settings.JWT_SECRET,
+            algorithm=settings.ALGORITHM,
+        )
+        return {
+            "user": {
+                "id": "admin-001",
+                "email": request.email,
+                "role": "super_admin",
+                "first_name": "Super",
+                "last_name": "Admin",
+                "modules": ALL_MODULES,
+            },
+            "token": token,
+        }
 
     # 2. Staff member
-    staff = await db.admin_staff.find_one({'email': request.email.lower()})
+    staff = await db.admin_staff.find_one({"email": request.email.lower()})
     if staff:
         pw_hash = hashlib.sha256(request.password.encode()).hexdigest()
-        if staff.get('password_hash') == pw_hash:
-            if not staff.get('is_active', True):
+        if staff.get("password_hash") == pw_hash:
+            if not staff.get("is_active", True):
                 raise HTTPException(status_code=403, detail="Account is deactivated")
-            await db.admin_staff.update_one({'id': staff['id']}, {'$set': {'last_login': datetime.utcnow().isoformat()}})
-            modules = staff.get('modules', ['dashboard'])
-            token = jwt.encode({
-                "user_id": staff['id'], "email": staff['email'],
-                "role": staff.get('role', 'custom'), "modules": modules, "phone": staff['email']
-            }, settings.JWT_SECRET, algorithm=settings.ALGORITHM)
-            return {"user": {"id": staff['id'], "email": staff['email'], "role": staff.get('role', 'custom'), "first_name": staff.get('first_name', ''), "last_name": staff.get('last_name', ''), "modules": modules}, "token": token}
+            await db.admin_staff.update_one(
+                {"id": staff["id"]},
+                {"$set": {"last_login": datetime.utcnow().isoformat()}},
+            )
+            modules = staff.get("modules", ["dashboard"])
+            token = jwt.encode(
+                {
+                    "user_id": staff["id"],
+                    "email": staff["email"],
+                    "role": staff.get("role", "custom"),
+                    "modules": modules,
+                    "phone": staff["email"],
+                },
+                settings.JWT_SECRET,
+                algorithm=settings.ALGORITHM,
+            )
+            return {
+                "user": {
+                    "id": staff["id"],
+                    "email": staff["email"],
+                    "role": staff.get("role", "custom"),
+                    "first_name": staff.get("first_name", ""),
+                    "last_name": staff.get("last_name", ""),
+                    "modules": modules,
+                },
+                "token": token,
+            }
 
     raise HTTPException(status_code=401, detail="Invalid credentials")
 
@@ -122,6 +184,7 @@ class DriverVerifyRequest(BaseModel):
 
 # ---------- Settings (single row id='app_settings', flat keys) ----------
 
+
 @admin_router.get("/settings")
 async def admin_get_settings():
     """Get all settings (normalized single app_settings row as dict)."""
@@ -133,21 +196,26 @@ async def admin_update_settings(settings: Dict[str, Any]):
     """Update settings (upsert single app_settings row)."""
     # First check if settings row exists
     existing = await db.settings.find_one({"id": "app_settings"})
-    
-    payload = {"id": "app_settings", **settings, "updated_at": datetime.utcnow().isoformat()}
-    
+
+    payload = {
+        "id": "app_settings",
+        **settings,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+
     if existing:
         # Update existing row - build update dict without 'id'
-        update_payload = {k: v for k, v in payload.items() if k != 'id'}
+        update_payload = {k: v for k, v in payload.items() if k != "id"}
         await db.settings.update_one({"id": "app_settings"}, {"$set": update_payload})
     else:
         # Insert new row
         await db.settings.insert_one(payload)
-    
+
     return {"message": "Settings updated"}
 
 
 # ---------- Service areas (table: service_areas) ----------
+
 
 @admin_router.get("/service-areas")
 async def admin_get_service_areas():
@@ -166,7 +234,6 @@ async def admin_create_service_area(area: Dict[str, Any]):
         "province": area.get("province", "SK"),
         "geojson": area.get("geojson"),
         "is_active": area.get("is_active", True),
-
         # Fees & Taxes
         "platform_fee": area.get("platform_fee", 0),
         "city_fee": area.get("city_fee", 0),
@@ -175,40 +242,60 @@ async def admin_create_service_area(area: Dict[str, Any]):
         "gst_rate": area.get("gst_rate", 5.0),
         "pst_rate": area.get("pst_rate", 6.0),
         "insurance_fee_percent": area.get("insurance_fee_percent", 2.0),
-
         # Cancellation fees (with driver/admin split)
         "rider_cancel_fee_before_driver": area.get("rider_cancel_fee_before_driver", 0),
-        "rider_cancel_fee_after_arrival": area.get("rider_cancel_fee_after_arrival", 4.50),
+        "rider_cancel_fee_after_arrival": area.get(
+            "rider_cancel_fee_after_arrival", 4.50
+        ),
         "cancel_fee_driver_share": area.get("cancel_fee_driver_share", 4.00),
         "cancel_fee_admin_share": area.get("cancel_fee_admin_share", 0.50),
-        "rider_cancel_fee_after_start": area.get("rider_cancel_fee_after_start", 0),  # 0 = full fare
+        "rider_cancel_fee_after_start": area.get(
+            "rider_cancel_fee_after_start", 0
+        ),  # 0 = full fare
         "driver_cancel_fee": area.get("driver_cancel_fee", 0),
         "free_cancel_window_seconds": area.get("free_cancel_window_seconds", 120),
-
         # Required driver documents
-        "required_documents": area.get("required_documents", [
-            {"key": "drivers_license", "label": "Driver's License", "has_expiry": True},
-            {"key": "vehicle_insurance", "label": "Vehicle Insurance", "has_expiry": True},
-            {"key": "vehicle_registration", "label": "Vehicle Registration", "has_expiry": True},
-            {"key": "background_check", "label": "Background Check", "has_expiry": True},
-            {"key": "vehicle_inspection", "label": "Vehicle Inspection", "has_expiry": True},
-        ]),
-
+        "required_documents": area.get(
+            "required_documents",
+            [
+                {
+                    "key": "drivers_license",
+                    "label": "Driver's License",
+                    "has_expiry": True,
+                },
+                {
+                    "key": "vehicle_insurance",
+                    "label": "Vehicle Insurance",
+                    "has_expiry": True,
+                },
+                {
+                    "key": "vehicle_registration",
+                    "label": "Vehicle Registration",
+                    "has_expiry": True,
+                },
+                {
+                    "key": "background_check",
+                    "label": "Background Check",
+                    "has_expiry": True,
+                },
+                {
+                    "key": "vehicle_inspection",
+                    "label": "Vehicle Inspection",
+                    "has_expiry": True,
+                },
+            ],
+        ),
         # Vehicle type pricing
         "vehicle_pricing": area.get("vehicle_pricing", []),
-
         # Spinr Pass — which subscription plans are available here
         "subscription_plan_ids": area.get("subscription_plan_ids", []),
         "spinr_pass_enabled": area.get("spinr_pass_enabled", True),
-
         # Surge
         "surge_enabled": area.get("surge_enabled", False),
         "surge_multiplier": area.get("surge_multiplier", 1.0),
-
         # Operational
         "max_pickup_radius_km": area.get("max_pickup_radius_km", 5.0),
         "currency": area.get("currency", "CAD"),
-
         "created_at": datetime.utcnow().isoformat(),
     }
     row = await db.service_areas.insert_one(doc)
@@ -220,25 +307,39 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
     """Update service area — accepts any field."""
     # Accept all fields that were sent
     allowed = [
-        'name', 'city', 'province', 'geojson', 'is_active',
-        'platform_fee', 'city_fee', 'airport_fee', 'is_airport',
-        'gst_rate', 'pst_rate', 'insurance_fee_percent',
-        'rider_cancel_fee_before_driver', 'rider_cancel_fee_after_arrival',
-        'cancel_fee_driver_share', 'cancel_fee_admin_share',
-        'rider_cancel_fee_after_start', 'driver_cancel_fee', 'free_cancel_window_seconds',
-        'required_documents',
-        'vehicle_pricing', 'subscription_plan_ids', 'spinr_pass_enabled',
-        'surge_enabled', 'surge_multiplier',
-        'max_pickup_radius_km', 'currency',
+        "name",
+        "city",
+        "province",
+        "geojson",
+        "is_active",
+        "platform_fee",
+        "city_fee",
+        "airport_fee",
+        "is_airport",
+        "gst_rate",
+        "pst_rate",
+        "insurance_fee_percent",
+        "rider_cancel_fee_before_driver",
+        "rider_cancel_fee_after_arrival",
+        "cancel_fee_driver_share",
+        "cancel_fee_admin_share",
+        "rider_cancel_fee_after_start",
+        "driver_cancel_fee",
+        "free_cancel_window_seconds",
+        "required_documents",
+        "vehicle_pricing",
+        "subscription_plan_ids",
+        "spinr_pass_enabled",
+        "surge_enabled",
+        "surge_multiplier",
+        "max_pickup_radius_km",
+        "currency",
     ]
     update_payload = {k: v for k, v in area.items() if k in allowed and v is not None}
 
     if update_payload:
-        update_payload['updated_at'] = datetime.utcnow().isoformat()
-        await db.service_areas.update_one(
-            {"id": area_id},
-            {"$set": update_payload}
-        )
+        update_payload["updated_at"] = datetime.utcnow().isoformat()
+        await db.service_areas.update_one({"id": area_id}, {"$set": update_payload})
     return {"message": "Service area updated"}
 
 
@@ -250,6 +351,7 @@ async def admin_delete_service_area(area_id: str):
 
 
 # ---------- Vehicle types (table: vehicle_types) ----------
+
 
 @admin_router.get("/vehicle-types")
 async def admin_get_vehicle_types():
@@ -269,7 +371,6 @@ async def admin_create_vehicle_type(vtype: Dict[str, Any]):
         "price_per_km": vtype.get("price_per_km"),
         "price_per_minute": vtype.get("price_per_minute"),
         "is_active": vtype.get("is_active", True),
-
         "created_at": datetime.utcnow().isoformat(),
     }
     row = await db.vehicle_types.insert_one(doc)
@@ -294,12 +395,9 @@ async def admin_update_vehicle_type(type_id: str, vtype: Dict[str, Any]):
         update_payload["price_per_minute"] = vtype.get("price_per_minute")
     if vtype.get("is_active") is not None:
         update_payload["is_active"] = vtype.get("is_active")
-    
+
     if update_payload:
-        await db.vehicle_types.update_one(
-            {"id": type_id},
-            {"$set": update_payload}
-        )
+        await db.vehicle_types.update_one({"id": type_id}, {"$set": update_payload})
     return {"message": "Vehicle type updated"}
 
 
@@ -312,10 +410,13 @@ async def admin_delete_vehicle_type(type_id: str):
 
 # ---------- Fare configs (table: fare_configs; schema column names) ----------
 
+
 @admin_router.get("/fare-configs")
 async def admin_get_fare_configs():
     """Get all fare configurations."""
-    configs = await db.get_rows("fare_configs", order="created_at", desc=True, limit=200)
+    configs = await db.get_rows(
+        "fare_configs", order="created_at", desc=True, limit=200
+    )
     return configs
 
 
@@ -328,7 +429,9 @@ async def admin_create_fare_config(config: Dict[str, Any]):
         "vehicle_type_id": config.get("vehicle_type_id", ""),
         "base_fare": config.get("base_fare", 0),
         "per_km_rate": config.get("price_per_km", config.get("per_km_rate", 0)),
-        "per_minute_rate": config.get("price_per_minute", config.get("per_minute_rate", 0)),
+        "per_minute_rate": config.get(
+            "price_per_minute", config.get("per_minute_rate", 0)
+        ),
         "minimum_fare": config.get("minimum_fare", 0),
         "booking_fee": config.get("booking_fee", 2.0),
         "is_active": config.get("is_active", True),
@@ -345,7 +448,9 @@ async def admin_update_fare_config(config_id: str, config: Dict[str, Any]):
         "name": config.get("name"),
         "base_fare": config.get("base_fare"),
         "per_km_rate": config.get("price_per_km", config.get("per_km_rate")),
-        "per_minute_rate": config.get("price_per_minute", config.get("per_minute_rate")),
+        "per_minute_rate": config.get(
+            "price_per_minute", config.get("per_minute_rate")
+        ),
         "area_geojson": config.get("area_geojson"),
         "is_active": config.get("is_active"),
     }
@@ -363,6 +468,7 @@ async def admin_delete_fare_config(config_id: str):
 
 
 # ---------- Drivers list (paginated, enriched with user) ----------
+
 
 def _user_display_name(user: Optional[Dict]) -> str:
     if not user:
@@ -385,7 +491,9 @@ async def admin_get_drivers(
         filters["is_verified"] = is_verified
     if is_online is not None:
         filters["is_online"] = is_online
-    drivers = await db.get_rows("drivers", filters, order="created_at", desc=True, limit=limit, offset=offset)
+    drivers = await db.get_rows(
+        "drivers", filters, order="created_at", desc=True, limit=limit, offset=offset
+    )
     user_ids = [d.get("user_id") for d in drivers if d.get("user_id")]
     users_map = {}
     for uid in user_ids:
@@ -395,12 +503,14 @@ async def admin_get_drivers(
     out = []
     for d in drivers:
         u = users_map.get(d.get("user_id"))
-        out.append({
-            **d,
-            "name": _user_display_name(u) or d.get("name"),
-            "email": u.get("email") if u else None,
-            "phone": u.get("phone") if u else d.get("phone"),
-        })
+        out.append(
+            {
+                **d,
+                "name": _user_display_name(u) or d.get("name"),
+                "email": u.get("email") if u else None,
+                "phone": u.get("phone") if u else d.get("phone"),
+            }
+        )
     return out
 
 
@@ -414,7 +524,9 @@ async def admin_get_rides(
     filters = {}
     if status:
         filters["status"] = status
-    rides = await db.get_rows("rides", filters, order="created_at", desc=True, limit=limit, offset=offset)
+    rides = await db.get_rows(
+        "rides", filters, order="created_at", desc=True, limit=limit, offset=offset
+    )
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
     users_map = {}
@@ -428,31 +540,56 @@ async def admin_get_rides(
             dr = await db.drivers.find_one({"id": did})
             drivers_map[did] = dr
             if dr and dr.get("user_id") and dr["user_id"] not in users_map:
-                users_map[dr["user_id"]] = await db.users.find_one({"id": dr["user_id"]})
+                users_map[dr["user_id"]] = await db.users.find_one(
+                    {"id": dr["user_id"]}
+                )
     out = []
     for r in rides:
         rider = users_map.get(r.get("rider_id"))
         driver = drivers_map.get(r.get("driver_id"))
         driver_user = users_map.get(driver.get("user_id")) if driver else None
-        out.append({
-            **r,
-            "rider_name": _user_display_name(rider),
-            "driver_name": _user_display_name(driver_user) if driver_user else (driver.get("name") if driver else None),
-        })
+        out.append(
+            {
+                **r,
+                "rider_name": _user_display_name(rider),
+                "driver_name": _user_display_name(driver_user)
+                if driver_user
+                else (driver.get("name") if driver else None),
+            }
+        )
     return out
 
 
 @admin_router.post("/drivers/{driver_id}/verify")
 async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest):
-    """Verify or unverify a driver."""
-    await db.drivers.update_one(
-        {"id": driver_id},
-        {"$set": {"is_verified": req.verified, "verified_at": datetime.utcnow().isoformat()}},
-    )
+    """Verify or unverify a driver.
+
+    NOTE: the Supabase `drivers` table in production was created from
+    supabase_schema.sql, which has no `updated_at` (and no `verified_at`)
+    column on `drivers`. Writing either triggers PGRST204 -> 500 (which
+    previously escaped CORSMiddleware and surfaced in the browser as a CORS
+    error). Only set columns that actually exist on the table.
+    """
+    try:
+        # First check if driver exists
+        existing_driver = await db.drivers.find_one({"id": driver_id})
+        if not existing_driver:
+            raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
+
+        await db.drivers.update_one(
+            {"id": driver_id},
+            {"$set": {"is_verified": req.verified}},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update driver {driver_id} verify flag: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}")
     return {"message": f"Driver {'verified' if req.verified else 'unverified'}"}
 
 
 # ---------- Stats (count_documents + sum from rides) ----------
+
 
 @admin_router.get("/stats")
 async def admin_get_stats():
@@ -460,7 +597,9 @@ async def admin_get_stats():
     total_drivers = await db.drivers.count_documents({})
     active_drivers = await db.drivers.count_documents({"is_online": True})
     total_rides = await db.rides.count_documents({})
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    today_start = (
+        datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    )
     rides_today = await db.rides.count_documents({"created_at": {"$gte": today_start}})
     completed_today = await db.get_rows(
         "rides",
@@ -468,7 +607,9 @@ async def admin_get_stats():
         limit=10000,
     )
     revenue_today = sum(float(r.get("total_fare") or 0) for r in completed_today)
-    month_start = (datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)).isoformat()
+    month_start = (
+        datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    ).isoformat()
     completed_month = await db.get_rows(
         "rides",
         {"status": "completed", "ride_completed_at": {"$gte": month_start}},
@@ -493,17 +634,37 @@ async def admin_get_ride_details(ride_id: str):
     ride = await db.rides.find_one({"id": ride_id})
     if not ride:
         return None
-    rider = await db.users.find_one({"id": ride.get("rider_id")}) if ride.get("rider_id") else None
-    driver = await db.drivers.find_one({"id": ride.get("driver_id")}) if ride.get("driver_id") else None
-    driver_user = await db.users.find_one({"id": driver["user_id"]}) if driver and driver.get("user_id") else None
-    vt = await db.vehicle_types.find_one({"id": ride.get("vehicle_type_id")}) if ride.get("vehicle_type_id") else None
+    rider = (
+        await db.users.find_one({"id": ride.get("rider_id")})
+        if ride.get("rider_id")
+        else None
+    )
+    driver = (
+        await db.drivers.find_one({"id": ride.get("driver_id")})
+        if ride.get("driver_id")
+        else None
+    )
+    driver_user = (
+        await db.users.find_one({"id": driver["user_id"]})
+        if driver and driver.get("user_id")
+        else None
+    )
+    vt = (
+        await db.vehicle_types.find_one({"id": ride.get("vehicle_type_id")})
+        if ride.get("vehicle_type_id")
+        else None
+    )
     return {
         **ride,
         "rider_name": _user_display_name(rider),
         "rider_phone": rider.get("phone") if isinstance(rider, dict) else None,
         "rider_email": rider.get("email") if isinstance(rider, dict) else None,
-        "driver_name": _user_display_name(driver_user) if driver_user else (driver.get("name") if isinstance(driver, dict) else None),
-        "driver_phone": driver_user.get("phone") if isinstance(driver_user, dict) else (driver.get("phone") if isinstance(driver, dict) else None),
+        "driver_name": _user_display_name(driver_user)
+        if driver_user
+        else (driver.get("name") if isinstance(driver, dict) else None),
+        "driver_phone": driver_user.get("phone")
+        if isinstance(driver_user, dict)
+        else (driver.get("phone") if isinstance(driver, dict) else None),
         "vehicle_type": vt.get("name") if isinstance(vt, dict) else None,
     }
 
@@ -511,14 +672,16 @@ async def admin_get_ride_details(ride_id: str):
 @admin_router.get("/drivers/{driver_id}/rides")
 async def admin_get_driver_rides(driver_id: str):
     """Get all rides for a specific driver."""
-    rides = await db.get_rows("rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=500)
+    rides = await db.get_rows(
+        "rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=500
+    )
     return rides
 
 
 @admin_router.get("/earnings")
 async def admin_get_earnings(period: str = Query("month")):
     """Get earnings statistics from completed rides.
-    
+
     Uses MongoDB aggregation to calculate totals from ride data.
     """
     # Calculate date range
@@ -529,21 +692,21 @@ async def admin_get_earnings(period: str = Query("month")):
         start_date = now - timedelta(days=7)
     else:  # month
         start_date = now - timedelta(days=30)
-    
+
     start_date_str = start_date.isoformat()
-    
+
     # Get completed rides since start_date
     completed_rides = await db.get_rows(
         "rides",
         {"status": "completed", "ride_completed_at": {"$gte": start_date_str}},
-        limit=10000
+        limit=10000,
     )
-    
+
     # Calculate totals
     total_revenue = sum(float(r.get("total_fare") or 0) for r in completed_rides)
     driver_earnings = sum(float(r.get("driver_earnings") or 0) for r in completed_rides)
     platform_fees = sum(float(r.get("admin_earnings") or 0) for r in completed_rides)
-    
+
     return {
         "period": period,
         "total_revenue": total_revenue,
@@ -551,6 +714,7 @@ async def admin_get_earnings(period: str = Query("month")):
         "driver_earnings": driver_earnings,
         "platform_fees": platform_fees,
     }
+
 
 @admin_router.get("/export/rides")
 async def admin_export_rides(
@@ -572,22 +736,28 @@ async def admin_export_rides(
             dr = await db.drivers.find_one({"id": did})
             drivers_map[did] = dr
             if dr and dr.get("user_id") and dr["user_id"] not in users_map:
-                users_map[dr["user_id"]] = await db.users.find_one({"id": dr["user_id"]})
+                users_map[dr["user_id"]] = await db.users.find_one(
+                    {"id": dr["user_id"]}
+                )
     out = []
     for r in rides:
         rider = users_map.get(r.get("rider_id"))
         driver = drivers_map.get(r.get("driver_id"))
         driver_user = users_map.get(driver.get("user_id")) if driver else None
-        out.append({
-            "id": r.get("id"),
-            "pickup_address": r.get("pickup_address"),
-            "dropoff_address": r.get("dropoff_address"),
-            "fare": r.get("total_fare"),
-            "status": r.get("status"),
-            "created_at": r.get("created_at"),
-            "rider_name": _user_display_name(rider),
-            "driver_name": _user_display_name(driver_user) if driver_user else (driver.get("name") if driver else None),
-        })
+        out.append(
+            {
+                "id": r.get("id"),
+                "pickup_address": r.get("pickup_address"),
+                "dropoff_address": r.get("dropoff_address"),
+                "fare": r.get("total_fare"),
+                "status": r.get("status"),
+                "created_at": r.get("created_at"),
+                "rider_name": _user_display_name(rider),
+                "driver_name": _user_display_name(driver_user)
+                if driver_user
+                else (driver.get("name") if driver else None),
+            }
+        )
     return {"rides": out, "count": len(out)}
 
 
@@ -603,23 +773,26 @@ async def admin_export_drivers():
     out = []
     for d in drivers:
         u = users_map.get(d.get("user_id"))
-        out.append({
-            "id": d.get("id"),
-            "name": _user_display_name(u),
-            "email": u.get("email") if isinstance(u, dict) else None,
-            "phone": u.get("phone") if isinstance(u, dict) else d.get("phone"),
-            "vehicle_make": d.get("vehicle_make"),
-            "vehicle_model": d.get("vehicle_model"),
-            "license_plate": d.get("license_plate"),
-            "is_verified": d.get("is_verified"),
-            "is_online": d.get("is_online"),
-            "total_rides": d.get("total_rides"),
-            "created_at": d.get("created_at"),
-        })
+        out.append(
+            {
+                "id": d.get("id"),
+                "name": _user_display_name(u),
+                "email": u.get("email") if isinstance(u, dict) else None,
+                "phone": u.get("phone") if isinstance(u, dict) else d.get("phone"),
+                "vehicle_make": d.get("vehicle_make"),
+                "vehicle_model": d.get("vehicle_model"),
+                "license_plate": d.get("license_plate"),
+                "is_verified": d.get("is_verified"),
+                "is_online": d.get("is_online"),
+                "total_rides": d.get("total_rides"),
+                "created_at": d.get("created_at"),
+            }
+        )
     return {"drivers": out, "count": len(out)}
 
 
 # ---------- Users (riders) ----------
+
 
 @admin_router.get("/users")
 async def admin_get_users(
@@ -637,8 +810,10 @@ async def admin_get_users(
             {"email": {"$regex": search, "$options": "i"}},
             {"phone": {"$regex": search, "$options": "i"}},
         ]
-    
-    users = await db.get_rows("users", filters, order="created_at", desc=True, limit=limit, offset=offset)
+
+    users = await db.get_rows(
+        "users", filters, order="created_at", desc=True, limit=limit, offset=offset
+    )
     return users
 
 
@@ -648,14 +823,16 @@ async def admin_get_user_details(user_id: str):
     user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     # Get user's recent rides
-    rides = await db.get_rows("rides", {"rider_id": user_id}, order="created_at", desc=True, limit=10)
-    
+    rides = await db.get_rows(
+        "rides", {"rider_id": user_id}, order="created_at", desc=True, limit=10
+    )
+
     return {
         **user,
         "total_rides": await db.rides.count_documents({"rider_id": user_id}),
-        "recent_rides": rides
+        "recent_rides": rides,
     }
 
 
@@ -664,23 +841,28 @@ async def admin_update_user_status(user_id: str, status_data: Dict[str, Any]):
     """Update user status (e.g., suspend, activate)."""
     valid_status = ["active", "suspended", "banned"]
     new_status = status_data.get("status")
-    
+
     if new_status not in valid_status:
-        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_status}")
-    
+        raise HTTPException(
+            status_code=400, detail=f"Invalid status. Must be one of: {valid_status}"
+        )
+
     await db.users.update_one(
         {"id": user_id},
-        {"$set": {"status": new_status, "updated_at": datetime.utcnow().isoformat()}}
+        {"$set": {"status": new_status, "updated_at": datetime.utcnow().isoformat()}},
     )
     return {"message": f"User status updated to {new_status}"}
 
 
 # ---------- Promotions (Discount Codes) ----------
 
+
 @admin_router.get("/promotions")
 async def admin_get_promotions():
     """Get all promotions/discount codes."""
-    promotions = await db.get_rows("promotions", order="created_at", desc=True, limit=500)
+    promotions = await db.get_rows(
+        "promotions", order="created_at", desc=True, limit=500
+    )
     return promotions
 
 
@@ -690,51 +872,61 @@ async def admin_create_promotion(promotion: Dict[str, Any]):
     doc = {
         "code": (promotion.get("code") or "").strip().upper(),
         "description": promotion.get("description", ""),
-        "promo_type": promotion.get("promo_type", "discount"),  # discount, referral, reward, private
+        "promo_type": promotion.get(
+            "promo_type", "discount"
+        ),  # discount, referral, reward, private
         "discount_type": promotion.get("discount_type", "flat"),  # flat | percentage
         "discount_value": promotion.get("discount_value", 0),
         "max_discount": promotion.get("max_discount"),  # cap for percentage
-
         # Usage limits
         "max_uses": promotion.get("max_uses", 0),  # 0 = unlimited total uses
-        "max_uses_per_user": promotion.get("max_uses_per_user", 1),  # 0 = unlimited per user
+        "max_uses_per_user": promotion.get(
+            "max_uses_per_user", 1
+        ),  # 0 = unlimited per user
         "uses": 0,
-
         # Validity
         "valid_from": promotion.get("valid_from", datetime.utcnow().isoformat()),
         "expiry_date": promotion.get("expiry_date"),
-
         # Ride requirements
         "min_ride_fare": promotion.get("min_ride_fare", 0),  # minimum fare to apply
-
         # User targeting
         "first_ride_only": promotion.get("first_ride_only", False),
-        "new_user_days": promotion.get("new_user_days", 0),  # 0 = no restriction, 7 = users < 7 days old
-        "inactive_days": promotion.get("inactive_days", 0),  # target users with no rides in X days
-        "min_total_rides": promotion.get("min_total_rides", 0),  # user must have at least X completed rides
-        "max_total_rides": promotion.get("max_total_rides", 0),  # user must have less than X rides (0=no limit)
-
+        "new_user_days": promotion.get(
+            "new_user_days", 0
+        ),  # 0 = no restriction, 7 = users < 7 days old
+        "inactive_days": promotion.get(
+            "inactive_days", 0
+        ),  # target users with no rides in X days
+        "min_total_rides": promotion.get(
+            "min_total_rides", 0
+        ),  # user must have at least X completed rides
+        "max_total_rides": promotion.get(
+            "max_total_rides", 0
+        ),  # user must have less than X rides (0=no limit)
         # Private coupon (specific user only)
-        "assigned_user_ids": promotion.get("assigned_user_ids", []),  # empty = available to all
-
+        "assigned_user_ids": promotion.get(
+            "assigned_user_ids", []
+        ),  # empty = available to all
         # Area & vehicle targeting
         "applicable_areas": promotion.get("applicable_areas", []),  # empty = all areas
-        "applicable_vehicles": promotion.get("applicable_vehicles", []),  # empty = all vehicles
-        "user_segments": promotion.get("user_segments", []),  # tags like "vip", "corporate"
-
+        "applicable_vehicles": promotion.get(
+            "applicable_vehicles", []
+        ),  # empty = all vehicles
+        "user_segments": promotion.get(
+            "user_segments", []
+        ),  # tags like "vip", "corporate"
         # Budget
         "total_budget": promotion.get("total_budget", 0),  # 0 = no budget limit
         "budget_used": 0,
-
         # Schedule
-        "valid_days": promotion.get("valid_days", []),  # empty = all days, ["mon","tue"]
+        "valid_days": promotion.get(
+            "valid_days", []
+        ),  # empty = all days, ["mon","tue"]
         "valid_hours_start": promotion.get("valid_hours_start"),  # e.g. "08:00"
         "valid_hours_end": promotion.get("valid_hours_end"),  # e.g. "22:00"
-
         # Referral
         "referrer_user_id": promotion.get("referrer_user_id"),
         "referrer_reward": promotion.get("referrer_reward", 0),
-
         "is_active": promotion.get("is_active", True),
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
@@ -747,13 +939,32 @@ async def admin_create_promotion(promotion: Dict[str, Any]):
 async def admin_update_promotion(promotion_id: str, promotion: Dict[str, Any]):
     """Update a promotion."""
     allowed_fields = [
-        "code", "description", "promo_type", "discount_type", "discount_value",
-        "max_discount", "max_uses", "max_uses_per_user", "valid_from", "expiry_date",
-        "min_ride_fare", "first_ride_only", "new_user_days", "applicable_areas",
-        "applicable_vehicles", "user_segments", "total_budget", "valid_days",
-        "valid_hours_start", "valid_hours_end", "referrer_reward", "is_active",
+        "code",
+        "description",
+        "promo_type",
+        "discount_type",
+        "discount_value",
+        "max_discount",
+        "max_uses",
+        "max_uses_per_user",
+        "valid_from",
+        "expiry_date",
+        "min_ride_fare",
+        "first_ride_only",
+        "new_user_days",
+        "applicable_areas",
+        "applicable_vehicles",
+        "user_segments",
+        "total_budget",
+        "valid_days",
+        "valid_hours_start",
+        "valid_hours_end",
+        "referrer_reward",
+        "is_active",
     ]
-    updates = {k: v for k, v in promotion.items() if k in allowed_fields and v is not None}
+    updates = {
+        k: v for k, v in promotion.items() if k in allowed_fields and v is not None
+    }
 
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
@@ -770,6 +981,7 @@ async def admin_delete_promotion(promotion_id: str):
 
 # ---------- Disputes ----------
 
+
 @admin_router.get("/disputes")
 async def admin_get_disputes():
     """Get all disputes."""
@@ -783,14 +995,11 @@ async def admin_get_dispute_details(dispute_id: str):
     dispute = await db.disputes.find_one({"id": dispute_id})
     if not dispute:
         raise HTTPException(status_code=404, detail="Dispute not found")
-    
+
     # Get related ride information
     ride = await db.rides.find_one({"id": dispute.get("ride_id")})
-    
-    return {
-        **dispute,
-        "ride_details": ride
-    }
+
+    return {**dispute, "ride_details": ride}
 
 
 @admin_router.put("/disputes/{dispute_id}/resolve")
@@ -800,22 +1009,22 @@ async def admin_resolve_dispute(dispute_id: str, resolution: Dict[str, Any]):
         "resolution_status": resolution.get("status"),  # resolved, rejected, pending
         "resolution_notes": resolution.get("notes", ""),
         "resolved_at": datetime.utcnow().isoformat(),
-        "resolved_by": resolution.get("resolved_by", "admin")
+        "resolved_by": resolution.get("resolved_by", "admin"),
     }
-    
-    await db.disputes.update_one(
-        {"id": dispute_id},
-        {"$set": resolution_data}
-    )
+
+    await db.disputes.update_one({"id": dispute_id}, {"$set": resolution_data})
     return {"message": "Dispute resolved"}
 
 
 # ---------- Support Tickets ----------
 
+
 @admin_router.get("/tickets")
 async def admin_get_tickets():
     """Get all support tickets."""
-    tickets = await db.get_rows("support_tickets", order="created_at", desc=True, limit=500)
+    tickets = await db.get_rows(
+        "support_tickets", order="created_at", desc=True, limit=500
+    )
     return tickets
 
 
@@ -825,14 +1034,13 @@ async def admin_get_ticket_details(ticket_id: str):
     ticket = await db.support_tickets.find_one({"id": ticket_id})
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    
+
     # Get ticket messages
-    messages = await db.get_rows("support_messages", {"ticket_id": ticket_id}, order="created_at", limit=100)
-    
-    return {
-        **ticket,
-        "messages": messages
-    }
+    messages = await db.get_rows(
+        "support_messages", {"ticket_id": ticket_id}, order="created_at", limit=100
+    )
+
+    return {**ticket, "messages": messages}
 
 
 @admin_router.post("/tickets/{ticket_id}/reply")
@@ -845,17 +1053,22 @@ async def admin_reply_to_ticket(ticket_id: str, reply: Dict[str, Any]):
         "message": reply.get("message", ""),
         "created_at": datetime.utcnow().isoformat(),
     }
-    
+
     # Insert message
     await db.support_messages.insert_one(message_doc)
-    
+
     # Update ticket status if needed
     if reply.get("status"):
         await db.support_tickets.update_one(
             {"id": ticket_id},
-            {"$set": {"status": reply.get("status"), "updated_at": datetime.utcnow().isoformat()}}
+            {
+                "$set": {
+                    "status": reply.get("status"),
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+            },
         )
-    
+
     return {"message": "Reply sent"}
 
 
@@ -864,12 +1077,13 @@ async def admin_close_ticket(ticket_id: str):
     """Close a support ticket."""
     await db.support_tickets.update_one(
         {"id": ticket_id},
-        {"$set": {"status": "closed", "closed_at": datetime.utcnow().isoformat()}}
+        {"$set": {"status": "closed", "closed_at": datetime.utcnow().isoformat()}},
     )
     return {"message": "Ticket closed"}
 
 
 # ---------- FAQs ----------
+
 
 @admin_router.get("/faqs")
 async def admin_get_faqs():
@@ -904,7 +1118,7 @@ async def admin_update_faq(faq_id: str, faq: Dict[str, Any]):
         updates["category"] = faq.get("category")
     if faq.get("is_active") is not None:
         updates["is_active"] = faq.get("is_active")
-    
+
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
         await db.faqs.update_one({"id": faq_id}, {"$set": updates})
@@ -919,6 +1133,7 @@ async def admin_delete_faq(faq_id: str):
 
 
 # ---------- Notifications ----------
+
 
 @admin_router.post("/notifications/send")
 async def admin_send_notification(notification: Dict[str, Any]):
@@ -977,7 +1192,9 @@ async def admin_get_notifications(
     notifications = await db.get_rows(
         "notifications",
         filters,
-        order="created_at" if "created_at" in (await db.notifications.find_one({}) or {}) else "sent_at",
+        order="created_at"
+        if "created_at" in (await db.notifications.find_one({}) or {})
+        else "sent_at",
         desc=True,
         limit=limit,
         offset=offset,
@@ -987,10 +1204,13 @@ async def admin_get_notifications(
 
 # ---------- Area Management (Pricing, Tax, Vehicle Pricing) ----------
 
+
 @admin_router.get("/areas/{area_id}/fees")
 async def admin_get_area_fees(area_id: str):
     """Get all fees for a service area."""
-    fees = await db.get_rows("area_fees", {"service_area_id": area_id}, order="created_at", limit=100)
+    fees = await db.get_rows(
+        "area_fees", {"service_area_id": area_id}, order="created_at", limit=100
+    )
     return fees
 
 
@@ -1021,7 +1241,7 @@ async def admin_update_area_fee(area_id: str, fee_id: str, fee: Dict[str, Any]):
         updates["description"] = fee.get("description")
     if fee.get("is_active") is not None:
         updates["is_active"] = fee.get("is_active")
-    
+
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
         await db.area_fees.update_one({"id": fee_id}, {"$set": updates})
@@ -1051,39 +1271,45 @@ async def admin_update_area_tax(area_id: str, tax: Dict[str, Any]):
         "tax_name": tax.get("tax_name", "Tax"),
         "updated_at": datetime.utcnow().isoformat(),
     }
-    
+
     existing = await db.area_taxes.find_one({"service_area_id": area_id})
     if existing:
         await db.area_taxes.update_one({"service_area_id": area_id}, {"$set": tax_doc})
     else:
         await db.area_taxes.insert_one(tax_doc)
-    
+
     return {"message": "Area tax updated"}
 
 
 @admin_router.get("/areas/{area_id}/vehicle-pricing")
 async def admin_get_vehicle_pricing(area_id: str):
     """Get vehicle pricing configuration for a service area."""
-    pricing = await db.get_rows("vehicle_pricing", {"service_area_id": area_id}, order="created_at", limit=100)
+    pricing = await db.get_rows(
+        "vehicle_pricing", {"service_area_id": area_id}, order="created_at", limit=100
+    )
     return pricing
 
 
 # ---------- Driver Area Assignment ----------
+
 
 @admin_router.put("/drivers/{driver_id}/area")
 async def admin_assign_driver_area(driver_id: str, service_area_id: str):
     """Assign a driver to a specific service area."""
     await db.drivers.update_one(
         {"id": driver_id},
-        {"$set": {
-            "service_area_id": service_area_id,
-            "updated_at": datetime.utcnow().isoformat()
-        }}
+        {
+            "$set": {
+                "service_area_id": service_area_id,
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+        },
     )
     return {"message": f"Driver assigned to area {service_area_id}"}
 
 
 # ---------- Surge Pricing ----------
+
 
 @admin_router.put("/service-areas/{area_id}/surge")
 async def admin_update_surge_pricing(area_id: str, surge: Dict[str, Any]):
@@ -1094,13 +1320,15 @@ async def admin_update_surge_pricing(area_id: str, surge: Dict[str, Any]):
         "is_active": surge.get("is_active", False),
         "updated_at": datetime.utcnow().isoformat(),
     }
-    
+
     existing = await db.surge_pricing.find_one({"service_area_id": area_id})
     if existing:
-        await db.surge_pricing.update_one({"service_area_id": area_id}, {"$set": surge_doc})
+        await db.surge_pricing.update_one(
+            {"service_area_id": area_id}, {"$set": surge_doc}
+        )
     else:
         await db.surge_pricing.insert_one(surge_doc)
-    
+
     return {"message": "Surge pricing updated"}
 
 
@@ -1117,15 +1345,25 @@ async def admin_get_driver_location_trail(
         order="timestamp",
         limit=5000,
     )
-    return [{"lat": loc.get("lat"), "lng": loc.get("lng"), "timestamp": loc.get("timestamp")} for loc in locations]
+    return [
+        {
+            "lat": loc.get("lat"),
+            "lng": loc.get("lng"),
+            "timestamp": loc.get("timestamp"),
+        }
+        for loc in locations
+    ]
 
 
 # ---------- Document Requirements ----------
 
+
 @admin_router.get("/documents/requirements")
 async def admin_get_document_requirements():
     """Get all document requirements."""
-    requirements = await db.get_rows("document_requirements", order="created_at", limit=100)
+    requirements = await db.get_rows(
+        "document_requirements", order="created_at", limit=100
+    )
     return requirements or []
 
 
@@ -1137,15 +1375,21 @@ async def admin_create_document_requirement(requirement: Dict[str, Any]):
         "description": requirement.get("description", ""),
         "document_type": requirement.get("document_type"),
         "is_required": requirement.get("is_required", True),
-        "applicable_to": requirement.get("applicable_to", "driver"),  # driver, rider, vehicle
+        "applicable_to": requirement.get(
+            "applicable_to", "driver"
+        ),  # driver, rider, vehicle
         "created_at": datetime.utcnow().isoformat(),
     }
     row = await db.document_requirements.insert_one(doc)
-    return {"requirement_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+    return {
+        "requirement_id": str(row.get("id") if row and isinstance(row, dict) else "")
+    }
 
 
 @admin_router.put("/documents/requirements/{requirement_id}")
-async def admin_update_document_requirement(requirement_id: str, requirement: Dict[str, Any]):
+async def admin_update_document_requirement(
+    requirement_id: str, requirement: Dict[str, Any]
+):
     """Update a document requirement."""
     updates = {}
     if requirement.get("name") is not None:
@@ -1158,10 +1402,12 @@ async def admin_update_document_requirement(requirement_id: str, requirement: Di
         updates["is_required"] = requirement.get("is_required")
     if requirement.get("applicable_to") is not None:
         updates["applicable_to"] = requirement.get("applicable_to")
-    
+
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
-        await db.document_requirements.update_one({"id": requirement_id}, {"$set": updates})
+        await db.document_requirements.update_one(
+            {"id": requirement_id}, {"$set": updates}
+        )
     return {"message": "Document requirement updated"}
 
 
@@ -1174,6 +1420,7 @@ async def admin_delete_document_requirement(requirement_id: str):
 
 # ---------- Driver Documents ----------
 
+
 @admin_router.get("/documents/drivers/{driver_id}")
 async def admin_get_driver_documents(driver_id: str):
     """Get all documents for a specific driver."""
@@ -1182,7 +1429,7 @@ async def admin_get_driver_documents(driver_id: str):
         {"driver_id": driver_id},
         order="uploaded_at",
         desc=True,
-        limit=100
+        limit=100,
     )
     return documents or []
 
@@ -1192,13 +1439,13 @@ async def admin_get_driver_documents(driver_id: str):
 # the go-online expiry check in routes/drivers.py update_driver_status stops
 # rejecting the driver based on the stale onboarding-time value.
 _REQUIREMENT_EXPIRY_FIELD_KEYWORDS = (
-    ("license",     "license_expiry_date"),
-    ("driving",     "license_expiry_date"),
-    ("permit",      "license_expiry_date"),
-    ("insurance",   "insurance_expiry_date"),
-    ("inspection",  "vehicle_inspection_expiry_date"),
-    ("background",  "background_check_expiry_date"),
-    ("work",        "work_eligibility_expiry_date"),
+    ("license", "license_expiry_date"),
+    ("driving", "license_expiry_date"),
+    ("permit", "license_expiry_date"),
+    ("insurance", "insurance_expiry_date"),
+    ("inspection", "vehicle_inspection_expiry_date"),
+    ("background", "background_check_expiry_date"),
+    ("work", "work_eligibility_expiry_date"),
     ("eligibility", "work_eligibility_expiry_date"),
 )
 
@@ -1214,10 +1461,7 @@ def _legacy_expiry_field_for_requirement(req_name: Optional[str]) -> Optional[st
 
 
 @admin_router.post("/documents/{document_id}/review")
-async def admin_review_driver_document(
-    document_id: str,
-    review_data: Dict[str, Any]
-):
+async def admin_review_driver_document(document_id: str, review_data: Dict[str, Any]):
     """Review and approve/reject a driver document.
 
     On approval, if an ``expiry_date`` is provided (or already stored on the
@@ -1248,25 +1492,32 @@ async def admin_review_driver_document(
         except ValueError:
             new_expiry_iso = None
 
+    # NOTE: driver_documents schema only guarantees these columns:
+    #   id, driver_id, document_type, document_url, status,
+    #   rejection_reason, uploaded_at, updated_at, requirement_id, side
+    # Writing `reviewed_at` or `expiry_date` here would cause PGRST204
+    # ("Could not find the X column") -> 500 response with no CORS headers,
+    # which is why this endpoint has been silently failing in production.
     updates: Dict[str, Any] = {
         "status": status,
-        "reviewed_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }
     if rejection_reason:
         updates["rejection_reason"] = rejection_reason
-    if new_expiry_iso is not None:
-        updates["expiry_date"] = new_expiry_iso
 
-    await db.driver_documents.update_one(
-        {"id": document_id},
-        {"$set": updates},
-    )
+    try:
+        await db.driver_documents.update_one(
+            {"id": document_id},
+            {"$set": updates},
+        )
+    except Exception as e:
+        logger.error(f"Failed to update driver_document {document_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update document: {e}")
 
     # On approval, propagate the expiry to the legacy drivers.* column so the
     # go-online check stops blocking based on stale onboarding-time values.
     if status == "approved":
-        effective_expiry_iso = new_expiry_iso or existing.get("expiry_date")
+        effective_expiry_iso = new_expiry_iso
 
         req_row = None
         try:
@@ -1304,6 +1555,7 @@ async def admin_review_driver_document(
 
 # ---------- Heat Map Data ----------
 
+
 @admin_router.get("/rides/heatmap-data")
 async def admin_get_heatmap_data(
     filter: str = Query("all"),
@@ -1338,7 +1590,9 @@ async def admin_get_heatmap_data(
     if service_area_id:
         query_filters["service_area_id"] = service_area_id
 
-    rides = await db.get_rows("rides", query_filters, order="created_at", desc=True, limit=10000)
+    rides = await db.get_rows(
+        "rides", query_filters, order="created_at", desc=True, limit=10000
+    )
 
     pickup_points = []
     dropoff_points = []
@@ -1416,7 +1670,9 @@ async def admin_update_heatmap_settings(data: Dict[str, Any]):
     existing = await db.settings.find_one({"id": _HEATMAP_SETTINGS_ID})
     if existing:
         update_fields = {k: v for k, v in payload.items() if k != "id"}
-        await db.settings.update_one({"id": _HEATMAP_SETTINGS_ID}, {"$set": update_fields})
+        await db.settings.update_one(
+            {"id": _HEATMAP_SETTINGS_ID}, {"$set": update_fields}
+        )
     else:
         await db.settings.insert_one(payload)
 
@@ -1430,24 +1686,44 @@ async def admin_update_heatmap_settings(data: Dict[str, Any]):
 # See routes/corporate_accounts.py for implementation
 
 
-
 # ============================================================
 # Staff Management — Multi-admin with role-based module access
 # ============================================================
 
 AVAILABLE_MODULES = [
-    'dashboard', 'users', 'drivers', 'rides', 'earnings',
-    'promotions', 'surge', 'service_areas', 'vehicle_types',
-    'pricing', 'support', 'disputes', 'notifications',
-    'settings', 'corporate_accounts', 'documents', 'heatmap',
-    'staff',  # Only super_admin can access this
+    "dashboard",
+    "users",
+    "drivers",
+    "rides",
+    "earnings",
+    "promotions",
+    "surge",
+    "service_areas",
+    "vehicle_types",
+    "pricing",
+    "support",
+    "disputes",
+    "notifications",
+    "settings",
+    "corporate_accounts",
+    "documents",
+    "heatmap",
+    "staff",  # Only super_admin can access this
 ]
 
 ROLE_PRESETS = {
-    'super_admin': AVAILABLE_MODULES,
-    'operations': ['dashboard', 'rides', 'drivers', 'surge', 'service_areas', 'vehicle_types', 'heatmap'],
-    'support': ['dashboard', 'support', 'disputes', 'notifications', 'users'],
-    'finance': ['dashboard', 'earnings', 'promotions', 'corporate_accounts', 'pricing'],
+    "super_admin": AVAILABLE_MODULES,
+    "operations": [
+        "dashboard",
+        "rides",
+        "drivers",
+        "surge",
+        "service_areas",
+        "vehicle_types",
+        "heatmap",
+    ],
+    "support": ["dashboard", "support", "disputes", "notifications", "users"],
+    "finance": ["dashboard", "earnings", "promotions", "corporate_accounts", "pricing"],
 }
 
 
@@ -1456,7 +1732,7 @@ class StaffCreateRequest(BaseModel):
     password: str
     first_name: str
     last_name: str
-    role: str = 'custom'  # super_admin, operations, support, finance, custom
+    role: str = "custom"  # super_admin, operations, support, finance, custom
     modules: Optional[List[str]] = None  # Only used if role=custom
 
 
@@ -1471,102 +1747,104 @@ class StaffUpdateRequest(BaseModel):
 @admin_router.get("/staff")
 async def list_staff(authorization: Optional[str] = Header(None)):
     """List all staff members."""
-    staff = await db.get_rows('admin_staff', limit=100)
+    staff = await db.get_rows("admin_staff", limit=100)
     # Remove passwords from response
     for s in staff:
-        s.pop('password_hash', None)
-        s.pop('password', None)
+        s.pop("password_hash", None)
+        s.pop("password", None)
     return staff
 
 
 @admin_router.post("/staff")
-async def create_staff(req: StaffCreateRequest, authorization: Optional[str] = Header(None)):
+async def create_staff(
+    req: StaffCreateRequest, authorization: Optional[str] = Header(None)
+):
     """Create a new staff member with role-based module access."""
     import hashlib
 
     # Check if email already exists
-    existing = await db.admin_staff.find_one({'email': req.email.lower()})
+    existing = await db.admin_staff.find_one({"email": req.email.lower()})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered as staff")
 
     # Determine modules based on role
     if req.role in ROLE_PRESETS:
         modules = ROLE_PRESETS[req.role]
-    elif req.role == 'custom' and req.modules:
+    elif req.role == "custom" and req.modules:
         modules = [m for m in req.modules if m in AVAILABLE_MODULES]
     else:
-        modules = ['dashboard']
+        modules = ["dashboard"]
 
     staff = {
-        'id': str(uuid.uuid4()),
-        'email': req.email.lower(),
-        'password_hash': hashlib.sha256(req.password.encode()).hexdigest(),
-        'first_name': req.first_name,
-        'last_name': req.last_name,
-        'role': req.role,
-        'modules': modules,
-        'is_active': True,
-        'created_at': datetime.utcnow().isoformat(),
-        'last_login': None,
+        "id": str(uuid.uuid4()),
+        "email": req.email.lower(),
+        "password_hash": hashlib.sha256(req.password.encode()).hexdigest(),
+        "first_name": req.first_name,
+        "last_name": req.last_name,
+        "role": req.role,
+        "modules": modules,
+        "is_active": True,
+        "created_at": datetime.utcnow().isoformat(),
+        "last_login": None,
     }
 
     await db.admin_staff.insert_one(staff)
-    staff.pop('password_hash')
+    staff.pop("password_hash")
     return staff
 
 
 @admin_router.get("/staff/{staff_id}")
 async def get_staff(staff_id: str):
     """Get a single staff member."""
-    s = await db.admin_staff.find_one({'id': staff_id})
+    s = await db.admin_staff.find_one({"id": staff_id})
     if not s:
         raise HTTPException(status_code=404, detail="Staff member not found")
-    s.pop('password_hash', None)
-    s.pop('password', None)
+    s.pop("password_hash", None)
+    s.pop("password", None)
     return s
 
 
 @admin_router.put("/staff/{staff_id}")
 async def update_staff(staff_id: str, req: StaffUpdateRequest):
     """Update staff member role/modules/status."""
-    s = await db.admin_staff.find_one({'id': staff_id})
+    s = await db.admin_staff.find_one({"id": staff_id})
     if not s:
         raise HTTPException(status_code=404, detail="Staff member not found")
 
     updates = {}
     if req.first_name is not None:
-        updates['first_name'] = req.first_name
+        updates["first_name"] = req.first_name
     if req.last_name is not None:
-        updates['last_name'] = req.last_name
+        updates["last_name"] = req.last_name
     if req.is_active is not None:
-        updates['is_active'] = req.is_active
+        updates["is_active"] = req.is_active
     if req.role is not None:
-        updates['role'] = req.role
+        updates["role"] = req.role
         if req.role in ROLE_PRESETS:
-            updates['modules'] = ROLE_PRESETS[req.role]
+            updates["modules"] = ROLE_PRESETS[req.role]
     if req.modules is not None:
-        updates['modules'] = [m for m in req.modules if m in AVAILABLE_MODULES]
+        updates["modules"] = [m for m in req.modules if m in AVAILABLE_MODULES]
 
     if updates:
-        updates['updated_at'] = datetime.utcnow().isoformat()
-        await db.admin_staff.update_one({'id': staff_id}, {'$set': updates})
+        updates["updated_at"] = datetime.utcnow().isoformat()
+        await db.admin_staff.update_one({"id": staff_id}, {"$set": updates})
 
-    return {'success': True}
+    return {"success": True}
 
 
 @admin_router.delete("/staff/{staff_id}")
 async def delete_staff(staff_id: str):
     """Delete a staff member."""
-    await db.admin_staff.delete_many({'id': staff_id})
-    return {'success': True}
+    await db.admin_staff.delete_many({"id": staff_id})
+    return {"success": True}
 
 
 @admin_router.get("/staff/modules/list")
 async def list_modules():
     """List available modules and role presets."""
     return {
-        'modules': AVAILABLE_MODULES,
-        'role_presets': {k: v for k, v in ROLE_PRESETS.items()},
+        "modules": AVAILABLE_MODULES,
+        "role_presets": {k: v for k, v in ROLE_PRESETS.items()},
     }
 
 
@@ -1574,11 +1852,12 @@ async def list_modules():
 # Spinr Pass — Driver Subscription Plans
 # ============================================================
 
+
 class SubscriptionPlanCreate(BaseModel):
-    name: str                          # "Basic", "Pro", "Unlimited"
-    price: float                       # 19.99, 49.99
-    duration_days: int = 30            # 1=daily, 7=weekly, 30=monthly
-    rides_per_day: int = -1            # -1 = unlimited, or 4, 8, etc.
+    name: str  # "Basic", "Pro", "Unlimited"
+    price: float  # 19.99, 49.99
+    duration_days: int = 30  # 1=daily, 7=weekly, 30=monthly
+    rides_per_day: int = -1  # -1 = unlimited, or 4, 8, etc.
     description: Optional[str] = None
     features: Optional[List[str]] = None  # ["Priority support", "Surge protection"]
     vehicle_types: Optional[List[str]] = None  # restrict to vehicle type IDs, null=all
@@ -1601,7 +1880,7 @@ class SubscriptionPlanUpdate(BaseModel):
 @admin_router.get("/subscription-plans")
 async def list_subscription_plans():
     """List all Spinr Pass subscription plans."""
-    plans = await db.get_rows('subscription_plans', limit=50)
+    plans = await db.get_rows("subscription_plans", limit=50)
     return plans
 
 
@@ -1609,18 +1888,18 @@ async def list_subscription_plans():
 async def create_subscription_plan(req: SubscriptionPlanCreate):
     """Create a new driver subscription plan."""
     plan = {
-        'id': str(uuid.uuid4()),
-        'name': req.name,
-        'price': req.price,
-        'duration_days': req.duration_days,
-        'rides_per_day': req.rides_per_day,
-        'description': req.description or '',
-        'features': req.features or [],
-        'vehicle_types': req.vehicle_types,
-        'service_areas': req.service_areas,
-        'is_active': req.is_active,
-        'subscriber_count': 0,
-        'created_at': datetime.utcnow().isoformat(),
+        "id": str(uuid.uuid4()),
+        "name": req.name,
+        "price": req.price,
+        "duration_days": req.duration_days,
+        "rides_per_day": req.rides_per_day,
+        "description": req.description or "",
+        "features": req.features or [],
+        "vehicle_types": req.vehicle_types,
+        "service_areas": req.service_areas,
+        "is_active": req.is_active,
+        "subscriber_count": 0,
+        "created_at": datetime.utcnow().isoformat(),
     }
     await db.subscription_plans.insert_one(plan)
     return plan
@@ -1631,26 +1910,27 @@ async def update_subscription_plan(plan_id: str, req: SubscriptionPlanUpdate):
     """Update a subscription plan."""
     updates = {k: v for k, v in req.dict().items() if v is not None}
     if updates:
-        updates['updated_at'] = datetime.utcnow().isoformat()
-        await db.subscription_plans.update_one({'id': plan_id}, {'$set': updates})
-    return {'success': True}
+        updates["updated_at"] = datetime.utcnow().isoformat()
+        await db.subscription_plans.update_one({"id": plan_id}, {"$set": updates})
+    return {"success": True}
 
 
 @admin_router.delete("/subscription-plans/{plan_id}")
 async def delete_subscription_plan(plan_id: str):
     """Delete a subscription plan."""
-    await db.subscription_plans.delete_many({'id': plan_id})
-    return {'success': True}
+    await db.subscription_plans.delete_many({"id": plan_id})
+    return {"success": True}
 
 
 # ─── Driver Subscription Management ───
+
 
 @admin_router.get("/driver-subscriptions")
 async def list_driver_subscriptions(status: Optional[str] = Query(None)):
     """List all driver subscriptions, optionally filtered by status."""
     subs = await db.driver_subscriptions.find({}).to_list(200)
     if status:
-        subs = [s for s in subs if s.get('status') == status]
+        subs = [s for s in subs if s.get("status") == status]
     return subs
 
 
@@ -1658,21 +1938,26 @@ async def list_driver_subscriptions(status: Optional[str] = Query(None)):
 # Audit Logs
 # ============================================================
 
+
 @admin_router.get("/audit-logs")
 async def get_audit_logs(limit: int = Query(50), offset: int = Query(0)):
     """Get audit log entries."""
-    logs = await db.get_rows('audit_logs', order='created_at', desc=True, limit=limit)
+    logs = await db.get_rows("audit_logs", order="created_at", desc=True, limit=limit)
     return logs
 
 
-async def log_audit(action: str, entity_type: str, entity_id: str, user_email: str, details: str = ""):
+async def log_audit(
+    action: str, entity_type: str, entity_id: str, user_email: str, details: str = ""
+):
     """Record an audit log entry. Call from admin endpoints."""
-    await db.audit_logs.insert_one({
-        'id': str(uuid.uuid4()),
-        'action': action,           # created, updated, deleted, login, status_change
-        'entity_type': entity_type,  # driver, user, ride, promotion, service_area, staff, setting
-        'entity_id': entity_id,
-        'user_email': user_email,
-        'details': details,
-        'created_at': datetime.utcnow().isoformat(),
-    })
+    await db.audit_logs.insert_one(
+        {
+            "id": str(uuid.uuid4()),
+            "action": action,  # created, updated, deleted, login, status_change
+            "entity_type": entity_type,  # driver, user, ride, promotion, service_area, staff, setting
+            "entity_id": entity_id,
+            "user_email": user_email,
+            "details": details,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+    )

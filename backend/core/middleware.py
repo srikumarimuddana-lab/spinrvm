@@ -1,4 +1,6 @@
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Request
+from fastapi.responses import JSONResponse
 from slowapi.errors import RateLimitExceeded
 from loguru import logger
 from core.config import settings
@@ -33,6 +35,35 @@ def init_middleware(app):
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # FIX: Add CORS headers to exception responses (FastAPI bug fix)
+    @app.exception_handler(Exception)
+    async def cors_exception_handler(request: Request, exc: Exception):
+        origin = request.headers.get("origin")
+        
+        # Handle standard HTTP exceptions
+        if hasattr(exc, 'status_code') and hasattr(exc, 'detail'):
+            response = JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail}
+            )
+        else:
+            # Handle unhandled exceptions
+            logger.error(f"Unhandled exception: {exc}")
+            response = JSONResponse(
+                status_code=500,
+                content={"detail": "Internal Server Error"}
+            )
+        
+        # Add CORS headers if origin is allowed
+        if origin:
+            if origin in origins or "*" in origins:
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Allow-Credentials"] = "true"
+                response.headers["Access-Control-Allow-Methods"] = "*"
+                response.headers["Access-Control-Allow-Headers"] = "*"
+        
+        return response
     
     # Rate Limiting Middleware
     app.state.limiter = default_limiter

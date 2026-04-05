@@ -465,6 +465,30 @@ async def http_exception_handler(
     )
 
 
+# Origins that are always permitted for cross-origin requests. Kept in sync
+# with the `always_allowed` list in core/middleware.py. These are echoed
+# manually on error responses because the generic Exception handler runs in
+# Starlette's ServerErrorMiddleware — which sits OUTSIDE CORSMiddleware — so
+# without this, 500s come back without CORS headers and surface in the
+# browser as a CORS error instead of a real 500.
+_CORS_ALLOWED_ORIGINS = {
+    'https://spinr-admin.vercel.app',
+    'http://localhost:3000',
+    'http://localhost:3001',
+}
+
+
+def _cors_headers_for(request: Request) -> Dict[str, str]:
+    origin = request.headers.get('origin', '')
+    if origin and origin in _CORS_ALLOWED_ORIGINS:
+        return {
+            'Access-Control-Allow-Origin': origin,
+            'Access-Control-Allow-Credentials': 'true',
+            'Vary': 'Origin',
+        }
+    return {}
+
+
 async def general_exception_handler(
     request: Request,
     exc: Exception
@@ -479,7 +503,7 @@ async def general_exception_handler(
             'user_agent': request.headers.get('user-agent')
         }
     )
-    
+
     return JSONResponse(
         status_code=500,
         content={
@@ -489,7 +513,8 @@ async def general_exception_handler(
                 'message': 'An unexpected error occurred',
                 'timestamp': datetime.utcnow().isoformat()
             }
-        }
+        },
+        headers=_cors_headers_for(request),
     )
 
 

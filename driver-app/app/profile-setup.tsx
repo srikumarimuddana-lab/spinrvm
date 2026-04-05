@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -47,6 +47,43 @@ export default function ProfileSetupScreen() {
     variant: 'info' | 'warning' | 'danger' | 'success';
     buttons?: { text: string; style: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info' });
+
+  // Memoized handlers to prevent FormInput re-renders
+  const handleFirstNameChange = useCallback((value: string) => {
+    setFirstName(value);
+  }, []);
+
+  const handleLastNameChange = useCallback((value: string) => {
+    setLastName(value);
+  }, []);
+
+  const handleEmailChange = useCallback((value: string) => {
+    setEmail(value);
+  }, []);
+
+  const handleGenderChange = useCallback((value: string) => {
+    setGender(value);
+  }, []);
+
+  const handleFocus = useCallback((field: string) => {
+    setFocusedField(field);
+  }, []);
+
+  const handleBlur = useCallback(() => {
+    setFocusedField(null);
+  }, []);
+
+  const handleGenderMale = useCallback(() => {
+    setGender('Male');
+  }, []);
+
+  const handleGenderFemale = useCallback(() => {
+    setGender('Female');
+  }, []);
+
+  const handleGenderOther = useCallback(() => {
+    setGender('Other');
+  }, []);
 
   // ── Auth guard ──
   useEffect(() => {
@@ -257,28 +294,28 @@ export default function ProfileSetupScreen() {
               <FormInput
                 label="First Name"
                 value={firstName}
-                onChangeText={setFirstName}
+                onChangeText={handleFirstNameChange}
                 placeholder="John"
                 icon="person-outline"
                 fieldKey="fn"
                 isValid={isFirstNameValid}
                 focusedField={focusedField}
-                onFocus={setFocusedField}
-                onBlur={() => setFocusedField(null)}
+                onFocus={handleFocus}
+                onBlur={handleBlur}
               />
             </View>
             <View style={{ flex: 1 }}>
               <FormInput
                 label="Last Name"
                 value={lastName}
-                onChangeText={setLastName}
+                onChangeText={handleLastNameChange}
                 placeholder="Doe"
                 icon="person-outline"
                 fieldKey="ln"
                 isValid={isLastNameValid}
                 focusedField={focusedField}
-                onFocus={setFocusedField}
-                onBlur={() => setFocusedField(null)}
+                onFocus={handleFocus}
+                onBlur={handleBlur}
               />
             </View>
           </View>
@@ -286,41 +323,74 @@ export default function ProfileSetupScreen() {
           <FormInput
             label="Email Address"
             value={email}
-            onChangeText={setEmail}
+            onChangeText={handleEmailChange}
             placeholder="john.doe@example.com"
             icon="mail-outline"
             fieldKey="email"
             isValid={isEmailValid}
             keyboardType="email-address"
             focusedField={focusedField}
-            onFocus={setFocusedField}
-            onBlur={() => setFocusedField(null)}
+            onFocus={handleFocus}
+            onBlur={handleBlur}
           />
 
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Gender</Text>
             <View style={styles.genderOptions}>
-              {['Male', 'Female', 'Other'].map((option) => (
-                <TouchableOpacity
-                  key={option}
-                  style={[
-                    styles.genderOption,
-                    gender === option && styles.genderOptionSelected
-                  ]}
-                  onPress={() => setGender(option)}
-                  activeOpacity={0.8}
-                >
-                  {gender === option && (
-                    <Ionicons name="checkmark" size={16} color={THEME.primary} style={{ marginRight: 4 }} />
-                  )}
-                  <Text style={[
-                    styles.genderOptionText,
-                    gender === option && styles.genderOptionTextSelected
-                  ]}>
-                    {option}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              <TouchableOpacity
+                style={[
+                  styles.genderOption,
+                  gender === 'Male' && styles.genderOptionSelected
+                ]}
+                onPress={handleGenderMale}
+                activeOpacity={0.8}
+              >
+                {gender === 'Male' && (
+                  <Ionicons name="checkmark" size={16} color={THEME.primary} style={{ marginRight: 4 }} />
+                )}
+                <Text style={[
+                  styles.genderOptionText,
+                  gender === 'Male' && styles.genderOptionTextSelected
+                ]}>
+                  Male
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.genderOption,
+                  gender === 'Female' && styles.genderOptionSelected
+                ]}
+                onPress={handleGenderFemale}
+                activeOpacity={0.8}
+              >
+                {gender === 'Female' && (
+                  <Ionicons name="checkmark" size={16} color={THEME.primary} style={{ marginRight: 4 }} />
+                )}
+                <Text style={[
+                  styles.genderOptionText,
+                  gender === 'Female' && styles.genderOptionTextSelected
+                ]}>
+                  Female
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.genderOption,
+                  gender === 'Other' && styles.genderOptionSelected
+                ]}
+                onPress={handleGenderOther}
+                activeOpacity={0.8}
+              >
+                {gender === 'Other' && (
+                  <Ionicons name="checkmark" size={16} color={THEME.primary} style={{ marginRight: 4 }} />
+                )}
+                <Text style={[
+                  styles.genderOptionText,
+                  gender === 'Other' && styles.genderOptionTextSelected
+                ]}>
+                  Other
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
         </View>

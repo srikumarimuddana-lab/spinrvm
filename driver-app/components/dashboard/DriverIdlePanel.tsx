@@ -103,27 +103,6 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
           </TouchableOpacity>
         )}
 
-        {/* Stats Glass Bar */}
-        {!banner && (
-          <View style={styles.statsGlassWrapper}>
-            <BlurView intensity={Platform.OS === 'ios' ? 40 : 100} tint="light" style={styles.statsGlassBar}>
-              <View style={styles.statItem}>
-                <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
-                <Text style={styles.statValue}>{driverData?.acceptance_rate || '100'}%</Text>
-              </View>
-              <View style={styles.statDivider} />
-              <View style={styles.statItemCenter}>
-                <Ionicons name="cash" size={20} color={COLORS.accent} />
-                <Text style={styles.statValueLarge}>${(earnings?.total_earnings || 0).toFixed(2)}</Text>
-              </View>
-              <View style={styles.statDivider} />
-              <View style={styles.statItem}>
-                <Ionicons name="car-sport" size={16} color="#007AFF" />
-                <Text style={styles.statValue}>{driverData?.total_rides || '0'}</Text>
-              </View>
-            </BlurView>
-          </View>
-        )}
 
         {/* Status Indicator Pill */}
         <View style={styles.statusPillWrapper}>
@@ -221,51 +200,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: COLORS.text,
   },
-  // Stats Glass Bar
-  statsGlassWrapper: {
-    width: '100%',
-    borderRadius: 24,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 6,
-    marginBottom: 16,
-  },
-  statsGlassBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: 'rgba(255, 255, 255, 0.75)',
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-  },
-  statItem: {
-    alignItems: 'center',
-    flex: 1,
-  },
-  statItemCenter: {
-    alignItems: 'center',
-    flex: 1.5,
-  },
-  statDivider: {
-    width: 1,
-    height: 30,
-    backgroundColor: 'rgba(0,0,0,0.08)',
-  },
-  statValue: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: COLORS.text,
-    marginTop: 4,
-  },
-  statValueLarge: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: COLORS.accent,
-    marginTop: 2,
-  },
+
   // Status Pill
   statusPillWrapper: {
       shadowColor: '#000',

@@ -1187,29 +1187,118 @@ async def admin_get_driver_documents(driver_id: str):
     return documents or []
 
 
+# Map keywords in a requirement name to the legacy top-level expiry column
+# on the `drivers` row. Used when approving a re-uploaded document so that
+# the go-online expiry check in routes/drivers.py update_driver_status stops
+# rejecting the driver based on the stale onboarding-time value.
+_REQUIREMENT_EXPIRY_FIELD_KEYWORDS = (
+    ("license",     "license_expiry_date"),
+    ("driving",     "license_expiry_date"),
+    ("permit",      "license_expiry_date"),
+    ("insurance",   "insurance_expiry_date"),
+    ("inspection",  "vehicle_inspection_expiry_date"),
+    ("background",  "background_check_expiry_date"),
+    ("work",        "work_eligibility_expiry_date"),
+    ("eligibility", "work_eligibility_expiry_date"),
+)
+
+
+def _legacy_expiry_field_for_requirement(req_name: Optional[str]) -> Optional[str]:
+    if not req_name:
+        return None
+    name = req_name.lower()
+    for kw, field in _REQUIREMENT_EXPIRY_FIELD_KEYWORDS:
+        if kw in name:
+            return field
+    return None
+
+
 @admin_router.post("/documents/{document_id}/review")
 async def admin_review_driver_document(
     document_id: str,
     review_data: Dict[str, Any]
 ):
-    """Review and approve/reject a driver document."""
+    """Review and approve/reject a driver document.
+
+    On approval, if an ``expiry_date`` is provided (or already stored on the
+    doc), we also refresh the corresponding legacy top-level expiry column on
+    the ``drivers`` row so that the go-online check in
+    ``update_driver_status`` sees the new date instead of the stale
+    onboarding-time value (which used to leave drivers blocked offline).
+    """
     status = review_data.get("status")
     rejection_reason = review_data.get("rejection_reason")
-    
+    expiry_raw = review_data.get("expiry_date")
+
     if status not in ["approved", "rejected", "pending"]:
         raise HTTPException(status_code=400, detail="Invalid status")
-    
-    updates = {
+
+    # Load existing doc so we know which driver + requirement this is.
+    existing = await db.driver_documents.find_one({"id": document_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Parse incoming expiry (accept ISO string or None).
+    new_expiry_iso: Optional[str] = None
+    if expiry_raw:
+        try:
+            new_expiry_iso = datetime.fromisoformat(
+                str(expiry_raw).replace("Z", "+00:00")
+            ).isoformat()
+        except ValueError:
+            new_expiry_iso = None
+
+    updates: Dict[str, Any] = {
         "status": status,
         "reviewed_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
     }
     if rejection_reason:
         updates["rejection_reason"] = rejection_reason
-    
+    if new_expiry_iso is not None:
+        updates["expiry_date"] = new_expiry_iso
+
     await db.driver_documents.update_one(
         {"id": document_id},
-        {"$set": updates}
+        {"$set": updates},
     )
+
+    # On approval, propagate the expiry to the legacy drivers.* column so the
+    # go-online check stops blocking based on stale onboarding-time values.
+    if status == "approved":
+        effective_expiry_iso = new_expiry_iso or existing.get("expiry_date")
+
+        req_row = None
+        try:
+            req_row = await db.document_requirements.find_one(
+                {"id": existing.get("requirement_id")}
+            )
+        except Exception:
+            req_row = None
+
+        legacy_field = _legacy_expiry_field_for_requirement(
+            req_row.get("name") if req_row else None
+        )
+        if legacy_field:
+            # If admin did not supply a new expiry, clear the stale legacy
+            # value (None) so the go-online check skips it instead of
+            # rejecting on a past date from original onboarding.
+            try:
+                await db.drivers.update_one(
+                    {"id": existing.get("driver_id")},
+                    {
+                        "$set": {
+                            legacy_field: effective_expiry_iso,
+                            "updated_at": datetime.utcnow().isoformat(),
+                        }
+                    },
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Could not update legacy expiry field {legacy_field} "
+                    f"for driver {existing.get('driver_id')}: {e}"
+                )
+
     return {"message": f"Document {status}"}
 
 

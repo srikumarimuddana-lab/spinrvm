@@ -338,14 +338,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
   // ─── Toggle Online/Offline ───────────────────────────────────────
   const toggleOnline = async () => {
-    console.log('[GO-DEBUG] toggleOnline enter', {
-      vehicle_make: driverData?.vehicle_make,
-      license_plate: driverData?.license_plate,
-      is_verified: driverData?.is_verified,
-      isOnline,
-    });
     if (!driverData?.vehicle_make || !driverData?.license_plate) {
-      console.log('[GO-DEBUG] toggleOnline blocked: profile incomplete');
       Alert.alert(
         "Profile Incomplete",
         "You must provide vehicle details before going online.",
@@ -361,7 +354,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     }
 
     if (!driverData?.is_verified) {
-      console.log('[GO-DEBUG] toggleOnline blocked: is_verified false');
       Alert.alert(
         "Account Not Verified",
         "Your account is not verified yet. Please complete your profile and wait for admin approval before going online.",
@@ -377,17 +369,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     }
 
     const next = !isOnline;
-    console.log('[GO-DEBUG] toggleOnline -> calling updateDriverStatus', { next });
     setIsOnline(next);
     try {
       await updateDriverStatus(next);
-      console.log('[GO-DEBUG] toggleOnline updateDriverStatus success');
     } catch (err: any) {
-      console.log('[GO-DEBUG] toggleOnline updateDriverStatus FAILED', {
-        status: err?.response?.status,
-        data: err?.response?.data,
-        message: err?.message,
-      });
+      console.log('Toggle online error:', err);
       setIsOnline(!next);
 
       // 402 = no subscription

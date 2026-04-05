@@ -1410,23 +1410,30 @@ async def update_driver_status(
                 detail='Your driver profile has not been verified yet. Please wait for admin approval.'
             )
 
-        # Check active Spinr Pass subscription
-        # TODO: Re-enable after testing
+        # Check active Spinr Pass subscription. The enforcement is toggled
+        # by the admin-controlled app setting `require_driver_subscription`
+        # so the business team can flip it without a redeploy. When the
+        # setting is false (default, pre-launch), drivers can go online
+        # without a subscription.
+        try:
+            from ..settings_loader import get_app_settings  # type: ignore
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        app_settings = await get_app_settings()
+        require_sub = bool(app_settings.get('require_driver_subscription', False))
+
         sub = await db.driver_subscriptions.find_one({
             'driver_id': driver_id,
             'status': 'active',
         })
         if not sub:
-            # For now, allow going online without subscription (dev/testing mode)
-            import os
-            env = os.environ.get('ENV')
-            if env != 'development' and env != 'test':
+            if require_sub:
                 raise HTTPException(
                     status_code=402,
                     detail='You need an active Spinr Pass subscription to go online. Subscribe from your dashboard.'
                 )
-            # In dev/test with no subscription, skip the expiry check entirely
-            # — sub is None so there's nothing to expire.
+            # Enforcement off and no subscription — skip the expiry check
+            # entirely; sub is None so there's nothing to expire.
         elif sub.get('expires_at'):
             # Only runs when we actually have a subscription row. Previously
             # this called sub.get(...) unconditionally, which crashed with

@@ -134,6 +134,37 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
+                    {/* Driver Requirements */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Driver Requirements</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <div className="flex items-center justify-between">
+                                <div className="space-y-0.5 pr-4">
+                                    <Label htmlFor="require_driver_subscription">
+                                        Require Spinr Pass to go online
+                                    </Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        When on, drivers must have an active Spinr Pass
+                                        subscription to toggle online. When off, any
+                                        verified driver can go online without a
+                                        subscription — useful pre-launch or during
+                                        promotional windows.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="require_driver_subscription"
+                                    checked={settings.require_driver_subscription ?? false}
+                                    onCheckedChange={(v) =>
+                                        update("require_driver_subscription", v)
+                                    }
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
+
                     {/* Cancellation Fees */}
                     <Card className="border-border/50">
                         <CardHeader>

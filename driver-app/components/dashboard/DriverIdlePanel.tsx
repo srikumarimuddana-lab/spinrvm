@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Animated, Platform, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Animated, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -73,49 +73,6 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   const canGoOnline =
     !!driverData?.is_verified && onboardingStatus !== 'suspended';
 
-  // ─── DIAGNOSTIC LOGGING ──────────────────────────────────────────
-  // Logs every render so we can see exactly what state the gate sees.
-  // Filter Metro logs for "[GO-DEBUG]" to trace this.
-  console.log('[GO-DEBUG] render', {
-    is_verified: driverData?.is_verified,
-    onboarding_status: onboardingStatus,
-    banner_title: banner?.title ?? null,
-    canGoOnline,
-    isOnline,
-    driverData_keys: driverData ? Object.keys(driverData as any) : null,
-  });
-
-  // Always-fires press handler. If the gate blocks, we show an alert
-  // explaining which field is the problem instead of silently doing
-  // nothing — so there is no such thing as a "dead tap" anymore.
-  const handlePress = () => {
-    console.log('[GO-DEBUG] press', {
-      canGoOnline,
-      is_verified: driverData?.is_verified,
-      onboarding_status: onboardingStatus,
-      isOnline,
-    });
-    if (!canGoOnline) {
-      const reasons: string[] = [];
-      if (!driverData) reasons.push('driverData is null (not loaded)');
-      else if (!driverData.is_verified) reasons.push('driver.is_verified = false');
-      if (onboardingStatus === 'suspended') reasons.push('account suspended');
-      Alert.alert(
-        'GO blocked (debug)',
-        [
-          `is_verified: ${String(driverData?.is_verified)}`,
-          `onboarding_status: ${String(onboardingStatus)}`,
-          `banner: ${banner?.title ?? 'none'}`,
-          '',
-          'Reason(s):',
-          ...(reasons.length ? reasons : ['(unknown)']),
-        ].join('\n'),
-      );
-      return;
-    }
-    onToggleOnline();
-  };
-
   const goAnim = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -178,7 +135,8 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
       <View style={styles.goButtonArea} pointerEvents="box-none">
         <TouchableOpacity
           activeOpacity={0.9}
-          onPress={handlePress}
+          disabled={!canGoOnline}
+          onPress={onToggleOnline}
           style={styles.goButtonOuterContainer}
         >
           <Animated.View style={[

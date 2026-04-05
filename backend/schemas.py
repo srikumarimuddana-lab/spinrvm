@@ -68,6 +68,10 @@ class AppSettings(BaseModel):
     cancellation_fee_admin: float = 0.50  # Admin gets 50 cents
     cancellation_fee_driver: float = 2.50  # Default driver gets $2.50 (rest of $3 total)
     platform_fee_percent: float = 0.0  # 0% commission - driver keeps all fare
+    # When false, drivers can go online without an active Spinr Pass. Set
+    # this to true to enforce the subscription gate at the "go online" call.
+    # Defaults to false so the product works out of the box pre-launch.
+    require_driver_subscription: bool = False
     terms_of_service_text: str = ""
     privacy_policy_text: str = ""
     updated_at: datetime = Field(default_factory=datetime.utcnow)

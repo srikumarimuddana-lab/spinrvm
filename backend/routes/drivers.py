@@ -1413,8 +1413,11 @@ async def update_driver_status(
         # Check active Spinr Pass subscription. The enforcement is toggled
         # by the admin-controlled app setting `require_driver_subscription`
         # so the business team can flip it without a redeploy. When the
-        # setting is false (default, pre-launch), drivers can go online
-        # without a subscription.
+        # setting is false (default, pre-launch), we skip the subscription
+        # query entirely — the `driver_subscriptions` table may not even
+        # exist in the database yet during pre-launch, so querying it would
+        # raise PostgREST PGRST205. The query only runs when enforcement
+        # is actively turned on.
         try:
             from ..settings_loader import get_app_settings  # type: ignore
         except ImportError:
@@ -1422,32 +1425,54 @@ async def update_driver_status(
         app_settings = await get_app_settings()
         require_sub = bool(app_settings.get('require_driver_subscription', False))
 
-        sub = await db.driver_subscriptions.find_one({
-            'driver_id': driver_id,
-            'status': 'active',
-        })
-        if not sub:
-            if require_sub:
+        if require_sub:
+            try:
+                sub = await db.driver_subscriptions.find_one({
+                    'driver_id': driver_id,
+                    'status': 'active',
+                })
+            except Exception as e:
+                # The table doesn't exist yet (PGRST205) or the query failed
+                # for some other reason. Fail loudly with a clear message so
+                # the operator knows the admin toggle was flipped before the
+                # subscription infrastructure was ready.
+                logger.error(f'driver_subscriptions lookup failed: {e}')
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        'Spinr Pass enforcement is enabled in settings but the '
+                        'driver_subscriptions table is not available. Disable '
+                        'the "Require Spinr Pass to go online" toggle in admin '
+                        'settings, or finish the subscription setup first.'
+                    ),
+                )
+
+            if not sub:
                 raise HTTPException(
                     status_code=402,
-                    detail='You need an active Spinr Pass subscription to go online. Subscribe from your dashboard.'
+                    detail='You need an active Spinr Pass subscription to go online. Subscribe from your dashboard.',
                 )
-            # Enforcement off and no subscription — skip the expiry check
-            # entirely; sub is None so there's nothing to expire.
-        elif sub.get('expires_at'):
-            # Only runs when we actually have a subscription row. Previously
-            # this called sub.get(...) unconditionally, which crashed with
-            # AttributeError in dev/test mode (no subscription) and escaped
-            # as a bare 500 "Internal Server Error".
-            try:
-                exp = datetime.fromisoformat(str(sub['expires_at']).replace('Z', '+00:00').replace('+00:00', ''))
-                if exp < datetime.utcnow():
-                    await db.driver_subscriptions.update_one({'id': sub['id']}, {'$set': {'status': 'expired'}})
-                    raise HTTPException(status_code=402, detail='Your Spinr Pass has expired. Please renew to go online.')
-            except HTTPException:
-                raise
-            except Exception:
-                pass
+
+            # Check expiry on the active subscription row.
+            if sub.get('expires_at'):
+                try:
+                    exp = datetime.fromisoformat(
+                        str(sub['expires_at']).replace('Z', '+00:00').replace('+00:00', '')
+                    )
+                    if exp < datetime.utcnow():
+                        await db.driver_subscriptions.update_one(
+                            {'id': sub['id']}, {'$set': {'status': 'expired'}}
+                        )
+                        raise HTTPException(
+                            status_code=402,
+                            detail='Your Spinr Pass has expired. Please renew to go online.',
+                        )
+                except HTTPException:
+                    raise
+                except Exception:
+                    # Malformed expiry string, unparseable date, etc. — let
+                    # the driver go online rather than blocking on a data bug.
+                    pass
 
     await db.drivers.update_one(
         {'id': driver_id},

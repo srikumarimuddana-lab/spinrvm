@@ -86,6 +86,78 @@ const getAuthHeader = async (): Promise<string | null> => {
   }
 };
 
+// ─── Error extraction + debug log ring buffer ────────────────────────
+// The backend returns errors in a few shapes depending on the handler:
+//   - HTTPException (via http_exception_handler): { detail, error:{message} }
+//   - Unhandled Exception (via general_exception_handler): { error:{message,detail,request_id,exception_type} }
+//   - FastAPI RequestValidationError: { detail: [...] }  (array of field errors)
+//   - Plain text "Internal Server Error" (pre-handler-register crash): body not JSON
+// This helper returns a human-readable message from any of them.
+const extractErrorMessage = (data: any): string => {
+  if (!data) return 'Request failed';
+  // Plain FastAPI HTTPException shape: detail is a string
+  if (typeof data.detail === 'string') return data.detail;
+  // RequestValidationError: detail is an array of {loc, msg, type}
+  if (Array.isArray(data.detail)) {
+    return data.detail
+      .map((d: any) => (typeof d === 'string' ? d : d?.msg || JSON.stringify(d)))
+      .join('; ');
+  }
+  // Our custom handlers: structured error object
+  if (data.error?.message) return data.error.message;
+  if (data.error?.detail) return data.error.detail;
+  return 'Request failed';
+};
+
+// In-memory ring buffer of recent API errors so we can surface them in a
+// debug screen (or just logcat them) without the user having to reproduce
+// on-device with Metro attached. Capped at 50 entries.
+export interface ApiErrorLogEntry {
+  ts: string;
+  method: string;
+  url: string;
+  status: number;
+  message: string;
+  request_id?: string;
+  exception_type?: string;
+  data?: any;
+}
+const _errorLog: ApiErrorLogEntry[] = [];
+const MAX_ERROR_LOG = 50;
+export const getApiErrorLog = (): ApiErrorLogEntry[] => [..._errorLog];
+export const clearApiErrorLog = (): void => { _errorLog.length = 0; };
+const recordApiError = (entry: ApiErrorLogEntry) => {
+  _errorLog.push(entry);
+  if (_errorLog.length > MAX_ERROR_LOG) _errorLog.shift();
+  // Also console.log so it shows up in Metro / Railway mirror. Tagged so
+  // it's easy to grep. Keep this concise — full data is in the buffer.
+  console.log(
+    `[API-ERR] ${entry.method} ${entry.url} → ${entry.status} | ${entry.message}` +
+    (entry.request_id ? ` | req=${entry.request_id}` : ''),
+  );
+};
+
+const handleApiError = async (response: Response, method: string, url: string): Promise<never> => {
+  const errorData = await response.json().catch(() => ({}));
+  const message = extractErrorMessage(errorData);
+  const requestId = response.headers.get('x-request-id') || errorData?.error?.request_id;
+  const exceptionType = errorData?.error?.exception_type;
+  recordApiError({
+    ts: new Date().toISOString(),
+    method,
+    url,
+    status: response.status,
+    message,
+    request_id: requestId || undefined,
+    exception_type: exceptionType,
+    data: errorData,
+  });
+  const error: any = new Error(message);
+  error.response = { data: errorData, status: response.status };
+  error.requestId = requestId;
+  throw error;
+};
+
 // Custom API client using fetch
 const client = {
   async get<T = any>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
@@ -106,12 +178,7 @@ const client = {
       headers,
     });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
-      const error: any = new Error(errorData.detail || 'Request failed');
-      error.response = { data: errorData, status: response.status };
-      throw error;
-    }
+    if (!response.ok) await handleApiError(response, 'GET', url);
 
     const data = await response.json();
     return { data, status: response.status };
@@ -133,12 +200,7 @@ const client = {
       body: body ? JSON.stringify(body) : undefined,
     });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
-      const error: any = new Error(errorData.detail || 'Request failed');
-      error.response = { data: errorData, status: response.status };
-      throw error;
-    }
+    if (!response.ok) await handleApiError(response, 'POST', url);
 
     const data = await response.json();
     return { data, status: response.status };
@@ -165,12 +227,7 @@ const client = {
       body: body === undefined || body === null ? undefined : (isFormData ? body : JSON.stringify(body)),
     });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
-      const error: any = new Error(errorData.detail || 'Request failed');
-      error.response = { data: errorData, status: response.status };
-      throw error;
-    }
+    if (!response.ok) await handleApiError(response, 'PUT', url);
 
     const data = await response.json();
     return { data, status: response.status };
@@ -192,12 +249,7 @@ const client = {
       body: body ? JSON.stringify(body) : undefined,
     });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
-      const error: any = new Error(errorData.detail || 'Request failed');
-      error.response = { data: errorData, status: response.status };
-      throw error;
-    }
+    if (!response.ok) await handleApiError(response, 'PATCH', url);
 
     const data = await response.json();
     return { data, status: response.status };
@@ -218,12 +270,7 @@ const client = {
       headers,
     });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
-      const error: any = new Error(errorData.detail || 'Request failed');
-      error.response = { data: errorData, status: response.status };
-      throw error;
-    }
+    if (!response.ok) await handleApiError(response, 'DELETE', url);
 
     const data = await response.json().catch(() => ({} as T));
     return { data, status: response.status };

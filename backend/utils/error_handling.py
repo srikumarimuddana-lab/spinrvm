@@ -451,17 +451,31 @@ async def http_exception_handler(
     request: Request,
     exc: HTTPException
 ) -> JSONResponse:
-    """Handle HTTPException and return formatted response."""
+    """Handle HTTPException and return formatted response.
+
+    The response body contains both the nested `error.message` shape and a
+    top-level `detail` field so the mobile client's fetch wrapper (which
+    reads `errorData.detail`) shows the real server message instead of
+    the generic "Request failed" fallback.
+    """
+    import uuid as _uuid
+    request_id = _uuid.uuid4().hex[:12]
     return JSONResponse(
         status_code=exc.status_code,
         content={
             'success': False,
+            'detail': exc.detail,  # legacy/compat — what the mobile client reads
             'error': {
                 'code': exc.status_code,
                 'message': exc.detail,
-                'timestamp': datetime.utcnow().isoformat()
-            }
-        }
+                'request_id': request_id,
+                'timestamp': datetime.utcnow().isoformat(),
+            },
+        },
+        headers={
+            **_cors_headers_for(request),
+            'X-Request-ID': request_id,
+        },
     )
 
 
@@ -494,15 +508,29 @@ async def general_exception_handler(
     exc: Exception
 ) -> JSONResponse:
     """Handle unexpected exceptions and return formatted response."""
-    # Log full traceback for debugging
-    logger.error(
-        f'Unhandled exception: {str(exc)}\n{traceback.format_exc()}',
-        extra={
-            'path': request.url.path,
-            'method': request.method,
-            'user_agent': request.headers.get('user-agent')
-        }
-    )
+    # Generate a short correlation ID the client can echo back so we can
+    # find the matching server log entry without grepping through the
+    # whole file. Included in both the log line and the JSON response.
+    import uuid as _uuid
+    request_id = _uuid.uuid4().hex[:12]
+
+    # Loguru treats the first positional arg as a format template, so
+    # embedding the traceback directly (which frequently contains '{'
+    # characters from dict reprs, type hints, or formatted strings)
+    # raises ValueError: unmatched '{' in format spec. Using opt(raw=True)
+    # disables template parsing so arbitrary content can be logged safely.
+    # Previously this handler crashed WHILE handling exceptions, which is
+    # why 500s came back as plain text "Internal Server Error" from
+    # Starlette's default fallback — the user never saw our JSON body.
+    try:
+        tb_text = traceback.format_exc()
+        logger.opt(raw=True).error(
+            f'[{request_id}] Unhandled exception at {request.method} {request.url.path}: '
+            f'{type(exc).__name__}: {exc}\n{tb_text}\n'
+        )
+    except Exception:
+        # Never let logging take down the error handler itself.
+        pass
 
     return JSONResponse(
         status_code=500,
@@ -511,10 +539,19 @@ async def general_exception_handler(
             'error': {
                 'code': ErrorCode.INTERNAL_ERROR.value,
                 'message': 'An unexpected error occurred',
-                'timestamp': datetime.utcnow().isoformat()
+                'request_id': request_id,
+                'exception_type': type(exc).__name__,
+                # Short exception message so the client can surface the root
+                # cause directly to the user / operator without needing log
+                # access. Full traceback stays server-side.
+                'detail': str(exc)[:500],
+                'timestamp': datetime.utcnow().isoformat(),
             }
         },
-        headers=_cors_headers_for(request),
+        headers={
+            **_cors_headers_for(request),
+            'X-Request-ID': request_id,
+        },
     )
 
 

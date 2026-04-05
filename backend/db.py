@@ -196,6 +196,16 @@ class DB:
         self.disputes = DisputeCollection('disputes')
         self.notifications = NotificationCollection('notifications')
         self.notification_preferences = NotificationPreferenceCollection('notification_preferences')
+        # Spinr Pass subscription tables + driver requirements. Previously
+        # unregistered, which caused AttributeError at any call site that
+        # wasn't wrapped in try/except — notably the go-online route, which
+        # crashed at db.driver_subscriptions.find_one(...). BaseCollection
+        # is fine: these tables only need generic find_one/find/update_one
+        # which the parent Collection class delegates to db_supabase by
+        # table name.
+        self.driver_subscriptions = BaseCollection('driver_subscriptions')
+        self.subscription_plans = BaseCollection('subscription_plans')
+        self.driver_requirements = BaseCollection('driver_requirements')
 
     async def rpc(self, func_name: str, params: Dict[str, Any]):
         return await db_supabase.rpc(func_name, params)

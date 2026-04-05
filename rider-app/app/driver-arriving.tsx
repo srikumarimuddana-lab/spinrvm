@@ -109,7 +109,7 @@ export default function DriverArrivingScreen() {
             onPress: async () => {
               await cancelRide();
               clearRide();
-              router.replace('/ride-options' as any);
+              router.replace('/(tabs)' as any);
             },
           },
         ],
@@ -128,7 +128,7 @@ export default function DriverArrivingScreen() {
             onPress: async () => {
               await cancelRide();
               clearRide();
-              router.replace('/ride-options' as any);
+              router.replace('/(tabs)' as any);
             },
           },
         ],
@@ -147,7 +147,7 @@ export default function DriverArrivingScreen() {
             onPress: async () => {
               await cancelRide();
               clearRide();
-              router.replace('/ride-options' as any);
+              router.replace('/(tabs)' as any);
             },
           },
         ],
@@ -166,7 +166,7 @@ export default function DriverArrivingScreen() {
             onPress: async () => {
               await cancelRide();
               clearRide();
-              router.replace('/ride-options' as any);
+              router.replace('/(tabs)' as any);
             },
           },
         ],

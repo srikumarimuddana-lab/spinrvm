@@ -3,13 +3,13 @@ from typing import Optional, List, Union, Dict, Any
 try:
     from ..dependencies import get_current_user, get_admin_user
     from ..schemas import Driver, Ride, RideRatingRequest
-    from ..db import db
+    from ..db import db, diag_logger
     from ..socket_manager import manager
     from ..features import send_push_notification
 except ImportError:
     from dependencies import get_current_user, get_admin_user
     from schemas import Driver, Ride, RideRatingRequest
-    from db import db
+    from db import db, diag_logger
     from socket_manager import manager
     from features import send_push_notification
 from datetime import datetime, timedelta
@@ -720,14 +720,17 @@ async def export_earnings(year: int = Query(None), current_user: dict = Depends(
 @api_router.get("/rides/active")
 async def get_active_ride(current_user: dict = Depends(get_current_user)):
     """Get the driver's current active ride."""
+    diag_logger.info(
+        f"[ACTIVE] called by user_id={current_user.get('id')}"
+    )
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     if not driver:
-        logger.warning(
+        diag_logger.info(
             f"[ACTIVE] no driver row for user_id={current_user.get('id')}"
         )
         raise HTTPException(status_code=404, detail='Driver not found')
 
-    logger.info(
+    diag_logger.info(
         f"[ACTIVE] lookup user_id={current_user.get('id')} "
         f"driver_id={driver.get('id')}"
     )
@@ -750,13 +753,13 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
             ]
         except Exception as e:
             recent_summary = f"(failed to load recent: {e})"
-        logger.warning(
+        diag_logger.info(
             f"[ACTIVE] no active ride for driver_id={driver['id']}. "
             f"recent_rides_by_driver={recent_summary}"
         )
         return {'ride': None}
 
-    logger.info(
+    diag_logger.info(
         f"[ACTIVE] found ride_id={ride.get('id')} status={ride.get('status')} "
         f"driver_id={ride.get('driver_id')} rider_id={ride.get('rider_id')}"
     )
@@ -833,7 +836,7 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     if not ride:
         raise HTTPException(status_code=404, detail='Ride not found')
 
-    logger.info(
+    diag_logger.info(
         f"[ACCEPT] entry ride_id={ride_id} driver_id={driver.get('id')} "
         f"pre_status={ride.get('status')} pre_driver_id={ride.get('driver_id')}"
     )
@@ -847,7 +850,7 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
              # Allow claim
              pass
         else:
-             logger.warning(
+             diag_logger.info(
                  f"[ACCEPT] ride_id={ride_id} not assigned to this driver: "
                  f"ride.driver_id={ride.get('driver_id')} != this_driver.id={driver['id']} "
                  f"and status={ride.get('status')} != 'searching'"
@@ -874,9 +877,9 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         verify_ride = await db.rides.find_one({'id': ride_id})
     except Exception as e:
         verify_ride = None
-        logger.warning(f"[ACCEPT] verify re-read failed: {e}")
+        diag_logger.info(f"[ACCEPT] verify re-read failed: {e}")
 
-    logger.info(
+    diag_logger.info(
         f"[ACCEPT] post-update ride_id={ride_id} "
         f"post_status={verify_ride.get('status') if verify_ride else 'ROW_GONE'} "
         f"post_driver_id={verify_ride.get('driver_id') if verify_ride else 'ROW_GONE'} "
@@ -884,8 +887,8 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     )
 
     if not verify_ride or verify_ride.get('status') != 'driver_accepted':
-        logger.error(
-            f"[ACCEPT] silent no-op: ride_id={ride_id} did not flip to "
+        diag_logger.info(
+            f"[ACCEPT] SILENT NO-OP: ride_id={ride_id} did not flip to "
             f"'driver_accepted'. This will cause the driver-app to render a "
             f"blank state because /drivers/rides/active query will mismatch."
         )

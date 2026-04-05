@@ -75,7 +75,7 @@ export default function RideStatusScreen() {
         variant: 'warning',
         buttons: [
           { text: 'Keep Ride', style: 'cancel' },
-          { text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive', onPress: async () => { await cancelRide(); clearRide(); router.replace('/ride-options' as any); } },
+          { text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive', onPress: async () => { await cancelRide(); clearRide(); router.replace('/(tabs)' as any); } },
         ],
       });
     } else if (status === 'driver_assigned' || status === 'driver_accepted') {
@@ -86,7 +86,7 @@ export default function RideStatusScreen() {
         variant: 'warning',
         buttons: [
           { text: 'Keep Ride', style: 'cancel' },
-          { text: 'Cancel (Free)', style: 'destructive', onPress: async () => { await cancelRide(); clearRide(); router.replace('/ride-options' as any); } },
+          { text: 'Cancel (Free)', style: 'destructive', onPress: async () => { await cancelRide(); clearRide(); router.replace('/(tabs)' as any); } },
         ],
       });
     } else {
@@ -97,7 +97,7 @@ export default function RideStatusScreen() {
         variant: 'info',
         buttons: [
           { text: 'Keep searching', style: 'cancel' },
-          { text: 'Cancel', onPress: async () => { await cancelRide(); clearRide(); router.replace('/ride-options' as any); } },
+          { text: 'Cancel', onPress: async () => { await cancelRide(); clearRide(); router.replace('/(tabs)' as any); } },
         ],
       });
     }

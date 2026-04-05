@@ -18,6 +18,21 @@ if not _goonline_logger.handlers:
     _goonline_logger.setLevel(logging.INFO)
     _goonline_logger.propagate = False
 
+# Dedicated diagnostic logger for route handlers. Route modules import
+# `diag_logger` from this file instead of using the stdlib/loguru loggers,
+# which were being silently dropped by the deployment's log configuration
+# (uvicorn + default Python logging level = WARNING, so logger.info in
+# routes went nowhere). This logger has its own StreamHandler so it always
+# reaches stdout. Use the same "[TAG] message" convention so different
+# traces can be greped independently.
+diag_logger = logging.getLogger('spinr.diag')
+if not diag_logger.handlers:
+    _h2 = logging.StreamHandler()
+    _h2.setFormatter(logging.Formatter('%(message)s'))
+    diag_logger.addHandler(_h2)
+    diag_logger.setLevel(logging.INFO)
+    diag_logger.propagate = False
+
 # Provide a db variable for backward compatibility
 # This will be set to DB instance after the class is defined
 db = None

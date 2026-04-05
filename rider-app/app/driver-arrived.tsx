@@ -50,7 +50,7 @@ export default function DriverArrivedScreen() {
         { text: 'Keep Ride', style: 'cancel' },
         {
           text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive',
-          onPress: async () => { await cancelRide(); clearRide(); router.replace('/ride-options' as any); },
+          onPress: async () => { await cancelRide(); clearRide(); router.replace('/(tabs)' as any); },
         },
       ],
     });

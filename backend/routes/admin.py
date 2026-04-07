@@ -632,7 +632,7 @@ async def admin_get_stats():
 
 @admin_router.get("/rides/stats")
 async def admin_get_ride_stats():
-    """Get ride count stats for today, yesterday, this week, this month."""
+    """Get ride count/revenue stats for today, yesterday, this week, this month, plus daily chart data."""
     now = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday_start = today_start - timedelta(days=1)
@@ -658,6 +658,33 @@ async def admin_get_ride_stats():
         month_start.isoformat(), next_month.isoformat()
     )
 
+    # Revenue stats from completed rides
+    completed_today = await db_supabase.get_rows(
+        "rides", {"status": "completed", "ride_completed_at": {"$gte": today_start.isoformat()}}, limit=10000
+    )
+    total_revenue = sum(float(r.get("total_fare") or 0) for r in completed_today)
+    total_tips = sum(float(r.get("tip_amount") or 0) for r in completed_today)
+    completed_count = len(completed_today)
+
+    # Monthly completed rides for revenue
+    completed_month = await db_supabase.get_rows(
+        "rides", {"status": "completed", "ride_completed_at": {"$gte": month_start.isoformat()}}, limit=10000
+    )
+    month_revenue = sum(float(r.get("total_fare") or 0) for r in completed_month)
+
+    # Daily chart data for last 14 days
+    daily_chart = []
+    for i in range(13, -1, -1):
+        day_start = today_start - timedelta(days=i)
+        day_end = day_start + timedelta(days=1)
+        count = await db_supabase.get_ride_count_by_date_range(
+            day_start.isoformat(), day_end.isoformat()
+        )
+        daily_chart.append({
+            "date": day_start.strftime("%b %d"),
+            "rides": count,
+        })
+
     return {
         "today_count": today_count,
         "yesterday_count": yesterday_count,
@@ -667,6 +694,11 @@ async def admin_get_ride_stats():
         "week_end": (week_end - timedelta(days=1)).strftime("%b %d"),
         "month_start": month_start.strftime("%b %d"),
         "month_end": (next_month - timedelta(days=1)).strftime("%b %d"),
+        "today_revenue": round(total_revenue, 2),
+        "today_tips": round(total_tips, 2),
+        "today_completed": completed_count,
+        "month_revenue": round(month_revenue, 2),
+        "daily_chart": daily_chart,
     }
 
 

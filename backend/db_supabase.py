@@ -617,7 +617,7 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
     rider_id = ride.get('rider_id')
     if rider_id:
         rider = await run_sync(lambda rid=rider_id: _single_row_from_res(
-            supabase.table('users').select('first_name,last_name,phone,email,profile_image,status').eq('id', rid).execute()
+            supabase.table('users').select('first_name,last_name,phone,email,profile_image,status,created_at').eq('id', rid).execute()
         ))
         if rider:
             ride['rider_name'] = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or rider_id[:12]
@@ -625,12 +625,34 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
             ride['rider_email'] = rider.get('email', '')
             ride['rider_profile_image'] = rider.get('profile_image', '')
             ride['rider_status'] = rider.get('status', 'active')
+            ride['rider_joined'] = rider.get('created_at', '')
+
+        # Rider's service area (region) from most recent ride
+        rider_area = await run_sync(lambda rid=rider_id: _single_row_from_res(
+            supabase.table('rides').select('service_area_id').eq('rider_id', rid).neq('service_area_id', 'null').order('created_at', desc=True).limit(1).execute()
+        ))
+        rider_area_id = rider_area.get('service_area_id') if rider_area else None
+        if rider_area_id:
+            area = await run_sync(lambda aid=rider_area_id: _single_row_from_res(
+                supabase.table('service_areas').select('name,city').eq('id', aid).execute()
+            ))
+            ride['rider_region'] = area.get('name', '') if area else ''
+            ride['rider_city'] = area.get('city', '') if area else ''
+        else:
+            ride['rider_region'] = ''
+            ride['rider_city'] = ''
+
+        # Rider's total past rides count
+        rider_count_res = await run_sync(lambda rid=rider_id: (
+            supabase.table('rides').select('id', count='exact', head=True).eq('rider_id', rid).execute()
+        ))
+        ride['rider_total_rides'] = int(rider_count_res.count) if hasattr(rider_count_res, 'count') and rider_count_res.count is not None else 0
 
     # Fetch driver details
     driver_id = ride.get('driver_id')
     if driver_id:
         driver = await run_sync(lambda did=driver_id: _single_row_from_res(
-            supabase.table('drivers').select('name,phone,vehicle_make,vehicle_model,vehicle_color,license_plate,rating,status,photo_url,vehicle_type_id').eq('id', did).execute()
+            supabase.table('drivers').select('name,phone,vehicle_make,vehicle_model,vehicle_color,vehicle_year,vehicle_vin,license_plate,rating,status,photo_url,vehicle_type_id,total_rides').eq('id', did).execute()
         ))
         if driver:
             ride['driver_name'] = driver.get('name', driver_id[:12])
@@ -638,11 +660,36 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
             ride['driver_vehicle_make'] = driver.get('vehicle_make', '')
             ride['driver_vehicle_model'] = driver.get('vehicle_model', '')
             ride['driver_vehicle_color'] = driver.get('vehicle_color', '')
+            ride['driver_vehicle_year'] = driver.get('vehicle_year')
+            ride['driver_vehicle_vin'] = driver.get('vehicle_vin', '')
             ride['driver_license_plate'] = driver.get('license_plate', '')
             ride['driver_rating'] = driver.get('rating', 0)
             ride['driver_status'] = driver.get('status', 'active')
             ride['driver_photo_url'] = driver.get('photo_url', '')
             ride['driver_vehicle'] = f"{driver.get('vehicle_make', '')} {driver.get('vehicle_model', '')}".strip()
+            ride['driver_total_rides'] = driver.get('total_rides', 0)
+
+            # Compute acceptance rate: completed / (completed + cancelled as driver)
+            vtype_id = driver.get('vehicle_type_id')
+            if vtype_id:
+                vtype = await run_sync(lambda vid=vtype_id: _single_row_from_res(
+                    supabase.table('vehicle_types').select('name,description,capacity').eq('id', vid).execute()
+                ))
+                if vtype:
+                    ride['driver_vehicle_type_name'] = vtype.get('name', '')
+                    ride['driver_vehicle_capacity'] = vtype.get('capacity', 0)
+
+            # Acceptance rate: total rides assigned to driver vs cancelled by driver
+            driver_completed_res = await run_sync(lambda did=driver_id: (
+                supabase.table('rides').select('id', count='exact', head=True).eq('driver_id', did).eq('status', 'completed').execute()
+            ))
+            completed = int(driver_completed_res.count) if hasattr(driver_completed_res, 'count') and driver_completed_res.count is not None else 0
+            driver_total_assigned_res = await run_sync(lambda did=driver_id: (
+                supabase.table('rides').select('id', count='exact', head=True).eq('driver_id', did).execute()
+            ))
+            total_assigned = int(driver_total_assigned_res.count) if hasattr(driver_total_assigned_res, 'count') and driver_total_assigned_res.count is not None else 0
+            ride['driver_acceptance_rate'] = round((completed / total_assigned * 100), 1) if total_assigned > 0 else 0
+            ride['driver_completed_rides'] = completed
 
     # Fetch flags for both rider and driver
     flags = []

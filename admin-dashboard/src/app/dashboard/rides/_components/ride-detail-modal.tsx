@@ -7,9 +7,10 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import {
     Car, User, Phone, Mail, Star, Route, Clock, Percent,
     DollarSign, Receipt, Ticket, AlertTriangle, Flag, Radio,
-    MapPin, Navigation, FileWarning,
+    MapPin, FileWarning, MapPinned, CalendarDays, Hash,
+    Gauge, Shield, Users, Palette, Calendar,
 } from "lucide-react";
-import { Sec, FR, MStat, TL, getStatusBadge, fmtTime, isRideLive } from "./ride-ui-helpers";
+import { Sec, FR, MStat, TL, getStatusBadge, fmtTime, isRideLive, computePhaseDistances } from "./ride-ui-helpers";
 import RideInvoice from "./ride-invoice";
 import RideLostFound from "./ride-lost-found";
 import RideFlagForm from "./ride-flag-form";
@@ -17,6 +18,22 @@ import RideComplaintForm from "./ride-complaint-form";
 import dynamic from "next/dynamic";
 
 const RideRouteMap = dynamic(() => import("./ride-route-map"), { ssr: false });
+
+const PHASE_LABELS: Record<string, string> = {
+    navigating_to_pickup: "To Pickup",
+    arrived_at_pickup: "At Pickup",
+    trip_in_progress: "Trip",
+    online_idle: "Idle",
+    unknown: "Unknown",
+};
+
+const PHASE_COLORS: Record<string, string> = {
+    navigating_to_pickup: "text-blue-600 bg-blue-100",
+    arrived_at_pickup: "text-violet-600 bg-violet-100",
+    trip_in_progress: "text-emerald-600 bg-emerald-100",
+    online_idle: "text-gray-600 bg-gray-100",
+    unknown: "text-gray-500 bg-gray-50",
+};
 
 interface Props {
     rideId: string | null;
@@ -46,6 +63,8 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
     }, [open, rideId, loadRide]);
 
     if (!open) return null;
+
+    const phaseDistances = ride?.location_trail ? computePhaseDistances(ride.location_trail) : [];
 
     return (
         <>
@@ -113,8 +132,9 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                 </div>
                             </div>
 
-                            {/* Customer & Driver */}
+                            {/* Customer & Driver - Enhanced */}
                             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                {/* Customer Section - Enhanced */}
                                 <Sec title="Customer">
                                     <div className="flex items-center gap-3">
                                         <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0">
@@ -137,52 +157,103 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     {ride.rider_flag_count} flag{ride.rider_flag_count > 1 ? "s" : ""}
                                                 </span>
                                             )}
-                                            {ride.rider_rating && (
-                                                <span className="flex items-center gap-0.5">
-                                                    <Star className="h-3.5 w-3.5 text-amber-400" />
-                                                    <span className="text-xs font-bold">{ride.rider_rating}</span>
-                                                </span>
-                                            )}
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t">
+                                        <div className="bg-background rounded-lg p-2 text-center">
+                                            <Hash className="h-3 w-3 text-muted-foreground mx-auto mb-0.5" />
+                                            <p className="text-xs font-bold">{ride.rider_total_rides ?? "—"}</p>
+                                            <p className="text-[9px] text-muted-foreground">Total Rides</p>
+                                        </div>
+                                        <div className="bg-background rounded-lg p-2 text-center">
+                                            <MapPinned className="h-3 w-3 text-muted-foreground mx-auto mb-0.5" />
+                                            <p className="text-xs font-bold truncate">{ride.rider_region || ride.rider_city || "—"}</p>
+                                            <p className="text-[9px] text-muted-foreground">Region</p>
+                                        </div>
+                                        <div className="bg-background rounded-lg p-2 text-center">
+                                            <CalendarDays className="h-3 w-3 text-muted-foreground mx-auto mb-0.5" />
+                                            <p className="text-xs font-bold">{ride.rider_joined ? new Date(ride.rider_joined).toLocaleDateString("en-CA", { month: "short", year: "numeric" }) : "—"}</p>
+                                            <p className="text-[9px] text-muted-foreground">Member Since</p>
                                         </div>
                                     </div>
                                 </Sec>
+
+                                {/* Driver Section - Enhanced */}
                                 <Sec title="Driver">
                                     {ride.driver_id ? (
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-10 h-10 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center shrink-0">
-                                                {ride.driver_photo_url ? (
-                                                    <img src={ride.driver_photo_url} alt="" className="w-10 h-10 rounded-full object-cover" />
-                                                ) : (
-                                                    <Car className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
-                                                )}
-                                            </div>
-                                            <div className="flex-1 min-w-0">
-                                                <p className="text-sm font-semibold">{ride.driver_name || ride.driver_id?.slice(0, 12)}</p>
-                                                <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5 flex-wrap">
-                                                    {ride.driver_phone && <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{ride.driver_phone}</span>}
-                                                    <span>{ride.driver_vehicle || "—"}</span>
-                                                    {ride.driver_license_plate && <span className="font-mono font-bold text-foreground">{ride.driver_license_plate}</span>}
+                                        <>
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center shrink-0">
+                                                    {ride.driver_photo_url ? (
+                                                        <img src={ride.driver_photo_url} alt="" className="w-10 h-10 rounded-full object-cover" />
+                                                    ) : (
+                                                        <Car className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                                                    )}
                                                 </div>
-                                                {(ride.driver_vehicle_make || ride.driver_vehicle_color) && (
-                                                    <p className="text-[10px] text-muted-foreground mt-0.5">
-                                                        {[ride.driver_vehicle_color, ride.driver_vehicle_make, ride.driver_vehicle_model].filter(Boolean).join(" ")}
-                                                    </p>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-sm font-semibold">{ride.driver_name || ride.driver_id?.slice(0, 12)}</p>
+                                                    <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5 flex-wrap">
+                                                        {ride.driver_phone && <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{ride.driver_phone}</span>}
+                                                        {ride.driver_license_plate && <span className="font-mono font-bold text-foreground">{ride.driver_license_plate}</span>}
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-2 shrink-0">
+                                                    {ride.driver_flag_count > 0 && (
+                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${ride.driver_flag_count >= 2 ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>
+                                                            {ride.driver_flag_count} flag{ride.driver_flag_count > 1 ? "s" : ""}
+                                                        </span>
+                                                    )}
+                                                    {ride.driver_rating != null && (
+                                                        <span className="flex items-center gap-0.5">
+                                                            <Star className="h-3.5 w-3.5 text-amber-400 fill-amber-400" />
+                                                            <span className="text-xs font-bold">{Number(ride.driver_rating).toFixed(1)}</span>
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            {/* Vehicle details */}
+                                            <div className="mt-2 pt-2 border-t space-y-1.5">
+                                                <div className="flex items-center gap-2 text-xs">
+                                                    <Car className="h-3 w-3 text-muted-foreground shrink-0" />
+                                                    <span className="font-medium">
+                                                        {[ride.driver_vehicle_color, ride.driver_vehicle_year, ride.driver_vehicle_make, ride.driver_vehicle_model].filter(Boolean).join(" ") || "—"}
+                                                    </span>
+                                                </div>
+                                                {ride.driver_vehicle_type_name && (
+                                                    <div className="flex items-center gap-2 text-xs">
+                                                        <Users className="h-3 w-3 text-muted-foreground shrink-0" />
+                                                        <span>{ride.driver_vehicle_type_name}</span>
+                                                        {ride.driver_vehicle_capacity > 0 && (
+                                                            <span className="text-muted-foreground">({ride.driver_vehicle_capacity} seats)</span>
+                                                        )}
+                                                    </div>
+                                                )}
+                                                {ride.driver_vehicle_vin && (
+                                                    <div className="flex items-center gap-2 text-xs">
+                                                        <Shield className="h-3 w-3 text-muted-foreground shrink-0" />
+                                                        <span className="font-mono text-muted-foreground">VIN: {ride.driver_vehicle_vin}</span>
+                                                    </div>
                                                 )}
                                             </div>
-                                            <div className="flex items-center gap-2 shrink-0">
-                                                {ride.driver_flag_count > 0 && (
-                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${ride.driver_flag_count >= 2 ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>
-                                                        {ride.driver_flag_count} flag{ride.driver_flag_count > 1 ? "s" : ""}
-                                                    </span>
-                                                )}
-                                                {ride.driver_rating && (
-                                                    <span className="flex items-center gap-0.5">
-                                                        <Star className="h-3.5 w-3.5 text-amber-400" />
-                                                        <span className="text-xs font-bold">{Number(ride.driver_rating).toFixed(1)}</span>
-                                                    </span>
-                                                )}
+                                            {/* Driver stats */}
+                                            <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t">
+                                                <div className="bg-background rounded-lg p-2 text-center">
+                                                    <Hash className="h-3 w-3 text-muted-foreground mx-auto mb-0.5" />
+                                                    <p className="text-xs font-bold">{ride.driver_total_rides ?? ride.driver_completed_rides ?? "—"}</p>
+                                                    <p className="text-[9px] text-muted-foreground">Total Rides</p>
+                                                </div>
+                                                <div className="bg-background rounded-lg p-2 text-center">
+                                                    <Gauge className="h-3 w-3 text-muted-foreground mx-auto mb-0.5" />
+                                                    <p className="text-xs font-bold">{ride.driver_acceptance_rate != null ? `${ride.driver_acceptance_rate}%` : "—"}</p>
+                                                    <p className="text-[9px] text-muted-foreground">Completion Rate</p>
+                                                </div>
+                                                <div className="bg-background rounded-lg p-2 text-center">
+                                                    <Star className="h-3 w-3 text-muted-foreground mx-auto mb-0.5" />
+                                                    <p className="text-xs font-bold">{ride.driver_rating ? Number(ride.driver_rating).toFixed(1) : "—"}</p>
+                                                    <p className="text-[9px] text-muted-foreground">Rating</p>
+                                                </div>
                                             </div>
-                                        </div>
+                                        </>
                                     ) : (
                                         <p className="text-sm text-muted-foreground">No driver assigned</p>
                                     )}
@@ -287,7 +358,6 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
 
                             {/* Complaints & Flags */}
                             <Sec title="Complaints & Flags">
-                                {/* Existing flags */}
                                 {ride.flags && ride.flags.length > 0 ? (
                                     <div className="space-y-1.5 mb-2">
                                         {ride.flags.map((f: any, i: number) => (
@@ -304,7 +374,6 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                     <p className="text-sm text-muted-foreground mb-2">No flags or complaints</p>
                                 )}
 
-                                {/* Existing complaints */}
                                 {ride.complaints && ride.complaints.length > 0 && (
                                     <div className="space-y-1.5 mb-2">
                                         {ride.complaints.map((c: any) => (
@@ -319,7 +388,6 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                     </div>
                                 )}
 
-                                {/* Warning for high flag count */}
                                 {(ride.rider_flag_count >= 2 || ride.driver_flag_count >= 2) && (
                                     <div className="flex items-center gap-2 bg-red-50 dark:bg-red-900/20 rounded-lg p-2 mb-2">
                                         <AlertTriangle className="h-4 w-4 text-red-500 shrink-0" />
@@ -350,15 +418,37 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                 </div>
                             </Sec>
 
-                            {/* Timeline */}
+                            {/* Booking Logs - Enhanced with phase distances */}
                             <Sec title="Booking Logs">
-                                <TL l="Requested" t={ride.ride_requested_at || ride.created_at} />
-                                <TL l="Driver notified" t={ride.driver_notified_at} />
-                                <TL l="Driver accepted" t={ride.driver_accepted_at} />
-                                <TL l="Driver arrived" t={ride.driver_arrived_at} />
-                                <TL l="Ride started" t={ride.ride_started_at} />
-                                <TL l="Ride completed" t={ride.ride_completed_at} />
-                                {ride.cancelled_at && <TL l="Cancelled" t={ride.cancelled_at} d />}
+                                <div className="space-y-0">
+                                    <TL l="Requested" t={ride.ride_requested_at || ride.created_at} />
+                                    <TL l="Driver notified" t={ride.driver_notified_at} />
+                                    <TL l="Driver accepted" t={ride.driver_accepted_at} />
+                                    <TL l="Driver arrived" t={ride.driver_arrived_at} />
+                                    <TL l="Ride started" t={ride.ride_started_at} />
+                                    <TL l="Ride completed" t={ride.ride_completed_at} />
+                                    {ride.cancelled_at && <TL l="Cancelled" t={ride.cancelled_at} d />}
+                                </div>
+
+                                {/* Phase distances */}
+                                {phaseDistances.length > 0 && (
+                                    <div className="mt-3 pt-3 border-t">
+                                        <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2">Distance by Phase</p>
+                                        <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
+                                            {phaseDistances.map(p => (
+                                                <div key={p.phase} className={`rounded-lg px-3 py-2 ${PHASE_COLORS[p.phase] || "bg-gray-50 text-gray-600"}`}>
+                                                    <p className="text-xs font-bold">{p.distance_km} km</p>
+                                                    <p className="text-[10px] opacity-80">{PHASE_LABELS[p.phase] || p.phase.replace(/_/g, " ")}</p>
+                                                    <p className="text-[9px] opacity-60">{p.points} points</p>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <div className="flex justify-between mt-2 text-xs">
+                                            <span className="text-muted-foreground">Total GPS distance</span>
+                                            <span className="font-bold">{phaseDistances.reduce((s, p) => s + p.distance_km, 0).toFixed(2)} km</span>
+                                        </div>
+                                    </div>
+                                )}
                             </Sec>
 
                             {/* Driver Tracking */}
@@ -406,7 +496,6 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                 </DialogContent>
             </Dialog>
 
-            {/* Flag form dialog */}
             {flagTarget && (
                 <RideFlagForm
                     open={!!flagTarget}
@@ -418,7 +507,6 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                 />
             )}
 
-            {/* Complaint form dialog */}
             <RideComplaintForm
                 open={showComplaint}
                 onClose={() => setShowComplaint(false)}

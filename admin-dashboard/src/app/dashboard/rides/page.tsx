@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { getRides, getServiceAreas } from "@/lib/api";
-import RideStatsCards from "./_components/ride-stats-cards";
+import RideStatsCards, { RidesChart } from "./_components/ride-stats-cards";
 import RideList from "./_components/ride-list";
 import RideDetailModal from "./_components/ride-detail-modal";
 
@@ -42,7 +42,7 @@ export default function RidesPage() {
     return (
         <div className="space-y-0">
             <RideStatsCards />
-            <div className="h-[calc(100vh-240px)]">
+            <div className="h-[calc(100vh-380px)] min-h-[300px]">
                 <RideList
                     rides={filtered}
                     allRides={rides}
@@ -58,6 +58,7 @@ export default function RidesPage() {
                     onSelect={(ride) => setSelectedRideId(ride.id)}
                 />
             </div>
+            <RidesChart />
             <RideDetailModal
                 rideId={selectedRideId}
                 open={!!selectedRideId}

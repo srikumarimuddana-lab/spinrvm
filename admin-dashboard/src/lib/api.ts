@@ -259,6 +259,33 @@ export const sendNotification = (data: { user_id?: string; title: string; body: 
         body: JSON.stringify(data),
     });
 
+/* ── Cloud Messaging ───────────────────────────── */
+export const getCloudMessages = (status?: string, audience?: string) => {
+    const params = new URLSearchParams();
+    if (status) params.set('status', status);
+    if (audience) params.set('audience', audience);
+    return request<any[]>(`/api/admin/cloud-messaging?${params.toString()}`);
+};
+
+export const sendCloudMessage = (data: {
+    title: string;
+    description: string;
+    audience: string;
+    channel: string;
+    particular_id?: string;
+    scheduled_at?: string;
+}) =>
+    request<any>("/api/admin/cloud-messaging/send", {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+
+export const getCloudMessageStats = () =>
+    request<any>("/api/admin/cloud-messaging/stats");
+
+export const deleteCloudMessage = (id: string) =>
+    request<any>(`/api/admin/cloud-messaging/${id}`, { method: "DELETE" });
+
 /* ── Users (Riders) ─────────────────────────── */
 export const getUsers = () =>
     request<any[]>("/api/admin/users");

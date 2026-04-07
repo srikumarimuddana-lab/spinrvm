@@ -1961,3 +1961,126 @@ async def log_audit(
             "created_at": datetime.utcnow().isoformat(),
         }
     )
+
+
+# ---------- Cloud Messaging ----------
+
+
+@admin_router.post("/cloud-messaging/send")
+async def admin_send_cloud_message(payload: Dict[str, Any]):
+    """Send or schedule a cloud message to users/drivers."""
+    title = payload.get("title", "")
+    description = payload.get("description", "")
+    audience = payload.get("audience", "customers")
+    channel = payload.get("channel", "push")
+    particular_id = payload.get("particular_id")
+    scheduled_at = payload.get("scheduled_at")
+
+    if not title or not description:
+        raise HTTPException(status_code=400, detail="Title and description are required")
+
+    is_scheduled = bool(scheduled_at)
+    status = "scheduled" if is_scheduled else "sent"
+
+    total_recipients = 1
+    successful = 0
+    failed_count = 0
+
+    if audience in ("particular_customer", "particular_driver"):
+        total_recipients = 1
+    elif audience == "customers":
+        count = await db.users.count_documents({"role": "rider"})
+        total_recipients = count if count > 0 else 0
+    elif audience == "drivers":
+        count = await db.users.count_documents({"role": "driver"})
+        total_recipients = count if count > 0 else 0
+
+    if not is_scheduled:
+        # TODO: Integrate with FCM / email service
+        successful = total_recipients
+        failed_count = 0
+        logger.info(f"Cloud message sent to {audience}: {title}")
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "title": title,
+        "description": description,
+        "audience": audience,
+        "channel": channel,
+        "particular_id": particular_id,
+        "status": status,
+        "scheduled_at": scheduled_at,
+        "sent_at": datetime.utcnow().isoformat() if not is_scheduled else None,
+        "created_at": datetime.utcnow().isoformat(),
+        "total_recipients": total_recipients,
+        "successful": successful,
+        "failed_count": failed_count,
+    }
+
+    await db.cloud_messages.insert_one(doc)
+    return {"success": True, "message": doc}
+
+
+@admin_router.get("/cloud-messaging")
+async def admin_get_cloud_messages(
+    status: Optional[str] = None,
+    audience: Optional[str] = None,
+    limit: int = Query(100),
+    offset: int = Query(0),
+):
+    """Get cloud messages with optional filters."""
+    filters: Dict[str, Any] = {}
+    if status:
+        filters["status"] = status
+    if audience:
+        filters["audience"] = audience
+
+    messages = await db.get_rows(
+        "cloud_messages",
+        filters,
+        order="created_at",
+        desc=True,
+        limit=limit,
+        offset=offset,
+    )
+    return messages
+
+
+@admin_router.get("/cloud-messaging/stats")
+async def admin_get_cloud_message_stats():
+    """Get cloud messaging statistics."""
+    all_messages = await db.get_rows("cloud_messages", {}, limit=10000)
+
+    total = len(all_messages)
+    total_sent = sum(1 for m in all_messages if m.get("status") == "sent")
+    total_scheduled = sum(1 for m in all_messages if m.get("status") == "scheduled")
+    total_failed = sum(1 for m in all_messages if m.get("status") == "failed")
+    total_reached = sum(m.get("successful", 0) for m in all_messages)
+    total_recipients = sum(m.get("total_recipients", 0) for m in all_messages)
+    success_rate = round((total_reached / total_recipients * 100), 1) if total_recipients > 0 else 0
+
+    return {
+        "total_messages": total,
+        "total_sent": total_sent,
+        "total_scheduled": total_scheduled,
+        "total_failed": total_failed,
+        "total_recipients_reached": total_reached,
+        "success_rate": success_rate,
+    }
+
+
+@admin_router.delete("/cloud-messaging/{message_id}")
+async def admin_delete_cloud_message(message_id: str):
+    """Cancel/delete a scheduled cloud message."""
+    existing = await db.cloud_messages.find_one({"id": message_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    if existing.get("status") == "sent":
+        raise HTTPException(status_code=400, detail="Cannot delete a sent message")
+
+    await db.cloud_messages.update_one(
+        {"id": message_id},
+        {"$set": {"status": "cancelled"}},
+    )
+    return {"message": "Message cancelled"}

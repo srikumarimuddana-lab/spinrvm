@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getLostAndFoundItems, resolveLostItem } from "@/lib/api";
+import { getLostAndFoundItems, resolveLostItem, updateLostItem, deleteLostItem } from "@/lib/api";
 import { Input } from "@/components/ui/input";
-import { PackageSearch, Search, CheckCircle, Clock, XCircle, Bell } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { PackageSearch, Search, CheckCircle, Clock, XCircle, Bell, Trash2, Pencil } from "lucide-react";
 
 const STATUS_COLORS: Record<string, string> = {
     reported: "bg-amber-100 text-amber-700",
@@ -24,6 +25,10 @@ export default function LostAndFoundTab() {
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
+    const [editing, setEditing] = useState<any>(null);
+    const [editDesc, setEditDesc] = useState("");
+    const [editNotes, setEditNotes] = useState("");
+    const [editStatus, setEditStatus] = useState("");
 
     const loadItems = () => {
         setLoading(true);
@@ -38,7 +43,8 @@ export default function LostAndFoundTab() {
             i.item_description?.toLowerCase().includes(q) ||
             i.ride_id?.toLowerCase().includes(q) ||
             i.rider_id?.toLowerCase().includes(q) ||
-            i.driver_id?.toLowerCase().includes(q);
+            i.driver_id?.toLowerCase().includes(q) ||
+            i.admin_notes?.toLowerCase().includes(q);
         const matchStatus = statusFilter === "all" || i.status === statusFilter;
         return matchSearch && matchStatus;
     });
@@ -47,12 +53,39 @@ export default function LostAndFoundTab() {
         try {
             await resolveLostItem(id, { status });
             loadItems();
-        } catch (e: any) {
-            alert(e.message || "Failed to update");
-        }
+        } catch (e: any) { alert(e.message || "Failed"); }
     };
 
-    const statusCounts = {
+    const handleEdit = (item: any) => {
+        setEditing(item);
+        setEditDesc(item.item_description || "");
+        setEditNotes(item.admin_notes || "");
+        setEditStatus(item.status || "reported");
+    };
+
+    const handleSaveEdit = async () => {
+        if (!editing) return;
+        try {
+            await updateLostItem(editing.id, {
+                item_description: editDesc,
+                admin_notes: editNotes,
+                status: editStatus,
+            });
+            loadItems();
+            setEditing(null);
+        } catch (e: any) { alert(e.message || "Failed"); }
+    };
+
+    const handleDelete = async (id: string) => {
+        if (!confirm("Permanently delete this lost & found item?")) return;
+        try {
+            await deleteLostItem(id);
+            loadItems();
+            setEditing(null);
+        } catch (e: any) { alert(e.message || "Failed"); }
+    };
+
+    const statusCounts: Record<string, number> = {
         all: items.length,
         reported: items.filter(i => i.status === "reported").length,
         driver_notified: items.filter(i => i.status === "driver_notified").length,
@@ -72,7 +105,7 @@ export default function LostAndFoundTab() {
                                 <I className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                             </div>
                             <div>
-                                <p className="text-xl font-bold">{statusCounts[s]}</p>
+                                <p className="text-lg sm:text-xl font-bold">{statusCounts[s]}</p>
                                 <p className="text-[10px] text-muted-foreground capitalize">{s.replace(/_/g, " ")}</p>
                             </div>
                         </div>
@@ -85,7 +118,7 @@ export default function LostAndFoundTab() {
                 {["all", "reported", "driver_notified", "resolved", "unresolved"].map(s => (
                     <button key={s} onClick={() => setStatusFilter(s)}
                         className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${statusFilter === s ? "bg-primary text-white" : "bg-muted text-muted-foreground"}`}>
-                        {s === "all" ? "All" : s.replace(/_/g, " ")} ({statusCounts[s as keyof typeof statusCounts]})
+                        {s === "all" ? "All" : s.replace(/_/g, " ")} ({statusCounts[s]})
                     </button>
                 ))}
             </div>
@@ -115,26 +148,80 @@ export default function LostAndFoundTab() {
                                         <span>Driver: <span className="font-mono">{item.driver_id?.slice(0, 8)}</span></span>
                                     </div>
                                     {item.admin_notes && <p className="text-xs text-muted-foreground mt-1">Note: {item.admin_notes}</p>}
-                                    <p className="text-[10px] text-muted-foreground mt-1">
-                                        {item.created_at ? new Date(item.created_at).toLocaleString() : ""}
-                                    </p>
+                                    <p className="text-[10px] text-muted-foreground mt-1">{item.created_at ? new Date(item.created_at).toLocaleString() : ""}</p>
                                 </div>
-                                <div className="flex items-center gap-2 shrink-0">
+                                <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
                                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${STATUS_COLORS[item.status] || "bg-gray-100 text-gray-600"}`}>
                                         {item.status?.replace(/_/g, " ").toUpperCase()}
                                     </span>
                                     {(item.status === "reported" || item.status === "driver_notified") && (
-                                        <div className="flex gap-1">
+                                        <>
                                             <button onClick={() => handleResolve(item.id, "resolved")} className="text-[10px] px-2 py-1 rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200 font-semibold">Resolve</button>
                                             <button onClick={() => handleResolve(item.id, "unresolved")} className="text-[10px] px-2 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200 font-semibold">Unresolved</button>
-                                        </div>
+                                        </>
                                     )}
+                                    <button onClick={() => handleEdit(item)} title="Edit" className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground">
+                                        <Pencil className="h-3.5 w-3.5" />
+                                    </button>
+                                    <button onClick={() => handleDelete(item.id)} title="Delete" className="p-1.5 rounded-lg hover:bg-red-100 text-red-600">
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
                                 </div>
                             </div>
                         );
                     })}
                 </div>
             )}
+
+            {/* Edit Dialog */}
+            <Dialog open={!!editing} onOpenChange={v => !v && setEditing(null)}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <Pencil className="h-5 w-5 text-primary" /> Edit Lost Item
+                        </DialogTitle>
+                    </DialogHeader>
+                    {editing && (
+                        <div className="space-y-3">
+                            <div>
+                                <label className="text-xs font-medium text-muted-foreground">Item Description</label>
+                                <textarea value={editDesc} onChange={e => setEditDesc(e.target.value)}
+                                    className="w-full mt-1 border rounded-lg px-3 py-2 text-sm bg-card text-foreground min-h-[60px] resize-none" />
+                            </div>
+                            <div>
+                                <label className="text-xs font-medium text-muted-foreground">Admin Notes</label>
+                                <textarea value={editNotes} onChange={e => setEditNotes(e.target.value)}
+                                    placeholder="Internal notes..."
+                                    className="w-full mt-1 border rounded-lg px-3 py-2 text-sm bg-card text-foreground min-h-[60px] resize-none" />
+                            </div>
+                            <div>
+                                <label className="text-xs font-medium text-muted-foreground">Status</label>
+                                <select value={editStatus} onChange={e => setEditStatus(e.target.value)}
+                                    className="w-full mt-1 border rounded-lg px-3 py-2 text-sm bg-card text-foreground">
+                                    <option value="reported">Reported</option>
+                                    <option value="driver_notified">Driver Notified</option>
+                                    <option value="resolved">Resolved</option>
+                                    <option value="unresolved">Unresolved</option>
+                                </select>
+                            </div>
+                            <div className="text-xs text-muted-foreground space-y-0.5">
+                                <p>Ride: <span className="font-mono">{editing.ride_id}</span></p>
+                                <p>Rider: <span className="font-mono">{editing.rider_id?.slice(0, 12)}</span> · Driver: <span className="font-mono">{editing.driver_id?.slice(0, 12)}</span></p>
+                            </div>
+                            <DialogFooter className="flex gap-2">
+                                <button onClick={() => handleDelete(editing.id)}
+                                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-red-100 text-red-700 hover:bg-red-200">
+                                    <Trash2 className="h-3.5 w-3.5" /> Delete
+                                </button>
+                                <button onClick={handleSaveEdit}
+                                    className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-primary text-white hover:bg-primary/90">
+                                    Save Changes
+                                </button>
+                            </DialogFooter>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

@@ -961,6 +961,62 @@ async def admin_list_lost_and_found(
     return items
 
 
+@admin_router.put("/flags/{flag_id}/deactivate")
+async def admin_deactivate_flag(flag_id: str):
+    """Deactivate a flag (soft delete)."""
+    result = await db_supabase.update_one("flags", {"id": flag_id}, {"$set": {"is_active": False}})
+    if not result:
+        raise HTTPException(status_code=404, detail="Flag not found")
+    return {"message": "Flag deactivated"}
+
+
+@admin_router.delete("/flags/{flag_id}")
+async def admin_delete_flag(flag_id: str):
+    """Permanently delete a flag."""
+    await db_supabase.delete_one("flags", {"id": flag_id})
+    return {"message": "Flag deleted"}
+
+
+@admin_router.put("/lost-and-found/{item_id}")
+async def admin_update_lost_item(item_id: str, req: dict):
+    """Update a lost and found item."""
+    update = {k: v for k, v in req.items() if k in ("item_description", "status", "admin_notes")}
+    update["updated_at"] = datetime.utcnow().isoformat()
+    result = await db_supabase.update_lost_and_found(item_id, update)
+    if not result:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return result
+
+
+@admin_router.delete("/lost-and-found/{item_id}")
+async def admin_delete_lost_item(item_id: str):
+    """Delete a lost and found item."""
+    await db_supabase.delete_one("lost_and_found", {"id": item_id})
+    return {"message": "Item deleted"}
+
+
+@admin_router.delete("/disputes/{dispute_id}")
+async def admin_delete_dispute(dispute_id: str):
+    """Delete a dispute."""
+    await db_supabase.delete_one("disputes", {"id": dispute_id})
+    return {"message": "Dispute deleted"}
+
+
+@admin_router.get("/complaints")
+async def admin_list_complaints(limit: int = 100, offset: int = 0):
+    """List all complaints."""
+    return await db_supabase.get_rows(
+        "complaints", order="created_at", desc=True, limit=limit, offset=offset
+    )
+
+
+@admin_router.delete("/complaints/{complaint_id}")
+async def admin_delete_complaint(complaint_id: str):
+    """Delete a complaint."""
+    await db_supabase.delete_one("complaints", {"id": complaint_id})
+    return {"message": "Complaint deleted"}
+
+
 @admin_router.get("/drivers/{driver_id}/rides")
 async def admin_get_driver_rides(driver_id: str):
     """Get all rides for a specific driver."""

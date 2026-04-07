@@ -28,9 +28,9 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import { HelpCircle, Search, MessageSquare, CheckCircle, XCircle, Clock } from "lucide-react";
+import { HelpCircle, Search, MessageSquare, CheckCircle, XCircle, Clock, Trash2 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
-import { getDisputes, resolveDispute } from "@/lib/api";
+import { getDisputes, resolveDispute, deleteDispute } from "@/lib/api";
 
 // Mock dispute data - replace with API calls when backend is ready
 const mockDisputes = [
@@ -299,7 +299,7 @@ export default function DisputesTab() {
                                     </div>
                                 </div>
                             )}
-                            {selectedDispute.status === "pending" && (
+                            {(selectedDispute.status === "pending" || selectedDispute.status === "open") && (
                                 <>
                                     <div className="space-y-2">
                                         <Label htmlFor="resolution">Resolution Notes</Label>
@@ -321,6 +321,17 @@ export default function DisputesTab() {
                                     </div>
                                 </>
                             )}
+                            <Button variant="outline" size="sm" className="text-red-600 border-red-200 hover:bg-red-50"
+                                onClick={async () => {
+                                    if (!confirm("Permanently delete this dispute?")) return;
+                                    try {
+                                        await deleteDispute(selectedDispute.id);
+                                        fetchDisputes();
+                                        setSelectedDispute(null);
+                                    } catch (e: any) { alert(e.message || "Failed"); }
+                                }}>
+                                <Trash2 className="h-3.5 w-3.5 mr-1.5" /> Delete Dispute
+                            </Button>
                         </div>
                     )}
                 </DialogContent>

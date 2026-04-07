@@ -159,7 +159,20 @@ export const sendRideInvoice = async (rideId: string) => {
     return res.json();
 };
 export const getFlags = () => request<any[]>("/api/admin/flags");
+export const deactivateFlag = (flagId: string) =>
+    request<any>(`/api/admin/flags/${flagId}/deactivate`, { method: "PUT" });
+export const deleteFlag = (flagId: string) =>
+    request<any>(`/api/admin/flags/${flagId}`, { method: "DELETE" });
 export const getLostAndFoundItems = () => request<any[]>("/api/admin/lost-and-found");
+export const updateLostItem = (itemId: string, data: any) =>
+    request<any>(`/api/admin/lost-and-found/${itemId}`, { method: "PUT", body: JSON.stringify(data) });
+export const deleteLostItem = (itemId: string) =>
+    request<any>(`/api/admin/lost-and-found/${itemId}`, { method: "DELETE" });
+export const deleteDispute = (disputeId: string) =>
+    request<any>(`/api/admin/disputes/${disputeId}`, { method: "DELETE" });
+export const getComplaints = () => request<any[]>("/api/admin/complaints");
+export const deleteComplaint = (complaintId: string) =>
+    request<any>(`/api/admin/complaints/${complaintId}`, { method: "DELETE" });
 
 /* ── Drivers ──────────────────────────────── */
 export const getDrivers = () => request<any[]>("/api/admin/drivers");

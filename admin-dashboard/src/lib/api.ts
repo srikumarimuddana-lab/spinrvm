@@ -158,6 +158,8 @@ export const sendRideInvoice = async (rideId: string) => {
     if (!res.ok) throw new Error("Failed to send invoice");
     return res.json();
 };
+export const getFlags = () => request<any[]>("/api/admin/flags");
+export const getLostAndFoundItems = () => request<any[]>("/api/admin/lost-and-found");
 
 /* ── Drivers ──────────────────────────────── */
 export const getDrivers = () => request<any[]>("/api/admin/drivers");

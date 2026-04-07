@@ -48,9 +48,7 @@ const NAV_GROUPS: NavGroup[] = [
         items: [
             { href: "/dashboard/service-areas", label: "Service Areas", icon: MapPin, module: "service_areas" },
             { href: "/dashboard/vehicle-types", label: "Vehicle Types", icon: Car, module: "pricing" },
-            { href: "/dashboard/pricing", label: "Pricing", icon: DollarSign, module: "pricing" },
-            { href: "/dashboard/subscriptions", label: "Spinr Pass", icon: CreditCard, module: "pricing" },
-            { href: "/dashboard/surge", label: "Surge Pricing", icon: Flame, module: "pricing" },
+            { href: "/dashboard/pricing", label: "Pricing & Billing", icon: DollarSign, module: "pricing" },
             { href: "/dashboard/promotions", label: "Promotions", icon: Ticket, module: "promotions" },
         ],
     },
@@ -64,8 +62,7 @@ const NAV_GROUPS: NavGroup[] = [
     {
         title: "Support",
         items: [
-            { href: "/dashboard/support", label: "Tickets", icon: LifeBuoy, module: "support" },
-            { href: "/dashboard/disputes", label: "Disputes", icon: HelpCircle, module: "disputes" },
+            { href: "/dashboard/support", label: "Support & Issues", icon: LifeBuoy, module: "support" },
             { href: "/dashboard/cloud-messaging", label: "Cloud Messaging", icon: Cloud, module: "notifications" },
         ],
     },

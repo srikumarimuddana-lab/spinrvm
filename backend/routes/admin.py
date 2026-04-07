@@ -937,6 +937,30 @@ async def admin_resolve_lost_item(item_id: str, req: LostAndFoundResolveRequest)
     return result
 
 
+@admin_router.get("/flags")
+async def admin_list_flags(
+    limit: int = 100,
+    offset: int = 0,
+):
+    """List all flags with optional pagination."""
+    flags = await db_supabase.get_rows(
+        "flags", order="created_at", desc=True, limit=limit, offset=offset
+    )
+    return flags
+
+
+@admin_router.get("/lost-and-found")
+async def admin_list_lost_and_found(
+    limit: int = 100,
+    offset: int = 0,
+):
+    """List all lost and found items."""
+    items = await db_supabase.get_rows(
+        "lost_and_found", order="created_at", desc=True, limit=limit, offset=offset
+    )
+    return items
+
+
 @admin_router.get("/drivers/{driver_id}/rides")
 async def admin_get_driver_rides(driver_id: str):
     """Get all rides for a specific driver."""

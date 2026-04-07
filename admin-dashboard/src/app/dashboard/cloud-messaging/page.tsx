@@ -23,7 +23,7 @@ import {
     CheckCircle2, XCircle, Timer, Trash2, Eye, RefreshCw, FileText, User,
     Phone, ChevronLeft, ChevronRight, Info, AlertCircle, MapPin, Flame, X, Check,
 } from "lucide-react";
-import { formatDate } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 import {
     getCloudMessages, sendCloudMessage, getCloudMessageStats,
     deleteCloudMessage, getUsers, getDrivers,
@@ -343,136 +343,169 @@ export default function CloudMessagingPage() {
 
             {/* ═══ COMPOSE TAB ═══ */}
             {activeTab === "compose" && (
-                <Card>
-                    <CardHeader className="pb-4">
-                        <CardTitle className="flex items-center gap-2 text-lg"><Send className="h-5 w-5 text-violet-500" /> Compose Message</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-5">
-                        {/* Audience */}
-                        <div className="space-y-2">
-                            <Label className="text-sm font-semibold">Select users : <span className="text-red-500">*</span></Label>
-                            <div className="flex flex-wrap gap-4">
-                                {AUDIENCE_OPTIONS.map((opt) => (
-                                    <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
-                                        <input type="radio" name="audience" value={opt.value} checked={form.audience === opt.value} onChange={(e) => { setForm({ ...form, audience: e.target.value, particular_ids: [] }); setSelectedUsers([]); setUserSearch(""); setUserOptions([]); }} className="accent-red-500" />
-                                        <span className="text-sm">{opt.label}</span>
-                                    </label>
-                                ))}
-                            </div>
-
-                            {/* Multi-select user/driver */}
-                            {(form.audience === "particular_customer" || form.audience === "particular_driver") && (
-                                <div className="mt-2 max-w-md space-y-2">
-                                    {/* Selected chips */}
-                                    {selectedUsers.length > 0 && (
-                                        <div className="flex flex-wrap gap-1.5">
-                                            {selectedUsers.map((u) => (
-                                                <span key={u.id} className="inline-flex items-center gap-1 bg-violet-500/10 text-violet-700 dark:text-violet-300 rounded-full px-2.5 py-1 text-xs font-medium">
-                                                    <User className="h-3 w-3" />
-                                                    {u.label}
-                                                    <button onClick={() => removeUser(u.id)} className="ml-0.5 hover:text-red-500"><X className="h-3 w-3" /></button>
-                                                </span>
-                                            ))}
-                                        </div>
-                                    )}
-                                    {/* Search input */}
-                                    <div className="relative">
-                                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                                        <Input placeholder={`Search ${form.audience === "particular_customer" ? "customers" : "drivers"}...`} value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="pl-9" />
-                                    </div>
-                                    {userSearchLoading && <p className="text-xs text-muted-foreground">Searching...</p>}
-                                    {/* Dropdown list */}
-                                    {!userSearchLoading && userOptions.length > 0 && (
-                                        <div className="border rounded-md max-h-48 overflow-y-auto">
-                                            {userOptions.map((opt) => {
-                                                const isSelected = form.particular_ids.includes(opt.id);
-                                                return (
-                                                    <button key={opt.id} className={`w-full text-left px-3 py-2 text-sm border-b last:border-b-0 flex items-center justify-between ${isSelected ? "bg-violet-500/5" : "hover:bg-muted/50"}`} onClick={() => toggleUserSelection(opt)}>
-                                                        <div>
-                                                            <p className="font-medium">{opt.label}</p>
-                                                            <p className="text-xs text-muted-foreground">{[opt.email, opt.phone].filter(Boolean).join(" · ")}</p>
-                                                        </div>
-                                                        {isSelected ? <Check className="h-4 w-4 text-violet-500" /> : <span className="text-xs text-muted-foreground font-mono">{opt.id.slice(0, 8)}</span>}
-                                                    </button>
-                                                );
-                                            })}
-                                        </div>
-                                    )}
-                                    {!userSearchLoading && userSearch && userOptions.length === 0 && <p className="text-xs text-muted-foreground">No results found</p>}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    {/* ── Left Column: Message Content (2/3 width) ── */}
+                    <div className="lg:col-span-2 space-y-6">
+                        <Card>
+                            <CardHeader className="pb-3">
+                                <CardTitle className="text-base">Message Content</CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                {/* Title */}
+                                <div className="space-y-2">
+                                    <Label className="text-sm font-medium">Title <span className="text-destructive">*</span></Label>
+                                    <Input placeholder="Enter notification title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
                                 </div>
-                            )}
-                        </div>
+                                {/* Description */}
+                                <div className="space-y-2">
+                                    <Label className="text-sm font-medium">Description <span className="text-destructive">*</span></Label>
+                                    <Textarea placeholder="Enter notification message..." value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={5} className="resize-none" />
+                                </div>
+                                {/* Type */}
+                                <div className="space-y-2 max-w-xs">
+                                    <Label className="text-sm font-medium">Notification Type</Label>
+                                    <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
+                                        <SelectTrigger><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                            {NOTIFICATION_TYPES.map((t) => (
+                                                <SelectItem key={t.value} value={t.value}>
+                                                    <span className="flex items-center gap-2"><t.icon className={`h-3.5 w-3.5 ${t.color}`} />{t.label}</span>
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            </CardContent>
+                        </Card>
 
-                        {/* Delivery channels */}
-                        <div className="space-y-3">
-                            <Label className="text-sm font-semibold">Send notification via : <span className="text-red-500">*</span></Label>
-                            <div className="space-y-2">
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-2"><Bell className="h-4 w-4 text-muted-foreground" /><Label htmlFor="ch-push" className="cursor-pointer text-sm">Push Notification</Label></div>
+                        {/* Audience Card */}
+                        <Card>
+                            <CardHeader className="pb-3">
+                                <CardTitle className="text-base">Audience</CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                                    {AUDIENCE_OPTIONS.map((opt) => {
+                                        const isActive = form.audience === opt.value;
+                                        return (
+                                            <button
+                                                key={opt.value}
+                                                onClick={() => { setForm({ ...form, audience: opt.value, particular_ids: [] }); setSelectedUsers([]); setUserSearch(""); setUserOptions([]); }}
+                                                className={cn(
+                                                    "flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm font-medium transition-colors",
+                                                    isActive
+                                                        ? "border-primary bg-primary/5 text-primary"
+                                                        : "border-border text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                                                )}
+                                            >
+                                                <opt.icon className="h-4 w-4" />
+                                                {opt.label}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+
+                                {/* Multi-select user/driver */}
+                                {(form.audience === "particular_customer" || form.audience === "particular_driver") && (
+                                    <div className="space-y-3 pt-1">
+                                        {/* Selected chips */}
+                                        {selectedUsers.length > 0 && (
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {selectedUsers.map((u) => (
+                                                    <span key={u.id} className="inline-flex items-center gap-1 bg-primary/10 text-primary rounded-full px-2.5 py-1 text-xs font-medium">
+                                                        <User className="h-3 w-3" />
+                                                        {u.label}
+                                                        <button onClick={() => removeUser(u.id)} className="ml-0.5 hover:text-destructive"><X className="h-3 w-3" /></button>
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        )}
+                                        {/* Search */}
+                                        <div className="relative">
+                                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                            <Input placeholder={`Search ${form.audience === "particular_customer" ? "customers" : "drivers"} by name, email, or phone...`} value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="pl-9" />
+                                        </div>
+                                        {userSearchLoading && <p className="text-xs text-muted-foreground">Searching...</p>}
+                                        {!userSearchLoading && userOptions.length > 0 && (
+                                            <div className="border rounded-lg max-h-52 overflow-y-auto divide-y">
+                                                {userOptions.map((opt) => {
+                                                    const isSelected = form.particular_ids.includes(opt.id);
+                                                    return (
+                                                        <button key={opt.id} className={cn("w-full text-left px-3 py-2.5 text-sm flex items-center justify-between transition-colors", isSelected ? "bg-primary/5" : "hover:bg-accent")} onClick={() => toggleUserSelection(opt)}>
+                                                            <div>
+                                                                <p className="font-medium">{opt.label}</p>
+                                                                <p className="text-xs text-muted-foreground">{[opt.email, opt.phone].filter(Boolean).join(" · ")}</p>
+                                                            </div>
+                                                            {isSelected ? <Check className="h-4 w-4 text-primary shrink-0" /> : <span className="text-xs text-muted-foreground font-mono shrink-0">{opt.id.slice(0, 8)}</span>}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
+                                        {!userSearchLoading && userSearch && userOptions.length === 0 && <p className="text-xs text-muted-foreground">No results found</p>}
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
+                    </div>
+
+                    {/* ── Right Column: Settings & Send (1/3 width) ── */}
+                    <div className="space-y-6">
+                        {/* Delivery Channels */}
+                        <Card>
+                            <CardHeader className="pb-3">
+                                <CardTitle className="text-base">Delivery Channels</CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-3">
+                                <div className="flex items-center justify-between rounded-lg border px-3 py-2.5">
+                                    <div className="flex items-center gap-2.5"><Bell className="h-4 w-4 text-muted-foreground" /><span className="text-sm font-medium">Push Notification</span></div>
                                     <Switch id="ch-push" checked={form.send_push} onCheckedChange={(v) => setForm({ ...form, send_push: v })} />
                                 </div>
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-2"><Mail className="h-4 w-4 text-muted-foreground" /><Label htmlFor="ch-email" className="cursor-pointer text-sm">Email</Label></div>
+                                <div className="flex items-center justify-between rounded-lg border px-3 py-2.5">
+                                    <div className="flex items-center gap-2.5"><Mail className="h-4 w-4 text-muted-foreground" /><span className="text-sm font-medium">Email</span></div>
                                     <Switch id="ch-email" checked={form.send_email} onCheckedChange={(v) => setForm({ ...form, send_email: v })} />
                                 </div>
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-2"><Phone className="h-4 w-4 text-muted-foreground" /><Label htmlFor="ch-sms" className="cursor-pointer text-sm">SMS</Label></div>
+                                <div className="flex items-center justify-between rounded-lg border px-3 py-2.5">
+                                    <div className="flex items-center gap-2.5"><Phone className="h-4 w-4 text-muted-foreground" /><span className="text-sm font-medium">SMS</span></div>
                                     <Switch id="ch-sms" checked={form.send_sms} onCheckedChange={(v) => setForm({ ...form, send_sms: v })} />
                                 </div>
-                            </div>
-                        </div>
-
-                        {/* Type + Title */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                                <Label className="text-sm font-semibold">Notification Type</Label>
-                                <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                        {NOTIFICATION_TYPES.map((t) => (<SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="space-y-2">
-                                <Label className="text-sm font-semibold">Title <span className="text-red-500">*</span></Label>
-                                <Input placeholder="Enter notification title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-                            </div>
-                        </div>
-
-                        {/* Description */}
-                        <div className="space-y-2">
-                            <Label className="text-sm font-semibold">Description <span className="text-red-500">*</span></Label>
-                            <Textarea placeholder="Enter notification message" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={4} />
-                        </div>
-
-                        <Separator />
+                            </CardContent>
+                        </Card>
 
                         {/* Schedule */}
-                        <div className="space-y-3">
-                            <label className="flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" checked={form.is_scheduled} onChange={(e) => setForm({ ...form, is_scheduled: e.target.checked })} className="accent-red-500 h-4 w-4" />
-                                <Calendar className="h-4 w-4 text-muted-foreground" />
-                                <span className="text-sm font-semibold">Schedule for later</span>
-                            </label>
-                            {form.is_scheduled && (
-                                <div className="max-w-xs space-y-1">
-                                    <Label className="text-xs text-muted-foreground">Date & Time</Label>
-                                    <Input
-                                        type="datetime-local"
-                                        value={form.scheduled_at}
-                                        onChange={(e) => setForm({ ...form, scheduled_at: e.target.value })}
-                                        min={new Date().toISOString().slice(0, 16)}
-                                    />
+                        <Card>
+                            <CardHeader className="pb-3">
+                                <CardTitle className="text-base">Schedule</CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-3">
+                                <div className="flex items-center justify-between rounded-lg border px-3 py-2.5">
+                                    <div className="flex items-center gap-2.5"><Calendar className="h-4 w-4 text-muted-foreground" /><span className="text-sm font-medium">Schedule for later</span></div>
+                                    <Switch checked={form.is_scheduled} onCheckedChange={(v) => setForm({ ...form, is_scheduled: v })} />
                                 </div>
-                            )}
-                        </div>
+                                {form.is_scheduled && (
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs text-muted-foreground">Date & Time</Label>
+                                        <Input
+                                            type="datetime-local"
+                                            value={form.scheduled_at}
+                                            onChange={(e) => setForm({ ...form, scheduled_at: e.target.value })}
+                                            min={new Date().toISOString().slice(0, 16)}
+                                        />
+                                    </div>
+                                )}
+                                {!form.is_scheduled && (
+                                    <p className="text-xs text-muted-foreground">Message will be sent immediately.</p>
+                                )}
+                            </CardContent>
+                        </Card>
 
-                        <Button className="bg-red-500 hover:bg-red-600 text-white" onClick={handleSend} disabled={sending}>
-                            {sending ? <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent mr-2" /> : form.is_scheduled ? <Calendar className="mr-2 h-4 w-4" /> : <Send className="mr-2 h-4 w-4" />}
+                        {/* Send Button */}
+                        <Button className="w-full h-11 bg-primary hover:bg-primary/90 text-primary-foreground" onClick={handleSend} disabled={sending}>
+                            {sending ? <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent mr-2" /> : form.is_scheduled ? <Calendar className="mr-2 h-4 w-4" /> : <Send className="mr-2 h-4 w-4" />}
                             {form.is_scheduled ? "Schedule Notification" : "Send Notification"}
                         </Button>
-                    </CardContent>
-                </Card>
+                    </div>
+                </div>
             )}
 
             {/* ═══ SCHEDULED TAB ═══ */}

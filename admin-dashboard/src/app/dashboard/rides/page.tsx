@@ -60,29 +60,41 @@ export default function RidesPage() {
     const totalPages = Math.ceil(totalCount / PAGE_SIZE);
 
     return (
-        <div className="space-y-0">
-            <RideStatsCards />
-            <div className="h-[calc(100vh-380px)] min-h-[300px]">
-                <RideList
-                    rides={filtered}
-                    allRides={rides}
-                    totalCount={totalCount}
-                    areas={areas}
-                    loading={loading}
-                    selectedId={selectedRideId || undefined}
-                    search={search}
-                    onSearchChange={setSearch}
-                    statusFilter={statusFilter}
-                    onStatusChange={setStatusFilter}
-                    areaFilter={areaFilter}
-                    onAreaChange={setAreaFilter}
-                    onSelect={(ride) => setSelectedRideId(ride.id)}
-                    page={page}
-                    totalPages={totalPages}
-                    onPageChange={handlePageChange}
-                />
+        <div className="space-y-6 pb-8">
+            {/* Page Header */}
+            <div>
+                <h1 className="text-3xl font-bold tracking-tight">Rides</h1>
+                <p className="text-muted-foreground mt-1">
+                    Monitor and manage all ride activity across your platform.
+                </p>
             </div>
+
+            {/* Stats Overview */}
+            <RideStatsCards />
+
+            {/* Rides Table */}
+            <RideList
+                rides={filtered}
+                allRides={rides}
+                totalCount={totalCount}
+                areas={areas}
+                loading={loading}
+                selectedId={selectedRideId || undefined}
+                search={search}
+                onSearchChange={setSearch}
+                statusFilter={statusFilter}
+                onStatusChange={setStatusFilter}
+                areaFilter={areaFilter}
+                onAreaChange={setAreaFilter}
+                onSelect={(ride) => setSelectedRideId(ride.id)}
+                page={page}
+                totalPages={totalPages}
+                onPageChange={handlePageChange}
+            />
+
+            {/* Trends Chart */}
             <RidesChart />
+
             <RideDetailModal
                 rideId={selectedRideId}
                 open={!!selectedRideId}

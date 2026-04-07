@@ -2,11 +2,14 @@
 
 import { formatCurrency } from "@/lib/utils";
 
-export function Sec({ title, children }: { title: string; children: React.ReactNode }) {
+export function Sec({ title, children, actions }: { title: string; children: React.ReactNode; actions?: React.ReactNode }) {
     return (
         <div>
-            <h4 className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2">{title}</h4>
-            <div className="bg-muted/30 rounded-xl p-3 space-y-2">{children}</div>
+            <div className="flex items-center justify-between mb-2.5">
+                <h4 className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">{title}</h4>
+                {actions}
+            </div>
+            <div className="bg-muted/30 rounded-xl p-3.5 space-y-2">{children}</div>
         </div>
     );
 }
@@ -14,16 +17,16 @@ export function Sec({ title, children }: { title: string; children: React.ReactN
 export function FR({ l, v, b, t }: { l: string; v?: any; b?: boolean; t?: boolean }) {
     const d = t ? (v || "—") : formatCurrency(v || 0);
     return (
-        <div className="flex justify-between text-sm">
+        <div className="flex justify-between text-sm items-center">
             <span className="text-muted-foreground">{l}</span>
-            <span className={b ? "font-bold" : "font-medium"}>{d}</span>
+            <span className={b ? "font-bold text-foreground" : "font-medium"}>{d}</span>
         </div>
     );
 }
 
 export function MStat({ label, value, icon: I }: { label: string; value: string; icon: any }) {
     return (
-        <div className="flex-1 bg-background rounded-lg p-2 text-center">
+        <div className="flex-1 bg-background rounded-lg p-2.5 text-center">
             <I className="h-3.5 w-3.5 text-muted-foreground mx-auto mb-1" />
             <p className="text-xs font-bold">{value}</p>
             <p className="text-[9px] text-muted-foreground">{label}</p>
@@ -34,31 +37,72 @@ export function MStat({ label, value, icon: I }: { label: string; value: string;
 export function TL({ l, t, d, km }: { l: string; t?: string; d?: boolean; km?: number }) {
     if (!t) return null;
     return (
-        <div className="flex items-center gap-2.5">
-            <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${d ? "bg-red-400" : "bg-emerald-400"}`} />
-            <p className="text-sm flex-1">{l}</p>
+        <div className="flex items-center gap-2.5 py-1">
+            <div className={`w-2 h-2 rounded-full shrink-0 ring-2 ring-offset-1 ring-offset-background ${
+                d ? "bg-red-400 ring-red-200 dark:ring-red-900/50" : "bg-emerald-400 ring-emerald-200 dark:ring-emerald-900/50"
+            }`} />
+            <p className="text-sm flex-1 font-medium">{l}</p>
             {km != null && km > 0 && (
-                <span className="text-[10px] font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded">{km.toFixed(2)} km</span>
+                <span className="text-[10px] font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded-md">{km.toFixed(2)} km</span>
             )}
-            <p className="text-[10px] text-muted-foreground">
+            <p className="text-[11px] text-muted-foreground tabular-nums">
                 {new Date(t).toLocaleString("en-CA", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
             </p>
         </div>
     );
 }
 
+const STATUS_CONFIG: Record<string, { bg: string; text: string; dot: string; label: string }> = {
+    completed: {
+        bg: "bg-emerald-50 dark:bg-emerald-900/20",
+        text: "text-emerald-700 dark:text-emerald-400",
+        dot: "bg-emerald-500",
+        label: "Completed",
+    },
+    cancelled: {
+        bg: "bg-red-50 dark:bg-red-900/20",
+        text: "text-red-600 dark:text-red-400",
+        dot: "bg-red-500",
+        label: "Cancelled",
+    },
+    in_progress: {
+        bg: "bg-blue-50 dark:bg-blue-900/20",
+        text: "text-blue-700 dark:text-blue-400",
+        dot: "bg-blue-500",
+        label: "In Progress",
+    },
+    searching: {
+        bg: "bg-amber-50 dark:bg-amber-900/20",
+        text: "text-amber-700 dark:text-amber-400",
+        dot: "bg-amber-500 animate-pulse",
+        label: "Searching",
+    },
+    driver_assigned: {
+        bg: "bg-violet-50 dark:bg-violet-900/20",
+        text: "text-violet-700 dark:text-violet-400",
+        dot: "bg-violet-500",
+        label: "Assigned",
+    },
+    driver_arrived: {
+        bg: "bg-teal-50 dark:bg-teal-900/20",
+        text: "text-teal-700 dark:text-teal-400",
+        dot: "bg-teal-500",
+        label: "Arrived",
+    },
+};
+
 export function getStatusBadge(status: string) {
-    const map: Record<string, string> = {
-        completed: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400",
-        cancelled: "bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400",
-        in_progress: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
-        searching: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
-        driver_assigned: "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400",
-        driver_arrived: "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400",
+    const config = STATUS_CONFIG[status] || {
+        bg: "bg-gray-50 dark:bg-gray-900/20",
+        text: "text-gray-600 dark:text-gray-400",
+        dot: "bg-gray-400",
+        label: status?.replace(/_/g, " "),
     };
+
     return (
-        <span className={`px-2 py-0.5 rounded-md text-xs font-bold ${map[status] || "bg-gray-100 text-gray-600"}`}>
-            {status?.replace(/_/g, " ").toUpperCase()}
+        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-bold ${config.bg} ${config.text}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${config.dot}`} />
+            {config.label}
         </span>
     );
 }

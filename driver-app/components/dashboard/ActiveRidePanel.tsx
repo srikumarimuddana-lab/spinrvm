@@ -1,27 +1,26 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, Animated } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  ActivityIndicator,
+  Animated,
+  Linking,
+  Platform,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import SpinrConfig from '@shared/config/spinr.config';
+import CustomAlert from '@shared/components/CustomAlert';
 
-const COLORS = {
-  primary: '#0B0F19', // Deep dark blue/black for contrast
-  surface: '#1A2138', // Lighter dark for cards
-  accent: SpinrConfig.theme.colors.primary,
-  accentDim: SpinrConfig.theme.colors.primaryDark,
-  success: SpinrConfig.theme.colors.success,
-  text: '#FFFFFF',
-  textDim: '#A0AEC0',
-  orange: '#FF9500',
-  gold: '#F6E05E',
-  danger: SpinrConfig.theme.colors.error,
-  border: 'rgba(255,255,255,0.1)',
-};
+const ACCENT = SpinrConfig.theme.colors.primary;
 
 interface Rider {
   first_name?: string;
+  last_name?: string;
   name?: string;
   rating?: number;
+  phone?: string;
 }
 
 interface Ride {
@@ -33,6 +32,11 @@ interface Ride {
   dropoff_lat: number;
   dropoff_lng: number;
   total_fare?: number;
+  driver_earnings?: number;
+  distance_km?: number;
+  duration_minutes?: number;
+  pickup_otp?: string;
+  status?: string;
 }
 
 interface ActiveRidePanelProps {
@@ -68,393 +72,462 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   slideUpAnim,
   fadeAnim,
 }) => {
+  // All hooks MUST be before any early return to avoid React ordering issues
+  const [waitSeconds, setWaitSeconds] = useState(0);
+  const waitTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [alertVisible, setAlertVisible] = useState(false);
+  const [alertCfg, setAlertCfg] = useState({
+    title: '', message: '', variant: 'info' as 'info' | 'warning' | 'danger' | 'success',
+    buttons: [] as Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>,
+  });
+
+  useEffect(() => {
+    if (rideState === 'arrived_at_pickup') {
+      setWaitSeconds(0);
+      const id = setInterval(() => setWaitSeconds(s => s + 1), 1000);
+      waitTimerRef.current = id;
+      return () => clearInterval(id);
+    }
+    if (waitTimerRef.current) {
+      clearInterval(waitTimerRef.current);
+      waitTimerRef.current = null;
+    }
+  }, [rideState]);
+
   if (!ride) return null;
 
-  const getStatusText = () => {
-    switch (rideState) {
-      case 'navigating_to_pickup': return 'Navigating to Pickup';
-      case 'arrived_at_pickup': return 'Waiting for Rider';
-      case 'trip_in_progress': return 'Trip in Progress';
-    }
+  // ── Helpers ─────────────────────────────────────────────────
+  const riderName = rider?.first_name
+    ? `${rider.first_name}${rider.last_name ? ' ' + rider.last_name[0] + '.' : ''}`
+    : rider?.name || 'Rider';
+
+  const earnings = ride.driver_earnings ?? ride.total_fare ?? 0;
+  const distKm = ride.distance_km ?? 0;
+  const durMin = ride.duration_minutes ?? 0;
+
+  const formatWait = (s: number) => {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return m > 0 ? `${m}m ${sec.toString().padStart(2, '0')}s` : `${sec}s`;
   };
 
-  const getStatusIndicator = () => {
-    switch (rideState) {
-      case 'trip_in_progress': 
-        return <View style={[styles.pulseDot, { backgroundColor: COLORS.success }]} />;
-      case 'arrived_at_pickup': 
-        return <Ionicons name="time" size={16} color={COLORS.orange} />;
-      default: 
-        return <Ionicons name="navigate-circle" size={18} color={COLORS.accent} />;
-    }
+  const openMapsNavigation = (lat: number, lng: number, _label: string) => {
+    // Use Google Maps web URL as primary — works on all devices regardless
+    // of whether the native Google Maps app is installed. On devices WITH
+    // the app installed, the web URL auto-redirects to the app. On devices
+    // without it (or in Expo Go), it opens in the browser which still
+    // provides turn-by-turn. The old `google.navigation:` scheme crashes
+    // with "No Activity found to handle Intent" when the app isn't present.
+    const googleUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
+    const appleUrl = `http://maps.apple.com/?daddr=${lat},${lng}&dirflg=d`;
+    const url = Platform.OS === 'ios' ? appleUrl : googleUrl;
+    Linking.openURL(url).catch(() => Linking.openURL(googleUrl));
   };
+
+  const showAlert = (
+    title: string, message: string,
+    variant: 'info' | 'warning' | 'danger' | 'success',
+    buttons: typeof alertCfg.buttons
+  ) => {
+    setAlertCfg({ title, message, variant, buttons });
+    setAlertVisible(true);
+  };
+
+  // ── Status config ───────────────────────────────────────────
+  const statusMap = {
+    navigating_to_pickup: { icon: 'navigate-circle' as const, label: 'En Route to Pickup', color: ACCENT },
+    arrived_at_pickup: { icon: 'time' as const, label: `Waiting · ${formatWait(waitSeconds)}`, color: '#F59E0B' },
+    trip_in_progress: { icon: 'car-sport' as const, label: 'Trip in Progress', color: '#22C55E' },
+  };
+  const status = statusMap[rideState];
 
   return (
     <Animated.View
-      style={[styles.activePanelContainer, { transform: [{ translateY: slideUpAnim }], opacity: fadeAnim }]}
+      style={[styles.container, { transform: [{ translateY: slideUpAnim }], opacity: fadeAnim }]}
     >
-      {/* Floating Header Card */}
-      <View style={styles.floatingHeader}>
-        <View style={styles.statusRow}>
-          {getStatusIndicator()}
-          <Text style={styles.statusText}>{getStatusText()}</Text>
+      {/* ── Status pill (floating) ──────────────────────────── */}
+      <View style={styles.statusPill}>
+        <View style={[styles.statusIconBg, { backgroundColor: `${status.color}15` }]}>
+          <Ionicons name={status.icon} size={16} color={status.color} />
         </View>
-        <Text style={styles.fareHighlight}>
-          ${ride.total_fare ? ride.total_fare.toFixed(2) : '0.00'}
-        </Text>
+        <Text style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
+        <View style={{ flex: 1 }} />
+        <Text style={styles.statusFare}>${earnings.toFixed(2)}</Text>
       </View>
 
-      <View style={styles.mainBottomSheet}>
-        
-        {/* Rider Info Card */}
-        {rider && (
-          <View style={styles.riderCard}>
-            <View style={styles.riderAvatar}>
-              <Ionicons name="person" size={24} color={COLORS.textDim} />
-            </View>
-            <View style={styles.riderInfo}>
-              <Text style={styles.riderName}>{rider.first_name || rider.name || 'Rider'}</Text>
-              {rider.rating && (
-                <View style={styles.riderRating}>
-                  <Ionicons name="star" size={12} color={COLORS.gold} />
-                  <Text style={styles.ratingNumber}>{rider.rating.toFixed(1)}</Text>
-                </View>
-              )}
-            </View>
-            <TouchableOpacity style={styles.contactBtnActive}>
-              <Ionicons name="chatbubble" size={20} color="#fff" />
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.contactBtn}>
-              <Ionicons name="call" size={20} color={COLORS.textDim} />
-            </TouchableOpacity>
-          </View>
-        )}
+      {/* ── Main card ───────────────────────────────────────── */}
+      <View style={styles.sheet}>
 
-        {/* Dynamic OTP Section */}
-        {rideState === 'arrived_at_pickup' && (
-          <View style={styles.otpSection}>
-            <Text style={styles.otpLabel}>Ask rider for their 4-digit PIN</Text>
-            <View style={styles.otpRow}>
-              {[0, 1, 2, 3].map((i) => (
+        {/* ── Trip info row: earnings, distance, time ────── */}
+        <View style={styles.tripInfoRow}>
+          <View style={styles.tripInfoItem}>
+            <Text style={styles.tripInfoValue}>${earnings.toFixed(2)}</Text>
+            <Text style={styles.tripInfoLabel}>Your Earnings</Text>
+          </View>
+          <View style={styles.tripInfoDivider} />
+          <View style={styles.tripInfoItem}>
+            <Text style={styles.tripInfoValue}>{distKm.toFixed(1)} km</Text>
+            <Text style={styles.tripInfoLabel}>Distance</Text>
+          </View>
+          <View style={styles.tripInfoDivider} />
+          <View style={styles.tripInfoItem}>
+            <Text style={styles.tripInfoValue}>{durMin} min</Text>
+            <Text style={styles.tripInfoLabel}>Est. Time</Text>
+          </View>
+        </View>
+
+        {/* ── Rider info ─────────────────────────────────── */}
+        <View style={styles.riderRow}>
+          <View style={styles.riderAvatar}>
+            <Ionicons name="person" size={20} color="#999" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.riderName}>{riderName}</Text>
+            {rider?.rating ? (
+              <View style={styles.ratingRow}>
+                <Ionicons name="star" size={11} color="#F59E0B" />
+                <Text style={styles.ratingText}>{Number(rider.rating).toFixed(1)}</Text>
+              </View>
+            ) : null}
+          </View>
+          <TouchableOpacity style={styles.chatBtn}>
+            <Ionicons name="chatbubble-ellipses" size={18} color={ACCENT} />
+          </TouchableOpacity>
+        </View>
+
+        {/* ── Route addresses ────────────────────────────── */}
+        <View style={styles.routeCard}>
+          <View style={styles.routeRow}>
+            <View style={[styles.dot, { backgroundColor: ACCENT }]} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.routeLabel}>PICKUP</Text>
+              <Text style={styles.routeAddress} numberOfLines={2}>{ride.pickup_address}</Text>
+            </View>
+          </View>
+          <View style={styles.routeLineContainer}>
+            <View style={styles.routeLine} />
+          </View>
+          <View style={styles.routeRow}>
+            <View style={[styles.dot, { backgroundColor: '#22C55E' }]} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.routeLabel}>DROPOFF</Text>
+              <Text style={styles.routeAddress} numberOfLines={2}>{ride.dropoff_address}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* ── OTP section (arrived_at_pickup) ─────────────── */}
+        {rideState === 'arrived_at_pickup' ? (
+          <View style={styles.otpCard}>
+            <View style={styles.otpHeader}>
+              <Ionicons name="shield-checkmark" size={18} color={ACCENT} />
+              <Text style={styles.otpTitle}>Verify Rider's PIN</Text>
+            </View>
+            <Text style={styles.otpSub}>Ask rider for their 4-digit code</Text>
+            <View style={styles.otpBoxRow}>
+              {[0, 1, 2, 3].map(i => (
                 <View key={i} style={[styles.otpBox, otpInput.length > i && styles.otpBoxFilled]}>
                   <Text style={styles.otpDigit}>{otpInput[i] || ''}</Text>
                 </View>
               ))}
             </View>
-            <View style={styles.otpKeypad}>
+            <View style={styles.keypad}>
               {[1, 2, 3, 4, 5, 6, 7, 8, 9, null, 0, 'del'].map((key, idx) => (
                 <TouchableOpacity
                   key={idx}
-                  style={[styles.keypadBtn, key === null && { backgroundColor: 'transparent', elevation: 0 }]}
+                  style={[styles.kpBtn, key === null && { backgroundColor: 'transparent', elevation: 0 }]}
+                  disabled={key === null}
+                  activeOpacity={0.6}
                   onPress={() => {
-                    if (key === 'del') {
-                      setOtpInput(otpInput.slice(0, -1));
-                    } else if (key !== null && otpInput.length < 4) {
-                      const newOtp = otpInput + String(key);
-                      setOtpInput(newOtp);
-                      if (newOtp.length === 4) {
-                        onVerifyOTP(newOtp);
-                      }
+                    if (key === 'del') setOtpInput(otpInput.slice(0, -1));
+                    else if (key !== null && otpInput.length < 4) {
+                      const next = otpInput + String(key);
+                      setOtpInput(next);
+                      if (next.length === 4) onVerifyOTP(next);
                     }
                   }}
-                  activeOpacity={0.7}
-                  disabled={key === null}
                 >
-                  {key === 'del' ? (
-                    <Ionicons name="backspace" size={24} color={COLORS.text} />
-                  ) : key !== null ? (
-                    <Text style={styles.keypadText}>{key}</Text>
-                  ) : null}
+                  {key === 'del' ? <Ionicons name="backspace-outline" size={20} color="#333" />
+                    : key !== null ? <Text style={styles.kpText}>{key}</Text>
+                    : null}
                 </TouchableOpacity>
               ))}
             </View>
+            <TouchableOpacity style={styles.skipBtn} onPress={onStartRide} disabled={isLoading}>
+              <Text style={styles.skipText}>Start Without PIN</Text>
+            </TouchableOpacity>
           </View>
-        )}
+        ) : null}
 
-        {/* Action Buttons */}
-        <View style={styles.rideActions}>
-          {rideState === 'navigating_to_pickup' && (
-            <>
-              <TouchableOpacity
-                style={[styles.actionBtn, { backgroundColor: COLORS.surface }]}
-                onPress={() => onNavigate(ride.pickup_lat, ride.pickup_lng, 'Pickup')}
-              >
-                <Ionicons name="navigate" size={20} color="#63B3ED" />
-                <Text style={styles.actionBtnTextOutline}>Navigate</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.actionBtn, styles.primaryBtn]}
-                onPress={onArriveAtPickup}
-                disabled={isLoading}
-              >
-                {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>I've Arrived</Text>}
-              </TouchableOpacity>
-            </>
-          )}
-
-          {rideState === 'arrived_at_pickup' && (
+        {/* ── Action buttons ──────────────────────────────── */}
+        {rideState === 'navigating_to_pickup' ? (
+          <View style={styles.actions}>
             <TouchableOpacity
-              style={[styles.actionBtn, { backgroundColor: 'rgba(255,255,255,0.1)' }]}
-              onPress={onStartRide}
+              style={[styles.actionPrimary, { backgroundColor: ACCENT }]}
+              onPress={() => openMapsNavigation(ride.pickup_lat, ride.pickup_lng, 'Pickup')}
+            >
+              <Ionicons name="navigate" size={20} color="#fff" />
+              <Text style={styles.actionPrimaryText}>Navigate to Pickup</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.actionSecondary}
+              onPress={onArriveAtPickup}
               disabled={isLoading}
             >
-              {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.actionBtnTextOutline}>Start Without PIN</Text>}
+              {isLoading ? <ActivityIndicator color={ACCENT} /> : (
+                <>
+                  <Ionicons name="flag" size={18} color={ACCENT} />
+                  <Text style={[styles.actionSecondaryText, { color: ACCENT }]}>I've Arrived at Pickup</Text>
+                </>
+              )}
             </TouchableOpacity>
-          )}
+          </View>
+        ) : null}
 
-          {rideState === 'trip_in_progress' && (
-            <>
-              <TouchableOpacity
-                style={[styles.actionBtn, { backgroundColor: COLORS.surface }]}
-                onPress={() => onNavigate(ride.dropoff_lat, ride.dropoff_lng, 'Dropoff')}
-              >
-                <Ionicons name="navigate" size={20} color="#63B3ED" />
-                <Text style={styles.actionBtnTextOutline}>Navigate</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.actionBtn, styles.primaryBtn, { backgroundColor: COLORS.success }]}
-                onPress={() => {
-                  Alert.alert('Complete Ride', 'Are you sure you want to complete this trip?', [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Complete', onPress: onCompleteRide },
-                  ]);
-                }}
-                disabled={isLoading}
-              >
-                {isLoading ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryBtnText}>Complete Trip</Text>}
-              </TouchableOpacity>
-            </>
-          )}
-
-          {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup') && (
+        {rideState === 'trip_in_progress' ? (
+          <View style={styles.actions}>
             <TouchableOpacity
-              style={styles.cancelRideBtn}
-              onPress={() => {
-                Alert.alert('Cancel Ride', 'Are you sure you want to cancel? This may affect your rating.', [
-                  { text: 'No', style: 'cancel' },
-                  { text: 'Yes, Cancel', style: 'destructive', onPress: onCancelRide },
-                ]);
-              }}
+              style={[styles.actionPrimary, { backgroundColor: '#3B82F6' }]}
+              onPress={() => openMapsNavigation(ride.dropoff_lat, ride.dropoff_lng, 'Dropoff')}
             >
-              <Text style={styles.cancelRideText}>Cancel Ride</Text>
+              <Ionicons name="navigate" size={20} color="#fff" />
+              <Text style={styles.actionPrimaryText}>Navigate to Dropoff</Text>
             </TouchableOpacity>
-          )}
-        </View>
+            <TouchableOpacity
+              style={[styles.actionPrimary, { backgroundColor: '#22C55E' }]}
+              onPress={() => showAlert(
+                'Complete Trip',
+                `End this trip? Rider will be charged $${(ride.total_fare ?? 0).toFixed(2)}.`,
+                'success',
+                [
+                  { text: 'Not Yet', style: 'cancel' },
+                  { text: 'Complete', onPress: onCompleteRide },
+                ],
+              )}
+              disabled={isLoading}
+            >
+              {isLoading ? <ActivityIndicator color="#fff" /> : (
+                <>
+                  <Ionicons name="checkmark-circle" size={20} color="#fff" />
+                  <Text style={styles.actionPrimaryText}>Complete Trip</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
+        {/* ── Cancel link (pickup phases only) ────────────── */}
+        {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup') ? (
+          <TouchableOpacity
+            style={styles.cancelBtn}
+            onPress={() => showAlert(
+              'Cancel Ride?',
+              'Frequent cancellations may affect your rating.',
+              'warning',
+              [
+                { text: 'Keep Ride', style: 'cancel' },
+                { text: 'Yes, Cancel', style: 'destructive', onPress: onCancelRide },
+              ],
+            )}
+          >
+            <Text style={styles.cancelText}>Cancel Ride</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
+
+      <CustomAlert
+        visible={alertVisible}
+        title={alertCfg.title}
+        message={alertCfg.message}
+        variant={alertCfg.variant}
+        buttons={alertCfg.buttons.length > 0 ? alertCfg.buttons : [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertVisible(false)}
+      />
     </Animated.View>
   );
 };
 
 const styles = StyleSheet.create({
-  activePanelContainer: {
+  container: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
     zIndex: 100,
   },
-  // Floating top status pill
-  floatingHeader: {
+
+  // Status pill
+  statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: COLORS.primary,
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderRadius: 24,
+    backgroundColor: '#fff',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 20,
     marginHorizontal: 16,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 8,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    marginBottom: 8,
     gap: 8,
-  },
-  pulseDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-  },
-  statusText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#fff',
-  },
-  fareHighlight: {
-    fontSize: 18,
-    fontWeight: '900',
-    color: COLORS.success,
-  },
-  // Dark bottom sheet
-  mainBottomSheet: {
-    backgroundColor: COLORS.primary,
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
-    padding: 24,
-    paddingBottom: 40,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -5 },
-    shadowOpacity: 0.3,
-    shadowRadius: 15,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  statusIconBg: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  statusText: { fontSize: 13, fontWeight: '700' },
+  statusFare: { fontSize: 18, fontWeight: '900', color: '#22C55E' },
+
+  // Sheet
+  sheet: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: Platform.OS === 'ios' ? 38 : 22,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
     elevation: 10,
   },
-  // Rider profile card
-  riderCard: {
+
+  // Trip info row
+  tripInfoRow: {
+    flexDirection: 'row',
+    backgroundColor: '#F8F9FA',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+    marginBottom: 14,
+    alignItems: 'center',
+  },
+  tripInfoItem: { flex: 1, alignItems: 'center' },
+  tripInfoValue: { fontSize: 17, fontWeight: '800', color: '#1A1A1A', marginBottom: 2 },
+  tripInfoLabel: { fontSize: 10, fontWeight: '600', color: '#999', letterSpacing: 0.3 },
+  tripInfoDivider: { width: 1, height: 28, backgroundColor: '#E5E5E5' },
+
+  // Rider row
+  riderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: COLORS.surface,
-    borderRadius: 20,
-    padding: 16,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: COLORS.border,
+    marginBottom: 14,
+    gap: 12,
   },
   riderAvatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F0F0F0',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 14,
   },
-  riderInfo: {
-    flex: 1,
-  },
-  riderName: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#fff',
-    marginBottom: 4,
-  },
-  riderRating: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  ratingNumber: {
-    color: COLORS.textDim,
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  contactBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(255,255,255,0.05)',
+  riderName: { fontSize: 15, fontWeight: '700', color: '#1A1A1A' },
+  ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
+  ratingText: { fontSize: 12, fontWeight: '600', color: '#999' },
+  chatBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1.5,
+    borderColor: '#F0F0F0',
     justifyContent: 'center',
     alignItems: 'center',
-    marginLeft: 10,
   },
-  contactBtnActive: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: COLORS.accent,
-    justifyContent: 'center',
+
+  // Route card
+  routeCard: {
+    backgroundColor: '#F8F9FA',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+  },
+  routeRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  dot: { width: 10, height: 10, borderRadius: 5, marginTop: 4 },
+  routeLabel: { fontSize: 9, fontWeight: '800', color: '#999', letterSpacing: 0.8, marginBottom: 2 },
+  routeAddress: { fontSize: 13, fontWeight: '600', color: '#1A1A1A', lineHeight: 18 },
+  routeLineContainer: { paddingLeft: 4, marginVertical: 4 },
+  routeLine: { width: 2, height: 16, backgroundColor: '#DDD', marginLeft: 3 },
+
+  // OTP
+  otpCard: {
+    backgroundColor: '#F8F9FA',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 14,
     alignItems: 'center',
-    marginLeft: 10,
   },
-  // OTP Section
-  otpSection: {
-    backgroundColor: COLORS.surface,
-    borderRadius: 24,
-    padding: 20,
-    alignItems: 'center',
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  otpLabel: {
-    fontSize: 15,
-    color: COLORS.textDim,
-    fontWeight: '600',
-    marginBottom: 16,
-  },
-  otpRow: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 24,
-  },
+  otpHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  otpTitle: { fontSize: 14, fontWeight: '700', color: '#1A1A1A' },
+  otpSub: { fontSize: 12, color: '#999', marginBottom: 14 },
+  otpBoxRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
   otpBox: {
-    width: 55,
-    height: 65,
-    borderRadius: 16,
-    backgroundColor: 'rgba(0,0,0,0.2)',
-    borderWidth: 2,
-    borderColor: 'transparent',
+    width: 48,
+    height: 56,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    borderWidth: 1.5,
+    borderColor: '#E5E5E5',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  otpBoxFilled: {
-    borderColor: COLORS.accent,
-    backgroundColor: 'rgba(255, 71, 87, 0.1)',
-  },
-  otpDigit: {
-    fontSize: 32,
-    fontWeight: '800',
-    color: '#fff',
-  },
-  otpKeypad: {
+  otpBoxFilled: { borderColor: ACCENT, backgroundColor: `${ACCENT}08` },
+  otpDigit: { fontSize: 26, fontWeight: '800', color: '#1A1A1A' },
+  keypad: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'center',
-    gap: 12,
+    gap: 6,
+    width: '100%',
+    marginBottom: 8,
   },
-  keypadBtn: {
+  kpBtn: {
     width: '28%',
-    aspectRatio: 1.5,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderRadius: 12,
+    aspectRatio: 1.7,
+    backgroundColor: '#fff',
+    borderRadius: 10,
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#F0F0F0',
   },
-  keypadText: {
-    fontSize: 24,
-    fontWeight: '600',
-    color: '#fff',
-  },
+  kpText: { fontSize: 20, fontWeight: '600', color: '#1A1A1A' },
+  skipBtn: { paddingVertical: 6 },
+  skipText: { fontSize: 12, color: '#999', fontWeight: '600' },
+
   // Actions
-  rideActions: {
-    gap: 12,
-  },
-  actionBtn: {
+  actions: { gap: 8 },
+  actionPrimary: {
     flexDirection: 'row',
-    height: 56,
-    borderRadius: 16,
+    height: 50,
+    borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
     gap: 8,
   },
-  actionBtnTextOutline: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#fff',
-  },
-  primaryBtn: {
-    backgroundColor: COLORS.accent,
-  },
-  primaryBtnText: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#fff',
-    letterSpacing: 0.5,
-  },
-  cancelRideBtn: {
-    paddingVertical: 14,
+  actionPrimaryText: { fontSize: 15, fontWeight: '700', color: '#fff' },
+  actionSecondary: {
+    flexDirection: 'row',
+    height: 50,
+    borderRadius: 14,
+    justifyContent: 'center',
     alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#F8F9FA',
+    borderWidth: 1.5,
+    borderColor: '#F0F0F0',
   },
-  cancelRideText: {
-    color: COLORS.danger,
-    fontSize: 15,
-    fontWeight: '600',
-  },
+  actionSecondaryText: { fontSize: 15, fontWeight: '700' },
+
+  // Cancel
+  cancelBtn: { paddingVertical: 12, alignItems: 'center', marginTop: 4 },
+  cancelText: { fontSize: 13, fontWeight: '600', color: '#EF4444' },
 });
 
 export default ActiveRidePanel;

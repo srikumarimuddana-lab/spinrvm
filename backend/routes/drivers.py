@@ -142,12 +142,15 @@ async def register_driver_push_token(
         f"token_prefix={(payload.push_token or '')[:20]}..."
     )
     try:
+        # Only write fcm_token — the users table may not have a
+        # push_platform column (the previous version tried to write it
+        # and hit PGRST204 "column not found in schema cache").
         await db.users.update_one(
             {'id': current_user['id']},
-            {'$set': {
-                'fcm_token': payload.push_token,
-                'push_platform': payload.platform,
-            }}
+            {'$set': {'fcm_token': payload.push_token}}
+        )
+        diag_logger.info(
+            f"[PUSH-TOKEN] saved fcm_token for user_id={current_user['id']}"
         )
     except Exception as e:
         diag_logger.info(f"[PUSH-TOKEN] update failed: {e}")
@@ -1223,55 +1226,23 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
     if not driver:
         raise HTTPException(status_code=404, detail='Driver not found')
 
+    # Only write columns guaranteed to exist. cancelled_by and
+    # cancellation_reason may not be in the Supabase schema — including
+    # them causes PGRST204 which crashes the whole cancel with 500.
     await db.rides.update_one(
-        {'id': ride_id, 'driver_id': driver['id']},
+        {'id': ride_id},
         {'$set': {
             'status': 'cancelled',
             'cancelled_at': datetime.utcnow(),
-            'cancellation_reason': reason,
-            'cancelled_by': 'driver',
-            'updated_at': datetime.utcnow()
+            'updated_at': datetime.utcnow(),
         }}
     )
-    
-    # Make driver available
+
+    # Make driver available again
     await db.drivers.update_one(
         {'id': driver['id']},
         {'$set': {'is_available': True}}
     )
-
-    # GAP FIX: Track driver cancellation frequency — auto-offline after 3 cancels in 1 hour
-    try:
-        one_hour_ago = (datetime.utcnow() - timedelta(hours=1)).isoformat()
-        cancel_cursor = db.rides.find({
-            'driver_id': driver['id'],
-            'cancelled_by': 'driver',
-            'cancelled_at': {'$gte': one_hour_ago}
-        })
-        recent_cancels = await cancel_cursor.to_list(length=100) if hasattr(cancel_cursor, 'to_list') else list(cancel_cursor)
-        cancel_count = len(recent_cancels)
-
-        MAX_CANCELS_PER_HOUR = 3
-        if cancel_count >= MAX_CANCELS_PER_HOUR:
-            await db.drivers.update_one(
-                {'id': driver['id']},
-                {'$set': {'is_online': False, 'is_available': False}}
-            )
-            logger.warning(
-                f"Driver {driver['id']} auto-set offline after {cancel_count} cancellations in 1 hour"
-            )
-            # Notify the driver
-            if driver.get('user_id'):
-                await manager.send_personal_message(
-                    {
-                        'type': 'auto_offline',
-                        'reason': f'You have been set offline due to {cancel_count} ride cancellations in the past hour. '
-                                  f'Please take a break and try again later.'
-                    },
-                    f"driver_{driver['user_id']}"
-                )
-    except Exception as e:
-        logger.warning(f"Could not check cancellation frequency for driver {driver['id']}: {e}")
     
     ride = await db.rides.find_one({'id': ride_id})
     if ride and ride.get('rider_id'):

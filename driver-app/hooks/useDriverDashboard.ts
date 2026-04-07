@@ -87,6 +87,35 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const slideUpAnim = useRef(new Animated.Value(height)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
+  // ─── Animate ActiveRidePanel in/out based on rideState ──────────
+  // The panel starts at translateY=screenHeight + opacity=0 (invisible).
+  // Without this animation, the panel IS mounted in the React tree and
+  // HAS the correct ride data + buttons, but is pushed off-screen and
+  // invisible — which is why drivers saw a "blank map" after accepting.
+  useEffect(() => {
+    const isActive = rideState === 'navigating_to_pickup' ||
+                     rideState === 'arrived_at_pickup' ||
+                     rideState === 'trip_in_progress';
+    if (isActive) {
+      Animated.parallel([
+        Animated.spring(slideUpAnim, {
+          toValue: 0,
+          useNativeDriver: true,
+          friction: 8,
+        }),
+        Animated.timing(fadeAnim, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+      ]).start();
+    } else {
+      // Reset to hidden when not in an active ride state
+      slideUpAnim.setValue(height);
+      fadeAnim.setValue(0);
+    }
+  }, [rideState]);
+
   // ─── Refresh user + driver profile on mount and on foreground ────
   // The Zustand store only pulls /auth/me on app init, so admin-side
   // changes (e.g. flipping is_verified or the derived onboarding status)

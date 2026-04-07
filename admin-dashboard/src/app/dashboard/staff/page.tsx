@@ -18,7 +18,7 @@ const ALL_MODULES = [
   { key: "pricing", label: "Pricing" },
   { key: "support", label: "Support" },
   { key: "disputes", label: "Disputes" },
-  { key: "notifications", label: "Notifications" },
+  { key: "notifications", label: "Cloud Messaging" },
   { key: "settings", label: "Settings" },
   { key: "corporate_accounts", label: "Corporate Accounts" },
   { key: "documents", label: "Documents" },

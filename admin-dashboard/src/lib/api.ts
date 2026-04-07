@@ -231,35 +231,7 @@ export const updateCorporateAccount = (id: string, data: any) =>
 export const deleteCorporateAccount = (id: string) =>
     request<any>(`/api/admin/corporate-accounts/${id}`, { method: "DELETE" });
 
-/* ── Notifications ──────────────────────────── */
-export interface Notification {
-    id: string;
-    user_id?: string;
-    title: string;
-    body: string;
-    type: string;
-    audience?: string;
-    status: string;
-    sent_count?: number;
-    created_at: string;
-}
-
-export const getNotifications = (limit?: number, offset?: number, status?: string, type?: string) => {
-    const params = new URLSearchParams();
-    if (limit) params.set('limit', limit.toString());
-    if (offset) params.set('offset', offset.toString());
-    if (status) params.set('status', status);
-    if (type) params.set('type', type);
-    return request<Notification[]>(`/api/admin/notifications?${params.toString()}`);
-};
-
-export const sendNotification = (data: { user_id?: string; title: string; body: string; type: string; audience: string }) =>
-    request<any>("/api/admin/notifications/send", {
-        method: "POST",
-        body: JSON.stringify(data),
-    });
-
-/* ── Cloud Messaging ───────────────────────────── */
+/* ── Cloud Messaging (merged with Notifications) ── */
 export const getCloudMessages = (status?: string, audience?: string) => {
     const params = new URLSearchParams();
     if (status) params.set('status', status);
@@ -271,8 +243,9 @@ export const sendCloudMessage = (data: {
     title: string;
     description: string;
     audience: string;
-    channel: string;
-    particular_id?: string;
+    channels: string[];
+    type?: string;
+    particular_ids?: string[];
     scheduled_at?: string;
 }) =>
     request<any>("/api/admin/cloud-messaging/send", {
@@ -285,6 +258,23 @@ export const getCloudMessageStats = () =>
 
 export const deleteCloudMessage = (id: string) =>
     request<any>(`/api/admin/cloud-messaging/${id}`, { method: "DELETE" });
+
+/* ── Promotions Usage & Stats ──────────────────── */
+export const getPromoUsage = (params?: { promo_id?: string; date_from?: string; date_to?: string; limit?: number; offset?: number }) => {
+    const sp = new URLSearchParams();
+    if (params?.promo_id) sp.set('promo_id', params.promo_id);
+    if (params?.date_from) sp.set('date_from', params.date_from);
+    if (params?.date_to) sp.set('date_to', params.date_to);
+    if (params?.limit) sp.set('limit', params.limit.toString());
+    if (params?.offset) sp.set('offset', params.offset.toString());
+    return request<any[]>(`/api/admin/promotions/usage?${sp.toString()}`);
+};
+
+export const getPromoStats = (range?: string) => {
+    const sp = new URLSearchParams();
+    if (range) sp.set('range', range);
+    return request<any>(`/api/admin/promotions/stats?${sp.toString()}`);
+};
 
 /* ── Users (Riders) ─────────────────────────── */
 export const getUsers = () =>

@@ -65,7 +65,6 @@ const NAV_GROUPS: NavGroup[] = [
         items: [
             { href: "/dashboard/support", label: "Tickets", icon: LifeBuoy, module: "support" },
             { href: "/dashboard/disputes", label: "Disputes", icon: HelpCircle, module: "disputes" },
-            { href: "/dashboard/notifications", label: "Notifications", icon: Bell, module: "notifications" },
             { href: "/dashboard/cloud-messaging", label: "Cloud Messaging", icon: Cloud, module: "notifications" },
         ],
     },

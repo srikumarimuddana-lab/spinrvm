@@ -935,6 +935,107 @@ async def admin_create_promotion(promotion: Dict[str, Any]):
     return {"promotion_id": str(row.get("id") if row and isinstance(row, dict) else "")}
 
 
+@admin_router.get("/promotions/usage")
+async def admin_get_promo_usage(
+    promo_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    limit: int = Query(100),
+    offset: int = Query(0),
+):
+    """Get promo code usage/redemption history."""
+    filters: Dict[str, Any] = {}
+    if promo_id:
+        filters["promo_id"] = promo_id
+
+    applications = await db.get_rows(
+        "promo_applications",
+        filters,
+        order="created_at",
+        desc=True,
+        limit=limit,
+        offset=offset,
+    )
+
+    # Filter by date range in Python (supabase may not support complex date filters)
+    if date_from or date_to:
+        filtered = []
+        for app in applications:
+            created = app.get("created_at", "")
+            if date_from and created < date_from:
+                continue
+            if date_to and created > date_to + "T23:59:59Z":
+                continue
+            filtered.append(app)
+        applications = filtered
+
+    return applications
+
+
+@admin_router.get("/promotions/stats")
+async def admin_get_promo_stats(range: Optional[str] = None):
+    """Get promotion statistics with daily usage data."""
+    all_promos = await db.get_rows("promotions", {}, limit=10000)
+    all_usage = await db.get_rows("promo_applications", {}, order="created_at", desc=True, limit=10000)
+
+    now = datetime.utcnow()
+    today = now.strftime("%Y-%m-%d")
+
+    # Date range filtering
+    range_start = None
+    if range == "today":
+        range_start = today
+    elif range == "yesterday":
+        range_start = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    elif range == "week":
+        range_start = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+    elif range == "last_week":
+        range_start = (now - timedelta(days=14)).strftime("%Y-%m-%d")
+    elif range == "month":
+        range_start = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+
+    # Filter usage by range
+    filtered_usage = all_usage
+    if range_start:
+        filtered_usage = [u for u in all_usage if u.get("created_at", "") >= range_start]
+
+    # Promo counts
+    total_codes = len([p for p in all_promos if p.get("promo_type") != "private"])
+    active_codes = len([p for p in all_promos if p.get("promo_type") != "private" and p.get("is_active")])
+    expired_codes = len([p for p in all_promos if p.get("promo_type") != "private" and not p.get("is_active") and p.get("expiry_date") and p.get("expiry_date", "") < now.isoformat()])
+    total_private = len([p for p in all_promos if p.get("promo_type") == "private"])
+    active_private = len([p for p in all_promos if p.get("promo_type") == "private" and p.get("is_active")])
+
+    # Usage stats
+    total_redemptions = len(filtered_usage)
+    total_discount = sum(float(u.get("discount_applied", 0)) for u in filtered_usage)
+
+    # Daily usage for charts (last 30 days)
+    daily: Dict[str, Dict[str, Any]] = {}
+    for i in range(30):
+        d = (now - timedelta(days=i)).strftime("%Y-%m-%d")
+        daily[d] = {"date": d, "count": 0, "amount": 0.0}
+
+    for u in all_usage:
+        d = u.get("created_at", "")[:10]
+        if d in daily:
+            daily[d]["count"] += 1
+            daily[d]["amount"] += float(u.get("discount_applied", 0))
+
+    daily_usage = sorted(daily.values(), key=lambda x: x["date"])
+
+    return {
+        "total_codes": total_codes,
+        "active_codes": active_codes,
+        "expired_codes": expired_codes,
+        "total_private": total_private,
+        "active_private": active_private,
+        "total_redemptions": total_redemptions,
+        "total_discount_given": round(total_discount, 2),
+        "daily_usage": daily_usage,
+    }
+
+
 @admin_router.put("/promotions/{promotion_id}")
 async def admin_update_promotion(promotion_id: str, promotion: Dict[str, Any]):
     """Update a promotion."""
@@ -1972,8 +2073,16 @@ async def admin_send_cloud_message(payload: Dict[str, Any]):
     title = payload.get("title", "")
     description = payload.get("description", "")
     audience = payload.get("audience", "customers")
-    channel = payload.get("channel", "push")  # push, email, sms
-    particular_id = payload.get("particular_id")
+    msg_type = payload.get("type", "info")
+    channels = payload.get("channels")
+    if not channels:
+        channel = payload.get("channel", "push")
+        channels = [channel]
+    particular_ids = payload.get("particular_ids") or []
+    if not particular_ids:
+        pid = payload.get("particular_id")
+        if pid:
+            particular_ids = [pid]
     scheduled_at = payload.get("scheduled_at")
 
     if not title or not description:
@@ -1987,7 +2096,7 @@ async def admin_send_cloud_message(payload: Dict[str, Any]):
     failed_count = 0
 
     if audience in ("particular_customer", "particular_driver"):
-        total_recipients = 1
+        total_recipients = len(particular_ids) if particular_ids else 1
     elif audience == "customers":
         count = await db.users.count_documents({"role": "rider"})
         total_recipients = count if count > 0 else 0
@@ -2006,8 +2115,11 @@ async def admin_send_cloud_message(payload: Dict[str, Any]):
         "title": title,
         "description": description,
         "audience": audience,
-        "channel": channel,
-        "particular_id": particular_id,
+        "type": msg_type,
+        "channel": channels[0],
+        "channels": channels,
+        "particular_id": particular_ids[0] if particular_ids else None,
+        "particular_ids": particular_ids,
         "status": status,
         "scheduled_at": scheduled_at,
         "sent_at": datetime.utcnow().isoformat() if not is_scheduled else None,

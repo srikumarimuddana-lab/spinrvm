@@ -7,69 +7,41 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
+    Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
+    Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import {
-    Dialog,
-    DialogContent,
-    DialogHeader,
-    DialogTitle,
+    Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import {
-    Cloud,
-    Send,
-    Users,
-    Car,
-    Bell,
-    Mail,
-    Calendar,
-    Clock,
-    Download,
-    Search,
-    CheckCircle2,
-    XCircle,
-    Timer,
-    Trash2,
-    Eye,
-    RefreshCw,
-    FileText,
-    User,
-    Phone,
-    ChevronLeft,
-    ChevronRight,
+    Cloud, Send, Users, Car, Bell, Mail, Calendar, Clock, Download, Search,
+    CheckCircle2, XCircle, Timer, Trash2, Eye, RefreshCw, FileText, User,
+    Phone, ChevronLeft, ChevronRight, Info, AlertCircle, MapPin, Flame, X, Check,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import {
-    getCloudMessages,
-    sendCloudMessage,
-    getCloudMessageStats,
-    deleteCloudMessage,
-    getUsers,
-    getDrivers,
+    getCloudMessages, sendCloudMessage, getCloudMessageStats,
+    deleteCloudMessage, getUsers, getDrivers,
 } from "@/lib/api";
+
+// --- Types ---
 
 interface CloudMessage {
     id: string;
     title: string;
     description: string;
-    audience: "customers" | "drivers" | "particular_customer" | "particular_driver";
+    audience: string;
+    particular_ids?: string[];
     particular_id?: string;
-    channel: "push" | "email" | "sms";
-    status: "sent" | "scheduled" | "failed" | "pending" | "cancelled";
+    channels?: string[];
+    channel?: string;
+    type?: string;
+    status: string;
     scheduled_at?: string;
     sent_at?: string;
     created_at: string;
@@ -94,6 +66,8 @@ interface UserOption {
     phone?: string;
 }
 
+// --- Constants ---
+
 const AUDIENCE_OPTIONS = [
     { value: "customers", label: "Customers", icon: Users },
     { value: "drivers", label: "Drivers", icon: Car },
@@ -101,10 +75,12 @@ const AUDIENCE_OPTIONS = [
     { value: "particular_driver", label: "Particular Driver", icon: User },
 ];
 
-const CHANNEL_OPTIONS = [
-    { value: "push", label: "Push", icon: Bell },
-    { value: "email", label: "Email", icon: Mail },
-    { value: "sms", label: "SMS", icon: Phone },
+const NOTIFICATION_TYPES = [
+    { value: "info", label: "Information", icon: Info, color: "text-blue-500" },
+    { value: "alert", label: "Alert", icon: AlertCircle, color: "text-amber-500" },
+    { value: "surge", label: "Surge Pricing", icon: MapPin, color: "text-purple-500" },
+    { value: "promotion", label: "Promotion", icon: Flame, color: "text-pink-500" },
+    { value: "system", label: "System", icon: Clock, color: "text-gray-500" },
 ];
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }> = {
@@ -116,15 +92,9 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; icon: any }>
 };
 
 const PER_PAGE = 20;
+const emptyStats: MessageStats = { total_messages: 0, total_sent: 0, total_scheduled: 0, total_failed: 0, total_recipients_reached: 0, success_rate: 0 };
 
-const emptyStats: MessageStats = {
-    total_messages: 0,
-    total_sent: 0,
-    total_scheduled: 0,
-    total_failed: 0,
-    total_recipients_reached: 0,
-    success_rate: 0,
-};
+// --- Component ---
 
 export default function CloudMessagingPage() {
     const [messages, setMessages] = useState<CloudMessage[]>([]);
@@ -140,44 +110,37 @@ export default function CloudMessagingPage() {
     const [sending, setSending] = useState(false);
     const [activeTab, setActiveTab] = useState<"compose" | "scheduled" | "history">("compose");
 
-    // User/driver search for particular targeting
+    // Multi-select user/driver
     const [userOptions, setUserOptions] = useState<UserOption[]>([]);
+    const [selectedUsers, setSelectedUsers] = useState<UserOption[]>([]);
     const [userSearch, setUserSearch] = useState("");
     const [userSearchLoading, setUserSearchLoading] = useState(false);
 
-    // Form state
+    // Form
     const [form, setForm] = useState({
         title: "",
         description: "",
-        audience: "customers" as string,
-        particular_id: "",
-        channel: "push" as string,
+        audience: "customers",
+        particular_ids: [] as string[],
+        type: "info",
+        send_push: true,
+        send_email: false,
+        send_sms: false,
         is_scheduled: false,
-        scheduled_date: "",
-        scheduled_time: "",
+        scheduled_at: "",
     });
 
-    useEffect(() => {
-        fetchData();
-    }, []);
+    useEffect(() => { fetchData(); }, []);
 
     const fetchData = async () => {
         setLoading(true);
         try {
-            const [messagesData, statsData] = await Promise.all([
+            const [md, sd] = await Promise.all([
                 getCloudMessages().catch(() => null),
                 getCloudMessageStats().catch(() => null),
             ]);
-            if (messagesData && Array.isArray(messagesData)) {
-                setMessages(messagesData);
-            } else {
-                setMessages([]);
-            }
-            if (statsData) {
-                setStats(statsData);
-            } else {
-                setStats(emptyStats);
-            }
+            setMessages(md && Array.isArray(md) ? md : []);
+            setStats(sd || emptyStats);
         } catch {
             setMessages([]);
             setStats(emptyStats);
@@ -186,29 +149,22 @@ export default function CloudMessagingPage() {
         }
     };
 
-    // Fetch users/drivers for the searchable dropdown
+    // Fetch users/drivers for multi-select
     const fetchUserOptions = useCallback(async (type: "customer" | "driver", query: string) => {
         setUserSearchLoading(true);
         try {
             const data = type === "customer" ? await getUsers() : await getDrivers();
-            const options: UserOption[] = (data || []).map((u: any) => ({
+            const opts: UserOption[] = (data || []).map((u: any) => ({
                 id: u.id,
                 label: `${u.first_name || ""} ${u.last_name || ""}`.trim() || u.email || u.phone || u.id,
                 email: u.email,
                 phone: u.phone,
             }));
-            // Filter by search query
-            if (query) {
-                const q = query.toLowerCase();
-                setUserOptions(options.filter((o) =>
-                    o.label.toLowerCase().includes(q) ||
-                    o.email?.toLowerCase().includes(q) ||
-                    o.phone?.includes(q) ||
-                    o.id.toLowerCase().includes(q)
-                ));
-            } else {
-                setUserOptions(options.slice(0, 50));
-            }
+            const q = query.toLowerCase();
+            const filtered = q
+                ? opts.filter((o) => o.label.toLowerCase().includes(q) || o.email?.toLowerCase().includes(q) || o.phone?.includes(q) || o.id.toLowerCase().includes(q))
+                : opts.slice(0, 50);
+            setUserOptions(filtered);
         } catch {
             setUserOptions([]);
         } finally {
@@ -216,66 +172,63 @@ export default function CloudMessagingPage() {
         }
     }, []);
 
-    // Debounced user search
     useEffect(() => {
         if (form.audience !== "particular_customer" && form.audience !== "particular_driver") {
             setUserOptions([]);
             return;
         }
         const type = form.audience === "particular_customer" ? "customer" : "driver";
-        const timer = setTimeout(() => {
-            fetchUserOptions(type, userSearch);
-        }, 300);
+        const timer = setTimeout(() => fetchUserOptions(type, userSearch), 300);
         return () => clearTimeout(timer);
     }, [form.audience, userSearch, fetchUserOptions]);
 
+    const toggleUserSelection = (opt: UserOption) => {
+        if (form.particular_ids.includes(opt.id)) {
+            setForm((f) => ({ ...f, particular_ids: f.particular_ids.filter((id) => id !== opt.id) }));
+            setSelectedUsers((prev) => prev.filter((u) => u.id !== opt.id));
+        } else {
+            setForm((f) => ({ ...f, particular_ids: [...f.particular_ids, opt.id] }));
+            setSelectedUsers((prev) => [...prev, opt]);
+        }
+    };
+
+    const removeUser = (id: string) => {
+        setForm((f) => ({ ...f, particular_ids: f.particular_ids.filter((uid) => uid !== id) }));
+        setSelectedUsers((prev) => prev.filter((u) => u.id !== id));
+    };
+
+    // Filtered messages
     const filtered = useMemo(() => {
         return messages.filter((m) => {
-            const matchSearch =
-                !search ||
-                m.title.toLowerCase().includes(search.toLowerCase()) ||
-                m.description.toLowerCase().includes(search.toLowerCase());
+            const matchSearch = !search || m.title.toLowerCase().includes(search.toLowerCase()) || m.description.toLowerCase().includes(search.toLowerCase());
             const matchStatus = statusFilter === "all" || m.status === statusFilter;
             const matchAudience = audienceFilter === "all" || m.audience === audienceFilter;
-
-            // Date range filter
             const msgDate = m.sent_at || m.scheduled_at || m.created_at;
             let matchDate = true;
-            if (dateFrom && msgDate) {
-                matchDate = matchDate && msgDate >= dateFrom;
-            }
-            if (dateTo && msgDate) {
-                matchDate = matchDate && msgDate <= dateTo + "T23:59:59Z";
-            }
-
+            if (dateFrom && msgDate) matchDate = matchDate && msgDate >= dateFrom;
+            if (dateTo && msgDate) matchDate = matchDate && msgDate <= dateTo + "T23:59:59Z";
             return matchSearch && matchStatus && matchAudience && matchDate;
         });
     }, [messages, search, statusFilter, audienceFilter, dateFrom, dateTo]);
 
     const scheduledMessages = useMemo(() => {
-        return messages
-            .filter((m) => m.status === "scheduled")
-            .sort((a, b) => new Date(a.scheduled_at || "").getTime() - new Date(b.scheduled_at || "").getTime());
+        return messages.filter((m) => m.status === "scheduled").sort((a, b) => new Date(a.scheduled_at || "").getTime() - new Date(b.scheduled_at || "").getTime());
     }, [messages]);
 
     const totalHistoryPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
     const paginatedHistory = filtered.slice((historyPage - 1) * PER_PAGE, historyPage * PER_PAGE);
-
     useEffect(() => { setHistoryPage(1); }, [search, statusFilter, audienceFilter, dateFrom, dateTo]);
 
     const handleSend = async () => {
-        if (!form.title.trim() || !form.description.trim()) {
-            alert("Please fill in title and description.");
-            return;
-        }
-        if ((form.audience === "particular_customer" || form.audience === "particular_driver") && !form.particular_id.trim()) {
-            alert("Please select a user/driver.");
-            return;
-        }
-        if (form.is_scheduled && (!form.scheduled_date || !form.scheduled_time)) {
-            alert("Please select a scheduled date and time.");
-            return;
-        }
+        if (!form.title.trim() || !form.description.trim()) { alert("Please fill in title and description."); return; }
+        const isParticular = form.audience === "particular_customer" || form.audience === "particular_driver";
+        if (isParticular && form.particular_ids.length === 0) { alert("Please select at least one user/driver."); return; }
+        if (form.is_scheduled && !form.scheduled_at) { alert("Please select a date and time."); return; }
+        const channels: string[] = [];
+        if (form.send_push) channels.push("push");
+        if (form.send_email) channels.push("email");
+        if (form.send_sms) channels.push("sms");
+        if (channels.length === 0) { alert("Please select at least one delivery channel."); return; }
 
         setSending(true);
         try {
@@ -283,104 +236,57 @@ export default function CloudMessagingPage() {
                 title: form.title,
                 description: form.description,
                 audience: form.audience,
-                channel: form.channel,
+                channels,
+                type: form.type,
             };
-            if (form.particular_id) payload.particular_id = form.particular_id;
-            if (form.is_scheduled) {
-                payload.scheduled_at = `${form.scheduled_date}T${form.scheduled_time}:00Z`;
+            if (isParticular) payload.particular_ids = form.particular_ids;
+            if (form.is_scheduled && form.scheduled_at) {
+                payload.scheduled_at = new Date(form.scheduled_at).toISOString();
             }
-
             await sendCloudMessage(payload);
             await fetchData();
             resetForm();
         } catch (error: any) {
-            alert(`Failed to send message: ${error.message || "Unknown error"}`);
-            return;
+            alert(`Failed to send: ${error.message || "Unknown error"}`);
         } finally {
             setSending(false);
         }
     };
 
     const resetForm = () => {
-        setForm({
-            title: "",
-            description: "",
-            audience: "customers",
-            particular_id: "",
-            channel: "push",
-            is_scheduled: false,
-            scheduled_date: "",
-            scheduled_time: "",
-        });
+        setForm({ title: "", description: "", audience: "customers", particular_ids: [], type: "info", send_push: true, send_email: false, send_sms: false, is_scheduled: false, scheduled_at: "" });
+        setSelectedUsers([]);
         setUserSearch("");
         setUserOptions([]);
     };
 
     const handleDelete = async (id: string) => {
-        if (!confirm("Are you sure you want to cancel this message?")) return;
-        try {
-            await deleteCloudMessage(id);
-        } catch {
-            // continue
-        }
+        if (!confirm("Cancel this message?")) return;
+        try { await deleteCloudMessage(id); } catch { /* continue */ }
         setMessages((prev) => prev.filter((m) => m.id !== id));
     };
 
     const handleExport = () => {
-        const headers = [
-            "ID", "Title", "Description", "Audience", "Channel", "Status",
-            "Scheduled At", "Sent At", "Total Recipients", "Successful", "Failed", "Created At",
-        ];
-        const escapeCSV = (val: string) => `"${String(val || "").replace(/"/g, '""')}"`;
-        const rows = filtered.map((m) => [
-            m.id, escapeCSV(m.title), escapeCSV(m.description), m.audience, m.channel, m.status,
-            m.scheduled_at ? formatDate(m.scheduled_at) : "", m.sent_at ? formatDate(m.sent_at) : "",
-            m.total_recipients, m.successful, m.failed_count, formatDate(m.created_at),
-        ]);
+        const headers = ["ID", "Title", "Description", "Audience", "Channels", "Type", "Status", "Scheduled At", "Sent At", "Recipients", "Successful", "Failed", "Created"];
+        const esc = (v: string) => `"${String(v || "").replace(/"/g, '""')}"`;
+        const rows = filtered.map((m) => [m.id, esc(m.title), esc(m.description), m.audience, (m.channels || [m.channel]).join(";"), m.type || "", m.status, m.scheduled_at ? formatDate(m.scheduled_at) : "", m.sent_at ? formatDate(m.sent_at) : "", m.total_recipients, m.successful, m.failed_count, formatDate(m.created_at)]);
         const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
         const blob = new Blob([csv], { type: "text/csv" });
         const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `cloud-messaging-history-${new Date().toISOString().split("T")[0]}.csv`;
-        a.click();
+        const a = document.createElement("a"); a.href = url; a.download = `cloud-messaging-${new Date().toISOString().split("T")[0]}.csv`; a.click();
         URL.revokeObjectURL(url);
     };
 
     const handleExportSummary = () => {
-        const summaryRows = [
-            ["Cloud Messaging Summary Report"],
-            [`Generated: ${new Date().toLocaleString()}`],
-            [],
-            ["Metric", "Value"],
-            ["Total Messages", stats.total_messages],
-            ["Total Sent", stats.total_sent],
-            ["Total Scheduled", stats.total_scheduled],
-            ["Total Failed", stats.total_failed],
-            ["Total Recipients Reached", stats.total_recipients_reached],
-            ["Success Rate", `${stats.success_rate}%`],
-            [],
-            ["Scheduled Messages"],
-            ["Title", "Audience", "Channel", "Scheduled At", "Recipients"],
-            ...scheduledMessages.map((m) => [
-                `"${m.title}"`, m.audience, m.channel, m.scheduled_at ? formatDate(m.scheduled_at) : "", m.total_recipients,
-            ]),
-        ];
-        const csv = summaryRows.map((r) => r.join(",")).join("\n");
+        const rows = [["Cloud Messaging Summary"], [`Generated: ${new Date().toLocaleString()}`], [], ["Metric", "Value"], ["Total", stats.total_messages], ["Sent", stats.total_sent], ["Scheduled", stats.total_scheduled], ["Failed", stats.total_failed], ["Recipients Reached", stats.total_recipients_reached], ["Success Rate", `${stats.success_rate}%`], [], ["Scheduled Messages"], ["Title", "Audience", "Channels", "Scheduled At", "Recipients"], ...scheduledMessages.map((m) => [`"${m.title}"`, m.audience, (m.channels || [m.channel]).join(";"), m.scheduled_at ? formatDate(m.scheduled_at) : "", m.total_recipients])];
+        const csv = rows.map((r) => r.join(",")).join("\n");
         const blob = new Blob([csv], { type: "text/csv" });
         const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `cloud-messaging-summary-${new Date().toISOString().split("T")[0]}.csv`;
-        a.click();
+        const a = document.createElement("a"); a.href = url; a.download = `cloud-messaging-summary-${new Date().toISOString().split("T")[0]}.csv`; a.click();
         URL.revokeObjectURL(url);
     };
 
-    const selectedUserLabel = useMemo(() => {
-        if (!form.particular_id) return "";
-        const found = userOptions.find((u) => u.id === form.particular_id);
-        return found ? found.label : form.particular_id;
-    }, [form.particular_id, userOptions]);
+    const getChannels = (m: CloudMessage) => m.channels || (m.channel ? [m.channel] : ["push"]);
 
     return (
         <div className="space-y-6">
@@ -391,307 +297,190 @@ export default function CloudMessagingPage() {
                         <Cloud className="h-8 w-8 text-violet-500" />
                         Cloud Messaging
                     </h1>
-                    <p className="text-muted-foreground mt-1">
-                        Send push notifications, emails, and SMS to customers and drivers.
-                    </p>
+                    <p className="text-muted-foreground mt-1">Send push notifications, emails, and SMS to customers and drivers.</p>
                 </div>
                 <Button variant="outline" size="sm" onClick={fetchData} disabled={loading}>
                     <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
                 </Button>
             </div>
 
-            {/* Summary Stats */}
+            {/* Stats */}
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-                <Card>
-                    <CardContent className="pt-4 pb-3">
-                        <div className="flex items-center gap-2">
-                            <Cloud className="h-5 w-5 text-violet-500" />
-                            <div>
-                                <p className="text-xs text-muted-foreground">Total Messages</p>
-                                <p className="text-2xl font-bold">{stats.total_messages}</p>
+                {[
+                    { label: "Total Messages", value: stats.total_messages, icon: Cloud, color: "text-violet-500" },
+                    { label: "Sent", value: stats.total_sent, icon: CheckCircle2, color: "text-emerald-500" },
+                    { label: "Scheduled", value: stats.total_scheduled, icon: Timer, color: "text-blue-500" },
+                    { label: "Failed", value: stats.total_failed, icon: XCircle, color: "text-red-500" },
+                    { label: "Recipients Reached", value: stats.total_recipients_reached.toLocaleString(), icon: Users, color: "text-amber-500" },
+                    { label: "Success Rate", value: `${stats.success_rate}%`, icon: CheckCircle2, color: "text-emerald-500" },
+                ].map((s, i) => (
+                    <Card key={i}>
+                        <CardContent className="pt-4 pb-3">
+                            <div className="flex items-center gap-2">
+                                <s.icon className={`h-5 w-5 ${s.color}`} />
+                                <div>
+                                    <p className="text-xs text-muted-foreground">{s.label}</p>
+                                    <p className="text-2xl font-bold">{s.value}</p>
+                                </div>
                             </div>
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="pt-4 pb-3">
-                        <div className="flex items-center gap-2">
-                            <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-                            <div>
-                                <p className="text-xs text-muted-foreground">Sent</p>
-                                <p className="text-2xl font-bold">{stats.total_sent}</p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="pt-4 pb-3">
-                        <div className="flex items-center gap-2">
-                            <Timer className="h-5 w-5 text-blue-500" />
-                            <div>
-                                <p className="text-xs text-muted-foreground">Scheduled</p>
-                                <p className="text-2xl font-bold">{stats.total_scheduled}</p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="pt-4 pb-3">
-                        <div className="flex items-center gap-2">
-                            <XCircle className="h-5 w-5 text-red-500" />
-                            <div>
-                                <p className="text-xs text-muted-foreground">Failed</p>
-                                <p className="text-2xl font-bold">{stats.total_failed}</p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="pt-4 pb-3">
-                        <div className="flex items-center gap-2">
-                            <Users className="h-5 w-5 text-amber-500" />
-                            <div>
-                                <p className="text-xs text-muted-foreground">Recipients Reached</p>
-                                <p className="text-2xl font-bold">{stats.total_recipients_reached.toLocaleString()}</p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="pt-4 pb-3">
-                        <div className="flex items-center gap-2">
-                            <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-                            <div>
-                                <p className="text-xs text-muted-foreground">Success Rate</p>
-                                <p className="text-2xl font-bold">{stats.success_rate}%</p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
+                        </CardContent>
+                    </Card>
+                ))}
             </div>
 
-            {/* Page Tabs */}
+            {/* Tabs */}
             <div className="flex gap-1 border-b">
                 {[
                     { key: "compose", label: "Compose Message", icon: Send },
-                    { key: "scheduled", label: `Upcoming Schedule (${scheduledMessages.length})`, icon: Timer },
+                    { key: "scheduled", label: `Upcoming (${scheduledMessages.length})`, icon: Timer },
                     { key: "history", label: "Message History", icon: FileText },
                 ].map((tab) => (
-                    <button
-                        key={tab.key}
-                        onClick={() => setActiveTab(tab.key as any)}
-                        className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
-                            activeTab === tab.key
-                                ? "border-red-500 text-red-600 dark:text-red-400"
-                                : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
-                        }`}
-                    >
-                        <tab.icon className="h-4 w-4" />
-                        {tab.label}
+                    <button key={tab.key} onClick={() => setActiveTab(tab.key as any)} className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${activeTab === tab.key ? "border-red-500 text-red-600 dark:text-red-400" : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"}`}>
+                        <tab.icon className="h-4 w-4" /> {tab.label}
                     </button>
                 ))}
             </div>
 
-            {/* === COMPOSE TAB === */}
+            {/* ═══ COMPOSE TAB ═══ */}
             {activeTab === "compose" && (
                 <Card>
                     <CardHeader className="pb-4">
-                        <CardTitle className="flex items-center gap-2 text-lg">
-                            <Send className="h-5 w-5 text-violet-500" />
-                            Compose Message
-                        </CardTitle>
+                        <CardTitle className="flex items-center gap-2 text-lg"><Send className="h-5 w-5 text-violet-500" /> Compose Message</CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-5">
-                        {/* Select Users */}
+                        {/* Audience */}
                         <div className="space-y-2">
-                            <Label className="text-sm font-semibold">
-                                Select users : <span className="text-red-500">*</span>
-                            </Label>
+                            <Label className="text-sm font-semibold">Select users : <span className="text-red-500">*</span></Label>
                             <div className="flex flex-wrap gap-4">
                                 {AUDIENCE_OPTIONS.map((opt) => (
                                     <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
-                                        <input
-                                            type="radio"
-                                            name="audience"
-                                            value={opt.value}
-                                            checked={form.audience === opt.value}
-                                            onChange={(e) => {
-                                                setForm({ ...form, audience: e.target.value, particular_id: "" });
-                                                setUserSearch("");
-                                                setUserOptions([]);
-                                            }}
-                                            className="accent-red-500"
-                                        />
+                                        <input type="radio" name="audience" value={opt.value} checked={form.audience === opt.value} onChange={(e) => { setForm({ ...form, audience: e.target.value, particular_ids: [] }); setSelectedUsers([]); setUserSearch(""); setUserOptions([]); }} className="accent-red-500" />
                                         <span className="text-sm">{opt.label}</span>
                                     </label>
                                 ))}
                             </div>
 
-                            {/* Searchable user/driver dropdown */}
+                            {/* Multi-select user/driver */}
                             {(form.audience === "particular_customer" || form.audience === "particular_driver") && (
                                 <div className="mt-2 max-w-md space-y-2">
-                                    <div className="relative">
-                                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                                        <Input
-                                            placeholder={`Search ${form.audience === "particular_customer" ? "customers" : "drivers"} by name, email, or phone...`}
-                                            value={userSearch}
-                                            onChange={(e) => setUserSearch(e.target.value)}
-                                            className="pl-9"
-                                        />
-                                    </div>
-                                    {form.particular_id && (
-                                        <div className="flex items-center gap-2 text-sm bg-violet-500/10 text-violet-700 dark:text-violet-300 px-3 py-1.5 rounded-md">
-                                            <User className="h-3 w-3" />
-                                            <span>Selected: <strong>{selectedUserLabel}</strong></span>
-                                            <button onClick={() => setForm({ ...form, particular_id: "" })} className="ml-auto text-muted-foreground hover:text-foreground">&times;</button>
-                                        </div>
-                                    )}
-                                    {userSearchLoading && (
-                                        <p className="text-xs text-muted-foreground">Searching...</p>
-                                    )}
-                                    {!userSearchLoading && userOptions.length > 0 && !form.particular_id && (
-                                        <div className="border rounded-md max-h-48 overflow-y-auto">
-                                            {userOptions.map((opt) => (
-                                                <button
-                                                    key={opt.id}
-                                                    className="w-full text-left px-3 py-2 text-sm hover:bg-muted/50 border-b last:border-b-0 flex items-center justify-between"
-                                                    onClick={() => {
-                                                        setForm({ ...form, particular_id: opt.id });
-                                                        setUserSearch("");
-                                                    }}
-                                                >
-                                                    <div>
-                                                        <p className="font-medium">{opt.label}</p>
-                                                        <p className="text-xs text-muted-foreground">
-                                                            {opt.email && <span>{opt.email}</span>}
-                                                            {opt.email && opt.phone && <span> &middot; </span>}
-                                                            {opt.phone && <span>{opt.phone}</span>}
-                                                        </p>
-                                                    </div>
-                                                    <span className="text-xs text-muted-foreground font-mono">{opt.id.slice(0, 8)}</span>
-                                                </button>
+                                    {/* Selected chips */}
+                                    {selectedUsers.length > 0 && (
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {selectedUsers.map((u) => (
+                                                <span key={u.id} className="inline-flex items-center gap-1 bg-violet-500/10 text-violet-700 dark:text-violet-300 rounded-full px-2.5 py-1 text-xs font-medium">
+                                                    <User className="h-3 w-3" />
+                                                    {u.label}
+                                                    <button onClick={() => removeUser(u.id)} className="ml-0.5 hover:text-red-500"><X className="h-3 w-3" /></button>
+                                                </span>
                                             ))}
                                         </div>
                                     )}
-                                    {!userSearchLoading && userSearch && userOptions.length === 0 && (
-                                        <p className="text-xs text-muted-foreground">No results found for &quot;{userSearch}&quot;</p>
+                                    {/* Search input */}
+                                    <div className="relative">
+                                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                                        <Input placeholder={`Search ${form.audience === "particular_customer" ? "customers" : "drivers"}...`} value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="pl-9" />
+                                    </div>
+                                    {userSearchLoading && <p className="text-xs text-muted-foreground">Searching...</p>}
+                                    {/* Dropdown list */}
+                                    {!userSearchLoading && userOptions.length > 0 && (
+                                        <div className="border rounded-md max-h-48 overflow-y-auto">
+                                            {userOptions.map((opt) => {
+                                                const isSelected = form.particular_ids.includes(opt.id);
+                                                return (
+                                                    <button key={opt.id} className={`w-full text-left px-3 py-2 text-sm border-b last:border-b-0 flex items-center justify-between ${isSelected ? "bg-violet-500/5" : "hover:bg-muted/50"}`} onClick={() => toggleUserSelection(opt)}>
+                                                        <div>
+                                                            <p className="font-medium">{opt.label}</p>
+                                                            <p className="text-xs text-muted-foreground">{[opt.email, opt.phone].filter(Boolean).join(" · ")}</p>
+                                                        </div>
+                                                        {isSelected ? <Check className="h-4 w-4 text-violet-500" /> : <span className="text-xs text-muted-foreground font-mono">{opt.id.slice(0, 8)}</span>}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
                                     )}
+                                    {!userSearchLoading && userSearch && userOptions.length === 0 && <p className="text-xs text-muted-foreground">No results found</p>}
                                 </div>
                             )}
                         </div>
 
-                        {/* Send notification via */}
-                        <div className="space-y-2">
-                            <Label className="text-sm font-semibold">
-                                Send notification via : <span className="text-red-500">*</span>
-                            </Label>
-                            <div className="flex gap-4">
-                                {CHANNEL_OPTIONS.map((opt) => (
-                                    <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
-                                        <input
-                                            type="radio"
-                                            name="channel"
-                                            value={opt.value}
-                                            checked={form.channel === opt.value}
-                                            onChange={(e) => setForm({ ...form, channel: e.target.value })}
-                                            className="accent-red-500"
-                                        />
-                                        <opt.icon className="h-4 w-4 text-muted-foreground" />
-                                        <span className="text-sm">{opt.label}</span>
-                                    </label>
-                                ))}
+                        {/* Delivery channels */}
+                        <div className="space-y-3">
+                            <Label className="text-sm font-semibold">Send notification via : <span className="text-red-500">*</span></Label>
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2"><Bell className="h-4 w-4 text-muted-foreground" /><Label htmlFor="ch-push" className="cursor-pointer text-sm">Push Notification</Label></div>
+                                    <Switch id="ch-push" checked={form.send_push} onCheckedChange={(v) => setForm({ ...form, send_push: v })} />
+                                </div>
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2"><Mail className="h-4 w-4 text-muted-foreground" /><Label htmlFor="ch-email" className="cursor-pointer text-sm">Email</Label></div>
+                                    <Switch id="ch-email" checked={form.send_email} onCheckedChange={(v) => setForm({ ...form, send_email: v })} />
+                                </div>
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2"><Phone className="h-4 w-4 text-muted-foreground" /><Label htmlFor="ch-sms" className="cursor-pointer text-sm">SMS</Label></div>
+                                    <Switch id="ch-sms" checked={form.send_sms} onCheckedChange={(v) => setForm({ ...form, send_sms: v })} />
+                                </div>
                             </div>
                         </div>
 
-                        {/* Title */}
-                        <div className="space-y-2">
-                            <Label className="text-sm font-semibold">
-                                Title <span className="text-red-500">*</span>
-                            </Label>
-                            <Input
-                                placeholder="Enter notification title"
-                                value={form.title}
-                                onChange={(e) => setForm({ ...form, title: e.target.value })}
-                            />
+                        {/* Type + Title */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <Label className="text-sm font-semibold">Notification Type</Label>
+                                <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
+                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                        {NOTIFICATION_TYPES.map((t) => (<SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <div className="space-y-2">
+                                <Label className="text-sm font-semibold">Title <span className="text-red-500">*</span></Label>
+                                <Input placeholder="Enter notification title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+                            </div>
                         </div>
 
                         {/* Description */}
                         <div className="space-y-2">
-                            <Label className="text-sm font-semibold">
-                                Description <span className="text-red-500">*</span>
-                            </Label>
-                            <Textarea
-                                placeholder="Enter notification message"
-                                value={form.description}
-                                onChange={(e) => setForm({ ...form, description: e.target.value })}
-                                rows={4}
-                            />
+                            <Label className="text-sm font-semibold">Description <span className="text-red-500">*</span></Label>
+                            <Textarea placeholder="Enter notification message" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={4} />
                         </div>
 
                         <Separator />
 
-                        {/* Schedule Option */}
+                        {/* Schedule */}
                         <div className="space-y-3">
                             <label className="flex items-center gap-2 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={form.is_scheduled}
-                                    onChange={(e) => setForm({ ...form, is_scheduled: e.target.checked })}
-                                    className="accent-red-500 h-4 w-4"
-                                />
+                                <input type="checkbox" checked={form.is_scheduled} onChange={(e) => setForm({ ...form, is_scheduled: e.target.checked })} className="accent-red-500 h-4 w-4" />
                                 <Calendar className="h-4 w-4 text-muted-foreground" />
                                 <span className="text-sm font-semibold">Schedule for later</span>
                             </label>
                             {form.is_scheduled && (
-                                <div className="flex gap-4 max-w-md">
-                                    <div className="flex-1 space-y-1">
-                                        <Label className="text-xs text-muted-foreground">Date</Label>
-                                        <Input
-                                            type="date"
-                                            value={form.scheduled_date}
-                                            onChange={(e) => setForm({ ...form, scheduled_date: e.target.value })}
-                                            min={new Date().toISOString().split("T")[0]}
-                                        />
-                                    </div>
-                                    <div className="flex-1 space-y-1">
-                                        <Label className="text-xs text-muted-foreground">Time</Label>
-                                        <Input
-                                            type="time"
-                                            value={form.scheduled_time}
-                                            onChange={(e) => setForm({ ...form, scheduled_time: e.target.value })}
-                                        />
-                                    </div>
+                                <div className="max-w-xs space-y-1">
+                                    <Label className="text-xs text-muted-foreground">Date & Time</Label>
+                                    <Input
+                                        type="datetime-local"
+                                        value={form.scheduled_at}
+                                        onChange={(e) => setForm({ ...form, scheduled_at: e.target.value })}
+                                        min={new Date().toISOString().slice(0, 16)}
+                                    />
                                 </div>
                             )}
                         </div>
 
-                        {/* Send Button */}
-                        <Button
-                            className="bg-red-500 hover:bg-red-600 text-white"
-                            onClick={handleSend}
-                            disabled={sending}
-                        >
-                            {sending ? (
-                                <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent mr-2" />
-                            ) : form.is_scheduled ? (
-                                <Calendar className="mr-2 h-4 w-4" />
-                            ) : (
-                                <Send className="mr-2 h-4 w-4" />
-                            )}
+                        <Button className="bg-red-500 hover:bg-red-600 text-white" onClick={handleSend} disabled={sending}>
+                            {sending ? <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent mr-2" /> : form.is_scheduled ? <Calendar className="mr-2 h-4 w-4" /> : <Send className="mr-2 h-4 w-4" />}
                             {form.is_scheduled ? "Schedule Notification" : "Send Notification"}
                         </Button>
                     </CardContent>
                 </Card>
             )}
 
-            {/* === SCHEDULED TAB === */}
+            {/* ═══ SCHEDULED TAB ═══ */}
             {activeTab === "scheduled" && (
                 <Card>
                     <CardHeader className="pb-3">
                         <CardTitle className="flex items-center gap-2 text-lg">
-                            <Timer className="h-5 w-5 text-blue-500" />
-                            Upcoming Scheduled Messages
-                            <Badge variant="secondary" className="ml-2">{scheduledMessages.length}</Badge>
+                            <Timer className="h-5 w-5 text-blue-500" /> Upcoming Scheduled Messages <Badge variant="secondary" className="ml-2">{scheduledMessages.length}</Badge>
                         </CardTitle>
                     </CardHeader>
                     <CardContent className="p-0">
@@ -703,48 +492,21 @@ export default function CloudMessagingPage() {
                             </div>
                         ) : (
                             <Table>
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>Title</TableHead>
-                                        <TableHead>Audience</TableHead>
-                                        <TableHead>Channel</TableHead>
-                                        <TableHead>Scheduled For</TableHead>
-                                        <TableHead>Recipients</TableHead>
-                                        <TableHead className="text-right">Actions</TableHead>
-                                    </TableRow>
-                                </TableHeader>
+                                <TableHeader><TableRow>
+                                    <TableHead>Title</TableHead><TableHead>Audience</TableHead><TableHead>Channels</TableHead><TableHead>Scheduled For</TableHead><TableHead>Recipients</TableHead><TableHead className="text-right">Actions</TableHead>
+                                </TableRow></TableHeader>
                                 <TableBody>
                                     {scheduledMessages.map((msg) => (
                                         <TableRow key={msg.id}>
-                                            <TableCell>
-                                                <div>
-                                                    <p className="font-medium text-sm">{msg.title}</p>
-                                                    <p className="text-xs text-muted-foreground truncate max-w-[250px]">{msg.description}</p>
-                                                </div>
-                                            </TableCell>
-                                            <TableCell>
-                                                <span className="text-sm capitalize">{msg.audience.replace(/_/g, " ")}</span>
-                                            </TableCell>
-                                            <TableCell>
-                                                <Badge variant="outline" className="text-xs capitalize">{msg.channel}</Badge>
-                                            </TableCell>
-                                            <TableCell>
-                                                <div className="flex items-center gap-1 text-sm">
-                                                    <Calendar className="h-3 w-3 text-blue-500" />
-                                                    {msg.scheduled_at ? formatDate(msg.scheduled_at) : "—"}
-                                                </div>
-                                            </TableCell>
+                                            <TableCell><p className="font-medium text-sm">{msg.title}</p><p className="text-xs text-muted-foreground truncate max-w-[250px]">{msg.description}</p></TableCell>
+                                            <TableCell><span className="text-sm capitalize">{msg.audience.replace(/_/g, " ")}</span></TableCell>
+                                            <TableCell><div className="flex gap-1">{getChannels(msg).map((c) => <Badge key={c} variant="outline" className="text-xs capitalize">{c}</Badge>)}</div></TableCell>
+                                            <TableCell><div className="flex items-center gap-1 text-sm"><Calendar className="h-3 w-3 text-blue-500" />{msg.scheduled_at ? formatDate(msg.scheduled_at) : "—"}</div></TableCell>
                                             <TableCell className="text-sm">{msg.total_recipients.toLocaleString()}</TableCell>
-                                            <TableCell className="text-right">
-                                                <div className="flex justify-end gap-1">
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSelectedMessage(msg)}>
-                                                        <Eye className="h-4 w-4" />
-                                                    </Button>
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDelete(msg.id)}>
-                                                        <Trash2 className="h-4 w-4" />
-                                                    </Button>
-                                                </div>
-                                            </TableCell>
+                                            <TableCell className="text-right"><div className="flex justify-end gap-1">
+                                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setSelectedMessage(msg)}><Eye className="h-4 w-4" /></Button>
+                                                <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDelete(msg.id)}><Trash2 className="h-4 w-4" /></Button>
+                                            </div></TableCell>
                                         </TableRow>
                                     ))}
                                 </TableBody>
@@ -754,191 +516,78 @@ export default function CloudMessagingPage() {
                 </Card>
             )}
 
-            {/* === HISTORY TAB === */}
+            {/* ═══ HISTORY TAB ═══ */}
             {activeTab === "history" && (
                 <Card>
                     <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
-                            <CardTitle className="flex items-center gap-2 text-lg">
-                                <FileText className="h-5 w-5 text-violet-500" />
-                                Message History & Report
-                            </CardTitle>
+                            <CardTitle className="flex items-center gap-2 text-lg"><FileText className="h-5 w-5 text-violet-500" /> Message History & Report</CardTitle>
                             <div className="flex gap-2">
-                                <Button variant="outline" size="sm" onClick={handleExportSummary}>
-                                    <Download className="mr-2 h-4 w-4" /> Export Summary
-                                </Button>
-                                <Button variant="outline" size="sm" onClick={handleExport} disabled={filtered.length === 0}>
-                                    <Download className="mr-2 h-4 w-4" /> Export History
-                                </Button>
+                                <Button variant="outline" size="sm" onClick={handleExportSummary}><Download className="mr-2 h-4 w-4" /> Summary</Button>
+                                <Button variant="outline" size="sm" onClick={handleExport} disabled={filtered.length === 0}><Download className="mr-2 h-4 w-4" /> Export</Button>
                             </div>
                         </div>
                     </CardHeader>
                     <CardContent className="space-y-4">
-                        {/* Filters */}
                         <div className="flex flex-wrap items-center gap-3">
                             <div className="relative flex-1 max-w-sm">
                                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                                <Input
-                                    placeholder="Search messages..."
-                                    value={search}
-                                    onChange={(e) => setSearch(e.target.value)}
-                                    className="pl-9"
-                                />
+                                <Input placeholder="Search messages..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" />
                             </div>
-                            <Select value={statusFilter} onValueChange={setStatusFilter}>
-                                <SelectTrigger className="w-36">
-                                    <SelectValue placeholder="Status" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All Status</SelectItem>
-                                    <SelectItem value="sent">Sent</SelectItem>
-                                    <SelectItem value="scheduled">Scheduled</SelectItem>
-                                    <SelectItem value="failed">Failed</SelectItem>
-                                    <SelectItem value="pending">Pending</SelectItem>
-                                    <SelectItem value="cancelled">Cancelled</SelectItem>
-                                </SelectContent>
-                            </Select>
-                            <Select value={audienceFilter} onValueChange={setAudienceFilter}>
-                                <SelectTrigger className="w-36">
-                                    <SelectValue placeholder="Audience" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="all">All Audiences</SelectItem>
-                                    {AUDIENCE_OPTIONS.map((a) => (
-                                        <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>
-                                    ))}
-                                </SelectContent>
-                            </Select>
+                            <Select value={statusFilter} onValueChange={setStatusFilter}><SelectTrigger className="w-36"><SelectValue placeholder="Status" /></SelectTrigger><SelectContent><SelectItem value="all">All Status</SelectItem><SelectItem value="sent">Sent</SelectItem><SelectItem value="scheduled">Scheduled</SelectItem><SelectItem value="failed">Failed</SelectItem><SelectItem value="cancelled">Cancelled</SelectItem></SelectContent></Select>
+                            <Select value={audienceFilter} onValueChange={setAudienceFilter}><SelectTrigger className="w-36"><SelectValue placeholder="Audience" /></SelectTrigger><SelectContent><SelectItem value="all">All</SelectItem>{AUDIENCE_OPTIONS.map((a) => <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>)}</SelectContent></Select>
                         </div>
-
-                        {/* Date Range */}
                         <div className="flex flex-wrap items-center gap-3">
-                            <div className="flex items-center gap-2">
-                                <Label className="text-xs text-muted-foreground whitespace-nowrap">From</Label>
-                                <Input
-                                    type="date"
-                                    value={dateFrom}
-                                    onChange={(e) => setDateFrom(e.target.value)}
-                                    className="w-40"
-                                />
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <Label className="text-xs text-muted-foreground whitespace-nowrap">To</Label>
-                                <Input
-                                    type="date"
-                                    value={dateTo}
-                                    onChange={(e) => setDateTo(e.target.value)}
-                                    className="w-40"
-                                />
-                            </div>
-                            {(dateFrom || dateTo) && (
-                                <Button variant="ghost" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); }}>
-                                    Clear dates
-                                </Button>
-                            )}
+                            <div className="flex items-center gap-2"><Label className="text-xs text-muted-foreground">From</Label><Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-40" /></div>
+                            <div className="flex items-center gap-2"><Label className="text-xs text-muted-foreground">To</Label><Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-40" /></div>
+                            {(dateFrom || dateTo) && <Button variant="ghost" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); }}>Clear</Button>}
                         </div>
 
-                        {/* Table */}
                         {loading ? (
-                            <div className="flex items-center justify-center p-12">
-                                <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                            </div>
+                            <div className="flex items-center justify-center p-12"><div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
                         ) : (
                             <div className="border rounded-lg">
                                 <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Title</TableHead>
-                                            <TableHead>Audience</TableHead>
-                                            <TableHead>Channel</TableHead>
-                                            <TableHead>Status</TableHead>
-                                            <TableHead>Recipients</TableHead>
-                                            <TableHead>Successful</TableHead>
-                                            <TableHead>Failed</TableHead>
-                                            <TableHead>Date</TableHead>
-                                            <TableHead className="text-right">Actions</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
+                                    <TableHeader><TableRow>
+                                        <TableHead>Title</TableHead><TableHead>Type</TableHead><TableHead>Audience</TableHead><TableHead>Channels</TableHead><TableHead>Status</TableHead><TableHead>Recipients</TableHead><TableHead>OK</TableHead><TableHead>Fail</TableHead><TableHead>Date</TableHead><TableHead className="text-right">Actions</TableHead>
+                                    </TableRow></TableHeader>
                                     <TableBody>
                                         {filtered.length === 0 ? (
-                                            <TableRow>
-                                                <TableCell colSpan={9} className="text-center text-muted-foreground py-12">
-                                                    No messages found.
-                                                </TableCell>
-                                            </TableRow>
-                                        ) : (
-                                            paginatedHistory.map((msg) => {
-                                                const statusCfg = STATUS_CONFIG[msg.status] || STATUS_CONFIG.pending;
-                                                const StatusIcon = statusCfg.icon;
-                                                return (
-                                                    <TableRow
-                                                        key={msg.id}
-                                                        className="cursor-pointer hover:bg-muted/50"
-                                                        onClick={() => setSelectedMessage(msg)}
-                                                    >
-                                                        <TableCell>
-                                                            <div>
-                                                                <p className="font-medium text-sm">{msg.title}</p>
-                                                                <p className="text-xs text-muted-foreground truncate max-w-[200px]">{msg.description}</p>
-                                                            </div>
-                                                        </TableCell>
-                                                        <TableCell>
-                                                            <span className="text-sm capitalize">{msg.audience.replace(/_/g, " ")}</span>
-                                                        </TableCell>
-                                                        <TableCell>
-                                                            <Badge variant="outline" className="text-xs capitalize">{msg.channel}</Badge>
-                                                        </TableCell>
-                                                        <TableCell>
-                                                            <Badge className={statusCfg.color}>
-                                                                <StatusIcon className="h-3 w-3 mr-1" />
-                                                                {statusCfg.label}
-                                                            </Badge>
-                                                        </TableCell>
-                                                        <TableCell className="text-sm">{msg.total_recipients.toLocaleString()}</TableCell>
-                                                        <TableCell>
-                                                            <span className="text-sm text-emerald-600 font-medium">{msg.successful.toLocaleString()}</span>
-                                                        </TableCell>
-                                                        <TableCell>
-                                                            <span className={`text-sm font-medium ${msg.failed_count > 0 ? "text-red-500" : "text-muted-foreground"}`}>
-                                                                {msg.failed_count.toLocaleString()}
-                                                            </span>
-                                                        </TableCell>
-                                                        <TableCell className="text-xs text-muted-foreground">
-                                                            {msg.sent_at ? formatDate(msg.sent_at) : msg.scheduled_at ? formatDate(msg.scheduled_at) : formatDate(msg.created_at)}
-                                                        </TableCell>
-                                                        <TableCell className="text-right">
-                                                            <div className="flex justify-end gap-1">
-                                                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(e) => { e.stopPropagation(); setSelectedMessage(msg); }}>
-                                                                    <Eye className="h-4 w-4" />
-                                                                </Button>
-                                                                {(msg.status === "scheduled" || msg.status === "pending") && (
-                                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={(e) => { e.stopPropagation(); handleDelete(msg.id); }}>
-                                                                        <Trash2 className="h-4 w-4" />
-                                                                    </Button>
-                                                                )}
-                                                            </div>
-                                                        </TableCell>
-                                                    </TableRow>
-                                                );
-                                            })
-                                        )}
+                                            <TableRow><TableCell colSpan={10} className="text-center text-muted-foreground py-12">No messages found.</TableCell></TableRow>
+                                        ) : paginatedHistory.map((msg) => {
+                                            const sc = STATUS_CONFIG[msg.status] || STATUS_CONFIG.pending;
+                                            const SI = sc.icon;
+                                            const typeCfg = NOTIFICATION_TYPES.find((t) => t.value === msg.type);
+                                            const TI = typeCfg?.icon || Info;
+                                            return (
+                                                <TableRow key={msg.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelectedMessage(msg)}>
+                                                    <TableCell><p className="font-medium text-sm">{msg.title}</p><p className="text-xs text-muted-foreground truncate max-w-[180px]">{msg.description}</p></TableCell>
+                                                    <TableCell><div className="flex items-center gap-1"><TI className={`h-3 w-3 ${typeCfg?.color || ""}`} /><span className="text-xs capitalize">{msg.type || "info"}</span></div></TableCell>
+                                                    <TableCell><span className="text-sm capitalize">{msg.audience.replace(/_/g, " ")}</span></TableCell>
+                                                    <TableCell><div className="flex gap-1">{getChannels(msg).map((c) => <Badge key={c} variant="outline" className="text-[10px] capitalize">{c}</Badge>)}</div></TableCell>
+                                                    <TableCell><Badge className={sc.color}><SI className="h-3 w-3 mr-1" />{sc.label}</Badge></TableCell>
+                                                    <TableCell className="text-sm">{msg.total_recipients.toLocaleString()}</TableCell>
+                                                    <TableCell><span className="text-sm text-emerald-600 font-medium">{msg.successful.toLocaleString()}</span></TableCell>
+                                                    <TableCell><span className={`text-sm font-medium ${msg.failed_count > 0 ? "text-red-500" : "text-muted-foreground"}`}>{msg.failed_count.toLocaleString()}</span></TableCell>
+                                                    <TableCell className="text-xs text-muted-foreground">{formatDate(msg.sent_at || msg.scheduled_at || msg.created_at)}</TableCell>
+                                                    <TableCell className="text-right">
+                                                        <div className="flex justify-end gap-1">
+                                                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={(e) => { e.stopPropagation(); setSelectedMessage(msg); }}><Eye className="h-4 w-4" /></Button>
+                                                            {(msg.status === "scheduled" || msg.status === "pending") && <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={(e) => { e.stopPropagation(); handleDelete(msg.id); }}><Trash2 className="h-4 w-4" /></Button>}
+                                                        </div>
+                                                    </TableCell>
+                                                </TableRow>
+                                            );
+                                        })}
                                     </TableBody>
                                 </Table>
-
-                                {/* Pagination */}
                                 {filtered.length > PER_PAGE && (
                                     <div className="flex items-center justify-between px-4 py-3 border-t">
-                                        <p className="text-sm text-muted-foreground">
-                                            Showing {(historyPage - 1) * PER_PAGE + 1}–{Math.min(historyPage * PER_PAGE, filtered.length)} of {filtered.length}
-                                        </p>
+                                        <p className="text-sm text-muted-foreground">Showing {(historyPage - 1) * PER_PAGE + 1}–{Math.min(historyPage * PER_PAGE, filtered.length)} of {filtered.length}</p>
                                         <div className="flex items-center gap-2">
-                                            <Button variant="outline" size="sm" onClick={() => setHistoryPage(p => Math.max(1, p - 1))} disabled={historyPage === 1}>
-                                                <ChevronLeft className="h-4 w-4" />
-                                            </Button>
+                                            <Button variant="outline" size="sm" onClick={() => setHistoryPage((p) => Math.max(1, p - 1))} disabled={historyPage === 1}><ChevronLeft className="h-4 w-4" /></Button>
                                             <span className="text-sm text-muted-foreground">Page {historyPage} of {totalHistoryPages}</span>
-                                            <Button variant="outline" size="sm" onClick={() => setHistoryPage(p => Math.min(totalHistoryPages, p + 1))} disabled={historyPage === totalHistoryPages}>
-                                                <ChevronRight className="h-4 w-4" />
-                                            </Button>
+                                            <Button variant="outline" size="sm" onClick={() => setHistoryPage((p) => Math.min(totalHistoryPages, p + 1))} disabled={historyPage === totalHistoryPages}><ChevronRight className="h-4 w-4" /></Button>
                                         </div>
                                     </div>
                                 )}
@@ -948,98 +597,39 @@ export default function CloudMessagingPage() {
                 </Card>
             )}
 
-            {/* View Message Detail Dialog */}
+            {/* ═══ DETAIL DIALOG ═══ */}
             <Dialog open={!!selectedMessage} onOpenChange={(open) => { if (!open) setSelectedMessage(null); }}>
                 <DialogContent className="sm:max-w-lg">
-                    <DialogHeader>
-                        <DialogTitle className="flex items-center gap-2">
-                            <Cloud className="h-5 w-5 text-violet-500" />
-                            Message Details
-                        </DialogTitle>
-                    </DialogHeader>
+                    <DialogHeader><DialogTitle className="flex items-center gap-2"><Cloud className="h-5 w-5 text-violet-500" /> Message Details</DialogTitle></DialogHeader>
                     {selectedMessage && (
                         <div className="space-y-4">
-                            <div>
-                                <Label className="text-xs text-muted-foreground">Title</Label>
-                                <p className="font-semibold">{selectedMessage.title}</p>
+                            <div><Label className="text-xs text-muted-foreground">Title</Label><p className="font-semibold">{selectedMessage.title}</p></div>
+                            <div><Label className="text-xs text-muted-foreground">Description</Label><div className="rounded-lg bg-muted/50 p-3 text-sm mt-1">{selectedMessage.description}</div></div>
+                            <div className="grid grid-cols-3 gap-4">
+                                <div><Label className="text-xs text-muted-foreground">Type</Label><p className="text-sm capitalize">{selectedMessage.type || "info"}</p></div>
+                                <div><Label className="text-xs text-muted-foreground">Audience</Label><p className="text-sm capitalize">{selectedMessage.audience.replace(/_/g, " ")}</p></div>
+                                <div><Label className="text-xs text-muted-foreground">Channels</Label><div className="flex gap-1 mt-0.5">{getChannels(selectedMessage).map((c) => <Badge key={c} variant="outline" className="text-xs capitalize">{c}</Badge>)}</div></div>
                             </div>
-                            <div>
-                                <Label className="text-xs text-muted-foreground">Description</Label>
-                                <div className="rounded-lg bg-muted/50 p-3 text-sm mt-1">{selectedMessage.description}</div>
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <Label className="text-xs text-muted-foreground">Audience</Label>
-                                    <p className="text-sm capitalize">{selectedMessage.audience.replace(/_/g, " ")}</p>
-                                </div>
-                                <div>
-                                    <Label className="text-xs text-muted-foreground">Channel</Label>
-                                    <p className="text-sm capitalize">{selectedMessage.channel}</p>
-                                </div>
-                            </div>
-                            {selectedMessage.particular_id && (
-                                <div>
-                                    <Label className="text-xs text-muted-foreground">Target ID</Label>
-                                    <p className="text-sm font-mono">{selectedMessage.particular_id}</p>
-                                </div>
-                            )}
-                            <div>
-                                <Label className="text-xs text-muted-foreground">Status</Label>
-                                <div className="mt-1">
-                                    <Badge className={STATUS_CONFIG[selectedMessage.status]?.color || "bg-zinc-500/15"}>
-                                        {STATUS_CONFIG[selectedMessage.status]?.label || selectedMessage.status}
-                                    </Badge>
-                                </div>
-                            </div>
+                            <div><Label className="text-xs text-muted-foreground">Status</Label><div className="mt-1"><Badge className={STATUS_CONFIG[selectedMessage.status]?.color || "bg-zinc-500/15"}>{STATUS_CONFIG[selectedMessage.status]?.label || selectedMessage.status}</Badge></div></div>
                             <Separator />
                             <div>
                                 <Label className="text-xs text-muted-foreground mb-2 block">Delivery Report</Label>
                                 <div className="grid grid-cols-3 gap-3">
-                                    <div className="rounded-lg bg-muted/50 p-3 text-center">
-                                        <p className="text-lg font-bold">{selectedMessage.total_recipients.toLocaleString()}</p>
-                                        <p className="text-xs text-muted-foreground">Total Recipients</p>
-                                    </div>
-                                    <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3 text-center">
-                                        <p className="text-lg font-bold text-emerald-600">{selectedMessage.successful.toLocaleString()}</p>
-                                        <p className="text-xs text-muted-foreground">Successful</p>
-                                    </div>
-                                    <div className="rounded-lg bg-red-50 dark:bg-red-900/20 p-3 text-center">
-                                        <p className="text-lg font-bold text-red-500">{selectedMessage.failed_count.toLocaleString()}</p>
-                                        <p className="text-xs text-muted-foreground">Failed</p>
-                                    </div>
+                                    <div className="rounded-lg bg-muted/50 p-3 text-center"><p className="text-lg font-bold">{selectedMessage.total_recipients.toLocaleString()}</p><p className="text-xs text-muted-foreground">Recipients</p></div>
+                                    <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3 text-center"><p className="text-lg font-bold text-emerald-600">{selectedMessage.successful.toLocaleString()}</p><p className="text-xs text-muted-foreground">Successful</p></div>
+                                    <div className="rounded-lg bg-red-50 dark:bg-red-900/20 p-3 text-center"><p className="text-lg font-bold text-red-500">{selectedMessage.failed_count.toLocaleString()}</p><p className="text-xs text-muted-foreground">Failed</p></div>
                                 </div>
                                 {selectedMessage.total_recipients > 0 && selectedMessage.status === "sent" && (
                                     <div className="mt-3">
-                                        <div className="flex justify-between text-xs text-muted-foreground mb-1">
-                                            <span>Success Rate</span>
-                                            <span>{((selectedMessage.successful / selectedMessage.total_recipients) * 100).toFixed(1)}%</span>
-                                        </div>
-                                        <div className="h-2 rounded-full bg-muted overflow-hidden">
-                                            <div
-                                                className="h-full rounded-full bg-emerald-500 transition-all"
-                                                style={{ width: `${(selectedMessage.successful / selectedMessage.total_recipients) * 100}%` }}
-                                            />
-                                        </div>
+                                        <div className="flex justify-between text-xs text-muted-foreground mb-1"><span>Success Rate</span><span>{((selectedMessage.successful / selectedMessage.total_recipients) * 100).toFixed(1)}%</span></div>
+                                        <div className="h-2 rounded-full bg-muted overflow-hidden"><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${(selectedMessage.successful / selectedMessage.total_recipients) * 100}%` }} /></div>
                                     </div>
                                 )}
                             </div>
                             <div className="grid grid-cols-2 gap-4 text-sm">
-                                {selectedMessage.scheduled_at && (
-                                    <div>
-                                        <Label className="text-xs text-muted-foreground">Scheduled For</Label>
-                                        <p>{formatDate(selectedMessage.scheduled_at)}</p>
-                                    </div>
-                                )}
-                                {selectedMessage.sent_at && (
-                                    <div>
-                                        <Label className="text-xs text-muted-foreground">Sent At</Label>
-                                        <p>{formatDate(selectedMessage.sent_at)}</p>
-                                    </div>
-                                )}
-                                <div>
-                                    <Label className="text-xs text-muted-foreground">Created At</Label>
-                                    <p>{formatDate(selectedMessage.created_at)}</p>
-                                </div>
+                                {selectedMessage.scheduled_at && <div><Label className="text-xs text-muted-foreground">Scheduled For</Label><p>{formatDate(selectedMessage.scheduled_at)}</p></div>}
+                                {selectedMessage.sent_at && <div><Label className="text-xs text-muted-foreground">Sent At</Label><p>{formatDate(selectedMessage.sent_at)}</p></div>}
+                                <div><Label className="text-xs text-muted-foreground">Created At</Label><p>{formatDate(selectedMessage.created_at)}</p></div>
                             </div>
                         </div>
                     )}

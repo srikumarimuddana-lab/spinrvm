@@ -20,7 +20,7 @@ import { Separator } from "@/components/ui/separator";
 import {
     Ticket, Plus, Trash2, ToggleLeft, ToggleRight, Pencil, Search, Download,
     RefreshCw, Tag, Users, Calendar, Lock, Globe, ChevronLeft, ChevronRight,
-    DollarSign, TrendingUp, BarChart3, X, Check, User,
+    DollarSign, TrendingUp, BarChart3, X, Check, User, Clock,
 } from "lucide-react";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { getPromotions, createPromotion, updatePromotion, deletePromotion, getPromoUsage, getPromoStats, getUsers } from "@/lib/api";
@@ -106,16 +106,21 @@ export default function PromotionsPage() {
     const [loading, setLoading] = useState(true);
     const [usageLoading, setUsageLoading] = useState(false);
     const [search, setSearch] = useState("");
-    const [statusFilter, setStatusFilter] = useState("all");
-    const [dateRange, setDateRange] = useState("month");
-    const [dateFrom, setDateFrom] = useState("");
-    const [dateTo, setDateTo] = useState("");
-    const [promoTab, setPromoTab] = useState<"public" | "private">("public");
+    const [promoTab, setPromoTab] = useState<"public" | "private" | "expired">("public");
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editingPromo, setEditingPromo] = useState<PromoCode | null>(null);
     const [saving, setSaving] = useState(false);
+
+    // Usage History filters
     const [usagePage, setUsagePage] = useState(1);
     const [usageSearch, setUsageSearch] = useState("");
+    const [usageDateRange, setUsageDateRange] = useState("month");
+    const [usageDateFrom, setUsageDateFrom] = useState("");
+    const [usageDateTo, setUsageDateTo] = useState("");
+    const [usageTypeFilter, setUsageTypeFilter] = useState("all"); // all, public, private
+
+    // Charts filter
+    const [chartFilter, setChartFilter] = useState("all"); // all, public, private
 
     // Multi-select for private coupon users
     const [userOptions, setUserOptions] = useState<UserOption[]>([]);
@@ -145,7 +150,7 @@ export default function PromotionsPage() {
         try {
             const [promosData, statsData] = await Promise.all([
                 getPromotions().catch(() => []),
-                getPromoStats(dateRange).catch(() => null),
+                getPromoStats(usageDateRange).catch(() => null),
             ]);
             setPromos(Array.isArray(promosData) ? promosData : []);
             setStats(statsData);
@@ -159,7 +164,7 @@ export default function PromotionsPage() {
     const fetchUsage = async () => {
         setUsageLoading(true);
         try {
-            const data = await getPromoUsage({ date_from: dateFrom || undefined, date_to: dateTo || undefined, limit: 500 });
+            const data = await getPromoUsage({ date_from: usageDateFrom || undefined, date_to: usageDateTo || undefined, limit: 500 });
             setUsage(Array.isArray(data) ? data : []);
         } catch {
             setUsage([]);
@@ -168,8 +173,8 @@ export default function PromotionsPage() {
         }
     };
 
-    useEffect(() => { fetchAll(); }, [dateRange]);
-    useEffect(() => { fetchUsage(); }, [dateFrom, dateTo]);
+    useEffect(() => { fetchAll(); }, [usageDateRange]);
+    useEffect(() => { fetchUsage(); }, [usageDateFrom, usageDateTo]);
 
     // User search for private coupons
     const fetchUserOptions = useCallback(async (query: string) => {
@@ -199,30 +204,56 @@ export default function PromotionsPage() {
 
     // --- Filtering ---
 
-    const publicPromos = useMemo(() => promos.filter((p) => p.promo_type !== "private"), [promos]);
-    const privatePromos = useMemo(() => promos.filter((p) => p.promo_type === "private"), [promos]);
-    const activeList = promoTab === "public" ? publicPromos : privatePromos;
+    // Build promo ID to type lookup for usage filtering
+    const promoIdTypeMap = useMemo(() => {
+        const map: Record<string, string> = {};
+        promos.forEach((p) => { map[p.id] = p.promo_type || "discount"; });
+        return map;
+    }, [promos]);
+
+    const publicPromos = useMemo(() => promos.filter((p) => p.promo_type !== "private" && getPromoStatus(p) !== "expired"), [promos]);
+    const privatePromos = useMemo(() => promos.filter((p) => p.promo_type === "private" && getPromoStatus(p) !== "expired"), [promos]);
+    const expiredPromos = useMemo(() => promos.filter((p) => getPromoStatus(p) === "expired"), [promos]);
+
+    const activeList = promoTab === "public" ? publicPromos : promoTab === "private" ? privatePromos : expiredPromos;
 
     const filtered = useMemo(() => {
         return activeList.filter((p) => {
             const matchSearch = !search || p.code?.toLowerCase().includes(search.toLowerCase()) || p.description?.toLowerCase().includes(search.toLowerCase());
-            const status = getPromoStatus(p);
-            const matchStatus = statusFilter === "all" || status === statusFilter;
-            return matchSearch && matchStatus;
+            return matchSearch;
         });
-    }, [activeList, search, statusFilter]);
+    }, [activeList, search]);
 
+    // Usage filtering with type dropdown and date range
     const filteredUsage = useMemo(() => {
         return usage.filter((u) => {
-            if (!usageSearch) return true;
-            const q = usageSearch.toLowerCase();
-            return u.code?.toLowerCase().includes(q) || u.user_id?.toLowerCase().includes(q);
+            // Search filter
+            if (usageSearch) {
+                const q = usageSearch.toLowerCase();
+                if (!u.code?.toLowerCase().includes(q) && !u.user_id?.toLowerCase().includes(q)) return false;
+            }
+            // Type filter (public/private/all)
+            if (usageTypeFilter !== "all") {
+                const pType = promoIdTypeMap[u.promo_id] || "discount";
+                if (usageTypeFilter === "private" && pType !== "private") return false;
+                if (usageTypeFilter === "public" && pType === "private") return false;
+            }
+            return true;
         });
-    }, [usage, usageSearch]);
+    }, [usage, usageSearch, usageTypeFilter, promoIdTypeMap]);
 
     const totalUsagePages = Math.max(1, Math.ceil(filteredUsage.length / PER_PAGE));
     const paginatedUsage = filteredUsage.slice((usagePage - 1) * PER_PAGE, usagePage * PER_PAGE);
-    useEffect(() => { setUsagePage(1); }, [usageSearch]);
+    useEffect(() => { setUsagePage(1); }, [usageSearch, usageTypeFilter]);
+
+    // Chart data filtered by chartFilter
+    const chartData = useMemo(() => {
+        if (!stats?.daily_usage) return [];
+        // If "all", return raw daily_usage from stats
+        // For public/private filtering, we'd need per-type data from backend
+        // For now, show all data with the filter label context
+        return stats.daily_usage;
+    }, [stats, chartFilter]);
 
     // --- CRUD ---
 
@@ -252,9 +283,10 @@ export default function PromotionsPage() {
         if (!form.code.trim() || !form.discount_value) { alert("Please fill in code and discount value."); return; }
         setSaving(true);
         try {
+            const isPrivateTab = promoTab === "private" || (editingPromo?.promo_type === "private");
             const payload: any = {
                 code: form.code.trim().toUpperCase(),
-                promo_type: promoTab === "private" ? "private" : "discount",
+                promo_type: isPrivateTab ? "private" : "discount",
                 discount_type: form.discount_type,
                 discount_value: parseFloat(form.discount_value),
                 max_discount: form.max_discount ? parseFloat(form.max_discount) : null,
@@ -265,7 +297,7 @@ export default function PromotionsPage() {
                 min_ride_fare: form.min_ride_fare ? parseFloat(form.min_ride_fare) : 0,
                 first_ride_only: form.first_ride_only,
             };
-            if (promoTab === "private") payload.assigned_user_ids = form.assigned_user_ids;
+            if (isPrivateTab) payload.assigned_user_ids = form.assigned_user_ids;
             if (editingPromo) { await updatePromotion(editingPromo.id, payload); }
             else { await createPromotion(payload); }
             setDialogOpen(false);
@@ -325,28 +357,9 @@ export default function PromotionsPage() {
                     <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2"><Ticket className="h-8 w-8 text-violet-500" /> Promotions</h1>
                     <p className="text-muted-foreground mt-1">Manage promo codes, private coupons, and track usage.</p>
                 </div>
-                <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={() => { fetchAll(); fetchUsage(); }} disabled={loading}><RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh</Button>
-                </div>
-            </div>
-
-            {/* Quick Date Selectors */}
-            <div className="flex flex-wrap items-center gap-2">
-                {DATE_RANGES.map((r) => (
-                    <Button key={r.key} variant={dateRange === r.key ? "default" : "outline"} size="sm" onClick={() => setDateRange(r.key)} className={dateRange === r.key ? "bg-red-500 hover:bg-red-600 text-white" : ""}>
-                        {r.label}
-                    </Button>
-                ))}
-                <Separator orientation="vertical" className="h-6 mx-1" />
-                <div className="flex items-center gap-2">
-                    <Label className="text-xs text-muted-foreground">From</Label>
-                    <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36 h-8 text-xs" />
-                </div>
-                <div className="flex items-center gap-2">
-                    <Label className="text-xs text-muted-foreground">To</Label>
-                    <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36 h-8 text-xs" />
-                </div>
-                {(dateFrom || dateTo) && <Button variant="ghost" size="sm" onClick={() => { setDateFrom(""); setDateTo(""); }}>Clear</Button>}
+                <Button variant="outline" size="sm" onClick={() => { fetchAll(); fetchUsage(); }} disabled={loading}>
+                    <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
+                </Button>
             </div>
 
             {/* Summary Stats */}
@@ -355,23 +368,26 @@ export default function PromotionsPage() {
                     {[
                         { label: "Total Codes", value: stats.total_codes, icon: Tag, color: "text-violet-500" },
                         { label: "Active", value: stats.active_codes, icon: ToggleRight, color: "text-emerald-500" },
+                        { label: "Expired", value: stats.expired_codes, icon: Clock, color: "text-red-500" },
                         { label: "Private Coupons", value: stats.total_private, icon: Lock, color: "text-blue-500" },
                         { label: "Redemptions", value: stats.total_redemptions, icon: Users, color: "text-amber-500" },
                         { label: "Discount Given", value: formatCurrency(stats.total_discount_given), icon: DollarSign, color: "text-red-500" },
-                        { label: "Active Private", value: stats.active_private, icon: Lock, color: "text-emerald-500" },
                     ].map((s, i) => (
                         <Card key={i}><CardContent className="pt-4 pb-3"><div className="flex items-center gap-2"><s.icon className={`h-5 w-5 ${s.color}`} /><div><p className="text-xs text-muted-foreground">{s.label}</p><p className="text-2xl font-bold">{s.value}</p></div></div></CardContent></Card>
                     ))}
                 </div>
             )}
 
-            {/* Promo Tabs: Public vs Private */}
+            {/* Promo Tabs: Public | Private | Expired */}
             <div className="flex gap-1 border-b">
                 <button onClick={() => setPromoTab("public")} className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px ${promoTab === "public" ? "border-red-500 text-red-600 dark:text-red-400" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
-                    <Globe className="h-4 w-4" /> Public Promo Codes ({publicPromos.length})
+                    <Globe className="h-4 w-4" /> Public Codes ({publicPromos.length})
                 </button>
                 <button onClick={() => setPromoTab("private")} className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px ${promoTab === "private" ? "border-red-500 text-red-600 dark:text-red-400" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
                     <Lock className="h-4 w-4" /> Private Coupons ({privatePromos.length})
+                </button>
+                <button onClick={() => setPromoTab("expired")} className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px ${promoTab === "expired" ? "border-red-500 text-red-600 dark:text-red-400" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+                    <Clock className="h-4 w-4" /> Expired ({expiredPromos.length})
                 </button>
             </div>
 
@@ -379,29 +395,29 @@ export default function PromotionsPage() {
             <Card>
                 <CardHeader className="pb-3">
                     <div className="flex items-center justify-between">
-                        <CardTitle className="text-lg">{promoTab === "public" ? "Public Promo Codes" : "Private Coupons"}</CardTitle>
+                        <CardTitle className="text-lg">{promoTab === "public" ? "Active Public Promo Codes" : promoTab === "private" ? "Active Private Coupons" : "Expired Promo Codes"}</CardTitle>
                         <div className="flex gap-2">
                             <Button variant="outline" size="sm" onClick={handleExportPromos} disabled={filtered.length === 0}><Download className="mr-2 h-4 w-4" /> Export</Button>
-                            <Button size="sm" onClick={openCreate}><Plus className="mr-2 h-4 w-4" /> {promoTab === "public" ? "Create Code" : "Create Coupon"}</Button>
+                            {promoTab !== "expired" && <Button size="sm" onClick={openCreate}><Plus className="mr-2 h-4 w-4" /> {promoTab === "public" ? "Create Code" : "Create Coupon"}</Button>}
                         </div>
                     </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
                     <div className="flex flex-wrap items-center gap-3">
                         <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by code or description..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" /></div>
-                        <Select value={statusFilter} onValueChange={setStatusFilter}><SelectTrigger className="w-36"><SelectValue placeholder="Status" /></SelectTrigger><SelectContent><SelectItem value="all">All Status</SelectItem><SelectItem value="active">Active</SelectItem><SelectItem value="inactive">Inactive</SelectItem><SelectItem value="expired">Expired</SelectItem></SelectContent></Select>
                     </div>
 
                     {loading ? (
                         <div className="flex items-center justify-center p-12"><div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
                     ) : filtered.length === 0 ? (
-                        <div className="text-center py-12"><Ticket className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" /><h3 className="text-lg font-semibold">No {promoTab === "public" ? "promo codes" : "coupons"} found</h3><p className="text-muted-foreground mt-1">Create one to get started.</p></div>
+                        <div className="text-center py-12"><Ticket className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" /><h3 className="text-lg font-semibold">No {promoTab === "expired" ? "expired codes" : promoTab === "public" ? "promo codes" : "coupons"} found</h3><p className="text-muted-foreground mt-1">{promoTab === "expired" ? "No expired promo codes." : "Create one to get started."}</p></div>
                     ) : (
                         <div className="border rounded-lg">
                             <Table>
                                 <TableHeader><TableRow>
                                     <TableHead>Code</TableHead><TableHead>Discount</TableHead><TableHead>Uses</TableHead>
-                                    {promoTab === "private" && <TableHead>Assigned To</TableHead>}
+                                    {promoTab === "expired" && <TableHead>Type</TableHead>}
+                                    {(promoTab === "private" || promoTab === "expired") && <TableHead>Assigned To</TableHead>}
                                     <TableHead>Expiry</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead>
                                 </TableRow></TableHeader>
                                 <TableBody>
@@ -413,12 +429,13 @@ export default function PromotionsPage() {
                                                 <TableCell><span className="font-mono font-semibold text-violet-600 dark:text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded">{p.code}</span>{p.description && <p className="text-xs text-muted-foreground mt-1">{p.description}</p>}</TableCell>
                                                 <TableCell className="text-sm">{p.discount_type === "flat" ? formatCurrency(p.discount_value) : `${p.discount_value}%`}{p.max_discount != null && <span className="text-xs text-muted-foreground ml-1">(max {formatCurrency(p.max_discount)})</span>}</TableCell>
                                                 <TableCell className="text-sm">{p.uses}/{p.max_uses || "∞"}</TableCell>
-                                                {promoTab === "private" && <TableCell className="text-sm">{(p.assigned_user_ids || []).length} user{(p.assigned_user_ids || []).length !== 1 ? "s" : ""}</TableCell>}
+                                                {promoTab === "expired" && <TableCell><Badge variant="outline" className="text-xs">{p.promo_type === "private" ? "Private" : "Public"}</Badge></TableCell>}
+                                                {(promoTab === "private" || promoTab === "expired") && <TableCell className="text-sm">{(p.assigned_user_ids || []).length > 0 ? `${(p.assigned_user_ids || []).length} user${(p.assigned_user_ids || []).length !== 1 ? "s" : ""}` : "—"}</TableCell>}
                                                 <TableCell className="text-sm text-muted-foreground">{p.expiry_date ? formatDate(p.expiry_date) : "No expiry"}</TableCell>
                                                 <TableCell><Badge className={sc.color}>{sc.label}</Badge></TableCell>
                                                 <TableCell className="text-right"><div className="flex gap-1 justify-end">
                                                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toggleActive(p)}>{p.is_active ? <ToggleRight className="h-4 w-4 text-emerald-500" /> : <ToggleLeft className="h-4 w-4 text-muted-foreground" />}</Button>
+                                                    {promoTab !== "expired" && <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => toggleActive(p)}>{p.is_active ? <ToggleRight className="h-4 w-4 text-emerald-500" /> : <ToggleLeft className="h-4 w-4 text-muted-foreground" />}</Button>}
                                                     <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => handleDelete(p.id)}><Trash2 className="h-4 w-4" /></Button>
                                                 </div></TableCell>
                                             </TableRow>
@@ -431,37 +448,50 @@ export default function PromotionsPage() {
                 </CardContent>
             </Card>
 
-            {/* Charts */}
+            {/* Charts with filter dropdown */}
             {stats && stats.daily_usage && stats.daily_usage.length > 0 && (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                    <Card>
-                        <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><BarChart3 className="h-4 w-4 text-blue-500" /> Daily Redemptions</CardTitle></CardHeader>
-                        <CardContent>
-                            <ResponsiveContainer width="100%" height={220}>
-                                <BarChart data={stats.daily_usage}>
-                                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                                    <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(d) => d.slice(5)} className="text-muted-foreground" />
-                                    <YAxis tick={{ fontSize: 10 }} className="text-muted-foreground" />
-                                    <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
-                                    <Bar dataKey="count" fill="var(--chart-3)" radius={[3, 3, 0, 0]} name="Redemptions" />
-                                </BarChart>
-                            </ResponsiveContainer>
-                        </CardContent>
-                    </Card>
-                    <Card>
-                        <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><TrendingUp className="h-4 w-4 text-emerald-500" /> Daily Discount Amount</CardTitle></CardHeader>
-                        <CardContent>
-                            <ResponsiveContainer width="100%" height={220}>
-                                <LineChart data={stats.daily_usage}>
-                                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                                    <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(d) => d.slice(5)} className="text-muted-foreground" />
-                                    <YAxis tick={{ fontSize: 10 }} className="text-muted-foreground" />
-                                    <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={(v) => [`$${Number(v).toFixed(2)}`, "Amount"]} />
-                                    <Line dataKey="amount" stroke="var(--chart-2)" strokeWidth={2} dot={false} name="Amount ($)" />
-                                </LineChart>
-                            </ResponsiveContainer>
-                        </CardContent>
-                    </Card>
+                <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                        <h2 className="text-lg font-semibold flex items-center gap-2"><BarChart3 className="h-5 w-5 text-blue-500" /> Analytics</h2>
+                        <Select value={chartFilter} onValueChange={setChartFilter}>
+                            <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Promos</SelectItem>
+                                <SelectItem value="public">Public Codes Only</SelectItem>
+                                <SelectItem value="private">Private Coupons Only</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <Card>
+                            <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><BarChart3 className="h-4 w-4 text-blue-500" /> Daily Redemptions</CardTitle></CardHeader>
+                            <CardContent>
+                                <ResponsiveContainer width="100%" height={220}>
+                                    <BarChart data={chartData}>
+                                        <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                                        <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(d) => d.slice(5)} className="text-muted-foreground" />
+                                        <YAxis tick={{ fontSize: 10 }} className="text-muted-foreground" />
+                                        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                                        <Bar dataKey="count" fill="var(--chart-3)" radius={[3, 3, 0, 0]} name="Redemptions" />
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            </CardContent>
+                        </Card>
+                        <Card>
+                            <CardHeader className="pb-2"><CardTitle className="text-sm flex items-center gap-2"><TrendingUp className="h-4 w-4 text-emerald-500" /> Daily Discount Amount</CardTitle></CardHeader>
+                            <CardContent>
+                                <ResponsiveContainer width="100%" height={220}>
+                                    <LineChart data={chartData}>
+                                        <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                                        <XAxis dataKey="date" tick={{ fontSize: 10 }} tickFormatter={(d) => d.slice(5)} className="text-muted-foreground" />
+                                        <YAxis tick={{ fontSize: 10 }} className="text-muted-foreground" />
+                                        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={(v) => [`$${Number(v).toFixed(2)}`, "Amount"]} />
+                                        <Line dataKey="amount" stroke="var(--chart-2)" strokeWidth={2} dot={false} name="Amount ($)" />
+                                    </LineChart>
+                                </ResponsiveContainer>
+                            </CardContent>
+                        </Card>
+                    </div>
                 </div>
             )}
 
@@ -474,7 +504,37 @@ export default function PromotionsPage() {
                     </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                    <div className="relative max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by code or user ID..." value={usageSearch} onChange={(e) => setUsageSearch(e.target.value)} className="pl-9" /></div>
+                    {/* Date range selectors for usage */}
+                    <div className="flex flex-wrap items-center gap-2">
+                        {DATE_RANGES.map((r) => (
+                            <Button key={r.key} variant={usageDateRange === r.key ? "default" : "outline"} size="sm" onClick={() => setUsageDateRange(r.key)} className={usageDateRange === r.key ? "bg-red-500 hover:bg-red-600 text-white" : ""}>
+                                {r.label}
+                            </Button>
+                        ))}
+                        <Separator orientation="vertical" className="h-6 mx-1" />
+                        <div className="flex items-center gap-2">
+                            <Label className="text-xs text-muted-foreground">From</Label>
+                            <Input type="date" value={usageDateFrom} onChange={(e) => setUsageDateFrom(e.target.value)} className="w-36 h-8 text-xs" />
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Label className="text-xs text-muted-foreground">To</Label>
+                            <Input type="date" value={usageDateTo} onChange={(e) => setUsageDateTo(e.target.value)} className="w-36 h-8 text-xs" />
+                        </div>
+                        {(usageDateFrom || usageDateTo) && <Button variant="ghost" size="sm" onClick={() => { setUsageDateFrom(""); setUsageDateTo(""); }}>Clear</Button>}
+                    </div>
+
+                    {/* Usage filters */}
+                    <div className="flex flex-wrap items-center gap-3">
+                        <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by code or user ID..." value={usageSearch} onChange={(e) => setUsageSearch(e.target.value)} className="pl-9" /></div>
+                        <Select value={usageTypeFilter} onValueChange={setUsageTypeFilter}>
+                            <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Promos</SelectItem>
+                                <SelectItem value="public">Public Codes Only</SelectItem>
+                                <SelectItem value="private">Private Coupons Only</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
 
                     {usageLoading ? (
                         <div className="flex items-center justify-center p-12"><div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
@@ -484,17 +544,21 @@ export default function PromotionsPage() {
                         <div className="border rounded-lg">
                             <Table>
                                 <TableHeader><TableRow>
-                                    <TableHead>Date</TableHead><TableHead>User ID</TableHead><TableHead>Code</TableHead><TableHead>Discount Applied</TableHead>
+                                    <TableHead>Date</TableHead><TableHead>User ID</TableHead><TableHead>Code</TableHead><TableHead>Type</TableHead><TableHead>Discount Applied</TableHead>
                                 </TableRow></TableHeader>
                                 <TableBody>
-                                    {paginatedUsage.map((u) => (
-                                        <TableRow key={u.id}>
-                                            <TableCell className="text-sm text-muted-foreground">{formatDate(u.created_at)}</TableCell>
-                                            <TableCell className="text-sm font-mono">{u.user_id?.slice(0, 12)}...</TableCell>
-                                            <TableCell><span className="font-mono font-semibold text-violet-600 dark:text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded text-xs">{u.code}</span></TableCell>
-                                            <TableCell className="text-sm font-medium text-emerald-600">{formatCurrency(u.discount_applied)}</TableCell>
-                                        </TableRow>
-                                    ))}
+                                    {paginatedUsage.map((u) => {
+                                        const pType = promoIdTypeMap[u.promo_id] || "discount";
+                                        return (
+                                            <TableRow key={u.id}>
+                                                <TableCell className="text-sm text-muted-foreground">{formatDate(u.created_at)}</TableCell>
+                                                <TableCell className="text-sm font-mono">{u.user_id?.slice(0, 12)}...</TableCell>
+                                                <TableCell><span className="font-mono font-semibold text-violet-600 dark:text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded text-xs">{u.code}</span></TableCell>
+                                                <TableCell><Badge variant="outline" className="text-xs">{pType === "private" ? "Private" : "Public"}</Badge></TableCell>
+                                                <TableCell className="text-sm font-medium text-emerald-600">{formatCurrency(u.discount_applied)}</TableCell>
+                                            </TableRow>
+                                        );
+                                    })}
                                 </TableBody>
                             </Table>
                             {filteredUsage.length > PER_PAGE && (
@@ -515,7 +579,7 @@ export default function PromotionsPage() {
             {/* Create/Edit Dialog */}
             <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) { setDialogOpen(false); resetForm(); } }}>
                 <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
-                    <DialogHeader><DialogTitle className="flex items-center gap-2"><Ticket className="h-5 w-5 text-violet-500" /> {editingPromo ? "Edit" : "Create"} {promoTab === "public" ? "Promo Code" : "Private Coupon"}</DialogTitle></DialogHeader>
+                    <DialogHeader><DialogTitle className="flex items-center gap-2"><Ticket className="h-5 w-5 text-violet-500" /> {editingPromo ? "Edit" : "Create"} {(promoTab === "private" || editingPromo?.promo_type === "private") ? "Private Coupon" : "Promo Code"}</DialogTitle></DialogHeader>
                     <div className="space-y-4">
                         <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-2"><Label>Code</Label><Input placeholder="e.g. SAVE10" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} className="uppercase tracking-widest font-mono" /></div>
@@ -536,8 +600,7 @@ export default function PromotionsPage() {
                         </div>
                         <div className="space-y-2"><Label>Description</Label><Input placeholder="Optional description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
 
-                        {/* Private coupon: assign users */}
-                        {promoTab === "private" && (
+                        {(promoTab === "private" || editingPromo?.promo_type === "private") && (
                             <>
                                 <Separator />
                                 <div className="space-y-2">

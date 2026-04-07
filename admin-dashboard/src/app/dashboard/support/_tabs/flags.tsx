@@ -42,31 +42,31 @@ export default function FlagsTab() {
     return (
         <div>
             {/* Stats */}
-            <div className="grid grid-cols-3 gap-3 mb-4">
-                <div className="bg-card border rounded-xl p-3 flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 bg-red-100 text-red-600">
-                        <Flag className="h-4 w-4" />
+            <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-4">
+                <div className="bg-card border rounded-xl p-2.5 sm:p-3 flex items-center gap-2">
+                    <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg flex items-center justify-center shrink-0 bg-red-100 text-red-600">
+                        <Flag className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                     </div>
                     <div>
-                        <p className="text-xl font-bold">{flags.length}</p>
+                        <p className="text-lg sm:text-xl font-bold">{flags.length}</p>
                         <p className="text-[10px] text-muted-foreground">Total Flags</p>
                     </div>
                 </div>
-                <div className="bg-card border rounded-xl p-3 flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 bg-blue-100 text-blue-600">
-                        <User className="h-4 w-4" />
+                <div className="bg-card border rounded-xl p-2.5 sm:p-3 flex items-center gap-2">
+                    <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg flex items-center justify-center shrink-0 bg-blue-100 text-blue-600">
+                        <User className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                     </div>
                     <div>
-                        <p className="text-xl font-bold">{riderFlags.length}</p>
+                        <p className="text-lg sm:text-xl font-bold">{riderFlags.length}</p>
                         <p className="text-[10px] text-muted-foreground">Rider Flags</p>
                     </div>
                 </div>
-                <div className="bg-card border rounded-xl p-3 flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 bg-emerald-100 text-emerald-600">
-                        <Car className="h-4 w-4" />
+                <div className="bg-card border rounded-xl p-2.5 sm:p-3 flex items-center gap-2">
+                    <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg flex items-center justify-center shrink-0 bg-emerald-100 text-emerald-600">
+                        <Car className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                     </div>
                     <div>
-                        <p className="text-xl font-bold">{driverFlags.length}</p>
+                        <p className="text-lg sm:text-xl font-bold">{driverFlags.length}</p>
                         <p className="text-[10px] text-muted-foreground">Driver Flags</p>
                     </div>
                 </div>

@@ -63,13 +63,13 @@ export default function LostAndFoundTab() {
     return (
         <div>
             {/* Stats */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 mb-4">
                 {(["reported", "driver_notified", "resolved", "unresolved"] as const).map(s => {
                     const I = STATUS_ICONS[s];
                     return (
-                        <div key={s} className="bg-card border rounded-xl p-3 flex items-center gap-3">
-                            <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${STATUS_COLORS[s]}`}>
-                                <I className="h-4 w-4" />
+                        <div key={s} className="bg-card border rounded-xl p-2.5 sm:p-3 flex items-center gap-2 sm:gap-3">
+                            <div className={`w-8 h-8 sm:w-9 sm:h-9 rounded-lg flex items-center justify-center shrink-0 ${STATUS_COLORS[s]}`}>
+                                <I className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                             </div>
                             <div>
                                 <p className="text-xl font-bold">{statusCounts[s]}</p>

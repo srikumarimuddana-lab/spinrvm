@@ -161,33 +161,21 @@ export default function DisputesTab() {
     };
 
     return (
-        <div className="space-y-6">
-            <div className="flex items-center justify-between">
-                <div>
-                    <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-                        <HelpCircle className="h-8 w-8 text-amber-500" />
-                        Disputes
-                    </h1>
-                    <p className="text-muted-foreground mt-1">
-                        Review and resolve disputes from riders and drivers.
-                    </p>
-                </div>
-            </div>
-
+        <div className="space-y-4">
             {/* Filters */}
-            <div className="flex flex-wrap items-center gap-3">
-                <div className="relative flex-1 max-w-sm">
+            <div className="flex flex-col sm:flex-row gap-2">
+                <div className="relative flex-1">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
                         placeholder="Search disputes..."
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
-                        className="pl-9"
+                        className="pl-9 h-9 text-sm"
                     />
                 </div>
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
-                    <SelectTrigger className="w-40">
-                        <SelectValue placeholder="Filter by status" />
+                    <SelectTrigger className="w-full sm:w-36 h-9 text-sm">
+                        <SelectValue placeholder="Status" />
                     </SelectTrigger>
                     <SelectContent>
                         <SelectItem value="all">All Status</SelectItem>
@@ -199,112 +187,78 @@ export default function DisputesTab() {
             </div>
 
             {/* Stats */}
-            <div className="grid grid-cols-3 gap-4">
-                <Card>
-                    <CardContent className="pt-4">
-                        <div className="flex items-center gap-2">
-                            <Clock className="h-5 w-5 text-amber-500" />
-                            <div>
-                                <p className="text-xs text-muted-foreground">Pending</p>
-                                <p className="text-2xl font-bold">{disputeStats.pending}</p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="pt-4">
-                        <div className="flex items-center gap-2">
-                            <CheckCircle className="h-5 w-5 text-emerald-500" />
-                            <div>
-                                <p className="text-xs text-muted-foreground">Resolved</p>
-                                <p className="text-2xl font-bold">{disputeStats.resolved}</p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="pt-4">
-                        <div className="flex items-center gap-2">
-                            <XCircle className="h-5 w-5 text-red-500" />
-                            <div>
-                                <p className="text-xs text-muted-foreground">Rejected</p>
-                                <p className="text-2xl font-bold">{disputeStats.rejected}</p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
+            <div className="grid grid-cols-3 gap-2 sm:gap-3">
+                <div className="bg-card border rounded-xl p-2.5 sm:p-3 flex items-center gap-2">
+                    <Clock className="h-4 w-4 sm:h-5 sm:w-5 text-amber-500 shrink-0" />
+                    <div>
+                        <p className="text-lg sm:text-2xl font-bold">{disputeStats.pending}</p>
+                        <p className="text-[10px] text-muted-foreground">Pending</p>
+                    </div>
+                </div>
+                <div className="bg-card border rounded-xl p-2.5 sm:p-3 flex items-center gap-2">
+                    <CheckCircle className="h-4 w-4 sm:h-5 sm:w-5 text-emerald-500 shrink-0" />
+                    <div>
+                        <p className="text-lg sm:text-2xl font-bold">{disputeStats.resolved}</p>
+                        <p className="text-[10px] text-muted-foreground">Resolved</p>
+                    </div>
+                </div>
+                <div className="bg-card border rounded-xl p-2.5 sm:p-3 flex items-center gap-2">
+                    <XCircle className="h-4 w-4 sm:h-5 sm:w-5 text-red-500 shrink-0" />
+                    <div>
+                        <p className="text-lg sm:text-2xl font-bold">{disputeStats.rejected}</p>
+                        <p className="text-[10px] text-muted-foreground">Rejected</p>
+                    </div>
+                </div>
             </div>
 
-            {/* Table */}
-            <Card className="border-border/50">
-                <CardContent className="p-0">
-                    {loading ? (
-                        <div className="flex items-center justify-center p-12">
-                            <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                        </div>
-                    ) : (
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>ID</TableHead>
-                                    <TableHead>User</TableHead>
-                                    <TableHead>Type</TableHead>
-                                    <TableHead>Description</TableHead>
-                                    <TableHead>Status</TableHead>
-                                    <TableHead>Date</TableHead>
-                                    <TableHead className="text-right">Actions</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {filtered.length === 0 ? (
-                                    <TableRow>
-                                        <TableCell colSpan={7} className="text-center text-muted-foreground py-12">
-                                            No disputes found.
-                                        </TableCell>
-                                    </TableRow>
-                                ) : (
-                                    filtered.map((dispute) => {
-                                        const StatusIcon = STATUS_CONFIG[dispute.status as keyof typeof STATUS_CONFIG]?.icon || HelpCircle;
-                                        return (
-                                            <TableRow key={dispute.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelectedDispute(dispute)}>
-                                                <TableCell className="font-mono text-xs">{dispute.id}</TableCell>
-                                                <TableCell>
-                                                    <div>
-                                                        <p className="font-medium">{dispute.user_name}</p>
-                                                        <p className="text-xs text-muted-foreground capitalize">{dispute.user_type}</p>
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell>
-                                                    <Badge variant="outline" className="text-xs">
-                                                        {DISPUTE_TYPES.find(t => t.value === dispute.dispute_type)?.label || dispute.dispute_type}
-                                                    </Badge>
-                                                </TableCell>
-                                                <TableCell className="max-w-[200px] truncate text-muted-foreground">
-                                                    {dispute.description}
-                                                </TableCell>
-                                                <TableCell>
-                                                    <Badge className={STATUS_CONFIG[dispute.status as keyof typeof STATUS_CONFIG]?.color || "bg-zinc-500/15"}>
-                                                        <StatusIcon className="h-3 w-3 mr-1" />
-                                                        {STATUS_CONFIG[dispute.status as keyof typeof STATUS_CONFIG]?.label || dispute.status}
-                                                    </Badge>
-                                                </TableCell>
-                                                <TableCell className="text-xs text-muted-foreground">
-                                                    {formatDate(dispute.created_at)}
-                                                </TableCell>
-                                                <TableCell className="text-right">
-                                                    <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); setSelectedDispute(dispute); }}>
-                                                        Review
-                                                    </Button>
-                                                </TableCell>
-                                            </TableRow>
-                                        );
-                                    })
-                                )}
-                            </TableBody>
-                        </Table>
-                    )}
-                </CardContent>
-            </Card>
+            {/* Dispute list - card-based for mobile */}
+            {loading ? (
+                <div className="flex items-center justify-center py-16">
+                    <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                </div>
+            ) : filtered.length === 0 ? (
+                <div className="text-center py-16 text-muted-foreground">
+                    <HelpCircle className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                    <p>No disputes found</p>
+                </div>
+            ) : (
+                <div className="space-y-2">
+                    {filtered.map((dispute) => {
+                        const StatusIcon = STATUS_CONFIG[dispute.status as keyof typeof STATUS_CONFIG]?.icon || HelpCircle;
+                        const statusConf = STATUS_CONFIG[dispute.status as keyof typeof STATUS_CONFIG];
+                        return (
+                            <div key={dispute.id}
+                                onClick={() => setSelectedDispute(dispute)}
+                                className="flex flex-col sm:flex-row sm:items-center gap-2 p-3 bg-card border rounded-xl cursor-pointer hover:shadow-sm transition-shadow">
+                                <div className="flex items-center gap-2 flex-1 min-w-0">
+                                    <div className="flex flex-col flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <span className="text-sm font-semibold">{dispute.user_name}</span>
+                                            <span className="text-[10px] text-muted-foreground capitalize">({dispute.user_type})</span>
+                                            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                                                {DISPUTE_TYPES.find(t => t.value === dispute.dispute_type)?.label || dispute.dispute_type}
+                                            </Badge>
+                                        </div>
+                                        <p className="text-xs text-muted-foreground truncate mt-0.5">{dispute.description}</p>
+                                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                                            Ride: <span className="font-mono">{dispute.ride_id?.slice(0, 8)}</span> · {formatDate(dispute.created_at)}
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2 justify-between sm:justify-end">
+                                    <Badge className={`text-[10px] ${statusConf?.color || "bg-zinc-500/15"}`}>
+                                        <StatusIcon className="h-3 w-3 mr-1" />
+                                        {statusConf?.label || dispute.status}
+                                    </Badge>
+                                    <Button variant="ghost" size="sm" className="text-xs h-7 px-2" onClick={(e) => { e.stopPropagation(); setSelectedDispute(dispute); }}>
+                                        Review
+                                    </Button>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
 
             {/* Review Dialog */}
             <Dialog open={!!selectedDispute} onOpenChange={(open) => { if (!open) setSelectedDispute(null); }}>

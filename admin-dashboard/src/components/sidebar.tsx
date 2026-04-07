@@ -5,13 +5,14 @@ import { useRouter, usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
     LayoutDashboard, Car, Users, DollarSign, Settings, MapPin, Ticket,
-    HelpCircle, Bell, Flame, Building2, LifeBuoy,
+    HelpCircle, Flame, Building2, LifeBuoy,
     LogOut, Menu, FileText, X, CreditCard, ChevronLeft, ChevronRight,
-    Sun, Moon, Shield, Activity, Cloud,
+    Sun, Moon, Shield, Cloud,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
 import { useAuthStore } from "@/store/authStore";
+import { useTheme } from "next-themes";
 
 interface NavItem {
     href: string;
@@ -83,24 +84,19 @@ export function Sidebar() {
     const router = useRouter();
     const [mobileOpen, setMobileOpen] = useState(false);
     const [collapsed, setCollapsed] = useState(false);
-    const [darkMode, setDarkMode] = useState(false);
     const { logout, user } = useAuthStore();
+    const { theme, setTheme } = useTheme();
 
     const userModules = user?.modules || [];
     const isSuperAdmin = user?.role === 'super_admin' || user?.role === 'admin';
 
     useEffect(() => {
-        const saved = localStorage.getItem('spinr-theme');
-        if (saved === 'dark') { setDarkMode(true); document.documentElement.classList.add('dark'); }
         const sc = localStorage.getItem('spinr-sidebar-collapsed');
         if (sc === 'true') setCollapsed(true);
     }, []);
 
     const toggleTheme = () => {
-        const next = !darkMode;
-        setDarkMode(next);
-        localStorage.setItem('spinr-theme', next ? 'dark' : 'light');
-        document.documentElement.classList.toggle('dark', next);
+        setTheme(theme === 'dark' ? 'light' : 'dark');
     };
 
     const toggleCollapse = () => {
@@ -124,16 +120,16 @@ export function Sidebar() {
             {mobileOpen && <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={() => setMobileOpen(false)} />}
 
             <aside className={cn(
-                "fixed inset-y-0 left-0 z-40 flex flex-col border-r border-border bg-sidebar transition-all duration-200 md:translate-x-0",
+                "fixed inset-y-0 left-0 z-40 flex flex-col border-r border-sidebar-border bg-sidebar transition-all duration-200 md:translate-x-0",
                 collapsed ? "w-[68px]" : "w-60",
                 mobileOpen ? "translate-x-0 w-60" : "-translate-x-full md:translate-x-0"
             )}>
                 {/* Brand */}
-                <div className={cn("flex shrink-0 h-14 items-center border-b border-border", collapsed ? "justify-center px-2" : "gap-2.5 px-4")}>
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-red-500 to-red-600 shrink-0">
-                        <span className="text-sm font-bold text-white">S</span>
+                <div className={cn("flex shrink-0 h-14 items-center border-b border-sidebar-border", collapsed ? "justify-center px-2" : "gap-2.5 px-4")}>
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary shrink-0">
+                        <span className="text-sm font-bold text-primary-foreground">S</span>
                     </div>
-                    {!collapsed && <span className="text-base font-bold tracking-tight">Spinr</span>}
+                    {!collapsed && <span className="text-base font-bold tracking-tight text-sidebar-foreground">Spinr</span>}
                 </div>
 
                 {/* Nav */}
@@ -151,7 +147,7 @@ export function Sidebar() {
                                         {group.title}
                                     </p>
                                 )}
-                                {collapsed && gi > 0 && <div className="border-t border-border my-1" />}
+                                {collapsed && gi > 0 && <div className="border-t border-sidebar-border my-1" />}
                                 {visibleItems.map((item) => {
                                     const active = pathname === item.href ||
                                         (item.href !== "/dashboard" && pathname.startsWith(item.href));
@@ -162,8 +158,8 @@ export function Sidebar() {
                                                 "flex items-center rounded-lg text-[13px] font-medium transition-colors",
                                                 collapsed ? "justify-center p-2.5 my-0.5" : "gap-2.5 px-2.5 py-[7px] my-[1px]",
                                                 active
-                                                    ? "bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400"
-                                                    : "text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                                                    ? "bg-primary/10 text-primary"
+                                                    : "text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground"
                                             )}
                                         >
                                             <item.icon className={cn("shrink-0", collapsed ? "h-[18px] w-[18px]" : "h-4 w-4")} />
@@ -177,23 +173,23 @@ export function Sidebar() {
                 </div>
 
                 {/* Footer */}
-                <div className={cn("shrink-0 border-t border-border", collapsed ? "p-1.5" : "p-2")}>
+                <div className={cn("shrink-0 border-t border-sidebar-border", collapsed ? "p-1.5" : "p-2")}>
                     <button onClick={toggleTheme}
-                        className={cn("flex w-full items-center rounded-lg text-[13px] font-medium text-sidebar-foreground/50 hover:bg-sidebar-accent/50 transition-colors",
+                        className={cn("flex w-full items-center rounded-lg text-[13px] font-medium text-sidebar-foreground/50 hover:bg-sidebar-accent transition-colors",
                             collapsed ? "justify-center p-2.5" : "gap-2.5 px-2.5 py-[7px]")}>
-                        {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-                        {!collapsed && (darkMode ? "Light Mode" : "Dark Mode")}
+                        {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                        {!collapsed && (theme === 'dark' ? "Light Mode" : "Dark Mode")}
                     </button>
 
                     <button onClick={toggleCollapse}
-                        className={cn("hidden md:flex w-full items-center rounded-lg text-[13px] font-medium text-sidebar-foreground/50 hover:bg-sidebar-accent/50 transition-colors",
+                        className={cn("hidden md:flex w-full items-center rounded-lg text-[13px] font-medium text-sidebar-foreground/50 hover:bg-sidebar-accent transition-colors",
                             collapsed ? "justify-center p-2.5" : "gap-2.5 px-2.5 py-[7px]")}>
                         {collapsed ? <ChevronRight className="h-4 w-4" /> : <><ChevronLeft className="h-4 w-4" />Collapse</>}
                     </button>
 
                     {!collapsed && (
-                        <div className="flex items-center gap-2 px-2.5 py-2 mt-1 rounded-lg bg-sidebar-accent/30">
-                            <div className="w-7 h-7 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center text-red-600 dark:text-red-400 text-xs font-bold shrink-0">
+                        <div className="flex items-center gap-2 px-2.5 py-2 mt-1 rounded-lg bg-sidebar-accent/50">
+                            <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-bold shrink-0">
                                 {user?.first_name?.[0] || user?.email?.[0]?.toUpperCase() || 'A'}
                             </div>
                             <div className="flex-1 min-w-0">
@@ -204,7 +200,7 @@ export function Sidebar() {
                     )}
 
                     <button onClick={handleLogout}
-                        className={cn("flex w-full items-center rounded-lg text-[13px] font-medium text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors mt-1",
+                        className={cn("flex w-full items-center rounded-lg text-[13px] font-medium text-destructive hover:bg-destructive/10 transition-colors mt-1",
                             collapsed ? "justify-center p-2.5" : "gap-2.5 px-2.5 py-[7px]")}>
                         <LogOut className="h-4 w-4" />
                         {!collapsed && "Sign Out"}

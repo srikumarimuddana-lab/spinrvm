@@ -573,5 +573,270 @@ async def execute_write(query: str, params: Optional[Dict[str, Any]] = None):
         except Exception as e:
             logger.warning(f"execute_write warning: {e}")
             return {'success': False, 'error': str(e)}
-    
+
     return await run_sync(_fn)
+
+
+# ============ Rides Admin Dashboard – New Helpers ============
+
+async def get_ride_count_by_date_range(start_iso: str, end_iso: str) -> int:
+    """Count rides created within a date range using Supabase SDK."""
+    if not supabase:
+        return 0
+
+    def _fn():
+        res = (
+            supabase.table('rides')
+            .select('id', count='exact', head=True)
+            .gte('created_at', start_iso)
+            .lt('created_at', end_iso)
+            .execute()
+        )
+        if hasattr(res, 'count') and res.count is not None:
+            return int(res.count)
+        return 0
+
+    return await run_sync(_fn)
+
+
+async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
+    """Get a ride with enriched rider/driver details, flags, complaints, lost items."""
+    if not supabase:
+        return None
+
+    def _get_ride():
+        return _single_row_from_res(
+            supabase.table('rides').select('*').eq('id', ride_id).execute()
+        )
+
+    ride = await run_sync(_get_ride)
+    if not ride:
+        return None
+
+    # Fetch rider details
+    rider_id = ride.get('rider_id')
+    if rider_id:
+        rider = await run_sync(lambda rid=rider_id: _single_row_from_res(
+            supabase.table('users').select('first_name,last_name,phone,email,profile_image,status').eq('id', rid).execute()
+        ))
+        if rider:
+            ride['rider_name'] = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or rider_id[:12]
+            ride['rider_phone'] = rider.get('phone', '')
+            ride['rider_email'] = rider.get('email', '')
+            ride['rider_profile_image'] = rider.get('profile_image', '')
+            ride['rider_status'] = rider.get('status', 'active')
+
+    # Fetch driver details
+    driver_id = ride.get('driver_id')
+    if driver_id:
+        driver = await run_sync(lambda did=driver_id: _single_row_from_res(
+            supabase.table('drivers').select('name,phone,vehicle_make,vehicle_model,vehicle_color,license_plate,rating,status,photo_url,vehicle_type_id').eq('id', did).execute()
+        ))
+        if driver:
+            ride['driver_name'] = driver.get('name', driver_id[:12])
+            ride['driver_phone'] = driver.get('phone', '')
+            ride['driver_vehicle_make'] = driver.get('vehicle_make', '')
+            ride['driver_vehicle_model'] = driver.get('vehicle_model', '')
+            ride['driver_vehicle_color'] = driver.get('vehicle_color', '')
+            ride['driver_license_plate'] = driver.get('license_plate', '')
+            ride['driver_rating'] = driver.get('rating', 0)
+            ride['driver_status'] = driver.get('status', 'active')
+            ride['driver_photo_url'] = driver.get('photo_url', '')
+            ride['driver_vehicle'] = f"{driver.get('vehicle_make', '')} {driver.get('vehicle_model', '')}".strip()
+
+    # Fetch flags for both rider and driver
+    flags = []
+    if rider_id:
+        rider_flags = await run_sync(lambda rid=rider_id: _rows_from_res(
+            supabase.table('flags').select('*').eq('target_type', 'rider').eq('target_id', rid).eq('is_active', True).order('created_at', desc=True).execute()
+        ))
+        flags.extend([{**f, '_party': 'rider'} for f in rider_flags])
+    if driver_id:
+        driver_flags = await run_sync(lambda did=driver_id: _rows_from_res(
+            supabase.table('flags').select('*').eq('target_type', 'driver').eq('target_id', did).eq('is_active', True).order('created_at', desc=True).execute()
+        ))
+        flags.extend([{**f, '_party': 'driver'} for f in driver_flags])
+    ride['flags'] = flags
+    ride['rider_flag_count'] = sum(1 for f in flags if f.get('_party') == 'rider')
+    ride['driver_flag_count'] = sum(1 for f in flags if f.get('_party') == 'driver')
+
+    # Fetch complaints for this ride
+    ride['complaints'] = await run_sync(lambda: _rows_from_res(
+        supabase.table('complaints').select('*').eq('ride_id', ride_id).order('created_at', desc=True).execute()
+    ))
+
+    # Fetch lost and found items for this ride
+    ride['lost_and_found'] = await run_sync(lambda: _rows_from_res(
+        supabase.table('lost_and_found').select('*').eq('ride_id', ride_id).order('created_at', desc=True).execute()
+    ))
+
+    # Fetch location trail for this ride
+    ride['location_trail'] = await run_sync(lambda: _rows_from_res(
+        supabase.table('driver_location_history').select('lat,lng,speed,heading,tracking_phase,timestamp').eq('ride_id', ride_id).order('timestamp').limit(5000).execute()
+    ))
+
+    return ride
+
+
+async def create_flag(flag_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a flag and check if auto-ban threshold (3) is reached."""
+    if not supabase:
+        raise RuntimeError('Supabase client not configured')
+
+    flag_data = _serialize_for_api(flag_data)
+
+    # Insert flag
+    flag = await run_sync(lambda: _single_row_from_res(
+        supabase.table('flags').insert(flag_data).execute()
+    ))
+
+    # Count active flags for this target
+    target_type = flag_data['target_type']
+    target_id = flag_data['target_id']
+
+    count_res = await run_sync(lambda: (
+        supabase.table('flags')
+        .select('id', count='exact', head=True)
+        .eq('target_type', target_type)
+        .eq('target_id', target_id)
+        .eq('is_active', True)
+        .execute()
+    ))
+    active_count = int(count_res.count) if hasattr(count_res, 'count') and count_res.count is not None else 0
+
+    auto_banned = False
+    if active_count >= 3:
+        ban_table = 'users' if target_type == 'rider' else 'drivers'
+        await run_sync(lambda: (
+            supabase.table(ban_table).update({'status': 'banned'}).eq('id', target_id).execute()
+        ))
+        auto_banned = True
+
+    return {'flag': flag, 'active_flag_count': active_count, 'auto_banned': auto_banned}
+
+
+async def create_complaint(complaint_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Insert a complaint record."""
+    if not supabase:
+        raise RuntimeError('Supabase client not configured')
+    complaint_data = _serialize_for_api(complaint_data)
+    return await run_sync(lambda: _single_row_from_res(
+        supabase.table('complaints').insert(complaint_data).execute()
+    ))
+
+
+async def resolve_complaint(complaint_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Resolve or dismiss a complaint."""
+    if not supabase:
+        return None
+    update_data = _serialize_for_api(update_data)
+    return await run_sync(lambda: _single_row_from_res(
+        supabase.table('complaints').update(update_data).eq('id', complaint_id).execute()
+    ))
+
+
+async def create_lost_and_found(item_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Insert a lost and found report."""
+    if not supabase:
+        raise RuntimeError('Supabase client not configured')
+    item_data = _serialize_for_api(item_data)
+    return await run_sync(lambda: _single_row_from_res(
+        supabase.table('lost_and_found').insert(item_data).execute()
+    ))
+
+
+async def update_lost_and_found(item_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Update a lost and found item status."""
+    if not supabase:
+        return None
+    update_data = _serialize_for_api(update_data)
+    return await run_sync(lambda: _single_row_from_res(
+        supabase.table('lost_and_found').update(update_data).eq('id', item_id).execute()
+    ))
+
+
+async def get_ride_location_trail(ride_id: str) -> List[Dict[str, Any]]:
+    """Get driver location trail for a specific ride."""
+    if not supabase:
+        return []
+    return await run_sync(lambda: _rows_from_res(
+        supabase.table('driver_location_history')
+        .select('lat,lng,speed,heading,tracking_phase,timestamp')
+        .eq('ride_id', ride_id)
+        .order('timestamp')
+        .limit(5000)
+        .execute()
+    ))
+
+
+async def get_live_ride_data(ride_id: str) -> Optional[Dict[str, Any]]:
+    """Get live ride data including current driver location."""
+    if not supabase:
+        return None
+
+    ride = await run_sync(lambda: _single_row_from_res(
+        supabase.table('rides').select('*').eq('id', ride_id).execute()
+    ))
+    if not ride:
+        return None
+
+    driver_id = ride.get('driver_id')
+    if driver_id:
+        driver = await run_sync(lambda did=driver_id: _single_row_from_res(
+            supabase.table('drivers').select('name,phone,lat,lng,vehicle_make,vehicle_model,vehicle_color,license_plate,rating,photo_url').eq('id', did).execute()
+        ))
+        if driver:
+            ride['driver_current_lat'] = driver.get('lat', 0)
+            ride['driver_current_lng'] = driver.get('lng', 0)
+            ride['driver_name'] = driver.get('name', '')
+            ride['driver_phone'] = driver.get('phone', '')
+            ride['driver_vehicle'] = f"{driver.get('vehicle_make', '')} {driver.get('vehicle_model', '')}".strip()
+            ride['driver_license_plate'] = driver.get('license_plate', '')
+            ride['driver_rating'] = driver.get('rating', 0)
+            ride['driver_photo_url'] = driver.get('photo_url', '')
+
+    rider_id = ride.get('rider_id')
+    if rider_id:
+        rider = await run_sync(lambda rid=rider_id: _single_row_from_res(
+            supabase.table('users').select('first_name,last_name,phone').eq('id', rid).execute()
+        ))
+        if rider:
+            ride['rider_name'] = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip()
+            ride['rider_phone'] = rider.get('phone', '')
+
+    return ride
+
+
+async def get_user_status(user_id: str) -> Optional[str]:
+    """Get user account status (active/suspended/banned)."""
+    if not supabase:
+        return None
+    user = await run_sync(lambda: _single_row_from_res(
+        supabase.table('users').select('status').eq('id', user_id).execute()
+    ))
+    return user.get('status', 'active') if user else None
+
+
+async def get_driver_status_by_user(user_id: str) -> Optional[str]:
+    """Get driver account status by user_id (active/suspended/banned)."""
+    if not supabase:
+        return None
+    driver = await run_sync(lambda: _single_row_from_res(
+        supabase.table('drivers').select('status').eq('user_id', user_id).execute()
+    ))
+    return driver.get('status', 'active') if driver else None
+
+
+async def get_flags_for_target(target_type: str, target_id: str) -> List[Dict[str, Any]]:
+    """Get all active flags for a rider or driver."""
+    if not supabase:
+        return []
+    return await run_sync(lambda: _rows_from_res(
+        supabase.table('flags')
+        .select('*')
+        .eq('target_type', target_type)
+        .eq('target_id', target_id)
+        .eq('is_active', True)
+        .order('created_at', desc=True)
+        .execute()
+    ))

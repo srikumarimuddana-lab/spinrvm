@@ -1413,6 +1413,12 @@ async def update_driver_status(
     if driver.get('user_id') != current_user['id']:
         raise HTTPException(status_code=403, detail='Not authorized')
 
+    # Ban check: prevent banned drivers from going online
+    if is_online and driver.get('status') == 'banned':
+        raise HTTPException(status_code=403, detail='Your account has been suspended due to policy violations.')
+    if is_online and driver.get('status') == 'suspended':
+        raise HTTPException(status_code=403, detail='Your account is currently suspended. Please contact support.')
+
     if is_online:
         now = datetime.utcnow()
 

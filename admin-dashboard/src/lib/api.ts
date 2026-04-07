@@ -102,6 +102,59 @@ export const getStats = () =>
 export const getRides = () => request<any[]>("/api/admin/rides");
 export const getRideDetails = (id: string) =>
     request<any>(`/api/admin/rides/${id}/details`);
+export const getRideStats = () =>
+    request<{
+        today_count: number;
+        yesterday_count: number;
+        this_week_count: number;
+        this_month_count: number;
+        week_start: string;
+        week_end: string;
+        month_start: string;
+        month_end: string;
+    }>("/api/admin/rides/stats");
+export const getRideLocationTrail = (rideId: string) =>
+    request<any[]>(`/api/admin/rides/${rideId}/location-trail`);
+export const getLiveRideData = (rideId: string) =>
+    request<any>(`/api/admin/rides/${rideId}/live`);
+export const getRideInvoice = (rideId: string) =>
+    request<any>(`/api/admin/rides/${rideId}/invoice`);
+export const flagRideParticipant = (rideId: string, data: { target_type: string; reason: string; description?: string }) =>
+    request<any>(`/api/admin/rides/${rideId}/flag`, {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+export const createRideComplaint = (rideId: string, data: { against_type: string; category: string; description: string }) =>
+    request<any>(`/api/admin/rides/${rideId}/complaint`, {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+export const resolveComplaint = (complaintId: string, data: { status: string; resolution: string }) =>
+    request<any>(`/api/admin/complaints/${complaintId}/resolve`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+    });
+export const reportLostItem = (rideId: string, data: { item_description: string }) =>
+    request<any>(`/api/admin/rides/${rideId}/lost-and-found`, {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+export const resolveLostItem = (itemId: string, data: { status: string; admin_notes?: string }) =>
+    request<any>(`/api/admin/lost-and-found/${itemId}/resolve`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+    });
+export const sendRideInvoice = async (rideId: string) => {
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    const token = useAuthStore.getState().token;
+    const res = await fetch(`${API_BASE}/api/v1/rides/${rideId}/process-payment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ tip_amount: 0 }),
+    });
+    if (!res.ok) throw new Error("Failed to send invoice");
+    return res.json();
+};
 
 /* ── Drivers ──────────────────────────────── */
 export const getDrivers = () => request<any[]>("/api/admin/drivers");

@@ -344,40 +344,8 @@ export default function CloudMessagingPage() {
             {/* ═══ COMPOSE TAB ═══ */}
             {activeTab === "compose" && (
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                    {/* ── Left Column: Message Content (2/3 width) ── */}
+                    {/* ── Left Column (2/3 width) ── */}
                     <div className="lg:col-span-2 space-y-6">
-                        <Card>
-                            <CardHeader className="pb-3">
-                                <CardTitle className="text-base">Message Content</CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-4">
-                                {/* Title */}
-                                <div className="space-y-2">
-                                    <Label className="text-sm font-medium">Title <span className="text-destructive">*</span></Label>
-                                    <Input placeholder="Enter notification title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-                                </div>
-                                {/* Description */}
-                                <div className="space-y-2">
-                                    <Label className="text-sm font-medium">Description <span className="text-destructive">*</span></Label>
-                                    <Textarea placeholder="Enter notification message..." value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={5} className="resize-none" />
-                                </div>
-                                {/* Type */}
-                                <div className="space-y-2 max-w-xs">
-                                    <Label className="text-sm font-medium">Notification Type</Label>
-                                    <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
-                                        <SelectTrigger><SelectValue /></SelectTrigger>
-                                        <SelectContent>
-                                            {NOTIFICATION_TYPES.map((t) => (
-                                                <SelectItem key={t.value} value={t.value}>
-                                                    <span className="flex items-center gap-2"><t.icon className={`h-3.5 w-3.5 ${t.color}`} />{t.label}</span>
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                </div>
-                            </CardContent>
-                        </Card>
-
                         {/* Audience Card */}
                         <Card>
                             <CardHeader className="pb-3">
@@ -408,7 +376,6 @@ export default function CloudMessagingPage() {
                                 {/* Multi-select user/driver */}
                                 {(form.audience === "particular_customer" || form.audience === "particular_driver") && (
                                     <div className="space-y-3 pt-1">
-                                        {/* Selected chips */}
                                         {selectedUsers.length > 0 && (
                                             <div className="flex flex-wrap gap-1.5">
                                                 {selectedUsers.map((u) => (
@@ -420,7 +387,6 @@ export default function CloudMessagingPage() {
                                                 ))}
                                             </div>
                                         )}
-                                        {/* Search */}
                                         <div className="relative">
                                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                                             <Input placeholder={`Search ${form.audience === "particular_customer" ? "customers" : "drivers"} by name, email, or phone...`} value={userSearch} onChange={(e) => setUserSearch(e.target.value)} className="pl-9" />
@@ -445,6 +411,36 @@ export default function CloudMessagingPage() {
                                         {!userSearchLoading && userSearch && userOptions.length === 0 && <p className="text-xs text-muted-foreground">No results found</p>}
                                     </div>
                                 )}
+                            </CardContent>
+                        </Card>
+
+                        {/* Message Content Card */}
+                        <Card>
+                            <CardHeader className="pb-3">
+                                <CardTitle className="text-base">Message Content</CardTitle>
+                            </CardHeader>
+                            <CardContent className="space-y-4">
+                                <div className="space-y-2">
+                                    <Label className="text-sm font-medium">Title <span className="text-destructive">*</span></Label>
+                                    <Input placeholder="Enter notification title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label className="text-sm font-medium">Description <span className="text-destructive">*</span></Label>
+                                    <Textarea placeholder="Enter notification message..." value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={5} className="resize-none" />
+                                </div>
+                                <div className="space-y-2 max-w-xs">
+                                    <Label className="text-sm font-medium">Notification Type</Label>
+                                    <Select value={form.type} onValueChange={(v) => setForm({ ...form, type: v })}>
+                                        <SelectTrigger><SelectValue /></SelectTrigger>
+                                        <SelectContent>
+                                            {NOTIFICATION_TYPES.map((t) => (
+                                                <SelectItem key={t.value} value={t.value}>
+                                                    <span className="flex items-center gap-2"><t.icon className={`h-3.5 w-3.5 ${t.color}`} />{t.label}</span>
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                </div>
                             </CardContent>
                         </Card>
                     </div>

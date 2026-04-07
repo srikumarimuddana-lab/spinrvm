@@ -11,11 +11,13 @@ try:
     from ..db import db  # type: ignore
     from ..settings_loader import get_app_settings  # type: ignore
     from ..core.config import settings
+    from .. import db_supabase  # type: ignore
 except ImportError:
     from dependencies import get_current_user, get_admin_user  # type: ignore
     from db import db  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
     from core.config import settings
+    import db_supabase  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -628,45 +630,305 @@ async def admin_get_stats():
     }
 
 
+@admin_router.get("/rides/stats")
+async def admin_get_ride_stats():
+    """Get ride count/revenue stats for today, yesterday, this week, this month, plus daily chart data."""
+    now = datetime.utcnow()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday_start = today_start - timedelta(days=1)
+
+    # This week (Monday start)
+    week_start = today_start - timedelta(days=today_start.weekday())
+    week_end = week_start + timedelta(days=7)
+
+    # This month
+    month_start = today_start.replace(day=1)
+    next_month = (month_start + timedelta(days=32)).replace(day=1)
+
+    today_count = await db_supabase.get_ride_count_by_date_range(
+        today_start.isoformat(), now.isoformat()
+    )
+    yesterday_count = await db_supabase.get_ride_count_by_date_range(
+        yesterday_start.isoformat(), today_start.isoformat()
+    )
+    this_week_count = await db_supabase.get_ride_count_by_date_range(
+        week_start.isoformat(), week_end.isoformat()
+    )
+    this_month_count = await db_supabase.get_ride_count_by_date_range(
+        month_start.isoformat(), next_month.isoformat()
+    )
+
+    # Revenue stats from completed rides
+    completed_today = await db_supabase.get_rows(
+        "rides", {"status": "completed", "ride_completed_at": {"$gte": today_start.isoformat()}}, limit=10000
+    )
+    total_revenue = sum(float(r.get("total_fare") or 0) for r in completed_today)
+    total_tips = sum(float(r.get("tip_amount") or 0) for r in completed_today)
+    completed_count = len(completed_today)
+
+    # Monthly completed rides for revenue
+    completed_month = await db_supabase.get_rows(
+        "rides", {"status": "completed", "ride_completed_at": {"$gte": month_start.isoformat()}}, limit=10000
+    )
+    month_revenue = sum(float(r.get("total_fare") or 0) for r in completed_month)
+
+    # Daily chart data for last 14 days
+    daily_chart = []
+    for i in range(13, -1, -1):
+        day_start = today_start - timedelta(days=i)
+        day_end = day_start + timedelta(days=1)
+        count = await db_supabase.get_ride_count_by_date_range(
+            day_start.isoformat(), day_end.isoformat()
+        )
+        daily_chart.append({
+            "date": day_start.strftime("%b %d"),
+            "rides": count,
+        })
+
+    return {
+        "today_count": today_count,
+        "yesterday_count": yesterday_count,
+        "this_week_count": this_week_count,
+        "this_month_count": this_month_count,
+        "week_start": week_start.strftime("%b %d"),
+        "week_end": (week_end - timedelta(days=1)).strftime("%b %d"),
+        "month_start": month_start.strftime("%b %d"),
+        "month_end": (next_month - timedelta(days=1)).strftime("%b %d"),
+        "today_revenue": round(total_revenue, 2),
+        "today_tips": round(total_tips, 2),
+        "today_completed": completed_count,
+        "month_revenue": round(month_revenue, 2),
+        "daily_chart": daily_chart,
+    }
+
+
 @admin_router.get("/rides/{ride_id}/details")
 async def admin_get_ride_details(ride_id: str):
-    """Get detailed ride information with rider, driver, vehicle type."""
+    """Get detailed ride information with rider, driver, flags, complaints, lost items, location trail."""
+    ride = await db_supabase.get_ride_details_enriched(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    return ride
+
+
+@admin_router.get("/rides/{ride_id}/location-trail")
+async def admin_get_ride_location_trail(ride_id: str):
+    """Get driver location trail for a specific ride."""
+    trail = await db_supabase.get_ride_location_trail(ride_id)
+    return trail
+
+
+@admin_router.get("/rides/{ride_id}/live")
+async def admin_get_live_ride(ride_id: str):
+    """Get live ride data including current driver location."""
+    data = await db_supabase.get_live_ride_data(ride_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    return data
+
+
+@admin_router.get("/rides/{ride_id}/invoice")
+async def admin_get_ride_invoice(ride_id: str):
+    """Get structured invoice data for a ride (used for client-side PDF generation)."""
+    ride = await db_supabase.get_ride_details_enriched(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    return {
+        "ride_id": ride.get("id"),
+        "status": ride.get("status"),
+        "created_at": ride.get("created_at"),
+        "ride_completed_at": ride.get("ride_completed_at"),
+        "pickup_address": ride.get("pickup_address"),
+        "dropoff_address": ride.get("dropoff_address"),
+        "distance_km": ride.get("distance_km", 0),
+        "duration_minutes": ride.get("duration_minutes", 0),
+        "base_fare": ride.get("base_fare", 0),
+        "distance_fare": ride.get("distance_fare", 0),
+        "time_fare": ride.get("time_fare", 0),
+        "booking_fee": ride.get("booking_fee", 0),
+        "airport_fee": ride.get("airport_fee", 0),
+        "total_fare": ride.get("total_fare", 0),
+        "tip_amount": ride.get("tip_amount", 0),
+        "surge_multiplier": ride.get("surge_multiplier", 1.0),
+        "payment_method": ride.get("payment_method", "card"),
+        "payment_status": ride.get("payment_status", "pending"),
+        "rider_name": ride.get("rider_name", ""),
+        "rider_phone": ride.get("rider_phone", ""),
+        "rider_email": ride.get("rider_email", ""),
+        "driver_name": ride.get("driver_name", ""),
+        "driver_phone": ride.get("driver_phone", ""),
+        "driver_vehicle": ride.get("driver_vehicle", ""),
+        "driver_license_plate": ride.get("driver_license_plate", ""),
+        "driver_earnings": ride.get("driver_earnings", 0),
+        "admin_earnings": ride.get("admin_earnings", 0),
+    }
+
+
+class FlagRequest(BaseModel):
+    target_type: str  # 'rider' or 'driver'
+    reason: str
+    description: Optional[str] = None
+
+
+@admin_router.post("/rides/{ride_id}/flag")
+async def admin_flag_ride_participant(ride_id: str, req: FlagRequest):
+    """Flag a rider or driver from a ride. 3 active flags = auto-ban."""
     ride = await db.rides.find_one({"id": ride_id})
     if not ride:
-        return None
-    rider = (
-        await db.users.find_one({"id": ride.get("rider_id")})
-        if ride.get("rider_id")
-        else None
-    )
-    driver = (
-        await db.drivers.find_one({"id": ride.get("driver_id")})
-        if ride.get("driver_id")
-        else None
-    )
-    driver_user = (
-        await db.users.find_one({"id": driver["user_id"]})
-        if driver and driver.get("user_id")
-        else None
-    )
-    vt = (
-        await db.vehicle_types.find_one({"id": ride.get("vehicle_type_id")})
-        if ride.get("vehicle_type_id")
-        else None
-    )
-    return {
-        **ride,
-        "rider_name": _user_display_name(rider),
-        "rider_phone": rider.get("phone") if isinstance(rider, dict) else None,
-        "rider_email": rider.get("email") if isinstance(rider, dict) else None,
-        "driver_name": _user_display_name(driver_user)
-        if driver_user
-        else (driver.get("name") if isinstance(driver, dict) else None),
-        "driver_phone": driver_user.get("phone")
-        if isinstance(driver_user, dict)
-        else (driver.get("phone") if isinstance(driver, dict) else None),
-        "vehicle_type": vt.get("name") if isinstance(vt, dict) else None,
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    if req.target_type not in ("rider", "driver"):
+        raise HTTPException(status_code=400, detail="target_type must be 'rider' or 'driver'")
+
+    target_id = ride.get("rider_id") if req.target_type == "rider" else ride.get("driver_id")
+    if not target_id:
+        raise HTTPException(status_code=400, detail=f"No {req.target_type} assigned to this ride")
+
+    flag_data = {
+        "id": str(uuid.uuid4()),
+        "target_type": req.target_type,
+        "target_id": target_id,
+        "ride_id": ride_id,
+        "reason": req.reason,
+        "description": req.description,
+        "flagged_by": "admin",
+        "is_active": True,
     }
+
+    result = await db_supabase.create_flag(flag_data)
+    return result
+
+
+class ComplaintRequest(BaseModel):
+    against_type: str  # 'rider' or 'driver'
+    category: str  # safety, behavior, fraud, damage, other
+    description: str
+
+
+@admin_router.post("/rides/{ride_id}/complaint")
+async def admin_create_complaint(ride_id: str, req: ComplaintRequest):
+    """Create a complaint against a rider or driver from a ride."""
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    if req.against_type not in ("rider", "driver"):
+        raise HTTPException(status_code=400, detail="against_type must be 'rider' or 'driver'")
+
+    against_id = ride.get("rider_id") if req.against_type == "rider" else ride.get("driver_id")
+    if not against_id:
+        raise HTTPException(status_code=400, detail=f"No {req.against_type} assigned to this ride")
+
+    complaint_data = {
+        "id": str(uuid.uuid4()),
+        "ride_id": ride_id,
+        "against_type": req.against_type,
+        "against_id": against_id,
+        "category": req.category,
+        "description": req.description,
+        "status": "open",
+        "created_by": "admin",
+    }
+
+    complaint = await db_supabase.create_complaint(complaint_data)
+    return complaint
+
+
+class ComplaintResolveRequest(BaseModel):
+    status: str  # resolved or dismissed
+    resolution: str
+
+
+@admin_router.put("/complaints/{complaint_id}/resolve")
+async def admin_resolve_complaint(complaint_id: str, req: ComplaintResolveRequest):
+    """Resolve or dismiss a complaint."""
+    result = await db_supabase.resolve_complaint(complaint_id, {
+        "status": req.status,
+        "resolution": req.resolution,
+        "resolved_by": "admin",
+        "updated_at": datetime.utcnow().isoformat(),
+    })
+    if not result:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+    return result
+
+
+class LostAndFoundRequest(BaseModel):
+    item_description: str
+
+
+@admin_router.post("/rides/{ride_id}/lost-and-found")
+async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
+    """Report a lost item from a ride and notify the driver."""
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    driver_id = ride.get("driver_id")
+    rider_id = ride.get("rider_id")
+    if not driver_id:
+        raise HTTPException(status_code=400, detail="No driver assigned to this ride")
+
+    item_data = {
+        "id": str(uuid.uuid4()),
+        "ride_id": ride_id,
+        "rider_id": rider_id or "",
+        "driver_id": driver_id,
+        "item_description": req.item_description,
+        "status": "reported",
+        "created_by": "admin",
+    }
+
+    item = await db_supabase.create_lost_and_found(item_data)
+
+    # Send push notification to driver
+    try:
+        driver = await db.drivers.find_one({"id": driver_id})
+        if driver and driver.get("user_id"):
+            driver_user = await db.users.find_one({"id": driver["user_id"]})
+            if driver_user and driver_user.get("fcm_token"):
+                try:
+                    from ..features import send_push_notification
+                except ImportError:
+                    from features import send_push_notification
+                await send_push_notification(
+                    driver_user["fcm_token"],
+                    "Lost Item Report",
+                    f"A rider reported a lost item: {req.item_description}. Please check your vehicle.",
+                    {"type": "lost_and_found", "ride_id": ride_id},
+                )
+                # Update status to driver_notified
+                await db_supabase.update_lost_and_found(item["id"], {
+                    "status": "driver_notified",
+                    "notified_at": datetime.utcnow().isoformat(),
+                })
+    except Exception as e:
+        logger.warning(f"Failed to send lost item notification: {e}")
+
+    return item
+
+
+class LostAndFoundResolveRequest(BaseModel):
+    status: str  # resolved or unresolved
+    admin_notes: Optional[str] = None
+
+
+@admin_router.put("/lost-and-found/{item_id}/resolve")
+async def admin_resolve_lost_item(item_id: str, req: LostAndFoundResolveRequest):
+    """Resolve or mark a lost and found item as unresolved."""
+    update_data = {
+        "status": req.status,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    if req.admin_notes:
+        update_data["admin_notes"] = req.admin_notes
+    if req.status == "resolved":
+        update_data["resolved_at"] = datetime.utcnow().isoformat()
+
+    result = await db_supabase.update_lost_and_found(item_id, update_data)
+    if not result:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return result
 
 
 @admin_router.get("/drivers/{driver_id}/rides")

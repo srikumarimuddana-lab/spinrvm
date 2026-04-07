@@ -7,14 +7,17 @@ try:
     from ..socket_manager import manager
     from ..settings_loader import get_app_settings
     from ..features import send_push_notification
+    from .. import db_supabase
+    from ..geo_utils import point_in_polygon, get_service_area_polygon
 except ImportError:
     from dependencies import get_current_user, generate_otp
     from schemas import CreateRideRequest, Ride, UserProfile, RideRatingRequest
     from db import db
-    from geo_utils import calculate_distance
+    from geo_utils import calculate_distance, point_in_polygon, get_service_area_polygon
     from socket_manager import manager
     from settings_loader import get_app_settings
     from features import send_push_notification
+    import db_supabase
 from .fares import get_fares_for_location
 import asyncio
 from loguru import logger
@@ -353,6 +356,13 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
 
 @api_router.post("")
 async def create_ride(request: CreateRideRequest, current_user: dict = Depends(get_current_user)):
+    # Ban check: prevent banned users from creating rides
+    user_status = await db_supabase.get_user_status(current_user['id'])
+    if user_status == 'banned':
+        raise HTTPException(status_code=403, detail="Your account has been suspended due to policy violations.")
+    if user_status == 'suspended':
+        raise HTTPException(status_code=403, detail="Your account is currently suspended. Please contact support.")
+
     distance_km = calculate_distance(
         request.pickup_lat, request.pickup_lng,
         request.dropoff_lat, request.dropoff_lng
@@ -382,6 +392,18 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
     driver_earnings = fare_info['base_fare'] + distance_fare + time_fare
     admin_earnings = booking_fee
     
+    # Resolve service area from pickup location
+    service_area_id = None
+    try:
+        all_areas = await db.service_areas.find({'is_active': True}).to_list(100)
+        for area in all_areas:
+            poly = get_service_area_polygon(area)
+            if poly and point_in_polygon(request.pickup_lat, request.pickup_lng, poly):
+                service_area_id = area['id']
+                break
+    except Exception as e:
+        logger.warning(f"Failed to resolve service area: {e}")
+
     ride = Ride(
         rider_id=current_user['id'],
         vehicle_type_id=request.vehicle_type_id,
@@ -409,8 +431,12 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
         pickup_otp=generate_otp(),
         ride_requested_at=datetime.utcnow()
     )
-    
-    await db.rides.insert_one(ride.dict())
+
+    ride_data = ride.dict()
+    if service_area_id:
+        ride_data['service_area_id'] = service_area_id
+
+    await db.rides.insert_one(ride_data)
     
     # Match driver
     await match_driver_to_ride(ride.id)

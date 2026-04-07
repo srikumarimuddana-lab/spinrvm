@@ -295,31 +295,8 @@ export default function CloudMessagingPage() {
             await fetchData();
             resetForm();
         } catch (error: any) {
-            // Fallback: add to local state
-            const newMsg: CloudMessage = {
-                id: String(Date.now()),
-                title: form.title,
-                description: form.description,
-                audience: form.audience as CloudMessage["audience"],
-                particular_id: form.particular_id || undefined,
-                channel: form.channel as CloudMessage["channel"],
-                status: form.is_scheduled ? "scheduled" : "sent",
-                scheduled_at: form.is_scheduled ? `${form.scheduled_date}T${form.scheduled_time}:00Z` : undefined,
-                sent_at: form.is_scheduled ? undefined : new Date().toISOString(),
-                created_at: new Date().toISOString(),
-                total_recipients: form.audience.startsWith("particular") ? 1 : Math.floor(Math.random() * 5000) + 500,
-                successful: form.is_scheduled ? 0 : Math.floor(Math.random() * 4500) + 500,
-                failed_count: form.is_scheduled ? 0 : Math.floor(Math.random() * 50),
-            };
-            setMessages((prev) => [newMsg, ...prev]);
-            setStats((prev) => ({
-                ...prev,
-                total_messages: prev.total_messages + 1,
-                total_sent: prev.total_sent + (form.is_scheduled ? 0 : 1),
-                total_scheduled: prev.total_scheduled + (form.is_scheduled ? 1 : 0),
-                total_recipients_reached: prev.total_recipients_reached + newMsg.successful,
-            }));
-            resetForm();
+            alert(`Failed to send message: ${error.message || "Unknown error"}`);
+            return;
         } finally {
             setSending(false);
         }
@@ -690,7 +667,7 @@ export default function CloudMessagingPage() {
                                                     const Icon = AUDIENCE_OPTIONS.find((a) => a.value === msg.audience)?.icon || Users;
                                                     return <Icon className="h-3 w-3 text-muted-foreground" />;
                                                 })()}
-                                                <span className="text-sm capitalize">{msg.audience.replace("_", " ")}</span>
+                                                <span className="text-sm capitalize">{msg.audience.replace(/_/g, " ")}</span>
                                             </div>
                                         </TableCell>
                                         <TableCell>
@@ -834,7 +811,7 @@ export default function CloudMessagingPage() {
                                                         </div>
                                                     </TableCell>
                                                     <TableCell>
-                                                        <span className="text-sm capitalize">{msg.audience.replace("_", " ")}</span>
+                                                        <span className="text-sm capitalize">{msg.audience.replace(/_/g, " ")}</span>
                                                     </TableCell>
                                                     <TableCell>
                                                         <Badge variant="outline" className="text-xs capitalize">{msg.channel}</Badge>
@@ -914,7 +891,7 @@ export default function CloudMessagingPage() {
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <Label className="text-xs text-muted-foreground">Audience</Label>
-                                    <p className="text-sm capitalize">{selectedMessage.audience.replace("_", " ")}</p>
+                                    <p className="text-sm capitalize">{selectedMessage.audience.replace(/_/g, " ")}</p>
                                 </div>
                                 <div>
                                     <Label className="text-xs text-muted-foreground">Channel</Label>

@@ -284,6 +284,9 @@ class DB:
         self.driver_subscriptions = BaseCollection('driver_subscriptions')
         self.subscription_plans = BaseCollection('subscription_plans')
         self.driver_requirements = BaseCollection('driver_requirements')
+        self.cloud_messages = BaseCollection('cloud_messages')
+        self.audit_logs = BaseCollection('audit_logs')
+        self.push_tokens = BaseCollection('push_tokens')
 
     async def rpc(self, func_name: str, params: Dict[str, Any]):
         return await db_supabase.rpc(func_name, params)

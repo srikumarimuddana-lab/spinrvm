@@ -1972,7 +1972,7 @@ async def admin_send_cloud_message(payload: Dict[str, Any]):
     title = payload.get("title", "")
     description = payload.get("description", "")
     audience = payload.get("audience", "customers")
-    channel = payload.get("channel", "push")
+    channel = payload.get("channel", "push")  # push, email, sms
     particular_id = payload.get("particular_id")
     scheduled_at = payload.get("scheduled_at")
 

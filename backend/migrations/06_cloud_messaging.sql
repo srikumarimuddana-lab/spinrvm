@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS cloud_messages (
     title             TEXT NOT NULL,
     description       TEXT NOT NULL,
     audience          TEXT NOT NULL DEFAULT 'customers',
-    channel           TEXT NOT NULL DEFAULT 'push',
+    channel           TEXT NOT NULL DEFAULT 'push',  -- push, email, sms
     particular_id     TEXT,
     status            TEXT NOT NULL DEFAULT 'pending',
     scheduled_at      TIMESTAMPTZ,

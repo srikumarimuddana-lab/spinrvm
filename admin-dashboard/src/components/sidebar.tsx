@@ -37,6 +37,7 @@ const NAV_GROUPS: NavGroup[] = [
         items: [
             { href: "/dashboard/rides", label: "Rides", icon: Car, module: "rides" },
             { href: "/dashboard/drivers", label: "Drivers", icon: Car, module: "drivers" },
+            { href: "/dashboard/documents", label: "Documents", icon: FileText, module: "drivers" },
             { href: "/dashboard/users", label: "Users", icon: Users, module: "users" },
             { href: "/dashboard/heatmap", label: "Heat Map", icon: Flame, module: "heatmap" },
         ],
@@ -45,7 +46,10 @@ const NAV_GROUPS: NavGroup[] = [
         title: "Configuration",
         items: [
             { href: "/dashboard/service-areas", label: "Service Areas", icon: MapPin, module: "service_areas" },
+            { href: "/dashboard/vehicle-types", label: "Vehicle Types", icon: Car, module: "pricing" },
+            { href: "/dashboard/pricing", label: "Pricing", icon: DollarSign, module: "pricing" },
             { href: "/dashboard/subscriptions", label: "Spinr Pass", icon: CreditCard, module: "pricing" },
+            { href: "/dashboard/surge", label: "Surge Pricing", icon: Flame, module: "pricing" },
             { href: "/dashboard/promotions", label: "Promotions", icon: Ticket, module: "promotions" },
         ],
     },

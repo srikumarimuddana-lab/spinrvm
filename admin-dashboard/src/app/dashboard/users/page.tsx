@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,43 +27,20 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, ShieldAlert, Download, RefreshCw } from "lucide-react";
+import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, ShieldAlert, Download, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { getUsers, getUserDetails, updateUserStatus, getStats } from "@/lib/api";
 
-// Mock user data - fallback if API fails
-const mockUsers = [
-    {
-        id: "1",
-        name: "John Doe",
-        email: "john@example.com",
-        phone: "+13065551234",
-        created_at: "2024-01-10T08:00:00Z",
-        total_rides: 25,
-        rating: 4.8,
-        is_verified: true,
-        city: "Saskatoon",
-    },
-    {
-        id: "2",
-        name: "Jane Smith",
-        email: "jane@example.com",
-        phone: "+13065555678",
-        created_at: "2024-01-12T14:30:00Z",
-        total_rides: 12,
-        rating: 4.5,
-        is_verified: false,
-        city: "Regina",
-    },
-];
+const PER_PAGE = 25;
 
 export default function UsersPage() {
     const [users, setUsers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState("");
     const [search, setSearch] = useState("");
     const [verifiedFilter, setVerifiedFilter] = useState("all");
     const [selectedUser, setSelectedUser] = useState<any>(null);
-    const [userStats, setUserStats] = useState({ total: 0, verified: 0, unverified: 0, avgRating: 0 });
+    const [page, setPage] = useState(1);
 
     useEffect(() => {
         fetchUsers();
@@ -71,50 +48,52 @@ export default function UsersPage() {
 
     const fetchUsers = async () => {
         setLoading(true);
+        setError("");
         try {
             const [usersData, statsData] = await Promise.all([
                 getUsers(),
                 getStats()
             ]);
-            // Transform API response to match UI expectations
             const transformedUsers = (usersData || []).map((u: any) => ({
                 id: u.id,
                 name: `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.email || u.phone,
                 email: u.email,
                 phone: u.phone,
                 created_at: u.created_at,
-                total_rides: 0, // Would need to fetch separately
-                rating: 5.0, // Default rating
-                is_verified: u.is_verified || true,
+                total_rides: u.total_rides || 0,
+                rating: u.rating || null,
+                is_verified: u.is_verified ?? true,
                 city: u.city,
             }));
             setUsers(transformedUsers);
-            setUserStats({
-                total: statsData?.total_users || transformedUsers.length,
-                verified: transformedUsers.filter((u: any) => u.is_verified).length,
-                unverified: transformedUsers.filter((u: any) => !u.is_verified).length,
-                avgRating: 5.0,
-            });
-        } catch (error) {
-            console.error('Failed to fetch users:', error);
-            setUsers(mockUsers);
+        } catch (err: any) {
+            console.error('Failed to fetch users:', err);
+            setError("Failed to load users. Please try again.");
+            setUsers([]);
         } finally {
             setLoading(false);
         }
     };
 
-    const filtered = users.filter((u) => {
-        const matchSearch =
-            !search ||
-            u.name?.toLowerCase().includes(search.toLowerCase()) ||
-            u.email?.toLowerCase().includes(search.toLowerCase()) ||
-            u.phone?.toLowerCase().includes(search.toLowerCase()) ||
-            u.city?.toLowerCase().includes(search.toLowerCase());
-        let matchVerified = true;
-        if (verifiedFilter === "verified") matchVerified = u.is_verified === true;
-        else if (verifiedFilter === "unverified") matchVerified = u.is_verified !== true;
-        return matchSearch && matchVerified;
-    });
+    const filtered = useMemo(() => {
+        return users.filter((u) => {
+            const matchSearch =
+                !search ||
+                u.name?.toLowerCase().includes(search.toLowerCase()) ||
+                u.email?.toLowerCase().includes(search.toLowerCase()) ||
+                u.phone?.toLowerCase().includes(search.toLowerCase()) ||
+                u.city?.toLowerCase().includes(search.toLowerCase());
+            let matchVerified = true;
+            if (verifiedFilter === "verified") matchVerified = u.is_verified === true;
+            else if (verifiedFilter === "unverified") matchVerified = u.is_verified !== true;
+            return matchSearch && matchVerified;
+        });
+    }, [users, search, verifiedFilter]);
+
+    const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
+    const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+
+    useEffect(() => { setPage(1); }, [search, verifiedFilter]);
 
     const handleExport = () => {
         const headers = ["ID", "Name", "Email", "Phone", "City", "Total Rides", "Rating", "Verified", "Joined Date"];
@@ -152,8 +131,8 @@ export default function UsersPage() {
                     </p>
                 </div>
                 <div className="flex gap-2">
-                    <Button variant="outline" size="icon" onClick={() => { setLoading(true); setTimeout(() => setLoading(false), 500); }}>
-                        <RefreshCw className="h-4 w-4" />
+                    <Button variant="outline" size="icon" onClick={fetchUsers} disabled={loading}>
+                        <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
                     </Button>
                     <Button variant="outline" onClick={handleExport} disabled={filtered.length === 0}>
                         <Download className="mr-2 h-4 w-4" /> Export CSV
@@ -162,9 +141,9 @@ export default function UsersPage() {
             </div>
 
             {/* Stats */}
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <Card>
-                    <CardContent className="pt-4">
+                    <CardContent className="pt-4 pb-3">
                         <div className="flex items-center gap-2">
                             <Users className="h-5 w-5 text-sky-500" />
                             <div>
@@ -175,7 +154,7 @@ export default function UsersPage() {
                     </CardContent>
                 </Card>
                 <Card>
-                    <CardContent className="pt-4">
+                    <CardContent className="pt-4 pb-3">
                         <div className="flex items-center gap-2">
                             <ShieldCheck className="h-5 w-5 text-emerald-500" />
                             <div>
@@ -186,7 +165,7 @@ export default function UsersPage() {
                     </CardContent>
                 </Card>
                 <Card>
-                    <CardContent className="pt-4">
+                    <CardContent className="pt-4 pb-3">
                         <div className="flex items-center gap-2">
                             <ShieldAlert className="h-5 w-5 text-amber-500" />
                             <div>
@@ -197,21 +176,36 @@ export default function UsersPage() {
                     </CardContent>
                 </Card>
                 <Card>
-                    <CardContent className="pt-4">
+                    <CardContent className="pt-4 pb-3">
                         <div className="flex items-center gap-2">
                             <Star className="h-5 w-5 text-amber-400 fill-amber-400" />
                             <div>
                                 <p className="text-xs text-muted-foreground">Avg Rating</p>
                                 <p className="text-2xl font-bold">
-                                    {users.length > 0
-                                        ? (users.reduce((s, u) => s + (u.rating || 5), 0) / users.length).toFixed(1)
-                                        : "—"}
+                                    {(() => {
+                                        const rated = users.filter(u => u.rating != null);
+                                        return rated.length > 0
+                                            ? (rated.reduce((s, u) => s + u.rating, 0) / rated.length).toFixed(1)
+                                            : "N/A";
+                                    })()}
                                 </p>
                             </div>
                         </div>
                     </CardContent>
                 </Card>
             </div>
+
+            {/* Error State */}
+            {error && (
+                <Card className="border-red-200 dark:border-red-900/50">
+                    <CardContent className="pt-4 pb-4">
+                        <div className="flex items-center justify-between">
+                            <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
+                            <Button variant="outline" size="sm" onClick={fetchUsers}>Retry</Button>
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
 
             {/* Filters */}
             <div className="flex flex-wrap items-center gap-3">
@@ -244,83 +238,103 @@ export default function UsersPage() {
                             <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                         </div>
                     ) : (
-                        <Table>
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>Name</TableHead>
-                                    <TableHead>Contact</TableHead>
-                                    <TableHead>City</TableHead>
-                                    <TableHead>Rides</TableHead>
-                                    <TableHead>Rating</TableHead>
-                                    <TableHead>Verified</TableHead>
-                                    <TableHead>Joined</TableHead>
-                                    <TableHead className="text-right">Actions</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {filtered.length === 0 ? (
+                        <>
+                            <Table>
+                                <TableHeader>
                                     <TableRow>
-                                        <TableCell colSpan={8} className="text-center text-muted-foreground py-12">
-                                            No users found.
-                                        </TableCell>
+                                        <TableHead>Name</TableHead>
+                                        <TableHead>Contact</TableHead>
+                                        <TableHead>City</TableHead>
+                                        <TableHead>Rides</TableHead>
+                                        <TableHead>Rating</TableHead>
+                                        <TableHead>Verified</TableHead>
+                                        <TableHead>Joined</TableHead>
+                                        <TableHead className="text-right">Actions</TableHead>
                                     </TableRow>
-                                ) : (
-                                    filtered.map((user) => (
-                                        <TableRow key={user.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelectedUser(user)}>
-                                            <TableCell>
-                                                <div>
-                                                    <p className="font-medium">{user.name}</p>
-                                                    <p className="text-xs text-muted-foreground font-mono">{user.id}</p>
-                                                </div>
-                                            </TableCell>
-                                            <TableCell>
-                                                <div className="space-y-1 text-sm">
-                                                    <div className="flex items-center gap-1 text-muted-foreground">
-                                                        <Mail className="h-3 w-3" />
-                                                        {user.email}
-                                                    </div>
-                                                    <div className="flex items-center gap-1 text-muted-foreground">
-                                                        <Phone className="h-3 w-3" />
-                                                        {user.phone}
-                                                    </div>
-                                                </div>
-                                            </TableCell>
-                                            <TableCell>
-                                                <div className="flex items-center gap-1">
-                                                    <MapPin className="h-3 w-3 text-muted-foreground" />
-                                                    {user.city || "N/A"}
-                                                </div>
-                                            </TableCell>
-                                            <TableCell>
-                                                <div className="flex items-center gap-1">
-                                                    <Car className="h-3 w-3 text-muted-foreground" />
-                                                    {user.total_rides || 0}
-                                                </div>
-                                            </TableCell>
-                                            <TableCell>
-                                                <div className="flex items-center gap-1">
-                                                    <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
-                                                    {user.rating?.toFixed(1) || "5.0"}
-                                                </div>
-                                            </TableCell>
-                                            <TableCell>
-                                                <Badge variant={user.is_verified ? "default" : "secondary"} className={user.is_verified ? "bg-emerald-500 hover:bg-emerald-600" : ""}>
-                                                    {user.is_verified ? "Verified" : "Pending"}
-                                                </Badge>
-                                            </TableCell>
-                                            <TableCell className="text-xs text-muted-foreground">
-                                                {formatDate(user.created_at)}
-                                            </TableCell>
-                                            <TableCell className="text-right">
-                                                <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); setSelectedUser(user); }}>
-                                                    Details
-                                                </Button>
+                                </TableHeader>
+                                <TableBody>
+                                    {filtered.length === 0 ? (
+                                        <TableRow>
+                                            <TableCell colSpan={8} className="text-center text-muted-foreground py-12">
+                                                No users found.
                                             </TableCell>
                                         </TableRow>
-                                    ))
-                                )}
-                            </TableBody>
-                        </Table>
+                                    ) : (
+                                        paginated.map((user) => (
+                                            <TableRow key={user.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelectedUser(user)}>
+                                                <TableCell>
+                                                    <div>
+                                                        <p className="font-medium">{user.name}</p>
+                                                        <p className="text-xs text-muted-foreground font-mono">{user.id?.slice(0, 8)}</p>
+                                                    </div>
+                                                </TableCell>
+                                                <TableCell>
+                                                    <div className="space-y-1 text-sm">
+                                                        <div className="flex items-center gap-1 text-muted-foreground">
+                                                            <Mail className="h-3 w-3" />
+                                                            {user.email || "—"}
+                                                        </div>
+                                                        <div className="flex items-center gap-1 text-muted-foreground">
+                                                            <Phone className="h-3 w-3" />
+                                                            {user.phone || "—"}
+                                                        </div>
+                                                    </div>
+                                                </TableCell>
+                                                <TableCell>
+                                                    <div className="flex items-center gap-1">
+                                                        <MapPin className="h-3 w-3 text-muted-foreground" />
+                                                        {user.city || "N/A"}
+                                                    </div>
+                                                </TableCell>
+                                                <TableCell>
+                                                    <div className="flex items-center gap-1">
+                                                        <Car className="h-3 w-3 text-muted-foreground" />
+                                                        {user.total_rides || 0}
+                                                    </div>
+                                                </TableCell>
+                                                <TableCell>
+                                                    <div className="flex items-center gap-1">
+                                                        <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+                                                        {user.rating != null ? user.rating.toFixed(1) : "N/A"}
+                                                    </div>
+                                                </TableCell>
+                                                <TableCell>
+                                                    <Badge className={user.is_verified ? "bg-emerald-500/15 text-emerald-600" : "bg-zinc-500/15 text-zinc-600"}>
+                                                        {user.is_verified ? "Verified" : "Pending"}
+                                                    </Badge>
+                                                </TableCell>
+                                                <TableCell className="text-xs text-muted-foreground">
+                                                    {formatDate(user.created_at)}
+                                                </TableCell>
+                                                <TableCell className="text-right">
+                                                    <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); setSelectedUser(user); }}>
+                                                        Details
+                                                    </Button>
+                                                </TableCell>
+                                            </TableRow>
+                                        ))
+                                    )}
+                                </TableBody>
+                            </Table>
+
+                            {/* Pagination */}
+                            {filtered.length > PER_PAGE && (
+                                <div className="flex items-center justify-between px-4 py-3 border-t">
+                                    <p className="text-sm text-muted-foreground">
+                                        Showing {(page - 1) * PER_PAGE + 1}–{Math.min(page * PER_PAGE, filtered.length)} of {filtered.length}
+                                    </p>
+                                    <div className="flex items-center gap-2">
+                                        <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
+                                            <ChevronLeft className="h-4 w-4" />
+                                        </Button>
+                                        <span className="text-sm text-muted-foreground">Page {page} of {totalPages}</span>
+                                        <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
+                                            <ChevronRight className="h-4 w-4" />
+                                        </Button>
+                                    </div>
+                                </div>
+                            )}
+                        </>
                     )}
                 </CardContent>
             </Card>
@@ -385,7 +399,7 @@ export default function UsersPage() {
                                         <p className="text-xs text-muted-foreground">Rating</p>
                                         <p className="text-2xl font-bold flex items-center justify-center gap-1">
                                             <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
-                                            {selectedUser.rating?.toFixed(1) || "5.0"}
+                                            {selectedUser.rating != null ? selectedUser.rating.toFixed(1) : "N/A"}
                                         </p>
                                     </div>
                                 </div>

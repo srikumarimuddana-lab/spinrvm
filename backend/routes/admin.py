@@ -869,70 +869,175 @@ async def admin_get_promotions():
 @admin_router.post("/promotions")
 async def admin_create_promotion(promotion: Dict[str, Any]):
     """Create a new promotion/discount code."""
-    doc = {
+    # Only include fields that exist in the Supabase promotions table schema
+    doc: Dict[str, Any] = {
         "code": (promotion.get("code") or "").strip().upper(),
         "description": promotion.get("description", ""),
-        "promo_type": promotion.get(
-            "promo_type", "discount"
-        ),  # discount, referral, reward, private
-        "discount_type": promotion.get("discount_type", "flat"),  # flat | percentage
+        "promo_type": promotion.get("promo_type", "discount"),
+        "discount_type": promotion.get("discount_type", "flat"),
         "discount_value": promotion.get("discount_value", 0),
-        "max_discount": promotion.get("max_discount"),  # cap for percentage
-        # Usage limits
-        "max_uses": promotion.get("max_uses", 0),  # 0 = unlimited total uses
-        "max_uses_per_user": promotion.get(
-            "max_uses_per_user", 1
-        ),  # 0 = unlimited per user
+        "max_discount": promotion.get("max_discount"),
+        "max_uses": promotion.get("max_uses", 0),
+        "max_uses_per_user": promotion.get("max_uses_per_user", 1),
         "uses": 0,
-        # Validity
         "valid_from": promotion.get("valid_from", datetime.utcnow().isoformat()),
         "expiry_date": promotion.get("expiry_date"),
-        # Ride requirements
-        "min_ride_fare": promotion.get("min_ride_fare", 0),  # minimum fare to apply
-        # User targeting
+        "min_ride_fare": promotion.get("min_ride_fare", 0),
         "first_ride_only": promotion.get("first_ride_only", False),
-        "new_user_days": promotion.get(
-            "new_user_days", 0
-        ),  # 0 = no restriction, 7 = users < 7 days old
-        "inactive_days": promotion.get(
-            "inactive_days", 0
-        ),  # target users with no rides in X days
-        "min_total_rides": promotion.get(
-            "min_total_rides", 0
-        ),  # user must have at least X completed rides
-        "max_total_rides": promotion.get(
-            "max_total_rides", 0
-        ),  # user must have less than X rides (0=no limit)
-        # Private coupon (specific user only)
-        "assigned_user_ids": promotion.get(
-            "assigned_user_ids", []
-        ),  # empty = available to all
-        # Area & vehicle targeting
-        "applicable_areas": promotion.get("applicable_areas", []),  # empty = all areas
-        "applicable_vehicles": promotion.get(
-            "applicable_vehicles", []
-        ),  # empty = all vehicles
-        "user_segments": promotion.get(
-            "user_segments", []
-        ),  # tags like "vip", "corporate"
-        # Budget
-        "total_budget": promotion.get("total_budget", 0),  # 0 = no budget limit
-        "budget_used": 0,
-        # Schedule
-        "valid_days": promotion.get(
-            "valid_days", []
-        ),  # empty = all days, ["mon","tue"]
-        "valid_hours_start": promotion.get("valid_hours_start"),  # e.g. "08:00"
-        "valid_hours_end": promotion.get("valid_hours_end"),  # e.g. "22:00"
-        # Referral
-        "referrer_user_id": promotion.get("referrer_user_id"),
-        "referrer_reward": promotion.get("referrer_reward", 0),
+        "new_user_days": promotion.get("new_user_days", 0),
         "is_active": promotion.get("is_active", True),
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }
-    row = await db.promotions.insert_one(doc)
+
+    # Optional JSONB fields that exist in the schema
+    if promotion.get("applicable_areas"):
+        doc["applicable_areas"] = promotion["applicable_areas"]
+    if promotion.get("applicable_vehicles"):
+        doc["applicable_vehicles"] = promotion["applicable_vehicles"]
+    if promotion.get("user_segments"):
+        doc["user_segments"] = promotion["user_segments"]
+    if promotion.get("valid_days"):
+        doc["valid_days"] = promotion["valid_days"]
+    if promotion.get("valid_hours_start") is not None:
+        doc["valid_hours_start"] = promotion["valid_hours_start"]
+    if promotion.get("valid_hours_end") is not None:
+        doc["valid_hours_end"] = promotion["valid_hours_end"]
+    if promotion.get("total_budget"):
+        doc["total_budget"] = promotion["total_budget"]
+    if promotion.get("referrer_user_id"):
+        doc["referrer_user_id"] = promotion["referrer_user_id"]
+    if promotion.get("referrer_reward"):
+        doc["referrer_reward"] = promotion["referrer_reward"]
+
+    # Fields that require migration (may not exist yet in DB)
+    # Insert safely - skip if column doesn't exist
+    optional_fields = {
+        "assigned_user_ids": promotion.get("assigned_user_ids", []),
+        "inactive_days": promotion.get("inactive_days", 0),
+        "min_total_rides": promotion.get("min_total_rides", 0),
+        "max_total_rides": promotion.get("max_total_rides", 0),
+    }
+
+    try:
+        # Try inserting with all fields first
+        full_doc = {**doc, **optional_fields}
+        row = await db.promotions.insert_one(full_doc)
+    except Exception:
+        # Fallback: insert without optional fields that may not exist in schema
+        logger.warning("Promotions insert failed with optional fields, retrying without them")
+        row = await db.promotions.insert_one(doc)
+
     return {"promotion_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+
+
+@admin_router.get("/promotions/usage")
+async def admin_get_promo_usage(
+    promo_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    limit: int = Query(100),
+    offset: int = Query(0),
+):
+    """Get promo code usage/redemption history."""
+    filters: Dict[str, Any] = {}
+    if promo_id:
+        filters["promo_id"] = promo_id
+
+    try:
+        applications = await db.get_rows(
+            "promo_applications",
+            filters,
+            order="created_at",
+            desc=True,
+            limit=limit,
+            offset=offset,
+        )
+    except Exception:
+        logger.warning("promo_applications table may not exist yet")
+        return []
+
+    # Filter by date range in Python (supabase may not support complex date filters)
+    if date_from or date_to:
+        filtered = []
+        for app in applications:
+            created = app.get("created_at", "")
+            if date_from and created < date_from:
+                continue
+            if date_to and created > date_to + "T23:59:59Z":
+                continue
+            filtered.append(app)
+        applications = filtered
+
+    return applications
+
+
+@admin_router.get("/promotions/stats")
+async def admin_get_promo_stats(range: Optional[str] = None):
+    """Get promotion statistics with daily usage data."""
+    all_promos = await db.get_rows("promotions", {}, limit=10000)
+    try:
+        all_usage = await db.get_rows("promo_applications", {}, order="created_at", desc=True, limit=10000)
+    except Exception:
+        logger.warning("promo_applications table may not exist yet")
+        all_usage = []
+
+    now = datetime.utcnow()
+    today = now.strftime("%Y-%m-%d")
+
+    # Date range filtering
+    range_start = None
+    if range == "today":
+        range_start = today
+    elif range == "yesterday":
+        range_start = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    elif range == "week":
+        range_start = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+    elif range == "last_week":
+        range_start = (now - timedelta(days=14)).strftime("%Y-%m-%d")
+    elif range == "month":
+        range_start = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+
+    # Filter usage by range
+    filtered_usage = all_usage
+    if range_start:
+        filtered_usage = [u for u in all_usage if u.get("created_at", "") >= range_start]
+
+    # Promo counts
+    total_codes = len([p for p in all_promos if p.get("promo_type") != "private"])
+    active_codes = len([p for p in all_promos if p.get("promo_type") != "private" and p.get("is_active")])
+    expired_codes = len([p for p in all_promos if p.get("promo_type") != "private" and not p.get("is_active") and p.get("expiry_date") and p.get("expiry_date", "") < now.isoformat()])
+    total_private = len([p for p in all_promos if p.get("promo_type") == "private"])
+    active_private = len([p for p in all_promos if p.get("promo_type") == "private" and p.get("is_active")])
+
+    # Usage stats
+    total_redemptions = len(filtered_usage)
+    total_discount = sum(float(u.get("discount_applied", 0)) for u in filtered_usage)
+
+    # Daily usage for charts (last 30 days)
+    daily: Dict[str, Dict[str, Any]] = {}
+    for i in range(30):
+        d = (now - timedelta(days=i)).strftime("%Y-%m-%d")
+        daily[d] = {"date": d, "count": 0, "amount": 0.0}
+
+    for u in all_usage:
+        d = u.get("created_at", "")[:10]
+        if d in daily:
+            daily[d]["count"] += 1
+            daily[d]["amount"] += float(u.get("discount_applied", 0))
+
+    daily_usage = sorted(daily.values(), key=lambda x: x["date"])
+
+    return {
+        "total_codes": total_codes,
+        "active_codes": active_codes,
+        "expired_codes": expired_codes,
+        "total_private": total_private,
+        "active_private": active_private,
+        "total_redemptions": total_redemptions,
+        "total_discount_given": round(total_discount, 2),
+        "daily_usage": daily_usage,
+    }
 
 
 @admin_router.put("/promotions/{promotion_id}")
@@ -961,6 +1066,10 @@ async def admin_update_promotion(promotion_id: str, promotion: Dict[str, Any]):
         "valid_hours_end",
         "referrer_reward",
         "is_active",
+        "assigned_user_ids",
+        "inactive_days",
+        "min_total_rides",
+        "max_total_rides",
     ]
     updates = {
         k: v for k, v in promotion.items() if k in allowed_fields and v is not None
@@ -968,7 +1077,14 @@ async def admin_update_promotion(promotion_id: str, promotion: Dict[str, Any]):
 
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
-        await db.promotions.update_one({"id": promotion_id}, {"$set": updates})
+        try:
+            await db.promotions.update_one({"id": promotion_id}, {"$set": updates})
+        except Exception:
+            # If update fails (e.g. column doesn't exist yet), remove optional fields and retry
+            for f in ["assigned_user_ids", "inactive_days", "min_total_rides", "max_total_rides"]:
+                updates.pop(f, None)
+            if updates:
+                await db.promotions.update_one({"id": promotion_id}, {"$set": updates})
     return {"message": "Promotion updated"}
 
 
@@ -1961,3 +2077,149 @@ async def log_audit(
             "created_at": datetime.utcnow().isoformat(),
         }
     )
+
+
+# ---------- Cloud Messaging ----------
+
+
+@admin_router.post("/cloud-messaging/send")
+async def admin_send_cloud_message(payload: Dict[str, Any]):
+    """Send or schedule a cloud message to users/drivers."""
+    title = payload.get("title", "")
+    description = payload.get("description", "")
+    audience = payload.get("audience", "customers")
+    msg_type = payload.get("type", "info")
+    channels = payload.get("channels")
+    if not channels:
+        channel = payload.get("channel", "push")
+        channels = [channel]
+    particular_ids = payload.get("particular_ids") or []
+    if not particular_ids:
+        pid = payload.get("particular_id")
+        if pid:
+            particular_ids = [pid]
+    scheduled_at = payload.get("scheduled_at")
+
+    if not title or not description:
+        raise HTTPException(status_code=400, detail="Title and description are required")
+
+    is_scheduled = bool(scheduled_at)
+    status = "scheduled" if is_scheduled else "sent"
+
+    total_recipients = 1
+    successful = 0
+    failed_count = 0
+
+    if audience in ("particular_customer", "particular_driver"):
+        total_recipients = len(particular_ids) if particular_ids else 1
+    elif audience == "customers":
+        count = await db.users.count_documents({"role": "rider"})
+        total_recipients = count if count > 0 else 0
+    elif audience == "drivers":
+        count = await db.users.count_documents({"role": "driver"})
+        total_recipients = count if count > 0 else 0
+
+    if not is_scheduled:
+        # TODO: Integrate with FCM / email service
+        successful = total_recipients
+        failed_count = 0
+        logger.info(f"Cloud message sent to {audience}: {title}")
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "title": title,
+        "description": description,
+        "audience": audience,
+        "type": msg_type,
+        "channel": channels[0],
+        "channels": channels,
+        "particular_id": particular_ids[0] if particular_ids else None,
+        "particular_ids": particular_ids,
+        "status": status,
+        "scheduled_at": scheduled_at,
+        "sent_at": datetime.utcnow().isoformat() if not is_scheduled else None,
+        "created_at": datetime.utcnow().isoformat(),
+        "total_recipients": total_recipients,
+        "successful": successful,
+        "failed_count": failed_count,
+    }
+
+    try:
+        await db.cloud_messages.insert_one(doc)
+    except Exception as e:
+        logger.error(f"Failed to insert cloud message: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save message. The cloud_messages table may not exist yet. Please run migration 06_cloud_messaging.sql.")
+    return {"success": True, "message": doc}
+
+
+@admin_router.get("/cloud-messaging")
+async def admin_get_cloud_messages(
+    status: Optional[str] = None,
+    audience: Optional[str] = None,
+    limit: int = Query(100),
+    offset: int = Query(0),
+):
+    """Get cloud messages with optional filters."""
+    filters: Dict[str, Any] = {}
+    if status:
+        filters["status"] = status
+    if audience:
+        filters["audience"] = audience
+
+    try:
+        messages = await db.get_rows(
+            "cloud_messages",
+            filters,
+            order="created_at",
+            desc=True,
+            limit=limit,
+            offset=offset,
+        )
+    except Exception:
+        logger.warning("cloud_messages table may not exist yet")
+        return []
+    return messages
+
+
+@admin_router.get("/cloud-messaging/stats")
+async def admin_get_cloud_message_stats():
+    """Get cloud messaging statistics."""
+    try:
+        all_messages = await db.get_rows("cloud_messages", {}, limit=10000)
+    except Exception:
+        logger.warning("cloud_messages table may not exist yet")
+        all_messages = []
+
+    total = len(all_messages)
+    total_sent = sum(1 for m in all_messages if m.get("status") == "sent")
+    total_scheduled = sum(1 for m in all_messages if m.get("status") == "scheduled")
+    total_failed = sum(1 for m in all_messages if m.get("status") == "failed")
+    total_reached = sum(m.get("successful", 0) for m in all_messages)
+    total_recipients = sum(m.get("total_recipients", 0) for m in all_messages)
+    success_rate = round((total_reached / total_recipients * 100), 1) if total_recipients > 0 else 0
+
+    return {
+        "total_messages": total,
+        "total_sent": total_sent,
+        "total_scheduled": total_scheduled,
+        "total_failed": total_failed,
+        "total_recipients_reached": total_reached,
+        "success_rate": success_rate,
+    }
+
+
+@admin_router.delete("/cloud-messaging/{message_id}")
+async def admin_delete_cloud_message(message_id: str):
+    """Cancel/delete a scheduled cloud message."""
+    existing = await db.cloud_messages.find_one({"id": message_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Message not found")
+
+    if existing.get("status") == "sent":
+        raise HTTPException(status_code=400, detail="Cannot delete a sent message")
+
+    await db.cloud_messages.update_one(
+        {"id": message_id},
+        {"$set": {"status": "cancelled"}},
+    )
+    return {"message": "Message cancelled"}

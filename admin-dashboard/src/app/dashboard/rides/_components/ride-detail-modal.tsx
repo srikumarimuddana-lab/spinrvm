@@ -65,6 +65,8 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
     if (!open) return null;
 
     const phaseDistances = ride?.location_trail ? computePhaseDistances(ride.location_trail) : [];
+    const phaseMap: Record<string, number> = {};
+    for (const p of phaseDistances) phaseMap[p.phase] = p.distance_km;
 
     return (
         <>
@@ -236,7 +238,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 )}
                                             </div>
                                             {/* Driver stats */}
-                                            <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t">
+                                            <div className="grid grid-cols-4 gap-2 mt-2 pt-2 border-t">
                                                 <div className="bg-background rounded-lg p-2 text-center">
                                                     <Hash className="h-3 w-3 text-muted-foreground mx-auto mb-0.5" />
                                                     <p className="text-xs font-bold">{ride.driver_total_rides ?? ride.driver_completed_rides ?? "—"}</p>
@@ -251,6 +253,11 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     <Star className="h-3 w-3 text-muted-foreground mx-auto mb-0.5" />
                                                     <p className="text-xs font-bold">{ride.driver_rating ? Number(ride.driver_rating).toFixed(1) : "—"}</p>
                                                     <p className="text-[9px] text-muted-foreground">Rating</p>
+                                                </div>
+                                                <div className="bg-background rounded-lg p-2 text-center">
+                                                    <MapPinned className="h-3 w-3 text-muted-foreground mx-auto mb-0.5" />
+                                                    <p className="text-xs font-bold truncate">{ride.driver_region || ride.driver_city || "—"}</p>
+                                                    <p className="text-[9px] text-muted-foreground">Region</p>
                                                 </div>
                                             </div>
                                         </>
@@ -418,28 +425,31 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                 </div>
                             </Sec>
 
-                            {/* Booking Logs - Enhanced with phase distances */}
+                            {/* Booking Logs - with distance per phase inline */}
                             <Sec title="Booking Logs">
                                 <div className="space-y-0">
                                     <TL l="Requested" t={ride.ride_requested_at || ride.created_at} />
                                     <TL l="Driver notified" t={ride.driver_notified_at} />
-                                    <TL l="Driver accepted" t={ride.driver_accepted_at} />
-                                    <TL l="Driver arrived" t={ride.driver_arrived_at} />
+                                    <TL l="Driver accepted" t={ride.driver_accepted_at}
+                                        km={phaseMap.navigating_to_pickup} />
+                                    <TL l="Driver arrived" t={ride.driver_arrived_at}
+                                        km={phaseMap.arrived_at_pickup} />
                                     <TL l="Ride started" t={ride.ride_started_at} />
-                                    <TL l="Ride completed" t={ride.ride_completed_at} />
+                                    <TL l="Ride completed" t={ride.ride_completed_at}
+                                        km={phaseMap.trip_in_progress} />
                                     {ride.cancelled_at && <TL l="Cancelled" t={ride.cancelled_at} d />}
                                 </div>
 
-                                {/* Phase distances */}
+                                {/* Phase distance summary */}
                                 {phaseDistances.length > 0 && (
                                     <div className="mt-3 pt-3 border-t">
                                         <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider mb-2">Distance by Phase</p>
-                                        <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
+                                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
                                             {phaseDistances.map(p => (
                                                 <div key={p.phase} className={`rounded-lg px-3 py-2 ${PHASE_COLORS[p.phase] || "bg-gray-50 text-gray-600"}`}>
                                                     <p className="text-xs font-bold">{p.distance_km} km</p>
                                                     <p className="text-[10px] opacity-80">{PHASE_LABELS[p.phase] || p.phase.replace(/_/g, " ")}</p>
-                                                    <p className="text-[9px] opacity-60">{p.points} points</p>
+                                                    <p className="text-[9px] opacity-60">{p.points} pts</p>
                                                 </div>
                                             ))}
                                         </div>

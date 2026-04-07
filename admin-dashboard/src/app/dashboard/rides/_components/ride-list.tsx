@@ -2,7 +2,7 @@
 
 import { Input } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/utils";
-import { Car, Search, Clock, CheckCircle, XCircle, MapPin, Loader, Download, ChevronRight } from "lucide-react";
+import { Car, Search, Clock, CheckCircle, XCircle, MapPin, Loader, Download, ChevronRight, ChevronLeft } from "lucide-react";
 import { getStatusBadge, fmtTime } from "./ride-ui-helpers";
 import { exportToCsv } from "@/lib/export-csv";
 
@@ -18,6 +18,7 @@ const STATUS_TABS = [
 interface RideListProps {
     rides: any[];
     allRides: any[];
+    totalCount: number;
     areas: any[];
     loading: boolean;
     selectedId?: string;
@@ -28,21 +29,28 @@ interface RideListProps {
     areaFilter: string;
     onAreaChange: (v: string) => void;
     onSelect: (ride: any) => void;
+    page: number;
+    totalPages: number;
+    onPageChange: (p: number) => void;
 }
 
 export default function RideList({
-    rides, allRides, areas, loading, selectedId,
+    rides, allRides, totalCount, areas, loading, selectedId,
     search, onSearchChange, statusFilter, onStatusChange,
     areaFilter, onAreaChange, onSelect,
+    page, totalPages, onPageChange,
 }: RideListProps) {
     const statusCounts = (s: string) => s === "all" ? allRides.length : allRides.filter(r => r.status === s).length;
 
     return (
-        <div className="flex flex-col w-full">
+        <div className="flex flex-col w-full h-full">
             <div className="flex items-center justify-between mb-3">
                 <div>
                     <h1 className="text-2xl font-bold">Rides</h1>
-                    <p className="text-sm text-muted-foreground">{rides.length} of {allRides.length} rides</p>
+                    <p className="text-sm text-muted-foreground">
+                        Showing {rides.length} of {totalCount} rides
+                        {totalPages > 1 && <span className="ml-1">(page {page + 1}/{totalPages})</span>}
+                    </p>
                 </div>
                 <button
                     onClick={() => exportToCsv("rides", rides, [
@@ -100,6 +108,40 @@ export default function RideList({
                     </div>
                 ))}
             </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+                <div className="flex items-center justify-between pt-3 border-t mt-2">
+                    <button onClick={() => onPageChange(page - 1)} disabled={page === 0}
+                        className="flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed">
+                        <ChevronLeft className="h-3.5 w-3.5" /> Previous
+                    </button>
+                    <div className="flex items-center gap-1">
+                        {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                            let pageNum: number;
+                            if (totalPages <= 7) {
+                                pageNum = i;
+                            } else if (page < 3) {
+                                pageNum = i;
+                            } else if (page > totalPages - 4) {
+                                pageNum = totalPages - 7 + i;
+                            } else {
+                                pageNum = page - 3 + i;
+                            }
+                            return (
+                                <button key={pageNum} onClick={() => onPageChange(pageNum)}
+                                    className={`w-7 h-7 rounded-lg text-xs font-semibold ${page === pageNum ? "bg-primary text-white" : "hover:bg-muted text-muted-foreground"}`}>
+                                    {pageNum + 1}
+                                </button>
+                            );
+                        })}
+                    </div>
+                    <button onClick={() => onPageChange(page + 1)} disabled={page >= totalPages - 1}
+                        className="flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded-lg hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed">
+                        Next <ChevronRight className="h-3.5 w-3.5" />
+                    </button>
+                </div>
+            )}
         </div>
     );
 }

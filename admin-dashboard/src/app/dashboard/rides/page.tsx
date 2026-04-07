@@ -1,13 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { getRides, getServiceAreas } from "@/lib/api";
 import RideStatsCards, { RidesChart } from "./_components/ride-stats-cards";
 import RideList from "./_components/ride-list";
 import RideDetailModal from "./_components/ride-detail-modal";
 
+const PAGE_SIZE = 50;
+
 export default function RidesPage() {
     const [rides, setRides] = useState<any[]>([]);
+    const [totalCount, setTotalCount] = useState(0);
+    const [page, setPage] = useState(0);
     const [areas, setAreas] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
@@ -15,12 +19,26 @@ export default function RidesPage() {
     const [areaFilter, setAreaFilter] = useState("all");
     const [selectedRideId, setSelectedRideId] = useState<string | null>(null);
 
-    useEffect(() => {
-        Promise.all([getRides(), getServiceAreas().catch(() => [])])
-            .then(([r, a]) => { setRides(r); setAreas(a); })
-            .catch(() => {})
-            .finally(() => setLoading(false));
+    const loadRides = useCallback(async (p: number) => {
+        setLoading(true);
+        try {
+            const res = await getRides(PAGE_SIZE, p * PAGE_SIZE);
+            setRides(res.rides);
+            setTotalCount(res.total_count);
+        } catch {}
+        finally { setLoading(false); }
     }, []);
+
+    useEffect(() => {
+        Promise.all([loadRides(0), getServiceAreas().catch(() => [])])
+            .then(([_, a]) => { if (a) setAreas(a as any); })
+            .catch(() => {});
+    }, [loadRides]);
+
+    const handlePageChange = (newPage: number) => {
+        setPage(newPage);
+        loadRides(newPage);
+    };
 
     const filtered = rides.filter(r => {
         const q = search.toLowerCase();
@@ -39,6 +57,8 @@ export default function RidesPage() {
         return matchSearch && matchStatus && matchArea;
     });
 
+    const totalPages = Math.ceil(totalCount / PAGE_SIZE);
+
     return (
         <div className="space-y-0">
             <RideStatsCards />
@@ -46,6 +66,7 @@ export default function RidesPage() {
                 <RideList
                     rides={filtered}
                     allRides={rides}
+                    totalCount={totalCount}
                     areas={areas}
                     loading={loading}
                     selectedId={selectedRideId || undefined}
@@ -56,6 +77,9 @@ export default function RidesPage() {
                     areaFilter={areaFilter}
                     onAreaChange={setAreaFilter}
                     onSelect={(ride) => setSelectedRideId(ride.id)}
+                    page={page}
+                    totalPages={totalPages}
+                    onPageChange={handlePageChange}
                 />
             </div>
             <RidesChart />

@@ -522,10 +522,14 @@ async def admin_get_rides(
     offset: int = 0,
     status: Optional[str] = None,
 ):
-    """Get all rides with filters, enriched with rider_name and driver_name."""
+    """Get all rides with filters, enriched with rider_name and driver_name. Returns paginated."""
     filters = {}
     if status:
         filters["status"] = status
+
+    # Get total count for pagination
+    total_count = await db.rides.count_documents(filters)
+
     rides = await db.get_rows(
         "rides", filters, order="created_at", desc=True, limit=limit, offset=offset
     )
@@ -559,7 +563,7 @@ async def admin_get_rides(
                 else (driver.get("name") if driver else None),
             }
         )
-    return out
+    return {"rides": out, "total_count": total_count, "limit": limit, "offset": offset}
 
 
 @admin_router.post("/drivers/{driver_id}/verify")
@@ -759,8 +763,10 @@ async def admin_get_ride_invoice(ride_id: str):
         "driver_phone": ride.get("driver_phone", ""),
         "driver_vehicle": ride.get("driver_vehicle", ""),
         "driver_license_plate": ride.get("driver_license_plate", ""),
-        "driver_earnings": ride.get("driver_earnings", 0),
-        "admin_earnings": ride.get("admin_earnings", 0),
+        "pickup_lat": ride.get("pickup_lat"),
+        "pickup_lng": ride.get("pickup_lng"),
+        "dropoff_lat": ride.get("dropoff_lat"),
+        "dropoff_lng": ride.get("dropoff_lng"),
     }
 
 

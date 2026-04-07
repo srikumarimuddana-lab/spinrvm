@@ -31,12 +31,15 @@ export function MStat({ label, value, icon: I }: { label: string; value: string;
     );
 }
 
-export function TL({ l, t, d }: { l: string; t?: string; d?: boolean }) {
+export function TL({ l, t, d, km }: { l: string; t?: string; d?: boolean; km?: number }) {
     if (!t) return null;
     return (
         <div className="flex items-center gap-2.5">
             <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${d ? "bg-red-400" : "bg-emerald-400"}`} />
             <p className="text-sm flex-1">{l}</p>
+            {km != null && km > 0 && (
+                <span className="text-[10px] font-semibold text-primary bg-primary/10 px-1.5 py-0.5 rounded">{km.toFixed(2)} km</span>
+            )}
             <p className="text-[10px] text-muted-foreground">
                 {new Date(t).toLocaleString("en-CA", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
             </p>

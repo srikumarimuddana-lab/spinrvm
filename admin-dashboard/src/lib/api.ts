@@ -99,7 +99,10 @@ export const getStats = () =>
     }>("/api/admin/stats");
 
 /* ── Rides ────────────────────────────────── */
-export const getRides = () => request<any[]>("/api/admin/rides");
+export const getRides = (limit = 50, offset = 0) =>
+    request<{ rides: any[]; total_count: number; limit: number; offset: number }>(
+        `/api/admin/rides?limit=${limit}&offset=${offset}`
+    );
 export const getRideDetails = (id: string) =>
     request<any>(`/api/admin/rides/${id}/details`);
 export const getRideStats = () =>

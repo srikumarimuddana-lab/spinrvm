@@ -652,7 +652,7 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
     driver_id = ride.get('driver_id')
     if driver_id:
         driver = await run_sync(lambda did=driver_id: _single_row_from_res(
-            supabase.table('drivers').select('name,phone,vehicle_make,vehicle_model,vehicle_color,vehicle_year,vehicle_vin,license_plate,rating,status,photo_url,vehicle_type_id,total_rides').eq('id', did).execute()
+            supabase.table('drivers').select('name,phone,vehicle_make,vehicle_model,vehicle_color,vehicle_year,vehicle_vin,license_plate,rating,status,photo_url,vehicle_type_id,total_rides,service_area_id').eq('id', did).execute()
         ))
         if driver:
             ride['driver_name'] = driver.get('name', driver_id[:12])
@@ -666,6 +666,18 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
             ride['driver_rating'] = driver.get('rating', 0)
             ride['driver_status'] = driver.get('status', 'active')
             ride['driver_photo_url'] = driver.get('photo_url', '')
+
+            # Driver region/service area
+            driver_area_id = driver.get('service_area_id')
+            if driver_area_id:
+                d_area = await run_sync(lambda aid=driver_area_id: _single_row_from_res(
+                    supabase.table('service_areas').select('name,city').eq('id', aid).execute()
+                ))
+                ride['driver_region'] = d_area.get('name', '') if d_area else ''
+                ride['driver_city'] = d_area.get('city', '') if d_area else ''
+            else:
+                ride['driver_region'] = ''
+                ride['driver_city'] = ''
             ride['driver_vehicle'] = f"{driver.get('vehicle_make', '')} {driver.get('vehicle_model', '')}".strip()
             ride['driver_total_rides'] = driver.get('total_rides', 0)
 

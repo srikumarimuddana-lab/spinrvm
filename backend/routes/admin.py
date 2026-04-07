@@ -973,7 +973,7 @@ async def admin_get_promo_usage(
 
 
 @admin_router.get("/promotions/stats")
-async def admin_get_promo_stats(range: Optional[str] = None):
+async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="range")):
     """Get promotion statistics with daily usage data."""
     all_promos = await db.get_rows("promotions", {}, limit=10000)
     try:
@@ -987,15 +987,15 @@ async def admin_get_promo_stats(range: Optional[str] = None):
 
     # Date range filtering
     range_start = None
-    if range == "today":
+    if date_range == "today":
         range_start = today
-    elif range == "yesterday":
+    elif date_range == "yesterday":
         range_start = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-    elif range == "week":
+    elif date_range == "week":
         range_start = (now - timedelta(days=7)).strftime("%Y-%m-%d")
-    elif range == "last_week":
+    elif date_range == "last_week":
         range_start = (now - timedelta(days=14)).strftime("%Y-%m-%d")
-    elif range == "month":
+    elif date_range == "month":
         range_start = (now - timedelta(days=30)).strftime("%Y-%m-%d")
 
     # Filter usage by range

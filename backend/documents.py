@@ -10,9 +10,11 @@ from pathlib import Path
 try:
     from .db import db
     from .dependencies import get_current_user
+    from .supabase_client import supabase
 except ImportError:
     from db import db
     from dependencies import get_current_user
+    from supabase_client import supabase
 
 from loguru import logger
 
@@ -130,15 +132,21 @@ async def _supersede_and_flag_pending_review(
 async def save_upload(file: UploadFile) -> str:
     file_ext = os.path.splitext(file.filename)[1]
     filename = f"{uuid.uuid4()}{file_ext}"
-    file_path = os.path.join(UPLOAD_DIR, filename)
     
     try:
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Could not save file: {e}")
+        file_bytes = await file.read()
+        res = supabase.storage.from_("driver-documents").upload(
+            file=file_bytes,
+            path=filename,
+            file_options={"content-type": file.content_type}
+        )
         
-    return f"/uploads/{filename}"
+        # Get public URL
+        url_res = supabase.storage.from_("driver-documents").get_public_url(filename)
+        return url_res
+    except Exception as e:
+        logger.error(f"Failed to upload to Supabase Storage: {e}")
+        raise HTTPException(status_code=500, detail=f"Could not save file: {e}")
 
 # --- Public/Driver Endpoints ---
 

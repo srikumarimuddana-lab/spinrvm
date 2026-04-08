@@ -221,9 +221,21 @@ async def admin_update_settings(settings: Dict[str, Any]):
 
 @admin_router.get("/service-areas")
 async def admin_get_service_areas():
-    """Get all service areas."""
+    """Get all service areas. Sub-regions are nested under their parent as 'sub_regions'."""
     areas = await db.get_rows("service_areas", order="name", limit=500)
-    return areas
+    # Build parent → children mapping
+    parent_map: Dict[str, list] = {}
+    parents = []
+    for a in areas:
+        pid = a.get("parent_service_area_id")
+        if pid:
+            parent_map.setdefault(pid, []).append(a)
+        else:
+            parents.append(a)
+    # Attach sub_regions to each parent
+    for p in parents:
+        p["sub_regions"] = parent_map.get(p["id"], [])
+    return parents
 
 
 @admin_router.post("/service-areas")
@@ -236,6 +248,8 @@ async def admin_create_service_area(area: Dict[str, Any]):
         "province": area.get("province", "SK"),
         "geojson": area.get("geojson"),
         "is_active": area.get("is_active", True),
+        # Sub-region support (e.g. airport zone inside a parent area)
+        "parent_service_area_id": area.get("parent_service_area_id"),
         # Fees & Taxes
         "platform_fee": area.get("platform_fee", 0),
         "city_fee": area.get("city_fee", 0),
@@ -314,6 +328,7 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
         "province",
         "geojson",
         "is_active",
+        "parent_service_area_id",
         "platform_fee",
         "city_fee",
         "airport_fee",

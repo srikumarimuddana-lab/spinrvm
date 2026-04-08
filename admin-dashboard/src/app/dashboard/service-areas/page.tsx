@@ -2,7 +2,7 @@
 
 import { useEffect, useState, lazy, Suspense } from "react";
 import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans } from "@/lib/api";
-import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, X, FileText } from "lucide-react";
+import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, X, FileText, Plane } from "lucide-react";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
@@ -31,6 +31,11 @@ export default function ServiceAreasPage() {
     is_active: true, is_airport: false,
   });
   const [mapKey, setMapKey] = useState(0);
+
+  // Airport sub-region create form
+  const [addAirportFor, setAddAirportFor] = useState<string | null>(null);
+  const [airportForm, setAirportForm] = useState({ name: "", airport_fee: 2.0, polygon: [] as any[] });
+  const [airportMapKey, setAirportMapKey] = useState(0);
 
   useEffect(() => { load(); }, []);
 
@@ -80,10 +85,44 @@ export default function ServiceAreasPage() {
     } catch (e: any) { alert(e?.message || "Failed to create"); }
   };
 
+  const handleCreateAirportSubRegion = async (parentId: string) => {
+    const parent = areas.find(a => a.id === parentId);
+    if (!airportForm.name || airportForm.polygon.length < 3) {
+      alert("Please enter a name and draw the airport boundary on the map.");
+      return;
+    }
+    try {
+      await createServiceArea({
+        name: airportForm.name,
+        city: parent?.city || "",
+        province: parent?.province || "SK",
+        geojson: { type: "Polygon", coordinates: [airportForm.polygon.map((p: any) => [p.lng, p.lat])] },
+        is_active: true,
+        is_airport: true,
+        parent_service_area_id: parentId,
+        airport_fee: airportForm.airport_fee,
+        platform_fee: 0, city_fee: 0, gst_rate: parent?.gst_rate || 5.0, pst_rate: parent?.pst_rate || 0,
+        insurance_fee_percent: 0, vehicle_pricing: [], subscription_plan_ids: [],
+        spinr_pass_enabled: false, surge_enabled: false, surge_multiplier: 1.0,
+        max_pickup_radius_km: 0, currency: 'CAD',
+      });
+      setAddAirportFor(null);
+      setAirportForm({ name: "", airport_fee: 2.0, polygon: [] });
+      load();
+    } catch (e: any) { alert(e?.message || "Failed to create airport zone"); }
+  };
+
   const handleFieldUpdate = async (areaId: string, field: string, value: any) => {
     try {
       await updateServiceArea(areaId, { [field]: value });
-      setAreas(prev => prev.map(a => a.id === areaId ? { ...a, [field]: value } : a));
+      // Update local state — handle both parent and sub-region updates
+      setAreas(prev => prev.map(a => {
+        if (a.id === areaId) return { ...a, [field]: value };
+        if (a.sub_regions?.length) {
+          return { ...a, sub_regions: a.sub_regions.map((s: any) => s.id === areaId ? { ...s, [field]: value } : s) };
+        }
+        return a;
+      }));
     } catch (e: any) { alert("Failed to update: " + (e?.message || "")); }
   };
 
@@ -138,7 +177,7 @@ export default function ServiceAreasPage() {
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={createForm.is_active} onChange={e => setCreateForm({...createForm, is_active: e.target.checked})} className="accent-red-500" /> Active</label>
           </div>
 
-          {/* Geofence Map — always visible, draw polygon or select preset */}
+          {/* Geofence Map */}
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-600 mb-2">
               Service Area Boundary {createForm.polygon.length === 0 && <span className="text-red-500">(select a preset or draw on the map)</span>}
@@ -179,9 +218,10 @@ export default function ServiceAreasPage() {
         <div className="space-y-3">
           {areas.map(area => {
             const isExpanded = expandedId === area.id;
+            const subRegions: any[] = area.sub_regions || [];
             return (
               <div key={area.id} className="bg-white rounded-2xl border overflow-hidden">
-                {/* Area Header — click to expand */}
+                {/* Area Header */}
                 <div className="flex items-center gap-4 p-5 cursor-pointer" onClick={() => { setExpandedId(isExpanded ? null : area.id); setEditTab("general"); }}>
                   <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${area.is_active ? 'bg-green-100' : 'bg-gray-100'}`}>
                     <MapPin className={`h-5 w-5 ${area.is_active ? 'text-green-600' : 'text-gray-400'}`} />
@@ -191,6 +231,11 @@ export default function ServiceAreasPage() {
                       <h4 className="font-bold text-gray-900">{area.name}</h4>
                       {area.is_airport && <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-bold rounded-md">AIRPORT</span>}
                       {!area.is_active && <span className="px-2 py-0.5 bg-gray-100 text-gray-500 text-xs font-bold rounded-md">INACTIVE</span>}
+                      {subRegions.length > 0 && (
+                        <span className="px-2 py-0.5 bg-violet-100 text-violet-700 text-xs font-bold rounded-md">
+                          {subRegions.length} sub-region{subRegions.length > 1 ? 's' : ''}
+                        </span>
+                      )}
                     </div>
                     <p className="text-sm text-gray-500">{area.city || ''}{area.province ? `, ${area.province}` : ''} · GST {area.gst_rate || 5}% · PST {area.pst_rate || 0}%</p>
                   </div>
@@ -208,11 +253,15 @@ export default function ServiceAreasPage() {
                         { key: 'pricing', label: 'Vehicle Pricing', icon: Car },
                         { key: 'fees', label: 'Fees & Taxes', icon: DollarSign },
                         { key: 'subscriptions', label: 'Spinr Pass', icon: CreditCard },
-                        { key: 'documents', label: 'Documents', icon: Settings },
+                        { key: 'documents', label: 'Documents', icon: FileText },
+                        { key: 'subregions', label: 'Airport Zones', icon: Plane },
                       ].map(tab => (
                         <button key={tab.key} onClick={() => setEditTab(tab.key)}
                           className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold rounded-t-lg transition ${editTab === tab.key ? 'bg-white text-red-500 border-t-2 border-red-500' : 'text-gray-500 hover:text-gray-700'}`}>
                           <tab.icon className="h-4 w-4" /> {tab.label}
+                          {tab.key === 'subregions' && subRegions.length > 0 && (
+                            <span className="ml-1 px-1.5 py-0.5 bg-violet-100 text-violet-700 text-[10px] font-bold rounded">{subRegions.length}</span>
+                          )}
                         </button>
                       ))}
                     </div>
@@ -259,8 +308,8 @@ export default function ServiceAreasPage() {
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <FieldInput label="Rider cancel — driver on the way ($)" value={area.rider_cancel_fee_before_driver || 0} type="number" onSave={v => handleFieldUpdate(area.id, 'rider_cancel_fee_before_driver', parseFloat(v))} />
                             <FieldInput label="Rider cancel — driver arrived (total $)" value={area.rider_cancel_fee_after_arrival || 4.50} type="number" onSave={v => handleFieldUpdate(area.id, 'rider_cancel_fee_after_arrival', parseFloat(v))} />
-                            <FieldInput label="↳ Driver gets ($)" value={area.cancel_fee_driver_share || 4.00} type="number" onSave={v => handleFieldUpdate(area.id, 'cancel_fee_driver_share', parseFloat(v))} />
-                            <FieldInput label="↳ Admin gets ($)" value={area.cancel_fee_admin_share || 0.50} type="number" onSave={v => handleFieldUpdate(area.id, 'cancel_fee_admin_share', parseFloat(v))} />
+                            <FieldInput label="Driver gets ($)" value={area.cancel_fee_driver_share || 4.00} type="number" onSave={v => handleFieldUpdate(area.id, 'cancel_fee_driver_share', parseFloat(v))} />
+                            <FieldInput label="Admin gets ($)" value={area.cancel_fee_admin_share || 0.50} type="number" onSave={v => handleFieldUpdate(area.id, 'cancel_fee_admin_share', parseFloat(v))} />
                             <FieldInput label="Rider cancel — ride started" value="Full fare" type="text" onSave={() => {}} />
                             <FieldInput label="Driver cancel penalty ($)" value={area.driver_cancel_fee || 0} type="number" onSave={v => handleFieldUpdate(area.id, 'driver_cancel_fee', parseFloat(v))} />
                             <FieldInput label="Free cancel window (seconds)" value={area.free_cancel_window_seconds || 120} type="number" onSave={v => handleFieldUpdate(area.id, 'free_cancel_window_seconds', parseInt(v))} />
@@ -308,6 +357,110 @@ export default function ServiceAreasPage() {
                           onSave={d => handleFieldUpdate(area.id, 'required_documents', d)}
                         />
                       )}
+
+                      {/* Airport Zones (Sub-regions) Tab */}
+                      {editTab === 'subregions' && (
+                        <div>
+                          <div className="flex items-center justify-between mb-4">
+                            <div>
+                              <h4 className="font-bold text-gray-800">Airport Zones</h4>
+                              <p className="text-sm text-gray-500">
+                                Draw airport boundaries inside {area.name}. Rides to/from these zones get an extra airport surcharge.
+                              </p>
+                            </div>
+                            {addAirportFor !== area.id && (
+                              <button onClick={() => { setAddAirportFor(area.id); setAirportForm({ name: "", airport_fee: 2.0, polygon: [] }); setAirportMapKey(k => k + 1); }}
+                                className="flex items-center gap-2 bg-blue-500 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-blue-600">
+                                <Plane className="h-4 w-4" /> Add Airport Zone
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Add Airport Form */}
+                          {addAirportFor === area.id && (
+                            <div className="bg-blue-50 border border-blue-200 rounded-xl p-5 mb-5">
+                              <h5 className="font-bold text-blue-900 mb-3 flex items-center gap-2">
+                                <Plane className="h-4 w-4" /> New Airport Zone in {area.name}
+                              </h5>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                <div>
+                                  <label className="block text-xs font-semibold text-blue-800 mb-1">Airport Zone Name *</label>
+                                  <input className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm bg-white"
+                                    value={airportForm.name}
+                                    onChange={e => setAirportForm({ ...airportForm, name: e.target.value })}
+                                    placeholder={`e.g. ${area.city || area.name} Airport`} />
+                                </div>
+                                <div>
+                                  <label className="block text-xs font-semibold text-blue-800 mb-1">Airport Fee ($)</label>
+                                  <input className="w-full border border-blue-200 rounded-lg px-3 py-2 text-sm bg-white"
+                                    type="number" step="0.50" min="0"
+                                    value={airportForm.airport_fee}
+                                    onChange={e => setAirportForm({ ...airportForm, airport_fee: parseFloat(e.target.value) || 0 })} />
+                                </div>
+                              </div>
+                              <div className="mb-4">
+                                <label className="block text-xs font-semibold text-blue-800 mb-2">
+                                  Draw Airport Boundary on Map {airportForm.polygon.length === 0 && <span className="text-red-500">(required)</span>}
+                                </label>
+                                <div className="h-64 rounded-xl overflow-hidden border border-blue-200">
+                                  <Suspense fallback={<div className="h-full bg-gray-100 flex items-center justify-center text-gray-400">Loading map...</div>}>
+                                    <GeofenceMap
+                                      key={airportMapKey}
+                                      polygon={airportForm.polygon}
+                                      center={CITY_PRESETS[area.city?.toLowerCase()]?.center || { lat: parseFloat(area.geojson?.coordinates?.[0]?.[0]?.[1]) || 52.13, lng: parseFloat(area.geojson?.coordinates?.[0]?.[0]?.[0]) || -106.67 }}
+                                      zoom={11}
+                                      onPolygonChange={(p: any) => setAirportForm({ ...airportForm, polygon: p })}
+                                    />
+                                  </Suspense>
+                                </div>
+                                {airportForm.polygon.length > 0 && (
+                                  <p className="text-xs text-green-600 mt-1">{airportForm.polygon.length} points defined</p>
+                                )}
+                              </div>
+                              <div className="flex gap-3">
+                                <button onClick={() => handleCreateAirportSubRegion(area.id)}
+                                  className="bg-blue-500 text-white px-5 py-2 rounded-xl text-sm font-semibold hover:bg-blue-600">
+                                  Create Airport Zone
+                                </button>
+                                <button onClick={() => setAddAirportFor(null)}
+                                  className="bg-gray-100 text-gray-600 px-5 py-2 rounded-xl text-sm font-semibold">
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Existing Sub-regions */}
+                          {subRegions.length === 0 && addAirportFor !== area.id ? (
+                            <div className="text-center py-10 bg-gray-50 rounded-xl">
+                              <Plane className="h-10 w-10 text-gray-300 mx-auto mb-3" />
+                              <p className="text-gray-500 font-medium">No airport zones yet</p>
+                              <p className="text-gray-400 text-sm mt-1">Add an airport zone to automatically charge a surcharge for rides to/from the airport</p>
+                            </div>
+                          ) : (
+                            <div className="space-y-3">
+                              {subRegions.map((sub: any) => (
+                                <div key={sub.id} className="bg-blue-50 border border-blue-100 rounded-xl p-4">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <div className="flex items-center gap-2">
+                                      <Plane className="h-4 w-4 text-blue-600" />
+                                      <span className="font-bold text-blue-900">{sub.name}</span>
+                                      <span className="px-2 py-0.5 bg-blue-200 text-blue-800 text-xs font-bold rounded-md">AIRPORT</span>
+                                      {!sub.is_active && <span className="px-2 py-0.5 bg-gray-200 text-gray-600 text-xs font-bold rounded-md">INACTIVE</span>}
+                                    </div>
+                                    <button onClick={() => handleDelete(sub.id, sub.name)} className="text-sm text-red-500 hover:underline">Delete</button>
+                                  </div>
+                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                    <FieldInput label="Zone Name" value={sub.name} onSave={v => handleFieldUpdate(sub.id, 'name', v)} />
+                                    <FieldInput label="Airport Fee ($)" value={sub.airport_fee || 0} type="number" onSave={v => handleFieldUpdate(sub.id, 'airport_fee', parseFloat(v))} />
+                                    <FieldToggle label="Active" value={sub.is_active} onSave={v => handleFieldUpdate(sub.id, 'is_active', v)} />
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -320,7 +473,7 @@ export default function ServiceAreasPage() {
   );
 }
 
-// ─── Inline Editable Field Components ───
+// --- Inline Editable Field Components ---
 
 function FieldInput({ label, value, type = "text", onSave }: { label: string; value: any; type?: string; onSave: (v: string) => void }) {
   const [val, setVal] = useState(String(value));
@@ -360,7 +513,7 @@ function FieldToggle({ label, value, onSave }: { label: string; value: boolean; 
   );
 }
 
-// ─── Vehicle Pricing Editor ───
+// --- Vehicle Pricing Editor ---
 
 function VehiclePricingEditor({ pricing, onSave }: { pricing: any[]; onSave: (p: any[]) => void }) {
   const [rows, setRows] = useState(pricing.length > 0 ? pricing : [
@@ -418,7 +571,7 @@ function VehiclePricingEditor({ pricing, onSave }: { pricing: any[]; onSave: (p:
   );
 }
 
-// ─── Documents Editor ───
+// --- Documents Editor ---
 
 function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => void }) {
   const [rows, setRows] = useState(docs.length > 0 ? docs : [

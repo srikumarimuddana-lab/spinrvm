@@ -82,89 +82,6 @@ export default function SettingsPage() {
 
             {settings && (
                 <div className="grid gap-6 lg:grid-cols-2">
-                    {/* Driver Matching */}
-                    <Card className="border-border/50">
-                        <CardHeader>
-                            <CardTitle className="text-base">Driver Matching</CardTitle>
-                        </CardHeader>
-                        <Separator />
-                        <CardContent className="pt-4 space-y-4">
-                            <div className="space-y-2">
-                                <Label>Matching Algorithm</Label>
-                                <Select
-                                    value={settings.driver_matching_algorithm || "nearest"}
-                                    onValueChange={(v) =>
-                                        update("driver_matching_algorithm", v)
-                                    }
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="nearest">Nearest</SelectItem>
-                                        <SelectItem value="rating_based">Rating Based</SelectItem>
-                                        <SelectItem value="round_robin">Round Robin</SelectItem>
-                                        <SelectItem value="combined">Combined</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Search Radius (km)</Label>
-                                <Input
-                                    type="number"
-                                    value={settings.search_radius_km || 10}
-                                    onChange={(e) =>
-                                        update("search_radius_km", parseFloat(e.target.value))
-                                    }
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Min Driver Rating</Label>
-                                <Input
-                                    type="number"
-                                    step="0.1"
-                                    min="1"
-                                    max="5"
-                                    value={settings.min_driver_rating || 4.0}
-                                    onChange={(e) =>
-                                        update("min_driver_rating", parseFloat(e.target.value))
-                                    }
-                                />
-                            </div>
-                        </CardContent>
-                    </Card>
-
-                    {/* Driver Requirements */}
-                    <Card className="border-border/50">
-                        <CardHeader>
-                            <CardTitle className="text-base">Driver Requirements</CardTitle>
-                        </CardHeader>
-                        <Separator />
-                        <CardContent className="pt-4 space-y-4">
-                            <div className="flex items-center justify-between">
-                                <div className="space-y-0.5 pr-4">
-                                    <Label htmlFor="require_driver_subscription">
-                                        Require Spinr Pass to go online
-                                    </Label>
-                                    <p className="text-xs text-muted-foreground">
-                                        When on, drivers must have an active Spinr Pass
-                                        subscription to toggle online. When off, any
-                                        verified driver can go online without a
-                                        subscription — useful pre-launch or during
-                                        promotional windows.
-                                    </p>
-                                </div>
-                                <Switch
-                                    id="require_driver_subscription"
-                                    checked={settings.require_driver_subscription ?? false}
-                                    onCheckedChange={(v) =>
-                                        update("require_driver_subscription", v)
-                                    }
-                                />
-                            </div>
-                        </CardContent>
-                    </Card>
-
                     {/* Cancellation Fees */}
                     <Card className="border-border/50">
                         <CardHeader>
@@ -239,7 +156,7 @@ export default function SettingsPage() {
                                     placeholder="whsec_..."
                                 />
                                 <p className="text-xs text-muted-foreground">
-                                    From Stripe Dashboard → Developers → Webhooks
+                                    From Stripe Dashboard &rarr; Developers &rarr; Webhooks
                                 </p>
                             </div>
                         </CardContent>
@@ -304,16 +221,13 @@ export default function SettingsPage() {
                                     onCheckedChange={(v) => update("heat_map_enabled", v)}
                                 />
                             </div>
-
                             <div className="space-y-2">
                                 <Label>Default Time Range</Label>
                                 <Select
                                     value={settings.heat_map_default_range || "30d"}
                                     onValueChange={(v) => update("heat_map_default_range", v)}
                                 >
-                                    <SelectTrigger>
-                                        <SelectValue />
-                                    </SelectTrigger>
+                                    <SelectTrigger><SelectValue /></SelectTrigger>
                                     <SelectContent>
                                         <SelectItem value="today">Today</SelectItem>
                                         <SelectItem value="7d">7 Days</SelectItem>
@@ -323,63 +237,55 @@ export default function SettingsPage() {
                                     </SelectContent>
                                 </Select>
                             </div>
-
+                            <div className="space-y-2">
+                                <Label>Heat Intensity</Label>
+                                <Select
+                                    value={settings.heat_map_intensity || "medium"}
+                                    onValueChange={(v) => update("heat_map_intensity", v)}
+                                >
+                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="low">Low</SelectItem>
+                                        <SelectItem value="medium">Medium</SelectItem>
+                                        <SelectItem value="high">High</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-2">
                                     <Label>Radius (px)</Label>
-                                    <Input
-                                        type="number"
-                                        value={settings.heat_map_radius || 25}
-                                        onChange={(e) => update("heat_map_radius", parseInt(e.target.value))}
-                                    />
+                                    <Input type="number" value={settings.heat_map_radius || 25}
+                                        onChange={(e) => update("heat_map_radius", parseInt(e.target.value))} />
                                 </div>
                                 <div className="space-y-2">
                                     <Label>Blur (px)</Label>
-                                    <Input
-                                        type="number"
-                                        value={settings.heat_map_blur || 15}
-                                        onChange={(e) => update("heat_map_blur", parseInt(e.target.value))}
-                                    />
+                                    <Input type="number" value={settings.heat_map_blur || 15}
+                                        onChange={(e) => update("heat_map_blur", parseInt(e.target.value))} />
                                 </div>
                             </div>
-
                             <div className="space-y-4 pt-2">
                                 <div className="flex items-center justify-between">
-                                    <Label htmlFor="heat_map_show_pickups">Show Pickups by Default</Label>
-                                    <Switch
-                                        id="heat_map_show_pickups"
-                                        checked={settings.heat_map_show_pickups ?? true}
-                                        onCheckedChange={(v) => update("heat_map_show_pickups", v)}
-                                    />
+                                    <Label htmlFor="heat_map_show_pickups">Show Pickups</Label>
+                                    <Switch id="heat_map_show_pickups" checked={settings.heat_map_show_pickups ?? true}
+                                        onCheckedChange={(v) => update("heat_map_show_pickups", v)} />
                                 </div>
                                 <div className="flex items-center justify-between">
-                                    <Label htmlFor="heat_map_show_dropoffs">Show Dropoffs by Default</Label>
-                                    <Switch
-                                        id="heat_map_show_dropoffs"
-                                        checked={settings.heat_map_show_dropoffs ?? true}
-                                        onCheckedChange={(v) => update("heat_map_show_dropoffs", v)}
-                                    />
+                                    <Label htmlFor="heat_map_show_dropoffs">Show Dropoffs</Label>
+                                    <Switch id="heat_map_show_dropoffs" checked={settings.heat_map_show_dropoffs ?? true}
+                                        onCheckedChange={(v) => update("heat_map_show_dropoffs", v)} />
                                 </div>
                             </div>
-
                             <Separator />
-
                             <div className="space-y-4">
                                 <div className="flex items-center justify-between">
-                                    <Label htmlFor="corporate_heat_map_enabled">Enable Corporate Heat Map</Label>
-                                    <Switch
-                                        id="corporate_heat_map_enabled"
-                                        checked={settings.corporate_heat_map_enabled ?? true}
-                                        onCheckedChange={(v) => update("corporate_heat_map_enabled", v)}
-                                    />
+                                    <Label htmlFor="corporate_heat_map_enabled">Corporate Heat Map</Label>
+                                    <Switch id="corporate_heat_map_enabled" checked={settings.corporate_heat_map_enabled ?? true}
+                                        onCheckedChange={(v) => update("corporate_heat_map_enabled", v)} />
                                 </div>
                                 <div className="flex items-center justify-between">
-                                    <Label htmlFor="regular_rider_heat_map_enabled">Enable Regular Rider Heat Map</Label>
-                                    <Switch
-                                        id="regular_rider_heat_map_enabled"
-                                        checked={settings.regular_rider_heat_map_enabled ?? true}
-                                        onCheckedChange={(v) => update("regular_rider_heat_map_enabled", v)}
-                                    />
+                                    <Label htmlFor="regular_rider_heat_map_enabled">Regular Rider Heat Map</Label>
+                                    <Switch id="regular_rider_heat_map_enabled" checked={settings.regular_rider_heat_map_enabled ?? true}
+                                        onCheckedChange={(v) => update("regular_rider_heat_map_enabled", v)} />
                                 </div>
                             </div>
                         </CardContent>
@@ -411,146 +317,6 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
-                    {/* Heat Map */}
-                    <Card className="border-border/50">
-                        <CardHeader>
-                            <CardTitle className="text-base">Heat Map</CardTitle>
-                        </CardHeader>
-                        <Separator />
-                        <CardContent className="pt-4 space-y-4">
-                            <div className="flex items-center justify-between">
-                                <div className="space-y-0.5">
-                                    <Label>Enable Heat Map</Label>
-                                    <p className="text-xs text-muted-foreground">
-                                        Show heat map feature in admin dashboard
-                                    </p>
-                                </div>
-                                <Switch
-                                    checked={settings.heat_map_enabled ?? true}
-                                    onCheckedChange={(checked) =>
-                                        update("heat_map_enabled", checked)
-                                    }
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Default Date Range</Label>
-                                <Select
-                                    value={settings.heat_map_default_range || "30d"}
-                                    onValueChange={(v) =>
-                                        update("heat_map_default_range", v)
-                                    }
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="7d">7 Days</SelectItem>
-                                        <SelectItem value="30d">30 Days</SelectItem>
-                                        <SelectItem value="90d">90 Days</SelectItem>
-                                        <SelectItem value="1y">1 Year</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Heat Intensity</Label>
-                                <Select
-                                    value={settings.heat_map_intensity || "medium"}
-                                    onValueChange={(v) =>
-                                        update("heat_map_intensity", v)
-                                    }
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="low">Low</SelectItem>
-                                        <SelectItem value="medium">Medium</SelectItem>
-                                        <SelectItem value="high">High</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <Label>Radius (px)</Label>
-                                    <Input
-                                        type="number"
-                                        value={settings.heat_map_radius || 25}
-                                        onChange={(e) =>
-                                            update("heat_map_radius", parseInt(e.target.value))
-                                        }
-                                    />
-                                </div>
-                                <div className="space-y-2">
-                                    <Label>Blur (px)</Label>
-                                    <Input
-                                        type="number"
-                                        value={settings.heat_map_blur || 15}
-                                        onChange={(e) =>
-                                            update("heat_map_blur", parseInt(e.target.value))
-                                        }
-                                    />
-                                </div>
-                            </div>
-                            <div className="flex items-center justify-between">
-                                <div className="space-y-0.5">
-                                    <Label>Show Pickups</Label>
-                                    <p className="text-xs text-muted-foreground">
-                                        Display pickup heat points
-                                    </p>
-                                </div>
-                                <Switch
-                                    checked={settings.heat_map_show_pickups ?? true}
-                                    onCheckedChange={(checked) =>
-                                        update("heat_map_show_pickups", checked)
-                                    }
-                                />
-                            </div>
-                            <div className="flex items-center justify-between">
-                                <div className="space-y-0.5">
-                                    <Label>Show Dropoffs</Label>
-                                    <p className="text-xs text-muted-foreground">
-                                        Display dropoff heat points
-                                    </p>
-                                </div>
-                                <Switch
-                                    checked={settings.heat_map_show_dropoffs ?? true}
-                                    onCheckedChange={(checked) =>
-                                        update("heat_map_show_dropoffs", checked)
-                                    }
-                                />
-                            </div>
-                            <Separator />
-                            <div className="flex items-center justify-between">
-                                <div className="space-y-0.5">
-                                    <Label>Corporate Heat Map</Label>
-                                    <p className="text-xs text-muted-foreground">
-                                        Enable corporate-specific view
-                                    </p>
-                                </div>
-                                <Switch
-                                    checked={settings.corporate_heat_map_enabled ?? true}
-                                    onCheckedChange={(checked) =>
-                                        update("corporate_heat_map_enabled", checked)
-                                    }
-                                />
-                            </div>
-                            <div className="flex items-center justify-between">
-                                <div className="space-y-0.5">
-                                    <Label>Regular Rider Heat Map</Label>
-                                    <p className="text-xs text-muted-foreground">
-                                        Enable regular rider view
-                                    </p>
-                                </div>
-                                <Switch
-                                    checked={settings.regular_rider_heat_map_enabled ?? true}
-                                    onCheckedChange={(checked) =>
-                                        update("regular_rider_heat_map_enabled", checked)
-                                    }
-                                />
-                            </div>
-                        </CardContent>
-                    </Card>
-
                     {/* Legal Documents */}
                     <Card className="border-border/50 lg:col-span-2">
                         <CardHeader>
@@ -566,9 +332,6 @@ export default function SettingsPage() {
                                     placeholder="Enter full terms of service text here..."
                                     className="min-h-[200px]"
                                 />
-                                <p className="text-xs text-muted-foreground">
-                                    Supports basic formatting or markdown. Sent directly to driver/rider apps.
-                                </p>
                             </div>
                             <div className="space-y-2">
                                 <Label>Privacy Policy</Label>
@@ -578,9 +341,6 @@ export default function SettingsPage() {
                                     placeholder="Enter full privacy policy text here..."
                                     className="min-h-[200px]"
                                 />
-                                <p className="text-xs text-muted-foreground">
-                                    Supports basic formatting or markdown. Sent directly to driver/rider apps.
-                                </p>
                             </div>
                         </CardContent>
                     </Card>

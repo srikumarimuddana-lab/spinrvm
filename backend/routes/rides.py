@@ -55,10 +55,18 @@ async def match_driver_to_ride(ride_id: str):
         logger.warning(f"[DISPATCH] match_driver_to_ride: ride {ride_id} not found")
         return
 
-    settings = await get_app_settings()
-    algorithm = settings.get('driver_matching_algorithm', 'nearest')
-    min_rating = settings.get('min_driver_rating', 4.0)
-    search_radius = settings.get('search_radius_km', 10.0)
+    # Try to load matching settings from the ride's service area first,
+    # then fall back to global app settings for backward compatibility.
+    app_settings = await get_app_settings()
+    area_settings: dict = {}
+    if ride.get('service_area_id'):
+        area = await db.service_areas.find_one({'id': ride['service_area_id']})
+        if area:
+            area_settings = area
+
+    algorithm = area_settings.get('driver_matching_algorithm') or app_settings.get('driver_matching_algorithm', 'nearest')
+    min_rating = float(area_settings.get('min_driver_rating') or app_settings.get('min_driver_rating', 4.0))
+    search_radius = float(area_settings.get('search_radius_km') or app_settings.get('search_radius_km', 10.0))
 
     logger.info(
         f"[DISPATCH] match start ride_id={ride_id} "

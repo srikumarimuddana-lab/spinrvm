@@ -262,6 +262,10 @@ async def admin_create_service_area(area: Dict[str, Any]):
         # Spinr Pass kill switch
         "spinr_pass_enabled": area.get("spinr_pass_enabled", True),
         "subscription_plan_ids": area.get("subscription_plan_ids", []),
+        # Driver matching settings (per-area)
+        "driver_matching_algorithm": area.get("driver_matching_algorithm", "nearest"),
+        "search_radius_km": area.get("search_radius_km", 10.0),
+        "min_driver_rating": area.get("min_driver_rating", 4.0),
         "created_at": datetime.utcnow().isoformat(),
     }
     row = await db.service_areas.insert_one(doc)
@@ -290,6 +294,9 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
         "required_documents",
         "spinr_pass_enabled",
         "subscription_plan_ids",
+        "driver_matching_algorithm",
+        "search_radius_km",
+        "min_driver_rating",
     ]
     
     # Map geojson from frontend to polygon in DB schema if present

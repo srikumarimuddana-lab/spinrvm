@@ -308,6 +308,17 @@ export default function ServiceAreasPage() {
                             <FieldToggle label="Airport Zone" value={area.is_airport} onSave={v => handleFieldUpdate(area.id, 'is_airport', v)} />
                           </div>
 
+                          {/* Driver Matching */}
+                          <div>
+                            <h4 className="font-bold text-gray-800 mb-2">Driver Matching</h4>
+                            <p className="text-sm text-gray-500 mb-3">Configure how drivers are matched to rides in this area.</p>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                              <FieldSelect label="Matching Algorithm" value={area.driver_matching_algorithm || 'nearest'} options={['nearest', 'rating_based', 'round_robin', 'combined']} onSave={v => handleFieldUpdate(area.id, 'driver_matching_algorithm', v)} />
+                              <FieldInput label="Search Radius (km)" value={area.search_radius_km || 10} type="number" onSave={v => handleFieldUpdate(area.id, 'search_radius_km', parseFloat(v))} />
+                              <FieldInput label="Min Driver Rating" value={area.min_driver_rating || 4.0} type="number" onSave={v => handleFieldUpdate(area.id, 'min_driver_rating', parseFloat(v))} />
+                            </div>
+                          </div>
+
                           {/* Geofence Editor */}
                           <div>
                             <h4 className="font-bold text-gray-800 mb-2">Service Area Boundary</h4>

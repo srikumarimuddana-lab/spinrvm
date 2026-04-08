@@ -530,6 +530,24 @@ export const driverAction = (driverId: string, action: string, reason?: string) 
         body: JSON.stringify({ action, reason }),
     });
 
+export const overrideDriverStatus = (driverId: string, status: string, reason?: string) =>
+    request<any>(`/api/admin/drivers/${driverId}/status-override`, {
+        method: "PUT",
+        body: JSON.stringify({ status, reason }),
+    });
+
+export const getDriverNotes = (driverId: string) =>
+    request<any[]>(`/api/admin/drivers/${driverId}/notes`);
+
+export const addDriverNote = (driverId: string, note: string, category: string = "general") =>
+    request<any>(`/api/admin/drivers/${driverId}/notes`, {
+        method: "POST",
+        body: JSON.stringify({ note, category }),
+    });
+
+export const deleteDriverNote = (noteId: string) =>
+    request<any>(`/api/admin/drivers/notes/${noteId}`, { method: "DELETE" });
+
 
 /* ── Heat Map Data ─────────────────────────── */
 export interface HeatMapData {

@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { driverAction } from "@/lib/api";
+import { driverAction, overrideDriverStatus } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import {
@@ -52,7 +53,12 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
         if (actionDialog.requiresReason && !reason.trim()) return;
         setLoading(true);
         try {
-            await driverAction(driver.id, actionDialog.action, reason.trim() || undefined);
+            if (actionDialog.action.startsWith("override_")) {
+                const targetStatus = actionDialog.action.replace("override_", "");
+                await overrideDriverStatus(driver.id, targetStatus, reason.trim() || undefined);
+            } else {
+                await driverAction(driver.id, actionDialog.action, reason.trim() || undefined);
+            }
             setActionDialog(null);
             onActionComplete();
         } catch (e: any) {
@@ -159,6 +165,33 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
                             <ShieldOff className="h-3.5 w-3.5 mr-1.5" />Unban
                         </Button>
                     )}
+                </div>
+
+                {/* Manual Status Override */}
+                <div className="flex items-center gap-2 mt-3 pt-3 border-t border-dashed">
+                    <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider shrink-0">Move to:</span>
+                    <Select value="" onValueChange={(v) => {
+                        if (v && v !== status) {
+                            openAction(
+                                `override_${v}`,
+                                `Move to ${v.charAt(0).toUpperCase() + v.slice(1)}`,
+                                `Manually override this driver's status to "${v}". This is an admin override — use with caution.`,
+                                v === "rejected" || v === "suspended" || v === "banned",
+                                `Set ${v.charAt(0).toUpperCase() + v.slice(1)}`,
+                                v === "active" ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                                    : v === "banned" ? "bg-red-700 hover:bg-red-800 text-white"
+                                    : v === "suspended" ? "bg-orange-600 hover:bg-orange-700 text-white"
+                                    : "bg-primary hover:bg-primary/90 text-white"
+                            );
+                        }
+                    }}>
+                        <SelectTrigger className="h-7 text-[11px] w-[140px]"><SelectValue placeholder="Override status..." /></SelectTrigger>
+                        <SelectContent>
+                            {(["pending", "active", "rejected", "suspended", "banned"] as const)
+                                .filter(s => s !== status)
+                                .map(s => <SelectItem key={s} value={s} className="text-xs">{s.charAt(0).toUpperCase() + s.slice(1)}</SelectItem>)}
+                        </SelectContent>
+                    </Select>
                 </div>
             </div>
 

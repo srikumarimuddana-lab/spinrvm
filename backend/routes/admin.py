@@ -882,6 +882,92 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
     }
 
 
+class DriverStatusOverride(BaseModel):
+    status: str  # pending, active, rejected, suspended, banned
+    is_verified: Optional[bool] = None
+    reason: Optional[str] = None
+
+
+@admin_router.put("/drivers/{driver_id}/status-override")
+async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride):
+    """Manually move a driver to any status. Use with caution."""
+    valid = {"pending", "active", "rejected", "suspended", "banned"}
+    if req.status not in valid:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {', '.join(valid)}")
+
+    driver = await db.drivers.find_one({"id": driver_id})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    now = datetime.utcnow().isoformat()
+    updates: Dict[str, Any] = {"status": req.status, "updated_at": now}
+
+    if req.is_verified is not None:
+        updates["is_verified"] = req.is_verified
+    elif req.status == "active":
+        updates["is_verified"] = True
+        updates["needs_review"] = False
+    elif req.status in ("rejected", "banned"):
+        updates["is_verified"] = False
+        updates["is_online"] = False
+        updates["is_available"] = False
+    elif req.status == "suspended":
+        updates["is_online"] = False
+        updates["is_available"] = False
+
+    if req.reason:
+        if req.status == "rejected":
+            updates["rejection_reason"] = req.reason
+        elif req.status == "suspended":
+            updates["suspension_reason"] = req.reason
+        elif req.status == "banned":
+            updates["ban_reason"] = req.reason
+
+    await db.drivers.update_one({"id": driver_id}, {"$set": updates})
+    logger.info(f"[ADMIN] Driver {driver_id} status overridden to {req.status} reason={req.reason}")
+    return {"message": f"Driver status set to {req.status}"}
+
+
+# ── Driver Notes ──
+
+
+@admin_router.get("/drivers/{driver_id}/notes")
+async def admin_get_driver_notes(driver_id: str):
+    """Get all notes for a driver, newest first."""
+    notes = await db.get_rows(
+        "driver_notes", {"driver_id": driver_id}, order="created_at", desc=True, limit=200
+    )
+    return notes or []
+
+
+class DriverNoteCreate(BaseModel):
+    note: str
+    category: str = "general"
+
+
+@admin_router.post("/drivers/{driver_id}/notes")
+async def admin_add_driver_note(driver_id: str, req: DriverNoteCreate):
+    """Add a note to a driver's record."""
+    if not req.note.strip():
+        raise HTTPException(status_code=400, detail="Note cannot be empty")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "driver_id": driver_id,
+        "note": req.note.strip(),
+        "category": req.category,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    await db.driver_notes.insert_one(doc)
+    return doc
+
+
+@admin_router.delete("/drivers/notes/{note_id}")
+async def admin_delete_driver_note(note_id: str):
+    """Delete a note."""
+    await db.driver_notes.delete_many({"id": note_id})
+    return {"message": "Note deleted"}
+
+
 # ---------- Stats (count_documents + sum from rides) ----------
 
 

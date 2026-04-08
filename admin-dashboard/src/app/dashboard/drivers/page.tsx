@@ -17,6 +17,7 @@ import DriverStatsCards from "./_components/driver-stats-cards";
 import DriverCharts from "./_components/driver-charts";
 import AreaStatsTable from "./_components/area-stats-table";
 import DriverActionBar from "./_components/driver-action-bar";
+import DriverNotes from "./_components/driver-notes";
 
 const STATUS_TABS = [
     { value: "all", label: "All", icon: Users },
@@ -379,6 +380,7 @@ export default function DriversPage() {
                                 <TabsTrigger value="overview">Overview</TabsTrigger>
                                 <TabsTrigger value="documents">Documents{activeDocs.length > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{activeDocs.length}</span>}</TabsTrigger>
                                 <TabsTrigger value="verification">Actions</TabsTrigger>
+                                <TabsTrigger value="notes">Notes</TabsTrigger>
                             </TabsList>
                             <div className="flex-1 overflow-y-auto px-6 pb-6">
                                 {/* Overview */}
@@ -536,6 +538,11 @@ export default function DriversPage() {
                                             <CheckItem label="Vehicle Photo" checked={!!selected.vehicle_photo_url} />
                                         </div>
                                     </DetailSection>
+                                </TabsContent>
+
+                                {/* Notes */}
+                                <TabsContent value="notes" className="mt-4">
+                                    <DriverNotes driverId={selected.id} />
                                 </TabsContent>
                             </div>
                         </Tabs>

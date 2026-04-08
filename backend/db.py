@@ -284,6 +284,7 @@ class DB:
         self.driver_subscriptions = BaseCollection('driver_subscriptions')
         self.subscription_plans = BaseCollection('subscription_plans')
         self.driver_requirements = BaseCollection('driver_requirements')
+        self.driver_notes = BaseCollection('driver_notes')
         self.cloud_messages = BaseCollection('cloud_messages')
         self.audit_logs = BaseCollection('audit_logs')
         self.push_tokens = BaseCollection('push_tokens')

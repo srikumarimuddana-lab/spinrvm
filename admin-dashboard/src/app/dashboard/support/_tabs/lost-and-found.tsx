@@ -1,23 +1,24 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getLostAndFoundItems, resolveLostItem, updateLostItem, deleteLostItem } from "@/lib/api";
+import { getLostAndFoundItems, resolveLostItem, updateLostItem, deleteLostItem, reportLostItem } from "@/lib/api";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { PackageSearch, Search, CheckCircle, Clock, XCircle, Bell, Trash2, Pencil } from "lucide-react";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { PackageSearch, Search, CheckCircle, XCircle, Clock, Plus, Pencil, Trash2, RefreshCw, Eye } from "lucide-react";
+import { formatDate } from "@/lib/utils";
 
-const STATUS_COLORS: Record<string, string> = {
-    reported: "bg-amber-100 text-amber-700",
-    driver_notified: "bg-blue-100 text-blue-700",
-    resolved: "bg-emerald-100 text-emerald-700",
-    unresolved: "bg-red-100 text-red-700",
-};
-
-const STATUS_ICONS: Record<string, any> = {
-    reported: Clock,
-    driver_notified: Bell,
-    resolved: CheckCircle,
-    unresolved: XCircle,
+const S_CFG: Record<string, { l: string; c: string }> = {
+    reported: { l: "Reported", c: "bg-amber-500/15 text-amber-600" },
+    driver_notified: { l: "Driver Notified", c: "bg-blue-500/15 text-blue-600" },
+    resolved: { l: "Resolved", c: "bg-emerald-500/15 text-emerald-600" },
+    unresolved: { l: "Unresolved", c: "bg-red-500/15 text-red-600" },
 };
 
 export default function LostAndFoundTab() {
@@ -25,201 +26,100 @@ export default function LostAndFoundTab() {
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
+    const [selected, setSelected] = useState<any>(null);
+    const [dialogOpen, setDialogOpen] = useState(false);
+    const [editDialog, setEditDialog] = useState(false);
     const [editing, setEditing] = useState<any>(null);
-    const [editDesc, setEditDesc] = useState("");
-    const [editNotes, setEditNotes] = useState("");
-    const [editStatus, setEditStatus] = useState("");
+    const [saving, setSaving] = useState(false);
+    const [form, setForm] = useState({ ride_id: "", item_description: "" });
+    const [editForm, setEditForm] = useState({ item_description: "", admin_notes: "", status: "reported" });
 
-    const loadItems = () => {
-        setLoading(true);
-        getLostAndFoundItems().then(setItems).catch(() => {}).finally(() => setLoading(false));
-    };
+    const load = () => { setLoading(true); getLostAndFoundItems().then((d) => setItems(d || [])).catch(() => setItems([])).finally(() => setLoading(false)); };
+    useEffect(() => { load(); }, []);
 
-    useEffect(() => { loadItems(); }, []);
-
-    const filtered = items.filter(i => {
-        const q = search.toLowerCase();
-        const matchSearch = !search ||
-            i.item_description?.toLowerCase().includes(q) ||
-            i.ride_id?.toLowerCase().includes(q) ||
-            i.rider_id?.toLowerCase().includes(q) ||
-            i.driver_id?.toLowerCase().includes(q) ||
-            i.admin_notes?.toLowerCase().includes(q);
-        const matchStatus = statusFilter === "all" || i.status === statusFilter;
-        return matchSearch && matchStatus;
+    const stats = { reported: items.filter((i) => i.status === "reported").length, notified: items.filter((i) => i.status === "driver_notified").length, resolved: items.filter((i) => i.status === "resolved").length, unresolved: items.filter((i) => i.status === "unresolved").length };
+    const filtered = items.filter((i) => {
+        const ms = !search || i.item_description?.toLowerCase().includes(search.toLowerCase());
+        return ms && (statusFilter === "all" || i.status === statusFilter);
     });
 
-    const handleResolve = async (id: string, status: "resolved" | "unresolved") => {
-        try {
-            await resolveLostItem(id, { status });
-            loadItems();
-        } catch (e: any) { alert(e.message || "Failed"); }
+    const handleCreate = async () => {
+        if (!form.ride_id.trim() || !form.item_description.trim()) { alert("Enter ride ID and item description."); return; }
+        setSaving(true);
+        try { await reportLostItem(form.ride_id, { item_description: form.item_description }); setDialogOpen(false); setForm({ ride_id: "", item_description: "" }); load(); }
+        catch (e: any) { alert(e.message); } finally { setSaving(false); }
     };
 
-    const handleEdit = (item: any) => {
-        setEditing(item);
-        setEditDesc(item.item_description || "");
-        setEditNotes(item.admin_notes || "");
-        setEditStatus(item.status || "reported");
-    };
-
-    const handleSaveEdit = async () => {
+    const handleUpdate = async () => {
         if (!editing) return;
-        try {
-            await updateLostItem(editing.id, {
-                item_description: editDesc,
-                admin_notes: editNotes,
-                status: editStatus,
-            });
-            loadItems();
-            setEditing(null);
-        } catch (e: any) { alert(e.message || "Failed"); }
+        setSaving(true);
+        try { await updateLostItem(editing.id, editForm); setEditDialog(false); setEditing(null); load(); }
+        catch (e: any) { alert(e.message); } finally { setSaving(false); }
     };
 
-    const handleDelete = async (id: string) => {
-        if (!confirm("Permanently delete this lost & found item?")) return;
-        try {
-            await deleteLostItem(id);
-            loadItems();
-            setEditing(null);
-        } catch (e: any) { alert(e.message || "Failed"); }
-    };
-
-    const statusCounts: Record<string, number> = {
-        all: items.length,
-        reported: items.filter(i => i.status === "reported").length,
-        driver_notified: items.filter(i => i.status === "driver_notified").length,
-        resolved: items.filter(i => i.status === "resolved").length,
-        unresolved: items.filter(i => i.status === "unresolved").length,
+    const handleResolve = async (id: string, status: string) => {
+        try { await resolveLostItem(id, { status }); load(); } catch (e: any) { alert(e.message); }
     };
 
     return (
-        <div>
-            {/* Stats */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 mb-4">
-                {(["reported", "driver_notified", "resolved", "unresolved"] as const).map(s => {
-                    const I = STATUS_ICONS[s];
-                    return (
-                        <div key={s} className="bg-card border rounded-xl p-2.5 sm:p-3 flex items-center gap-2 sm:gap-3">
-                            <div className={`w-8 h-8 sm:w-9 sm:h-9 rounded-lg flex items-center justify-center shrink-0 ${STATUS_COLORS[s]}`}>
-                                <I className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                            </div>
-                            <div>
-                                <p className="text-lg sm:text-xl font-bold">{statusCounts[s]}</p>
-                                <p className="text-[10px] text-muted-foreground capitalize">{s.replace(/_/g, " ")}</p>
-                            </div>
-                        </div>
-                    );
-                })}
+        <div className="space-y-4">
+            <div className="grid grid-cols-4 gap-3">
+                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><Clock className="h-4 w-4 text-amber-500" /><div><p className="text-[10px] text-muted-foreground">Reported</p><p className="text-xl font-bold">{stats.reported}</p></div></div></CardContent></Card>
+                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><PackageSearch className="h-4 w-4 text-blue-500" /><div><p className="text-[10px] text-muted-foreground">Notified</p><p className="text-xl font-bold">{stats.notified}</p></div></div></CardContent></Card>
+                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><CheckCircle className="h-4 w-4 text-emerald-500" /><div><p className="text-[10px] text-muted-foreground">Resolved</p><p className="text-xl font-bold">{stats.resolved}</p></div></div></CardContent></Card>
+                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><XCircle className="h-4 w-4 text-red-500" /><div><p className="text-[10px] text-muted-foreground">Unresolved</p><p className="text-xl font-bold">{stats.unresolved}</p></div></div></CardContent></Card>
             </div>
 
-            {/* Filters */}
-            <div className="flex gap-2 mb-3 flex-wrap">
-                {["all", "reported", "driver_notified", "resolved", "unresolved"].map(s => (
-                    <button key={s} onClick={() => setStatusFilter(s)}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${statusFilter === s ? "bg-primary text-white" : "bg-muted text-muted-foreground"}`}>
-                        {s === "all" ? "All" : s.replace(/_/g, " ")} ({statusCounts[s]})
-                    </button>
-                ))}
-            </div>
-
-            <div className="relative mb-3">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input placeholder="Search item description, ride ID..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 h-9 text-sm" />
-            </div>
-
-            {/* List */}
-            {loading ? (
-                <div className="flex items-center justify-center py-16"><div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
-            ) : filtered.length === 0 ? (
-                <div className="text-center py-16 text-muted-foreground"><PackageSearch className="h-10 w-10 mx-auto mb-3 opacity-30" /><p>No items found</p></div>
-            ) : (
-                <div className="space-y-2">
-                    {filtered.map(item => {
-                        const I = STATUS_ICONS[item.status] || Clock;
-                        return (
-                            <div key={item.id} className="flex items-start gap-3 p-3 bg-card border rounded-xl">
-                                <I className={`h-5 w-5 mt-0.5 shrink-0 ${STATUS_COLORS[item.status]?.split(" ")[1] || "text-gray-500"}`} />
-                                <div className="flex-1 min-w-0">
-                                    <p className="text-sm font-medium">{item.item_description}</p>
-                                    <div className="flex gap-3 text-xs text-muted-foreground mt-1 flex-wrap">
-                                        <span>Ride: <span className="font-mono">{item.ride_id?.slice(0, 8)}</span></span>
-                                        <span>Rider: <span className="font-mono">{item.rider_id?.slice(0, 8)}</span></span>
-                                        <span>Driver: <span className="font-mono">{item.driver_id?.slice(0, 8)}</span></span>
-                                    </div>
-                                    {item.admin_notes && <p className="text-xs text-muted-foreground mt-1">Note: {item.admin_notes}</p>}
-                                    <p className="text-[10px] text-muted-foreground mt-1">{item.created_at ? new Date(item.created_at).toLocaleString() : ""}</p>
-                                </div>
-                                <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
-                                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${STATUS_COLORS[item.status] || "bg-gray-100 text-gray-600"}`}>
-                                        {item.status?.replace(/_/g, " ").toUpperCase()}
-                                    </span>
-                                    {(item.status === "reported" || item.status === "driver_notified") && (
-                                        <>
-                                            <button onClick={() => handleResolve(item.id, "resolved")} className="text-[10px] px-2 py-1 rounded bg-emerald-100 text-emerald-700 hover:bg-emerald-200 font-semibold">Resolve</button>
-                                            <button onClick={() => handleResolve(item.id, "unresolved")} className="text-[10px] px-2 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200 font-semibold">Unresolved</button>
-                                        </>
-                                    )}
-                                    <button onClick={() => handleEdit(item)} title="Edit" className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground">
-                                        <Pencil className="h-3.5 w-3.5" />
-                                    </button>
-                                    <button onClick={() => handleDelete(item.id)} title="Delete" className="p-1.5 rounded-lg hover:bg-red-100 text-red-600">
-                                        <Trash2 className="h-3.5 w-3.5" />
-                                    </button>
-                                </div>
-                            </div>
-                        );
-                    })}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2 flex-1">
+                    <div className="relative flex-1 max-w-xs"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search items..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-9" /></div>
+                    <Select value={statusFilter} onValueChange={setStatusFilter}><SelectTrigger className="w-36 h-9"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All</SelectItem><SelectItem value="reported">Reported</SelectItem><SelectItem value="driver_notified">Notified</SelectItem><SelectItem value="resolved">Resolved</SelectItem><SelectItem value="unresolved">Unresolved</SelectItem></SelectContent></Select>
                 </div>
-            )}
+                <div className="flex gap-2">
+                    <Button variant="outline" size="sm" onClick={load}><RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />Refresh</Button>
+                    <Button size="sm" onClick={() => setDialogOpen(true)}><Plus className="mr-1.5 h-3.5 w-3.5" />Report Item</Button>
+                </div>
+            </div>
+
+            <Card><CardContent className="p-0">
+                {loading ? <div className="flex justify-center p-12"><div className="h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
+                : filtered.length === 0 ? <div className="text-center py-12 text-muted-foreground text-sm">No items found.</div>
+                : <Table><TableHeader><TableRow><TableHead>Item</TableHead><TableHead>Ride</TableHead><TableHead>Status</TableHead><TableHead>Date</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+                    <TableBody>{filtered.map((item) => (
+                        <TableRow key={item.id}>
+                            <TableCell className="font-medium max-w-[220px] truncate text-sm">{item.item_description}</TableCell>
+                            <TableCell className="font-mono text-xs text-muted-foreground">{item.ride_id?.slice(0, 8) || "—"}</TableCell>
+                            <TableCell><Badge className={`text-[10px] ${(S_CFG[item.status] || S_CFG.reported).c}`}>{(S_CFG[item.status] || S_CFG.reported).l}</Badge></TableCell>
+                            <TableCell className="text-[10px] text-muted-foreground">{formatDate(item.created_at)}</TableCell>
+                            <TableCell className="text-right"><div className="flex justify-end gap-0.5">
+                                {item.status !== "resolved" && <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleResolve(item.id, "resolved")} title="Resolve"><CheckCircle className="h-3.5 w-3.5 text-emerald-500" /></Button>}
+                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditing(item); setEditForm({ item_description: item.item_description || "", admin_notes: item.admin_notes || "", status: item.status || "reported" }); setEditDialog(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => { if (confirm("Delete?")) deleteLostItem(item.id).then(load); }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                            </div></TableCell>
+                        </TableRow>
+                    ))}</TableBody></Table>}
+            </CardContent></Card>
+
+            {/* Report Dialog */}
+            <Dialog open={dialogOpen} onOpenChange={(o) => { if (!o) setDialogOpen(false); }}>
+                <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="text-base">Report Lost Item</DialogTitle></DialogHeader>
+                    <div className="space-y-3">
+                        <div className="space-y-1.5"><Label className="text-xs">Ride ID *</Label><Input placeholder="Enter ride ID" value={form.ride_id} onChange={(e) => setForm({ ...form, ride_id: e.target.value })} /></div>
+                        <div className="space-y-1.5"><Label className="text-xs">Item Description *</Label><Textarea placeholder="Describe the item..." value={form.item_description} onChange={(e) => setForm({ ...form, item_description: e.target.value })} rows={3} /></div>
+                        <Button className="w-full" size="sm" onClick={handleCreate} disabled={saving}>{saving ? "Reporting..." : "Report Item"}</Button>
+                    </div>
+                </DialogContent>
+            </Dialog>
 
             {/* Edit Dialog */}
-            <Dialog open={!!editing} onOpenChange={v => !v && setEditing(null)}>
-                <DialogContent className="sm:max-w-md">
-                    <DialogHeader>
-                        <DialogTitle className="flex items-center gap-2">
-                            <Pencil className="h-5 w-5 text-primary" /> Edit Lost Item
-                        </DialogTitle>
-                    </DialogHeader>
-                    {editing && (
-                        <div className="space-y-3">
-                            <div>
-                                <label className="text-xs font-medium text-muted-foreground">Item Description</label>
-                                <textarea value={editDesc} onChange={e => setEditDesc(e.target.value)}
-                                    className="w-full mt-1 border rounded-lg px-3 py-2 text-sm bg-card text-foreground min-h-[60px] resize-none" />
-                            </div>
-                            <div>
-                                <label className="text-xs font-medium text-muted-foreground">Admin Notes</label>
-                                <textarea value={editNotes} onChange={e => setEditNotes(e.target.value)}
-                                    placeholder="Internal notes..."
-                                    className="w-full mt-1 border rounded-lg px-3 py-2 text-sm bg-card text-foreground min-h-[60px] resize-none" />
-                            </div>
-                            <div>
-                                <label className="text-xs font-medium text-muted-foreground">Status</label>
-                                <select value={editStatus} onChange={e => setEditStatus(e.target.value)}
-                                    className="w-full mt-1 border rounded-lg px-3 py-2 text-sm bg-card text-foreground">
-                                    <option value="reported">Reported</option>
-                                    <option value="driver_notified">Driver Notified</option>
-                                    <option value="resolved">Resolved</option>
-                                    <option value="unresolved">Unresolved</option>
-                                </select>
-                            </div>
-                            <div className="text-xs text-muted-foreground space-y-0.5">
-                                <p>Ride: <span className="font-mono">{editing.ride_id}</span></p>
-                                <p>Rider: <span className="font-mono">{editing.rider_id?.slice(0, 12)}</span> · Driver: <span className="font-mono">{editing.driver_id?.slice(0, 12)}</span></p>
-                            </div>
-                            <DialogFooter className="flex gap-2">
-                                <button onClick={() => handleDelete(editing.id)}
-                                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-red-100 text-red-700 hover:bg-red-200">
-                                    <Trash2 className="h-3.5 w-3.5" /> Delete
-                                </button>
-                                <button onClick={handleSaveEdit}
-                                    className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-lg bg-primary text-white hover:bg-primary/90">
-                                    Save Changes
-                                </button>
-                            </DialogFooter>
-                        </div>
-                    )}
+            <Dialog open={editDialog} onOpenChange={(o) => { if (!o) { setEditDialog(false); setEditing(null); } }}>
+                <DialogContent className="sm:max-w-md"><DialogHeader><DialogTitle className="text-base">Edit Lost Item</DialogTitle></DialogHeader>
+                    <div className="space-y-3">
+                        <div className="space-y-1.5"><Label className="text-xs">Item Description</Label><Textarea value={editForm.item_description} onChange={(e) => setEditForm({ ...editForm, item_description: e.target.value })} rows={2} /></div>
+                        <div className="space-y-1.5"><Label className="text-xs">Admin Notes</Label><Textarea value={editForm.admin_notes} onChange={(e) => setEditForm({ ...editForm, admin_notes: e.target.value })} rows={2} /></div>
+                        <div className="space-y-1.5"><Label className="text-xs">Status</Label><Select value={editForm.status} onValueChange={(v) => setEditForm({ ...editForm, status: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="reported">Reported</SelectItem><SelectItem value="driver_notified">Driver Notified</SelectItem><SelectItem value="resolved">Resolved</SelectItem><SelectItem value="unresolved">Unresolved</SelectItem></SelectContent></Select></div>
+                        <Button className="w-full" size="sm" onClick={handleUpdate} disabled={saving}>{saving ? "Saving..." : "Save Changes"}</Button>
+                    </div>
                 </DialogContent>
             </Dialog>
         </div>

@@ -1,17 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { DollarSign, CreditCard, Flame, Banknote } from "lucide-react";
+import { DollarSign, Flame, Banknote } from "lucide-react";
 import dynamic from "next/dynamic";
 
 const FareConfigTab = dynamic(() => import("./_tabs/fare-config"), { ssr: false, loading: () => <TabLoader /> });
 const SurgeTab = dynamic(() => import("./_tabs/surge"), { ssr: false, loading: () => <TabLoader /> });
-const SpinrPassTab = dynamic(() => import("./_tabs/spinr-pass"), { ssr: false, loading: () => <TabLoader /> });
 
 const TABS = [
     { id: "fares", label: "Fares", icon: Banknote },
     { id: "surge", label: "Surge", icon: Flame },
-    { id: "spinr-pass", label: "Spinr Pass", icon: CreditCard },
 ];
 
 function TabLoader() {
@@ -27,7 +25,7 @@ export default function PricingPage() {
                 <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2">
                     <DollarSign className="h-5 w-5 sm:h-6 sm:w-6" /> Pricing & Billing
                 </h1>
-                <p className="text-xs sm:text-sm text-muted-foreground mt-1">Manage fares, surge pricing, and driver subscriptions</p>
+                <p className="text-xs sm:text-sm text-muted-foreground mt-1">Manage fares and surge pricing</p>
             </div>
 
             <div className="flex gap-0 mb-4 overflow-x-auto border-b -mx-1 px-1 scrollbar-none">
@@ -46,7 +44,6 @@ export default function PricingPage() {
 
             {activeTab === "fares" && <FareConfigTab />}
             {activeTab === "surge" && <SurgeTab />}
-            {activeTab === "spinr-pass" && <SpinrPassTab />}
         </div>
     );
 }

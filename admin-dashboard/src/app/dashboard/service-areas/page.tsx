@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, lazy, Suspense } from "react";
-import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans, getAreaFees, createAreaFee, updateAreaFee, deleteAreaFee } from "@/lib/api";
+import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans, createSubscriptionPlan, updateSubscriptionPlan, deleteSubscriptionPlan, getDriverSubscriptions, getAreaFees, createAreaFee, updateAreaFee, deleteAreaFee } from "@/lib/api";
+import { Infinity as InfinityIcon } from "lucide-react";
 import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, X, FileText, GripVertical, Clock, ShieldCheck, ShieldAlert, CheckCircle, AlertTriangle, Image, Plane } from "lucide-react";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
@@ -330,35 +331,12 @@ export default function ServiceAreasPage() {
 
                       {/* Spinr Pass Tab */}
                       {editTab === 'subscriptions' && (
-                        <div>
-                          <div className="flex items-center justify-between mb-4">
-                            <div>
-                              <h4 className="font-bold text-gray-800">Spinr Pass Plans</h4>
-                              <p className="text-sm text-gray-500">Select which subscription plans are available in this area</p>
-                            </div>
-                            <FieldToggle label="Enabled" value={area.spinr_pass_enabled !== false} onSave={v => handleFieldUpdate(area.id, 'spinr_pass_enabled', v)} />
-                          </div>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            {plans.map(plan => {
-                              const selected = (area.subscription_plan_ids || []).includes(plan.id);
-                              return (
-                                <label key={plan.id} className={`flex items-center gap-3 p-4 rounded-xl border cursor-pointer transition ${selected ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-100 hover:border-gray-300'}`}>
-                                  <input type="checkbox" checked={selected} className="accent-red-500 w-4 h-4" onChange={() => {
-                                    const current = area.subscription_plan_ids || [];
-                                    const next = selected ? current.filter((id: string) => id !== plan.id) : [...current, plan.id];
-                                    handleFieldUpdate(area.id, 'subscription_plan_ids', next);
-                                  }} />
-                                  <div className="flex-1">
-                                    <div className="font-semibold text-gray-800">{plan.name}</div>
-                                    <div className="text-sm text-gray-500">${plan.price?.toFixed(2)} · {plan.rides_per_day === -1 ? 'Unlimited' : plan.rides_per_day + ' rides/day'}</div>
-                                  </div>
-                                  {!plan.is_active && <span className="text-xs text-yellow-600 bg-yellow-50 px-2 py-0.5 rounded">Inactive</span>}
-                                </label>
-                              );
-                            })}
-                            {plans.length === 0 && <p className="text-gray-400 text-sm col-span-2">No subscription plans created yet. Go to Spinr Pass to create plans.</p>}
-                          </div>
-                        </div>
+                        <SpinrPassAreaTab
+                          area={area}
+                          plans={plans}
+                          onToggle={v => handleFieldUpdate(area.id, 'spinr_pass_enabled', v)}
+                          onPlansChanged={load}
+                        />
                       )}
 
                       {/* Documents Tab */}
@@ -985,4 +963,214 @@ function FeeEditForm({ fee, feeTypes, calcModes, onSave, onCancel }: {
             </div>
         </div>
     );
+}
+
+// --- Spinr Pass per-area tab with full plan management ---
+
+const DURATION_OPTIONS = [
+  { label: "Daily", value: 1 },
+  { label: "Weekly", value: 7 },
+  { label: "Monthly", value: 30 },
+  { label: "Yearly", value: 365 },
+];
+
+function SpinrPassAreaTab({ area, plans, onToggle, onPlansChanged }: {
+  area: any; plans: any[]; onToggle: (v: boolean) => void; onPlansChanged: () => void;
+}) {
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [subs, setSubs] = useState<any[]>([]);
+  const [subsLoaded, setSubsLoaded] = useState(false);
+  const [form, setForm] = useState({ name: "", price: "", duration_days: 30, rides_per_day: -1, description: "", features: "", is_active: true });
+
+  const loadSubs = async () => {
+    try { const s = await getDriverSubscriptions(); setSubs(s || []); } catch {}
+    setSubsLoaded(true);
+  };
+
+  const resetForm = () => { setShowForm(false); setEditingId(null); setForm({ name: "", price: "", duration_days: 30, rides_per_day: -1, description: "", features: "", is_active: true }); };
+
+  const handleSubmit = async () => {
+    if (!form.name || !form.price) return;
+    const data = {
+      name: form.name, price: parseFloat(form.price), duration_days: form.duration_days,
+      rides_per_day: form.rides_per_day, description: form.description,
+      features: form.features ? form.features.split(",").map(f => f.trim()).filter(Boolean) : [],
+      is_active: form.is_active,
+    };
+    try {
+      if (editingId) { await updateSubscriptionPlan(editingId, data); }
+      else { await createSubscriptionPlan(data); }
+      resetForm(); onPlansChanged();
+    } catch (e: any) { alert(e?.message || "Failed to save plan"); }
+  };
+
+  const handleEdit = (p: any) => {
+    setEditingId(p.id);
+    setForm({ name: p.name, price: String(p.price), duration_days: p.duration_days, rides_per_day: p.rides_per_day, description: p.description || "", features: (p.features || []).join(", "), is_active: p.is_active });
+    setShowForm(true);
+  };
+
+  const handleDeletePlan = async (p: any) => {
+    if (!confirm(`Delete "${p.name}" plan?`)) return;
+    await deleteSubscriptionPlan(p.id); onPlansChanged();
+  };
+
+  const handleTogglePlan = async (p: any) => {
+    await updateSubscriptionPlan(p.id, { is_active: !p.is_active }); onPlansChanged();
+  };
+
+  const getDurationLabel = (days: number) => DURATION_OPTIONS.find(d => d.value === days)?.label || `${days} days`;
+
+  const enabled = area.spinr_pass_enabled !== false;
+
+  return (
+    <div>
+      {/* Kill switch */}
+      <div className={`flex items-center justify-between p-4 rounded-xl mb-5 ${enabled ? 'bg-green-50 border border-green-200' : 'bg-gray-50 border border-gray-200'}`}>
+        <div>
+          <h4 className="font-bold text-gray-800">Spinr Pass for {area.name}</h4>
+          <p className="text-sm text-gray-500">
+            {enabled ? 'Drivers in this area can see and subscribe to plans' : 'Disabled — drivers see "It\'s Free Right Now!" instead'}
+          </p>
+        </div>
+        <FieldToggle label={enabled ? "ON" : "OFF"} value={enabled} onSave={onToggle} />
+      </div>
+
+      {/* Plan management */}
+      <div className="flex items-center justify-between mb-4">
+        <h4 className="font-bold text-gray-800">Subscription Plans</h4>
+        <button onClick={() => { resetForm(); setShowForm(true); }} className="flex items-center gap-1.5 bg-red-500 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-red-600">
+          <Plus className="h-4 w-4" /> New Plan
+        </button>
+      </div>
+
+      {/* Create/Edit Form */}
+      {showForm && (
+        <div className="bg-white rounded-xl border p-5 mb-5 shadow-sm">
+          <h5 className="font-bold mb-3">{editingId ? "Edit Plan" : "New Plan"}</h5>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Plan Name *</label>
+              <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="e.g. Basic" value={form.name} onChange={e => setForm({...form, name: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Price (CAD) *</label>
+              <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.01" placeholder="19.99" value={form.price} onChange={e => setForm({...form, price: e.target.value})} />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Duration</label>
+              <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.duration_days} onChange={e => setForm({...form, duration_days: parseInt(e.target.value)})}>
+                {DURATION_OPTIONS.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Rides Per Day</label>
+              <div className="flex gap-1.5 flex-wrap">
+                <button onClick={() => setForm({...form, rides_per_day: -1})} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${form.rides_per_day === -1 ? "bg-red-500 text-white border-red-500" : "bg-white border-gray-200"}`}>Unlimited</button>
+                {[4, 8, 12, 20].map(n => (
+                  <button key={n} onClick={() => setForm({...form, rides_per_day: n})} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${form.rides_per_day === n ? "bg-red-500 text-white border-red-500" : "bg-white border-gray-200"}`}>{n}</button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1">Description</label>
+              <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Brief description" value={form.description} onChange={e => setForm({...form, description: e.target.value})} />
+            </div>
+          </div>
+          <div className="mb-3">
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Features (comma-separated)</label>
+            <input className="w-full border rounded-lg px-3 py-2 text-sm" placeholder="Priority support, Surge protection" value={form.features} onChange={e => setForm({...form, features: e.target.value})} />
+          </div>
+          <div className="flex items-center gap-4 mb-4">
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_active} onChange={e => setForm({...form, is_active: e.target.checked})} className="accent-red-500" /> Active</label>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={handleSubmit} className="bg-red-500 text-white px-5 py-2 rounded-xl text-sm font-semibold hover:bg-red-600">{editingId ? "Save" : "Create Plan"}</button>
+            <button onClick={resetForm} className="bg-gray-100 text-gray-600 px-5 py-2 rounded-xl text-sm font-semibold">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Plans List */}
+      {plans.length === 0 ? (
+        <div className="text-center py-12 bg-gray-50 rounded-xl">
+          <CreditCard className="h-10 w-10 text-gray-300 mx-auto mb-3" />
+          <p className="text-gray-500 font-medium">No subscription plans yet</p>
+          <p className="text-gray-400 text-sm mt-1">Create your first Spinr Pass plan above</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 mb-6">
+          {plans.map(p => (
+            <div key={p.id} className={`bg-white rounded-xl border p-5 relative ${!p.is_active ? "opacity-50" : ""}`}>
+              <button onClick={() => handleTogglePlan(p)} className="absolute top-3 right-3">
+                {p.is_active ? <ToggleRight className="h-5 w-5 text-green-500" /> : <ToggleLeft className="h-5 w-5 text-gray-300" />}
+              </button>
+              <h5 className="font-bold text-gray-900 text-lg">{p.name}</h5>
+              {p.description && <p className="text-gray-500 text-xs mt-0.5">{p.description}</p>}
+              <div className="mt-2 mb-3">
+                <span className="text-2xl font-extrabold text-red-500">${p.price?.toFixed(2)}</span>
+                <span className="text-gray-400 text-xs ml-1">/ {getDurationLabel(p.duration_days).toLowerCase()}</span>
+              </div>
+              <p className="text-sm text-gray-600 mb-1">
+                {p.rides_per_day === -1 ? 'Unlimited rides/day' : `${p.rides_per_day} rides/day`}
+              </p>
+              <p className="text-xs text-gray-400">{p.subscriber_count || 0} subscribers</p>
+              {(p.features || []).length > 0 && (
+                <div className="border-t mt-3 pt-2">
+                  {p.features.map((f: string, i: number) => <p key={i} className="text-xs text-gray-500 py-0.5">✓ {f}</p>)}
+                </div>
+              )}
+              <div className="flex gap-2 mt-3 pt-2 border-t">
+                <button onClick={() => handleEdit(p)} className="flex-1 text-center py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50 rounded-lg"><Pencil className="h-3 w-3 inline mr-1" />Edit</button>
+                <button onClick={() => handleDeletePlan(p)} className="flex-1 text-center py-1.5 text-xs font-semibold text-red-500 hover:bg-red-50 rounded-lg"><Trash2 className="h-3 w-3 inline mr-1" />Delete</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Subscribers */}
+      {plans.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h4 className="font-bold text-gray-800">Subscribers</h4>
+            {!subsLoaded && <button onClick={loadSubs} className="text-sm text-red-500 font-semibold hover:underline">Load subscribers</button>}
+          </div>
+          {subsLoaded && (
+            subs.length === 0 ? (
+              <p className="text-gray-400 text-sm">No subscribers yet.</p>
+            ) : (
+              <div className="bg-white rounded-xl border overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 text-left">
+                    <tr>
+                      <th className="px-4 py-2 font-semibold text-gray-600 text-xs">Driver</th>
+                      <th className="px-4 py-2 font-semibold text-gray-600 text-xs">Plan</th>
+                      <th className="px-4 py-2 font-semibold text-gray-600 text-xs">Status</th>
+                      <th className="px-4 py-2 font-semibold text-gray-600 text-xs">Expires</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {subs.map(s => (
+                      <tr key={s.id} className="border-t">
+                        <td className="px-4 py-2 font-mono text-xs">{s.driver_id?.slice(0, 8)}...</td>
+                        <td className="px-4 py-2">{s.plan_name}</td>
+                        <td className="px-4 py-2">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${s.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{s.status?.toUpperCase()}</span>
+                        </td>
+                        <td className="px-4 py-2 text-xs text-gray-500">{s.expires_at ? new Date(s.expires_at).toLocaleDateString() : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          )}
+        </div>
+      )}
+    </div>
+  );
 }

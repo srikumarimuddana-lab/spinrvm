@@ -121,13 +121,24 @@ async def _supersede_and_flag_pending_review(
     except Exception as e:
         logger.warning(f"Could not supersede prior docs for driver {driver_id}: {e}")
 
-    # Flag driver for re-review. We keep is_verified=true but set
-    # needs_review=true so admin sees them in the "Needs Review" queue.
+    # Set driver to needs_review so they can't go online until admin re-approves.
     try:
-        await db.drivers.update_one(
-            {'id': driver_id},
-            {'$set': {'needs_review': True, 'updated_at': datetime.utcnow()}},
-        )
+        driver = await db.drivers.find_one({'id': driver_id})
+        if driver and driver.get('status') == 'active':
+            await db.drivers.update_one(
+                {'id': driver_id},
+                {'$set': {
+                    'status': 'needs_review',
+                    'is_online': False,
+                    'is_available': False,
+                    'updated_at': datetime.utcnow(),
+                }},
+            )
+        else:
+            await db.drivers.update_one(
+                {'id': driver_id},
+                {'$set': {'updated_at': datetime.utcnow()}},
+            )
     except Exception as e:
         logger.warning(f"Could not flag driver {driver_id} for review: {e}")
 

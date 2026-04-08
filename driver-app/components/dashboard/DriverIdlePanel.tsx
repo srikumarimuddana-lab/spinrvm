@@ -61,17 +61,10 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
     ? STATE_BANNERS[onboardingStatus as keyof typeof STATE_BANNERS]
     : null;
 
-  // `is_verified` is the authoritative admin-approved flag. The onboarding
-  // state machine describes sub-states of pre-verification, so once admin
-  // sets is_verified=true the only legitimate hard-block is `suspended`.
-  // Don't gate GO on the full state machine — that causes false negatives
-  // when an edge case in derive_driver_onboarding_status (e.g. a missing
-  // first_name on the user row, an empty driver_requirements collection
-  // read that throws) returns a non-verified status for a driver the
-  // admin has already approved. The backend still has the final say via
-  // PUT /drivers/{id}/status (402 = no subscription, etc).
-  const canGoOnline =
-    !!driverData?.is_verified && onboardingStatus !== 'suspended';
+  // Only drivers with status='active' can go online. The backend enforces
+  // this too, but we disable the GO button client-side for better UX.
+  const driverStatus = (driverData as any)?.status || 'pending';
+  const canGoOnline = driverStatus === 'active';
 
   const goAnim = useRef(new Animated.Value(1)).current;
 

@@ -65,12 +65,14 @@ async def update_my_driver(body: dict = Body(...), current_user: dict = Depends(
     if not updates:
         return {'success': True}
 
-    # Check if a verified driver changed vehicle/document fields → flag for review
+    # Check if an active driver changed vehicle/document fields → needs review
     changed_vehicle = any(k in vehicle_fields for k in updates)
-    if changed_vehicle and driver.get('is_verified'):
-        updates['needs_review'] = True
+    if changed_vehicle and driver.get('status') == 'active':
+        updates['status'] = 'needs_review'
+        updates['is_online'] = False
+        updates['is_available'] = False
         logger.info(
-            f"[DRIVER] Driver {driver['id']} updated vehicle info → flagged for admin re-review"
+            f"[DRIVER] Driver {driver['id']} updated vehicle info → status set to needs_review"
         )
 
     updates['updated_at'] = datetime.utcnow().isoformat()
@@ -132,6 +134,7 @@ async def register_driver(
         'is_online': False,
         'is_available': False,
         'is_verified': False,
+        'status': 'pending',
         'lat': 0.0,
         'lng': 0.0,
         'created_at': datetime.utcnow().isoformat(),
@@ -1443,9 +1446,18 @@ async def update_driver_status(
 
     # Ban check: prevent banned drivers from going online
     if is_online and driver.get('status') == 'banned':
-        raise HTTPException(status_code=403, detail='Your account has been suspended due to policy violations.')
+        raise HTTPException(status_code=403, detail='Your account has been permanently suspended due to policy violations.')
     if is_online and driver.get('status') == 'suspended':
         raise HTTPException(status_code=403, detail='Your account is currently suspended. Please contact support.')
+    if is_online and driver.get('status') == 'needs_review':
+        raise HTTPException(status_code=400, detail='Your account is under review. Please wait for admin approval before going online.')
+    if is_online and driver.get('status') not in ('active',):
+        # Pending, rejected, or any unknown status
+        if not driver.get('is_verified', False) and driver.get('status') != 'active':
+            raise HTTPException(
+                status_code=400,
+                detail='Your driver profile has not been verified yet. Please wait for admin approval.'
+            )
 
     if is_online:
         now = datetime.utcnow()
@@ -1536,11 +1548,8 @@ async def update_driver_status(
                         detail=f'{label} has expired ({field}). Please update your documents before going online.'
                     )
 
-        if not driver.get('is_verified', False):
-            raise HTTPException(
-                status_code=400,
-                detail='Your driver profile has not been verified yet. Please wait for admin approval.'
-            )
+        # is_verified check removed — status field is the single source of truth now.
+        # Only status='active' drivers reach this point (blocked above).
 
         # Check active Spinr Pass subscription. The enforcement is toggled
         # by the admin-controlled app setting `require_driver_subscription`

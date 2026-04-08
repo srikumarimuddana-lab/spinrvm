@@ -531,7 +531,7 @@ async def admin_get_driver_stats(
         if uid and uid not in users_map:
             users_map[uid] = await db.users.find_one({"id": uid})
 
-    # Fetch pending documents for verified drivers (re-uploads needing review)
+    # Auto-detect needs_review: active drivers with expired docs or pending re-uploads
     all_docs = await db.get_rows("driver_documents", {"status": "pending"}, limit=10000)
     pending_doc_driver_ids = {d.get("driver_id") for d in all_docs if d.get("driver_id")}
 
@@ -544,37 +544,36 @@ async def admin_get_driver_stats(
     enriched_drivers = []
     for d in all_drivers:
         u = users_map.get(d.get("user_id"))
-        is_verified = d.get("is_verified", False)
+        driver_status = d.get("status", "pending")
 
-        # Detect "needs_review": stored flag, expired docs, or pending re-uploads
-        needs_review = bool(d.get("needs_review"))
-        if not needs_review and is_verified:
-            # Check expired documents
+        # Auto-detect needs_review for active drivers
+        if driver_status == "active":
             for ef in expiry_fields:
                 exp = d.get(ef)
                 if exp and str(exp) < now_iso:
-                    needs_review = True
+                    driver_status = "needs_review"
                     break
-            # Check pending re-uploaded documents
-            if not needs_review and d.get("id") in pending_doc_driver_ids:
-                needs_review = True
+            if driver_status == "active" and d.get("id") in pending_doc_driver_ids:
+                driver_status = "needs_review"
 
         enriched_drivers.append({
             **d,
+            "status": driver_status,
             "first_name": u.get("first_name") if u else d.get("first_name"),
             "last_name": u.get("last_name") if u else d.get("last_name"),
             "name": _user_display_name(u) or d.get("name"),
             "email": u.get("email") if u else None,
             "phone": u.get("phone") if u else d.get("phone"),
-            "needs_review": needs_review,
         })
 
     # ── Compute overall driver stats ──
     total = len(enriched_drivers)
     online = sum(1 for d in enriched_drivers if d.get("is_online"))
-    verified = sum(1 for d in enriched_drivers if d.get("is_verified") and not d.get("needs_review"))
-    needs_review_count = sum(1 for d in enriched_drivers if d.get("needs_review"))
-    unverified = total - verified - needs_review_count
+    active_count = sum(1 for d in enriched_drivers if d.get("status") == "active")
+    pending_count = sum(1 for d in enriched_drivers if d.get("status") == "pending")
+    needs_review_count = sum(1 for d in enriched_drivers if d.get("status") == "needs_review")
+    suspended_count = sum(1 for d in enriched_drivers if d.get("status") == "suspended")
+    banned_count = sum(1 for d in enriched_drivers if d.get("status") == "banned")
     total_rides_sum = sum(int(d.get("total_rides") or 0) for d in enriched_drivers)
     total_earnings_sum = sum(float(d.get("total_earnings") or 0) for d in enriched_drivers)
     avg_rating = 0.0
@@ -662,9 +661,11 @@ async def admin_get_driver_stats(
         "stats": {
             "total": total,
             "online": online,
-            "verified": verified,
-            "unverified": unverified,
+            "active": active_count,
+            "pending": pending_count,
             "needs_review": needs_review_count,
+            "suspended": suspended_count,
+            "banned": banned_count,
             "total_rides": total_rides_sum,
             "total_earnings": total_earnings_sum,
             "avg_rating": avg_rating,
@@ -808,31 +809,18 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
         raise HTTPException(status_code=404, detail="Driver not found")
 
     current_status = driver.get("status", "pending")
-    is_verified = driver.get("is_verified", False)
     now = datetime.utcnow().isoformat()
     updates: Dict[str, Any] = {"updated_at": now}
 
     if req.action == "approve":
-        # Approve: verify the driver, clear any review flags, set status active
-        updates["is_verified"] = True
-        updates["needs_review"] = False
+        # Approve → Active: driver can go online
         updates["status"] = "active"
+        updates["is_verified"] = True
         updates["rejection_reason"] = None
         updates["verified_at"] = now
 
-    elif req.action == "reject":
-        # Reject: un-verify, set status rejected, store reason
-        if not req.reason:
-            raise HTTPException(status_code=400, detail="Reason is required when rejecting")
-        updates["is_verified"] = False
-        updates["needs_review"] = False
-        updates["status"] = "rejected"
-        updates["rejection_reason"] = req.reason
-        updates["is_online"] = False
-        updates["is_available"] = False
-
     elif req.action == "suspend":
-        # Suspend: temporarily disable, keep verified status, store reason
+        # Suspend: temporarily disable, store reason
         if not req.reason:
             raise HTTPException(status_code=400, detail="Reason is required when suspending")
         updates["status"] = "suspended"
@@ -846,25 +834,27 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
         if not req.reason:
             raise HTTPException(status_code=400, detail="Reason is required when banning")
         updates["status"] = "banned"
+        updates["is_verified"] = False
         updates["ban_reason"] = req.reason
         updates["banned_at"] = now
         updates["is_online"] = False
         updates["is_available"] = False
 
     elif req.action == "unban":
-        # Unban: lift ban, set back to active if was verified, else pending
-        updates["status"] = "active" if is_verified else "pending"
+        # Unban → Active
+        updates["status"] = "active"
+        updates["is_verified"] = True
         updates["ban_reason"] = None
         updates["banned_at"] = None
         updates["unban_reason"] = req.reason
         updates["unbanned_at"] = now
 
     elif req.action == "reactivate":
-        # Reactivate from suspended/rejected → active if verified, else pending
-        updates["status"] = "active" if is_verified else "pending"
+        # Reactivate from suspended → Active
+        updates["status"] = "active"
+        updates["is_verified"] = True
         updates["suspension_reason"] = None
         updates["suspended_at"] = None
-        updates["rejection_reason"] = None
 
     else:
         raise HTTPException(status_code=400, detail=f"Unknown action: {req.action}")
@@ -919,23 +909,16 @@ async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride
     now = datetime.utcnow().isoformat()
     updates: Dict[str, Any] = {"status": req.status, "updated_at": now}
 
-    if req.is_verified is not None:
-        updates["is_verified"] = req.is_verified
-    elif req.status == "active":
-        updates["is_verified"] = True
-        updates["needs_review"] = False
-    elif req.status in ("rejected", "banned"):
-        updates["is_verified"] = False
-        updates["is_online"] = False
-        updates["is_available"] = False
-    elif req.status == "suspended":
+    # Sync is_verified with status
+    updates["is_verified"] = req.status == "active"
+
+    # Take offline if not active
+    if req.status != "active":
         updates["is_online"] = False
         updates["is_available"] = False
 
     if req.reason:
-        if req.status == "rejected":
-            updates["rejection_reason"] = req.reason
-        elif req.status == "suspended":
+        if req.status == "suspended":
             updates["suspension_reason"] = req.reason
         elif req.status == "banned":
             updates["ban_reason"] = req.reason
@@ -2545,11 +2528,14 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
                 limit=1,
             )
             if not remaining_pending:
+                # All pending docs approved → set driver back to active
                 try:
-                    await db.drivers.update_one(
-                        {"id": driver_id},
-                        {"$set": {"needs_review": False}},
-                    )
+                    drv = await db.drivers.find_one({"id": driver_id})
+                    if drv and drv.get("status") == "needs_review":
+                        await db.drivers.update_one(
+                            {"id": driver_id},
+                            {"$set": {"status": "active", "is_verified": True}},
+                        )
                 except Exception:
                     pass
 

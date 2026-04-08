@@ -17,6 +17,8 @@ export default function RidesPage() {
     const [search, setSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
     const [areaFilter, setAreaFilter] = useState("all");
+    const [dateFrom, setDateFrom] = useState("");
+    const [dateTo, setDateTo] = useState("");
     const [selectedRideId, setSelectedRideId] = useState<string | null>(null);
 
     const loadRides = useCallback(async (p: number) => {
@@ -54,7 +56,13 @@ export default function RidesPage() {
             r.driver_id?.toLowerCase().includes(q);
         const matchStatus = statusFilter === "all" || r.status === statusFilter;
         const matchArea = areaFilter === "all" || r.service_area_id === areaFilter;
-        return matchSearch && matchStatus && matchArea;
+        let matchDate = true;
+        if (dateFrom || dateTo) {
+            const d = r.created_at ? new Date(r.created_at).toISOString().split("T")[0] : "";
+            if (dateFrom && d < dateFrom) matchDate = false;
+            if (dateTo && d > dateTo) matchDate = false;
+        }
+        return matchSearch && matchStatus && matchArea && matchDate;
     });
 
     const totalPages = Math.ceil(totalCount / PAGE_SIZE);
@@ -86,6 +94,10 @@ export default function RidesPage() {
                 onStatusChange={setStatusFilter}
                 areaFilter={areaFilter}
                 onAreaChange={setAreaFilter}
+                dateFrom={dateFrom}
+                onDateFromChange={setDateFrom}
+                dateTo={dateTo}
+                onDateToChange={setDateTo}
                 onSelect={(ride) => setSelectedRideId(ride.id)}
                 page={page}
                 totalPages={totalPages}

@@ -12,7 +12,7 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Users, Wifi, WifiOff, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye } from "lucide-react";
+import { Search, Users, Wifi, WifiOff, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 import DriverStatsCards from "./_components/driver-stats-cards";
 import DriverCharts from "./_components/driver-charts";
 import AreaStatsTable from "./_components/area-stats-table";
@@ -31,6 +31,8 @@ export default function DriversPage() {
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
+    const [sortKey, setSortKey] = useState<string>("created_at");
+    const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
     const [selected, setSelected] = useState<any>(null);
     const [verifying, setVerifying] = useState(false);
     const [driverDocs, setDriverDocs] = useState<any[]>([]);
@@ -115,10 +117,28 @@ export default function DriversPage() {
         return matchSearch && matchStatus;
     });
 
+    // Sort
+    const sorted = [...filtered].sort((a, b) => {
+        let av: any, bv: any;
+        if (sortKey === "name") { av = `${a.first_name} ${a.last_name}`.toLowerCase(); bv = `${b.first_name} ${b.last_name}`.toLowerCase(); }
+        else if (sortKey === "rating") { av = a.rating || 0; bv = b.rating || 0; }
+        else if (sortKey === "total_rides") { av = a.total_rides || 0; bv = b.total_rides || 0; }
+        else if (sortKey === "total_earnings") { av = a.total_earnings || 0; bv = b.total_earnings || 0; }
+        else if (sortKey === "created_at") { av = a.created_at || ""; bv = b.created_at || ""; }
+        else if (sortKey === "region") { av = (serviceAreas.find(sa => sa.id === a.service_area_id)?.name || "zzz").toLowerCase(); bv = (serviceAreas.find(sa => sa.id === b.service_area_id)?.name || "zzz").toLowerCase(); }
+        else { av = (a[sortKey] || "").toString().toLowerCase(); bv = (b[sortKey] || "").toString().toLowerCase(); }
+        if (av < bv) return sortDir === "asc" ? -1 : 1;
+        if (av > bv) return sortDir === "asc" ? 1 : -1;
+        return 0;
+    });
+
+    const handleSort = (key: string) => { if (sortKey === key) { setSortDir(d => d === "asc" ? "desc" : "asc"); } else { setSortKey(key); setSortDir(key === "created_at" || key === "total_earnings" || key === "total_rides" || key === "rating" ? "desc" : "asc"); } };
+    const SortIcon = ({ col }: { col: string }) => { if (sortKey !== col) return <ArrowUpDown className="h-3 w-3 opacity-30 inline ml-1" />; return sortDir === "asc" ? <ArrowUp className="h-3 w-3 inline ml-1" /> : <ArrowDown className="h-3 w-3 inline ml-1" />; };
+
     const statusCounts = (s: string) => { if (s === "all") return drivers.length; if (s === "online") return drivers.filter(d => d.is_online).length; if (s === "offline") return drivers.filter(d => !d.is_online).length; if (s === "verified") return drivers.filter(d => d.is_verified).length; if (s === "unverified") return drivers.filter(d => !d.is_verified).length; return 0; };
     const fmtDate = (d: string) => { if (!d) return "\u2014"; try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
 
-    const handleExport = () => { exportToCsv("drivers", filtered, [{ key: "id", label: "ID" }, { key: "first_name", label: "First Name" }, { key: "last_name", label: "Last Name" }, { key: "email", label: "Email" }, { key: "phone", label: "Phone" }, { key: "service_area_id", label: "Service Area ID" }, { key: "is_verified", label: "Verified" }, { key: "is_online", label: "Online" }, { key: "rating", label: "Rating" }, { key: "total_rides", label: "Rides" }, { key: "total_earnings", label: "Earnings" }, { key: "vehicle_make", label: "Vehicle Make" }, { key: "vehicle_model", label: "Vehicle Model" }, { key: "license_plate", label: "License Plate" }, { key: "created_at", label: "Joined" }]); };
+    const handleExport = () => { exportToCsv("drivers", sorted, [{ key: "id", label: "ID" }, { key: "first_name", label: "First Name" }, { key: "last_name", label: "Last Name" }, { key: "email", label: "Email" }, { key: "phone", label: "Phone" }, { key: "service_area_id", label: "Service Area ID" }, { key: "is_verified", label: "Verified" }, { key: "is_online", label: "Online" }, { key: "rating", label: "Rating" }, { key: "total_rides", label: "Rides" }, { key: "total_earnings", label: "Earnings" }, { key: "vehicle_make", label: "Vehicle Make" }, { key: "vehicle_model", label: "Vehicle Model" }, { key: "license_plate", label: "License Plate" }, { key: "created_at", label: "Joined" }]); };
 
     const selectedAreaName = serviceAreaId ? serviceAreas.find(a => a.id === serviceAreaId)?.name || "Selected Area" : "All Areas";
     const activeDocs = driverDocs.filter(d => d.status !== "superseded");
@@ -199,32 +219,48 @@ export default function DriversPage() {
                     <Table>
                         <TableHeader>
                             <TableRow className="bg-muted/50 hover:bg-muted/50 border-b-0">
-                                <TableHead className="font-semibold text-foreground/80 lowercase tracking-wider text-[11px] h-11 uppercase">Driver</TableHead>
-                                <TableHead className="font-semibold text-foreground/80 lowercase tracking-wider text-[11px] h-11 uppercase">Status</TableHead>
-                                <TableHead className="font-semibold text-foreground/80 lowercase tracking-wider text-[11px] h-11 uppercase">Vehicle</TableHead>
-                                <TableHead className="font-semibold text-foreground/80 lowercase tracking-wider text-[11px] h-11 uppercase text-center">Performance</TableHead>
-                                <TableHead className="font-semibold text-foreground/80 lowercase tracking-wider text-[11px] h-11 uppercase">Region & Joined</TableHead>
-                                <TableHead className="text-right font-semibold text-foreground/80 lowercase tracking-wider text-[11px] h-11 uppercase pr-5">Actions</TableHead>
+                                <TableHead className="h-11 pl-5 w-20"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Actions</span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("name")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Driver<SortIcon col="name" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("status")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Status<SortIcon col="status" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("vehicle_make")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Vehicle<SortIcon col="vehicle_make" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none text-center" onClick={() => handleSort("rating")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Rating<SortIcon col="rating" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none text-center" onClick={() => handleSort("total_rides")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Rides<SortIcon col="total_rides" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none text-right" onClick={() => handleSort("total_earnings")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Earnings<SortIcon col="total_earnings" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("region")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Region<SortIcon col="region" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none pr-5" onClick={() => handleSort("created_at")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Joined<SortIcon col="created_at" /></span></TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {loading ? Array.from({ length: 5 }).map((_, i) => (
                                 <TableRow key={i} className="animate-pulse">
+                                    <TableCell><div className="h-8 w-16 bg-muted rounded" /></TableCell>
                                     <TableCell className="py-4"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-muted" /><div className="space-y-2"><div className="h-3 w-24 bg-muted rounded" /><div className="h-2 w-16 bg-muted rounded" /></div></div></TableCell>
-                                    <TableCell><div className="space-y-2"><div className="h-4 w-16 bg-muted rounded" /><div className="h-4 w-16 bg-muted rounded" /></div></TableCell>
-                                    <TableCell><div className="space-y-2"><div className="h-3 w-20 bg-muted rounded" /><div className="h-4 w-16 bg-muted rounded" /></div></TableCell>
-                                    <TableCell><div className="flex justify-center space-x-4"><div className="h-8 w-8 bg-muted rounded" /><div className="h-8 w-8 bg-muted rounded" /><div className="h-8 w-8 bg-muted rounded" /></div></TableCell>
-                                    <TableCell><div className="space-y-2"><div className="h-3 w-20 bg-muted rounded" /><div className="h-3 w-20 bg-muted rounded" /></div></TableCell>
-                                    <TableCell><div className="h-8 w-20 bg-muted rounded ml-auto mr-1" /></TableCell>
+                                    <TableCell><div className="h-4 w-16 bg-muted rounded" /></TableCell>
+                                    <TableCell><div className="h-3 w-20 bg-muted rounded" /></TableCell>
+                                    <TableCell><div className="h-4 w-8 bg-muted rounded mx-auto" /></TableCell>
+                                    <TableCell><div className="h-4 w-8 bg-muted rounded mx-auto" /></TableCell>
+                                    <TableCell><div className="h-4 w-12 bg-muted rounded ml-auto" /></TableCell>
+                                    <TableCell><div className="h-3 w-16 bg-muted rounded" /></TableCell>
+                                    <TableCell><div className="h-3 w-16 bg-muted rounded" /></TableCell>
                                 </TableRow>
-                            )) : filtered.length === 0 ? (
+                            )) : sorted.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={6} className="text-center py-20 text-muted-foreground"><Users className="h-12 w-12 mx-auto mb-3 opacity-20" /><p className="text-base font-medium">No drivers found</p><p className="text-sm mt-1">Try adjusting your search or filters</p></TableCell>
+                                    <TableCell colSpan={9} className="text-center py-20 text-muted-foreground"><Users className="h-12 w-12 mx-auto mb-3 opacity-20" /><p className="text-base font-medium">No drivers found</p><p className="text-sm mt-1">Try adjusting your search or filters</p></TableCell>
                                 </TableRow>
-                            ) : filtered.map(driver => {
+                            ) : sorted.map(driver => {
                                 const areaName = serviceAreas.find(a => a.id === driver.service_area_id)?.name;
                                 return (
                                     <TableRow key={driver.id} className={`group cursor-pointer transition-colors hover:bg-muted/40 ${selected?.id === driver.id ? "bg-primary/5 hover:bg-primary/5" : ""}`} onClick={() => setSelected(driver)}>
+                                        <TableCell className="pl-4 align-middle">
+                                            <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                                <Button size="sm" variant="secondary" className="h-7 text-[10px] font-medium px-2" onClick={(e) => { e.stopPropagation(); setSelected(driver); }}><Eye className="h-3 w-3 mr-1" />View</Button>
+                                                {!driver.is_verified && (
+                                                    <Button size="sm" variant="outline" className="h-7 text-[10px] font-medium px-2 border-amber-200 text-amber-600 hover:bg-amber-50 bg-amber-50/50" onClick={(e) => { e.stopPropagation(); handleVerify(driver.id, true); }}>
+                                                        <ShieldCheck className="h-3 w-3 mr-1" />Verify
+                                                    </Button>
+                                                )}
+                                            </div>
+                                        </TableCell>
                                         <TableCell className="py-3">
                                             <div className="flex items-center gap-3">
                                                 <div className="relative">
@@ -232,7 +268,7 @@ export default function DriversPage() {
                                                     <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-card ${driver.is_online ? "bg-emerald-500" : "bg-gray-300"}`} />
                                                 </div>
                                                 <div className="flex-1 min-w-0">
-                                                    <p className="text-sm font-semibold truncate hover:text-primary transition-colors">{driver.first_name} {driver.last_name}</p>
+                                                    <p className="text-sm font-semibold truncate">{driver.first_name} {driver.last_name}</p>
                                                     {driver.email && <p className="text-[11px] text-muted-foreground truncate">{driver.email}</p>}
                                                     {driver.phone && <p className="text-[11px] text-muted-foreground flex items-center gap-1 mt-0.5"><Phone className="h-2.5 w-2.5" /> {driver.phone}</p>}
                                                 </div>
@@ -240,7 +276,7 @@ export default function DriversPage() {
                                         </TableCell>
                                         <TableCell>
                                             <div className="flex flex-col gap-1.5 items-start">
-                                                {driver.is_verified ? <Badge variant="default" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:hover:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800"><ShieldCheck className="h-3 w-3 mr-1" /> Verified</Badge> : <Badge variant="default" className="bg-amber-100 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:hover:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0 border-amber-200 dark:border-amber-800"><ShieldAlert className="h-3 w-3 mr-1" /> Pending</Badge>}
+                                                {driver.is_verified ? <Badge variant="default" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800"><ShieldCheck className="h-3 w-3 mr-1" />Verified</Badge> : <Badge variant="default" className="bg-amber-100 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0 border-amber-200 dark:border-amber-800"><ShieldAlert className="h-3 w-3 mr-1" />Pending</Badge>}
                                                 <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${driver.is_online ? "border-emerald-300 text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10" : ""}`}>{driver.is_online ? "Online" : "Offline"}</Badge>
                                             </div>
                                         </TableCell>
@@ -250,33 +286,23 @@ export default function DriversPage() {
                                                     <Car className="h-3.5 w-3.5" />
                                                     <span className="truncate max-w-[120px]">{[driver.vehicle_color, driver.vehicle_make, driver.vehicle_model].filter(Boolean).join(" ") || "No vehicle"}</span>
                                                 </div>
-                                                {driver.license_plate ? <span className="font-mono font-bold text-foreground/80 tracking-wider bg-muted px-1.5 py-0.5 rounded text-[10px] border shadow-sm self-start inline-block">{driver.license_plate}</span> : <span className="text-[10px] text-muted-foreground/60 italic">No plate</span>}
+                                                {driver.license_plate ? <span className="font-mono font-bold text-foreground/80 tracking-wider bg-muted px-1.5 py-0.5 rounded text-[10px] border shadow-sm self-start">{driver.license_plate}</span> : <span className="text-[10px] text-muted-foreground/60 italic">No plate</span>}
                                             </div>
+                                        </TableCell>
+                                        <TableCell className="text-center">
+                                            <span className="text-xs font-bold flex items-center justify-center gap-1"><Star className="h-3 w-3 text-amber-500 fill-amber-500" />{driver.rating?.toFixed(1) || "\u2014"}</span>
+                                        </TableCell>
+                                        <TableCell className="text-center">
+                                            <span className="text-xs font-bold">{(driver.total_rides || 0).toLocaleString()}</span>
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                            <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(driver.total_earnings || 0)}</span>
                                         </TableCell>
                                         <TableCell>
-                                            <div className="flex items-center justify-center gap-3">
-                                                <div className="flex flex-col items-center"><span className="text-xs font-bold text-foreground flex items-center gap-1"><Star className="h-3 w-3 text-amber-500 fill-amber-500" />{driver.rating?.toFixed(1) || "\u2014"}</span><span className="text-[9px] text-muted-foreground uppercase tracking-wider">Rating</span></div>
-                                                <div className="h-6 w-px bg-border"></div>
-                                                <div className="flex flex-col items-center"><span className="text-xs font-bold text-foreground">{(driver.total_rides || 0).toLocaleString()}</span><span className="text-[9px] text-muted-foreground uppercase tracking-wider">Rides</span></div>
-                                                <div className="h-6 w-px bg-border"></div>
-                                                <div className="flex flex-col items-center"><span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(driver.total_earnings || 0)}</span><span className="text-[9px] text-muted-foreground uppercase tracking-wider">Earned</span></div>
-                                            </div>
+                                            <div className="flex items-center gap-1.5 text-xs text-foreground font-medium truncate max-w-[120px]"><MapPin className="h-3.5 w-3.5 text-blue-500 shrink-0" />{areaName || "Unassigned"}</div>
                                         </TableCell>
-                                        <TableCell>
-                                            <div className="flex flex-col gap-1.5 text-xs">
-                                                <div className="flex items-center gap-1.5 text-foreground font-medium truncate max-w-[140px]"><MapPin className="h-3.5 w-3.5 text-blue-500" />{areaName || "Unassigned"}</div>
-                                                <div className="flex items-center gap-1.5 text-muted-foreground"><Clock className="h-3 w-3" />{fmtDate(driver.created_at)}</div>
-                                            </div>
-                                        </TableCell>
-                                        <TableCell className="text-right pr-4 align-middle">
-                                            <div className="flex items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
-                                                {!driver.is_verified && (
-                                                    <Button size="sm" variant="outline" className="h-8 text-xs font-medium border-amber-200 text-amber-600 hover:bg-amber-50 hover:text-amber-700 bg-amber-50/50" onClick={(e) => { e.stopPropagation(); handleVerify(driver.id, true); }}>
-                                                        {verifying && selected?.id === driver.id ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <ShieldCheck className="h-3 w-3 mr-1" />} Verify
-                                                    </Button>
-                                                )}
-                                                <Button size="sm" variant="secondary" className="h-8 text-xs font-medium" onClick={(e) => { e.stopPropagation(); setSelected(driver); }}>View</Button>
-                                            </div>
+                                        <TableCell className="pr-5">
+                                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground"><Clock className="h-3 w-3 shrink-0" />{fmtDate(driver.created_at)}</div>
                                         </TableCell>
                                     </TableRow>
                                 );

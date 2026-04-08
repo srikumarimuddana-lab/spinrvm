@@ -2,7 +2,7 @@
 
 import { useEffect, useState, lazy, Suspense } from "react";
 import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans } from "@/lib/api";
-import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, X, FileText } from "lucide-react";
+import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, X, FileText, GripVertical, Clock, ShieldCheck, ShieldAlert, CheckCircle, AlertTriangle, Image } from "lucide-react";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
@@ -208,7 +208,7 @@ export default function ServiceAreasPage() {
                         { key: 'pricing', label: 'Vehicle Pricing', icon: Car },
                         { key: 'fees', label: 'Fees & Taxes', icon: DollarSign },
                         { key: 'subscriptions', label: 'Spinr Pass', icon: CreditCard },
-                        { key: 'documents', label: 'Documents', icon: Settings },
+                        { key: 'documents', label: 'Documents', icon: FileText },
                       ].map(tab => (
                         <button key={tab.key} onClick={() => setEditTab(tab.key)}
                           className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold rounded-t-lg transition ${editTab === tab.key ? 'bg-white text-red-500 border-t-2 border-red-500' : 'text-gray-500 hover:text-gray-700'}`}>
@@ -428,37 +428,156 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
     { key: 'background_check', label: 'Background Check', has_expiry: true, required: true },
     { key: 'vehicle_inspection', label: 'Vehicle Inspection', has_expiry: true, required: true },
   ]);
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [dirty, setDirty] = useState(false);
 
   const update = (idx: number, field: string, val: any) => {
     const next = [...rows];
     next[idx] = { ...next[idx], [field]: val };
     setRows(next);
+    setDirty(true);
   };
 
-  const addDoc = () => setRows([...rows, { key: '', label: '', has_expiry: false, required: true }]);
-  const removeDoc = (i: number) => setRows(rows.filter((_, idx) => idx !== i));
+  const addDoc = () => {
+    setRows([...rows, { key: '', label: '', has_expiry: false, required: true }]);
+    setEditingIdx(rows.length);
+    setDirty(true);
+  };
+
+  const removeDoc = (i: number) => {
+    setRows(rows.filter((_, idx) => idx !== i));
+    setEditingIdx(null);
+    setDirty(true);
+  };
+
+  const moveDoc = (from: number, to: number) => {
+    if (to < 0 || to >= rows.length) return;
+    const next = [...rows];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    setRows(next);
+    setEditingIdx(to);
+    setDirty(true);
+  };
+
+  const requiredCount = rows.filter(r => r.required !== false).length;
+  const expiryCount = rows.filter(r => r.has_expiry).length;
 
   return (
     <div>
-      <p className="text-sm text-gray-500 mb-4">Define which documents drivers must upload to operate in this area.</p>
-      <div className="space-y-3">
-        {rows.map((r, i) => (
-          <div key={i} className="flex items-center gap-3 bg-gray-50 rounded-xl p-3">
-            <input className="flex-1 border rounded-lg px-3 py-2 text-sm" placeholder="Document label" value={r.label} onChange={e => update(i, 'label', e.target.value)} />
-            <input className="w-36 border rounded-lg px-3 py-2 text-sm" placeholder="Key (e.g. sin_card)" value={r.key} onChange={e => update(i, 'key', e.target.value)} />
-            <label className="flex items-center gap-1 text-sm whitespace-nowrap">
-              <input type="checkbox" checked={r.has_expiry} onChange={e => update(i, 'has_expiry', e.target.checked)} className="accent-red-500" /> Expiry
-            </label>
-            <label className="flex items-center gap-1 text-sm whitespace-nowrap">
-              <input type="checkbox" checked={r.required !== false} onChange={e => update(i, 'required', e.target.checked)} className="accent-red-500" /> Required
-            </label>
-            <button onClick={() => removeDoc(i)} className="text-gray-400 hover:text-red-500"><X className="h-4 w-4" /></button>
-          </div>
-        ))}
+      {/* Header */}
+      <div className="flex items-start justify-between mb-5">
+        <div>
+          <h4 className="font-bold text-gray-800 text-base">Required Documents</h4>
+          <p className="text-sm text-gray-500 mt-0.5">Define which documents drivers must upload to operate in this area.</p>
+        </div>
+        <div className="flex items-center gap-4 text-xs text-gray-500">
+          <span className="flex items-center gap-1"><FileText className="h-3.5 w-3.5" /> {rows.length} total</span>
+          <span className="flex items-center gap-1"><ShieldCheck className="h-3.5 w-3.5 text-emerald-500" /> {requiredCount} required</span>
+          <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5 text-amber-500" /> {expiryCount} with expiry</span>
+        </div>
       </div>
-      <div className="flex gap-3 mt-3">
-        <button onClick={addDoc} className="text-sm text-red-500 font-semibold hover:underline">+ Add document type</button>
-        <button onClick={() => onSave(rows)} className="bg-red-500 text-white px-5 py-2 rounded-xl text-sm font-semibold hover:bg-red-600">Save Documents</button>
+
+      {/* Document Cards Grid */}
+      {rows.length === 0 ? (
+        <div className="text-center py-12 bg-gray-50 rounded-xl border-2 border-dashed border-gray-200">
+          <Image className="h-10 w-10 mx-auto mb-3 text-gray-300" />
+          <p className="text-sm font-medium text-gray-500">No documents required</p>
+          <p className="text-xs text-gray-400 mt-1">Add document types that drivers need to upload</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {rows.map((r, i) => {
+            const isEditing = editingIdx === i;
+            return (
+              <div key={i} className={`rounded-xl border overflow-hidden transition-all ${isEditing ? 'ring-2 ring-red-200 border-red-300 shadow-md' : 'bg-white hover:shadow-sm border-gray-200'}`}>
+                {/* Card Header with preview */}
+                <div className={`px-4 py-3 flex items-center gap-3 ${isEditing ? 'bg-red-50' : 'bg-gray-50'}`}>
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${r.required !== false ? 'bg-emerald-100' : 'bg-gray-100'}`}>
+                    <FileText className={`h-5 w-5 ${r.required !== false ? 'text-emerald-600' : 'text-gray-400'}`} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-bold text-gray-800 truncate">{r.label || 'Untitled Document'}</p>
+                    <p className="text-xs text-gray-400 font-mono">{r.key || 'no_key'}</p>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button onClick={() => moveDoc(i, i - 1)} disabled={i === 0} className="p-1 text-gray-300 hover:text-gray-500 disabled:opacity-30" title="Move up">
+                      <ChevronUp className="h-4 w-4" />
+                    </button>
+                    <button onClick={() => moveDoc(i, i + 1)} disabled={i === rows.length - 1} className="p-1 text-gray-300 hover:text-gray-500 disabled:opacity-30" title="Move down">
+                      <ChevronDown className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Status badges */}
+                <div className="px-4 py-2.5 flex items-center gap-2 flex-wrap">
+                  {r.required !== false ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-700"><ShieldCheck className="h-3 w-3" /> Required</span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-500"><ShieldAlert className="h-3 w-3" /> Optional</span>
+                  )}
+                  {r.has_expiry ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-700"><Clock className="h-3 w-3" /> Has Expiry</span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-400">No Expiry</span>
+                  )}
+                </div>
+
+                {/* Expand to edit or show actions */}
+                {isEditing ? (
+                  <div className="px-4 pb-4 space-y-3 border-t bg-white">
+                    <div className="pt-3">
+                      <label className="block text-[11px] font-semibold text-gray-500 mb-1">Document Label</label>
+                      <input className="w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-red-200 focus:border-red-300 outline-none" placeholder="e.g. Driver's License" value={r.label} onChange={e => update(i, 'label', e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-gray-500 mb-1">Key (identifier)</label>
+                      <input className="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-red-200 focus:border-red-300 outline-none" placeholder="e.g. drivers_license" value={r.key} onChange={e => update(i, 'key', e.target.value)} />
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input type="checkbox" checked={r.has_expiry} onChange={e => update(i, 'has_expiry', e.target.checked)} className="accent-red-500 w-4 h-4" />
+                        <span>Requires expiry date</span>
+                      </label>
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input type="checkbox" checked={r.required !== false} onChange={e => update(i, 'required', e.target.checked)} className="accent-red-500 w-4 h-4" />
+                        <span>Required</span>
+                      </label>
+                    </div>
+                    <div className="flex items-center justify-between pt-2">
+                      <button onClick={() => removeDoc(i)} className="flex items-center gap-1 text-sm text-red-500 hover:text-red-700 font-medium">
+                        <Trash2 className="h-3.5 w-3.5" /> Remove
+                      </button>
+                      <button onClick={() => setEditingIdx(null)} className="px-4 py-1.5 bg-gray-100 text-gray-700 text-sm rounded-lg font-semibold hover:bg-gray-200">Done</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="px-4 pb-3 flex items-center justify-between">
+                    <button onClick={() => setEditingIdx(i)} className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-500 font-medium">
+                      <Pencil className="h-3 w-3" /> Edit
+                    </button>
+                    <button onClick={() => removeDoc(i)} className="flex items-center gap-1 text-xs text-gray-300 hover:text-red-500">
+                      <Trash2 className="h-3 w-3" /> Remove
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex items-center gap-3 mt-5 pt-4 border-t">
+        <button onClick={addDoc} className="flex items-center gap-1.5 text-sm text-red-500 font-semibold hover:text-red-700 transition">
+          <Plus className="h-4 w-4" /> Add document type
+        </button>
+        <div className="flex-1" />
+        {dirty && <span className="text-xs text-amber-600 font-medium">Unsaved changes</span>}
+        <button onClick={() => { onSave(rows); setDirty(false); }} className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${dirty ? 'bg-red-500 text-white hover:bg-red-600 shadow-sm' : 'bg-gray-100 text-gray-400'}`}>
+          <span className="flex items-center gap-1.5"><CheckCircle className="h-4 w-4" /> Save Documents</span>
+        </button>
       </div>
     </div>
   );

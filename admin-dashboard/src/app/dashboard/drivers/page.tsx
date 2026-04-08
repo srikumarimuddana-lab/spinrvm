@@ -113,6 +113,17 @@ export default function DriversPage() {
     const selectedDriverArea = selected ? allServiceAreas.find(a => a.id === selected.service_area_id) : null;
     const requiredDocs: { key: string; label: string; has_expiry: boolean }[] = selectedDriverArea?.required_documents || [];
 
+    // Map service area document key to driver profile legacy expiry field
+    function _docKeyToExpiryField(key: string): string | null {
+        const k = key.toLowerCase();
+        if (k.includes("license") || k.includes("driving") || k.includes("permit")) return "license_expiry_date";
+        if (k.includes("insurance")) return "insurance_expiry_date";
+        if (k.includes("inspection")) return "vehicle_inspection_expiry_date";
+        if (k.includes("background")) return "background_check_expiry_date";
+        if (k.includes("work") || k.includes("eligibility")) return "work_eligibility_expiry_date";
+        return null;
+    }
+
     return (
         <div className="space-y-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -352,10 +363,16 @@ export default function DriversPage() {
                                 {/* Documents */}
                                 <TabsContent value="documents" className="mt-4 space-y-6">
                                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                                        <DocExpirySummaryCard label="Driver's License" expiry={selected.license_expiry_date} />
-                                        <DocExpirySummaryCard label="Insurance" expiry={selected.insurance_expiry_date} />
-                                        <DocExpirySummaryCard label="Vehicle Inspection" expiry={selected.vehicle_inspection_expiry_date} />
-                                        <DocExpirySummaryCard label="Background Check" expiry={selected.background_check_expiry_date} />
+                                        {requiredDocs.length > 0 ? requiredDocs.filter(rd => rd.has_expiry).map(rd => {
+                                            // Map service area doc key to driver profile expiry field
+                                            const expiryField = _docKeyToExpiryField(rd.key);
+                                            return <DocExpirySummaryCard key={rd.key} label={rd.label} expiry={expiryField ? selected[expiryField] : undefined} />;
+                                        }) : (<>
+                                            <DocExpirySummaryCard label="Driver's License" expiry={selected.license_expiry_date} />
+                                            <DocExpirySummaryCard label="Insurance" expiry={selected.insurance_expiry_date} />
+                                            <DocExpirySummaryCard label="Vehicle Inspection" expiry={selected.vehicle_inspection_expiry_date} />
+                                            <DocExpirySummaryCard label="Background Check" expiry={selected.background_check_expiry_date} />
+                                        </>)}
                                     </div>
                                     {docsLoading ? <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">{[1,2,3,4].map(i=><div key={i} className="h-48 bg-muted rounded-xl animate-pulse" />)}</div>
                                     : requiredDocs.length > 0 ? (
@@ -401,10 +418,22 @@ export default function DriversPage() {
                                     </div>
                                     <DetailSection title="Verification Checklist" icon={CheckCircle}>
                                         <div className="space-y-2">
-                                            <CheckItem label="Driver's License" checked={!!selected.license_expiry_date} expired={selected.license_expiry_date && new Date(selected.license_expiry_date) < new Date()} />
-                                            <CheckItem label="Insurance" checked={!!selected.insurance_expiry_date} expired={selected.insurance_expiry_date && new Date(selected.insurance_expiry_date) < new Date()} />
-                                            <CheckItem label="Vehicle Inspection" checked={!!selected.vehicle_inspection_expiry_date} expired={selected.vehicle_inspection_expiry_date && new Date(selected.vehicle_inspection_expiry_date) < new Date()} />
-                                            <CheckItem label="Background Check" checked={!!selected.background_check_expiry_date} expired={selected.background_check_expiry_date && new Date(selected.background_check_expiry_date) < new Date()} />
+                                            {(requiredDocs.length > 0 ? requiredDocs : [
+                                                { key: "drivers_license", label: "Driver's License", has_expiry: true },
+                                                { key: "vehicle_insurance", label: "Insurance", has_expiry: true },
+                                                { key: "vehicle_inspection", label: "Vehicle Inspection", has_expiry: true },
+                                                { key: "background_check", label: "Background Check", has_expiry: true },
+                                            ]).map(rd => {
+                                                const expiryField = _docKeyToExpiryField(rd.key);
+                                                const hasDoc = activeDocs.some(d =>
+                                                    (d.document_type || "").toLowerCase().replace(/[^a-z0-9]/g, "_").includes(rd.key.replace(/[^a-z0-9]/g, "_")) ||
+                                                    (d.document_type || "").toLowerCase() === rd.label.toLowerCase() ||
+                                                    d.requirement_id === rd.key
+                                                );
+                                                const expiryVal = expiryField ? selected[expiryField] : undefined;
+                                                const isExpired = expiryVal && new Date(expiryVal) < new Date();
+                                                return <CheckItem key={rd.key} label={rd.label} checked={hasDoc || !!expiryVal} expired={isExpired} />;
+                                            })}
                                             <CheckItem label="Profile Photo" checked={!!selected.profile_photo_url} />
                                             <CheckItem label="Vehicle Photo" checked={!!selected.vehicle_photo_url} />
                                         </div>

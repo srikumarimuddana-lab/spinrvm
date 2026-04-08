@@ -143,10 +143,46 @@ async def save_upload(file: UploadFile) -> str:
 # --- Public/Driver Endpoints ---
 
 @documents_router.get("/requirements")
-async def get_document_requirements():
-    """Get all document requirements for drivers."""
-    # Fetch all active requirements
-    # In future, filter by country/city if needed
+async def get_document_requirements(
+    service_area_id: Optional[str] = Query(None),
+    current_user: Optional[dict] = Depends(get_current_user),
+):
+    """Get document requirements for drivers.
+
+    Priority:
+    1. If service_area_id is passed, use that area's required_documents.
+    2. Else if the current user has a driver profile with a service_area_id,
+       use that area's required_documents.
+    3. Fall back to the global document_requirements table.
+    """
+    area_id = service_area_id
+
+    # Try to get area from driver profile if not explicitly passed
+    if not area_id and current_user:
+        driver = await db.drivers.find_one({'user_id': current_user.get('id')})
+        if driver:
+            area_id = driver.get('service_area_id')
+
+    # If we have an area, return its required_documents
+    if area_id:
+        area = await db.service_areas.find_one({'id': area_id})
+        if area and area.get('required_documents'):
+            area_docs = area['required_documents']
+            # Transform to match DocumentRequirement shape so driver app works
+            result = []
+            for doc in area_docs:
+                result.append({
+                    'id': doc.get('key', ''),
+                    'name': doc.get('label', ''),
+                    'description': None,
+                    'is_mandatory': doc.get('required', True),
+                    'requires_back_side': doc.get('requires_back_side', False),
+                    'has_expiry': doc.get('has_expiry', False),
+                    'created_at': area.get('created_at', datetime.utcnow().isoformat()),
+                })
+            return result
+
+    # Fallback: global document_requirements table
     requirements = await db.document_requirements.find().sort('created_at', 1).to_list(100)
     return requirements
 

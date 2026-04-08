@@ -516,6 +516,171 @@ async def admin_get_drivers(
     return out
 
 
+@admin_router.get("/drivers/stats")
+async def admin_get_driver_stats(
+    service_area_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
+    """Get driver statistics, optionally filtered by service area and date range.
+
+    Returns overall + per-service-area stats, plus daily chart data for
+    driver joins, rides, and earnings.
+    """
+    from collections import defaultdict
+
+    now = datetime.utcnow()
+    # Default date range: last 30 days
+    if start_date:
+        range_start = datetime.fromisoformat(start_date.replace("Z", "+00:00").replace("+00:00", ""))
+    else:
+        range_start = now - timedelta(days=30)
+    range_start = range_start.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if end_date:
+        range_end = datetime.fromisoformat(end_date.replace("Z", "+00:00").replace("+00:00", ""))
+        range_end = range_end.replace(hour=23, minute=59, second=59, microsecond=0)
+    else:
+        range_end = now
+
+    # Fetch all service areas for lookups
+    service_areas = await db.get_rows("service_areas", order="name", limit=200)
+    area_map = {a["id"]: a.get("name", "Unknown") for a in service_areas}
+
+    # ── Fetch drivers ──
+    driver_filters: Dict[str, Any] = {}
+    if service_area_id:
+        driver_filters["service_area_id"] = service_area_id
+    all_drivers = await db.get_rows("drivers", driver_filters, order="created_at", desc=True, limit=5000)
+
+    # Enrich with user info
+    user_ids = list({d.get("user_id") for d in all_drivers if d.get("user_id")})
+    users_map: Dict[str, Any] = {}
+    for uid in user_ids:
+        if uid and uid not in users_map:
+            users_map[uid] = await db.users.find_one({"id": uid})
+
+    enriched_drivers = []
+    for d in all_drivers:
+        u = users_map.get(d.get("user_id"))
+        enriched_drivers.append({
+            **d,
+            "first_name": u.get("first_name") if u else d.get("first_name"),
+            "last_name": u.get("last_name") if u else d.get("last_name"),
+            "name": _user_display_name(u) or d.get("name"),
+            "email": u.get("email") if u else None,
+            "phone": u.get("phone") if u else d.get("phone"),
+        })
+
+    # ── Compute overall driver stats ──
+    total = len(enriched_drivers)
+    online = sum(1 for d in enriched_drivers if d.get("is_online"))
+    verified = sum(1 for d in enriched_drivers if d.get("is_verified"))
+    unverified = total - verified
+    total_rides_sum = sum(int(d.get("total_rides") or 0) for d in enriched_drivers)
+    total_earnings_sum = sum(float(d.get("total_earnings") or 0) for d in enriched_drivers)
+    avg_rating = 0.0
+    rated = [d for d in enriched_drivers if d.get("rating") and float(d.get("rating", 0)) > 0]
+    if rated:
+        avg_rating = round(sum(float(d["rating"]) for d in rated) / len(rated), 2)
+
+    # ── Per-service-area breakdown ──
+    area_stats: Dict[str, Dict[str, Any]] = {}
+    for d in enriched_drivers:
+        aid = d.get("service_area_id") or "unassigned"
+        if aid not in area_stats:
+            area_stats[aid] = {
+                "service_area_id": aid,
+                "service_area_name": area_map.get(aid, "Unassigned"),
+                "total": 0, "online": 0, "verified": 0, "unverified": 0,
+                "total_rides": 0, "total_earnings": 0.0,
+            }
+        area_stats[aid]["total"] += 1
+        if d.get("is_online"):
+            area_stats[aid]["online"] += 1
+        if d.get("is_verified"):
+            area_stats[aid]["verified"] += 1
+        else:
+            area_stats[aid]["unverified"] += 1
+        area_stats[aid]["total_rides"] += int(d.get("total_rides") or 0)
+        area_stats[aid]["total_earnings"] += float(d.get("total_earnings") or 0)
+
+    # ── Daily charts (within date range) ──
+    num_days = (range_end - range_start).days + 1
+    if num_days > 365:
+        num_days = 365
+
+    # Driver joins per day
+    daily_joins: Dict[str, int] = defaultdict(int)
+    for d in enriched_drivers:
+        ca = d.get("created_at")
+        if not ca:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(ca).replace("Z", "+00:00").replace("+00:00", ""))
+        except Exception:
+            continue
+        if range_start <= dt <= range_end:
+            day_key = dt.strftime("%Y-%m-%d")
+            daily_joins[day_key] += 1
+
+    # Rides + earnings per day (for drivers matching the service_area filter)
+    driver_ids_set = {d["id"] for d in enriched_drivers}
+    ride_filters: Dict[str, Any] = {"created_at": {"$gte": range_start.isoformat()}}
+    all_rides = await db.get_rows("rides", ride_filters, order="created_at", desc=True, limit=50000)
+
+    # Filter rides to only those belonging to our driver set
+    relevant_rides = [r for r in all_rides if r.get("driver_id") in driver_ids_set] if service_area_id else all_rides
+
+    daily_rides: Dict[str, int] = defaultdict(int)
+    daily_earnings: Dict[str, float] = defaultdict(float)
+    for r in relevant_rides:
+        ca = r.get("created_at")
+        if not ca:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(ca).replace("Z", "+00:00").replace("+00:00", ""))
+        except Exception:
+            continue
+        if range_start <= dt <= range_end:
+            day_key = dt.strftime("%Y-%m-%d")
+            daily_rides[day_key] += 1
+            if r.get("status") == "completed":
+                daily_earnings[day_key] += float(r.get("driver_earnings") or 0)
+
+    # Build chart arrays
+    joins_chart = []
+    rides_chart = []
+    earnings_chart = []
+    for i in range(num_days):
+        day = range_start + timedelta(days=i)
+        day_key = day.strftime("%Y-%m-%d")
+        day_label = day.strftime("%b %d")
+        joins_chart.append({"date": day_label, "date_raw": day_key, "count": daily_joins.get(day_key, 0)})
+        rides_chart.append({"date": day_label, "date_raw": day_key, "count": daily_rides.get(day_key, 0)})
+        earnings_chart.append({"date": day_label, "date_raw": day_key, "amount": round(daily_earnings.get(day_key, 0), 2)})
+
+    return {
+        "stats": {
+            "total": total,
+            "online": online,
+            "verified": verified,
+            "unverified": unverified,
+            "total_rides": total_rides_sum,
+            "total_earnings": total_earnings_sum,
+            "avg_rating": avg_rating,
+        },
+        "area_stats": list(area_stats.values()),
+        "charts": {
+            "daily_joins": joins_chart,
+            "daily_rides": rides_chart,
+            "daily_earnings": earnings_chart,
+        },
+        "drivers": enriched_drivers,
+        "service_areas": [{"id": a["id"], "name": a.get("name", "Unknown")} for a in service_areas],
+    }
+
+
 @admin_router.get("/rides")
 async def admin_get_rides(
     limit: int = 50,

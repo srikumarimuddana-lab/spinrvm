@@ -179,6 +179,45 @@ export const getDrivers = () => request<any[]>("/api/admin/drivers");
 export const getDriverRides = (id: string) =>
     request<any>(`/api/admin/drivers/${id}/rides`);
 
+export const getDriverStats = (params?: {
+    service_area_id?: string;
+    start_date?: string;
+    end_date?: string;
+}) => {
+    const sp = new URLSearchParams();
+    if (params?.service_area_id) sp.set("service_area_id", params.service_area_id);
+    if (params?.start_date) sp.set("start_date", params.start_date);
+    if (params?.end_date) sp.set("end_date", params.end_date);
+    return request<{
+        stats: {
+            total: number;
+            online: number;
+            verified: number;
+            unverified: number;
+            total_rides: number;
+            total_earnings: number;
+            avg_rating: number;
+        };
+        area_stats: {
+            service_area_id: string;
+            service_area_name: string;
+            total: number;
+            online: number;
+            verified: number;
+            unverified: number;
+            total_rides: number;
+            total_earnings: number;
+        }[];
+        charts: {
+            daily_joins: { date: string; date_raw: string; count: number }[];
+            daily_rides: { date: string; date_raw: string; count: number }[];
+            daily_earnings: { date: string; date_raw: string; amount: number }[];
+        };
+        drivers: any[];
+        service_areas: { id: string; name: string }[];
+    }>(`/api/admin/drivers/stats?${sp.toString()}`);
+};
+
 /* ── Earnings ─────────────────────────────── */
 export const getEarnings = () => request<any[]>("/api/admin/earnings");
 

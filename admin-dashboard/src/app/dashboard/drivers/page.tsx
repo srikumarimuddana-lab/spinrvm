@@ -12,16 +12,19 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Users, Wifi, WifiOff, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { Search, Users, Wifi, WifiOff, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause } from "lucide-react";
 import DriverStatsCards from "./_components/driver-stats-cards";
 import DriverCharts from "./_components/driver-charts";
 import AreaStatsTable from "./_components/area-stats-table";
+import DriverActionBar from "./_components/driver-action-bar";
 
 const STATUS_TABS = [
     { value: "all", label: "All", icon: Users },
     { value: "verified", label: "Verified", icon: ShieldCheck },
     { value: "unverified", label: "Unverified", icon: ShieldAlert },
     { value: "needs_review", label: "Needs Review", icon: AlertTriangle },
+    { value: "suspended", label: "Suspended", icon: Pause },
+    { value: "banned", label: "Banned", icon: Ban },
     { value: "online", label: "Online", icon: Wifi },
     { value: "offline", label: "Offline", icon: WifiOff },
 ];
@@ -113,9 +116,11 @@ export default function DriversPage() {
         let matchStatus = true;
         if (statusFilter === "online") matchStatus = d.is_online;
         if (statusFilter === "offline") matchStatus = !d.is_online;
-        if (statusFilter === "verified") matchStatus = d.is_verified && !d.needs_review;
-        if (statusFilter === "unverified") matchStatus = !d.is_verified;
+        if (statusFilter === "verified") matchStatus = d.is_verified && !d.needs_review && d.status !== "suspended" && d.status !== "banned" && d.status !== "rejected";
+        if (statusFilter === "unverified") matchStatus = !d.is_verified && d.status !== "rejected" && d.status !== "suspended" && d.status !== "banned";
         if (statusFilter === "needs_review") matchStatus = d.needs_review === true;
+        if (statusFilter === "suspended") matchStatus = d.status === "suspended";
+        if (statusFilter === "banned") matchStatus = d.status === "banned";
         return matchSearch && matchStatus;
     });
 
@@ -137,7 +142,7 @@ export default function DriversPage() {
     const handleSort = (key: string) => { if (sortKey === key) { setSortDir(d => d === "asc" ? "desc" : "asc"); } else { setSortKey(key); setSortDir(key === "created_at" || key === "total_earnings" || key === "total_rides" || key === "rating" ? "desc" : "asc"); } };
     const SortIcon = ({ col }: { col: string }) => { if (sortKey !== col) return <ArrowUpDown className="h-3 w-3 opacity-30 inline ml-1" />; return sortDir === "asc" ? <ArrowUp className="h-3 w-3 inline ml-1" /> : <ArrowDown className="h-3 w-3 inline ml-1" />; };
 
-    const statusCounts = (s: string) => { if (s === "all") return drivers.length; if (s === "online") return drivers.filter(d => d.is_online).length; if (s === "offline") return drivers.filter(d => !d.is_online).length; if (s === "verified") return drivers.filter(d => d.is_verified && !d.needs_review).length; if (s === "unverified") return drivers.filter(d => !d.is_verified).length; if (s === "needs_review") return drivers.filter(d => d.needs_review).length; return 0; };
+    const statusCounts = (s: string) => { if (s === "all") return drivers.length; if (s === "online") return drivers.filter(d => d.is_online).length; if (s === "offline") return drivers.filter(d => !d.is_online).length; if (s === "verified") return drivers.filter(d => d.is_verified && !d.needs_review && d.status !== "suspended" && d.status !== "banned" && d.status !== "rejected").length; if (s === "unverified") return drivers.filter(d => !d.is_verified && d.status !== "rejected" && d.status !== "suspended" && d.status !== "banned").length; if (s === "needs_review") return drivers.filter(d => d.needs_review).length; if (s === "suspended") return drivers.filter(d => d.status === "suspended").length; if (s === "banned") return drivers.filter(d => d.status === "banned").length; return 0; };
     const fmtDate = (d: string) => { if (!d) return "\u2014"; try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
 
     const handleExport = () => { exportToCsv("drivers", sorted, [{ key: "id", label: "ID" }, { key: "first_name", label: "First Name" }, { key: "last_name", label: "Last Name" }, { key: "email", label: "Email" }, { key: "phone", label: "Phone" }, { key: "service_area_id", label: "Service Area ID" }, { key: "is_verified", label: "Verified" }, { key: "is_online", label: "Online" }, { key: "rating", label: "Rating" }, { key: "total_rides", label: "Rides" }, { key: "total_earnings", label: "Earnings" }, { key: "vehicle_make", label: "Vehicle Make" }, { key: "vehicle_model", label: "Vehicle Model" }, { key: "license_plate", label: "License Plate" }, { key: "created_at", label: "Joined" }]); };
@@ -278,7 +283,12 @@ export default function DriversPage() {
                                         </TableCell>
                                         <TableCell>
                                             <div className="flex flex-col gap-1.5 items-start">
-                                                {driver.needs_review ? <Badge variant="default" className="bg-red-100 text-red-700 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-400 text-[10px] px-1.5 py-0 border-red-200 dark:border-red-800"><AlertTriangle className="h-3 w-3 mr-1" />Needs Review</Badge> : driver.is_verified ? <Badge variant="default" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800"><ShieldCheck className="h-3 w-3 mr-1" />Verified</Badge> : <Badge variant="default" className="bg-amber-100 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0 border-amber-200 dark:border-amber-800"><ShieldAlert className="h-3 w-3 mr-1" />Pending</Badge>}
+                                                {driver.status === "banned" ? <Badge variant="default" className="bg-red-200 text-red-800 hover:bg-red-200 dark:bg-red-900/40 dark:text-red-400 text-[10px] px-1.5 py-0 border-red-300 dark:border-red-800"><Ban className="h-3 w-3 mr-1" />Banned</Badge>
+                                                : driver.status === "suspended" ? <Badge variant="default" className="bg-orange-100 text-orange-700 hover:bg-orange-100 dark:bg-orange-900/30 dark:text-orange-400 text-[10px] px-1.5 py-0 border-orange-200 dark:border-orange-800"><Pause className="h-3 w-3 mr-1" />Suspended</Badge>
+                                                : driver.status === "rejected" ? <Badge variant="default" className="bg-red-100 text-red-700 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-400 text-[10px] px-1.5 py-0 border-red-200 dark:border-red-800"><XCircle className="h-3 w-3 mr-1" />Rejected</Badge>
+                                                : driver.needs_review ? <Badge variant="default" className="bg-amber-100 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0 border-amber-200 dark:border-amber-800"><AlertTriangle className="h-3 w-3 mr-1" />Needs Review</Badge>
+                                                : driver.is_verified ? <Badge variant="default" className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800"><ShieldCheck className="h-3 w-3 mr-1" />Verified</Badge>
+                                                : <Badge variant="default" className="bg-amber-100 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400 text-[10px] px-1.5 py-0 border-amber-200 dark:border-amber-800"><ShieldAlert className="h-3 w-3 mr-1" />Pending</Badge>}
                                                 <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${driver.is_online ? "border-emerald-300 text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10" : ""}`}>{driver.is_online ? "Online" : "Offline"}</Badge>
                                             </div>
                                         </TableCell>
@@ -336,7 +346,12 @@ export default function DriversPage() {
                                             <h2 className="text-xl font-bold">{selected.first_name} {selected.last_name}</h2>
                                             <button onClick={() => navigator.clipboard.writeText(selected.id)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition font-mono bg-muted/50 px-2 py-0.5 rounded mt-1" title="Copy ID">{selected.id?.slice(0, 16)}...<Copy className="h-3 w-3" /></button>
                                             <div className="flex items-center gap-2 mt-2">
-                                                {selected.is_verified ? <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"><ShieldCheck className="h-3 w-3" /> Verified</Badge> : <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"><ShieldAlert className="h-3 w-3" /> Unverified</Badge>}
+                                                {selected.status === "banned" ? <Badge className="bg-red-200 text-red-800 dark:bg-red-900/40 dark:text-red-400"><Ban className="h-3 w-3" /> Banned</Badge>
+                                                : selected.status === "suspended" ? <Badge className="bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"><Pause className="h-3 w-3" /> Suspended</Badge>
+                                                : selected.status === "rejected" ? <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"><XCircle className="h-3 w-3" /> Rejected</Badge>
+                                                : selected.needs_review ? <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> Needs Review</Badge>
+                                                : selected.is_verified ? <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"><ShieldCheck className="h-3 w-3" /> Verified</Badge>
+                                                : <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"><ShieldAlert className="h-3 w-3" /> Pending</Badge>}
                                                 <Badge variant="outline" className={selected.is_online ? "border-emerald-300 text-emerald-600" : ""}>{selected.is_online ? "Online" : "Offline"}</Badge>
                                                 {selected.subscription_status === "active" && <Badge className="bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400"><CreditCard className="h-3 w-3" /> Spinr Pass</Badge>}
                                             </div>
@@ -363,7 +378,7 @@ export default function DriversPage() {
                             <TabsList className="mx-6 mt-4 w-fit">
                                 <TabsTrigger value="overview">Overview</TabsTrigger>
                                 <TabsTrigger value="documents">Documents{activeDocs.length > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{activeDocs.length}</span>}</TabsTrigger>
-                                <TabsTrigger value="verification">Verification</TabsTrigger>
+                                <TabsTrigger value="verification">Actions</TabsTrigger>
                             </TabsList>
                             <div className="flex-1 overflow-y-auto px-6 pb-6">
                                 {/* Overview */}
@@ -472,18 +487,9 @@ export default function DriversPage() {
                                     )}
                                 </TabsContent>
 
-                                {/* Verification */}
+                                {/* Actions & Verification */}
                                 <TabsContent value="verification" className="mt-4 space-y-5">
-                                    <div className={`rounded-xl p-5 border ${selected.is_verified ? "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800" : "bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800"}`}>
-                                        <div className="flex items-start gap-4">
-                                            <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${selected.is_verified ? "bg-emerald-100 dark:bg-emerald-900/30" : "bg-amber-100 dark:bg-amber-900/30"}`}>{selected.is_verified ? <ShieldCheck className="h-6 w-6 text-emerald-600 dark:text-emerald-400" /> : <ShieldAlert className="h-6 w-6 text-amber-600 dark:text-amber-400" />}</div>
-                                            <div className="flex-1"><h3 className={`text-lg font-bold ${selected.is_verified ? "text-emerald-800 dark:text-emerald-300" : "text-amber-800 dark:text-amber-300"}`}>{selected.is_verified ? "Driver Verified" : "Pending Verification"}</h3><p className={`text-sm mt-1 ${selected.is_verified ? "text-emerald-700/70 dark:text-emerald-400/70" : "text-amber-700/70 dark:text-amber-400/70"}`}>{selected.is_verified ? "This driver is verified and can accept rides." : "Review documents before approving."}</p></div>
-                                        </div>
-                                        <div className="flex gap-3 mt-4">
-                                            <Button onClick={() => handleVerify(selected.id, true)} disabled={verifying || selected.is_verified} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"><CheckCircle className="h-4 w-4" />{selected.is_verified ? "Already Verified" : "Approve Driver"}</Button>
-                                            <Button variant="outline" onClick={() => handleVerify(selected.id, false)} disabled={verifying || !selected.is_verified} className="flex-1 border-red-200 text-red-600 hover:bg-red-50 dark:border-red-800 dark:hover:bg-red-900/20"><XCircle className="h-4 w-4" />Revoke Verification</Button>
-                                        </div>
-                                    </div>
+                                    <DriverActionBar driver={selected} onActionComplete={() => { loadData(); setSelected(null); }} />
                                     <DetailSection title="Verification Checklist" icon={CheckCircle}>
                                         <div className="space-y-2">
                                             {(requiredDocs.length > 0 ? requiredDocs : [

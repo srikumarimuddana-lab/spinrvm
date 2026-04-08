@@ -790,6 +790,98 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest):
     return {"message": f"Driver {'verified' if req.verified else 'unverified'}"}
 
 
+class DriverActionRequest(BaseModel):
+    action: str  # approve, reject, suspend, ban, unban, reactivate
+    reason: Optional[str] = None
+
+
+@admin_router.post("/drivers/{driver_id}/action")
+async def admin_driver_action(driver_id: str, req: DriverActionRequest):
+    """Perform a lifecycle action on a driver.
+
+    Actions: approve, reject, suspend, ban, unban, reactivate.
+    Each action transitions the driver to the appropriate state and
+    records the reason + timestamp for audit trail.
+    """
+    driver = await db.drivers.find_one({"id": driver_id})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    current_status = driver.get("status", "pending")
+    is_verified = driver.get("is_verified", False)
+    now = datetime.utcnow().isoformat()
+    updates: Dict[str, Any] = {"updated_at": now}
+
+    if req.action == "approve":
+        # Approve: verify the driver, clear any review flags, set status active
+        updates["is_verified"] = True
+        updates["needs_review"] = False
+        updates["status"] = "active"
+        updates["rejection_reason"] = None
+        updates["verified_at"] = now
+
+    elif req.action == "reject":
+        # Reject: un-verify, set status rejected, store reason
+        if not req.reason:
+            raise HTTPException(status_code=400, detail="Reason is required when rejecting")
+        updates["is_verified"] = False
+        updates["needs_review"] = False
+        updates["status"] = "rejected"
+        updates["rejection_reason"] = req.reason
+        updates["is_online"] = False
+        updates["is_available"] = False
+
+    elif req.action == "suspend":
+        # Suspend: temporarily disable, keep verified status, store reason
+        if not req.reason:
+            raise HTTPException(status_code=400, detail="Reason is required when suspending")
+        updates["status"] = "suspended"
+        updates["suspension_reason"] = req.reason
+        updates["suspended_at"] = now
+        updates["is_online"] = False
+        updates["is_available"] = False
+
+    elif req.action == "ban":
+        # Ban: permanently block, store reason
+        if not req.reason:
+            raise HTTPException(status_code=400, detail="Reason is required when banning")
+        updates["status"] = "banned"
+        updates["ban_reason"] = req.reason
+        updates["banned_at"] = now
+        updates["is_online"] = False
+        updates["is_available"] = False
+
+    elif req.action == "unban":
+        # Unban: lift ban, set back to active if was verified, else pending
+        updates["status"] = "active" if is_verified else "pending"
+        updates["ban_reason"] = None
+        updates["banned_at"] = None
+        updates["unban_reason"] = req.reason
+        updates["unbanned_at"] = now
+
+    elif req.action == "reactivate":
+        # Reactivate from suspended/rejected → active if verified, else pending
+        updates["status"] = "active" if is_verified else "pending"
+        updates["suspension_reason"] = None
+        updates["suspended_at"] = None
+        updates["rejection_reason"] = None
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown action: {req.action}")
+
+    try:
+        await db.drivers.update_one({"id": driver_id}, {"$set": updates})
+    except Exception as e:
+        logger.error(f"Failed driver action {req.action} on {driver_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    logger.info(f"[ADMIN] Driver {driver_id} action={req.action} reason={req.reason}")
+    return {
+        "message": f"Driver {req.action}d successfully",
+        "new_status": updates.get("status", current_status),
+    }
+
+
 # ---------- Stats (count_documents + sum from rides) ----------
 
 

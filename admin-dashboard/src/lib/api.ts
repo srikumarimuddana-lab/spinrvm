@@ -524,6 +524,12 @@ export const assignDriverArea = (driverId: string, serviceAreaId: string) =>
         method: "PUT",
     });
 
+export const driverAction = (driverId: string, action: string, reason?: string) =>
+    request<{ message: string; new_status: string }>(`/api/admin/drivers/${driverId}/action`, {
+        method: "POST",
+        body: JSON.stringify({ action, reason }),
+    });
+
 
 /* ── Heat Map Data ─────────────────────────── */
 export interface HeatMapData {

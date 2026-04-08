@@ -263,14 +263,7 @@ export default function DriversPage() {
                                 return (
                                     <TableRow key={driver.id} className={`group cursor-pointer transition-colors hover:bg-muted/40 ${selected?.id === driver.id ? "bg-primary/5 hover:bg-primary/5" : ""}`} onClick={() => setSelected(driver)}>
                                         <TableCell className="pl-4 align-middle">
-                                            <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                                                <Button size="sm" variant="secondary" className="h-7 text-[10px] font-medium px-2" onClick={(e) => { e.stopPropagation(); setSelected(driver); }}><Eye className="h-3 w-3 mr-1" />View</Button>
-                                                {!driver.is_verified && (
-                                                    <Button size="sm" variant="outline" className="h-7 text-[10px] font-medium px-2 border-amber-200 text-amber-600 hover:bg-amber-50 bg-amber-50/50" onClick={(e) => { e.stopPropagation(); handleVerify(driver.id, true); }}>
-                                                        <ShieldCheck className="h-3 w-3 mr-1" />Verify
-                                                    </Button>
-                                                )}
-                                            </div>
+                                            <Button size="sm" variant="secondary" className="h-7 text-[10px] font-medium px-2" onClick={(e) => { e.stopPropagation(); setSelected(driver); }}><Eye className="h-3 w-3 mr-1" />View</Button>
                                         </TableCell>
                                         <TableCell className="py-3">
                                             <div className="flex items-center gap-3">

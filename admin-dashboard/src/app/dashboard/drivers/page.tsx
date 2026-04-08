@@ -465,31 +465,10 @@ export default function DriversPage() {
                                                     </div>
                                                 );
                                             })}
-                                            {(() => {
-                                                const matchedIds = new Set<string>();
-                                                requiredDocs.forEach(r => activeDocs.forEach(d => {
-                                                    if (d.requirement_id) {
-                                                        if (d.requirement_id === r.id || d.requirement_id === r.key) matchedIds.add(d.id);
-                                                        return;
-                                                    }
-                                                    const dt = (d.document_type || "").toLowerCase();
-                                                    const label = r.label.toLowerCase();
-                                                    const key = r.key.toLowerCase().replace(/_/g, " ");
-                                                    if (dt === label || dt === key || dt.replace(/[^a-z0-9]/g, "_").includes(r.key.replace(/[^a-z0-9]/g, "_"))) matchedIds.add(d.id);
-                                                }));
-                                                const unmatched = activeDocs.filter(d => !matchedIds.has(d.id));
-                                                if (!unmatched.length) return null;
-                                                return (<div><div className="flex items-center gap-2 mb-3"><FileText className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">Other Documents</h4><Badge variant="secondary" className="text-[10px]">{unmatched.length}</Badge></div><div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{unmatched.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div></div>);
-                                            })()}
+                                            {/* Only show required documents — no "Other Documents" section */}
                                         </div>
-                                    ) : activeDocs.length === 0 ? (
-                                        <div className="text-center py-12 text-muted-foreground bg-muted/20 rounded-xl border border-dashed"><Image className="h-10 w-10 mx-auto mb-3 opacity-30" /><p className="text-sm font-medium">No documents uploaded</p></div>
                                     ) : (
-                                        <div className="space-y-6">
-                                            {Object.entries(activeDocs.reduce((acc: Record<string,any[]>, d) => { const t=d.document_type||"Other"; (acc[t]=acc[t]||[]).push(d); return acc; }, {})).map(([docType, docs]) => (
-                                                <div key={docType}><div className="flex items-center gap-2 mb-3"><FileText className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">{docType}</h4><Badge variant="secondary" className="text-[10px]">{(docs as any[]).length}</Badge></div><div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{(docs as any[]).map(d=><DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div></div>
-                                            ))}
-                                        </div>
+                                        <div className="text-center py-12 text-muted-foreground bg-muted/20 rounded-xl border border-dashed"><Image className="h-10 w-10 mx-auto mb-3 opacity-30" /><p className="text-sm font-medium">No document requirements configured for this service area</p></div>
                                     )}
                                 </TabsContent>
 

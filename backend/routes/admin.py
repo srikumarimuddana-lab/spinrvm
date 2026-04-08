@@ -221,9 +221,21 @@ async def admin_update_settings(settings: Dict[str, Any]):
 
 @admin_router.get("/service-areas")
 async def admin_get_service_areas():
-    """Get all service areas."""
+    """Get all service areas. Sub-regions are nested under their parent as 'sub_regions'."""
     areas = await db.get_rows("service_areas", order="name", limit=500)
-    return areas
+    # Build parent -> children mapping
+    parent_map: Dict[str, list] = {}
+    parents = []
+    for a in areas:
+        pid = a.get("parent_service_area_id")
+        if pid:
+            parent_map.setdefault(pid, []).append(a)
+        else:
+            parents.append(a)
+    # Attach sub_regions to each parent
+    for p in parents:
+        p["sub_regions"] = parent_map.get(p["id"], [])
+    return parents
 
 
 @admin_router.post("/service-areas")
@@ -235,6 +247,8 @@ async def admin_create_service_area(area: Dict[str, Any]):
         "city": area.get("city", ""),
         "polygon": area.get("geojson", area.get("polygon", [])),
         "is_active": area.get("is_active", True),
+        # Sub-region support (e.g. airport zone inside a parent area)
+        "parent_service_area_id": area.get("parent_service_area_id"),
         "is_airport": area.get("is_airport", False),
         "airport_fee": area.get("airport_fee", 0),
         "surge_active": area.get("surge_enabled", area.get("surge_active", False)),
@@ -259,6 +273,7 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
         "city",
         "polygon", # previously geojson mapped to polygon below
         "is_active",
+        "parent_service_area_id",
         "is_airport",
         "airport_fee",
         "surge_active",

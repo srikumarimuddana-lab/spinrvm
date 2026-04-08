@@ -2546,6 +2546,135 @@ async def list_driver_subscriptions(status: Optional[str] = Query(None)):
     return subs
 
 
+@admin_router.get("/subscription-stats")
+async def admin_get_subscription_stats(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
+    """Get Spinr Pass subscription revenue stats, transaction list, and chart data."""
+    from collections import defaultdict
+
+    now = datetime.utcnow()
+    if start_date:
+        range_start = datetime.fromisoformat(start_date.replace("Z", "").replace("+00:00", ""))
+    else:
+        range_start = now - timedelta(days=30)
+    range_start = range_start.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if end_date:
+        range_end = datetime.fromisoformat(end_date.replace("Z", "").replace("+00:00", ""))
+        range_end = range_end.replace(hour=23, minute=59, second=59)
+    else:
+        range_end = now
+
+    # Fetch all subscriptions
+    all_subs = await db.driver_subscriptions.find({}).to_list(10000)
+
+    # Fetch all plans for lookup
+    all_plans = await db.get_rows("subscription_plans", limit=100)
+    plan_map = {p["id"]: p for p in all_plans}
+
+    # Fetch drivers for name lookup
+    driver_ids = list({s.get("driver_id") for s in all_subs if s.get("driver_id")})
+    drivers_map = {}
+    for did in driver_ids:
+        if did and did not in drivers_map:
+            d = await db.drivers.find_one({"id": did})
+            if d:
+                uid = d.get("user_id")
+                u = await db.users.find_one({"id": uid}) if uid else None
+                name = ""
+                if u:
+                    name = f"{u.get('first_name', '')} {u.get('last_name', '')}".strip()
+                drivers_map[did] = name or d.get("name") or did[:8]
+
+    # Overall stats
+    active = [s for s in all_subs if s.get("status") == "active"]
+    expired = [s for s in all_subs if s.get("status") == "expired"]
+    cancelled = [s for s in all_subs if s.get("status") == "cancelled"]
+    total_revenue = sum(float(s.get("price") or 0) for s in all_subs)
+    active_revenue = sum(float(s.get("price") or 0) for s in active)
+
+    # Filter to date range for transactions and charts
+    def parse_dt(s):
+        try:
+            return datetime.fromisoformat(str(s).replace("Z", "").replace("+00:00", ""))
+        except Exception:
+            return None
+
+    in_range = []
+    for s in all_subs:
+        dt = parse_dt(s.get("created_at") or s.get("started_at"))
+        if dt and range_start <= dt <= range_end:
+            in_range.append(s)
+
+    range_revenue = sum(float(s.get("price") or 0) for s in in_range)
+
+    # Per-plan breakdown
+    plan_stats = defaultdict(lambda: {"name": "", "count": 0, "revenue": 0.0, "active": 0})
+    for s in all_subs:
+        pid = s.get("plan_id") or "unknown"
+        plan_stats[pid]["name"] = s.get("plan_name") or plan_map.get(pid, {}).get("name", "Unknown")
+        plan_stats[pid]["count"] += 1
+        plan_stats[pid]["revenue"] += float(s.get("price") or 0)
+        if s.get("status") == "active":
+            plan_stats[pid]["active"] += 1
+
+    # Daily charts (within date range)
+    num_days = min((range_end - range_start).days + 1, 365)
+    daily_revenue = defaultdict(float)
+    daily_new_subs = defaultdict(int)
+    for s in in_range:
+        dt = parse_dt(s.get("created_at") or s.get("started_at"))
+        if dt:
+            day_key = dt.strftime("%Y-%m-%d")
+            daily_revenue[day_key] += float(s.get("price") or 0)
+            daily_new_subs[day_key] += 1
+
+    revenue_chart = []
+    subscribers_chart = []
+    for i in range(num_days):
+        day = range_start + timedelta(days=i)
+        day_key = day.strftime("%Y-%m-%d")
+        day_label = day.strftime("%b %d")
+        revenue_chart.append({"date": day_label, "date_raw": day_key, "amount": round(daily_revenue.get(day_key, 0), 2)})
+        subscribers_chart.append({"date": day_label, "date_raw": day_key, "count": daily_new_subs.get(day_key, 0)})
+
+    # Transaction list (in range, enriched)
+    transactions = []
+    for s in sorted(in_range, key=lambda x: x.get("created_at", ""), reverse=True):
+        transactions.append({
+            "id": s.get("id"),
+            "driver_id": s.get("driver_id"),
+            "driver_name": drivers_map.get(s.get("driver_id"), s.get("driver_id", "")[:8]),
+            "plan_name": s.get("plan_name") or plan_map.get(s.get("plan_id", ""), {}).get("name", "Unknown"),
+            "price": float(s.get("price") or 0),
+            "status": s.get("status", "unknown"),
+            "started_at": s.get("started_at"),
+            "expires_at": s.get("expires_at"),
+            "created_at": s.get("created_at"),
+        })
+
+    return {
+        "stats": {
+            "total_subscribers": len(all_subs),
+            "active": len(active),
+            "expired": len(expired),
+            "cancelled": len(cancelled),
+            "total_revenue": round(total_revenue, 2),
+            "active_mrr": round(active_revenue, 2),
+            "range_revenue": round(range_revenue, 2),
+            "range_transactions": len(in_range),
+        },
+        "plan_breakdown": [{"plan_id": k, **v} for k, v in plan_stats.items()],
+        "charts": {
+            "daily_revenue": revenue_chart,
+            "daily_subscribers": subscribers_chart,
+        },
+        "transactions": transactions,
+    }
+
+
 # ============================================================
 # Audit Logs
 # ============================================================

@@ -224,6 +224,13 @@ export const updateDriver = (id: string, data: Record<string, any>) =>
 /* ── Earnings ─────────────────────────────── */
 export const getEarnings = () => request<any[]>("/api/admin/earnings");
 
+export const getSubscriptionStats = (params?: { start_date?: string; end_date?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.start_date) sp.set("start_date", params.start_date);
+    if (params?.end_date) sp.set("end_date", params.end_date);
+    return request<any>(`/api/admin/subscription-stats?${sp.toString()}`);
+};
+
 /* ── Settings ─────────────────────────────── */
 export const getSettings = () => request<any>("/api/admin/settings");
 export const updateSettings = (data: any) =>

@@ -231,14 +231,44 @@ export default function ServiceAreasPage() {
                     <div className="p-5">
                       {/* General Tab */}
                       {editTab === 'general' && (
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                          <FieldInput label="Area Name" value={area.name} onSave={v => handleFieldUpdate(area.id, 'name', v)} />
-                          <FieldInput label="City" value={area.city || ''} onSave={v => handleFieldUpdate(area.id, 'city', v)} />
-                          <FieldSelect label="Province" value={area.province || 'SK'} options={['SK','AB','MB','ON','BC','QC','NS','NB','PE','NL']} onSave={v => handleFieldUpdate(area.id, 'province', v)} />
-                          <FieldInput label="Pickup Radius (km)" value={area.max_pickup_radius_km || 5} type="number" onSave={v => handleFieldUpdate(area.id, 'max_pickup_radius_km', parseFloat(v))} />
-                          <FieldToggle label="Active" value={area.is_active} onSave={v => handleFieldUpdate(area.id, 'is_active', v)} />
-                          <FieldToggle label="Airport Zone" value={area.is_airport} onSave={v => handleFieldUpdate(area.id, 'is_airport', v)} />
-                          <div className="md:col-span-3 flex justify-end">
+                        <div className="space-y-6">
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <FieldInput label="Area Name" value={area.name} onSave={v => handleFieldUpdate(area.id, 'name', v)} />
+                            <FieldInput label="City" value={area.city || ''} onSave={v => handleFieldUpdate(area.id, 'city', v)} />
+                            <FieldSelect label="Province" value={area.province || 'SK'} options={['SK','AB','MB','ON','BC','QC','NS','NB','PE','NL']} onSave={v => handleFieldUpdate(area.id, 'province', v)} />
+                            <FieldInput label="Pickup Radius (km)" value={area.max_pickup_radius_km || 5} type="number" onSave={v => handleFieldUpdate(area.id, 'max_pickup_radius_km', parseFloat(v))} />
+                            <FieldToggle label="Active" value={area.is_active} onSave={v => handleFieldUpdate(area.id, 'is_active', v)} />
+                            <FieldToggle label="Airport Zone" value={area.is_airport} onSave={v => handleFieldUpdate(area.id, 'is_airport', v)} />
+                          </div>
+
+                          {/* Geofence Editor */}
+                          <div>
+                            <h4 className="font-bold text-gray-800 mb-2">Service Area Boundary</h4>
+                            <p className="text-sm text-gray-500 mb-3">Draw or edit the polygon to define the service area boundary. Drivers and riders must be within this zone.</p>
+                            <div className="h-80 rounded-xl overflow-hidden border">
+                              <Suspense fallback={<div className="h-full bg-gray-100 flex items-center justify-center text-gray-400">Loading map...</div>}>
+                                <GeofenceMap
+                                  key={`edit-${area.id}`}
+                                  polygon={area.geojson?.coordinates?.[0]?.map((c: number[]) => ({ lat: c[1], lng: c[0] })) || []}
+                                  center={
+                                    area.geojson?.coordinates?.[0]?.[0]
+                                      ? { lat: area.geojson.coordinates[0][0][1], lng: area.geojson.coordinates[0][0][0] }
+                                      : { lat: 52.13, lng: -106.67 }
+                                  }
+                                  zoom={11}
+                                  onPolygonChange={(p: any) => {
+                                    const geojson = { type: "Polygon", coordinates: [p.map((pt: any) => [pt.lng, pt.lat])] };
+                                    handleFieldUpdate(area.id, 'geojson', geojson);
+                                  }}
+                                />
+                              </Suspense>
+                            </div>
+                            {area.geojson?.coordinates?.[0] && (
+                              <p className="text-xs text-green-600 mt-1">{area.geojson.coordinates[0].length} boundary points defined</p>
+                            )}
+                          </div>
+
+                          <div className="flex justify-end">
                             <button onClick={() => handleDelete(area.id, area.name)} className="text-sm text-red-500 hover:underline">Delete this area</button>
                           </div>
                         </div>

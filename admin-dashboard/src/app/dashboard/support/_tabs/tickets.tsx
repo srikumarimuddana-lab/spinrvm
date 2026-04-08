@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { MessageSquare, CheckCircle, Plus, Trash2, Pencil, Send, Search, RefreshCw, HelpCircle, Clock, Inbox } from "lucide-react";
+import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
 
 const CATEGORIES = ["general", "rides", "payments", "account", "safety", "driver", "technical"];
 const PRIORITIES = ["low", "medium", "high", "urgent"];
@@ -39,6 +40,7 @@ export default function TicketsTab() {
 }
 
 function TicketsList() {
+    const { areas } = useServiceAreas();
     const [tickets, setTickets] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [selected, setSelected] = useState<any>(null);
@@ -46,10 +48,11 @@ function TicketsList() {
     const [replying, setReplying] = useState(false);
     const [search, setSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
+    const [areaFilter, setAreaFilter] = useState("all");
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editing, setEditing] = useState<any>(null);
     const [saving, setSaving] = useState(false);
-    const [form, setForm] = useState({ subject: "", category: "general", priority: "medium", message: "", user_name: "", user_email: "" });
+    const [form, setForm] = useState({ subject: "", category: "general", priority: "medium", message: "", user_name: "", user_email: "", service_area_id: "" });
 
     const load = () => { setLoading(true); getTickets().then(setTickets).catch(() => setTickets([])).finally(() => setLoading(false)); };
     useEffect(() => { load(); }, []);
@@ -57,20 +60,23 @@ function TicketsList() {
     const stats = { total: tickets.length, open: tickets.filter((t) => t.status === "open" || t.status === "in_progress").length, closed: tickets.filter((t) => t.status === "closed").length };
     const filtered = tickets.filter((t) => {
         const ms = !search || t.subject?.toLowerCase().includes(search.toLowerCase()) || t.user_name?.toLowerCase().includes(search.toLowerCase());
-        return ms && (statusFilter === "all" || t.status === statusFilter);
+        const ma = areaFilter === "all" || t.service_area_id === areaFilter;
+        return ms && ma && (statusFilter === "all" || t.status === statusFilter);
     });
 
-    const reset = () => { setForm({ subject: "", category: "general", priority: "medium", message: "", user_name: "", user_email: "" }); setEditing(null); };
+    const reset = () => { setForm({ subject: "", category: "general", priority: "medium", message: "", user_name: "", user_email: "", service_area_id: "" }); setEditing(null); };
 
     const handleSave = async () => {
         if (!form.subject.trim()) { alert("Enter a subject."); return; }
         setSaving(true);
         try {
-            if (editing) await updateTicket(editing.id, { subject: form.subject, category: form.category, priority: form.priority });
-            else await createTicket(form);
+            if (editing) await updateTicket(editing.id, { subject: form.subject, category: form.category, priority: form.priority, service_area_id: form.service_area_id || null });
+            else await createTicket({ ...form, service_area_id: form.service_area_id || null });
             setDialogOpen(false); reset(); load();
         } catch (e: any) { alert(e.message); } finally { setSaving(false); }
     };
+
+    const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
 
     return (
         <div className="space-y-4">
@@ -81,9 +87,10 @@ function TicketsList() {
             </div>
 
             <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-2 flex-1">
+                <div className="flex items-center gap-2 flex-1 flex-wrap">
                     <div className="relative flex-1 max-w-xs"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-9" /></div>
-                    <Select value={statusFilter} onValueChange={setStatusFilter}><SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All</SelectItem><SelectItem value="open">Open</SelectItem><SelectItem value="in_progress">In Progress</SelectItem><SelectItem value="closed">Closed</SelectItem></SelectContent></Select>
+                    <Select value={statusFilter} onValueChange={setStatusFilter}><SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All Status</SelectItem><SelectItem value="open">Open</SelectItem><SelectItem value="in_progress">In Progress</SelectItem><SelectItem value="closed">Closed</SelectItem></SelectContent></Select>
+                    <ServiceAreaFilter value={areaFilter} onChange={setAreaFilter} areas={areas} />
                 </div>
                 <div className="flex gap-2">
                     <Button variant="outline" size="sm" onClick={load}><RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />Refresh</Button>
@@ -95,17 +102,18 @@ function TicketsList() {
                 <Card><CardContent className="p-0">
                     {loading ? <div className="flex justify-center p-12"><div className="h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
                     : filtered.length === 0 ? <div className="text-center py-12 text-muted-foreground text-sm">No tickets found.</div>
-                    : <Table><TableHeader><TableRow><TableHead>Subject</TableHead><TableHead>Category</TableHead><TableHead>Priority</TableHead><TableHead>Status</TableHead><TableHead>Date</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+                    : <Table><TableHeader><TableRow><TableHead>Subject</TableHead><TableHead>Category</TableHead><TableHead>Area</TableHead><TableHead>Priority</TableHead><TableHead>Status</TableHead><TableHead>Date</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
                         <TableBody>{filtered.map((t) => (
                             <TableRow key={t.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelected(t)}>
-                                <TableCell className="font-medium max-w-[180px] truncate text-sm">{t.subject}</TableCell>
+                                <TableCell className="font-medium max-w-[160px] truncate text-sm">{t.subject}</TableCell>
                                 <TableCell className="text-xs text-muted-foreground capitalize">{t.category || "general"}</TableCell>
+                                <TableCell className="text-xs text-muted-foreground">{areaName(t.service_area_id) || "—"}</TableCell>
                                 <TableCell><Badge className={`text-[10px] ${P_COLORS[t.priority] || P_COLORS.medium}`}>{t.priority || "medium"}</Badge></TableCell>
                                 <TableCell><Badge variant="secondary" className={`text-[10px] ${statusColor(t.status)}`}>{t.status?.replace(/_/g, " ")}</Badge></TableCell>
                                 <TableCell className="text-[10px] text-muted-foreground">{formatDate(t.created_at)}</TableCell>
                                 <TableCell className="text-right"><div className="flex justify-end gap-0.5">
-                                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setEditing(t); setForm({ subject: t.subject || "", category: t.category || "general", priority: t.priority || "medium", message: t.message || "", user_name: t.user_name || "", user_email: t.user_email || "" }); setDialogOpen(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
-                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); if (confirm("Delete?")) { deleteTicket(t.id).then(load).catch(() => {}); if (selected?.id === t.id) setSelected(null); } }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setEditing(t); setForm({ subject: t.subject || "", category: t.category || "general", priority: t.priority || "medium", message: t.message || "", user_name: t.user_name || "", user_email: t.user_email || "", service_area_id: t.service_area_id || "" }); setDialogOpen(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); if (confirm("Delete?")) { deleteTicket(t.id).then(load); if (selected?.id === t.id) setSelected(null); } }}><Trash2 className="h-3.5 w-3.5" /></Button>
                                 </div></TableCell>
                             </TableRow>
                         ))}</TableBody></Table>}
@@ -116,7 +124,11 @@ function TicketsList() {
                         <>
                             <CardHeader className="pb-2">
                                 <div className="flex items-center justify-between"><CardTitle className="text-sm">{selected.subject}</CardTitle><Badge variant="secondary" className={`text-[10px] ${statusColor(selected.status)}`}>{selected.status}</Badge></div>
-                                <div className="flex gap-1.5 mt-1"><Badge className={`text-[10px] ${P_COLORS[selected.priority] || P_COLORS.medium}`}>{selected.priority || "medium"}</Badge><span className="text-[10px] text-muted-foreground">{selected.category || "General"} · {formatDate(selected.created_at)}</span></div>
+                                <div className="flex flex-wrap gap-1.5 mt-1">
+                                    <Badge className={`text-[10px] ${P_COLORS[selected.priority] || P_COLORS.medium}`}>{selected.priority || "medium"}</Badge>
+                                    <span className="text-[10px] text-muted-foreground">{selected.category || "General"} · {formatDate(selected.created_at)}</span>
+                                    {areaName(selected.service_area_id) && <Badge variant="outline" className="text-[10px]">{areaName(selected.service_area_id)}</Badge>}
+                                </div>
                                 {selected.user_name && <p className="text-[10px] text-muted-foreground mt-1">From: {selected.user_name}</p>}
                             </CardHeader>
                             <Separator />
@@ -148,6 +160,7 @@ function TicketsList() {
                             <div className="space-y-1.5"><Label className="text-xs">Category</Label><Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{CATEGORIES.map((c) => <SelectItem key={c} value={c} className="capitalize">{c}</SelectItem>)}</SelectContent></Select></div>
                             <div className="space-y-1.5"><Label className="text-xs">Priority</Label><Select value={form.priority} onValueChange={(v) => setForm({ ...form, priority: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{PRIORITIES.map((p) => <SelectItem key={p} value={p} className="capitalize">{p}</SelectItem>)}</SelectContent></Select></div>
                         </div>
+                        <ServiceAreaSelect value={form.service_area_id} onChange={(v) => setForm({ ...form, service_area_id: v })} areas={areas} />
                         {!editing && (<>
                             <div className="grid grid-cols-2 gap-3">
                                 <div className="space-y-1.5"><Label className="text-xs">User Name</Label><Input placeholder="Optional" value={form.user_name} onChange={(e) => setForm({ ...form, user_name: e.target.value })} /></div>

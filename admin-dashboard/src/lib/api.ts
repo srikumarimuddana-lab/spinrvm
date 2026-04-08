@@ -122,12 +122,12 @@ export const getLiveRideData = (rideId: string) =>
     request<any>(`/api/admin/rides/${rideId}/live`);
 export const getRideInvoice = (rideId: string) =>
     request<any>(`/api/admin/rides/${rideId}/invoice`);
-export const flagRideParticipant = (rideId: string, data: { target_type: string; reason: string; description?: string }) =>
+export const flagRideParticipant = (rideId: string, data: { target_type: string; reason: string; description?: string; service_area_id?: string | null }) =>
     request<any>(`/api/admin/rides/${rideId}/flag`, {
         method: "POST",
         body: JSON.stringify(data),
     });
-export const createRideComplaint = (rideId: string, data: { against_type: string; category: string; description: string }) =>
+export const createRideComplaint = (rideId: string, data: { against_type: string; category: string; description: string; service_area_id?: string | null }) =>
     request<any>(`/api/admin/rides/${rideId}/complaint`, {
         method: "POST",
         body: JSON.stringify(data),
@@ -137,7 +137,7 @@ export const resolveComplaint = (complaintId: string, data: { status: string; re
         method: "PUT",
         body: JSON.stringify(data),
     });
-export const reportLostItem = (rideId: string, data: { item_description: string }) =>
+export const reportLostItem = (rideId: string, data: { item_description: string; service_area_id?: string | null }) =>
     request<any>(`/api/admin/rides/${rideId}/lost-and-found`, {
         method: "POST",
         body: JSON.stringify(data),

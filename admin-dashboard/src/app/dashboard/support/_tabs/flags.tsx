@@ -13,18 +13,21 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Flag, Search, Plus, Trash2, Eye, RefreshCw, EyeOff, Users, Car, AlertTriangle } from "lucide-react";
 import { formatDate } from "@/lib/utils";
+import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
 
 const REASONS = ["inappropriate_behavior", "safety_concern", "fraud", "policy_violation", "spam", "other"];
 
 export default function FlagsTab() {
+    const { areas } = useServiceAreas();
     const [flags, setFlags] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const [typeFilter, setTypeFilter] = useState("all");
+    const [areaFilter, setAreaFilter] = useState("all");
     const [selected, setSelected] = useState<any>(null);
     const [dialogOpen, setDialogOpen] = useState(false);
     const [saving, setSaving] = useState(false);
-    const [form, setForm] = useState({ ride_id: "", target_type: "driver", reason: "other", description: "" });
+    const [form, setForm] = useState({ ride_id: "", target_type: "driver", reason: "other", description: "", service_area_id: "" });
 
     const load = () => { setLoading(true); getFlags().then((d) => setFlags(d || [])).catch(() => setFlags([])).finally(() => setLoading(false)); };
     useEffect(() => { load(); }, []);
@@ -32,13 +35,15 @@ export default function FlagsTab() {
     const stats = { total: flags.length, riders: flags.filter((f) => f.target_type === "rider").length, drivers: flags.filter((f) => f.target_type === "driver").length, active: flags.filter((f) => f.is_active !== false).length };
     const filtered = flags.filter((f) => {
         const ms = !search || f.reason?.toLowerCase().includes(search.toLowerCase()) || f.description?.toLowerCase().includes(search.toLowerCase()) || f.target_id?.toLowerCase().includes(search.toLowerCase());
-        return ms && (typeFilter === "all" || f.target_type === typeFilter);
+        const ma = areaFilter === "all" || f.service_area_id === areaFilter;
+        return ms && (typeFilter === "all" || f.target_type === typeFilter) && ma;
     });
+    const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
 
     const handleCreate = async () => {
         if (!form.ride_id.trim()) { alert("Enter a ride ID."); return; }
         setSaving(true);
-        try { await flagRideParticipant(form.ride_id, { target_type: form.target_type, reason: form.reason, description: form.description }); setDialogOpen(false); setForm({ ride_id: "", target_type: "driver", reason: "other", description: "" }); load(); }
+        try { await flagRideParticipant(form.ride_id, { target_type: form.target_type, reason: form.reason, description: form.description, service_area_id: form.service_area_id || null }); setDialogOpen(false); setForm({ ride_id: "", target_type: "driver", reason: "other", description: "", service_area_id: "" }); load(); }
         catch (e: any) { alert(e.message); } finally { setSaving(false); }
     };
 
@@ -55,6 +60,7 @@ export default function FlagsTab() {
                 <div className="flex items-center gap-2 flex-1">
                     <div className="relative flex-1 max-w-xs"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-9" /></div>
                     <Select value={typeFilter} onValueChange={setTypeFilter}><SelectTrigger className="w-32 h-9"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All</SelectItem><SelectItem value="rider">Riders</SelectItem><SelectItem value="driver">Drivers</SelectItem></SelectContent></Select>
+                    <ServiceAreaFilter value={areaFilter} onChange={setAreaFilter} areas={areas} />
                 </div>
                 <div className="flex gap-2">
                     <Button variant="outline" size="sm" onClick={load}><RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />Refresh</Button>
@@ -65,11 +71,12 @@ export default function FlagsTab() {
             <Card><CardContent className="p-0">
                 {loading ? <div className="flex justify-center p-12"><div className="h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
                 : filtered.length === 0 ? <div className="text-center py-12 text-muted-foreground text-sm">No flags found.</div>
-                : <Table><TableHeader><TableRow><TableHead>Target</TableHead><TableHead>Reason</TableHead><TableHead>Description</TableHead><TableHead>Status</TableHead><TableHead>Date</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+                : <Table><TableHeader><TableRow><TableHead>Target</TableHead><TableHead>Reason</TableHead><TableHead>Area</TableHead><TableHead>Description</TableHead><TableHead>Status</TableHead><TableHead>Date</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
                     <TableBody>{filtered.map((f) => (
                         <TableRow key={f.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelected(f)}>
                             <TableCell><div className="flex items-center gap-1.5">{f.target_type === "rider" ? <Users className="h-3.5 w-3.5 text-blue-500" /> : <Car className="h-3.5 w-3.5 text-emerald-500" />}<span className="text-sm capitalize">{f.target_type}</span></div></TableCell>
                             <TableCell><Badge variant="outline" className="text-[10px]">{f.reason?.replace(/_/g, " ") || "other"}</Badge></TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{areaName(f.service_area_id) || "—"}</TableCell>
                             <TableCell className="max-w-[200px] truncate text-xs text-muted-foreground">{f.description || "—"}</TableCell>
                             <TableCell>{f.is_active === false ? <Badge className="text-[10px] bg-zinc-500/15 text-zinc-600">Inactive</Badge> : <Badge className="text-[10px] bg-amber-500/15 text-amber-600">Active</Badge>}</TableCell>
                             <TableCell className="text-[10px] text-muted-foreground">{formatDate(f.created_at)}</TableCell>
@@ -113,6 +120,7 @@ export default function FlagsTab() {
                             <div className="space-y-1.5"><Label className="text-xs">Reason</Label><Select value={form.reason} onValueChange={(v) => setForm({ ...form, reason: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{REASONS.map((r) => <SelectItem key={r} value={r} className="capitalize">{r.replace(/_/g, " ")}</SelectItem>)}</SelectContent></Select></div>
                         </div>
                         <div className="space-y-1.5"><Label className="text-xs">Description</Label><Textarea placeholder="Optional details..." value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} /></div>
+                        <ServiceAreaSelect value={form.service_area_id} onChange={(v) => setForm({ ...form, service_area_id: v })} areas={areas} />
                         <Button className="w-full" size="sm" onClick={handleCreate} disabled={saving}>{saving ? "Creating..." : "Create Flag"}</Button>
                     </div>
                 </DialogContent>

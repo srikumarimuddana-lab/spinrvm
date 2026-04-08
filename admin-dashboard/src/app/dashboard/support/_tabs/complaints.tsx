@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { FileWarning, Search, CheckCircle, XCircle, Clock, Plus, Trash2, Eye, RefreshCw, AlertCircle } from "lucide-react";
 import { formatDate } from "@/lib/utils";
+import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
 
 const S_CFG: Record<string, { l: string; c: string }> = {
     open: { l: "Open", c: "bg-amber-500/15 text-amber-600" },
@@ -23,15 +24,17 @@ const S_CFG: Record<string, { l: string; c: string }> = {
 const CATS = ["rude_behavior", "unsafe_driving", "vehicle_condition", "route_issue", "overcharge", "harassment", "other"];
 
 export default function ComplaintsTab() {
+    const { areas } = useServiceAreas();
     const [items, setItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
+    const [areaFilter, setAreaFilter] = useState("all");
     const [selected, setSelected] = useState<any>(null);
     const [resolution, setResolution] = useState("");
     const [dialogOpen, setDialogOpen] = useState(false);
     const [saving, setSaving] = useState(false);
-    const [form, setForm] = useState({ ride_id: "", against_type: "driver", category: "other", description: "" });
+    const [form, setForm] = useState({ ride_id: "", against_type: "driver", category: "other", description: "", service_area_id: "" });
 
     const load = () => { setLoading(true); getComplaints().then((d) => setItems(d || [])).catch(() => setItems([])).finally(() => setLoading(false)); };
     useEffect(() => { load(); }, []);
@@ -39,13 +42,15 @@ export default function ComplaintsTab() {
     const stats = { open: items.filter((i) => i.status === "open").length, investigating: items.filter((i) => i.status === "investigating").length, resolved: items.filter((i) => i.status === "resolved").length, dismissed: items.filter((i) => i.status === "dismissed").length };
     const filtered = items.filter((i) => {
         const ms = !search || i.category?.toLowerCase().includes(search.toLowerCase()) || i.description?.toLowerCase().includes(search.toLowerCase());
-        return ms && (statusFilter === "all" || i.status === statusFilter);
+        const ma = areaFilter === "all" || i.service_area_id === areaFilter;
+        return ms && (statusFilter === "all" || i.status === statusFilter) && ma;
     });
+    const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
 
     const handleCreate = async () => {
         if (!form.ride_id.trim() || !form.description.trim()) { alert("Enter ride ID and description."); return; }
         setSaving(true);
-        try { await createRideComplaint(form.ride_id, { against_type: form.against_type, category: form.category, description: form.description }); setDialogOpen(false); setForm({ ride_id: "", against_type: "driver", category: "other", description: "" }); load(); }
+        try { await createRideComplaint(form.ride_id, { against_type: form.against_type, category: form.category, description: form.description, service_area_id: form.service_area_id || null }); setDialogOpen(false); setForm({ ride_id: "", against_type: "driver", category: "other", description: "", service_area_id: "" }); load(); }
         catch (e: any) { alert(e.message); } finally { setSaving(false); }
     };
 
@@ -68,6 +73,7 @@ export default function ComplaintsTab() {
                 <div className="flex items-center gap-2 flex-1">
                     <div className="relative flex-1 max-w-xs"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-9" /></div>
                     <Select value={statusFilter} onValueChange={setStatusFilter}><SelectTrigger className="w-36 h-9"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All</SelectItem><SelectItem value="open">Open</SelectItem><SelectItem value="investigating">Investigating</SelectItem><SelectItem value="resolved">Resolved</SelectItem><SelectItem value="dismissed">Dismissed</SelectItem></SelectContent></Select>
+                    <ServiceAreaFilter value={areaFilter} onChange={setAreaFilter} areas={areas} />
                 </div>
                 <div className="flex gap-2">
                     <Button variant="outline" size="sm" onClick={load}><RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />Refresh</Button>
@@ -78,11 +84,12 @@ export default function ComplaintsTab() {
             <Card><CardContent className="p-0">
                 {loading ? <div className="flex justify-center p-12"><div className="h-7 w-7 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
                 : filtered.length === 0 ? <div className="text-center py-12 text-muted-foreground text-sm">No complaints found.</div>
-                : <Table><TableHeader><TableRow><TableHead>Against</TableHead><TableHead>Category</TableHead><TableHead>Description</TableHead><TableHead>Status</TableHead><TableHead>Date</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+                : <Table><TableHeader><TableRow><TableHead>Against</TableHead><TableHead>Category</TableHead><TableHead>Area</TableHead><TableHead>Description</TableHead><TableHead>Status</TableHead><TableHead>Date</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
                     <TableBody>{filtered.map((c) => (
                         <TableRow key={c.id} className="cursor-pointer hover:bg-muted/50" onClick={() => { setSelected(c); setResolution(""); }}>
                             <TableCell className="text-sm capitalize">{c.against_type || "—"}</TableCell>
                             <TableCell><Badge variant="outline" className="text-[10px]">{c.category?.replace(/_/g, " ") || "other"}</Badge></TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{areaName(c.service_area_id) || "—"}</TableCell>
                             <TableCell className="max-w-[200px] truncate text-xs text-muted-foreground">{c.description}</TableCell>
                             <TableCell><Badge className={`text-[10px] ${(S_CFG[c.status] || S_CFG.open).c}`}>{(S_CFG[c.status] || S_CFG.open).l}</Badge></TableCell>
                             <TableCell className="text-[10px] text-muted-foreground">{formatDate(c.created_at)}</TableCell>
@@ -127,6 +134,7 @@ export default function ComplaintsTab() {
                             <div className="space-y-1.5"><Label className="text-xs">Category</Label><Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{CATS.map((c) => <SelectItem key={c} value={c} className="capitalize">{c.replace(/_/g, " ")}</SelectItem>)}</SelectContent></Select></div>
                         </div>
                         <div className="space-y-1.5"><Label className="text-xs">Description *</Label><Textarea placeholder="Describe..." value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} /></div>
+                        <ServiceAreaSelect value={form.service_area_id} onChange={(v) => setForm({ ...form, service_area_id: v })} areas={areas} />
                         <Button className="w-full" size="sm" onClick={handleCreate} disabled={saving}>{saving ? "Filing..." : "File Complaint"}</Button>
                     </div>
                 </DialogContent>

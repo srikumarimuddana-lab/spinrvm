@@ -121,13 +121,15 @@ async def _supersede_and_flag_pending_review(
     except Exception as e:
         logger.warning(f"Could not supersede prior docs for driver {driver_id}: {e}")
 
+    # Flag driver for re-review. We keep is_verified=true but set
+    # needs_review=true so admin sees them in the "Needs Review" queue.
     try:
         await db.drivers.update_one(
             {'id': driver_id},
-            {'$set': {'is_verified': False, 'updated_at': datetime.utcnow()}},
+            {'$set': {'needs_review': True, 'updated_at': datetime.utcnow()}},
         )
     except Exception as e:
-        logger.warning(f"Could not reset is_verified for driver {driver_id}: {e}")
+        logger.warning(f"Could not flag driver {driver_id} for review: {e}")
 
 async def save_upload(file: UploadFile) -> str:
     file_ext = os.path.splitext(file.filename)[1]

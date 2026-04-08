@@ -39,16 +39,44 @@ async def get_my_driver(current_user: dict = Depends(get_current_user)):
 
 @api_router.put("/me")
 async def update_my_driver(body: dict = Body(...), current_user: dict = Depends(get_current_user)):
-    """Update the current user's driver profile (e.g., gst_number)."""
+    """Update the current user's driver profile.
+
+    Accepts vehicle info, personal details, and preferences. When a
+    verified driver changes vehicle fields, they are automatically
+    un-verified and must wait for admin re-approval.
+    """
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     if not driver:
         raise HTTPException(status_code=404, detail='Driver not found')
-    allowed_fields = {'gst_number', 'preferred_language'}
-    updates = {k: v for k, v in body.items() if k in allowed_fields}
-    if updates:
-        updates['updated_at'] = datetime.utcnow().isoformat()
-        await db.drivers.update_one({'id': driver['id']}, {'$set': updates})
-    return {'success': True}
+
+    # Fields that always update without affecting verification
+    safe_fields = {'gst_number', 'preferred_language', 'photo_url'}
+    # Vehicle/doc fields — changing these on a verified driver triggers re-review
+    vehicle_fields = {
+        'vehicle_type_id', 'vehicle_make', 'vehicle_model', 'vehicle_color',
+        'vehicle_year', 'license_plate', 'vehicle_vin',
+        'license_number', 'license_expiry_date', 'insurance_expiry_date',
+        'vehicle_inspection_expiry_date', 'background_check_expiry_date',
+        'work_eligibility_expiry_date', 'city', 'service_area_id',
+    }
+    allowed_fields = safe_fields | vehicle_fields
+
+    updates = {k: v for k, v in body.items() if k in allowed_fields and v is not None}
+    if not updates:
+        return {'success': True}
+
+    # Check if a verified driver changed vehicle/document fields → flag for review
+    changed_vehicle = any(k in vehicle_fields for k in updates)
+    if changed_vehicle and driver.get('is_verified'):
+        updates['needs_review'] = True
+        logger.info(
+            f"[DRIVER] Driver {driver['id']} updated vehicle info → flagged for admin re-review"
+        )
+
+    updates['updated_at'] = datetime.utcnow().isoformat()
+    await db.drivers.update_one({'id': driver['id']}, {'$set': updates})
+    updated = await db.drivers.find_one({'id': driver['id']})
+    return serialize_doc(updated)
 
 @api_router.post("/register")
 async def register_driver(

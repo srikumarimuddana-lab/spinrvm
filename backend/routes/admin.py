@@ -546,9 +546,9 @@ async def admin_get_driver_stats(
         u = users_map.get(d.get("user_id"))
         is_verified = d.get("is_verified", False)
 
-        # Detect "needs_review": verified driver with expired docs or pending re-uploads
-        needs_review = False
-        if is_verified:
+        # Detect "needs_review": stored flag, expired docs, or pending re-uploads
+        needs_review = bool(d.get("needs_review"))
+        if not needs_review and is_verified:
             # Check expired documents
             for ef in expiry_fields:
                 exp = d.get(ef)
@@ -774,9 +774,13 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest):
         if not existing_driver:
             raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
 
+        update_fields: Dict[str, Any] = {"is_verified": req.verified}
+        # Clear needs_review when admin verifies (re-approves)
+        if req.verified:
+            update_fields["needs_review"] = False
         await db.drivers.update_one(
             {"id": driver_id},
-            {"$set": {"is_verified": req.verified}},
+            {"$set": update_fields},
         )
     except HTTPException:
         raise
@@ -2292,6 +2296,24 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
                     f"Could not update legacy expiry field {legacy_field} "
                     f"for driver {existing.get('driver_id')}: {e}"
                 )
+
+    # After approving, check if this driver has no more pending docs → clear needs_review
+    if status == "approved":
+        driver_id = existing.get("driver_id")
+        if driver_id:
+            remaining_pending = await db.get_rows(
+                "driver_documents",
+                {"driver_id": driver_id, "status": "pending"},
+                limit=1,
+            )
+            if not remaining_pending:
+                try:
+                    await db.drivers.update_one(
+                        {"id": driver_id},
+                        {"$set": {"needs_review": False}},
+                    )
+                except Exception:
+                    pass
 
     return {"message": f"Document {status}"}
 

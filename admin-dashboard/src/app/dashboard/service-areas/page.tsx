@@ -209,7 +209,6 @@ export default function ServiceAreasPage() {
             </div>
           </div>
           <div className="flex items-center gap-4 mb-4">
-            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={createForm.is_airport} onChange={e => setCreateForm({...createForm, is_airport: e.target.checked})} className="accent-red-500" /> Airport zone</label>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={createForm.is_active} onChange={e => setCreateForm({...createForm, is_active: e.target.checked})} className="accent-red-500" /> Active</label>
           </div>
 
@@ -305,7 +304,6 @@ export default function ServiceAreasPage() {
                             <FieldSelect label="Province" value={area.province || 'SK'} options={['SK','AB','MB','ON','BC','QC','NS','NB','PE','NL']} onSave={v => handleFieldUpdate(area.id, 'province', v)} />
                             <FieldInput label="Pickup Radius (km)" value={area.max_pickup_radius_km || 5} type="number" onSave={v => handleFieldUpdate(area.id, 'max_pickup_radius_km', parseFloat(v))} />
                             <FieldToggle label="Active" value={area.is_active} onSave={v => handleFieldUpdate(area.id, 'is_active', v)} />
-                            <FieldToggle label="Airport Zone" value={area.is_airport} onSave={v => handleFieldUpdate(area.id, 'is_airport', v)} />
                           </div>
 
                           {/* Driver Matching */}

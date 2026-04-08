@@ -322,10 +322,11 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
                     'distance_km': dist,
                 })
     
-    # Check airport surcharge (pickup or dropoff in airport sub-region)
+    # Check airport surcharge (pickup, dropoff, or any stop in airport sub-region)
     airport_result = await calculate_airport_fee(
         request.pickup_lat, request.pickup_lng,
         request.dropoff_lat, request.dropoff_lng,
+        stops=request.stops,
     )
     airport_fee = airport_result.get('airport_fee', 0.0)
 
@@ -351,7 +352,7 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
             closest = min(nearby_for_type, key=lambda x: x['distance_km'])
             eta_minutes = max(2, int(closest['distance_km'] / 30 * 60) + 1)
 
-        estimates.append({
+        est = {
             'vehicle_type': fare_info['vehicle_type'],
             'distance_km': round(distance_km, 2),
             'duration_minutes': duration_minutes,
@@ -359,14 +360,17 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
             'distance_fare': round(distance_fare, 2),
             'time_fare': round(time_fare, 2),
             'booking_fee': booking_fee,
-            'airport_fee': round(airport_fee, 2),
-            'airport_zone_name': airport_result.get('airport_zone_name'),
             'surge_multiplier': surge_multiplier,
             'total_fare': round(total_fare, 2),
             'available': is_available,
             'eta_minutes': eta_minutes,
             'driver_count': driver_count,
-        })
+        }
+        # Only include airport fee fields when there's actually an airport surcharge
+        if airport_fee > 0:
+            est['airport_fee'] = round(airport_fee, 2)
+            est['airport_zone_name'] = airport_result.get('airport_zone_name')
+        estimates.append(est)
 
     return estimates
 
@@ -402,10 +406,11 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
     time_fare = fare_info['per_minute_rate'] * duration_minutes * surge_multiplier
     booking_fee = fare_info.get('booking_fee', 2.0)
 
-    # Airport surcharge (pickup or dropoff in airport sub-region)
+    # Airport surcharge (pickup, dropoff, or any stop in airport sub-region)
     airport_result = await calculate_airport_fee(
         request.pickup_lat, request.pickup_lng,
         request.dropoff_lat, request.dropoff_lng,
+        stops=request.stops,
     )
     airport_fee = airport_result.get('airport_fee', 0.0)
     airport_zone_name = airport_result.get('airport_zone_name')
@@ -475,10 +480,11 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
     ride_data = ride.dict()
     if service_area_id:
         ride_data['service_area_id'] = service_area_id
-    # Store airport surcharge details
-    ride_data['airport_fee'] = round(airport_fee, 2)
-    if airport_zone_name:
-        ride_data['airport_zone_name'] = airport_zone_name
+    # Only store airport surcharge when it actually applies
+    if airport_fee > 0:
+        ride_data['airport_fee'] = round(airport_fee, 2)
+        if airport_zone_name:
+            ride_data['airport_zone_name'] = airport_zone_name
 
     ride_data['area_fees'] = fees_result.get('fees', [])
     ride_data['area_fees_total'] = area_fees_total

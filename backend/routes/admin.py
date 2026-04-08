@@ -259,6 +259,9 @@ async def admin_create_service_area(area: Dict[str, Any]):
         "pst_rate": area.get("pst_rate", 0.0),
         "hst_enabled": area.get("hst_enabled", False),
         "hst_rate": area.get("hst_rate", 0.0),
+        # Spinr Pass kill switch
+        "spinr_pass_enabled": area.get("spinr_pass_enabled", True),
+        "subscription_plan_ids": area.get("subscription_plan_ids", []),
         "created_at": datetime.utcnow().isoformat(),
     }
     row = await db.service_areas.insert_one(doc)
@@ -285,6 +288,8 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
         "hst_enabled",
         "hst_rate",
         "required_documents",
+        "spinr_pass_enabled",
+        "subscription_plan_ids",
     ]
     
     # Map geojson from frontend to polygon in DB schema if present

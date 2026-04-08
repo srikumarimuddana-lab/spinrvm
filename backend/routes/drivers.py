@@ -1637,8 +1637,19 @@ async def update_driver_status(
 
 @api_router.get("/subscription/plans")
 async def get_subscription_plans(current_user: dict = Depends(get_current_user)):
-    """Get available subscription plans for the driver's service area."""
+    """Get available subscription plans for the driver's service area.
+
+    Respects the per-area kill switch: if the driver's service area has
+    spinr_pass_enabled=false, returns an empty list so the driver never
+    sees subscription options.
+    """
     driver = await db.drivers.find_one({'user_id': current_user['id']})
+
+    # Check the area-level kill switch
+    if driver and driver.get('service_area_id'):
+        area = await db.service_areas.find_one({'id': driver['service_area_id']})
+        if area and area.get('spinr_pass_enabled') is False:
+            return []
 
     plans = await db.subscription_plans.find({'is_active': True}).to_list(50)
 
@@ -1717,6 +1728,12 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    # Block subscription if Spinr Pass is disabled for this area
+    if driver.get('service_area_id'):
+        area = await db.service_areas.find_one({'id': driver['service_area_id']})
+        if area and area.get('spinr_pass_enabled') is False:
+            raise HTTPException(status_code=403, detail="Spinr Pass is not available in your service area")
 
     plan = await db.subscription_plans.find_one({'id': plan_id, 'is_active': True})
     if not plan:

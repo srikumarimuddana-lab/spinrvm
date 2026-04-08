@@ -254,7 +254,6 @@ async def admin_create_service_area(area: Dict[str, Any]):
 @admin_router.put("/service-areas/{area_id}")
 async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
     """Update service area — accepts any field."""
-    # Only allow fields that actually exist in Supabase service_areas table
     allowed = [
         "name",
         "city",
@@ -270,6 +269,7 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
         "pst_rate",
         "hst_enabled",
         "hst_rate",
+        "required_documents",
     ]
     
     # Map geojson from frontend to polygon in DB schema if present

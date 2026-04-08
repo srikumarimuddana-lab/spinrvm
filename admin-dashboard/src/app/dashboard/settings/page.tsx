@@ -82,41 +82,6 @@ export default function SettingsPage() {
 
             {settings && (
                 <div className="grid gap-6 lg:grid-cols-2">
-                    {/* Cancellation Fees */}
-                    <Card className="border-border/50">
-                        <CardHeader>
-                            <CardTitle className="text-base">Cancellation Fees</CardTitle>
-                        </CardHeader>
-                        <Separator />
-                        <CardContent className="pt-4 space-y-4">
-                            <div className="space-y-2">
-                                <Label>Admin Cancellation Fee ($)</Label>
-                                <Input
-                                    type="number"
-                                    step="0.50"
-                                    value={settings.cancellation_fee_admin ?? 0.5}
-                                    onChange={(e) =>
-                                        update("cancellation_fee_admin", parseFloat(e.target.value))
-                                    }
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Driver Cancellation Fee ($)</Label>
-                                <Input
-                                    type="number"
-                                    step="0.50"
-                                    value={settings.cancellation_fee_driver ?? 2.5}
-                                    onChange={(e) =>
-                                        update(
-                                            "cancellation_fee_driver",
-                                            parseFloat(e.target.value)
-                                        )
-                                    }
-                                />
-                            </div>
-                        </CardContent>
-                    </Card>
-
                     {/* Stripe */}
                     <Card className="border-border/50">
                         <CardHeader>

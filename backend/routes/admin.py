@@ -1954,8 +1954,18 @@ async def admin_delete_area_fee(area_id: str, fee_id: str):
 @admin_router.get("/areas/{area_id}/tax")
 async def admin_get_area_tax(area_id: str):
     """Get tax configuration for a service area."""
-    tax = await db.area_taxes.find_one({"service_area_id": area_id})
-    return tax or {"service_area_id": area_id, "tax_rate": 0, "tax_name": "Tax"}
+    area = await db.service_areas.find_one({"id": area_id})
+    if not area:
+        return {"service_area_id": area_id, "gst_enabled": True, "gst_rate": 5.0, "pst_enabled": False, "pst_rate": 0, "hst_enabled": False, "hst_rate": 0}
+    return {
+        "service_area_id": area_id,
+        "gst_enabled": area.get("gst_enabled", True),
+        "gst_rate": area.get("gst_rate", 5.0),
+        "pst_enabled": area.get("pst_enabled", False),
+        "pst_rate": area.get("pst_rate", 0),
+        "hst_enabled": area.get("hst_enabled", False),
+        "hst_rate": area.get("hst_rate", 0),
+    }
 
 
 @admin_router.put("/areas/{area_id}/tax")
@@ -1972,10 +1982,10 @@ async def admin_update_area_tax(area_id: str, tax: Dict[str, Any]):
 @admin_router.get("/areas/{area_id}/vehicle-pricing")
 async def admin_get_vehicle_pricing(area_id: str):
     """Get vehicle pricing configuration for a service area."""
-    pricing = await db.get_rows(
-        "vehicle_pricing", {"service_area_id": area_id}, order="created_at", limit=100
-    )
-    return pricing
+    area = await db.service_areas.find_one({"id": area_id})
+    if not area:
+        return []
+    return area.get("vehicle_pricing", [])
 
 
 # ---------- Driver Area Assignment ----------

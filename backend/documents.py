@@ -438,8 +438,31 @@ async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
     if req.status == 'approved':
         effective_expiry = req.expiry_date
 
+        # Look up requirement name — first from global table, then from
+        # the driver's service area required_documents (since requirement_id
+        # may now be a service-area doc key like "drivers_license").
         req_row = await db.document_requirements.find_one({'id': existing.get('requirement_id')})
-        legacy_field = _legacy_expiry_field_for_requirement(req_row.get('name') if req_row else None)
+        req_name = req_row.get('name') if req_row else None
+
+        if not req_name:
+            # Try the service area's required_documents
+            driver = await db.drivers.find_one({'id': existing.get('driver_id')})
+            if driver and driver.get('service_area_id'):
+                area = await db.service_areas.find_one({'id': driver['service_area_id']})
+                if area:
+                    area_doc = next(
+                        (d for d in (area.get('required_documents') or [])
+                         if d.get('key') == existing.get('requirement_id')),
+                        None
+                    )
+                    if area_doc:
+                        req_name = area_doc.get('label')
+
+            # Last resort: use the document_type field from the uploaded doc
+            if not req_name:
+                req_name = existing.get('document_type')
+
+        legacy_field = _legacy_expiry_field_for_requirement(req_name)
         if legacy_field:
             # If admin didn't supply a new expiry, clear the stale legacy
             # value (None) so the go-online check skips it instead of

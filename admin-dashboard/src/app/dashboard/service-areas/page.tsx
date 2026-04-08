@@ -17,6 +17,35 @@ const CITY_PRESETS: Record<string, { city: string; province: string; center: { l
 
 function polygonToText(polygon: any[]) { return polygon.map(p => `${p.lat}, ${p.lng}`).join("\n"); }
 
+/** Extract polygon points [{lat,lng}] from area data. Backend may store as `polygon` or `geojson`. */
+function getAreaPolygon(area: any): { lat: number; lng: number }[] {
+  const geo = area.polygon || area.geojson;
+  if (!geo) return [];
+  // GeoJSON format: { type: "Polygon", coordinates: [[[lng,lat], ...]] }
+  if (geo.type === "Polygon" && geo.coordinates?.[0]) {
+    return geo.coordinates[0].map((c: number[]) => ({ lat: c[1], lng: c[0] }));
+  }
+  // Already an array of {lat,lng}
+  if (Array.isArray(geo) && geo.length > 0 && geo[0].lat !== undefined) {
+    return geo;
+  }
+  return [];
+}
+
+/** Get the center of an area's polygon for map centering. */
+function getAreaCenter(area: any): { lat: number; lng: number } {
+  const pts = getAreaPolygon(area);
+  if (pts.length === 0) {
+    // Fallback to city preset
+    const key = (area.city || "").toLowerCase();
+    return CITY_PRESETS[key]?.center || { lat: 52.13, lng: -106.67 };
+  }
+  return {
+    lat: pts.reduce((s, p) => s + p.lat, 0) / pts.length,
+    lng: pts.reduce((s, p) => s + p.lng, 0) / pts.length,
+  };
+}
+
 export default function ServiceAreasPage() {
   const [areas, setAreas] = useState<any[]>([]);
   const [plans, setPlans] = useState<any[]>([]);
@@ -287,22 +316,18 @@ export default function ServiceAreasPage() {
                               <Suspense fallback={<div className="h-full bg-gray-100 flex items-center justify-center text-gray-400">Loading map...</div>}>
                                 <GeofenceMap
                                   key={`edit-${area.id}`}
-                                  polygon={area.geojson?.coordinates?.[0]?.map((c: number[]) => ({ lat: c[1], lng: c[0] })) || []}
-                                  center={
-                                    area.geojson?.coordinates?.[0]?.[0]
-                                      ? { lat: area.geojson.coordinates[0][0][1], lng: area.geojson.coordinates[0][0][0] }
-                                      : { lat: 52.13, lng: -106.67 }
-                                  }
+                                  polygon={getAreaPolygon(area)}
+                                  center={getAreaCenter(area)}
                                   zoom={11}
                                   onPolygonChange={(p: any) => {
                                     const geojson = { type: "Polygon", coordinates: [p.map((pt: any) => [pt.lng, pt.lat])] };
-                                    handleFieldUpdate(area.id, 'geojson', geojson);
+                                    handleFieldUpdate(area.id, 'polygon', geojson);
                                   }}
                                 />
                               </Suspense>
                             </div>
-                            {area.geojson?.coordinates?.[0] && (
-                              <p className="text-xs text-green-600 mt-1">{area.geojson.coordinates[0].length} boundary points defined</p>
+                            {getAreaPolygon(area).length > 0 && (
+                              <p className="text-xs text-green-600 mt-1">{getAreaPolygon(area).length} boundary points defined</p>
                             )}
                           </div>
 
@@ -394,8 +419,8 @@ export default function ServiceAreasPage() {
                                     <GeofenceMap
                                       key={airportMapKey}
                                       polygon={airportForm.polygon}
-                                      center={CITY_PRESETS[area.city?.toLowerCase()]?.center || { lat: 52.13, lng: -106.67 }}
-                                      zoom={11}
+                                      center={getAreaCenter(area)}
+                                      zoom={12}
                                       onPolygonChange={(p: any) => setAirportForm({ ...airportForm, polygon: p })}
                                     />
                                   </Suspense>
@@ -417,10 +442,10 @@ export default function ServiceAreasPage() {
                               <p className="text-gray-400 text-sm mt-1">Add an airport zone to automatically charge a surcharge for rides to/from the airport</p>
                             </div>
                           ) : (
-                            <div className="space-y-3">
+                            <div className="space-y-4">
                               {subRegions.map((sub: any) => (
                                 <div key={sub.id} className="bg-blue-50 border border-blue-100 rounded-xl p-4">
-                                  <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center justify-between mb-3">
                                     <div className="flex items-center gap-2">
                                       <Plane className="h-4 w-4 text-blue-600" />
                                       <span className="font-bold text-blue-900">{sub.name}</span>
@@ -429,10 +454,31 @@ export default function ServiceAreasPage() {
                                     </div>
                                     <button onClick={() => handleDelete(sub.id, sub.name)} className="text-sm text-red-500 hover:underline">Delete</button>
                                   </div>
-                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
                                     <FieldInput label="Zone Name" value={sub.name} onSave={v => handleFieldUpdate(sub.id, 'name', v)} />
                                     <FieldInput label="Airport Fee ($)" value={sub.airport_fee || 0} type="number" onSave={v => handleFieldUpdate(sub.id, 'airport_fee', parseFloat(v))} />
                                     <FieldToggle label="Active" value={sub.is_active} onSave={v => handleFieldUpdate(sub.id, 'is_active', v)} />
+                                  </div>
+                                  {/* Airport zone boundary map */}
+                                  <div>
+                                    <label className="block text-xs font-semibold text-blue-800 mb-2">Airport Zone Boundary</label>
+                                    <div className="h-56 rounded-xl overflow-hidden border border-blue-200">
+                                      <Suspense fallback={<div className="h-full bg-gray-100 flex items-center justify-center text-gray-400">Loading map...</div>}>
+                                        <GeofenceMap
+                                          key={`sub-${sub.id}`}
+                                          polygon={getAreaPolygon(sub)}
+                                          center={getAreaPolygon(sub).length > 0 ? getAreaCenter(sub) : getAreaCenter(area)}
+                                          zoom={13}
+                                          onPolygonChange={(p: any) => {
+                                            const geojson = { type: "Polygon", coordinates: [p.map((pt: any) => [pt.lng, pt.lat])] };
+                                            handleFieldUpdate(sub.id, 'polygon', geojson);
+                                          }}
+                                        />
+                                      </Suspense>
+                                    </div>
+                                    {getAreaPolygon(sub).length > 0 && (
+                                      <p className="text-xs text-green-600 mt-1">{getAreaPolygon(sub).length} boundary points</p>
+                                    )}
                                   </div>
                                 </div>
                               ))}

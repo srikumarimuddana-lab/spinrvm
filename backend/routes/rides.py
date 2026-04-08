@@ -6,7 +6,7 @@ try:
     from ..utils import calculate_distance
     from ..socket_manager import manager
     from ..settings_loader import get_app_settings
-    from ..features import send_push_notification
+    from ..features import send_push_notification, calculate_all_fees
     from .. import db_supabase
     from ..geo_utils import point_in_polygon, get_service_area_polygon
 except ImportError:
@@ -16,7 +16,7 @@ except ImportError:
     from geo_utils import calculate_distance, point_in_polygon, get_service_area_polygon
     from socket_manager import manager
     from settings_loader import get_app_settings
-    from features import send_push_notification
+    from features import send_push_notification, calculate_all_fees
     import db_supabase
 from .fares import get_fares_for_location
 import asyncio
@@ -387,7 +387,22 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
     
     total_fare = fare_info['base_fare'] + distance_fare + time_fare + booking_fee
     total_fare = max(total_fare, fare_info['minimum_fare'])
-    
+
+    # Calculate area fees + taxes
+    fees_result = {}
+    try:
+        fees_result = await calculate_all_fees(
+            request.pickup_lat, request.pickup_lng,
+            request.dropoff_lat, request.dropoff_lng,
+            distance_km, total_fare
+        )
+    except Exception as e:
+        logger.warning(f"Failed to calculate area fees: {e}")
+
+    area_fees_total = fees_result.get('fees_total', 0)
+    tax_amount = fees_result.get('tax_amount', 0)
+    grand_total = round(total_fare + area_fees_total + tax_amount, 2)
+
     # Earnings split: Distance fare goes to driver, booking fee goes to admin
     driver_earnings = fare_info['base_fare'] + distance_fare + time_fare
     admin_earnings = booking_fee
@@ -435,6 +450,12 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
     ride_data = ride.dict()
     if service_area_id:
         ride_data['service_area_id'] = service_area_id
+
+    ride_data['area_fees'] = fees_result.get('fees', [])
+    ride_data['area_fees_total'] = area_fees_total
+    ride_data['tax_amount'] = tax_amount
+    ride_data['tax_breakdown'] = fees_result.get('tax_breakdown', {})
+    ride_data['grand_total'] = grand_total
 
     await db.rides.insert_one(ride_data)
     

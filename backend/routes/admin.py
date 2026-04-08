@@ -1819,30 +1819,29 @@ async def admin_get_area_fees(area_id: str):
 async def admin_create_area_fee(area_id: str, fee: Dict[str, Any]):
     """Create a new fee for a service area."""
     doc = {
+        "id": str(uuid.uuid4()),
         "service_area_id": area_id,
-        "fee_type": fee.get("fee_type"),  # airport, toll, surge, etc.
-        "amount": fee.get("amount", 0),
+        "fee_name": fee.get("fee_name", ""),
+        "fee_type": fee.get("fee_type", "custom"),
+        "calc_mode": fee.get("calc_mode", "flat"),
+        "amount": float(fee.get("amount", 0)),
         "description": fee.get("description", ""),
+        "conditions": fee.get("conditions", {}),
         "is_active": fee.get("is_active", True),
         "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
     }
-    row = await db.area_fees.insert_one(doc)
-    return {"fee_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+    await db.area_fees.insert_one(doc)
+    return doc
 
 
 @admin_router.put("/areas/{area_id}/fees/{fee_id}")
 async def admin_update_area_fee(area_id: str, fee_id: str, fee: Dict[str, Any]):
     """Update an area fee."""
-    updates = {}
-    if fee.get("fee_type") is not None:
-        updates["fee_type"] = fee.get("fee_type")
-    if fee.get("amount") is not None:
-        updates["amount"] = fee.get("amount")
-    if fee.get("description") is not None:
-        updates["description"] = fee.get("description")
-    if fee.get("is_active") is not None:
-        updates["is_active"] = fee.get("is_active")
-
+    allowed = ["fee_name", "fee_type", "calc_mode", "amount", "description", "conditions", "is_active"]
+    updates = {k: fee[k] for k in allowed if k in fee}
+    if "amount" in updates:
+        updates["amount"] = float(updates["amount"])
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
         await db.area_fees.update_one({"id": fee_id}, {"$set": updates})
@@ -1866,20 +1865,12 @@ async def admin_get_area_tax(area_id: str):
 @admin_router.put("/areas/{area_id}/tax")
 async def admin_update_area_tax(area_id: str, tax: Dict[str, Any]):
     """Update tax configuration for a service area."""
-    tax_doc = {
-        "service_area_id": area_id,
-        "tax_rate": tax.get("tax_rate", 0),
-        "tax_name": tax.get("tax_name", "Tax"),
-        "updated_at": datetime.utcnow().isoformat(),
-    }
-
-    existing = await db.area_taxes.find_one({"service_area_id": area_id})
-    if existing:
-        await db.area_taxes.update_one({"service_area_id": area_id}, {"$set": tax_doc})
-    else:
-        await db.area_taxes.insert_one(tax_doc)
-
-    return {"message": "Area tax updated"}
+    allowed = ["gst_enabled", "gst_rate", "pst_enabled", "pst_rate", "hst_enabled", "hst_rate"]
+    updates = {k: tax[k] for k in allowed if k in tax}
+    if updates:
+        await db.service_areas.update_one({"id": area_id}, {"$set": updates})
+    area = await db.service_areas.find_one({"id": area_id})
+    return {k: area.get(k) for k in allowed}
 
 
 @admin_router.get("/areas/{area_id}/vehicle-pricing")

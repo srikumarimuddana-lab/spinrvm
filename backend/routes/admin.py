@@ -898,7 +898,7 @@ class DriverStatusOverride(BaseModel):
 @admin_router.put("/drivers/{driver_id}/status-override")
 async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride):
     """Manually move a driver to any status. Use with caution."""
-    valid = {"pending", "active", "rejected", "suspended", "banned"}
+    valid = {"pending", "active", "needs_review", "suspended", "banned"}
     if req.status not in valid:
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {', '.join(valid)}")
 

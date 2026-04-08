@@ -876,6 +876,23 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
     logger.info(f"[ADMIN] Driver {driver_id} action={req.action} reason={req.reason}")
+
+    # Auto-log to activity timeline
+    action_titles = {
+        "approve": "Driver Approved",
+        "reject": "Application Rejected",
+        "suspend": "Driver Suspended",
+        "ban": "Driver Banned",
+        "unban": "Driver Unbanned",
+        "reactivate": "Driver Reactivated",
+    }
+    await _log_driver_activity(
+        driver_id, req.action,
+        action_titles.get(req.action, f"Action: {req.action}"),
+        req.reason or "",
+        {"old_status": current_status, "new_status": updates.get("status"), "reason": req.reason},
+    )
+
     return {
         "message": f"Driver {req.action}d successfully",
         "new_status": updates.get("status", current_status),
@@ -925,6 +942,11 @@ async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride
 
     await db.drivers.update_one({"id": driver_id}, {"$set": updates})
     logger.info(f"[ADMIN] Driver {driver_id} status overridden to {req.status} reason={req.reason}")
+    await _log_driver_activity(
+        driver_id, "status_override", f"Status changed to {req.status}",
+        req.reason or "Manual admin override",
+        {"old_status": driver.get("status"), "new_status": req.status, "reason": req.reason},
+    )
     return {"message": f"Driver status set to {req.status}"}
 
 
@@ -958,6 +980,10 @@ async def admin_add_driver_note(driver_id: str, req: DriverNoteCreate):
         "created_at": datetime.utcnow().isoformat(),
     }
     await db.driver_notes.insert_one(doc)
+    await _log_driver_activity(
+        driver_id, "note_added", f"Note added ({req.category})",
+        req.note[:100], {"category": req.category},
+    )
     return doc
 
 
@@ -966,6 +992,40 @@ async def admin_delete_driver_note(note_id: str):
     """Delete a note."""
     await db.driver_notes.delete_many({"id": note_id})
     return {"message": "Note deleted"}
+
+
+# ── Driver Activity Log ──
+
+
+async def _log_driver_activity(
+    driver_id: str, event_type: str, title: str,
+    description: str = "", metadata: dict = None, actor: str = "admin",
+):
+    """Helper to record a driver lifecycle event."""
+    try:
+        await db.driver_activity_log.insert_one({
+            "id": str(uuid.uuid4()),
+            "driver_id": driver_id,
+            "event_type": event_type,
+            "title": title,
+            "description": description,
+            "metadata": metadata or {},
+            "actor": actor,
+            "created_at": datetime.utcnow().isoformat(),
+        })
+    except Exception as e:
+        logger.warning(f"Failed to log driver activity: {e}")
+
+
+@admin_router.get("/drivers/{driver_id}/activity")
+async def admin_get_driver_activity(driver_id: str, limit: int = 100):
+    """Get full activity timeline for a driver, newest first."""
+    activities = await db.get_rows(
+        "driver_activity_log", {"driver_id": driver_id},
+        order="created_at", desc=True, limit=limit,
+    )
+    return activities or []
+
 
 
 # ---------- Stats (count_documents + sum from rides) ----------
@@ -2492,6 +2552,15 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
                     )
                 except Exception:
                     pass
+
+    # Log to activity timeline
+    doc_type = existing.get("document_type", "Document")
+    await _log_driver_activity(
+        existing.get("driver_id", ""), f"document_{status}",
+        f"Document {status}: {doc_type}",
+        rejection_reason or "",
+        {"document_id": document_id, "document_type": doc_type, "status": status},
+    )
 
     return {"message": f"Document {status}"}
 

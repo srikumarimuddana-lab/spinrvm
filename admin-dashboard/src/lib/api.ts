@@ -548,6 +548,9 @@ export const addDriverNote = (driverId: string, note: string, category: string =
 export const deleteDriverNote = (noteId: string) =>
     request<any>(`/api/admin/drivers/notes/${noteId}`, { method: "DELETE" });
 
+export const getDriverActivity = (driverId: string) =>
+    request<any[]>(`/api/admin/drivers/${driverId}/activity`);
+
 
 /* ── Heat Map Data ─────────────────────────── */
 export interface HeatMapData {

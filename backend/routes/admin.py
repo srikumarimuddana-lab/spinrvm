@@ -1610,6 +1610,26 @@ async def admin_get_disputes():
     return disputes
 
 
+@admin_router.post("/disputes")
+async def admin_create_dispute(dispute: Dict[str, Any]):
+    """Create a dispute manually from admin."""
+    doc = {
+        "id": str(uuid.uuid4()),
+        "ride_id": dispute.get("ride_id"),
+        "user_id": dispute.get("user_id"),
+        "user_name": dispute.get("user_name", ""),
+        "user_type": dispute.get("user_type", "rider"),
+        "reason": dispute.get("reason", ""),
+        "description": dispute.get("description", ""),
+        "status": "pending",
+        "refund_amount": dispute.get("refund_amount", 0),
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    await db.disputes.insert_one(doc)
+    return {"success": True, "dispute": doc}
+
+
 @admin_router.get("/disputes/{dispute_id}")
 async def admin_get_dispute_details(dispute_id: str):
     """Get detailed dispute information."""
@@ -1621,6 +1641,17 @@ async def admin_get_dispute_details(dispute_id: str):
     ride = await db.rides.find_one({"id": dispute.get("ride_id")})
 
     return {**dispute, "ride_details": ride}
+
+
+@admin_router.put("/disputes/{dispute_id}")
+async def admin_update_dispute(dispute_id: str, dispute: Dict[str, Any]):
+    """Update a dispute."""
+    allowed = ["reason", "description", "status", "refund_amount", "user_type"]
+    updates = {k: v for k, v in dispute.items() if k in allowed and v is not None}
+    if updates:
+        updates["updated_at"] = datetime.utcnow().isoformat()
+        await db.disputes.update_one({"id": dispute_id}, {"$set": updates})
+    return {"message": "Dispute updated"}
 
 
 @admin_router.put("/disputes/{dispute_id}/resolve")
@@ -1637,6 +1668,13 @@ async def admin_resolve_dispute(dispute_id: str, resolution: Dict[str, Any]):
     return {"message": "Dispute resolved"}
 
 
+@admin_router.delete("/disputes/{dispute_id}")
+async def admin_delete_dispute(dispute_id: str):
+    """Delete a dispute."""
+    await db.disputes.delete_many({"id": dispute_id})
+    return {"message": "Dispute deleted"}
+
+
 # ---------- Support Tickets ----------
 
 
@@ -1647,6 +1685,26 @@ async def admin_get_tickets():
         "support_tickets", order="created_at", desc=True, limit=500
     )
     return tickets
+
+
+@admin_router.post("/tickets")
+async def admin_create_ticket(ticket: Dict[str, Any]):
+    """Create a support ticket manually from admin."""
+    doc = {
+        "id": str(uuid.uuid4()),
+        "subject": ticket.get("subject", ""),
+        "category": ticket.get("category", "general"),
+        "message": ticket.get("message", ""),
+        "priority": ticket.get("priority", "medium"),
+        "user_id": ticket.get("user_id"),
+        "user_name": ticket.get("user_name", "Admin"),
+        "user_email": ticket.get("user_email", ""),
+        "status": "open",
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    await db.support_tickets.insert_one(doc)
+    return {"success": True, "ticket": doc}
 
 
 @admin_router.get("/tickets/{ticket_id}")
@@ -1701,6 +1759,24 @@ async def admin_close_ticket(ticket_id: str):
         {"$set": {"status": "closed", "closed_at": datetime.utcnow().isoformat()}},
     )
     return {"message": "Ticket closed"}
+
+
+@admin_router.put("/tickets/{ticket_id}")
+async def admin_update_ticket(ticket_id: str, ticket: Dict[str, Any]):
+    """Update a support ticket."""
+    allowed = ["subject", "category", "priority", "status"]
+    updates = {k: v for k, v in ticket.items() if k in allowed and v is not None}
+    if updates:
+        updates["updated_at"] = datetime.utcnow().isoformat()
+        await db.support_tickets.update_one({"id": ticket_id}, {"$set": updates})
+    return {"message": "Ticket updated"}
+
+
+@admin_router.delete("/tickets/{ticket_id}")
+async def admin_delete_ticket(ticket_id: str):
+    """Delete a support ticket."""
+    await db.support_tickets.delete_many({"id": ticket_id})
+    return {"message": "Ticket deleted"}
 
 
 # ---------- FAQs ----------

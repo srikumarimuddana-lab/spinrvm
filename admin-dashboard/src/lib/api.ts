@@ -417,11 +417,26 @@ export const getDisputes = () =>
 export const getDisputeDetails = (id: string) =>
     request<any>(`/api/admin/disputes/${id}`);
 
+export const createDispute = (data: any) =>
+    request<any>("/api/admin/disputes", {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+
+export const updateDispute = (id: string, data: any) =>
+    request<any>(`/api/admin/disputes/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+    });
+
 export const resolveDispute = (id: string, resolution: any) =>
     request<any>(`/api/admin/disputes/${id}/resolve`, {
         method: "PUT",
         body: JSON.stringify(resolution),
     });
+
+export const deleteDispute = (id: string) =>
+    request<any>(`/api/admin/disputes/${id}`, { method: "DELETE" });
 
 /* ── Support Tickets ────────────────────────── */
 export const getTickets = () =>
@@ -429,6 +444,18 @@ export const getTickets = () =>
 
 export const getTicketDetails = (id: string) =>
     request<any>(`/api/admin/tickets/${id}`);
+
+export const createTicket = (data: any) =>
+    request<any>("/api/admin/tickets", {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+
+export const updateTicket = (id: string, data: any) =>
+    request<any>(`/api/admin/tickets/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+    });
 
 export const replyToTicket = (id: string, message: string) =>
     request<any>(`/api/admin/tickets/${id}/reply`, {
@@ -438,6 +465,9 @@ export const replyToTicket = (id: string, message: string) =>
 
 export const closeTicket = (id: string) =>
     request<any>(`/api/admin/tickets/${id}/close`, { method: "POST" });
+
+export const deleteTicket = (id: string) =>
+    request<any>(`/api/admin/tickets/${id}`, { method: "DELETE" });
 
 /* ── FAQs ───────────────────────────────────── */
 export const getFaqs = () =>

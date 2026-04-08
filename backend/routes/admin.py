@@ -2550,9 +2550,15 @@ async def list_driver_subscriptions(status: Optional[str] = Query(None)):
 async def admin_get_subscription_stats(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    service_area_ids: Optional[str] = None,
 ):
-    """Get Spinr Pass subscription revenue stats, transaction list, and chart data."""
+    """Get Spinr Pass subscription revenue stats, transaction list, and chart data.
+
+    service_area_ids: comma-separated list of area IDs to filter by driver's area.
+    """
     from collections import defaultdict
+
+    area_filter = set(service_area_ids.split(",")) if service_area_ids else None
 
     now = datetime.utcnow()
     if start_date:
@@ -2574,9 +2580,10 @@ async def admin_get_subscription_stats(
     all_plans = await db.get_rows("subscription_plans", limit=100)
     plan_map = {p["id"]: p for p in all_plans}
 
-    # Fetch drivers for name lookup
+    # Fetch drivers for name + area lookup
     driver_ids = list({s.get("driver_id") for s in all_subs if s.get("driver_id")})
-    drivers_map = {}
+    drivers_map: Dict[str, str] = {}
+    driver_area_map: Dict[str, str] = {}
     for did in driver_ids:
         if did and did not in drivers_map:
             d = await db.drivers.find_one({"id": did})
@@ -2587,6 +2594,12 @@ async def admin_get_subscription_stats(
                 if u:
                     name = f"{u.get('first_name', '')} {u.get('last_name', '')}".strip()
                 drivers_map[did] = name or d.get("name") or did[:8]
+                if d.get("service_area_id"):
+                    driver_area_map[did] = d["service_area_id"]
+
+    # Filter by service area if requested
+    if area_filter:
+        all_subs = [s for s in all_subs if driver_area_map.get(s.get("driver_id", "")) in area_filter]
 
     # Overall stats
     active = [s for s in all_subs if s.get("status") == "active"]
@@ -2672,6 +2685,9 @@ async def admin_get_subscription_stats(
             "daily_subscribers": subscribers_chart,
         },
         "transactions": transactions,
+        "service_areas": [{"id": a["id"], "name": a.get("name", "Unknown")}
+                          for a in await db.get_rows("service_areas", {"parent_service_area_id": None}, order="name", limit=200)
+                          if not a.get("parent_service_area_id")],
     }
 
 

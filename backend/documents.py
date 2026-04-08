@@ -211,10 +211,29 @@ async def link_driver_document(
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
-    # Validate requirement exists
+    # Validate requirement exists — check global table first, then
+    # fall back to the driver's service area required_documents list
+    # (since we moved to per-area docs, requirement_id is now the area doc key).
     req = await db.document_requirements.find_one({'id': doc_data.requirement_id})
     if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
+        # Try looking it up from the driver's service area
+        area_req = None
+        if driver.get('service_area_id'):
+            area = await db.service_areas.find_one({'id': driver['service_area_id']})
+            if area:
+                area_req = next(
+                    (d for d in (area.get('required_documents') or [])
+                     if d.get('key') == doc_data.requirement_id),
+                    None
+                )
+        if not area_req:
+            raise HTTPException(status_code=404, detail="Requirement not found")
+        # Synthesise a req-like dict so downstream code works uniformly
+        req = {
+            'id': area_req.get('key'),
+            'name': area_req.get('label', doc_data.requirement_id),
+            'requires_back_side': area_req.get('requires_back_side', False),
+        }
 
     # Supersede any prior docs for this requirement+side and flip the
     # driver back to unverified so admin re-reviews this upload.
@@ -255,10 +274,27 @@ async def upload_driver_document(
     # storage logic
     url = await save_upload(file)
 
-    # Validate requirement exists
+    # Validate requirement — check global table first, then service area docs.
     req = await db.document_requirements.find_one({'id': requirement_id})
     if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
+        area_req = None
+        if driver_id:
+            drv = await db.drivers.find_one({'id': driver_id})
+            if drv and drv.get('service_area_id'):
+                area = await db.service_areas.find_one({'id': drv['service_area_id']})
+                if area:
+                    area_req = next(
+                        (d for d in (area.get('required_documents') or [])
+                         if d.get('key') == requirement_id),
+                        None
+                    )
+        if not area_req:
+            raise HTTPException(status_code=404, detail="Requirement not found")
+        req = {
+            'id': area_req.get('key'),
+            'name': area_req.get('label', requirement_id),
+            'requires_back_side': area_req.get('requires_back_side', False),
+        }
 
     # Normalise expiry_date input — accept ISO string, store as ISO string.
     expiry_iso: Optional[str] = None

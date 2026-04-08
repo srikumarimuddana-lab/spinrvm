@@ -111,7 +111,7 @@ export default function DriversPage() {
     const selectedAreaName = serviceAreaId ? serviceAreas.find(a => a.id === serviceAreaId)?.name || "Selected Area" : "All Areas";
     const activeDocs = driverDocs.filter(d => d.status !== "superseded");
     const selectedDriverArea = selected ? allServiceAreas.find(a => a.id === selected.service_area_id) : null;
-    const requiredDocs: { key: string; label: string; has_expiry: boolean }[] = selectedDriverArea?.required_documents || [];
+    const requiredDocs: { id?: string; key: string; label: string; has_expiry: boolean }[] = selectedDriverArea?.required_documents || [];
 
     // Map service area document key to driver profile legacy expiry field
     function _docKeyToExpiryField(key: string): string | null {
@@ -122,6 +122,25 @@ export default function DriversPage() {
         if (k.includes("background")) return "background_check_expiry_date";
         if (k.includes("work") || k.includes("eligibility")) return "work_eligibility_expiry_date";
         return null;
+    }
+
+    // Get expiry for a required document — prefers the expiry stored on the actual
+    // document record (from the API), falls back to the legacy top-level field on
+    // the driver row (set during onboarding or admin approval before docs flow existed).
+    function _getDocExpiry(rdId: string | undefined, rdKey: string, rdLabel: string): string | undefined {
+        const matchDoc = activeDocs.find(d => {
+            if (d.requirement_id) return d.requirement_id === rdId || d.requirement_id === rdKey;
+            const dt = (d.document_type || "").toLowerCase();
+            const label = rdLabel.toLowerCase();
+            const key = rdKey.toLowerCase().replace(/_/g, " ");
+            return dt === label || dt === key || dt.replace(/[^a-z0-9]/g, "_").includes(rdKey.replace(/[^a-z0-9]/g, "_"));
+        });
+        // doc record expiry (set when admin approves with an expiry date)
+        const docExpiry = matchDoc?.expiry_date || matchDoc?.expires_at;
+        if (docExpiry) return docExpiry;
+        // Legacy fallback: driver row top-level expiry field
+        const legacyField = _docKeyToExpiryField(rdKey);
+        return legacyField ? selected?.[legacyField] : undefined;
     }
 
     return (
@@ -363,22 +382,37 @@ export default function DriversPage() {
                                 {/* Documents */}
                                 <TabsContent value="documents" className="mt-4 space-y-6">
                                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                                        {requiredDocs.length > 0 ? requiredDocs.filter(rd => rd.has_expiry).map(rd => {
-                                            // Map service area doc key to driver profile expiry field
-                                            const expiryField = _docKeyToExpiryField(rd.key);
-                                            return <DocExpirySummaryCard key={rd.key} label={rd.label} expiry={expiryField ? selected[expiryField] : undefined} />;
-                                        }) : (<>
-                                            <DocExpirySummaryCard label="Driver's License" expiry={selected.license_expiry_date} />
-                                            <DocExpirySummaryCard label="Insurance" expiry={selected.insurance_expiry_date} />
-                                            <DocExpirySummaryCard label="Vehicle Inspection" expiry={selected.vehicle_inspection_expiry_date} />
-                                            <DocExpirySummaryCard label="Background Check" expiry={selected.background_check_expiry_date} />
+                                        {docsLoading ? (
+                                            <>{[1,2,3,4,5].map(i => <div key={i} className="h-24 bg-muted rounded-xl animate-pulse" />)}</>
+                                        ) : requiredDocs.length > 0 ? requiredDocs.filter(rd => rd.has_expiry).map(rd => (
+                                            <DocExpirySummaryCard
+                                                key={rd.key}
+                                                label={rd.label}
+                                                expiry={_getDocExpiry(rd.id, rd.key, rd.label)}
+                                            />
+                                        )) : (<>
+                                            <DocExpirySummaryCard label="Driver's License"    expiry={_getDocExpiry(undefined, "drivers_license",      "Driver's License")} />
+                                            <DocExpirySummaryCard label="Vehicle Insurance"   expiry={_getDocExpiry(undefined, "vehicle_insurance",    "Vehicle Insurance")} />
+                                            <DocExpirySummaryCard label="Vehicle Registration" expiry={_getDocExpiry(undefined, "vehicle_registration", "Vehicle Registration")} />
+                                            <DocExpirySummaryCard label="Vehicle Inspection"  expiry={_getDocExpiry(undefined, "vehicle_inspection",  "Vehicle Inspection")} />
+                                            <DocExpirySummaryCard label="Background Check"    expiry={_getDocExpiry(undefined, "background_check",    "Background Check")} />
                                         </>)}
                                     </div>
                                     {docsLoading ? <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">{[1,2,3,4].map(i=><div key={i} className="h-48 bg-muted rounded-xl animate-pulse" />)}</div>
                                     : requiredDocs.length > 0 ? (
                                         <div className="space-y-6">
                                             {requiredDocs.map(reqDoc => {
-                                                const matchingDocs = activeDocs.filter(d => (d.document_type||"").toLowerCase().replace(/[^a-z0-9]/g,"_").includes(reqDoc.key.replace(/[^a-z0-9]/g,"_")) || (d.document_type||"").toLowerCase()===reqDoc.label.toLowerCase() || d.requirement_id===reqDoc.key);
+                                                const matchingDocs = activeDocs.filter(d => {
+                                                    // 1. Best: match by requirement_id stored on the doc (set when driver uploads via /drivers/documents)
+                                                    if (d.requirement_id) return d.requirement_id === reqDoc.id || d.requirement_id === reqDoc.key;
+                                                    // 2. Match document_type against the label (set when driver uses become-driver flow)
+                                                    const dt = (d.document_type || "").toLowerCase();
+                                                    const label = reqDoc.label.toLowerCase();
+                                                    const key = reqDoc.key.toLowerCase().replace(/_/g, " ");
+                                                    if (dt === label || dt === key) return true;
+                                                    // 3. Fuzzy fallback: key slug appears inside document_type
+                                                    return dt.replace(/[^a-z0-9]/g, "_").includes(reqDoc.key.replace(/[^a-z0-9]/g, "_"));
+                                                });
                                                 return (
                                                     <div key={reqDoc.key}>
                                                         <div className="flex items-center gap-2 mb-3">
@@ -391,7 +425,22 @@ export default function DriversPage() {
                                                     </div>
                                                 );
                                             })}
-                                            {(() => { const matchedIds = new Set<string>(); requiredDocs.forEach(r => activeDocs.forEach(d => { if ((d.document_type||"").toLowerCase().replace(/[^a-z0-9]/g,"_").includes(r.key.replace(/[^a-z0-9]/g,"_")) || (d.document_type||"").toLowerCase()===r.label.toLowerCase() || d.requirement_id===r.key) matchedIds.add(d.id); })); const unmatched = activeDocs.filter(d=>!matchedIds.has(d.id)); if (!unmatched.length) return null; return (<div><div className="flex items-center gap-2 mb-3"><FileText className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">Other Documents</h4><Badge variant="secondary" className="text-[10px]">{unmatched.length}</Badge></div><div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{unmatched.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div></div>); })()}
+                                            {(() => {
+                                                const matchedIds = new Set<string>();
+                                                requiredDocs.forEach(r => activeDocs.forEach(d => {
+                                                    if (d.requirement_id) {
+                                                        if (d.requirement_id === r.id || d.requirement_id === r.key) matchedIds.add(d.id);
+                                                        return;
+                                                    }
+                                                    const dt = (d.document_type || "").toLowerCase();
+                                                    const label = r.label.toLowerCase();
+                                                    const key = r.key.toLowerCase().replace(/_/g, " ");
+                                                    if (dt === label || dt === key || dt.replace(/[^a-z0-9]/g, "_").includes(r.key.replace(/[^a-z0-9]/g, "_"))) matchedIds.add(d.id);
+                                                }));
+                                                const unmatched = activeDocs.filter(d => !matchedIds.has(d.id));
+                                                if (!unmatched.length) return null;
+                                                return (<div><div className="flex items-center gap-2 mb-3"><FileText className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">Other Documents</h4><Badge variant="secondary" className="text-[10px]">{unmatched.length}</Badge></div><div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{unmatched.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div></div>);
+                                            })()}
                                         </div>
                                     ) : activeDocs.length === 0 ? (
                                         <div className="text-center py-12 text-muted-foreground bg-muted/20 rounded-xl border border-dashed"><Image className="h-10 w-10 mx-auto mb-3 opacity-30" /><p className="text-sm font-medium">No documents uploaded</p></div>
@@ -419,17 +468,20 @@ export default function DriversPage() {
                                     <DetailSection title="Verification Checklist" icon={CheckCircle}>
                                         <div className="space-y-2">
                                             {(requiredDocs.length > 0 ? requiredDocs : [
-                                                { key: "drivers_license", label: "Driver's License", has_expiry: true },
-                                                { key: "vehicle_insurance", label: "Insurance", has_expiry: true },
-                                                { key: "vehicle_inspection", label: "Vehicle Inspection", has_expiry: true },
-                                                { key: "background_check", label: "Background Check", has_expiry: true },
+                                                { key: "drivers_license",      label: "Driver's License",    has_expiry: true },
+                                                { key: "vehicle_insurance",    label: "Vehicle Insurance",   has_expiry: true },
+                                                { key: "vehicle_registration", label: "Vehicle Registration",has_expiry: true },
+                                                { key: "vehicle_inspection",   label: "Vehicle Inspection",  has_expiry: true },
+                                                { key: "background_check",     label: "Background Check",   has_expiry: true },
                                             ]).map(rd => {
                                                 const expiryField = _docKeyToExpiryField(rd.key);
-                                                const hasDoc = activeDocs.some(d =>
-                                                    (d.document_type || "").toLowerCase().replace(/[^a-z0-9]/g, "_").includes(rd.key.replace(/[^a-z0-9]/g, "_")) ||
-                                                    (d.document_type || "").toLowerCase() === rd.label.toLowerCase() ||
-                                                    d.requirement_id === rd.key
-                                                );
+                                                const hasDoc = activeDocs.some(d => {
+                                                    if (d.requirement_id) return d.requirement_id === rd.id || d.requirement_id === rd.key;
+                                                    const dt = (d.document_type || "").toLowerCase();
+                                                    const label = rd.label.toLowerCase();
+                                                    const key = rd.key.toLowerCase().replace(/_/g, " ");
+                                                    return dt === label || dt === key || dt.replace(/[^a-z0-9]/g, "_").includes(rd.key.replace(/[^a-z0-9]/g, "_"));
+                                                });
                                                 const expiryVal = expiryField ? selected[expiryField] : undefined;
                                                 const isExpired = expiryVal && new Date(expiryVal) < new Date();
                                                 return <CheckItem key={rd.key} label={rd.label} checked={hasDoc || !!expiryVal} expired={isExpired} />;

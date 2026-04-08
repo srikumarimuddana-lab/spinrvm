@@ -422,11 +422,11 @@ function VehiclePricingEditor({ pricing, onSave }: { pricing: any[]; onSave: (p:
 
 function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => void }) {
   const [rows, setRows] = useState(docs.length > 0 ? docs : [
-    { key: 'drivers_license', label: "Driver's License", has_expiry: true, required: true },
-    { key: 'vehicle_insurance', label: 'Vehicle Insurance', has_expiry: true, required: true },
-    { key: 'vehicle_registration', label: 'Vehicle Registration', has_expiry: true, required: true },
-    { key: 'background_check', label: 'Background Check', has_expiry: true, required: true },
-    { key: 'vehicle_inspection', label: 'Vehicle Inspection', has_expiry: true, required: true },
+    { key: 'drivers_license',       label: "Driver's License",    has_expiry: true,  required: true, requires_back_side: false },
+    { key: 'vehicle_insurance',     label: 'Vehicle Insurance',   has_expiry: true,  required: true, requires_back_side: false },
+    { key: 'vehicle_registration',  label: 'Vehicle Registration',has_expiry: true,  required: true, requires_back_side: false },
+    { key: 'background_check',      label: 'Background Check',    has_expiry: true,  required: true, requires_back_side: false },
+    { key: 'vehicle_inspection',    label: 'Vehicle Inspection',  has_expiry: true,  required: true, requires_back_side: false },
   ]);
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -439,7 +439,7 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
   };
 
   const addDoc = () => {
-    setRows([...rows, { key: '', label: '', has_expiry: false, required: true }]);
+    setRows([...rows, { key: '', label: '', has_expiry: false, required: true, requires_back_side: false }]);
     setEditingIdx(rows.length);
     setDirty(true);
   };
@@ -522,6 +522,9 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
                   ) : (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-gray-100 text-gray-400">No Expiry</span>
                   )}
+                  {r.requires_back_side && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-700"><Image className="h-3 w-3" /> Both Sides</span>
+                  )}
                 </div>
 
                 {/* Expand to edit or show actions */}
@@ -535,7 +538,7 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
                       <label className="block text-[11px] font-semibold text-gray-500 mb-1">Key (identifier)</label>
                       <input className="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-red-200 focus:border-red-300 outline-none" placeholder="e.g. drivers_license" value={r.key} onChange={e => update(i, 'key', e.target.value)} />
                     </div>
-                    <div className="flex items-center gap-4">
+                    <div className="flex flex-col gap-2.5">
                       <label className="flex items-center gap-2 text-sm cursor-pointer">
                         <input type="checkbox" checked={r.has_expiry} onChange={e => update(i, 'has_expiry', e.target.checked)} className="accent-red-500 w-4 h-4" />
                         <span>Requires expiry date</span>
@@ -543,6 +546,10 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
                       <label className="flex items-center gap-2 text-sm cursor-pointer">
                         <input type="checkbox" checked={r.required !== false} onChange={e => update(i, 'required', e.target.checked)} className="accent-red-500 w-4 h-4" />
                         <span>Required</span>
+                      </label>
+                      <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input type="checkbox" checked={!!r.requires_back_side} onChange={e => update(i, 'requires_back_side', e.target.checked)} className="accent-red-500 w-4 h-4" />
+                        <span>Requires both sides <span className="text-xs text-gray-400">(front &amp; back photo)</span></span>
                       </label>
                     </div>
                     <div className="flex items-center justify-between pt-2">

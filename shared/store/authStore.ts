@@ -111,7 +111,7 @@ interface AuthState {
   // Actions
   initialize: () => Promise<void>;
   verifyOTP: (verificationId: string, code: string) => Promise<void>;
-  createProfile: (data: { first_name: string; last_name: string; email: string; gender: string }) => Promise<void>;
+  createProfile: (data: { first_name: string; last_name: string; email: string; gender: string; city?: string; service_area_id?: string }) => Promise<void>;
   fetchDriverProfile: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   registerDriver: (data: any) => Promise<void>;

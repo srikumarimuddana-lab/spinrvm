@@ -2782,7 +2782,7 @@ async def admin_get_subscription_stats(
         },
         "transactions": transactions,
         "service_areas": [{"id": a["id"], "name": a.get("name", "Unknown")}
-                          for a in await db.get_rows("service_areas", {"parent_service_area_id": None}, order="name", limit=200)
+                          for a in await db.get_rows("service_areas", order="name", limit=200)
                           if not a.get("parent_service_area_id")],
     }
 

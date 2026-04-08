@@ -218,6 +218,9 @@ export const getDriverStats = (params?: {
     }>(`/api/admin/drivers/stats?${sp.toString()}`);
 };
 
+export const updateDriver = (id: string, data: Record<string, any>) =>
+    request<any>(`/api/admin/drivers/${id}`, { method: "PUT", body: JSON.stringify(data) });
+
 /* ── Earnings ─────────────────────────────── */
 export const getEarnings = () => request<any[]>("/api/admin/earnings");
 

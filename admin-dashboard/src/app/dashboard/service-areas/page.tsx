@@ -297,53 +297,12 @@ export default function ServiceAreasPage() {
                     <div className="p-5">
                       {/* General Tab */}
                       {editTab === 'general' && (
-                        <div className="space-y-6">
-                          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <FieldInput label="Area Name" value={area.name} onSave={v => handleFieldUpdate(area.id, 'name', v)} />
-                            <FieldInput label="City" value={area.city || ''} onSave={v => handleFieldUpdate(area.id, 'city', v)} />
-                            <FieldSelect label="Province" value={area.province || 'SK'} options={['SK','AB','MB','ON','BC','QC','NS','NB','PE','NL']} onSave={v => handleFieldUpdate(area.id, 'province', v)} />
-                            <FieldInput label="Pickup Radius (km)" value={area.max_pickup_radius_km || 5} type="number" onSave={v => handleFieldUpdate(area.id, 'max_pickup_radius_km', parseFloat(v))} />
-                            <FieldToggle label="Active" value={area.is_active} onSave={v => handleFieldUpdate(area.id, 'is_active', v)} />
-                          </div>
-
-                          {/* Driver Matching */}
-                          <div>
-                            <h4 className="font-bold text-gray-800 mb-2">Driver Matching</h4>
-                            <p className="text-sm text-gray-500 mb-3">Configure how drivers are matched to rides in this area.</p>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                              <FieldSelect label="Matching Algorithm" value={area.driver_matching_algorithm || 'nearest'} options={['nearest', 'rating_based', 'round_robin', 'combined']} onSave={v => handleFieldUpdate(area.id, 'driver_matching_algorithm', v)} />
-                              <FieldInput label="Search Radius (km)" value={area.search_radius_km || 10} type="number" onSave={v => handleFieldUpdate(area.id, 'search_radius_km', parseFloat(v))} />
-                              <FieldInput label="Min Driver Rating" value={area.min_driver_rating || 4.0} type="number" onSave={v => handleFieldUpdate(area.id, 'min_driver_rating', parseFloat(v))} />
-                            </div>
-                          </div>
-
-                          {/* Geofence Editor */}
-                          <div>
-                            <h4 className="font-bold text-gray-800 mb-2">Service Area Boundary</h4>
-                            <p className="text-sm text-gray-500 mb-3">Draw or edit the polygon to define the service area boundary. Drivers and riders must be within this zone.</p>
-                            <div className="h-80 rounded-xl overflow-hidden border">
-                              <Suspense fallback={<div className="h-full bg-gray-100 flex items-center justify-center text-gray-400">Loading map...</div>}>
-                                <GeofenceMap
-                                  key={`edit-${area.id}`}
-                                  polygon={getAreaPolygon(area)}
-                                  center={getAreaCenter(area)}
-                                  zoom={11}
-                                  onPolygonChange={(p: any) => {
-                                    const geojson = { type: "Polygon", coordinates: [p.map((pt: any) => [pt.lng, pt.lat])] };
-                                    handleFieldUpdate(area.id, 'polygon', geojson);
-                                  }}
-                                />
-                              </Suspense>
-                            </div>
-                            {getAreaPolygon(area).length > 0 && (
-                              <p className="text-xs text-green-600 mt-1">{getAreaPolygon(area).length} boundary points defined</p>
-                            )}
-                          </div>
-
-                          <div className="flex justify-end">
-                            <button onClick={() => handleDelete(area.id, area.name)} className="text-sm text-red-500 hover:underline">Delete this area</button>
-                          </div>
-                        </div>
+                        <GeneralTabForm area={area} onSave={async (updates) => {
+                          try {
+                            await updateServiceArea(area.id, updates);
+                            setAreas(prev => prev.map(a => a.id === area.id ? { ...a, ...updates } : a));
+                          } catch (e: any) { alert("Failed to save: " + (e?.message || "")); }
+                        }} onDelete={() => handleDelete(area.id, area.name)} />
                       )}
 
                       {/* Vehicle Pricing Tab */}
@@ -508,6 +467,135 @@ export default function ServiceAreasPage() {
 }
 
 // ─── Inline Editable Field Components ───
+
+// --- General Tab with single Save button ---
+
+function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (updates: any) => Promise<void>; onDelete: () => void }) {
+  const [form, setForm] = useState({
+    name: area.name || "",
+    city: area.city || "",
+    province: area.province || "SK",
+    max_pickup_radius_km: area.max_pickup_radius_km || 5,
+    is_active: area.is_active !== false,
+    driver_matching_algorithm: area.driver_matching_algorithm || "nearest",
+    search_radius_km: area.search_radius_km || 10,
+    min_driver_rating: area.min_driver_rating || 4.0,
+  });
+  const [pendingPolygon, setPendingPolygon] = useState<any>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    const updates: any = {
+      name: form.name,
+      city: form.city,
+      province: form.province,
+      max_pickup_radius_km: parseFloat(String(form.max_pickup_radius_km)) || 5,
+      is_active: form.is_active,
+      driver_matching_algorithm: form.driver_matching_algorithm,
+      search_radius_km: parseFloat(String(form.search_radius_km)) || 10,
+      min_driver_rating: parseFloat(String(form.min_driver_rating)) || 4.0,
+    };
+    if (pendingPolygon) {
+      updates.polygon = pendingPolygon;
+    }
+    await onSave(updates);
+    setPendingPolygon(null);
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 mb-1">Area Name</label>
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 mb-1">City</label>
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" value={form.city} onChange={e => setForm({ ...form, city: e.target.value })} />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 mb-1">Province</label>
+          <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.province} onChange={e => setForm({ ...form, province: e.target.value })}>
+            {['SK','AB','MB','ON','BC','QC','NS','NB','PE','NL','NT','YT','NU'].map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 mb-1">Pickup Radius (km)</label>
+          <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.5" value={form.max_pickup_radius_km} onChange={e => setForm({ ...form, max_pickup_radius_km: e.target.value as any })} />
+        </div>
+        <div className="flex items-center gap-2 pt-5">
+          <label className="text-xs font-semibold text-gray-500">Active</label>
+          <button onClick={() => setForm({ ...form, is_active: !form.is_active })}>
+            {form.is_active ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
+          </button>
+        </div>
+      </div>
+
+      {/* Driver Matching */}
+      <div>
+        <h4 className="font-bold text-gray-800 mb-2">Driver Matching</h4>
+        <p className="text-sm text-gray-500 mb-3">Configure how drivers are matched to rides in this area.</p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Matching Algorithm</label>
+            <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.driver_matching_algorithm} onChange={e => setForm({ ...form, driver_matching_algorithm: e.target.value })}>
+              <option value="nearest">Nearest</option>
+              <option value="rating_based">Rating Based</option>
+              <option value="round_robin">Round Robin</option>
+              <option value="combined">Combined</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Search Radius (km)</label>
+            <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.5" value={form.search_radius_km} onChange={e => setForm({ ...form, search_radius_km: e.target.value as any })} />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Min Driver Rating</label>
+            <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.1" min="1" max="5" value={form.min_driver_rating} onChange={e => setForm({ ...form, min_driver_rating: e.target.value as any })} />
+          </div>
+        </div>
+      </div>
+
+      {/* Geofence Editor */}
+      <div>
+        <h4 className="font-bold text-gray-800 mb-2">Service Area Boundary</h4>
+        <p className="text-sm text-gray-500 mb-3">Draw or edit the polygon to define the service area boundary.</p>
+        <div className="h-80 rounded-xl overflow-hidden border">
+          <Suspense fallback={<div className="h-full bg-gray-100 flex items-center justify-center text-gray-400">Loading map...</div>}>
+            <GeofenceMap
+              key={`edit-${area.id}`}
+              polygon={pendingPolygon ? pendingPolygon.coordinates[0].map((c: number[]) => ({ lat: c[1], lng: c[0] })) : getAreaPolygon(area)}
+              center={getAreaCenter(area)}
+              zoom={11}
+              onPolygonChange={(p: any) => {
+                setPendingPolygon({ type: "Polygon", coordinates: [p.map((pt: any) => [pt.lng, pt.lat])] });
+              }}
+            />
+          </Suspense>
+        </div>
+        {(pendingPolygon || getAreaPolygon(area).length > 0) && (
+          <p className="text-xs text-green-600 mt-1">
+            {pendingPolygon ? `${pendingPolygon.coordinates[0].length} points (unsaved)` : `${getAreaPolygon(area).length} boundary points`}
+          </p>
+        )}
+      </div>
+
+      {/* Save + Delete */}
+      <div className="flex items-center justify-between pt-2 border-t">
+        <button onClick={onDelete} className="text-sm text-red-500 hover:underline">Delete this area</button>
+        <button onClick={handleSave} disabled={saving}
+          className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition ${saved ? 'bg-green-500 text-white' : 'bg-red-500 text-white hover:bg-red-600'} disabled:opacity-50`}>
+          {saving ? 'Saving...' : saved ? 'Saved!' : 'Save General Settings'}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function FieldInput({ label, value, type = "text", onSave }: { label: string; value: any; type?: string; onSave: (v: string) => void }) {
   const [val, setVal] = useState(String(value));

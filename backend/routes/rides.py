@@ -6,7 +6,7 @@ try:
     from ..utils import calculate_distance
     from ..socket_manager import manager
     from ..settings_loader import get_app_settings
-    from ..features import send_push_notification, calculate_airport_fee
+    from ..features import send_push_notification, calculate_all_fees
     from .. import db_supabase
     from ..geo_utils import point_in_polygon, get_service_area_polygon
 except ImportError:
@@ -16,7 +16,7 @@ except ImportError:
     from geo_utils import calculate_distance, point_in_polygon, get_service_area_polygon
     from socket_manager import manager
     from settings_loader import get_app_settings
-    from features import send_push_notification, calculate_airport_fee
+    from features import send_push_notification, calculate_all_fees
     import db_supabase
 from .fares import get_fares_for_location
 import asyncio
@@ -314,35 +314,28 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
                     'distance_km': dist,
                 })
     
-    # Check airport surcharge (pickup or dropoff in airport sub-region)
-    airport_result = await calculate_airport_fee(
-        request.pickup_lat, request.pickup_lng,
-        request.dropoff_lat, request.dropoff_lng,
-    )
-    airport_fee = airport_result.get('airport_fee', 0.0)
-
     estimates = []
     for fare_info in fares:
         surge_multiplier = fare_info.get('surge_multiplier', 1.0)
         distance_fare = fare_info['per_km_rate'] * distance_km * surge_multiplier
         time_fare = fare_info['per_minute_rate'] * duration_minutes * surge_multiplier
         booking_fee = fare_info.get('booking_fee', 2.0)
-
-        total_fare = fare_info['base_fare'] + distance_fare + time_fare + booking_fee + airport_fee
+        
+        total_fare = fare_info['base_fare'] + distance_fare + time_fare + booking_fee
         total_fare = max(total_fare, fare_info['minimum_fare'])
-
+        
         # Check real driver availability for this vehicle type
         vt_id = fare_info['vehicle_type'].get('id')
         nearby_for_type = drivers_by_type.get(vt_id, [])
         driver_count = len(nearby_for_type)
         is_available = driver_count > 0
-
+        
         # Calculate ETA: closest driver's distance / avg speed (30km/h in city)
         eta_minutes = None
         if nearby_for_type:
             closest = min(nearby_for_type, key=lambda x: x['distance_km'])
             eta_minutes = max(2, int(closest['distance_km'] / 30 * 60) + 1)
-
+        
         estimates.append({
             'vehicle_type': fare_info['vehicle_type'],
             'distance_km': round(distance_km, 2),
@@ -351,15 +344,13 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
             'distance_fare': round(distance_fare, 2),
             'time_fare': round(time_fare, 2),
             'booking_fee': booking_fee,
-            'airport_fee': round(airport_fee, 2),
-            'airport_zone_name': airport_result.get('airport_zone_name'),
             'surge_multiplier': surge_multiplier,
             'total_fare': round(total_fare, 2),
             'available': is_available,
             'eta_minutes': eta_minutes,
             'driver_count': driver_count,
         })
-
+        
     return estimates
 
 
@@ -389,26 +380,33 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
         raise HTTPException(status_code=400, detail='Invalid vehicle type')
         
     surge_multiplier = fare_info.get('surge_multiplier', 1.0)
-
+    
     distance_fare = fare_info['per_km_rate'] * distance_km * surge_multiplier
     time_fare = fare_info['per_minute_rate'] * duration_minutes * surge_multiplier
     booking_fee = fare_info.get('booking_fee', 2.0)
-
-    # Airport surcharge (pickup or dropoff in airport sub-region)
-    airport_result = await calculate_airport_fee(
-        request.pickup_lat, request.pickup_lng,
-        request.dropoff_lat, request.dropoff_lng,
-    )
-    airport_fee = airport_result.get('airport_fee', 0.0)
-    airport_zone_name = airport_result.get('airport_zone_name')
-
-    total_fare = fare_info['base_fare'] + distance_fare + time_fare + booking_fee + airport_fee
+    
+    total_fare = fare_info['base_fare'] + distance_fare + time_fare + booking_fee
     total_fare = max(total_fare, fare_info['minimum_fare'])
 
-    # Earnings split: Distance fare goes to driver, booking + airport fee goes to admin
-    driver_earnings = fare_info['base_fare'] + distance_fare + time_fare
-    admin_earnings = booking_fee + airport_fee
+    # Calculate area fees + taxes
+    fees_result = {}
+    try:
+        fees_result = await calculate_all_fees(
+            request.pickup_lat, request.pickup_lng,
+            request.dropoff_lat, request.dropoff_lng,
+            distance_km, total_fare
+        )
+    except Exception as e:
+        logger.warning(f"Failed to calculate area fees: {e}")
 
+    area_fees_total = fees_result.get('fees_total', 0)
+    tax_amount = fees_result.get('tax_amount', 0)
+    grand_total = round(total_fare + area_fees_total + tax_amount, 2)
+
+    # Earnings split: Distance fare goes to driver, booking fee goes to admin
+    driver_earnings = fare_info['base_fare'] + distance_fare + time_fare
+    admin_earnings = booking_fee
+    
     # Resolve service area from pickup location
     service_area_id = None
     try:
@@ -452,10 +450,12 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
     ride_data = ride.dict()
     if service_area_id:
         ride_data['service_area_id'] = service_area_id
-    # Store airport surcharge details
-    ride_data['airport_fee'] = round(airport_fee, 2)
-    if airport_zone_name:
-        ride_data['airport_zone_name'] = airport_zone_name
+
+    ride_data['area_fees'] = fees_result.get('fees', [])
+    ride_data['area_fees_total'] = area_fees_total
+    ride_data['tax_amount'] = tax_amount
+    ride_data['tax_breakdown'] = fees_result.get('tax_breakdown', {})
+    ride_data['grand_total'] = grand_total
 
     await db.rides.insert_one(ride_data)
     

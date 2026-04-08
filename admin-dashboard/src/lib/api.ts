@@ -218,6 +218,9 @@ export const getDriverStats = (params?: {
     }>(`/api/admin/drivers/stats?${sp.toString()}`);
 };
 
+export const updateDriver = (id: string, data: Record<string, any>) =>
+    request<any>(`/api/admin/drivers/${id}`, { method: "PUT", body: JSON.stringify(data) });
+
 /* ── Earnings ─────────────────────────────── */
 export const getEarnings = () => request<any[]>("/api/admin/earnings");
 
@@ -283,25 +286,6 @@ export const updateSurge = (areaId: string, data: any) =>
         method: "PUT",
         body: JSON.stringify(data),
     });
-
-/* ── Document Requirements ───────────────── */
-export const getRequirements = () =>
-    request<any[]>("/api/admin/documents/requirements");
-
-export const createRequirement = (data: any) =>
-    request<any>("/api/admin/documents/requirements", {
-        method: "POST",
-        body: JSON.stringify(data),
-    });
-
-export const updateRequirement = (id: string, data: any) =>
-    request<any>(`/api/admin/documents/requirements/${id}`, {
-        method: "PUT",
-        body: JSON.stringify(data),
-    });
-
-export const deleteRequirement = (id: string) =>
-    request<any>(`/api/admin/documents/requirements/${id}`, { method: "DELETE" });
 
 /* ── Driver Document Verification ────────── */
 export const getDriverDocuments = (driverId: string) =>

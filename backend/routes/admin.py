@@ -221,21 +221,9 @@ async def admin_update_settings(settings: Dict[str, Any]):
 
 @admin_router.get("/service-areas")
 async def admin_get_service_areas():
-    """Get all service areas. Sub-regions are nested under their parent as 'sub_regions'."""
+    """Get all service areas."""
     areas = await db.get_rows("service_areas", order="name", limit=500)
-    # Build parent → children mapping
-    parent_map: Dict[str, list] = {}
-    parents = []
-    for a in areas:
-        pid = a.get("parent_service_area_id")
-        if pid:
-            parent_map.setdefault(pid, []).append(a)
-        else:
-            parents.append(a)
-    # Attach sub_regions to each parent
-    for p in parents:
-        p["sub_regions"] = parent_map.get(p["id"], [])
-    return parents
+    return areas
 
 
 @admin_router.post("/service-areas")
@@ -245,73 +233,18 @@ async def admin_create_service_area(area: Dict[str, Any]):
         "id": str(uuid.uuid4()),
         "name": area.get("name"),
         "city": area.get("city", ""),
-        "province": area.get("province", "SK"),
-        "geojson": area.get("geojson"),
+        "polygon": area.get("geojson", area.get("polygon", [])),
         "is_active": area.get("is_active", True),
-        # Sub-region support (e.g. airport zone inside a parent area)
-        "parent_service_area_id": area.get("parent_service_area_id"),
-        # Fees & Taxes
-        "platform_fee": area.get("platform_fee", 0),
-        "city_fee": area.get("city_fee", 0),
-        "airport_fee": area.get("airport_fee", 0),
         "is_airport": area.get("is_airport", False),
-        "gst_rate": area.get("gst_rate", 5.0),
-        "pst_rate": area.get("pst_rate", 6.0),
-        "insurance_fee_percent": area.get("insurance_fee_percent", 2.0),
-        # Cancellation fees (with driver/admin split)
-        "rider_cancel_fee_before_driver": area.get("rider_cancel_fee_before_driver", 0),
-        "rider_cancel_fee_after_arrival": area.get(
-            "rider_cancel_fee_after_arrival", 4.50
-        ),
-        "cancel_fee_driver_share": area.get("cancel_fee_driver_share", 4.00),
-        "cancel_fee_admin_share": area.get("cancel_fee_admin_share", 0.50),
-        "rider_cancel_fee_after_start": area.get(
-            "rider_cancel_fee_after_start", 0
-        ),  # 0 = full fare
-        "driver_cancel_fee": area.get("driver_cancel_fee", 0),
-        "free_cancel_window_seconds": area.get("free_cancel_window_seconds", 120),
-        # Required driver documents
-        "required_documents": area.get(
-            "required_documents",
-            [
-                {
-                    "key": "drivers_license",
-                    "label": "Driver's License",
-                    "has_expiry": True,
-                },
-                {
-                    "key": "vehicle_insurance",
-                    "label": "Vehicle Insurance",
-                    "has_expiry": True,
-                },
-                {
-                    "key": "vehicle_registration",
-                    "label": "Vehicle Registration",
-                    "has_expiry": True,
-                },
-                {
-                    "key": "background_check",
-                    "label": "Background Check",
-                    "has_expiry": True,
-                },
-                {
-                    "key": "vehicle_inspection",
-                    "label": "Vehicle Inspection",
-                    "has_expiry": True,
-                },
-            ],
-        ),
-        # Vehicle type pricing
-        "vehicle_pricing": area.get("vehicle_pricing", []),
-        # Spinr Pass — which subscription plans are available here
-        "subscription_plan_ids": area.get("subscription_plan_ids", []),
-        "spinr_pass_enabled": area.get("spinr_pass_enabled", True),
-        # Surge
-        "surge_enabled": area.get("surge_enabled", False),
+        "airport_fee": area.get("airport_fee", 0),
+        "surge_active": area.get("surge_enabled", area.get("surge_active", False)),
         "surge_multiplier": area.get("surge_multiplier", 1.0),
-        # Operational
-        "max_pickup_radius_km": area.get("max_pickup_radius_km", 5.0),
-        "currency": area.get("currency", "CAD"),
+        "gst_enabled": area.get("gst_enabled", True),
+        "gst_rate": area.get("gst_rate", 5.0),
+        "pst_enabled": area.get("pst_enabled", False),
+        "pst_rate": area.get("pst_rate", 0.0),
+        "hst_enabled": area.get("hst_enabled", False),
+        "hst_rate": area.get("hst_rate", 0.0),
         "created_at": datetime.utcnow().isoformat(),
     }
     row = await db.service_areas.insert_one(doc)
@@ -321,41 +254,37 @@ async def admin_create_service_area(area: Dict[str, Any]):
 @admin_router.put("/service-areas/{area_id}")
 async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
     """Update service area — accepts any field."""
-    # Accept all fields that were sent
     allowed = [
         "name",
         "city",
-        "province",
-        "geojson",
+        "polygon", # previously geojson mapped to polygon below
         "is_active",
-        "parent_service_area_id",
-        "platform_fee",
-        "city_fee",
-        "airport_fee",
         "is_airport",
-        "gst_rate",
-        "pst_rate",
-        "insurance_fee_percent",
-        "rider_cancel_fee_before_driver",
-        "rider_cancel_fee_after_arrival",
-        "cancel_fee_driver_share",
-        "cancel_fee_admin_share",
-        "rider_cancel_fee_after_start",
-        "driver_cancel_fee",
-        "free_cancel_window_seconds",
-        "required_documents",
-        "vehicle_pricing",
-        "subscription_plan_ids",
-        "spinr_pass_enabled",
-        "surge_enabled",
+        "airport_fee",
+        "surge_active",
         "surge_multiplier",
-        "max_pickup_radius_km",
-        "currency",
+        "gst_enabled",
+        "gst_rate",
+        "pst_enabled",
+        "pst_rate",
+        "hst_enabled",
+        "hst_rate",
+        "required_documents",
     ]
+    
+    # Map geojson from frontend to polygon in DB schema if present
+    if "geojson" in area:
+        area["polygon"] = area["geojson"]
+        
+    # Map surge_enabled to surge_active
+    if "surge_enabled" in area:
+        area["surge_active"] = area["surge_enabled"]
+        
     update_payload = {k: v for k, v in area.items() if k in allowed and v is not None}
 
     if update_payload:
-        update_payload["updated_at"] = datetime.utcnow().isoformat()
+        # NOTE: service_areas table does not have an updated_at column in Supabase schema.
+        # Adding it causes PGRST204 -> 500 error.
         await db.service_areas.update_one({"id": area_id}, {"$set": update_payload})
     return {"message": "Service area updated"}
 
@@ -744,6 +673,34 @@ async def admin_get_rides(
             }
         )
     return {"rides": out, "total_count": total_count, "limit": limit, "offset": offset}
+
+
+@admin_router.put("/drivers/{driver_id}")
+async def admin_update_driver(driver_id: str, updates: Dict[str, Any]):
+    """Update driver details from admin dashboard."""
+    allowed = {
+        "first_name", "last_name", "email", "phone", "gender", "city",
+        "service_area_id", "vehicle_type_id",
+        "vehicle_make", "vehicle_model", "vehicle_color", "vehicle_year",
+        "license_plate", "vehicle_vin",
+        "license_number", "license_expiry_date", "insurance_expiry_date",
+        "vehicle_inspection_expiry_date", "background_check_expiry_date",
+        "work_eligibility_expiry_date",
+    }
+    filtered = {k: v for k, v in updates.items() if k in allowed}
+    if not filtered:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    existing = await db.drivers.find_one({"id": driver_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
+
+    try:
+        await db.drivers.update_one({"id": driver_id}, {"$set": filtered})
+    except Exception as e:
+        logger.error(f"Failed to update driver {driver_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}")
+    return {"message": "Driver updated", "updated_fields": list(filtered.keys())}
 
 
 @admin_router.post("/drivers/{driver_id}/verify")
@@ -1862,30 +1819,29 @@ async def admin_get_area_fees(area_id: str):
 async def admin_create_area_fee(area_id: str, fee: Dict[str, Any]):
     """Create a new fee for a service area."""
     doc = {
+        "id": str(uuid.uuid4()),
         "service_area_id": area_id,
-        "fee_type": fee.get("fee_type"),  # airport, toll, surge, etc.
-        "amount": fee.get("amount", 0),
+        "fee_name": fee.get("fee_name", ""),
+        "fee_type": fee.get("fee_type", "custom"),
+        "calc_mode": fee.get("calc_mode", "flat"),
+        "amount": float(fee.get("amount", 0)),
         "description": fee.get("description", ""),
+        "conditions": fee.get("conditions", {}),
         "is_active": fee.get("is_active", True),
         "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
     }
-    row = await db.area_fees.insert_one(doc)
-    return {"fee_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+    await db.area_fees.insert_one(doc)
+    return doc
 
 
 @admin_router.put("/areas/{area_id}/fees/{fee_id}")
 async def admin_update_area_fee(area_id: str, fee_id: str, fee: Dict[str, Any]):
     """Update an area fee."""
-    updates = {}
-    if fee.get("fee_type") is not None:
-        updates["fee_type"] = fee.get("fee_type")
-    if fee.get("amount") is not None:
-        updates["amount"] = fee.get("amount")
-    if fee.get("description") is not None:
-        updates["description"] = fee.get("description")
-    if fee.get("is_active") is not None:
-        updates["is_active"] = fee.get("is_active")
-
+    allowed = ["fee_name", "fee_type", "calc_mode", "amount", "description", "conditions", "is_active"]
+    updates = {k: fee[k] for k in allowed if k in fee}
+    if "amount" in updates:
+        updates["amount"] = float(updates["amount"])
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
         await db.area_fees.update_one({"id": fee_id}, {"$set": updates})
@@ -1909,20 +1865,12 @@ async def admin_get_area_tax(area_id: str):
 @admin_router.put("/areas/{area_id}/tax")
 async def admin_update_area_tax(area_id: str, tax: Dict[str, Any]):
     """Update tax configuration for a service area."""
-    tax_doc = {
-        "service_area_id": area_id,
-        "tax_rate": tax.get("tax_rate", 0),
-        "tax_name": tax.get("tax_name", "Tax"),
-        "updated_at": datetime.utcnow().isoformat(),
-    }
-
-    existing = await db.area_taxes.find_one({"service_area_id": area_id})
-    if existing:
-        await db.area_taxes.update_one({"service_area_id": area_id}, {"$set": tax_doc})
-    else:
-        await db.area_taxes.insert_one(tax_doc)
-
-    return {"message": "Area tax updated"}
+    allowed = ["gst_enabled", "gst_rate", "pst_enabled", "pst_rate", "hst_enabled", "hst_rate"]
+    updates = {k: tax[k] for k in allowed if k in tax}
+    if updates:
+        await db.service_areas.update_one({"id": area_id}, {"$set": updates})
+    area = await db.service_areas.find_one({"id": area_id})
+    return {k: area.get(k) for k in allowed}
 
 
 @admin_router.get("/areas/{area_id}/vehicle-pricing")

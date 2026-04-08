@@ -670,6 +670,65 @@ async def fare_estimate(
     }
 
 
+@support_router.get("/area-config")
+async def get_area_config(
+    lat: float = Query(...),
+    lng: float = Query(...),
+):
+    """Get service area config (fees, taxes, vehicle pricing) for a location.
+    Called by rider/driver apps on launch to cache area settings."""
+    all_areas = await db.service_areas.find({'is_active': True}).to_list(100)
+    matched_area = None
+    for area in all_areas:
+        polygon = get_service_area_polygon(area)
+        if len(polygon) >= 3 and point_in_polygon(lat, lng, polygon):
+            matched_area = area
+            break
+
+    if not matched_area:
+        return {"found": False, "service_area": None}
+
+    # Get active fees for this area
+    area_fees = await db.area_fees.find({
+        'service_area_id': matched_area['id'],
+        'is_active': True
+    }).to_list(50)
+
+    # Build tax config
+    tax_config = {}
+    if matched_area.get('hst_enabled'):
+        tax_config = {"type": "HST", "rate": float(matched_area.get('hst_rate', 0))}
+    else:
+        taxes = []
+        if matched_area.get('gst_enabled', True):
+            taxes.append({"name": "GST", "rate": float(matched_area.get('gst_rate', 5.0))})
+        if matched_area.get('pst_enabled', False):
+            taxes.append({"name": "PST", "rate": float(matched_area.get('pst_rate', 0))})
+        tax_config = {"type": "GST_PST", "taxes": taxes}
+
+    return {
+        "found": True,
+        "service_area": {
+            "id": matched_area['id'],
+            "name": matched_area.get('name'),
+            "city": matched_area.get('city'),
+            "province": matched_area.get('province'),
+            "currency": matched_area.get('currency', 'CAD'),
+        },
+        "fees": [{
+            "id": f.get('id'),
+            "name": f.get('fee_name'),
+            "type": f.get('fee_type'),
+            "calc_mode": f.get('calc_mode', 'flat'),
+            "amount": float(f.get('amount', 0)),
+            "description": f.get('description', ''),
+            "conditions": f.get('conditions', {}),
+        } for f in area_fees],
+        "tax": tax_config,
+        "vehicle_pricing": matched_area.get('vehicle_pricing', []),
+    }
+
+
 # ============ Scheduled Rides ============
 
 @support_router.post("/rides/schedule")

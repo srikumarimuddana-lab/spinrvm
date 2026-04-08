@@ -38,7 +38,6 @@ const NAV_GROUPS: NavGroup[] = [
         items: [
             { href: "/dashboard/rides", label: "Rides", icon: Car, module: "rides" },
             { href: "/dashboard/drivers", label: "Drivers", icon: Car, module: "drivers" },
-            { href: "/dashboard/documents", label: "Documents", icon: FileText, module: "drivers" },
             { href: "/dashboard/users", label: "Users", icon: Users, module: "users" },
             { href: "/dashboard/heatmap", label: "Heat Map", icon: Flame, module: "heatmap" },
         ],

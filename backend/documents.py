@@ -10,9 +10,11 @@ from pathlib import Path
 try:
     from .db import db
     from .dependencies import get_current_user
+    from .supabase_client import supabase
 except ImportError:
     from db import db
     from dependencies import get_current_user
+    from supabase_client import supabase
 
 from loguru import logger
 
@@ -130,23 +132,65 @@ async def _supersede_and_flag_pending_review(
 async def save_upload(file: UploadFile) -> str:
     file_ext = os.path.splitext(file.filename)[1]
     filename = f"{uuid.uuid4()}{file_ext}"
-    file_path = os.path.join(UPLOAD_DIR, filename)
     
     try:
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Could not save file: {e}")
+        file_bytes = await file.read()
+        res = supabase.storage.from_("driver-documents").upload(
+            file=file_bytes,
+            path=filename,
+            file_options={"content-type": file.content_type}
+        )
         
-    return f"/uploads/{filename}"
+        # Get public URL
+        url_res = supabase.storage.from_("driver-documents").get_public_url(filename)
+        return url_res
+    except Exception as e:
+        logger.error(f"Failed to upload to Supabase Storage: {e}")
+        raise HTTPException(status_code=500, detail=f"Could not save file: {e}")
 
 # --- Public/Driver Endpoints ---
 
 @documents_router.get("/requirements")
-async def get_document_requirements():
-    """Get all document requirements for drivers."""
-    # Fetch all active requirements
-    # In future, filter by country/city if needed
+async def get_document_requirements(
+    service_area_id: Optional[str] = Query(None),
+    current_user: Optional[dict] = Depends(get_current_user),
+):
+    """Get document requirements for drivers.
+
+    Priority:
+    1. If service_area_id is passed, use that area's required_documents.
+    2. Else if the current user has a driver profile with a service_area_id,
+       use that area's required_documents.
+    3. Fall back to the global document_requirements table.
+    """
+    area_id = service_area_id
+
+    # Try to get area from driver profile if not explicitly passed
+    if not area_id and current_user:
+        driver = await db.drivers.find_one({'user_id': current_user.get('id')})
+        if driver:
+            area_id = driver.get('service_area_id')
+
+    # If we have an area, return its required_documents
+    if area_id:
+        area = await db.service_areas.find_one({'id': area_id})
+        if area and area.get('required_documents'):
+            area_docs = area['required_documents']
+            # Transform to match DocumentRequirement shape so driver app works
+            result = []
+            for doc in area_docs:
+                result.append({
+                    'id': doc.get('key', ''),
+                    'name': doc.get('label', ''),
+                    'description': None,
+                    'is_mandatory': doc.get('required', True),
+                    'requires_back_side': doc.get('requires_back_side', False),
+                    'has_expiry': doc.get('has_expiry', False),
+                    'created_at': area.get('created_at', datetime.utcnow().isoformat()),
+                })
+            return result
+
+    # Fallback: global document_requirements table
     requirements = await db.document_requirements.find().sort('created_at', 1).to_list(100)
     return requirements
 
@@ -175,10 +219,29 @@ async def link_driver_document(
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
-    # Validate requirement exists
+    # Validate requirement exists — check global table first, then
+    # fall back to the driver's service area required_documents list
+    # (since we moved to per-area docs, requirement_id is now the area doc key).
     req = await db.document_requirements.find_one({'id': doc_data.requirement_id})
     if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
+        # Try looking it up from the driver's service area
+        area_req = None
+        if driver.get('service_area_id'):
+            area = await db.service_areas.find_one({'id': driver['service_area_id']})
+            if area:
+                area_req = next(
+                    (d for d in (area.get('required_documents') or [])
+                     if d.get('key') == doc_data.requirement_id),
+                    None
+                )
+        if not area_req:
+            raise HTTPException(status_code=404, detail="Requirement not found")
+        # Synthesise a req-like dict so downstream code works uniformly
+        req = {
+            'id': area_req.get('key'),
+            'name': area_req.get('label', doc_data.requirement_id),
+            'requires_back_side': area_req.get('requires_back_side', False),
+        }
 
     # Supersede any prior docs for this requirement+side and flip the
     # driver back to unverified so admin re-reviews this upload.
@@ -219,10 +282,27 @@ async def upload_driver_document(
     # storage logic
     url = await save_upload(file)
 
-    # Validate requirement exists
+    # Validate requirement — check global table first, then service area docs.
     req = await db.document_requirements.find_one({'id': requirement_id})
     if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
+        area_req = None
+        if driver_id:
+            drv = await db.drivers.find_one({'id': driver_id})
+            if drv and drv.get('service_area_id'):
+                area = await db.service_areas.find_one({'id': drv['service_area_id']})
+                if area:
+                    area_req = next(
+                        (d for d in (area.get('required_documents') or [])
+                         if d.get('key') == requirement_id),
+                        None
+                    )
+        if not area_req:
+            raise HTTPException(status_code=404, detail="Requirement not found")
+        req = {
+            'id': area_req.get('key'),
+            'name': area_req.get('label', requirement_id),
+            'requires_back_side': area_req.get('requires_back_side', False),
+        }
 
     # Normalise expiry_date input — accept ISO string, store as ISO string.
     expiry_iso: Optional[str] = None
@@ -358,8 +438,31 @@ async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
     if req.status == 'approved':
         effective_expiry = req.expiry_date
 
+        # Look up requirement name — first from global table, then from
+        # the driver's service area required_documents (since requirement_id
+        # may now be a service-area doc key like "drivers_license").
         req_row = await db.document_requirements.find_one({'id': existing.get('requirement_id')})
-        legacy_field = _legacy_expiry_field_for_requirement(req_row.get('name') if req_row else None)
+        req_name = req_row.get('name') if req_row else None
+
+        if not req_name:
+            # Try the service area's required_documents
+            driver = await db.drivers.find_one({'id': existing.get('driver_id')})
+            if driver and driver.get('service_area_id'):
+                area = await db.service_areas.find_one({'id': driver['service_area_id']})
+                if area:
+                    area_doc = next(
+                        (d for d in (area.get('required_documents') or [])
+                         if d.get('key') == existing.get('requirement_id')),
+                        None
+                    )
+                    if area_doc:
+                        req_name = area_doc.get('label')
+
+            # Last resort: use the document_type field from the uploaded doc
+            if not req_name:
+                req_name = existing.get('document_type')
+
+        legacy_field = _legacy_expiry_field_for_requirement(req_name)
         if legacy_field:
             # If admin didn't supply a new expiry, clear the stale legacy
             # value (None) so the go-online check skips it instead of

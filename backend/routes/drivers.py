@@ -1645,11 +1645,16 @@ async def get_subscription_plans(current_user: dict = Depends(get_current_user))
     """
     driver = await db.drivers.find_one({'user_id': current_user['id']})
 
-    # Check the area-level kill switch
+    # Check the area-level kill switch — when Spinr Pass is disabled for
+    # the driver's area, return a friendly free-ride message instead of plans.
     if driver and driver.get('service_area_id'):
         area = await db.service_areas.find_one({'id': driver['service_area_id']})
         if area and area.get('spinr_pass_enabled') is False:
-            return []
+            return {
+                "plans": [],
+                "free_mode": True,
+                "message": "No subscription needed — you're riding free right now! Drive on and enjoy the open road.",
+            }
 
     plans = await db.subscription_plans.find({'is_active': True}).to_list(50)
 
@@ -1665,7 +1670,7 @@ async def get_subscription_plans(current_user: dict = Depends(get_current_user))
                 filtered.append(p)
         plans = filtered
 
-    return plans
+    return {"plans": plans, "free_mode": False, "message": None}
 
 
 @api_router.get("/subscription/current")

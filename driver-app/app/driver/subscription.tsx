@@ -35,6 +35,8 @@ export default function SubscriptionScreen() {
   const router = useRouter();
   const [plans, setPlans] = useState<Plan[]>([]);
   const [currentSub, setCurrentSub] = useState<any>(null);
+  const [freeMode, setFreeMode] = useState(false);
+  const [freeMessage, setFreeMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [subscribing, setSubscribing] = useState<string | null>(null);
 
@@ -47,7 +49,17 @@ export default function SubscriptionScreen() {
         api.get('/drivers/subscription/plans'),
         api.get('/drivers/subscription/current'),
       ]);
-      setPlans(plansRes.data || []);
+      const data = plansRes.data;
+      // Backend returns {plans, free_mode, message} when Spinr Pass is off
+      if (data && typeof data === 'object' && 'free_mode' in data) {
+        setPlans(data.plans || []);
+        setFreeMode(data.free_mode || false);
+        setFreeMessage(data.message || '');
+      } else {
+        // Fallback for old response format (plain array)
+        setPlans(Array.isArray(data) ? data : []);
+        setFreeMode(false);
+      }
       setCurrentSub(subRes.data);
     } catch (e) { console.log('Sub load error:', e); }
     finally { setLoading(false); }
@@ -245,7 +257,19 @@ export default function SubscriptionScreen() {
           );
         })}
 
-        {plans.length === 0 && (
+        {plans.length === 0 && freeMode && (
+          <View style={styles.freeCard}>
+            <Text style={styles.freeEmoji}>🎉</Text>
+            <Text style={styles.freeTitle}>It's Free Right Now!</Text>
+            <Text style={styles.freeMessage}>{freeMessage}</Text>
+            <View style={styles.freeBadge}>
+              <Ionicons name="checkmark-circle" size={16} color="#10B981" />
+              <Text style={styles.freeBadgeText}>No subscription needed</Text>
+            </View>
+          </View>
+        )}
+
+        {plans.length === 0 && !freeMode && (
           <View style={styles.empty}>
             <Ionicons name="card-outline" size={48} color="#DDD" />
             <Text style={styles.emptyText}>No plans available in your area yet</Text>
@@ -320,4 +344,19 @@ const styles = StyleSheet.create({
 
   empty: { alignItems: 'center', paddingVertical: 40 },
   emptyText: { fontSize: 15, color: '#999', marginTop: 12 },
+
+  // Free mode celebration card
+  freeCard: {
+    backgroundColor: '#ECFDF5', marginHorizontal: 16, marginTop: 8,
+    borderRadius: 20, padding: 28, alignItems: 'center',
+    borderWidth: 1.5, borderColor: '#A7F3D0',
+  },
+  freeEmoji: { fontSize: 48, marginBottom: 12 },
+  freeTitle: { fontSize: 22, fontWeight: '800', color: '#065F46', marginBottom: 8 },
+  freeMessage: { fontSize: 15, color: '#047857', textAlign: 'center', lineHeight: 22, marginBottom: 16 },
+  freeBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#D1FAE5', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 12,
+  },
+  freeBadgeText: { fontSize: 13, fontWeight: '700', color: '#065F46' },
 });

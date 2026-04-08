@@ -2,7 +2,7 @@
 
 import { formatCurrency } from "@/lib/utils";
 import {
-    Users, Wifi, ShieldCheck, ShieldAlert, Car, DollarSign, Star,
+    Users, Wifi, ShieldCheck, ShieldAlert, Car, DollarSign, Star, AlertTriangle,
 } from "lucide-react";
 
 interface DriverStatsData {
@@ -10,6 +10,7 @@ interface DriverStatsData {
     online: number;
     verified: number;
     unverified: number;
+    needs_review: number;
     total_rides: number;
     total_earnings: number;
     avg_rating: number;
@@ -34,8 +35,8 @@ function StatCard({ icon: I, color, bg, label, value }: {
 export default function DriverStatsCards({ stats, loading }: { stats: DriverStatsData | null; loading: boolean }) {
     if (loading || !stats) {
         return (
-            <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3">
-                {Array.from({ length: 7 }).map((_, i) => (
+            <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 gap-3">
+                {Array.from({ length: 8 }).map((_, i) => (
                     <div key={i} className="bg-card border rounded-xl p-4 h-[72px] animate-pulse">
                         <div className="flex items-center gap-3">
                             <div className="w-10 h-10 rounded-xl bg-muted" />
@@ -51,7 +52,7 @@ export default function DriverStatsCards({ stats, loading }: { stats: DriverStat
     }
 
     return (
-        <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 gap-3">
             <StatCard icon={Users}
                 color="text-blue-600 dark:text-blue-400"
                 bg="bg-blue-100 dark:bg-blue-900/30"
@@ -68,6 +69,10 @@ export default function DriverStatsCards({ stats, loading }: { stats: DriverStat
                 color="text-amber-600 dark:text-amber-400"
                 bg="bg-amber-100 dark:bg-amber-900/30"
                 label="Unverified" value={stats.unverified} />
+            <StatCard icon={AlertTriangle}
+                color="text-red-600 dark:text-red-400"
+                bg="bg-red-100 dark:bg-red-900/30"
+                label="Needs Review" value={stats.needs_review || 0} />
             <StatCard icon={Car}
                 color="text-violet-600 dark:text-violet-400"
                 bg="bg-violet-100 dark:bg-violet-900/30"

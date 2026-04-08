@@ -531,9 +531,34 @@ async def admin_get_driver_stats(
         if uid and uid not in users_map:
             users_map[uid] = await db.users.find_one({"id": uid})
 
+    # Fetch pending documents for verified drivers (re-uploads needing review)
+    all_docs = await db.get_rows("driver_documents", {"status": "pending"}, limit=10000)
+    pending_doc_driver_ids = {d.get("driver_id") for d in all_docs if d.get("driver_id")}
+
+    now_iso = datetime.utcnow().isoformat()
+    expiry_fields = [
+        "license_expiry_date", "insurance_expiry_date",
+        "vehicle_inspection_expiry_date", "background_check_expiry_date",
+    ]
+
     enriched_drivers = []
     for d in all_drivers:
         u = users_map.get(d.get("user_id"))
+        is_verified = d.get("is_verified", False)
+
+        # Detect "needs_review": verified driver with expired docs or pending re-uploads
+        needs_review = False
+        if is_verified:
+            # Check expired documents
+            for ef in expiry_fields:
+                exp = d.get(ef)
+                if exp and str(exp) < now_iso:
+                    needs_review = True
+                    break
+            # Check pending re-uploaded documents
+            if not needs_review and d.get("id") in pending_doc_driver_ids:
+                needs_review = True
+
         enriched_drivers.append({
             **d,
             "first_name": u.get("first_name") if u else d.get("first_name"),
@@ -541,13 +566,15 @@ async def admin_get_driver_stats(
             "name": _user_display_name(u) or d.get("name"),
             "email": u.get("email") if u else None,
             "phone": u.get("phone") if u else d.get("phone"),
+            "needs_review": needs_review,
         })
 
     # ── Compute overall driver stats ──
     total = len(enriched_drivers)
     online = sum(1 for d in enriched_drivers if d.get("is_online"))
-    verified = sum(1 for d in enriched_drivers if d.get("is_verified"))
-    unverified = total - verified
+    verified = sum(1 for d in enriched_drivers if d.get("is_verified") and not d.get("needs_review"))
+    needs_review_count = sum(1 for d in enriched_drivers if d.get("needs_review"))
+    unverified = total - verified - needs_review_count
     total_rides_sum = sum(int(d.get("total_rides") or 0) for d in enriched_drivers)
     total_earnings_sum = sum(float(d.get("total_earnings") or 0) for d in enriched_drivers)
     avg_rating = 0.0
@@ -637,6 +664,7 @@ async def admin_get_driver_stats(
             "online": online,
             "verified": verified,
             "unverified": unverified,
+            "needs_review": needs_review_count,
             "total_rides": total_rides_sum,
             "total_earnings": total_earnings_sum,
             "avg_rating": avg_rating,

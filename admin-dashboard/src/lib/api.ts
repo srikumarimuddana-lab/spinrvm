@@ -435,9 +435,6 @@ export const resolveDispute = (id: string, resolution: any) =>
         body: JSON.stringify(resolution),
     });
 
-export const deleteDispute = (id: string) =>
-    request<any>(`/api/admin/disputes/${id}`, { method: "DELETE" });
-
 /* ── Support Tickets ────────────────────────── */
 export const getTickets = () =>
     request<any[]>("/api/admin/tickets");

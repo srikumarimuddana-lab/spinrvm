@@ -1606,7 +1606,11 @@ async def admin_delete_promotion(promotion_id: str):
 @admin_router.get("/disputes")
 async def admin_get_disputes():
     """Get all disputes."""
-    disputes = await db.get_rows("disputes", order="created_at", desc=True, limit=500)
+    try:
+        disputes = await db.get_rows("disputes", order="created_at", desc=True, limit=500)
+    except Exception:
+        logger.warning("disputes table may not exist yet")
+        return []
     return disputes
 
 

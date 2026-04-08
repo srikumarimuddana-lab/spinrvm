@@ -1981,11 +1981,17 @@ async def admin_update_area_tax(area_id: str, tax: Dict[str, Any]):
 
 @admin_router.get("/areas/{area_id}/vehicle-pricing")
 async def admin_get_vehicle_pricing(area_id: str):
-    """Get vehicle pricing configuration for a service area."""
-    area = await db.service_areas.find_one({"id": area_id})
-    if not area:
-        return []
-    return area.get("vehicle_pricing", [])
+    """Get vehicle pricing configuration for a service area.
+
+    Returns {vehicle_types, fare_configs} so the fare-config editor can
+    display a row per vehicle type with the area's specific rates.
+    """
+    vehicle_types = await db.get_rows("vehicle_types", {"is_active": True}, order="name", limit=50)
+    fare_configs = await db.get_rows("fare_configs", {"service_area_id": area_id}, limit=100)
+    return {
+        "vehicle_types": vehicle_types or [],
+        "fare_configs": fare_configs or [],
+    }
 
 
 # ---------- Driver Area Assignment ----------

@@ -131,13 +131,10 @@ class Collection:
     async def insert_many(self, docs: List[Dict[str, Any]]):
         if not docs:
             return type('Result', (), {'inserted_ids': []})()
-        
-        # Simple loop for now as Supabase might not have bulk insert exposed in db_supabase yet
-        ids = []
-        for doc in docs:
-            await self.insert_one(doc)
-            ids.append(doc.get('id'))
-            
+
+        # Bulk insert in a single round-trip
+        await db_supabase.insert_many(self.name, docs)
+        ids = [doc.get('id') for doc in docs]
         return type('Result', (), {'inserted_ids': ids})()
 
     async def update_one(self, _filter: Dict[str, Any], update: Dict[str, Any], upsert: bool = False):

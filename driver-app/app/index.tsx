@@ -3,6 +3,9 @@ import { View, Text, StyleSheet, Animated } from 'react-native';
 import { useRouter, useNavigationContainerRef } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import { createLogger } from '@shared/utils/logger';
+
+const log = createLogger('Index');
 
 export default function Index() {
   const router = useRouter();
@@ -57,7 +60,7 @@ export default function Index() {
       // Profile incomplete — clear stale session and send to login.
       // The user will enter their phone, verify OTP, then get routed
       // to /profile-setup by otp.tsx.
-      console.log('[Index] Profile incomplete, clearing session → /login');
+      log.info('Profile incomplete, clearing session → /login');
       logout().then(() => {
         router.replace('/login' as any);
       });

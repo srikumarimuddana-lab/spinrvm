@@ -557,6 +557,17 @@ async def calculate_all_fees(
         'is_active': True
     }).to_list(50)
 
+    # Pre-compute airport zone check once (reuses all_areas already fetched above)
+    airport_areas = [a for a in all_areas if a.get('is_airport')]
+    in_airport = False
+    for ap in airport_areas:
+        ap_poly = get_service_area_polygon(ap)
+        if len(ap_poly) >= 3:
+            if point_in_polygon(pickup_lat, pickup_lng, ap_poly) or \
+               point_in_polygon(dropoff_lat, dropoff_lng, ap_poly):
+                in_airport = True
+                break
+
     fees_total = 0.0
     fee_items = []
 
@@ -578,16 +589,6 @@ async def calculate_all_fees(
                     continue
 
         if fee_type == 'airport':
-            # Check if pickup or dropoff is in an airport zone
-            airport_areas = await db.service_areas.find({'is_airport': True}).to_list(20)
-            in_airport = False
-            for ap in airport_areas:
-                ap_poly = get_service_area_polygon(ap)
-                if len(ap_poly) >= 3:
-                    if point_in_polygon(pickup_lat, pickup_lng, ap_poly) or \
-                       point_in_polygon(dropoff_lat, dropoff_lng, ap_poly):
-                        in_airport = True
-                        break
             if not in_airport:
                 continue
 

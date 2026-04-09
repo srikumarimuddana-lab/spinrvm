@@ -447,6 +447,16 @@ async def insert_one(table: str, doc: Dict[str, Any]):
         supabase.table(table).insert(doc).execute()
     ))
 
+async def insert_many(table: str, docs: List[Dict[str, Any]]):
+    """Bulk insert using Supabase's native batch insert (single round-trip)."""
+    if not supabase or not docs:
+        return []
+    serialized = [_serialize_for_api(d) for d in docs]
+    return await run_sync(lambda: _rows_from_res(
+        supabase.table(table).insert(serialized).execute()
+    ))
+
+
 async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any], upsert: bool = False):
     if not supabase:
         if table == 'drivers':

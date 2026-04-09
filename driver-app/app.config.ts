@@ -7,7 +7,7 @@ const SCHEME = 'spinr-driver';
 export default ({ config }: ConfigContext): ExpoConfig => ({
     ...config,
     name: APP_NAME,
-    slug: 'spinr-driver',
+    slug: 'spinrdriver',
     version: '1.0.0',
     orientation: 'portrait',
     icon: './assets/images/icon.png',
@@ -15,7 +15,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     userInterfaceStyle: 'automatic',
     newArchEnabled: true,
     updates: {
-        url: 'https://u.expo.dev/9fb3b288-3036-442c-98aa-d18987008cef',
+        url: 'https://u.expo.dev/1ed02cf4-97cb-4678-b5a2-0881f89abaa8',
     },
     // Bare workflow (after `expo prebuild`) does not support runtime version
     // policies like { policy: 'appVersion' } — EAS Update requires a literal
@@ -77,7 +77,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     extra: {
         eas: {
-            projectId: "9fb3b288-3036-442c-98aa-d18987008cef"
+            projectId: "1ed02cf4-97cb-4678-b5a2-0881f89abaa8"
         },
         EXPO_PUBLIC_BACKEND_URL: process.env.EXPO_PUBLIC_BACKEND_URL,
         backendUrl: process.env.EXPO_PUBLIC_BACKEND_URL,

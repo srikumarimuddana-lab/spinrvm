@@ -451,6 +451,29 @@ def _user_display_name(user: Optional[Dict]) -> str:
     return f"{fn} {ln}".strip() or user.get("email") or user.get("phone") or ""
 
 
+async def _batch_fetch_drivers_and_users(
+    rider_ids: List[str], driver_ids: List[str]
+) -> tuple:
+    """Batch-fetch drivers and users in 2-3 queries instead of N+1 loops."""
+    drivers_list = (
+        await db.get_rows("drivers", {"id": {"$in": driver_ids}}, limit=max(len(driver_ids), 1))
+        if driver_ids else []
+    )
+    drivers_map = {d["id"]: d for d in drivers_list if d.get("id")}
+
+    all_user_ids = list({
+        *rider_ids,
+        *(d.get("user_id") for d in drivers_list if d.get("user_id")),
+    })
+    users_list = (
+        await db.get_rows("users", {"id": {"$in": all_user_ids}}, limit=max(len(all_user_ids), 1))
+        if all_user_ids else []
+    )
+    users_map = {u["id"]: u for u in users_list if u.get("id")}
+
+    return drivers_map, users_map
+
+
 @admin_router.get("/drivers")
 async def admin_get_drivers(
     limit: int = 50,
@@ -467,12 +490,9 @@ async def admin_get_drivers(
     drivers = await db.get_rows(
         "drivers", filters, order="created_at", desc=True, limit=limit, offset=offset
     )
-    user_ids = [d.get("user_id") for d in drivers if d.get("user_id")]
-    users_map = {}
-    for uid in user_ids:
-        if uid and uid not in users_map:
-            u = await db.users.find_one({"id": uid})
-            users_map[uid] = u
+    user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
+    users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    users_map = {u["id"]: u for u in users_list if u.get("id")}
     out = []
     for d in drivers:
         u = users_map.get(d.get("user_id"))
@@ -524,12 +544,10 @@ async def admin_get_driver_stats(
         driver_filters["service_area_id"] = service_area_id
     all_drivers = await db.get_rows("drivers", driver_filters, order="created_at", desc=True, limit=5000)
 
-    # Enrich with user info
+    # Enrich with user info (batch)
     user_ids = list({d.get("user_id") for d in all_drivers if d.get("user_id")})
-    users_map: Dict[str, Any] = {}
-    for uid in user_ids:
-        if uid and uid not in users_map:
-            users_map[uid] = await db.users.find_one({"id": uid})
+    users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    users_map: Dict[str, Any] = {u["id"]: u for u in users_list if u.get("id")}
 
     # Auto-detect needs_review: active drivers with expired docs or pending re-uploads
     all_docs = await db.get_rows("driver_documents", {"status": "pending"}, limit=10000)
@@ -700,20 +718,7 @@ async def admin_get_rides(
     )
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
-    users_map = {}
-    for uid in rider_ids + driver_ids:
-        if uid and uid not in users_map:
-            u = await db.users.find_one({"id": uid})
-            users_map[uid] = u
-    drivers_map = {}
-    for did in driver_ids:
-        if did:
-            dr = await db.drivers.find_one({"id": did})
-            drivers_map[did] = dr
-            if dr and dr.get("user_id") and dr["user_id"] not in users_map:
-                users_map[dr["user_id"]] = await db.users.find_one(
-                    {"id": dr["user_id"]}
-                )
+    drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
     out = []
     for r in rides:
         rider = users_map.get(r.get("rider_id"))
@@ -1490,20 +1495,7 @@ async def admin_export_rides(
     rides = await db.get_rows("rides", order="created_at", desc=True, limit=1000)
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
-    users_map = {}
-    for uid in rider_ids + driver_ids:
-        if uid and uid not in users_map:
-            u = await db.users.find_one({"id": uid})
-            users_map[uid] = u
-    drivers_map = {}
-    for did in driver_ids:
-        if did:
-            dr = await db.drivers.find_one({"id": did})
-            drivers_map[did] = dr
-            if dr and dr.get("user_id") and dr["user_id"] not in users_map:
-                users_map[dr["user_id"]] = await db.users.find_one(
-                    {"id": dr["user_id"]}
-                )
+    drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
     out = []
     for r in rides:
         rider = users_map.get(r.get("rider_id"))
@@ -1530,11 +1522,9 @@ async def admin_export_rides(
 async def admin_export_drivers():
     """Export drivers data."""
     drivers = await db.get_rows("drivers", order="created_at", desc=True, limit=1000)
-    user_ids = [d.get("user_id") for d in drivers if d.get("user_id")]
-    users_map = {}
-    for uid in user_ids:
-        if uid and uid not in users_map:
-            users_map[uid] = await db.users.find_one({"id": uid})
+    user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
+    users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    users_map = {u["id"]: u for u in users_list if u.get("id")}
     out = []
     for d in drivers:
         u = users_map.get(d.get("user_id"))
@@ -2966,22 +2956,17 @@ async def admin_get_subscription_stats(
     all_plans = await db.get_rows("subscription_plans", limit=100)
     plan_map = {p["id"]: p for p in all_plans}
 
-    # Fetch drivers for name + area lookup
+    # Fetch drivers for name + area lookup (batch)
     driver_ids = list({s.get("driver_id") for s in all_subs if s.get("driver_id")})
+    raw_drivers_map, raw_users_map = await _batch_fetch_drivers_and_users([], driver_ids)
     drivers_map: Dict[str, str] = {}
     driver_area_map: Dict[str, str] = {}
-    for did in driver_ids:
-        if did and did not in drivers_map:
-            d = await db.drivers.find_one({"id": did})
-            if d:
-                uid = d.get("user_id")
-                u = await db.users.find_one({"id": uid}) if uid else None
-                name = ""
-                if u:
-                    name = f"{u.get('first_name', '')} {u.get('last_name', '')}".strip()
-                drivers_map[did] = name or d.get("name") or did[:8]
-                if d.get("service_area_id"):
-                    driver_area_map[did] = d["service_area_id"]
+    for did, d in raw_drivers_map.items():
+        u = raw_users_map.get(d.get("user_id")) if d.get("user_id") else None
+        name = _user_display_name(u) if u else ""
+        drivers_map[did] = name or d.get("name") or did[:8]
+        if d.get("service_area_id"):
+            driver_area_map[did] = d["service_area_id"]
 
     # Filter by service area if requested
     if area_filter:

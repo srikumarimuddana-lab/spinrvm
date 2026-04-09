@@ -6,12 +6,14 @@ try:
     from ..db import db, diag_logger
     from ..socket_manager import manager
     from ..features import send_push_notification
+    from ..geo_utils import calculate_distance
 except ImportError:
     from dependencies import get_current_user, get_admin_user
     from schemas import Driver, Ride, RideRatingRequest
     from db import db, diag_logger
     from socket_manager import manager
     from features import send_push_notification
+    from geo_utils import calculate_distance
 from datetime import datetime, timedelta
 import json
 import logging
@@ -221,30 +223,18 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
     if not driver:
         raise HTTPException(status_code=404, detail='Driver not found')
     
-    # Use Supabase instead of aggregate
     try:
-        from supabase import create_client
-        supabase_url = os.environ.get('SUPABASE_URL')
-        supabase_key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
-        if supabase_url and supabase_key:
-            supabase = create_client(supabase_url, supabase_key)
-            
-            # Get completed rides
-            rides_res = supabase.table('rides').select(
-                'driver_earnings, tip_amount'
-            ).eq('driver_id', driver['id']).eq('status', 'completed').execute()
-            
-            rides = rides_res.data or []
-            total_earnings = sum(r.get('driver_earnings', 0) or 0 for r in rides)
-            total_tips = sum(r.get('tip_amount', 0) or 0 for r in rides)
-            total_rides = len(rides)
-            
-            # Get pending payouts
-            payouts_res = supabase.table('payouts').select('amount').eq('driver_id', driver['id']).eq('status', 'pending').execute()
-            payouts = payouts_res.data or []
-            pending_payouts = sum(p.get('amount', 0) or 0 for p in payouts)
-        else:
-            total_earnings = total_tips = total_rides = pending_payouts = 0
+        rides = await db.get_rows("rides", {
+            "driver_id": driver['id'], "status": "completed",
+        }, limit=10000)
+        total_earnings = sum(r.get('driver_earnings', 0) or 0 for r in rides)
+        total_tips = sum(r.get('tip_amount', 0) or 0 for r in rides)
+        total_rides = len(rides)
+
+        payouts = await db.get_rows("payouts", {
+            "driver_id": driver['id'], "status": "pending",
+        }, limit=1000)
+        pending_payouts = sum(p.get('amount', 0) or 0 for p in payouts)
     except Exception as e:
         logger.error(f"Error fetching balance: {e}")
         total_earnings = total_tips = total_rides = pending_payouts = 0
@@ -293,42 +283,20 @@ async def get_driver_earnings(
         # Fallback: treat unknown period as 'week'
         start_date = now - timedelta(days=7)
     
-    # Use Supabase RPC or manual calculation instead of aggregate
     try:
-        from supabase import create_client
-        supabase_url = os.environ.get('SUPABASE_URL')
-        supabase_key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
-        if supabase_url and supabase_key:
-            supabase = create_client(supabase_url, supabase_key)
-            
-            # Fetch completed rides in the period
-            q = supabase.table('rides').select(
-                'driver_earnings, tip_amount, distance_km, duration_minutes'
-            ).eq('driver_id', driver['id']).eq('status', 'completed')
-            
-            # Only apply date filter when not fetching all-time
-            if use_date_filter and start_date:
-                q = q.gte('ride_completed_at', start_date.isoformat())
-            
-            rides_res = q.execute()
-            
-            rides = rides_res.data or []
-            
-            total_earnings = sum(r.get('driver_earnings', 0) or 0 for r in rides)
-            total_tips = sum(r.get('tip_amount', 0) or 0 for r in rides)
-            total_rides = len(rides)
-            total_distance_km = sum(r.get('distance_km', 0) or 0 for r in rides)
-            total_duration_minutes = sum(r.get('duration_minutes', 0) or 0 for r in rides)
-            
-            stats = {
-                'total_earnings': total_earnings,
-                'total_tips': total_tips,
-                'total_rides': total_rides,
-                'total_distance_km': total_distance_km,
-                'total_duration_minutes': total_duration_minutes
-            }
-        else:
-            stats = {'total_earnings': 0, 'total_tips': 0, 'total_rides': 0, 'total_distance_km': 0, 'total_duration_minutes': 0}
+        filters: Dict[str, Any] = {"driver_id": driver['id'], "status": "completed"}
+        if use_date_filter and start_date:
+            filters["ride_completed_at"] = {"$gte": start_date.isoformat()}
+
+        rides = await db.get_rows("rides", filters, limit=10000)
+
+        stats = {
+            'total_earnings': sum(r.get('driver_earnings', 0) or 0 for r in rides),
+            'total_tips': sum(r.get('tip_amount', 0) or 0 for r in rides),
+            'total_rides': len(rides),
+            'total_distance_km': sum(r.get('distance_km', 0) or 0 for r in rides),
+            'total_duration_minutes': sum(r.get('duration_minutes', 0) or 0 for r in rides),
+        }
     except Exception as e:
         logger.error(f"Error fetching earnings: {e}")
         stats = {'total_earnings': 0, 'total_tips': 0, 'total_rides': 0, 'total_distance_km': 0, 'total_duration_minutes': 0}
@@ -355,42 +323,32 @@ async def get_driver_daily_earnings(
     
     start_date = datetime.utcnow() - timedelta(days=days)
     
-    # Use Supabase instead of aggregate
+    # Fetch completed rides in the period using the shared db layer
     try:
-        from supabase import create_client
-        supabase_url = os.environ.get('SUPABASE_URL')
-        supabase_key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
-        if supabase_url and supabase_key:
-            supabase = create_client(supabase_url, supabase_key)
-            
-            # Fetch all completed rides in the period
-            rides_res = supabase.table('rides').select(
-                'ride_completed_at, driver_earnings, tip_amount, distance_km'
-            ).eq('driver_id', driver['id']).eq('status', 'completed').gte('ride_completed_at', start_date.isoformat()).execute()
-            
-            rides = rides_res.data or []
-            
-            # Group by date manually
-            daily_data = {}
-            for r in rides:
-                date_str = r.get('ride_completed_at', '')[:10]  # Get YYYY-MM-DD
-                if date_str not in daily_data:
-                    daily_data[date_str] = {'earnings': 0, 'tips': 0, 'rides': 0, 'distance_km': 0}
-                daily_data[date_str]['earnings'] += r.get('driver_earnings', 0) or 0
-                daily_data[date_str]['tips'] += r.get('tip_amount', 0) or 0
-                daily_data[date_str]['rides'] += 1
-                daily_data[date_str]['distance_km'] += r.get('distance_km', 0) or 0
-            
-            results = [
-                {'date': date, **data}
-                for date, data in sorted(daily_data.items())
-            ]
-        else:
-            results = []
+        rides = await db.get_rows("rides", {
+            "driver_id": driver['id'],
+            "status": "completed",
+            "ride_completed_at": {"$gte": start_date.isoformat()},
+        }, order="ride_completed_at", limit=5000)
+
+        # Group by date (small dataset per driver, fine in Python)
+        daily_data: dict = {}
+        for r in rides:
+            date_str = (r.get('ride_completed_at') or '')[:10]
+            if not date_str:
+                continue
+            if date_str not in daily_data:
+                daily_data[date_str] = {'earnings': 0, 'tips': 0, 'rides': 0, 'distance_km': 0}
+            daily_data[date_str]['earnings'] += r.get('driver_earnings', 0) or 0
+            daily_data[date_str]['tips'] += r.get('tip_amount', 0) or 0
+            daily_data[date_str]['rides'] += 1
+            daily_data[date_str]['distance_km'] += r.get('distance_km', 0) or 0
+
+        results = [{'date': date, **data} for date, data in sorted(daily_data.items())]
     except Exception as e:
         logger.error(f"Error fetching daily earnings: {e}")
         results = []
-    
+
     return results
 
 @api_router.get("/earnings/trips")
@@ -404,23 +362,10 @@ async def get_driver_trip_earnings(
     if not driver:
         raise HTTPException(status_code=404, detail='Driver not found')
     
-    # Use Supabase instead of MongoDB cursor
     try:
-        from supabase import create_client
-        supabase_url = os.environ.get('SUPABASE_URL')
-        supabase_key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
-        if supabase_url and supabase_key:
-            supabase = create_client(supabase_url, supabase_key)
-            
-            rides_res = supabase.table('rides').select(
-                'id, pickup_address, dropoff_address, distance_km, duration_minutes, '
-                'base_fare, distance_fare, time_fare, driver_earnings, tip_amount, '
-                'rider_rating, ride_completed_at'
-            ).eq('driver_id', driver['id']).eq('status', 'completed').order('ride_completed_at', desc=True).range(offset, offset + limit - 1).execute()
-            
-            rides = rides_res.data or []
-        else:
-            rides = []
+        rides = await db.get_rows("rides", {
+            "driver_id": driver['id'], "status": "completed",
+        }, order="ride_completed_at", desc=True, limit=limit, offset=offset)
     except Exception as e:
         logger.error(f"Error fetching trip earnings: {e}")
         rides = []
@@ -459,26 +404,16 @@ async def get_nearby_drivers_public(
     # Get all matching drivers — service area filtering by distance (not polygon yet)
     drivers = await db.drivers.find(query).to_list(100)
     
-    # Manual filtering by distance using haversine
-    import math
-    def _haversine_km(lat1, lng1, lat2, lng2):
-        R = 6371
-        dlat = math.radians(lat2 - lat1)
-        dlng = math.radians(lng2 - lng1)
-        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng/2)**2
-        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-
+    # Manual filtering by distance
     nearby = []
     for d in drivers:
         # Exclude orphan/demo driver rows (no user_id → cannot be dispatched).
-        # Showing them as map pins would be misleading because a rider tapping
-        # them or seeing them counted as "available" would never get matched.
         if not d.get('user_id'):
             continue
         d_lat = d.get('lat')
         d_lng = d.get('lng')
         if d_lat and d_lng:
-            dist = _haversine_km(lat, lng, d_lat, d_lng)
+            dist = calculate_distance(lat, lng, d_lat, d_lng)
             if dist <= radius:
                 # hide personal info for riders
                 safe_driver = {
@@ -874,24 +809,11 @@ async def get_ride_history(
     if not driver:
         raise HTTPException(status_code=404, detail='Driver not found')
     
-    # Use Supabase instead of MongoDB cursor
     try:
-        from supabase import create_client
-        supabase_url = os.environ.get('SUPABASE_URL')
-        supabase_key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
-        if supabase_url and supabase_key:
-            supabase = create_client(supabase_url, supabase_key)
-            
-            # Get total count
-            count_res = supabase.table('rides').select('id', count='exact').eq('driver_id', driver['id']).execute()
-            total = count_res.count if hasattr(count_res, 'count') else 0
-            
-            # Get rides with pagination
-            rides_res = supabase.table('rides').select('*').eq('driver_id', driver['id']).order('created_at', desc=True).range(offset, offset + limit - 1).execute()
-            rides = rides_res.data or []
-        else:
-            total = 0
-            rides = []
+        total = await db.rides.count_documents({"driver_id": driver['id']})
+        rides = await db.get_rows("rides", {
+            "driver_id": driver['id'],
+        }, order="created_at", desc=True, limit=limit, offset=offset)
     except Exception as e:
         logger.error(f"Error fetching ride history: {e}")
         total = 0
@@ -1020,27 +942,20 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
     if not ride:
         raise HTTPException(status_code=404, detail='Ride not found')
 
-    # GAP FIX: Geofence check - verify driver is within 200m of pickup location
+    # Geofence check - verify driver is within 200m of pickup location
     ARRIVAL_RADIUS_KM = 0.2  # 200 meters
-    import math
-    def _haversine_arrive(lat1, lng1, lat2, lng2):
-        R = 6371
-        dlat = math.radians(lat2 - lat1)
-        dlng = math.radians(lng2 - lng1)
-        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng/2)**2
-        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-
     driver_lat = driver.get('lat', 0)
     driver_lng = driver.get('lng', 0)
     pickup_lat = ride.get('pickup_lat', 0)
     pickup_lng = ride.get('pickup_lng', 0)
 
     if driver_lat and driver_lng and pickup_lat and pickup_lng:
-        distance_to_pickup = _haversine_arrive(driver_lat, driver_lng, pickup_lat, pickup_lng)
+        distance_to_pickup = calculate_distance(driver_lat, driver_lng, pickup_lat, pickup_lng)
         if distance_to_pickup > ARRIVAL_RADIUS_KM:
+            distance_m = int(distance_to_pickup * 1000)
             raise HTTPException(
                 status_code=400,
-                detail=f'You are {distance_to_pickup:.0f}km away from the pickup. '
+                detail=f'You are {distance_m}m away from the pickup. '
                        f'Please move within 200m of the pickup location to mark arrival.'
             )
 
@@ -1142,15 +1057,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     if not ride:
         raise HTTPException(status_code=404, detail='Ride not found')
 
-    # GAP FIX: Recalculate fare based on actual GPS distance from location history
-    import math
-    def _haversine(lat1, lng1, lat2, lng2):
-        R = 6371
-        dlat = math.radians(lat2 - lat1)
-        dlng = math.radians(lng2 - lng1)
-        a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng/2)**2
-        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
-
+    # Recalculate fare based on actual GPS distance from location history
     actual_distance_km = ride.get('distance_km', 0)
     try:
         breadcrumbs = await db.driver_location_history.find({
@@ -1165,7 +1072,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 prev = breadcrumbs[i - 1]
                 curr = breadcrumbs[i]
                 if prev.get('lat') and prev.get('lng') and curr.get('lat') and curr.get('lng'):
-                    total_dist += _haversine(prev['lat'], prev['lng'], curr['lat'], curr['lng'])
+                    total_dist += calculate_distance(prev['lat'], prev['lng'], curr['lat'], curr['lng'])
             if total_dist > 0:
                 actual_distance_km = round(total_dist, 2)
                 logger.info(f"Ride {ride_id}: Recalculated distance = {actual_distance_km}km (estimated was {ride.get('distance_km', 0)}km)")

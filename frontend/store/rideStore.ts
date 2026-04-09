@@ -153,7 +153,6 @@ export const useRideStore = create<RideState>((set, get) => ({
   }),
 
   fetchEstimates: async () => {
-    console.log('fetchEstimates store action started');
     const { pickup, dropoff, stops } = get();
     if (!pickup || !dropoff) return;
 

@@ -110,6 +110,46 @@ async def update_my_driver(body: dict = Body(...), current_user: dict = Depends(
     updated = await db.drivers.find_one({'id': driver['id']})
     return serialize_doc(updated)
 
+@api_router.get("/demand-heatmap")
+async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
+    """Return recent ride pickup locations as heatmap points for the driver.
+
+    Scoped to the driver's service area (if set) and the last 7 days.
+    Only returns data when the admin has enabled `show_demand_heatmap`
+    on the driver's service area.
+    """
+    driver = await db.drivers.find_one({'user_id': current_user['id']})
+
+    # Check if heatmap is enabled for this driver's service area
+    service_area = None
+    if driver and driver.get('service_area_id'):
+        service_area = await db.service_areas.find_one({'id': driver['service_area_id']})
+
+    enabled = bool(service_area and service_area.get('show_demand_heatmap'))
+    if not enabled:
+        return {'enabled': False, 'points': [], 'total_rides': 0}
+
+    query_filters: dict = {}
+
+    # Last 7 days
+    cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
+    query_filters['created_at'] = {'$gte': cutoff}
+    query_filters['service_area_id'] = driver['service_area_id']
+
+    rides = await db.get_rows(
+        'rides', query_filters, order='created_at', desc=True, limit=5000
+    )
+
+    points = []
+    for r in rides:
+        lat = r.get('pickup_lat')
+        lng = r.get('pickup_lng')
+        if lat is not None and lng is not None:
+            points.append([float(lat), float(lng), 1])
+
+    return {'enabled': True, 'points': points, 'total_rides': len(rides)}
+
+
 @api_router.post("/register")
 async def register_driver(
     body: dict = Body(...),

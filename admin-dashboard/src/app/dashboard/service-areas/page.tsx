@@ -480,6 +480,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     driver_matching_algorithm: area.driver_matching_algorithm || "nearest",
     search_radius_km: area.search_radius_km || 10,
     min_driver_rating: area.min_driver_rating || 4.0,
+    show_demand_heatmap: area.show_demand_heatmap || false,
   });
   const [pendingPolygon, setPendingPolygon] = useState<any>(null);
   const [saving, setSaving] = useState(false);
@@ -496,6 +497,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       driver_matching_algorithm: form.driver_matching_algorithm,
       search_radius_km: parseFloat(String(form.search_radius_km)) || 10,
       min_driver_rating: parseFloat(String(form.min_driver_rating)) || 4.0,
+      show_demand_heatmap: form.show_demand_heatmap,
     };
     if (pendingPolygon) {
       updates.polygon = pendingPolygon;
@@ -533,6 +535,13 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
           <button onClick={() => setForm({ ...form, is_active: !form.is_active })}>
             {form.is_active ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
           </button>
+        </div>
+        <div className="flex items-center gap-2 pt-5">
+          <label className="text-xs font-semibold text-gray-500">Demand Heatmap</label>
+          <button onClick={() => setForm({ ...form, show_demand_heatmap: !form.show_demand_heatmap })}>
+            {form.show_demand_heatmap ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
+          </button>
+          <span className="text-xs text-gray-400">Show ride demand overlay to drivers</span>
         </div>
       </div>
 

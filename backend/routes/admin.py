@@ -266,6 +266,8 @@ async def admin_create_service_area(area: Dict[str, Any]):
         "driver_matching_algorithm": area.get("driver_matching_algorithm", "nearest"),
         "search_radius_km": area.get("search_radius_km", 10.0),
         "min_driver_rating": area.get("min_driver_rating", 4.0),
+        # Demand heatmap — when true, drivers in this area see ride demand overlay
+        "show_demand_heatmap": area.get("show_demand_heatmap", False),
         "created_at": datetime.utcnow().isoformat(),
     }
     row = await db.service_areas.insert_one(doc)
@@ -297,6 +299,7 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
         "driver_matching_algorithm",
         "search_radius_km",
         "min_driver_rating",
+        "show_demand_heatmap",
     ]
     
     # Map geojson from frontend to polygon in DB schema if present

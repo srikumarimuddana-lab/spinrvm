@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, HTTPException, Header  # type: ignore
+from fastapi import APIRouter, Depends, Query, HTTPException, Header, Response  # type: ignore
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel  # type: ignore
 from datetime import datetime, timedelta
@@ -1193,8 +1193,90 @@ async def admin_get_ride_invoice(ride_id: str):
         "dropoff_lat": ride.get("dropoff_lat"),
         "dropoff_lng": ride.get("dropoff_lng"),
         "actual_distance_km": ride.get("actual_distance_km"),
-        "location_trail": ride.get("location_trail", []),
+        # Privacy: only expose trail phases relevant to the paid ride.
+        # Filters out `online_idle` and any other pre-trip wandering so the
+        # invoice cannot leak the driver's unrelated movements.
+        "location_trail": [
+            p for p in (ride.get("location_trail") or [])
+            if p.get("tracking_phase") in ("navigating_to_pickup", "trip_in_progress")
+        ],
     }
+
+
+@admin_router.get("/rides/{ride_id}/route-map.png")
+async def admin_get_ride_route_map(
+    ride_id: str,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Proxy a Google Static Maps image for the ride's actual GPS route.
+
+    Keeps the Google Maps API key server-side (prevents client bundle leak)
+    and sidesteps browser CORS when the admin dashboard embeds the image in
+    a generated PDF. Returns a PNG binary.
+    """
+    import httpx
+
+    ride = await db_supabase.get_ride_details_enriched(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    pickup_lat = ride.get("pickup_lat")
+    pickup_lng = ride.get("pickup_lng")
+    dropoff_lat = ride.get("dropoff_lat")
+    dropoff_lng = ride.get("dropoff_lng")
+    if pickup_lat is None or dropoff_lat is None:
+        raise HTTPException(status_code=400, detail="Ride is missing coordinates")
+
+    # Only include ride-relevant phases (same privacy filter as invoice).
+    trail = [
+        p for p in (ride.get("location_trail") or [])
+        if p.get("tracking_phase") in ("navigating_to_pickup", "trip_in_progress")
+        and p.get("lat") is not None and p.get("lng") is not None
+    ]
+
+    # Sample to keep the URL under Google's ~8192 char limit.
+    if len(trail) > 30:
+        step = max(1, len(trail) // 30)
+        sampled = trail[::step]
+        # Always include the last point so the path reaches the dropoff area.
+        if sampled[-1] is not trail[-1]:
+            sampled.append(trail[-1])
+    else:
+        sampled = trail
+
+    settings_row = await get_app_settings()
+    api_key = (settings_row or {}).get("google_maps_api_key") or ""
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Google Maps API key not configured")
+
+    # Build static map URL
+    params = [
+        "size=600x240",
+        "maptype=roadmap",
+        f"markers=color:green|label:P|{pickup_lat},{pickup_lng}",
+        f"markers=color:red|label:D|{dropoff_lat},{dropoff_lng}",
+    ]
+    if len(sampled) >= 2:
+        path_str = "|".join(f"{p['lat']},{p['lng']}" for p in sampled)
+        params.append(f"path=color:0x3B82F6FF|weight:4|{path_str}")
+    params.append(f"key={api_key}")
+
+    url = "https://maps.googleapis.com/maps/api/staticmap?" + "&".join(params)
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url)
+        if resp.status_code != 200:
+            logger.warning(f"Static Maps returned {resp.status_code}: {resp.text[:200]}")
+            raise HTTPException(status_code=502, detail="Failed to fetch route map")
+        return Response(
+            content=resp.content,
+            media_type="image/png",
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+    except httpx.HTTPError as e:
+        logger.warning(f"Static Maps fetch error for ride {ride_id}: {e}")
+        raise HTTPException(status_code=502, detail="Failed to fetch route map")
 
 
 class FlagRequest(BaseModel):

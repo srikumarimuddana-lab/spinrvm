@@ -1193,10 +1193,24 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             'driver_earnings': new_driver_earnings,
         })
 
-    await db.rides.update_one(
-        {'id': ride_id, 'driver_id': driver['id']},
-        {'$set': update_fields}
-    )
+    try:
+        await db.rides.update_one(
+            {'id': ride_id, 'driver_id': driver['id']},
+            {'$set': update_fields}
+        )
+    except Exception as e:
+        # The `actual_distance_km` column may not exist in older deployments.
+        # Retry without it so ride completion never fails due to a missing column.
+        err_msg = str(e).lower()
+        if 'actual_distance_km' in err_msg or 'column' in err_msg or 'pgrst204' in err_msg:
+            logger.warning(f"Retrying ride update without actual_distance_km: {e}")
+            safe_updates = {k: v for k, v in update_fields.items() if k != 'actual_distance_km'}
+            await db.rides.update_one(
+                {'id': ride_id, 'driver_id': driver['id']},
+                {'$set': safe_updates}
+            )
+        else:
+            raise
     
     # Update driver stats
     await db.drivers.update_one(

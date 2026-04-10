@@ -99,29 +99,40 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
 
   // Live distance tracking during trip
   const [liveDistanceKm, setLiveDistanceKm] = useState(0);
+  const [hasLiveData, setHasLiveData] = useState(false);
   const lastLocRef = useRef<{ lat: number; lng: number } | null>(null);
+  const jitterBufferRef = useRef(0);
 
-  // Reset distance when ride phase changes
+  // Reset distance when ride phase OR ride id changes — prevents stale
+  // accumulation carrying over to a different ride if the panel is recycled.
   useEffect(() => {
     setLiveDistanceKm(0);
+    setHasLiveData(false);
     lastLocRef.current = null;
-  }, [rideState]);
+    jitterBufferRef.current = 0;
+  }, [rideState, ride?.id]);
 
-  // Accumulate distance from GPS updates during trip_in_progress
+  // Accumulate distance from GPS updates during trip_in_progress.
+  // Always advances the reference point so slow/crawl driving (deltas <10m)
+  // isn't permanently filtered out. We accumulate deltas into a jitter
+  // buffer and flush to the displayed total once cumulative movement
+  // crosses 10m — captures real motion while rejecting stationary GPS noise.
   useEffect(() => {
     if (rideState !== 'trip_in_progress' || !driverLocation?.coords) return;
     const { latitude, longitude } = driverLocation.coords;
     const prev = lastLocRef.current;
     if (prev) {
       const delta = haversineM(prev.lat, prev.lng, latitude, longitude);
-      // Only count movements > 5m to filter GPS jitter
-      if (delta > 5) {
-        setLiveDistanceKm(d => d + delta / 1000);
-        lastLocRef.current = { lat: latitude, lng: longitude };
+      jitterBufferRef.current += delta;
+      if (jitterBufferRef.current > 10) {
+        setLiveDistanceKm(d => d + jitterBufferRef.current / 1000);
+        setHasLiveData(true);
+        jitterBufferRef.current = 0;
       }
-    } else {
-      lastLocRef.current = { lat: latitude, lng: longitude };
     }
+    // Always advance the ref so consecutive small movements are measured
+    // between the latest two points, not against a stale origin.
+    lastLocRef.current = { lat: latitude, lng: longitude };
   }, [driverLocation, rideState]);
 
   useEffect(() => {
@@ -210,12 +221,12 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <View style={styles.tripInfoDivider} />
           <View style={styles.tripInfoItem}>
             <Text style={styles.tripInfoValue}>
-              {rideState === 'trip_in_progress' && liveDistanceKm > 0
+              {rideState === 'trip_in_progress' && hasLiveData
                 ? `${liveDistanceKm.toFixed(1)} km`
                 : `${distKm.toFixed(1)} km`}
             </Text>
             <Text style={styles.tripInfoLabel}>
-              {rideState === 'trip_in_progress' ? 'Traveled' : 'Distance'}
+              {rideState === 'trip_in_progress' && hasLiveData ? 'Traveled' : 'Distance'}
             </Text>
           </View>
           <View style={styles.tripInfoDivider} />

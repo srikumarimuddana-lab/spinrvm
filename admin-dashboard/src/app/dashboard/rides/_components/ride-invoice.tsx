@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { sendRideInvoice, getRideInvoice } from "@/lib/api";
+import { sendRideInvoice, getRideInvoice, getRideRouteMapDataUrl } from "@/lib/api";
 import { Send, Download } from "lucide-react";
 import { computePhaseDistances } from "./ride-ui-helpers";
 
@@ -9,6 +9,13 @@ interface Props {
     rideId: string;
     status: string;
 }
+
+// Safe number formatter — returns em-dash for null/undefined/NaN.
+const fmt = (n: any, digits = 1): string =>
+    typeof n === "number" && Number.isFinite(n) ? n.toFixed(digits) : "—";
+
+const fmtMoney = (n: any): string =>
+    typeof n === "number" && Number.isFinite(n) ? `$${n.toFixed(2)}` : "—";
 
 export default function RideInvoice({ rideId, status }: Props) {
     const [sending, setSending] = useState(false);
@@ -37,8 +44,18 @@ export default function RideInvoice({ rideId, status }: Props) {
 
             const margin = 20;
             const pageW = 210;
+            const pageH = 297;
+            const bottomLimit = 280;
             let y = margin;
             const lineH = 7;
+
+            // Helper: ensure there's enough vertical space; auto-page-break.
+            const ensureSpace = (needed: number) => {
+                if (y + needed > bottomLimit) {
+                    doc.addPage();
+                    y = margin;
+                }
+            };
 
             // Header
             doc.setFontSize(22);
@@ -53,10 +70,15 @@ export default function RideInvoice({ rideId, status }: Props) {
             // Ride info
             doc.setFontSize(9);
             doc.setTextColor(120);
-            doc.text(`Invoice #: ${data.ride_id?.slice(0, 12)}`, margin, y);
-            doc.text(`Date: ${data.ride_completed_at ? new Date(data.ride_completed_at).toLocaleString() : "—"}`, pageW - margin, y, { align: "right" });
+            doc.text(`Invoice #: ${data.ride_id?.slice(0, 12) ?? "—"}`, margin, y);
+            doc.text(
+                `Date: ${data.ride_completed_at ? new Date(data.ride_completed_at).toLocaleString() : "—"}`,
+                pageW - margin,
+                y,
+                { align: "right" }
+            );
             y += 6;
-            doc.text(`Status: ${data.status?.toUpperCase()}`, margin, y);
+            doc.text(`Status: ${(data.status ?? "—").toUpperCase()}`, margin, y);
             y += 2;
 
             // Separator
@@ -64,7 +86,8 @@ export default function RideInvoice({ rideId, status }: Props) {
             doc.line(margin, y + 3, pageW - margin, y + 3);
             y += 10;
 
-            // Route section with map placeholder
+            // Route section
+            ensureSpace(40);
             doc.setFontSize(11);
             doc.setFont("helvetica", "bold");
             doc.setTextColor(0);
@@ -75,7 +98,7 @@ export default function RideInvoice({ rideId, status }: Props) {
             doc.setFont("helvetica", "normal");
 
             // Pickup
-            doc.setFillColor(16, 185, 129); // emerald
+            doc.setFillColor(16, 185, 129);
             doc.circle(margin + 3, y - 1.5, 2, "F");
             doc.text("PICKUP", margin + 8, y);
             y += lineH;
@@ -85,7 +108,7 @@ export default function RideInvoice({ rideId, status }: Props) {
 
             // Dropoff
             doc.setTextColor(0);
-            doc.setFillColor(59, 130, 246); // blue
+            doc.setFillColor(59, 130, 246);
             doc.circle(margin + 3, y - 1.5, 2, "F");
             doc.text("DROPOFF", margin + 8, y);
             y += lineH;
@@ -96,38 +119,67 @@ export default function RideInvoice({ rideId, status }: Props) {
             // Route stats
             doc.setTextColor(0);
             doc.setFont("helvetica", "normal");
-            const statsText = `Distance: ${data.distance_km?.toFixed(1)} km  |  Duration: ${data.duration_minutes} min${data.surge_multiplier > 1 ? `  |  Surge: ${data.surge_multiplier}x` : ""}`;
+            const surgeTxt =
+                typeof data.surge_multiplier === "number" && data.surge_multiplier > 1
+                    ? `  |  Surge: ${data.surge_multiplier}x`
+                    : "";
+            const statsText = `Distance: ${fmt(data.distance_km)} km  |  Duration: ${fmt(
+                data.duration_minutes,
+                0
+            )} min${surgeTxt}`;
             doc.text(statsText, margin + 8, y);
             y += lineH;
 
             // Map coordinates (for reference)
             doc.setFontSize(8);
             doc.setTextColor(150);
-            if (data.pickup_lat) {
-                doc.text(`Pickup: ${data.pickup_lat?.toFixed(5)}, ${data.pickup_lng?.toFixed(5)}  |  Dropoff: ${data.dropoff_lat?.toFixed(5)}, ${data.dropoff_lng?.toFixed(5)}`, margin + 8, y);
+            if (typeof data.pickup_lat === "number" && typeof data.dropoff_lat === "number") {
+                doc.text(
+                    `Pickup: ${fmt(data.pickup_lat, 5)}, ${fmt(data.pickup_lng, 5)}  |  Dropoff: ${fmt(
+                        data.dropoff_lat,
+                        5
+                    )}, ${fmt(data.dropoff_lng, 5)}`,
+                    margin + 8,
+                    y
+                );
                 y += 5;
             }
 
-            // Static map link
+            // Static map link (OpenStreetMap — no API key needed)
             doc.setTextColor(59, 130, 246);
             doc.setFontSize(8);
-            if (data.pickup_lat && data.dropoff_lat) {
+            if (typeof data.pickup_lat === "number" && typeof data.dropoff_lat === "number") {
                 const mapUrl = `https://www.openstreetmap.org/directions?from=${data.pickup_lat},${data.pickup_lng}&to=${data.dropoff_lat},${data.dropoff_lng}`;
                 doc.textWithLink("View route on map", margin + 8, y, { url: mapUrl });
                 y += 4;
             }
 
             // Actual vs estimated distance
-            if (data.actual_distance_km && data.actual_distance_km !== data.distance_km) {
+            if (
+                typeof data.actual_distance_km === "number" &&
+                Number.isFinite(data.actual_distance_km) &&
+                data.actual_distance_km !== data.distance_km
+            ) {
                 doc.setTextColor(100);
                 doc.setFontSize(8);
                 y += 2;
-                doc.text(`Actual distance traveled: ${data.actual_distance_km.toFixed(2)} km (estimated: ${data.distance_km?.toFixed(1)} km)`, margin + 8, y);
+                doc.text(
+                    `Actual distance traveled: ${fmt(data.actual_distance_km, 2)} km (estimated: ${fmt(
+                        data.distance_km
+                    )} km)`,
+                    margin + 8,
+                    y
+                );
                 y += 4;
             }
 
-            // Route map image from GPS trail
-            if (data.location_trail && data.location_trail.length > 1 && data.pickup_lat) {
+            // Route map image from GPS trail — fetched via secure backend proxy
+            if (
+                Array.isArray(data.location_trail) &&
+                data.location_trail.length > 1 &&
+                typeof data.pickup_lat === "number"
+            ) {
+                ensureSpace(68);
                 y += 4;
                 doc.setTextColor(0);
                 doc.setFontSize(9);
@@ -136,38 +188,20 @@ export default function RideInvoice({ rideId, status }: Props) {
                 y += 2;
                 doc.setFont("helvetica", "normal");
 
-                try {
-                    // Build a static map URL using GPS trail points
-                    // Sample trail to ~30 points for URL length
-                    const trail = data.location_trail;
-                    const step = Math.max(1, Math.floor(trail.length / 30));
-                    const sampled = trail.filter((_: any, i: number) => i % step === 0 || i === trail.length - 1);
-                    const pathCoords = sampled.map((p: any) => `${p.lat},${p.lng}`).join("|");
-
-                    const staticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?size=500x200&maptype=roadmap`
-                        + `&markers=color:green|label:P|${data.pickup_lat},${data.pickup_lng}`
-                        + `&markers=color:red|label:D|${data.dropoff_lat},${data.dropoff_lng}`
-                        + `&path=color:0x3B82F6ff|weight:3|${pathCoords}`
-                        + `&key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ""}`;
-
-                    // Fetch and embed the static map image
-                    const imgResponse = await fetch(staticMapUrl);
-                    if (imgResponse.ok) {
-                        const imgBlob = await imgResponse.blob();
-                        const imgBase64 = await new Promise<string>((resolve) => {
-                            const reader = new FileReader();
-                            reader.onloadend = () => resolve(reader.result as string);
-                            reader.readAsDataURL(imgBlob);
-                        });
-                        doc.addImage(imgBase64, "PNG", margin, y, pageW - 2 * margin, 50);
-                        y += 54;
-                    }
-                } catch (mapErr) {
-                    console.log("Failed to embed route map in invoice:", mapErr);
+                const dataUrl = await getRideRouteMapDataUrl(rideId);
+                if (dataUrl) {
+                    doc.addImage(dataUrl, "PNG", margin, y, pageW - 2 * margin, 50);
+                    y += 54;
+                } else {
+                    doc.setTextColor(150);
+                    doc.setFontSize(8);
+                    doc.text("Route map unavailable", margin + 8, y + 6);
+                    y += 12;
                 }
             }
 
             y += 6;
+            ensureSpace(30);
             doc.setDrawColor(200);
             doc.line(margin, y, pageW - margin, y);
             y += 8;
@@ -189,9 +223,14 @@ export default function RideInvoice({ rideId, status }: Props) {
             doc.text(data.driver_phone || "—", pageW / 2, y);
             y += 5;
             doc.text(data.rider_email || "—", margin, y);
-            doc.text(`${data.driver_vehicle || ""} ${data.driver_license_plate || ""}`.trim() || "—", pageW / 2, y);
+            doc.text(
+                `${data.driver_vehicle || ""} ${data.driver_license_plate || ""}`.trim() || "—",
+                pageW / 2,
+                y
+            );
             y += 10;
 
+            ensureSpace(50);
             doc.setDrawColor(200);
             doc.line(margin, y, pageW - margin, y);
             y += 8;
@@ -206,21 +245,25 @@ export default function RideInvoice({ rideId, status }: Props) {
             doc.setFont("helvetica", "normal");
 
             const fareLines: [string, string][] = [
-                ["Base Fare", `$${(data.base_fare || 0).toFixed(2)}`],
-                [`Distance (${data.distance_km?.toFixed(1)} km)`, `$${(data.distance_fare || 0).toFixed(2)}`],
-                [`Time (${data.duration_minutes} min)`, `$${(data.time_fare || 0).toFixed(2)}`],
-                ["Booking Fee", `$${(data.booking_fee || 0).toFixed(2)}`],
+                ["Base Fare", fmtMoney(data.base_fare)],
+                [`Distance (${fmt(data.distance_km)} km)`, fmtMoney(data.distance_fare)],
+                [`Time (${fmt(data.duration_minutes, 0)} min)`, fmtMoney(data.time_fare)],
+                ["Booking Fee", fmtMoney(data.booking_fee)],
             ];
-            if ((data.airport_fee || 0) > 0) fareLines.push(["Airport Fee", `$${data.airport_fee.toFixed(2)}`]);
+            if (typeof data.airport_fee === "number" && data.airport_fee > 0) {
+                fareLines.push(["Airport Fee", fmtMoney(data.airport_fee)]);
+            }
 
             doc.setTextColor(80);
             for (const [label, val] of fareLines) {
+                ensureSpace(lineH);
                 doc.text(label, margin, y);
                 doc.text(val, pageW - margin, y, { align: "right" });
                 y += lineH;
             }
 
             // Total
+            ensureSpace(lineH * 2);
             y += 2;
             doc.setDrawColor(200);
             doc.line(margin, y, pageW - margin, y);
@@ -229,15 +272,15 @@ export default function RideInvoice({ rideId, status }: Props) {
             doc.setFontSize(12);
             doc.setTextColor(0);
             doc.text("Total", margin, y);
-            doc.text(`$${(data.total_fare || 0).toFixed(2)}`, pageW - margin, y, { align: "right" });
+            doc.text(fmtMoney(data.total_fare), pageW - margin, y, { align: "right" });
             y += lineH;
 
-            if ((data.tip_amount || 0) > 0) {
+            if (typeof data.tip_amount === "number" && data.tip_amount > 0) {
                 doc.setFontSize(9);
                 doc.setFont("helvetica", "normal");
                 doc.setTextColor(180, 130, 0);
                 doc.text("Tip", margin, y);
-                doc.text(`$${data.tip_amount.toFixed(2)}`, pageW - margin, y, { align: "right" });
+                doc.text(fmtMoney(data.tip_amount), pageW - margin, y, { align: "right" });
                 y += lineH;
             }
 
@@ -245,12 +288,19 @@ export default function RideInvoice({ rideId, status }: Props) {
             doc.setFontSize(9);
             doc.setFont("helvetica", "normal");
             doc.setTextColor(100);
-            doc.text(`Payment: ${(data.payment_method || "card").toUpperCase()}  |  Status: ${(data.payment_status || "pending").toUpperCase()}`, margin, y);
+            doc.text(
+                `Payment: ${(data.payment_method || "card").toUpperCase()}  |  Status: ${(
+                    data.payment_status || "pending"
+                ).toUpperCase()}`,
+                margin,
+                y
+            );
 
             // Phase distance log
-            if (data.location_trail && data.location_trail.length > 1) {
+            if (Array.isArray(data.location_trail) && data.location_trail.length > 1) {
                 const phases = computePhaseDistances(data.location_trail);
                 if (phases.length > 0) {
+                    ensureSpace(40);
                     y += 10;
                     doc.setDrawColor(200);
                     doc.line(margin, y, pageW - margin, y);
@@ -274,13 +324,16 @@ export default function RideInvoice({ rideId, status }: Props) {
 
                     doc.setTextColor(80);
                     for (const p of phases) {
+                        ensureSpace(lineH);
                         const label = phaseLabels[p.phase] || p.phase.replace(/_/g, " ");
                         doc.text(label, margin, y);
-                        doc.text(`${p.distance_km} km (${p.points} GPS pts)`, pageW - margin, y, { align: "right" });
+                        doc.text(`${p.distance_km} km (${p.points} GPS pts)`, pageW - margin, y, {
+                            align: "right",
+                        });
                         y += lineH;
                     }
 
-                    // Total GPS distance
+                    ensureSpace(lineH);
                     y += 2;
                     doc.setFont("helvetica", "bold");
                     doc.setTextColor(0);
@@ -291,19 +344,15 @@ export default function RideInvoice({ rideId, status }: Props) {
                 }
             }
 
-            // Footer — check if we need a new page
-            if (y > 265) {
-                doc.addPage();
-                y = margin;
-            } else {
-                y = 280;
-            }
+            // Footer — always on the last page
+            const footerY = pageH - 17;
             doc.setFontSize(8);
             doc.setTextColor(160);
-            doc.text("Thank you for riding with Spinr!", pageW / 2, y, { align: "center" });
+            doc.text("Thank you for riding with Spinr!", pageW / 2, footerY, { align: "center" });
 
-            doc.save(`spinr-invoice-${data.ride_id?.slice(0, 8)}.pdf`);
+            doc.save(`spinr-invoice-${data.ride_id?.slice(0, 8) ?? "ride"}.pdf`);
         } catch (e) {
+            console.error("Invoice download failed:", e);
             alert("Failed to download invoice");
         } finally {
             setDownloading(false);

@@ -122,6 +122,28 @@ export const getLiveRideData = (rideId: string) =>
     request<any>(`/api/admin/rides/${rideId}/live`);
 export const getRideInvoice = (rideId: string) =>
     request<any>(`/api/admin/rides/${rideId}/invoice`);
+
+/** Fetch the ride's route map PNG via the backend proxy. Returns a data URL
+ *  (base64) or null on failure. Never exposes the Google Maps API key. */
+export const getRideRouteMapDataUrl = async (rideId: string): Promise<string | null> => {
+    const token = useAuthStore.getState().token;
+    try {
+        const res = await fetch(`${API_BASE}/api/admin/rides/${rideId}/route-map.png`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) return null;
+        const blob = await res.blob();
+        return await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    } catch (e) {
+        console.log("Failed to fetch ride route map:", e);
+        return null;
+    }
+};
 export const flagRideParticipant = (rideId: string, data: { target_type: string; reason: string; description?: string; service_area_id?: string | null }) =>
     request<any>(`/api/admin/rides/${rideId}/flag`, {
         method: "POST",

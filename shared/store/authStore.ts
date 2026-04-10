@@ -290,6 +290,12 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
       set({ isLoading: true, error: null });
       const response = await api.post('/users/profile', data);
       set({ user: response.data, isLoading: false });
+      // Re-fetch /auth/me so driver_onboarding_status gets computed
+      // (the POST /users/profile response doesn't include it).
+      try {
+        const meRes = await api.get('/auth/me');
+        set({ user: meRes.data });
+      } catch {}
     } catch (error: any) {
       const message = error.response?.data?.detail || 'Failed to create profile';
       set({ isLoading: false, error: message });

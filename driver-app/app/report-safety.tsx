@@ -64,7 +64,7 @@ export default function ReportSafetyScreen() {
 
             <KeyboardAvoidingView
                 style={styles.container}
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             >
                 <View style={styles.content}>
                     <View style={styles.warningBox}>

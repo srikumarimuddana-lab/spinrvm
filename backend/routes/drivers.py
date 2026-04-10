@@ -48,8 +48,6 @@ async def update_my_driver(body: dict = Body(...), current_user: dict = Depends(
     un-verified and must wait for admin re-approval.
     """
     driver = await db.drivers.find_one({'user_id': current_user['id']})
-    if not driver:
-        raise HTTPException(status_code=404, detail='Driver not found')
 
     # Fields that always update without affecting verification
     safe_fields = {'gst_number', 'preferred_language', 'photo_url'}
@@ -66,6 +64,36 @@ async def update_my_driver(body: dict = Body(...), current_user: dict = Depends(
     updates = {k: v for k, v in body.items() if k in allowed_fields and v is not None}
     if not updates:
         return {'success': True}
+
+    # Auto-create a driver row if one doesn't exist yet (new driver adding
+    # vehicle details for the first time from the vehicle-info screen).
+    if not driver:
+        import uuid
+        first = current_user.get('first_name', '')
+        last = current_user.get('last_name', '')
+        new_driver = {
+            'id': str(uuid.uuid4()),
+            'user_id': current_user['id'],
+            'name': f"{first} {last}".strip() or current_user.get('phone', ''),
+            'phone': current_user.get('phone', ''),
+            'status': 'pending',
+            'is_verified': False,
+            'is_online': False,
+            'is_available': False,
+            'rating': 5.0,
+            'total_rides': 0,
+            'lat': 0,
+            'lng': 0,
+            'created_at': datetime.utcnow().isoformat(),
+            **updates,
+        }
+        await db.drivers.insert_one(new_driver)
+        # Also flip the user role to 'driver' if not already
+        await db.users.update_one(
+            {'id': current_user['id']},
+            {'$set': {'role': 'driver', 'is_driver': True}},
+        )
+        return serialize_doc(new_driver)
 
     # Check if an active driver changed vehicle/document fields → needs review
     changed_vehicle = any(k in vehicle_fields for k in updates)

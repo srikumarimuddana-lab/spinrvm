@@ -49,7 +49,7 @@ const COLORS = {
 export default function VehicleInfoScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
-    const { driver, fetchDriverProfile } = useAuthStore();
+    const { driver, fetchDriverProfile, refreshProfile } = useAuthStore();
     const [saving, setSaving] = useState(false);
 
     const scrollRef = useRef<ScrollView>(null);
@@ -151,6 +151,7 @@ export default function VehicleInfoScreen() {
                                 vehicle_year: parseInt(form.vehicle_year) || 0,
                             });
                             await fetchDriverProfile();
+                            await refreshProfile();
                             Alert.alert('Success', 'Vehicle information updated. Please wait for admin approval.', [
                                 { text: 'OK', onPress: () => router.back() },
                             ]);
@@ -180,7 +181,7 @@ export default function VehicleInfoScreen() {
 
             <KeyboardAvoidingView
                 style={{ flex: 1 }}
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
                 keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
             >
                 <ScrollView

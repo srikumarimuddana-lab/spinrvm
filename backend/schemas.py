@@ -17,6 +17,7 @@ class CreateProfileRequest(BaseModel):
     last_name: str
     email: EmailStr
     gender: str
+    role: Optional[str] = None  # 'driver' when coming from driver app
 
 class UserProfile(BaseModel):
     id: str

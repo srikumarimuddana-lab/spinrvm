@@ -5,6 +5,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Notifications from 'expo-notifications';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useAuthStore, DriverOnboardingStatus } from '@shared/store/authStore';
 
@@ -38,13 +40,62 @@ interface IdlePanelProps {
 }
 
 const STATE_BANNERS = {
-  profile_incomplete: { title: 'Finish profile', icon: 'person', tone: 'info', target: '/profile-setup' },
-  vehicle_required: { title: 'Add vehicle', icon: 'car', tone: 'info', target: '/become-driver' },
-  documents_required: { title: 'Upload docs', icon: 'document-text', tone: 'warning', target: '/documents' },
-  documents_rejected: { title: 'Docs rejected', icon: 'alert-circle', tone: 'danger', target: '/documents' },
-  documents_expired: { title: 'Docs expired', icon: 'time', tone: 'warning', target: '/documents' },
-  pending_review: { title: 'Under review', icon: 'hourglass', tone: 'info', target: '/documents' },
-  suspended: { title: 'Suspended', icon: 'ban', tone: 'danger', target: '/driver/settings' },
+  profile_incomplete: { 
+    title: 'Complete Your Profile', 
+    subtitle: 'We need a bit more information about you.',
+    button: 'Finish Profile',
+    icon: 'person', 
+    tone: 'info', 
+    target: '/profile-setup' 
+  },
+  vehicle_required: {
+    title: 'Add Your Vehicle',
+    subtitle: 'Enter your vehicle details to start driving.',
+    button: 'Add Vehicle Details',
+    icon: 'car',
+    tone: 'info',
+    target: '/vehicle-info'
+  },
+  documents_required: { 
+    title: 'Action Required', 
+    subtitle: 'Upload your documents (License, Insurance) to get approved.',
+    button: 'Upload Docs',
+    icon: 'document-text', 
+    tone: 'warning', 
+    target: '/documents' 
+  },
+  documents_rejected: { 
+    title: 'Documents Rejected', 
+    subtitle: 'Some documents were not approved. Please re-upload.',
+    button: 'Fix Documents',
+    icon: 'alert-circle', 
+    tone: 'danger', 
+    target: '/documents' 
+  },
+  documents_expired: { 
+    title: 'Documents Expired', 
+    subtitle: 'Your driving documents have expired.',
+    button: 'Update Docs',
+    icon: 'time', 
+    tone: 'warning', 
+    target: '/documents' 
+  },
+  pending_review: { 
+    title: 'Under Review', 
+    subtitle: 'Your documents are being reviewed by our team.',
+    button: 'View Status',
+    icon: 'hourglass', 
+    tone: 'info', 
+    target: '/documents' 
+  },
+  suspended: { 
+    title: 'Account Suspended', 
+    subtitle: 'You cannot go online at this time.',
+    button: 'Contact Support',
+    icon: 'ban', 
+    tone: 'danger', 
+    target: '/driver/settings' 
+  },
 };
 
 export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
@@ -55,7 +106,20 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
 }) => {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const onboardingStatus = useAuthStore(s => s.user?.driver_onboarding_status ?? null);
+  let onboardingStatus = useAuthStore(s => s.user?.driver_onboarding_status ?? null);
+  const driver = useAuthStore(s => s.driver);
+
+  // Fallback: If backend returns null (e.g. role still 'rider'), infer status locally
+  if (!onboardingStatus) {
+    if (!driver) {
+      // No driver row at all — they need to register a vehicle
+      onboardingStatus = 'vehicle_required';
+    } else if (!driver.vehicle_make) {
+      onboardingStatus = 'vehicle_required';
+    } else if (!driver.is_verified) {
+      onboardingStatus = 'documents_required';
+    }
+  }
 
   const banner = onboardingStatus && onboardingStatus !== 'verified'
     ? STATE_BANNERS[onboardingStatus as keyof typeof STATE_BANNERS]
@@ -81,6 +145,31 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
     }
   }, [canGoOnline, isOnline]);
 
+  // Welcome / Onboarding Notification Check
+  useEffect(() => {
+    if (onboardingStatus === 'documents_required') {
+      const triggerWelcomeNotif = async () => {
+        try {
+          const hasSent = await AsyncStorage.getItem('@notif_welcome_docs');
+          if (!hasSent) {
+            await Notifications.scheduleNotificationAsync({
+              content: {
+                title: 'Welcome to Spinr! 🎉',
+                body: 'Please upload your required documents to get approved and start driving.',
+                sound: true,
+              },
+              trigger: null, // Send immediately
+            });
+            await AsyncStorage.setItem('@notif_welcome_docs', 'true');
+          }
+        } catch (e) {
+          console.warn('Failed to schedule welcome notification:', e);
+        }
+      };
+      triggerWelcomeNotif();
+    }
+  }, [onboardingStatus]);
+
   return (
     <View style={[styles.idlePanelContainer, { paddingBottom: Math.max(insets.bottom, 20) }]} pointerEvents="box-none">
       
@@ -89,21 +178,29 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
         
         {/* Banner (if any) */}
         {banner && (
-          <TouchableOpacity
-            style={[styles.hudBannerWrapper, banner.tone === 'danger' && styles.hudBannerDanger, banner.tone === 'warning' && styles.hudBannerWarning]}
-            onPress={() => router.push(banner.target as any)}
-            activeOpacity={0.8}
-          >
-            <BlurView intensity={80} tint="light" style={styles.hudBannerBlur}>
-              <Ionicons 
-                name={banner.icon as keyof typeof Ionicons.glyphMap} 
-                size={20} 
-                color={banner.tone === 'danger' ? '#DC2626' : banner.tone === 'warning' ? '#D97706' : COLORS.accent} 
-              />
-              <Text style={styles.hudBannerText}>{banner.title}</Text>
-              <Ionicons name="chevron-forward" size={16} color={COLORS.textDim} />
-            </BlurView>
-          </TouchableOpacity>
+          <View style={styles.actionCardContainer}>
+            <View style={styles.actionCard}>
+              <View style={[styles.actionCardIcon, banner.tone === 'danger' && styles.actionCardIconDanger, banner.tone === 'warning' && styles.actionCardIconWarning]}>
+                <Ionicons 
+                  name={banner.icon as keyof typeof Ionicons.glyphMap} 
+                  size={24} 
+                  color={banner.tone === 'danger' ? '#DC2626' : banner.tone === 'warning' ? '#D97706' : COLORS.accent} 
+                />
+              </View>
+              <View style={styles.actionCardContent}>
+                <Text style={styles.actionCardTitle}>{banner.title}</Text>
+                <Text style={styles.actionCardSubtitle}>{banner.subtitle}</Text>
+              </View>
+            </View>
+            <TouchableOpacity
+              style={[styles.actionCardButton, banner.tone === 'danger' && styles.actionCardButtonDanger, banner.tone === 'warning' && styles.actionCardButtonWarning]}
+              onPress={() => router.push(banner.target as any)}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.actionCardButtonText}>{banner.button}</Text>
+              <Ionicons name="arrow-forward" size={16} color="#FFF" />
+            </TouchableOpacity>
+          </View>
         )}
 
 
@@ -126,6 +223,7 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
 
       {/* Floating GO Button */}
       <View style={styles.goButtonArea} pointerEvents="box-none">
+        
         <TouchableOpacity
           activeOpacity={0.9}
           disabled={!canGoOnline}
@@ -173,35 +271,72 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     marginBottom: 20,
   },
-  // Hud Banner
-  hudBannerWrapper: {
+  // Action Card
+  actionCardContainer: {
+    width: '100%',
+    backgroundColor: '#FFFFFF',
     borderRadius: 24,
-    overflow: 'hidden',
-    marginBottom: 16,
+    padding: 20,
+    marginBottom: 20,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 20,
+    elevation: 8,
   },
-  hudBannerDanger: {
-    shadowColor: '#DC2626',
-  },
-  hudBannerWarning: {
-    shadowColor: '#D97706',
-  },
-  hudBannerBlur: {
+  actionCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    backgroundColor: 'rgba(255,255,255,0.85)',
-    gap: 10,
+    marginBottom: 16,
   },
-  hudBannerText: {
+  actionCardIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'rgba(0, 212, 170, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  actionCardIconWarning: {
+    backgroundColor: 'rgba(217, 119, 6, 0.1)',
+  },
+  actionCardIconDanger: {
+    backgroundColor: 'rgba(220, 38, 38, 0.1)',
+  },
+  actionCardContent: {
+    flex: 1,
+  },
+  actionCardTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: COLORS.text,
+    marginBottom: 4,
+  },
+  actionCardSubtitle: {
+    fontSize: 13,
+    color: COLORS.textDim,
+    lineHeight: 18,
+  },
+  actionCardButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: COLORS.accent,
+    borderRadius: 14,
+    paddingVertical: 14,
+    gap: 8,
+  },
+  actionCardButtonWarning: {
+    backgroundColor: '#D97706',
+  },
+  actionCardButtonDanger: {
+    backgroundColor: '#DC2626',
+  },
+  actionCardButtonText: {
+    color: '#FFF',
     fontSize: 15,
     fontWeight: '700',
-    color: COLORS.text,
   },
 
   // Status Pill

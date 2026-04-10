@@ -24,71 +24,6 @@ import CustomAlert from '@shared/components/CustomAlert';
 
 const THEME = SpinrConfig.theme.colors;
 
-// FormInput defined at module level so React.memo keeps a stable component
-// identity across parent re-renders (prevents keyboard dismissal on keystroke).
-const FormInput = React.memo(({
-  label,
-  value,
-  onChangeText,
-  placeholder,
-  icon,
-  fieldKey,
-  isValid,
-  keyboardType = 'default',
-  focusedField,
-  onFocus,
-  onBlur
-}: {
-  label: string;
-  value: string;
-  onChangeText: (val: string) => void;
-  placeholder: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  fieldKey: string;
-  isValid: boolean;
-  keyboardType?: 'default' | 'email-address';
-  focusedField: string | null;
-  onFocus: (field: string) => void;
-  onBlur: () => void;
-}) => {
-  const isFocused = focusedField === fieldKey;
-
-  return (
-    <View style={styles.inputGroup}>
-      <Text style={styles.label}>{label}</Text>
-      <View style={[
-        styles.inputContainer,
-        isFocused && styles.inputContainerFocused,
-        value.length > 0 && isValid && styles.inputContainerValid
-      ]}>
-        <View style={styles.inputIconContainer}>
-          <Ionicons
-            name={icon}
-            size={20}
-            color={isFocused ? THEME.primary : (value ? THEME.text : '#A0A0A0')}
-          />
-        </View>
-        <TextInput
-          style={styles.input}
-          value={value}
-          onChangeText={onChangeText}
-          placeholder={placeholder}
-          placeholderTextColor="#B0B0B0"
-          autoCapitalize={keyboardType === 'email-address' ? 'none' : 'words'}
-          keyboardType={keyboardType}
-          autoCorrect={false}
-          onFocus={() => onFocus(fieldKey)}
-          onBlur={onBlur}
-        />
-        <View style={styles.checkIconWrapper}>
-          {value.length > 0 && isValid ? (
-            <Ionicons name="checkmark-circle" size={20} color={THEME.success} />
-          ) : null}
-        </View>
-      </View>
-    </View>
-  );
-});
 
 export default function ProfileSetupScreen() {
   const router = useRouter();
@@ -106,8 +41,6 @@ export default function ProfileSetupScreen() {
   const [city, setCity] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Focus states for animations
-  const [focusedField, setFocusedField] = useState<string | null>(null);
 
   // Alert state
   const [alertState, setAlertState] = useState<{
@@ -117,31 +50,6 @@ export default function ProfileSetupScreen() {
     variant: 'info' | 'warning' | 'danger' | 'success';
     buttons?: { text: string; style: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info' });
-
-  // Memoized handlers to prevent FormInput re-renders
-  const handleFirstNameChange = useCallback((value: string) => {
-    setFirstName(value);
-  }, []);
-
-  const handleLastNameChange = useCallback((value: string) => {
-    setLastName(value);
-  }, []);
-
-  const handleEmailChange = useCallback((value: string) => {
-    setEmail(value);
-  }, []);
-
-  const handleGenderChange = useCallback((value: string) => {
-    setGender(value);
-  }, []);
-
-  const handleFocus = useCallback((field: string) => {
-    setFocusedField(field);
-  }, []);
-
-  const handleBlur = useCallback(() => {
-    setFocusedField(null);
-  }, []);
 
   const handleGenderMale = useCallback(() => {
     setGender('Male');
@@ -288,6 +196,7 @@ export default function ProfileSetupScreen() {
         last_name: lastName.trim(),
         email: email.trim().toLowerCase(),
         gender,
+        role: 'driver',
         city: city || undefined,
         service_area_id: serviceAreaId || undefined,
       });
@@ -314,7 +223,7 @@ export default function ProfileSetupScreen() {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={styles.container}
     >
       <ScrollView
@@ -349,48 +258,99 @@ export default function ProfileSetupScreen() {
         <View style={styles.form}>
           <View style={styles.row}>
             <View style={{ flex: 1, marginRight: 12 }}>
-              <FormInput
-                label="First Name"
-                value={firstName}
-                onChangeText={handleFirstNameChange}
-                placeholder="John"
-                icon="person-outline"
-                fieldKey="fn"
-                isValid={isFirstNameValid}
-                focusedField={focusedField}
-                onFocus={handleFocus}
-                onBlur={handleBlur}
-              />
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>First Name</Text>
+                <View style={[
+                  styles.inputContainer,
+                  firstName.length > 0 && isFirstNameValid && styles.inputContainerValid
+                ]}>
+                  <View style={styles.inputIconContainer}>
+                    <Ionicons
+                      name="person-outline"
+                      size={20}
+                      color={firstName ? THEME.text : '#A0A0A0'}
+                    />
+                  </View>
+                  <TextInput
+                    style={styles.input}
+                    value={firstName}
+                    onChangeText={setFirstName}
+                    placeholder="John"
+                    placeholderTextColor="#B0B0B0"
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                  />
+                  <View style={styles.checkIconWrapper}>
+                    {firstName.length > 0 && isFirstNameValid ? (
+                      <Ionicons name="checkmark-circle" size={20} color={THEME.success} />
+                    ) : null}
+                  </View>
+                </View>
+              </View>
             </View>
             <View style={{ flex: 1 }}>
-              <FormInput
-                label="Last Name"
-                value={lastName}
-                onChangeText={handleLastNameChange}
-                placeholder="Doe"
-                icon="person-outline"
-                fieldKey="ln"
-                isValid={isLastNameValid}
-                focusedField={focusedField}
-                onFocus={handleFocus}
-                onBlur={handleBlur}
-              />
+              <View style={styles.inputGroup}>
+                <Text style={styles.label}>Last Name</Text>
+                <View style={[
+                  styles.inputContainer,
+                  lastName.length > 0 && isLastNameValid && styles.inputContainerValid
+                ]}>
+                  <View style={styles.inputIconContainer}>
+                    <Ionicons
+                      name="person-outline"
+                      size={20}
+                      color={lastName ? THEME.text : '#A0A0A0'}
+                    />
+                  </View>
+                  <TextInput
+                    style={styles.input}
+                    value={lastName}
+                    onChangeText={setLastName}
+                    placeholder="Doe"
+                    placeholderTextColor="#B0B0B0"
+                    autoCapitalize="words"
+                    autoCorrect={false}
+                  />
+                  <View style={styles.checkIconWrapper}>
+                    {lastName.length > 0 && isLastNameValid ? (
+                      <Ionicons name="checkmark-circle" size={20} color={THEME.success} />
+                    ) : null}
+                  </View>
+                </View>
+              </View>
             </View>
           </View>
 
-          <FormInput
-            label="Email Address"
-            value={email}
-            onChangeText={handleEmailChange}
-            placeholder="john.doe@example.com"
-            icon="mail-outline"
-            fieldKey="email"
-            isValid={isEmailValid}
-            keyboardType="email-address"
-            focusedField={focusedField}
-            onFocus={handleFocus}
-            onBlur={handleBlur}
-          />
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Email Address</Text>
+            <View style={[
+              styles.inputContainer,
+              email.length > 0 && isEmailValid && styles.inputContainerValid
+            ]}>
+              <View style={styles.inputIconContainer}>
+                <Ionicons
+                  name="mail-outline"
+                  size={20}
+                  color={email ? THEME.text : '#A0A0A0'}
+                />
+              </View>
+              <TextInput
+                style={styles.input}
+                value={email}
+                onChangeText={setEmail}
+                placeholder="john.doe@example.com"
+                placeholderTextColor="#B0B0B0"
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <View style={styles.checkIconWrapper}>
+                {email.length > 0 && isEmailValid ? (
+                  <Ionicons name="checkmark-circle" size={20} color={THEME.success} />
+                ) : null}
+              </View>
+            </View>
+          </View>
 
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Gender</Text>

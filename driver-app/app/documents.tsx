@@ -122,11 +122,14 @@ export default function DocumentsScreen() {
             }
 
             // 2. Link to driver (axios is fine for plain JSON).
+            // Use the requirement name as document_type (not the MIME type) so the
+            // admin dashboard can match uploaded docs to service-area requirements.
+            const matchedReq = requirements.find(r => r.id === reqId);
             await api.post('/drivers/documents', {
                 requirement_id: reqId,
                 document_url: fileUrl,
                 side,
-                document_type: mimeType,
+                document_type: matchedReq?.name || mimeType,
             });
 
             // 3. Refresh UI

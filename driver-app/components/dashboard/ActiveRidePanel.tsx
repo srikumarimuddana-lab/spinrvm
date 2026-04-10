@@ -39,10 +39,15 @@ interface Ride {
   status?: string;
 }
 
+interface DriverLocation {
+  coords: { latitude: number; longitude: number };
+}
+
 interface ActiveRidePanelProps {
   rideState: 'navigating_to_pickup' | 'arrived_at_pickup' | 'trip_in_progress';
   ride: Ride | null;
   rider: Rider | null;
+  driverLocation?: DriverLocation | null;
   isLoading: boolean;
   otpInput: string;
   setOtpInput: (value: string) => void;
@@ -57,10 +62,21 @@ interface ActiveRidePanelProps {
   distanceToPickup?: number | null;
 }
 
+// Haversine distance between two points in meters
+function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   rideState,
   ride,
   rider,
+  driverLocation,
   isLoading,
   otpInput,
   setOtpInput,
@@ -82,6 +98,44 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     title: '', message: '', variant: 'info' as 'info' | 'warning' | 'danger' | 'success',
     buttons: [] as Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>,
   });
+
+  // Live distance tracking during trip
+  const [liveDistanceKm, setLiveDistanceKm] = useState(0);
+  const [hasLiveData, setHasLiveData] = useState(false);
+  const lastLocRef = useRef<{ lat: number; lng: number } | null>(null);
+  const jitterBufferRef = useRef(0);
+
+  // Reset distance when ride phase OR ride id changes — prevents stale
+  // accumulation carrying over to a different ride if the panel is recycled.
+  useEffect(() => {
+    setLiveDistanceKm(0);
+    setHasLiveData(false);
+    lastLocRef.current = null;
+    jitterBufferRef.current = 0;
+  }, [rideState, ride?.id]);
+
+  // Accumulate distance from GPS updates during trip_in_progress.
+  // Always advances the reference point so slow/crawl driving (deltas <10m)
+  // isn't permanently filtered out. We accumulate deltas into a jitter
+  // buffer and flush to the displayed total once cumulative movement
+  // crosses 10m — captures real motion while rejecting stationary GPS noise.
+  useEffect(() => {
+    if (rideState !== 'trip_in_progress' || !driverLocation?.coords) return;
+    const { latitude, longitude } = driverLocation.coords;
+    const prev = lastLocRef.current;
+    if (prev) {
+      const delta = haversineM(prev.lat, prev.lng, latitude, longitude);
+      jitterBufferRef.current += delta;
+      if (jitterBufferRef.current > 10) {
+        setLiveDistanceKm(d => d + jitterBufferRef.current / 1000);
+        setHasLiveData(true);
+        jitterBufferRef.current = 0;
+      }
+    }
+    // Always advance the ref so consecutive small movements are measured
+    // between the latest two points, not against a stale origin.
+    lastLocRef.current = { lat: latitude, lng: longitude };
+  }, [driverLocation, rideState]);
 
   useEffect(() => {
     if (rideState === 'arrived_at_pickup') {
@@ -168,8 +222,14 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           </View>
           <View style={styles.tripInfoDivider} />
           <View style={styles.tripInfoItem}>
-            <Text style={styles.tripInfoValue}>{distKm.toFixed(1)} km</Text>
-            <Text style={styles.tripInfoLabel}>Distance</Text>
+            <Text style={styles.tripInfoValue}>
+              {rideState === 'trip_in_progress' && hasLiveData
+                ? `${liveDistanceKm.toFixed(1)} km`
+                : `${distKm.toFixed(1)} km`}
+            </Text>
+            <Text style={styles.tripInfoLabel}>
+              {rideState === 'trip_in_progress' && hasLiveData ? 'Traveled' : 'Distance'}
+            </Text>
           </View>
           <View style={styles.tripInfoDivider} />
           <View style={styles.tripInfoItem}>
@@ -477,37 +537,37 @@ const styles = StyleSheet.create({
   otpSub: { fontSize: 12, color: '#999', marginBottom: 14 },
   otpBoxRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
   otpBox: {
-    width: 48,
-    height: 56,
-    borderRadius: 12,
+    width: 56,
+    height: 66,
+    borderRadius: 14,
     backgroundColor: '#fff',
-    borderWidth: 1.5,
+    borderWidth: 2,
     borderColor: '#E5E5E5',
     justifyContent: 'center',
     alignItems: 'center',
   },
   otpBoxFilled: { borderColor: ACCENT, backgroundColor: `${ACCENT}08` },
-  otpDigit: { fontSize: 26, fontWeight: '800', color: '#1A1A1A' },
+  otpDigit: { fontSize: 32, fontWeight: '800', color: '#1A1A1A' },
   keypad: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'center',
-    gap: 6,
+    gap: 8,
     width: '100%',
     marginBottom: 8,
   },
   kpBtn: {
     width: '28%',
-    aspectRatio: 1.7,
+    aspectRatio: 1.4,
     backgroundColor: '#fff',
-    borderRadius: 10,
+    borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: '#F0F0F0',
   },
-  kpText: { fontSize: 20, fontWeight: '600', color: '#1A1A1A' },
-  skipBtn: { paddingVertical: 6 },
+  kpText: { fontSize: 26, fontWeight: '700', color: '#1A1A1A' },
+  skipBtn: { display: 'none' as any },
   skipText: { fontSize: 12, color: '#999', fontWeight: '600' },
 
   // Actions

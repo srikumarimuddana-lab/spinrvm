@@ -376,16 +376,31 @@ export default function BecomeDriverScreen() {
 
   const handleSubmit = async () => {
     try {
-      // Map expiry dates to legacy fields
-      const getExpiry = (name: string) => {
-        const req = requirements.find(r => r.name === name);
-        return req && docs[req.id]?.expiry ? new Date(docs[req.id].expiry!).toISOString() : undefined;
+      // Map requirements to legacy expiry fields using keyword matching
+      // (same logic as backend _REQUIREMENT_EXPIRY_FIELD_KEYWORDS)
+      // This is robust to admin renaming requirements in the service area editor.
+      const getExpiryFieldForReq = (reqName: string): string | null => {
+        const n = reqName.toLowerCase();
+        if (n.includes('licen') || n.includes('driving') || n.includes('permit')) return 'license_expiry_date';
+        if (n.includes('insurance')) return 'insurance_expiry_date';
+        if (n.includes('inspection')) return 'vehicle_inspection_expiry_date';
+        if (n.includes('background')) return 'background_check_expiry_date';
+        if (n.includes('work permit') || n.includes('eligib')) return 'work_eligibility_expiry_date';
+        return null;
       };
 
-      const licenseExpiry = getExpiry('Driving License');
-      const insuranceExpiry = getExpiry('Vehicle Insurance');
-      const inspectionExpiry = getExpiry('Vehicle Inspection');
-      const backgroundExpiry = getExpiry('Background Check');
+      const legacyExpiries: Record<string, string | undefined> = {};
+      requirements.forEach(req => {
+        const field = getExpiryFieldForReq(req.name);
+        if (field && docs[req.id]?.expiry) {
+          legacyExpiries[field] = new Date(docs[req.id].expiry!).toISOString();
+        }
+      });
+
+      const licenseExpiry    = legacyExpiries['license_expiry_date'];
+      const insuranceExpiry  = legacyExpiries['insurance_expiry_date'];
+      const inspectionExpiry = legacyExpiries['vehicle_inspection_expiry_date'];
+      const backgroundExpiry = legacyExpiries['background_check_expiry_date'];
 
       // Construct dynamic documents list
       const documentsPayload: any[] = [];
@@ -469,7 +484,7 @@ export default function BecomeDriverScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <View style={styles.header}>
           {currentStep > 0 ? (
             <TouchableOpacity onPress={prevStep} style={styles.backButton}>

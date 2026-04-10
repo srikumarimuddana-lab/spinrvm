@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query, HTTPException, Header  # type: ignore
+from fastapi import APIRouter, Depends, Query, HTTPException, Header, Response  # type: ignore
 from typing import Dict, Any, Optional, List
 from pydantic import BaseModel  # type: ignore
 from datetime import datetime, timedelta
@@ -11,11 +11,13 @@ try:
     from ..db import db  # type: ignore
     from ..settings_loader import get_app_settings  # type: ignore
     from ..core.config import settings
+    from .. import db_supabase  # type: ignore
 except ImportError:
     from dependencies import get_current_user, get_admin_user  # type: ignore
     from db import db  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
     from core.config import settings
+    import db_supabase  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -219,9 +221,21 @@ async def admin_update_settings(settings: Dict[str, Any]):
 
 @admin_router.get("/service-areas")
 async def admin_get_service_areas():
-    """Get all service areas."""
+    """Get all service areas. Sub-regions are nested under their parent as 'sub_regions'."""
     areas = await db.get_rows("service_areas", order="name", limit=500)
-    return areas
+    # Build parent -> children mapping
+    parent_map: Dict[str, list] = {}
+    parents = []
+    for a in areas:
+        pid = a.get("parent_service_area_id")
+        if pid:
+            parent_map.setdefault(pid, []).append(a)
+        else:
+            parents.append(a)
+    # Attach sub_regions to each parent
+    for p in parents:
+        p["sub_regions"] = parent_map.get(p["id"], [])
+    return parents
 
 
 @admin_router.post("/service-areas")
@@ -231,71 +245,29 @@ async def admin_create_service_area(area: Dict[str, Any]):
         "id": str(uuid.uuid4()),
         "name": area.get("name"),
         "city": area.get("city", ""),
-        "province": area.get("province", "SK"),
-        "geojson": area.get("geojson"),
+        "polygon": area.get("geojson", area.get("polygon", [])),
         "is_active": area.get("is_active", True),
-        # Fees & Taxes
-        "platform_fee": area.get("platform_fee", 0),
-        "city_fee": area.get("city_fee", 0),
-        "airport_fee": area.get("airport_fee", 0),
+        # Sub-region support (e.g. airport zone inside a parent area)
+        "parent_service_area_id": area.get("parent_service_area_id"),
         "is_airport": area.get("is_airport", False),
-        "gst_rate": area.get("gst_rate", 5.0),
-        "pst_rate": area.get("pst_rate", 6.0),
-        "insurance_fee_percent": area.get("insurance_fee_percent", 2.0),
-        # Cancellation fees (with driver/admin split)
-        "rider_cancel_fee_before_driver": area.get("rider_cancel_fee_before_driver", 0),
-        "rider_cancel_fee_after_arrival": area.get(
-            "rider_cancel_fee_after_arrival", 4.50
-        ),
-        "cancel_fee_driver_share": area.get("cancel_fee_driver_share", 4.00),
-        "cancel_fee_admin_share": area.get("cancel_fee_admin_share", 0.50),
-        "rider_cancel_fee_after_start": area.get(
-            "rider_cancel_fee_after_start", 0
-        ),  # 0 = full fare
-        "driver_cancel_fee": area.get("driver_cancel_fee", 0),
-        "free_cancel_window_seconds": area.get("free_cancel_window_seconds", 120),
-        # Required driver documents
-        "required_documents": area.get(
-            "required_documents",
-            [
-                {
-                    "key": "drivers_license",
-                    "label": "Driver's License",
-                    "has_expiry": True,
-                },
-                {
-                    "key": "vehicle_insurance",
-                    "label": "Vehicle Insurance",
-                    "has_expiry": True,
-                },
-                {
-                    "key": "vehicle_registration",
-                    "label": "Vehicle Registration",
-                    "has_expiry": True,
-                },
-                {
-                    "key": "background_check",
-                    "label": "Background Check",
-                    "has_expiry": True,
-                },
-                {
-                    "key": "vehicle_inspection",
-                    "label": "Vehicle Inspection",
-                    "has_expiry": True,
-                },
-            ],
-        ),
-        # Vehicle type pricing
-        "vehicle_pricing": area.get("vehicle_pricing", []),
-        # Spinr Pass — which subscription plans are available here
-        "subscription_plan_ids": area.get("subscription_plan_ids", []),
-        "spinr_pass_enabled": area.get("spinr_pass_enabled", True),
-        # Surge
-        "surge_enabled": area.get("surge_enabled", False),
+        "airport_fee": area.get("airport_fee", 0),
+        "surge_active": area.get("surge_enabled", area.get("surge_active", False)),
         "surge_multiplier": area.get("surge_multiplier", 1.0),
-        # Operational
-        "max_pickup_radius_km": area.get("max_pickup_radius_km", 5.0),
-        "currency": area.get("currency", "CAD"),
+        "gst_enabled": area.get("gst_enabled", True),
+        "gst_rate": area.get("gst_rate", 5.0),
+        "pst_enabled": area.get("pst_enabled", False),
+        "pst_rate": area.get("pst_rate", 0.0),
+        "hst_enabled": area.get("hst_enabled", False),
+        "hst_rate": area.get("hst_rate", 0.0),
+        # Spinr Pass kill switch
+        "spinr_pass_enabled": area.get("spinr_pass_enabled", True),
+        "subscription_plan_ids": area.get("subscription_plan_ids", []),
+        # Driver matching settings (per-area)
+        "driver_matching_algorithm": area.get("driver_matching_algorithm", "nearest"),
+        "search_radius_km": area.get("search_radius_km", 10.0),
+        "min_driver_rating": area.get("min_driver_rating", 4.0),
+        # Demand heatmap — when true, drivers in this area see ride demand overlay
+        "show_demand_heatmap": area.get("show_demand_heatmap", False),
         "created_at": datetime.utcnow().isoformat(),
     }
     row = await db.service_areas.insert_one(doc)
@@ -305,40 +277,44 @@ async def admin_create_service_area(area: Dict[str, Any]):
 @admin_router.put("/service-areas/{area_id}")
 async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
     """Update service area — accepts any field."""
-    # Accept all fields that were sent
     allowed = [
         "name",
         "city",
-        "province",
-        "geojson",
+        "polygon", # previously geojson mapped to polygon below
         "is_active",
-        "platform_fee",
-        "city_fee",
-        "airport_fee",
+        "parent_service_area_id",
         "is_airport",
-        "gst_rate",
-        "pst_rate",
-        "insurance_fee_percent",
-        "rider_cancel_fee_before_driver",
-        "rider_cancel_fee_after_arrival",
-        "cancel_fee_driver_share",
-        "cancel_fee_admin_share",
-        "rider_cancel_fee_after_start",
-        "driver_cancel_fee",
-        "free_cancel_window_seconds",
-        "required_documents",
-        "vehicle_pricing",
-        "subscription_plan_ids",
-        "spinr_pass_enabled",
-        "surge_enabled",
+        "airport_fee",
+        "surge_active",
         "surge_multiplier",
-        "max_pickup_radius_km",
-        "currency",
+        "gst_enabled",
+        "gst_rate",
+        "pst_enabled",
+        "pst_rate",
+        "hst_enabled",
+        "hst_rate",
+        "required_documents",
+        "spinr_pass_enabled",
+        "subscription_plan_ids",
+        "driver_matching_algorithm",
+        "search_radius_km",
+        "min_driver_rating",
+        "show_demand_heatmap",
     ]
+    
+    # Map geojson from frontend to polygon in DB schema if present
+    if "geojson" in area:
+        area["polygon"] = area["geojson"]
+        
+    # Map surge_enabled to surge_active
+    if "surge_enabled" in area:
+        area["surge_active"] = area["surge_enabled"]
+        
     update_payload = {k: v for k, v in area.items() if k in allowed and v is not None}
 
     if update_payload:
-        update_payload["updated_at"] = datetime.utcnow().isoformat()
+        # NOTE: service_areas table does not have an updated_at column in Supabase schema.
+        # Adding it causes PGRST204 -> 500 error.
         await db.service_areas.update_one({"id": area_id}, {"$set": update_payload})
     return {"message": "Service area updated"}
 
@@ -478,6 +454,29 @@ def _user_display_name(user: Optional[Dict]) -> str:
     return f"{fn} {ln}".strip() or user.get("email") or user.get("phone") or ""
 
 
+async def _batch_fetch_drivers_and_users(
+    rider_ids: List[str], driver_ids: List[str]
+) -> tuple:
+    """Batch-fetch drivers and users in 2-3 queries instead of N+1 loops."""
+    drivers_list = (
+        await db.get_rows("drivers", {"id": {"$in": driver_ids}}, limit=max(len(driver_ids), 1))
+        if driver_ids else []
+    )
+    drivers_map = {d["id"]: d for d in drivers_list if d.get("id")}
+
+    all_user_ids = list({
+        *rider_ids,
+        *(d.get("user_id") for d in drivers_list if d.get("user_id")),
+    })
+    users_list = (
+        await db.get_rows("users", {"id": {"$in": all_user_ids}}, limit=max(len(all_user_ids), 1))
+        if all_user_ids else []
+    )
+    users_map = {u["id"]: u for u in users_list if u.get("id")}
+
+    return drivers_map, users_map
+
+
 @admin_router.get("/drivers")
 async def admin_get_drivers(
     limit: int = 50,
@@ -494,12 +493,9 @@ async def admin_get_drivers(
     drivers = await db.get_rows(
         "drivers", filters, order="created_at", desc=True, limit=limit, offset=offset
     )
-    user_ids = [d.get("user_id") for d in drivers if d.get("user_id")]
-    users_map = {}
-    for uid in user_ids:
-        if uid and uid not in users_map:
-            u = await db.users.find_one({"id": uid})
-            users_map[uid] = u
+    user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
+    users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    users_map = {u["id"]: u for u in users_list if u.get("id")}
     out = []
     for d in drivers:
         u = users_map.get(d.get("user_id"))
@@ -514,35 +510,218 @@ async def admin_get_drivers(
     return out
 
 
+@admin_router.get("/drivers/stats")
+async def admin_get_driver_stats(
+    service_area_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
+    """Get driver statistics, optionally filtered by service area and date range.
+
+    Returns overall + per-service-area stats, plus daily chart data for
+    driver joins, rides, and earnings.
+    """
+    from collections import defaultdict
+
+    now = datetime.utcnow()
+    # Default date range: last 30 days
+    if start_date:
+        range_start = datetime.fromisoformat(start_date.replace("Z", "+00:00").replace("+00:00", ""))
+    else:
+        range_start = now - timedelta(days=30)
+    range_start = range_start.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if end_date:
+        range_end = datetime.fromisoformat(end_date.replace("Z", "+00:00").replace("+00:00", ""))
+        range_end = range_end.replace(hour=23, minute=59, second=59, microsecond=0)
+    else:
+        range_end = now
+
+    # Fetch all service areas for lookups
+    service_areas = await db.get_rows("service_areas", order="name", limit=200)
+    area_map = {a["id"]: a.get("name", "Unknown") for a in service_areas}
+
+    # ── Fetch drivers ──
+    driver_filters: Dict[str, Any] = {}
+    if service_area_id:
+        driver_filters["service_area_id"] = service_area_id
+    all_drivers = await db.get_rows("drivers", driver_filters, order="created_at", desc=True, limit=5000)
+
+    # Enrich with user info (batch)
+    user_ids = list({d.get("user_id") for d in all_drivers if d.get("user_id")})
+    users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    users_map: Dict[str, Any] = {u["id"]: u for u in users_list if u.get("id")}
+
+    # Auto-detect needs_review: active drivers with expired docs or pending re-uploads
+    all_docs = await db.get_rows("driver_documents", {"status": "pending"}, limit=10000)
+    pending_doc_driver_ids = {d.get("driver_id") for d in all_docs if d.get("driver_id")}
+
+    now_iso = datetime.utcnow().isoformat()
+    expiry_fields = [
+        "license_expiry_date", "insurance_expiry_date",
+        "vehicle_inspection_expiry_date", "background_check_expiry_date",
+    ]
+
+    enriched_drivers = []
+    for d in all_drivers:
+        u = users_map.get(d.get("user_id"))
+        driver_status = d.get("status", "pending")
+
+        # Auto-detect needs_review for active drivers
+        if driver_status == "active":
+            for ef in expiry_fields:
+                exp = d.get(ef)
+                if exp and str(exp) < now_iso:
+                    driver_status = "needs_review"
+                    break
+            if driver_status == "active" and d.get("id") in pending_doc_driver_ids:
+                driver_status = "needs_review"
+
+        enriched_drivers.append({
+            **d,
+            "status": driver_status,
+            "first_name": u.get("first_name") if u else d.get("first_name"),
+            "last_name": u.get("last_name") if u else d.get("last_name"),
+            "name": _user_display_name(u) or d.get("name"),
+            "email": u.get("email") if u else None,
+            "phone": u.get("phone") if u else d.get("phone"),
+        })
+
+    # ── Compute overall driver stats ──
+    total = len(enriched_drivers)
+    online = sum(1 for d in enriched_drivers if d.get("is_online"))
+    active_count = sum(1 for d in enriched_drivers if d.get("status") == "active")
+    pending_count = sum(1 for d in enriched_drivers if d.get("status") == "pending")
+    needs_review_count = sum(1 for d in enriched_drivers if d.get("status") == "needs_review")
+    suspended_count = sum(1 for d in enriched_drivers if d.get("status") == "suspended")
+    banned_count = sum(1 for d in enriched_drivers if d.get("status") == "banned")
+    total_rides_sum = sum(int(d.get("total_rides") or 0) for d in enriched_drivers)
+    total_earnings_sum = sum(float(d.get("total_earnings") or 0) for d in enriched_drivers)
+    avg_rating = 0.0
+    rated = [d for d in enriched_drivers if d.get("rating") and float(d.get("rating", 0)) > 0]
+    if rated:
+        avg_rating = round(sum(float(d["rating"]) for d in rated) / len(rated), 2)
+
+    # ── Per-service-area breakdown ──
+    area_stats: Dict[str, Dict[str, Any]] = {}
+    for d in enriched_drivers:
+        aid = d.get("service_area_id") or "unassigned"
+        if aid not in area_stats:
+            area_stats[aid] = {
+                "service_area_id": aid,
+                "service_area_name": area_map.get(aid, "Unassigned"),
+                "total": 0, "online": 0, "verified": 0, "unverified": 0,
+                "total_rides": 0, "total_earnings": 0.0,
+            }
+        area_stats[aid]["total"] += 1
+        if d.get("is_online"):
+            area_stats[aid]["online"] += 1
+        if d.get("is_verified"):
+            area_stats[aid]["verified"] += 1
+        else:
+            area_stats[aid]["unverified"] += 1
+        area_stats[aid]["total_rides"] += int(d.get("total_rides") or 0)
+        area_stats[aid]["total_earnings"] += float(d.get("total_earnings") or 0)
+
+    # ── Daily charts (within date range) ──
+    num_days = (range_end - range_start).days + 1
+    if num_days > 365:
+        num_days = 365
+
+    # Driver joins per day
+    daily_joins: Dict[str, int] = defaultdict(int)
+    for d in enriched_drivers:
+        ca = d.get("created_at")
+        if not ca:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(ca).replace("Z", "+00:00").replace("+00:00", ""))
+        except Exception:
+            continue
+        if range_start <= dt <= range_end:
+            day_key = dt.strftime("%Y-%m-%d")
+            daily_joins[day_key] += 1
+
+    # Rides + earnings per day (for drivers matching the service_area filter)
+    driver_ids_set = {d["id"] for d in enriched_drivers}
+    ride_filters: Dict[str, Any] = {"created_at": {"$gte": range_start.isoformat()}}
+    all_rides = await db.get_rows("rides", ride_filters, order="created_at", desc=True, limit=50000)
+
+    # Filter rides to only those belonging to our driver set
+    relevant_rides = [r for r in all_rides if r.get("driver_id") in driver_ids_set] if service_area_id else all_rides
+
+    daily_rides: Dict[str, int] = defaultdict(int)
+    daily_earnings: Dict[str, float] = defaultdict(float)
+    for r in relevant_rides:
+        ca = r.get("created_at")
+        if not ca:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(ca).replace("Z", "+00:00").replace("+00:00", ""))
+        except Exception:
+            continue
+        if range_start <= dt <= range_end:
+            day_key = dt.strftime("%Y-%m-%d")
+            daily_rides[day_key] += 1
+            if r.get("status") == "completed":
+                daily_earnings[day_key] += float(r.get("driver_earnings") or 0)
+
+    # Build chart arrays
+    joins_chart = []
+    rides_chart = []
+    earnings_chart = []
+    for i in range(num_days):
+        day = range_start + timedelta(days=i)
+        day_key = day.strftime("%Y-%m-%d")
+        day_label = day.strftime("%b %d")
+        joins_chart.append({"date": day_label, "date_raw": day_key, "count": daily_joins.get(day_key, 0)})
+        rides_chart.append({"date": day_label, "date_raw": day_key, "count": daily_rides.get(day_key, 0)})
+        earnings_chart.append({"date": day_label, "date_raw": day_key, "amount": round(daily_earnings.get(day_key, 0), 2)})
+
+    return {
+        "stats": {
+            "total": total,
+            "online": online,
+            "active": active_count,
+            "pending": pending_count,
+            "needs_review": needs_review_count,
+            "suspended": suspended_count,
+            "banned": banned_count,
+            "total_rides": total_rides_sum,
+            "total_earnings": total_earnings_sum,
+            "avg_rating": avg_rating,
+        },
+        "area_stats": list(area_stats.values()),
+        "charts": {
+            "daily_joins": joins_chart,
+            "daily_rides": rides_chart,
+            "daily_earnings": earnings_chart,
+        },
+        "drivers": enriched_drivers,
+        "service_areas": [{"id": a["id"], "name": a.get("name", "Unknown")} for a in service_areas],
+    }
+
+
 @admin_router.get("/rides")
 async def admin_get_rides(
     limit: int = 50,
     offset: int = 0,
     status: Optional[str] = None,
 ):
-    """Get all rides with filters, enriched with rider_name and driver_name."""
+    """Get all rides with filters, enriched with rider_name and driver_name. Returns paginated."""
     filters = {}
     if status:
         filters["status"] = status
+
+    # Get total count for pagination
+    total_count = await db.rides.count_documents(filters)
+
     rides = await db.get_rows(
         "rides", filters, order="created_at", desc=True, limit=limit, offset=offset
     )
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
-    users_map = {}
-    for uid in rider_ids + driver_ids:
-        if uid and uid not in users_map:
-            u = await db.users.find_one({"id": uid})
-            users_map[uid] = u
-    drivers_map = {}
-    for did in driver_ids:
-        if did:
-            dr = await db.drivers.find_one({"id": did})
-            drivers_map[did] = dr
-            if dr and dr.get("user_id") and dr["user_id"] not in users_map:
-                users_map[dr["user_id"]] = await db.users.find_one(
-                    {"id": dr["user_id"]}
-                )
+    drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
     out = []
     for r in rides:
         rider = users_map.get(r.get("rider_id"))
@@ -557,7 +736,35 @@ async def admin_get_rides(
                 else (driver.get("name") if driver else None),
             }
         )
-    return out
+    return {"rides": out, "total_count": total_count, "limit": limit, "offset": offset}
+
+
+@admin_router.put("/drivers/{driver_id}")
+async def admin_update_driver(driver_id: str, updates: Dict[str, Any]):
+    """Update driver details from admin dashboard."""
+    allowed = {
+        "first_name", "last_name", "email", "phone", "gender", "city",
+        "service_area_id", "vehicle_type_id",
+        "vehicle_make", "vehicle_model", "vehicle_color", "vehicle_year",
+        "license_plate", "vehicle_vin",
+        "license_number", "license_expiry_date", "insurance_expiry_date",
+        "vehicle_inspection_expiry_date", "background_check_expiry_date",
+        "work_eligibility_expiry_date",
+    }
+    filtered = {k: v for k, v in updates.items() if k in allowed}
+    if not filtered:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    existing = await db.drivers.find_one({"id": driver_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
+
+    try:
+        await db.drivers.update_one({"id": driver_id}, {"$set": filtered})
+    except Exception as e:
+        logger.error(f"Failed to update driver {driver_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}")
+    return {"message": "Driver updated", "updated_fields": list(filtered.keys())}
 
 
 @admin_router.post("/drivers/{driver_id}/verify")
@@ -576,9 +783,13 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest):
         if not existing_driver:
             raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
 
+        update_fields: Dict[str, Any] = {"is_verified": req.verified}
+        # Clear needs_review when admin verifies (re-approves)
+        if req.verified:
+            update_fields["needs_review"] = False
         await db.drivers.update_one(
             {"id": driver_id},
-            {"$set": {"is_verified": req.verified}},
+            {"$set": update_fields},
         )
     except HTTPException:
         raise
@@ -586,6 +797,459 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest):
         logger.error(f"Failed to update driver {driver_id} verify flag: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}")
     return {"message": f"Driver {'verified' if req.verified else 'unverified'}"}
+
+
+class DriverActionRequest(BaseModel):
+    action: str  # approve, reject, suspend, ban, unban, reactivate
+    reason: Optional[str] = None
+
+
+@admin_router.post("/drivers/{driver_id}/action")
+async def admin_driver_action(driver_id: str, req: DriverActionRequest):
+    """Perform a lifecycle action on a driver.
+
+    Actions: approve, reject, suspend, ban, unban, reactivate.
+    Each action transitions the driver to the appropriate state and
+    records the reason + timestamp for audit trail.
+    """
+    driver = await db.drivers.find_one({"id": driver_id})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    current_status = driver.get("status", "pending")
+    now = datetime.utcnow().isoformat()
+    updates: Dict[str, Any] = {"updated_at": now}
+
+    if req.action == "approve":
+        # Approve → Active: driver can go online
+        updates["status"] = "active"
+        updates["is_verified"] = True
+        updates["rejection_reason"] = None
+        updates["verified_at"] = now
+
+    elif req.action == "suspend":
+        # Suspend: temporarily disable, store reason
+        if not req.reason:
+            raise HTTPException(status_code=400, detail="Reason is required when suspending")
+        updates["status"] = "suspended"
+        updates["suspension_reason"] = req.reason
+        updates["suspended_at"] = now
+        updates["is_online"] = False
+        updates["is_available"] = False
+
+    elif req.action == "ban":
+        # Ban: permanently block, store reason
+        if not req.reason:
+            raise HTTPException(status_code=400, detail="Reason is required when banning")
+        updates["status"] = "banned"
+        updates["is_verified"] = False
+        updates["ban_reason"] = req.reason
+        updates["banned_at"] = now
+        updates["is_online"] = False
+        updates["is_available"] = False
+
+    elif req.action == "unban":
+        # Unban → Active
+        updates["status"] = "active"
+        updates["is_verified"] = True
+        updates["ban_reason"] = None
+        updates["banned_at"] = None
+        updates["unban_reason"] = req.reason
+        updates["unbanned_at"] = now
+
+    elif req.action == "reactivate":
+        # Reactivate from suspended → Active
+        updates["status"] = "active"
+        updates["is_verified"] = True
+        updates["suspension_reason"] = None
+        updates["suspended_at"] = None
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown action: {req.action}")
+
+    try:
+        await db.drivers.update_one({"id": driver_id}, {"$set": updates})
+    except Exception as e:
+        logger.error(f"Failed driver action {req.action} on {driver_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    logger.info(f"[ADMIN] Driver {driver_id} action={req.action} reason={req.reason}")
+
+    # Auto-log to activity timeline
+    action_titles = {
+        "approve": "Driver Approved",
+        "reject": "Application Rejected",
+        "suspend": "Driver Suspended",
+        "ban": "Driver Banned",
+        "unban": "Driver Unbanned",
+        "reactivate": "Driver Reactivated",
+    }
+    await _log_driver_activity(
+        driver_id, req.action,
+        action_titles.get(req.action, f"Action: {req.action}"),
+        req.reason or "",
+        {"old_status": current_status, "new_status": updates.get("status"), "reason": req.reason},
+    )
+
+    return {
+        "message": f"Driver {req.action}d successfully",
+        "new_status": updates.get("status", current_status),
+    }
+
+
+class DriverStatusOverride(BaseModel):
+    status: str  # pending, active, rejected, suspended, banned
+    is_verified: Optional[bool] = None
+    reason: Optional[str] = None
+
+
+@admin_router.put("/drivers/{driver_id}/status-override")
+async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride):
+    """Manually move a driver to any status. Use with caution."""
+    valid = {"pending", "active", "needs_review", "suspended", "banned"}
+    if req.status not in valid:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {', '.join(valid)}")
+
+    driver = await db.drivers.find_one({"id": driver_id})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    now = datetime.utcnow().isoformat()
+    updates: Dict[str, Any] = {"status": req.status, "updated_at": now}
+
+    # Sync is_verified with status
+    updates["is_verified"] = req.status == "active"
+
+    # Take offline if not active
+    if req.status != "active":
+        updates["is_online"] = False
+        updates["is_available"] = False
+
+    if req.reason:
+        if req.status == "suspended":
+            updates["suspension_reason"] = req.reason
+        elif req.status == "banned":
+            updates["ban_reason"] = req.reason
+
+    await db.drivers.update_one({"id": driver_id}, {"$set": updates})
+    logger.info(f"[ADMIN] Driver {driver_id} status overridden to {req.status} reason={req.reason}")
+    await _log_driver_activity(
+        driver_id, "status_override", f"Status changed to {req.status}",
+        req.reason or "Manual admin override",
+        {"old_status": driver.get("status"), "new_status": req.status, "reason": req.reason},
+    )
+    return {"message": f"Driver status set to {req.status}"}
+
+
+# ── Driver Notes ──
+
+
+@admin_router.get("/drivers/{driver_id}/notes")
+async def admin_get_driver_notes(driver_id: str):
+    """Get all notes for a driver, newest first."""
+    notes = await db.get_rows(
+        "driver_notes", {"driver_id": driver_id}, order="created_at", desc=True, limit=200
+    )
+    return notes or []
+
+
+class DriverNoteCreate(BaseModel):
+    note: str
+    category: str = "general"
+
+
+@admin_router.post("/drivers/{driver_id}/notes")
+async def admin_add_driver_note(driver_id: str, req: DriverNoteCreate):
+    """Add a note to a driver's record."""
+    if not req.note.strip():
+        raise HTTPException(status_code=400, detail="Note cannot be empty")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "driver_id": driver_id,
+        "note": req.note.strip(),
+        "category": req.category,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    await db.driver_notes.insert_one(doc)
+    await _log_driver_activity(
+        driver_id, "note_added", f"Note added ({req.category})",
+        req.note[:100], {"category": req.category},
+    )
+    return doc
+
+
+@admin_router.delete("/drivers/notes/{note_id}")
+async def admin_delete_driver_note(note_id: str):
+    """Delete a note."""
+    await db.driver_notes.delete_many({"id": note_id})
+    return {"message": "Note deleted"}
+
+
+# ── Driver Activity Log ──
+
+
+async def _log_driver_activity(
+    driver_id: str, event_type: str, title: str,
+    description: str = "", metadata: dict = None, actor: str = "admin",
+):
+    """Helper to record a driver lifecycle event."""
+    try:
+        await db.driver_activity_log.insert_one({
+            "id": str(uuid.uuid4()),
+            "driver_id": driver_id,
+            "event_type": event_type,
+            "title": title,
+            "description": description,
+            "metadata": metadata or {},
+            "actor": actor,
+            "created_at": datetime.utcnow().isoformat(),
+        })
+    except Exception as e:
+        logger.warning(f"Failed to log driver activity: {e}")
+
+
+@admin_router.get("/drivers/{driver_id}/activity")
+async def admin_get_driver_activity(driver_id: str, limit: int = 100):
+    """Get full activity timeline for a driver, newest first."""
+    activities = await db.get_rows(
+        "driver_activity_log", {"driver_id": driver_id},
+        order="created_at", desc=True, limit=limit,
+    )
+    return activities or []
+
+
+# ── GPS Location History Cleanup ──
+
+
+@admin_router.post("/maintenance/cleanup-location-history")
+async def admin_cleanup_location_history(days: int = 30):
+    """Delete old driver_location_history rows.
+
+    By default deletes rows older than 30 days. On ride completion the
+    aggregated data (phase distances, route polyline) is already stored on
+    the ride row, so the raw GPS points are only needed for recent disputes.
+
+    Also deletes online_idle points older than 24 hours regardless (they are
+    never useful for historical analysis).
+    """
+    from datetime import timezone
+    now = datetime.utcnow()
+    cutoff_historical = (now - timedelta(days=days)).isoformat()
+    cutoff_idle = (now - timedelta(hours=24)).isoformat()
+
+    deleted_historical = 0
+    deleted_idle = 0
+    try:
+        # Count rows to be deleted for reporting
+        old_rows = await db.get_rows(
+            "driver_location_history",
+            {"timestamp": {"$lt": cutoff_historical}},
+            limit=100000,
+        )
+        deleted_historical = len(old_rows or [])
+        if deleted_historical > 0:
+            await db.driver_location_history.delete_many({"timestamp": {"$lt": cutoff_historical}})
+    except Exception as e:
+        logger.warning(f"Cleanup historical GPS failed: {e}")
+
+    try:
+        idle_rows = await db.get_rows(
+            "driver_location_history",
+            {"timestamp": {"$lt": cutoff_idle}, "tracking_phase": "online_idle"},
+            limit=100000,
+        )
+        deleted_idle = len(idle_rows or [])
+        if deleted_idle > 0:
+            await db.driver_location_history.delete_many({
+                "timestamp": {"$lt": cutoff_idle},
+                "tracking_phase": "online_idle",
+            })
+    except Exception as e:
+        logger.warning(f"Cleanup idle GPS failed: {e}")
+
+    logger.info(f"[CLEANUP] Deleted {deleted_historical} historical + {deleted_idle} idle GPS points")
+    return {
+        "deleted_historical": deleted_historical,
+        "deleted_idle": deleted_idle,
+        "historical_cutoff": cutoff_historical,
+        "idle_cutoff": cutoff_idle,
+    }
+
+
+@admin_router.post("/maintenance/rollup-driver-daily")
+async def admin_rollup_driver_daily(target_date: Optional[str] = None):
+    """Roll up driver activity for a single day into driver_daily_stats.
+
+    Captures:
+    - Online minutes (first_online → last_online span that day)
+    - Idle km (distance traveled in 'online_idle' phase — roaming)
+    - Navigating km (driver → pickup)
+    - Trip km (paid trips, from completed rides that day)
+    - Rides completed/cancelled/declined counts
+    - Earnings totals
+
+    Run nightly via a cron job hitting this endpoint with yesterday's date.
+    Idempotent — upserts by (driver_id, stat_date).
+    """
+    from collections import defaultdict
+    import math
+
+    # Default to yesterday (UTC)
+    if target_date:
+        stat_date = datetime.fromisoformat(target_date).date()
+    else:
+        stat_date = (datetime.utcnow() - timedelta(days=1)).date()
+
+    day_start = datetime.combine(stat_date, datetime.min.time())
+    day_end = day_start + timedelta(days=1)
+    day_start_iso = day_start.isoformat()
+    day_end_iso = day_end.isoformat()
+
+    def _haversine(lat1, lng1, lat2, lng2):
+        R = 6371.0
+        dlat = math.radians(lat2 - lat1)
+        dlng = math.radians(lng2 - lng1)
+        a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng / 2) ** 2
+        return 2 * R * math.asin(math.sqrt(a))
+
+    # Pull all GPS points from that day
+    all_points = await db.get_rows(
+        "driver_location_history",
+        {"timestamp": {"$gte": day_start_iso, "$lt": day_end_iso}},
+        order="timestamp",
+        limit=1000000,
+    )
+
+    # Group by driver
+    by_driver: Dict[str, list] = defaultdict(list)
+    for p in all_points or []:
+        did = p.get("driver_id")
+        if did and p.get("lat") and p.get("lng"):
+            by_driver[did].append(p)
+
+    # Pull all rides from that day to count + sum earnings
+    day_rides = await db.get_rows(
+        "rides",
+        {"created_at": {"$gte": day_start_iso, "$lt": day_end_iso}},
+        limit=10000,
+    )
+    rides_by_driver: Dict[str, list] = defaultdict(list)
+    for r in day_rides or []:
+        did = r.get("driver_id")
+        if did:
+            rides_by_driver[did].append(r)
+
+    all_driver_ids = set(by_driver.keys()) | set(rides_by_driver.keys())
+
+    created = 0
+    updated = 0
+    for driver_id in all_driver_ids:
+        points = sorted(by_driver.get(driver_id, []), key=lambda x: str(x.get("timestamp", "")))
+        rides = rides_by_driver.get(driver_id, [])
+
+        # Online minutes (simple: span from first to last point)
+        online_minutes = 0
+        first_online_at = None
+        last_online_at = None
+        if points:
+            try:
+                first_online_at = points[0].get("timestamp")
+                last_online_at = points[-1].get("timestamp")
+                t_first = datetime.fromisoformat(str(first_online_at).replace("Z", "+00:00").replace("+00:00", ""))
+                t_last = datetime.fromisoformat(str(last_online_at).replace("Z", "+00:00").replace("+00:00", ""))
+                online_minutes = max(0, int((t_last - t_first).total_seconds() / 60))
+            except Exception:
+                pass
+
+        # Per-phase distances
+        idle_km = 0.0
+        navigating_km = 0.0
+        trip_km = 0.0
+        for i in range(1, len(points)):
+            prev, curr = points[i - 1], points[i]
+            seg = _haversine(prev["lat"], prev["lng"], curr["lat"], curr["lng"])
+            phase = curr.get("tracking_phase") or "unknown"
+            if phase == "online_idle":
+                idle_km += seg
+            elif phase == "navigating_to_pickup":
+                navigating_km += seg
+            elif phase == "trip_in_progress":
+                trip_km += seg
+
+        # Ride counts and earnings
+        rides_completed = sum(1 for r in rides if r.get("status") == "completed")
+        rides_cancelled = sum(1 for r in rides if r.get("status") == "cancelled")
+        total_earnings = sum(float(r.get("driver_earnings") or 0) for r in rides if r.get("status") == "completed")
+        total_tips = sum(float(r.get("tip_amount") or 0) for r in rides if r.get("status") == "completed")
+
+        # Determine service area from driver profile
+        drv = await db.drivers.find_one({"id": driver_id})
+        service_area_id = drv.get("service_area_id") if drv else None
+
+        total_km = round(idle_km + navigating_km + trip_km, 2)
+
+        stat_row = {
+            "id": f"{driver_id}_{stat_date.isoformat()}",
+            "driver_id": driver_id,
+            "stat_date": stat_date.isoformat(),
+            "service_area_id": service_area_id,
+            "online_minutes": online_minutes,
+            "idle_km": round(idle_km, 2),
+            "navigating_km": round(navigating_km, 2),
+            "trip_km": round(trip_km, 2),
+            "total_km": total_km,
+            "first_online_at": first_online_at,
+            "last_online_at": last_online_at,
+            "rides_completed": rides_completed,
+            "rides_cancelled": rides_cancelled,
+            "rides_declined": 0,  # TODO: wire up if we track declines
+            "total_earnings": round(total_earnings, 2),
+            "total_tips": round(total_tips, 2),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+
+        # Upsert
+        existing = await db.driver_daily_stats.find_one({"id": stat_row["id"]})
+        if existing:
+            await db.driver_daily_stats.update_one({"id": stat_row["id"]}, {"$set": stat_row})
+            updated += 1
+        else:
+            stat_row["created_at"] = datetime.utcnow().isoformat()
+            await db.driver_daily_stats.insert_one(stat_row)
+            created += 1
+
+    logger.info(f"[ROLLUP] driver_daily_stats for {stat_date}: created={created} updated={updated}")
+    return {
+        "stat_date": stat_date.isoformat(),
+        "drivers_processed": len(all_driver_ids),
+        "created": created,
+        "updated": updated,
+    }
+
+
+@admin_router.get("/drivers/{driver_id}/daily-stats")
+async def admin_get_driver_daily_stats(
+    driver_id: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+):
+    """Get aggregated daily stats for a driver. Default: last 30 days."""
+    if not end_date:
+        end_date = datetime.utcnow().date().isoformat()
+    if not start_date:
+        start_date = (datetime.utcnow().date() - timedelta(days=30)).isoformat()
+
+    stats = await db.get_rows(
+        "driver_daily_stats",
+        {
+            "driver_id": driver_id,
+            "stat_date": {"$gte": start_date, "$lte": end_date},
+        },
+        order="stat_date",
+        desc=True,
+        limit=400,
+    )
+    return stats or []
 
 
 # ---------- Stats (count_documents + sum from rides) ----------
@@ -628,45 +1292,471 @@ async def admin_get_stats():
     }
 
 
+@admin_router.get("/rides/stats")
+async def admin_get_ride_stats():
+    """Get ride count/revenue stats for today, yesterday, this week, this month, plus daily chart data."""
+    now = datetime.utcnow()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday_start = today_start - timedelta(days=1)
+
+    # This week (Monday start)
+    week_start = today_start - timedelta(days=today_start.weekday())
+    week_end = week_start + timedelta(days=7)
+
+    # This month
+    month_start = today_start.replace(day=1)
+    next_month = (month_start + timedelta(days=32)).replace(day=1)
+
+    today_count = await db_supabase.get_ride_count_by_date_range(
+        today_start.isoformat(), now.isoformat()
+    )
+    yesterday_count = await db_supabase.get_ride_count_by_date_range(
+        yesterday_start.isoformat(), today_start.isoformat()
+    )
+    this_week_count = await db_supabase.get_ride_count_by_date_range(
+        week_start.isoformat(), week_end.isoformat()
+    )
+    this_month_count = await db_supabase.get_ride_count_by_date_range(
+        month_start.isoformat(), next_month.isoformat()
+    )
+
+    # Revenue stats from completed rides
+    completed_today = await db_supabase.get_rows(
+        "rides", {"status": "completed", "ride_completed_at": {"$gte": today_start.isoformat()}}, limit=10000
+    )
+    total_revenue = sum(float(r.get("total_fare") or 0) for r in completed_today)
+    total_tips = sum(float(r.get("tip_amount") or 0) for r in completed_today)
+    completed_count = len(completed_today)
+
+    # Monthly completed rides for revenue
+    completed_month = await db_supabase.get_rows(
+        "rides", {"status": "completed", "ride_completed_at": {"$gte": month_start.isoformat()}}, limit=10000
+    )
+    month_revenue = sum(float(r.get("total_fare") or 0) for r in completed_month)
+
+    # Daily chart data for last 14 days
+    daily_chart = []
+    for i in range(13, -1, -1):
+        day_start = today_start - timedelta(days=i)
+        day_end = day_start + timedelta(days=1)
+        count = await db_supabase.get_ride_count_by_date_range(
+            day_start.isoformat(), day_end.isoformat()
+        )
+        daily_chart.append({
+            "date": day_start.strftime("%b %d"),
+            "rides": count,
+        })
+
+    return {
+        "today_count": today_count,
+        "yesterday_count": yesterday_count,
+        "this_week_count": this_week_count,
+        "this_month_count": this_month_count,
+        "week_start": week_start.strftime("%b %d"),
+        "week_end": (week_end - timedelta(days=1)).strftime("%b %d"),
+        "month_start": month_start.strftime("%b %d"),
+        "month_end": (next_month - timedelta(days=1)).strftime("%b %d"),
+        "today_revenue": round(total_revenue, 2),
+        "today_tips": round(total_tips, 2),
+        "today_completed": completed_count,
+        "month_revenue": round(month_revenue, 2),
+        "daily_chart": daily_chart,
+    }
+
+
 @admin_router.get("/rides/{ride_id}/details")
 async def admin_get_ride_details(ride_id: str):
-    """Get detailed ride information with rider, driver, vehicle type."""
+    """Get detailed ride information with rider, driver, flags, complaints, lost items, location trail."""
+    ride = await db_supabase.get_ride_details_enriched(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    return ride
+
+
+@admin_router.get("/rides/{ride_id}/location-trail")
+async def admin_get_ride_location_trail(ride_id: str):
+    """Get driver location trail for a specific ride."""
+    trail = await db_supabase.get_ride_location_trail(ride_id)
+    return trail
+
+
+@admin_router.get("/rides/{ride_id}/live")
+async def admin_get_live_ride(ride_id: str):
+    """Get live ride data including current driver location."""
+    data = await db_supabase.get_live_ride_data(ride_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    return data
+
+
+@admin_router.get("/rides/{ride_id}/invoice")
+async def admin_get_ride_invoice(ride_id: str):
+    """Get structured invoice data for a ride (used for client-side PDF generation)."""
+    ride = await db_supabase.get_ride_details_enriched(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    return {
+        "ride_id": ride.get("id"),
+        "status": ride.get("status"),
+        "created_at": ride.get("created_at"),
+        "ride_completed_at": ride.get("ride_completed_at"),
+        "pickup_address": ride.get("pickup_address"),
+        "dropoff_address": ride.get("dropoff_address"),
+        "distance_km": ride.get("distance_km", 0),
+        "duration_minutes": ride.get("duration_minutes", 0),
+        "base_fare": ride.get("base_fare", 0),
+        "distance_fare": ride.get("distance_fare", 0),
+        "time_fare": ride.get("time_fare", 0),
+        "booking_fee": ride.get("booking_fee", 0),
+        "airport_fee": ride.get("airport_fee", 0),
+        "total_fare": ride.get("total_fare", 0),
+        "tip_amount": ride.get("tip_amount", 0),
+        "surge_multiplier": ride.get("surge_multiplier", 1.0),
+        "payment_method": ride.get("payment_method", "card"),
+        "payment_status": ride.get("payment_status", "pending"),
+        "rider_name": ride.get("rider_name", ""),
+        "rider_phone": ride.get("rider_phone", ""),
+        "rider_email": ride.get("rider_email", ""),
+        "driver_name": ride.get("driver_name", ""),
+        "driver_phone": ride.get("driver_phone", ""),
+        "driver_vehicle": ride.get("driver_vehicle", ""),
+        "driver_license_plate": ride.get("driver_license_plate", ""),
+        "pickup_lat": ride.get("pickup_lat"),
+        "pickup_lng": ride.get("pickup_lng"),
+        "dropoff_lat": ride.get("dropoff_lat"),
+        "dropoff_lng": ride.get("dropoff_lng"),
+        "actual_distance_km": ride.get("actual_distance_km"),
+        # Privacy: only expose trail phases relevant to the paid ride.
+        # Filters out `online_idle` and any other pre-trip wandering so the
+        # invoice cannot leak the driver's unrelated movements.
+        "location_trail": [
+            p for p in (ride.get("location_trail") or [])
+            if p.get("tracking_phase") in ("navigating_to_pickup", "trip_in_progress")
+        ],
+    }
+
+
+@admin_router.get("/rides/{ride_id}/route-map.png")
+async def admin_get_ride_route_map(
+    ride_id: str,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Proxy a Google Static Maps image for the ride's actual GPS route.
+
+    Keeps the Google Maps API key server-side (prevents client bundle leak)
+    and sidesteps browser CORS when the admin dashboard embeds the image in
+    a generated PDF. Returns a PNG binary.
+    """
+    import httpx
+
+    ride = await db_supabase.get_ride_details_enriched(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    pickup_lat = ride.get("pickup_lat")
+    pickup_lng = ride.get("pickup_lng")
+    dropoff_lat = ride.get("dropoff_lat")
+    dropoff_lng = ride.get("dropoff_lng")
+    if pickup_lat is None or dropoff_lat is None:
+        raise HTTPException(status_code=400, detail="Ride is missing coordinates")
+
+    # Only include ride-relevant phases (same privacy filter as invoice).
+    trail = [
+        p for p in (ride.get("location_trail") or [])
+        if p.get("tracking_phase") in ("navigating_to_pickup", "trip_in_progress")
+        and p.get("lat") is not None and p.get("lng") is not None
+    ]
+
+    # Sample to keep the URL under Google's ~8192 char limit.
+    if len(trail) > 30:
+        step = max(1, len(trail) // 30)
+        sampled = trail[::step]
+        # Always include the last point so the path reaches the dropoff area.
+        if sampled[-1] is not trail[-1]:
+            sampled.append(trail[-1])
+    else:
+        sampled = trail
+
+    settings_row = await get_app_settings()
+    api_key = (settings_row or {}).get("google_maps_api_key") or ""
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Google Maps API key not configured")
+
+    # Build static map URL
+    params = [
+        "size=600x240",
+        "maptype=roadmap",
+        f"markers=color:green|label:P|{pickup_lat},{pickup_lng}",
+        f"markers=color:red|label:D|{dropoff_lat},{dropoff_lng}",
+    ]
+    if len(sampled) >= 2:
+        path_str = "|".join(f"{p['lat']},{p['lng']}" for p in sampled)
+        params.append(f"path=color:0x3B82F6FF|weight:4|{path_str}")
+    params.append(f"key={api_key}")
+
+    url = "https://maps.googleapis.com/maps/api/staticmap?" + "&".join(params)
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url)
+        if resp.status_code != 200:
+            logger.warning(f"Static Maps returned {resp.status_code}: {resp.text[:200]}")
+            raise HTTPException(status_code=502, detail="Failed to fetch route map")
+        return Response(
+            content=resp.content,
+            media_type="image/png",
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+    except httpx.HTTPError as e:
+        logger.warning(f"Static Maps fetch error for ride {ride_id}: {e}")
+        raise HTTPException(status_code=502, detail="Failed to fetch route map")
+
+
+class FlagRequest(BaseModel):
+    target_type: str  # 'rider' or 'driver'
+    reason: str
+    description: Optional[str] = None
+
+
+@admin_router.post("/rides/{ride_id}/flag")
+async def admin_flag_ride_participant(ride_id: str, req: FlagRequest):
+    """Flag a rider or driver from a ride. 3 active flags = auto-ban."""
     ride = await db.rides.find_one({"id": ride_id})
     if not ride:
-        return None
-    rider = (
-        await db.users.find_one({"id": ride.get("rider_id")})
-        if ride.get("rider_id")
-        else None
-    )
-    driver = (
-        await db.drivers.find_one({"id": ride.get("driver_id")})
-        if ride.get("driver_id")
-        else None
-    )
-    driver_user = (
-        await db.users.find_one({"id": driver["user_id"]})
-        if driver and driver.get("user_id")
-        else None
-    )
-    vt = (
-        await db.vehicle_types.find_one({"id": ride.get("vehicle_type_id")})
-        if ride.get("vehicle_type_id")
-        else None
-    )
-    return {
-        **ride,
-        "rider_name": _user_display_name(rider),
-        "rider_phone": rider.get("phone") if isinstance(rider, dict) else None,
-        "rider_email": rider.get("email") if isinstance(rider, dict) else None,
-        "driver_name": _user_display_name(driver_user)
-        if driver_user
-        else (driver.get("name") if isinstance(driver, dict) else None),
-        "driver_phone": driver_user.get("phone")
-        if isinstance(driver_user, dict)
-        else (driver.get("phone") if isinstance(driver, dict) else None),
-        "vehicle_type": vt.get("name") if isinstance(vt, dict) else None,
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    if req.target_type not in ("rider", "driver"):
+        raise HTTPException(status_code=400, detail="target_type must be 'rider' or 'driver'")
+
+    target_id = ride.get("rider_id") if req.target_type == "rider" else ride.get("driver_id")
+    if not target_id:
+        raise HTTPException(status_code=400, detail=f"No {req.target_type} assigned to this ride")
+
+    flag_data = {
+        "id": str(uuid.uuid4()),
+        "target_type": req.target_type,
+        "target_id": target_id,
+        "ride_id": ride_id,
+        "reason": req.reason,
+        "description": req.description,
+        "flagged_by": "admin",
+        "is_active": True,
     }
+
+    result = await db_supabase.create_flag(flag_data)
+    return result
+
+
+class ComplaintRequest(BaseModel):
+    against_type: str  # 'rider' or 'driver'
+    category: str  # safety, behavior, fraud, damage, other
+    description: str
+
+
+@admin_router.post("/rides/{ride_id}/complaint")
+async def admin_create_complaint(ride_id: str, req: ComplaintRequest):
+    """Create a complaint against a rider or driver from a ride."""
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    if req.against_type not in ("rider", "driver"):
+        raise HTTPException(status_code=400, detail="against_type must be 'rider' or 'driver'")
+
+    against_id = ride.get("rider_id") if req.against_type == "rider" else ride.get("driver_id")
+    if not against_id:
+        raise HTTPException(status_code=400, detail=f"No {req.against_type} assigned to this ride")
+
+    complaint_data = {
+        "id": str(uuid.uuid4()),
+        "ride_id": ride_id,
+        "against_type": req.against_type,
+        "against_id": against_id,
+        "category": req.category,
+        "description": req.description,
+        "status": "open",
+        "created_by": "admin",
+    }
+
+    complaint = await db_supabase.create_complaint(complaint_data)
+    return complaint
+
+
+class ComplaintResolveRequest(BaseModel):
+    status: str  # resolved or dismissed
+    resolution: str
+
+
+@admin_router.put("/complaints/{complaint_id}/resolve")
+async def admin_resolve_complaint(complaint_id: str, req: ComplaintResolveRequest):
+    """Resolve or dismiss a complaint."""
+    result = await db_supabase.resolve_complaint(complaint_id, {
+        "status": req.status,
+        "resolution": req.resolution,
+        "resolved_by": "admin",
+        "updated_at": datetime.utcnow().isoformat(),
+    })
+    if not result:
+        raise HTTPException(status_code=404, detail="Complaint not found")
+    return result
+
+
+class LostAndFoundRequest(BaseModel):
+    item_description: str
+
+
+@admin_router.post("/rides/{ride_id}/lost-and-found")
+async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
+    """Report a lost item from a ride and notify the driver."""
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    driver_id = ride.get("driver_id")
+    rider_id = ride.get("rider_id")
+    if not driver_id:
+        raise HTTPException(status_code=400, detail="No driver assigned to this ride")
+
+    item_data = {
+        "id": str(uuid.uuid4()),
+        "ride_id": ride_id,
+        "rider_id": rider_id or "",
+        "driver_id": driver_id,
+        "item_description": req.item_description,
+        "status": "reported",
+        "created_by": "admin",
+    }
+
+    item = await db_supabase.create_lost_and_found(item_data)
+
+    # Send push notification to driver
+    try:
+        driver = await db.drivers.find_one({"id": driver_id})
+        if driver and driver.get("user_id"):
+            driver_user = await db.users.find_one({"id": driver["user_id"]})
+            if driver_user and driver_user.get("fcm_token"):
+                try:
+                    from ..features import send_push_notification
+                except ImportError:
+                    from features import send_push_notification
+                await send_push_notification(
+                    driver_user["fcm_token"],
+                    "Lost Item Report",
+                    f"A rider reported a lost item: {req.item_description}. Please check your vehicle.",
+                    {"type": "lost_and_found", "ride_id": ride_id},
+                )
+                # Update status to driver_notified
+                await db_supabase.update_lost_and_found(item["id"], {
+                    "status": "driver_notified",
+                    "notified_at": datetime.utcnow().isoformat(),
+                })
+    except Exception as e:
+        logger.warning(f"Failed to send lost item notification: {e}")
+
+    return item
+
+
+class LostAndFoundResolveRequest(BaseModel):
+    status: str  # resolved or unresolved
+    admin_notes: Optional[str] = None
+
+
+@admin_router.put("/lost-and-found/{item_id}/resolve")
+async def admin_resolve_lost_item(item_id: str, req: LostAndFoundResolveRequest):
+    """Resolve or mark a lost and found item as unresolved."""
+    update_data = {
+        "status": req.status,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    if req.admin_notes:
+        update_data["admin_notes"] = req.admin_notes
+    if req.status == "resolved":
+        update_data["resolved_at"] = datetime.utcnow().isoformat()
+
+    result = await db_supabase.update_lost_and_found(item_id, update_data)
+    if not result:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return result
+
+
+@admin_router.get("/flags")
+async def admin_list_flags(
+    limit: int = 100,
+    offset: int = 0,
+):
+    """List all flags with optional pagination."""
+    flags = await db_supabase.get_rows(
+        "flags", order="created_at", desc=True, limit=limit, offset=offset
+    )
+    return flags
+
+
+@admin_router.get("/lost-and-found")
+async def admin_list_lost_and_found(
+    limit: int = 100,
+    offset: int = 0,
+):
+    """List all lost and found items."""
+    items = await db_supabase.get_rows(
+        "lost_and_found", order="created_at", desc=True, limit=limit, offset=offset
+    )
+    return items
+
+
+@admin_router.put("/flags/{flag_id}/deactivate")
+async def admin_deactivate_flag(flag_id: str):
+    """Deactivate a flag (soft delete)."""
+    result = await db_supabase.update_one("flags", {"id": flag_id}, {"$set": {"is_active": False}})
+    if not result:
+        raise HTTPException(status_code=404, detail="Flag not found")
+    return {"message": "Flag deactivated"}
+
+
+@admin_router.delete("/flags/{flag_id}")
+async def admin_delete_flag(flag_id: str):
+    """Permanently delete a flag."""
+    await db_supabase.delete_one("flags", {"id": flag_id})
+    return {"message": "Flag deleted"}
+
+
+@admin_router.put("/lost-and-found/{item_id}")
+async def admin_update_lost_item(item_id: str, req: dict):
+    """Update a lost and found item."""
+    update = {k: v for k, v in req.items() if k in ("item_description", "status", "admin_notes")}
+    update["updated_at"] = datetime.utcnow().isoformat()
+    result = await db_supabase.update_lost_and_found(item_id, update)
+    if not result:
+        raise HTTPException(status_code=404, detail="Item not found")
+    return result
+
+
+@admin_router.delete("/lost-and-found/{item_id}")
+async def admin_delete_lost_item(item_id: str):
+    """Delete a lost and found item."""
+    await db_supabase.delete_one("lost_and_found", {"id": item_id})
+    return {"message": "Item deleted"}
+
+
+@admin_router.delete("/disputes/{dispute_id}")
+async def admin_delete_dispute(dispute_id: str):
+    """Delete a dispute."""
+    await db_supabase.delete_one("disputes", {"id": dispute_id})
+    return {"message": "Dispute deleted"}
+
+
+@admin_router.get("/complaints")
+async def admin_list_complaints(limit: int = 100, offset: int = 0):
+    """List all complaints."""
+    return await db_supabase.get_rows(
+        "complaints", order="created_at", desc=True, limit=limit, offset=offset
+    )
+
+
+@admin_router.delete("/complaints/{complaint_id}")
+async def admin_delete_complaint(complaint_id: str):
+    """Delete a complaint."""
+    await db_supabase.delete_one("complaints", {"id": complaint_id})
+    return {"message": "Complaint deleted"}
 
 
 @admin_router.get("/drivers/{driver_id}/rides")
@@ -725,20 +1815,7 @@ async def admin_export_rides(
     rides = await db.get_rows("rides", order="created_at", desc=True, limit=1000)
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
-    users_map = {}
-    for uid in rider_ids + driver_ids:
-        if uid and uid not in users_map:
-            u = await db.users.find_one({"id": uid})
-            users_map[uid] = u
-    drivers_map = {}
-    for did in driver_ids:
-        if did:
-            dr = await db.drivers.find_one({"id": did})
-            drivers_map[did] = dr
-            if dr and dr.get("user_id") and dr["user_id"] not in users_map:
-                users_map[dr["user_id"]] = await db.users.find_one(
-                    {"id": dr["user_id"]}
-                )
+    drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
     out = []
     for r in rides:
         rider = users_map.get(r.get("rider_id"))
@@ -765,11 +1842,9 @@ async def admin_export_rides(
 async def admin_export_drivers():
     """Export drivers data."""
     drivers = await db.get_rows("drivers", order="created_at", desc=True, limit=1000)
-    user_ids = [d.get("user_id") for d in drivers if d.get("user_id")]
-    users_map = {}
-    for uid in user_ids:
-        if uid and uid not in users_map:
-            users_map[uid] = await db.users.find_one({"id": uid})
+    user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
+    users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    users_map = {u["id"]: u for u in users_list if u.get("id")}
     out = []
     for d in drivers:
         u = users_map.get(d.get("user_id"))
@@ -1101,8 +2176,32 @@ async def admin_delete_promotion(promotion_id: str):
 @admin_router.get("/disputes")
 async def admin_get_disputes():
     """Get all disputes."""
-    disputes = await db.get_rows("disputes", order="created_at", desc=True, limit=500)
+    try:
+        disputes = await db.get_rows("disputes", order="created_at", desc=True, limit=500)
+    except Exception:
+        logger.warning("disputes table may not exist yet")
+        return []
     return disputes
+
+
+@admin_router.post("/disputes")
+async def admin_create_dispute(dispute: Dict[str, Any]):
+    """Create a dispute manually from admin."""
+    doc = {
+        "id": str(uuid.uuid4()),
+        "ride_id": dispute.get("ride_id"),
+        "user_id": dispute.get("user_id"),
+        "user_name": dispute.get("user_name", ""),
+        "user_type": dispute.get("user_type", "rider"),
+        "reason": dispute.get("reason", ""),
+        "description": dispute.get("description", ""),
+        "status": "pending",
+        "refund_amount": dispute.get("refund_amount", 0),
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    await db.disputes.insert_one(doc)
+    return {"success": True, "dispute": doc}
 
 
 @admin_router.get("/disputes/{dispute_id}")
@@ -1116,6 +2215,17 @@ async def admin_get_dispute_details(dispute_id: str):
     ride = await db.rides.find_one({"id": dispute.get("ride_id")})
 
     return {**dispute, "ride_details": ride}
+
+
+@admin_router.put("/disputes/{dispute_id}")
+async def admin_update_dispute(dispute_id: str, dispute: Dict[str, Any]):
+    """Update a dispute."""
+    allowed = ["reason", "description", "status", "refund_amount", "user_type"]
+    updates = {k: v for k, v in dispute.items() if k in allowed and v is not None}
+    if updates:
+        updates["updated_at"] = datetime.utcnow().isoformat()
+        await db.disputes.update_one({"id": dispute_id}, {"$set": updates})
+    return {"message": "Dispute updated"}
 
 
 @admin_router.put("/disputes/{dispute_id}/resolve")
@@ -1132,6 +2242,13 @@ async def admin_resolve_dispute(dispute_id: str, resolution: Dict[str, Any]):
     return {"message": "Dispute resolved"}
 
 
+@admin_router.delete("/disputes/{dispute_id}")
+async def admin_delete_dispute(dispute_id: str):
+    """Delete a dispute."""
+    await db.disputes.delete_many({"id": dispute_id})
+    return {"message": "Dispute deleted"}
+
+
 # ---------- Support Tickets ----------
 
 
@@ -1142,6 +2259,26 @@ async def admin_get_tickets():
         "support_tickets", order="created_at", desc=True, limit=500
     )
     return tickets
+
+
+@admin_router.post("/tickets")
+async def admin_create_ticket(ticket: Dict[str, Any]):
+    """Create a support ticket manually from admin."""
+    doc = {
+        "id": str(uuid.uuid4()),
+        "subject": ticket.get("subject", ""),
+        "category": ticket.get("category", "general"),
+        "message": ticket.get("message", ""),
+        "priority": ticket.get("priority", "medium"),
+        "user_id": ticket.get("user_id"),
+        "user_name": ticket.get("user_name", "Admin"),
+        "user_email": ticket.get("user_email", ""),
+        "status": "open",
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    await db.support_tickets.insert_one(doc)
+    return {"success": True, "ticket": doc}
 
 
 @admin_router.get("/tickets/{ticket_id}")
@@ -1196,6 +2333,24 @@ async def admin_close_ticket(ticket_id: str):
         {"$set": {"status": "closed", "closed_at": datetime.utcnow().isoformat()}},
     )
     return {"message": "Ticket closed"}
+
+
+@admin_router.put("/tickets/{ticket_id}")
+async def admin_update_ticket(ticket_id: str, ticket: Dict[str, Any]):
+    """Update a support ticket."""
+    allowed = ["subject", "category", "priority", "status"]
+    updates = {k: v for k, v in ticket.items() if k in allowed and v is not None}
+    if updates:
+        updates["updated_at"] = datetime.utcnow().isoformat()
+        await db.support_tickets.update_one({"id": ticket_id}, {"$set": updates})
+    return {"message": "Ticket updated"}
+
+
+@admin_router.delete("/tickets/{ticket_id}")
+async def admin_delete_ticket(ticket_id: str):
+    """Delete a support ticket."""
+    await db.support_tickets.delete_many({"id": ticket_id})
+    return {"message": "Ticket deleted"}
 
 
 # ---------- FAQs ----------
@@ -1334,30 +2489,29 @@ async def admin_get_area_fees(area_id: str):
 async def admin_create_area_fee(area_id: str, fee: Dict[str, Any]):
     """Create a new fee for a service area."""
     doc = {
+        "id": str(uuid.uuid4()),
         "service_area_id": area_id,
-        "fee_type": fee.get("fee_type"),  # airport, toll, surge, etc.
-        "amount": fee.get("amount", 0),
+        "fee_name": fee.get("fee_name", ""),
+        "fee_type": fee.get("fee_type", "custom"),
+        "calc_mode": fee.get("calc_mode", "flat"),
+        "amount": float(fee.get("amount", 0)),
         "description": fee.get("description", ""),
+        "conditions": fee.get("conditions", {}),
         "is_active": fee.get("is_active", True),
         "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
     }
-    row = await db.area_fees.insert_one(doc)
-    return {"fee_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+    await db.area_fees.insert_one(doc)
+    return doc
 
 
 @admin_router.put("/areas/{area_id}/fees/{fee_id}")
 async def admin_update_area_fee(area_id: str, fee_id: str, fee: Dict[str, Any]):
     """Update an area fee."""
-    updates = {}
-    if fee.get("fee_type") is not None:
-        updates["fee_type"] = fee.get("fee_type")
-    if fee.get("amount") is not None:
-        updates["amount"] = fee.get("amount")
-    if fee.get("description") is not None:
-        updates["description"] = fee.get("description")
-    if fee.get("is_active") is not None:
-        updates["is_active"] = fee.get("is_active")
-
+    allowed = ["fee_name", "fee_type", "calc_mode", "amount", "description", "conditions", "is_active"]
+    updates = {k: fee[k] for k in allowed if k in fee}
+    if "amount" in updates:
+        updates["amount"] = float(updates["amount"])
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
         await db.area_fees.update_one({"id": fee_id}, {"$set": updates})
@@ -1374,36 +2528,44 @@ async def admin_delete_area_fee(area_id: str, fee_id: str):
 @admin_router.get("/areas/{area_id}/tax")
 async def admin_get_area_tax(area_id: str):
     """Get tax configuration for a service area."""
-    tax = await db.area_taxes.find_one({"service_area_id": area_id})
-    return tax or {"service_area_id": area_id, "tax_rate": 0, "tax_name": "Tax"}
+    area = await db.service_areas.find_one({"id": area_id})
+    if not area:
+        return {"service_area_id": area_id, "gst_enabled": True, "gst_rate": 5.0, "pst_enabled": False, "pst_rate": 0, "hst_enabled": False, "hst_rate": 0}
+    return {
+        "service_area_id": area_id,
+        "gst_enabled": area.get("gst_enabled", True),
+        "gst_rate": area.get("gst_rate", 5.0),
+        "pst_enabled": area.get("pst_enabled", False),
+        "pst_rate": area.get("pst_rate", 0),
+        "hst_enabled": area.get("hst_enabled", False),
+        "hst_rate": area.get("hst_rate", 0),
+    }
 
 
 @admin_router.put("/areas/{area_id}/tax")
 async def admin_update_area_tax(area_id: str, tax: Dict[str, Any]):
     """Update tax configuration for a service area."""
-    tax_doc = {
-        "service_area_id": area_id,
-        "tax_rate": tax.get("tax_rate", 0),
-        "tax_name": tax.get("tax_name", "Tax"),
-        "updated_at": datetime.utcnow().isoformat(),
-    }
-
-    existing = await db.area_taxes.find_one({"service_area_id": area_id})
-    if existing:
-        await db.area_taxes.update_one({"service_area_id": area_id}, {"$set": tax_doc})
-    else:
-        await db.area_taxes.insert_one(tax_doc)
-
-    return {"message": "Area tax updated"}
+    allowed = ["gst_enabled", "gst_rate", "pst_enabled", "pst_rate", "hst_enabled", "hst_rate"]
+    updates = {k: tax[k] for k in allowed if k in tax}
+    if updates:
+        await db.service_areas.update_one({"id": area_id}, {"$set": updates})
+    area = await db.service_areas.find_one({"id": area_id})
+    return {k: area.get(k) for k in allowed}
 
 
 @admin_router.get("/areas/{area_id}/vehicle-pricing")
 async def admin_get_vehicle_pricing(area_id: str):
-    """Get vehicle pricing configuration for a service area."""
-    pricing = await db.get_rows(
-        "vehicle_pricing", {"service_area_id": area_id}, order="created_at", limit=100
-    )
-    return pricing
+    """Get vehicle pricing configuration for a service area.
+
+    Returns {vehicle_types, fare_configs} so the fare-config editor can
+    display a row per vehicle type with the area's specific rates.
+    """
+    vehicle_types = await db.get_rows("vehicle_types", {"is_active": True}, order="name", limit=50)
+    fare_configs = await db.get_rows("fare_configs", {"service_area_id": area_id}, limit=100)
+    return {
+        "vehicle_types": vehicle_types or [],
+        "fare_configs": fare_configs or [],
+    }
 
 
 # ---------- Driver Area Assignment ----------
@@ -1665,6 +2827,36 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
                     f"Could not update legacy expiry field {legacy_field} "
                     f"for driver {existing.get('driver_id')}: {e}"
                 )
+
+    # After approving, check if this driver has no more pending docs → clear needs_review
+    if status == "approved":
+        driver_id = existing.get("driver_id")
+        if driver_id:
+            remaining_pending = await db.get_rows(
+                "driver_documents",
+                {"driver_id": driver_id, "status": "pending"},
+                limit=1,
+            )
+            if not remaining_pending:
+                # All pending docs approved → set driver back to active
+                try:
+                    drv = await db.drivers.find_one({"id": driver_id})
+                    if drv and drv.get("status") == "needs_review":
+                        await db.drivers.update_one(
+                            {"id": driver_id},
+                            {"$set": {"status": "active", "is_verified": True}},
+                        )
+                except Exception:
+                    pass
+
+    # Log to activity timeline
+    doc_type = existing.get("document_type", "Document")
+    await _log_driver_activity(
+        existing.get("driver_id", ""), f"document_{status}",
+        f"Document {status}: {doc_type}",
+        rejection_reason or "",
+        {"document_id": document_id, "document_type": doc_type, "status": status},
+    )
 
     return {"message": f"Document {status}"}
 
@@ -2048,6 +3240,146 @@ async def list_driver_subscriptions(status: Optional[str] = Query(None)):
     if status:
         subs = [s for s in subs if s.get("status") == status]
     return subs
+
+
+@admin_router.get("/subscription-stats")
+async def admin_get_subscription_stats(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    service_area_ids: Optional[str] = None,
+):
+    """Get Spinr Pass subscription revenue stats, transaction list, and chart data.
+
+    service_area_ids: comma-separated list of area IDs to filter by driver's area.
+    """
+    from collections import defaultdict
+
+    area_filter = set(service_area_ids.split(",")) if service_area_ids else None
+
+    now = datetime.utcnow()
+    if start_date:
+        range_start = datetime.fromisoformat(start_date.replace("Z", "").replace("+00:00", ""))
+    else:
+        range_start = now - timedelta(days=30)
+    range_start = range_start.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if end_date:
+        range_end = datetime.fromisoformat(end_date.replace("Z", "").replace("+00:00", ""))
+        range_end = range_end.replace(hour=23, minute=59, second=59)
+    else:
+        range_end = now
+
+    # Fetch all subscriptions
+    all_subs = await db.driver_subscriptions.find({}).to_list(10000)
+
+    # Fetch all plans for lookup
+    all_plans = await db.get_rows("subscription_plans", limit=100)
+    plan_map = {p["id"]: p for p in all_plans}
+
+    # Fetch drivers for name + area lookup (batch)
+    driver_ids = list({s.get("driver_id") for s in all_subs if s.get("driver_id")})
+    raw_drivers_map, raw_users_map = await _batch_fetch_drivers_and_users([], driver_ids)
+    drivers_map: Dict[str, str] = {}
+    driver_area_map: Dict[str, str] = {}
+    for did, d in raw_drivers_map.items():
+        u = raw_users_map.get(d.get("user_id")) if d.get("user_id") else None
+        name = _user_display_name(u) if u else ""
+        drivers_map[did] = name or d.get("name") or did[:8]
+        if d.get("service_area_id"):
+            driver_area_map[did] = d["service_area_id"]
+
+    # Filter by service area if requested
+    if area_filter:
+        all_subs = [s for s in all_subs if driver_area_map.get(s.get("driver_id", "")) in area_filter]
+
+    # Overall stats
+    active = [s for s in all_subs if s.get("status") == "active"]
+    expired = [s for s in all_subs if s.get("status") == "expired"]
+    cancelled = [s for s in all_subs if s.get("status") == "cancelled"]
+    total_revenue = sum(float(s.get("price") or 0) for s in all_subs)
+    active_revenue = sum(float(s.get("price") or 0) for s in active)
+
+    # Filter to date range for transactions and charts
+    def parse_dt(s):
+        try:
+            return datetime.fromisoformat(str(s).replace("Z", "").replace("+00:00", ""))
+        except Exception:
+            return None
+
+    in_range = []
+    for s in all_subs:
+        dt = parse_dt(s.get("created_at") or s.get("started_at"))
+        if dt and range_start <= dt <= range_end:
+            in_range.append(s)
+
+    range_revenue = sum(float(s.get("price") or 0) for s in in_range)
+
+    # Per-plan breakdown
+    plan_stats = defaultdict(lambda: {"name": "", "count": 0, "revenue": 0.0, "active": 0})
+    for s in all_subs:
+        pid = s.get("plan_id") or "unknown"
+        plan_stats[pid]["name"] = s.get("plan_name") or plan_map.get(pid, {}).get("name", "Unknown")
+        plan_stats[pid]["count"] += 1
+        plan_stats[pid]["revenue"] += float(s.get("price") or 0)
+        if s.get("status") == "active":
+            plan_stats[pid]["active"] += 1
+
+    # Daily charts (within date range)
+    num_days = min((range_end - range_start).days + 1, 365)
+    daily_revenue = defaultdict(float)
+    daily_new_subs = defaultdict(int)
+    for s in in_range:
+        dt = parse_dt(s.get("created_at") or s.get("started_at"))
+        if dt:
+            day_key = dt.strftime("%Y-%m-%d")
+            daily_revenue[day_key] += float(s.get("price") or 0)
+            daily_new_subs[day_key] += 1
+
+    revenue_chart = []
+    subscribers_chart = []
+    for i in range(num_days):
+        day = range_start + timedelta(days=i)
+        day_key = day.strftime("%Y-%m-%d")
+        day_label = day.strftime("%b %d")
+        revenue_chart.append({"date": day_label, "date_raw": day_key, "amount": round(daily_revenue.get(day_key, 0), 2)})
+        subscribers_chart.append({"date": day_label, "date_raw": day_key, "count": daily_new_subs.get(day_key, 0)})
+
+    # Transaction list (in range, enriched)
+    transactions = []
+    for s in sorted(in_range, key=lambda x: x.get("created_at", ""), reverse=True):
+        transactions.append({
+            "id": s.get("id"),
+            "driver_id": s.get("driver_id"),
+            "driver_name": drivers_map.get(s.get("driver_id"), s.get("driver_id", "")[:8]),
+            "plan_name": s.get("plan_name") or plan_map.get(s.get("plan_id", ""), {}).get("name", "Unknown"),
+            "price": float(s.get("price") or 0),
+            "status": s.get("status", "unknown"),
+            "started_at": s.get("started_at"),
+            "expires_at": s.get("expires_at"),
+            "created_at": s.get("created_at"),
+        })
+
+    return {
+        "stats": {
+            "total_subscribers": len(all_subs),
+            "active": len(active),
+            "expired": len(expired),
+            "cancelled": len(cancelled),
+            "total_revenue": round(total_revenue, 2),
+            "active_mrr": round(active_revenue, 2),
+            "range_revenue": round(range_revenue, 2),
+            "range_transactions": len(in_range),
+        },
+        "plan_breakdown": [{"plan_id": k, **v} for k, v in plan_stats.items()],
+        "charts": {
+            "daily_revenue": revenue_chart,
+            "daily_subscribers": subscribers_chart,
+        },
+        "transactions": transactions,
+        "service_areas": [{"id": a["id"], "name": a.get("name", "Unknown")}
+                          for a in await db.get_rows("service_areas", order="name", limit=200)
+                          if not a.get("parent_service_area_id")],
+    }
 
 
 # ============================================================

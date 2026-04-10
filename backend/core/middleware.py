@@ -57,9 +57,16 @@ def init_middleware(app):
         
         # Add CORS headers if origin is allowed
         if origin:
-            if origin in origins or "*" in origins:
+            if origin in origins:
+                # Explicit match — safe to allow credentials
                 response.headers["Access-Control-Allow-Origin"] = origin
                 response.headers["Access-Control-Allow-Credentials"] = "true"
+                response.headers["Access-Control-Allow-Methods"] = "*"
+                response.headers["Access-Control-Allow-Headers"] = "*"
+                response.headers["Vary"] = "Origin"
+            elif "*" in origins:
+                # Wildcard (dev only) — no credentials to avoid browser rejection
+                response.headers["Access-Control-Allow-Origin"] = "*"
                 response.headers["Access-Control-Allow-Methods"] = "*"
                 response.headers["Access-Control-Allow-Headers"] = "*"
         

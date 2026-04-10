@@ -46,6 +46,9 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
         'gender': request.gender,
         'profile_complete': True
     }
+    # Allow driver app to set role='driver' so onboarding status is computed
+    if request.role and request.role in ('driver', 'rider'):
+        update_data['role'] = request.role
     
     await db.users.update_one({'id': current_user['id']}, {'$set': update_data})
     updated_user = await db.users.find_one({'id': current_user['id']})

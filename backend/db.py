@@ -131,13 +131,10 @@ class Collection:
     async def insert_many(self, docs: List[Dict[str, Any]]):
         if not docs:
             return type('Result', (), {'inserted_ids': []})()
-        
-        # Simple loop for now as Supabase might not have bulk insert exposed in db_supabase yet
-        ids = []
-        for doc in docs:
-            await self.insert_one(doc)
-            ids.append(doc.get('id'))
-            
+
+        # Bulk insert in a single round-trip
+        await db_supabase.insert_many(self.name, docs)
+        ids = [doc.get('id') for doc in docs]
         return type('Result', (), {'inserted_ids': ids})()
 
     async def update_one(self, _filter: Dict[str, Any], update: Dict[str, Any], upsert: bool = False):
@@ -284,6 +281,9 @@ class DB:
         self.driver_subscriptions = BaseCollection('driver_subscriptions')
         self.subscription_plans = BaseCollection('subscription_plans')
         self.driver_requirements = BaseCollection('driver_requirements')
+        self.driver_notes = BaseCollection('driver_notes')
+        self.driver_activity_log = BaseCollection('driver_activity_log')
+        self.driver_daily_stats = BaseCollection('driver_daily_stats')
         self.cloud_messages = BaseCollection('cloud_messages')
         self.audit_logs = BaseCollection('audit_logs')
         self.push_tokens = BaseCollection('push_tokens')

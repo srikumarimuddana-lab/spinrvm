@@ -10,7 +10,10 @@
     "ios": "expo start --ios",
     "ios:driver": "cross-env APP_VARIANT=driver expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
   },
   "dependencies": {
     "@expo-google-fonts/plus-jakarta-sans": "^0.4.2",
@@ -64,11 +67,16 @@
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
+    "@testing-library/jest-native": "^5.4.3",
+    "@testing-library/react-native": "^13.3.3",
+    "@types/jest": "^29.5.0",
     "@types/node": "^25.3.0",
     "@types/react": "~19.1.0",
     "cross-env": "^10.1.0",
     "eslint": "^8.57.0",
     "eslint-config-expo": "~10.0.0",
+    "jest": "^29.7.0",
+    "jest-expo": "^55.0.14",
     "typescript": "~5.9.2"
   },
   "overrides": {

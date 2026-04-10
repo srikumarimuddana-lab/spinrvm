@@ -55,12 +55,20 @@ def point_in_polygon(lat: float, lng: float, polygon: List[Dict[str, float]]) ->
 
 
 async def calculate_airport_fee(pickup_lat: float, pickup_lng: float,
-                                dropoff_lat: float, dropoff_lng: float) -> Dict[str, Any]:
-    """Check if pickup or dropoff falls in an airport zone.
-    Returns {'airport_fee': float, 'airport_zone_name': str | None, 'is_pickup': bool, 'is_dropoff': bool}
+                                dropoff_lat: float, dropoff_lng: float,
+                                stops: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """Check if pickup, dropoff, or any stop falls in an airport zone.
+
+    For normal rides outside airport zones, returns airport_fee=0 and no
+    airport_zone_name — these fields should be omitted from invoices/apps.
+    For multi-stop rides, each stop is also checked.
+
+    Returns {'airport_fee': float, 'airport_zone_name': str | None,
+             'is_pickup': bool, 'is_dropoff': bool, 'is_stop': bool}
     """
     areas = await db.service_areas.find({'is_airport': True}).to_list(50)
-    result = {'airport_fee': 0.0, 'airport_zone_name': None, 'is_pickup': False, 'is_dropoff': False}
+    result: Dict[str, Any] = {'airport_fee': 0.0, 'airport_zone_name': None,
+                               'is_pickup': False, 'is_dropoff': False, 'is_stop': False}
 
     for area in areas:
         polygon = get_service_area_polygon(area)
@@ -71,11 +79,22 @@ async def calculate_airport_fee(pickup_lat: float, pickup_lng: float,
         pickup_in = point_in_polygon(pickup_lat, pickup_lng, polygon)
         dropoff_in = point_in_polygon(dropoff_lat, dropoff_lng, polygon)
 
-        if pickup_in or dropoff_in:
+        # Check multi-stop waypoints
+        stop_in = False
+        if stops:
+            for stop in stops:
+                slat = stop.get('lat')
+                slng = stop.get('lng')
+                if slat and slng and point_in_polygon(slat, slng, polygon):
+                    stop_in = True
+                    break
+
+        if pickup_in or dropoff_in or stop_in:
             result['airport_fee'] = fee
             result['airport_zone_name'] = area.get('name', 'Airport')
             result['is_pickup'] = pickup_in
             result['is_dropoff'] = dropoff_in
+            result['is_stop'] = stop_in
             break  # Use the first matching airport zone
 
     return result
@@ -538,6 +557,17 @@ async def calculate_all_fees(
         'is_active': True
     }).to_list(50)
 
+    # Pre-compute airport zone check once (reuses all_areas already fetched above)
+    airport_areas = [a for a in all_areas if a.get('is_airport')]
+    in_airport = False
+    for ap in airport_areas:
+        ap_poly = get_service_area_polygon(ap)
+        if len(ap_poly) >= 3:
+            if point_in_polygon(pickup_lat, pickup_lng, ap_poly) or \
+               point_in_polygon(dropoff_lat, dropoff_lng, ap_poly):
+                in_airport = True
+                break
+
     fees_total = 0.0
     fee_items = []
 
@@ -559,16 +589,6 @@ async def calculate_all_fees(
                     continue
 
         if fee_type == 'airport':
-            # Check if pickup or dropoff is in an airport zone
-            airport_areas = await db.service_areas.find({'is_airport': True}).to_list(20)
-            in_airport = False
-            for ap in airport_areas:
-                ap_poly = get_service_area_polygon(ap)
-                if len(ap_poly) >= 3:
-                    if point_in_polygon(pickup_lat, pickup_lng, ap_poly) or \
-                       point_in_polygon(dropoff_lat, dropoff_lng, ap_poly):
-                        in_airport = True
-                        break
             if not in_airport:
                 continue
 
@@ -667,6 +687,65 @@ async def fare_estimate(
         'tax_breakdown': fees_result['tax_breakdown'],
         'grand_total': grand_total,
         'service_area': fees_result.get('service_area_name'),
+    }
+
+
+@support_router.get("/area-config")
+async def get_area_config(
+    lat: float = Query(...),
+    lng: float = Query(...),
+):
+    """Get service area config (fees, taxes, vehicle pricing) for a location.
+    Called by rider/driver apps on launch to cache area settings."""
+    all_areas = await db.service_areas.find({'is_active': True}).to_list(100)
+    matched_area = None
+    for area in all_areas:
+        polygon = get_service_area_polygon(area)
+        if len(polygon) >= 3 and point_in_polygon(lat, lng, polygon):
+            matched_area = area
+            break
+
+    if not matched_area:
+        return {"found": False, "service_area": None}
+
+    # Get active fees for this area
+    area_fees = await db.area_fees.find({
+        'service_area_id': matched_area['id'],
+        'is_active': True
+    }).to_list(50)
+
+    # Build tax config
+    tax_config = {}
+    if matched_area.get('hst_enabled'):
+        tax_config = {"type": "HST", "rate": float(matched_area.get('hst_rate', 0))}
+    else:
+        taxes = []
+        if matched_area.get('gst_enabled', True):
+            taxes.append({"name": "GST", "rate": float(matched_area.get('gst_rate', 5.0))})
+        if matched_area.get('pst_enabled', False):
+            taxes.append({"name": "PST", "rate": float(matched_area.get('pst_rate', 0))})
+        tax_config = {"type": "GST_PST", "taxes": taxes}
+
+    return {
+        "found": True,
+        "service_area": {
+            "id": matched_area['id'],
+            "name": matched_area.get('name'),
+            "city": matched_area.get('city'),
+            "province": matched_area.get('province'),
+            "currency": matched_area.get('currency', 'CAD'),
+        },
+        "fees": [{
+            "id": f.get('id'),
+            "name": f.get('fee_name'),
+            "type": f.get('fee_type'),
+            "calc_mode": f.get('calc_mode', 'flat'),
+            "amount": float(f.get('amount', 0)),
+            "description": f.get('description', ''),
+            "conditions": f.get('conditions', {}),
+        } for f in area_fees],
+        "tax": tax_config,
+        "vehicle_pricing": matched_area.get('vehicle_pricing', []),
     }
 
 

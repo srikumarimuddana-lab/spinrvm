@@ -15,7 +15,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     userInterfaceStyle: 'automatic',
     newArchEnabled: true,
     updates: {
-        url: 'https://u.expo.dev/63b5d645-e787-4f47-8289-d879ca6c51a4',
+        url: 'https://u.expo.dev/8f1e4f60-720e-46b0-9b71-33c13d3af043',
     },
     runtimeVersion: {
         policy: 'appVersion',
@@ -79,7 +79,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     extra: {
         eas: {
-            projectId: "63b5d645-e787-4f47-8289-d879ca6c51a4"
+            projectId: "8f1e4f60-720e-46b0-9b71-33c13d3af043"
         },
         EXPO_PUBLIC_BACKEND_URL: process.env.EXPO_PUBLIC_BACKEND_URL,
         backendUrl: process.env.EXPO_PUBLIC_BACKEND_URL,

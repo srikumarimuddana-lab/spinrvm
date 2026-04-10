@@ -136,39 +136,41 @@ export default function PaymentConfirmScreen() {
               <Text style={styles.fareLabel}>Time ({selectedEstimate.duration_minutes} min)</Text>
               <Text style={styles.fareValue}>${selectedEstimate.time_fare.toFixed(2)}</Text>
             </View>
-            <View style={styles.fareDivider} />
             <View style={styles.fareRow}>
-              <Text style={styles.fareLabel}>Insurance fee</Text>
-              <Text style={styles.fareValue}>${(selectedEstimate.total_fare * 0.02).toFixed(2)}</Text>
-            </View>
-            <View style={styles.fareRow}>
-              <Text style={styles.fareLabel}>City fee</Text>
-              <Text style={styles.fareValue}>$0.50</Text>
-            </View>
-            <View style={styles.fareRow}>
-              <Text style={styles.fareLabel}>GST/PST (11%)</Text>
-              <Text style={styles.fareValue}>${(selectedEstimate.total_fare * 0.11).toFixed(2)}</Text>
-            </View>
-            <View style={styles.fareRow}>
-              <Text style={styles.fareLabel}>Platform fee</Text>
+              <Text style={styles.fareLabel}>Booking fee</Text>
               <Text style={styles.fareValue}>${selectedEstimate.booking_fee.toFixed(2)}</Text>
             </View>
+
+            <View style={styles.fareDivider} />
+
+            {/* Dynamic area fees from API */}
+            {(selectedEstimate as any).area_fees?.map((fee: any, i: number) => (
+              <View key={fee.id || i} style={styles.fareRow}>
+                <Text style={styles.fareLabel}>{fee.name || fee.type}</Text>
+                <Text style={styles.fareValue}>${Number(fee.calculated_value || 0).toFixed(2)}</Text>
+              </View>
+            ))}
+
+            {/* Dynamic tax breakdown from API */}
+            {(selectedEstimate as any).tax_breakdown && Object.entries((selectedEstimate as any).tax_breakdown).map(([name, info]: [string, any]) => (
+              <View key={name} style={styles.fareRow}>
+                <Text style={styles.fareLabel}>{name} ({info.rate}%)</Text>
+                <Text style={styles.fareValue}>${Number(info.amount || 0).toFixed(2)}</Text>
+              </View>
+            ))}
+
             {(selectedEstimate as any).surge_multiplier > 1.0 && (
               <View style={styles.fareRow}>
                 <Text style={[styles.fareLabel, { color: '#EF4444' }]}>Surge ({(selectedEstimate as any).surge_multiplier}x)</Text>
                 <Text style={[styles.fareValue, { color: '#EF4444' }]}>Applied</Text>
               </View>
             )}
+
             <View style={styles.fareDivider} />
             <View style={styles.fareRow}>
               <Text style={styles.fareTotalLabel}>Estimated Total</Text>
               <Text style={styles.fareTotalValue}>
-                ${(
-                  selectedEstimate.total_fare +
-                  selectedEstimate.total_fare * 0.02 +
-                  0.50 +
-                  selectedEstimate.total_fare * 0.11
-                ).toFixed(2)}
+                ${((selectedEstimate as any).grand_total || selectedEstimate.total_fare).toFixed(2)}
               </Text>
             </View>
           </View>

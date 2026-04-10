@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -15,6 +15,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { auth } from '@shared/config/firebaseConfig';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
@@ -50,6 +52,38 @@ export default function LoginScreen() {
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
   }>({ visible: false, title: '', message: '', variant: 'info' });
+
+  // Request location permission and fetch location early so the map is
+  // ready by the time the user reaches the dashboard after login.
+  useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+
+        // Try fast cached location first
+        const lastKnown = await Location.getLastKnownPositionAsync();
+        if (lastKnown) {
+          await AsyncStorage.setItem('spinr_driver_last_location', JSON.stringify({
+            lat: lastKnown.coords.latitude,
+            lng: lastKnown.coords.longitude,
+          }));
+        }
+
+        // Then get accurate position in background
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+          .then(async (loc) => {
+            await AsyncStorage.setItem('spinr_driver_last_location', JSON.stringify({
+              lat: loc.coords.latitude,
+              lng: loc.coords.longitude,
+            }));
+          })
+          .catch(() => {});
+      } catch (e) {
+        console.log('[Login] Early location fetch failed:', e);
+      }
+    })();
+  }, []);
 
   const formatPhoneDisplay = (raw: string) => {
     const digits = raw.replace(/\D/g, '');
@@ -122,7 +156,7 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       style={styles.container}
     >
       <StatusBar barStyle="dark-content" />

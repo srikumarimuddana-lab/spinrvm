@@ -242,11 +242,37 @@ export default function RideDetailScreen() {
                                     </Text>
                                 </View>
                             )}
+
+                            {/* Area Fees */}
+                            {ride.area_fees?.length > 0 && (
+                                <>
+                                    <View style={styles.fareDivider} />
+                                    {ride.area_fees.map((fee: any, i: number) => (
+                                        <View key={fee.id || i} style={styles.fareRow}>
+                                            <Text style={styles.fareLabel}>{fee.name || fee.type}</Text>
+                                            <Text style={styles.fareValue}>${(fee.calculated_value || 0).toFixed(2)}</Text>
+                                        </View>
+                                    ))}
+                                </>
+                            )}
+
+                            {/* Tax Breakdown */}
+                            {ride.tax_breakdown && Object.keys(ride.tax_breakdown).length > 0 && (
+                                <>
+                                    {Object.entries(ride.tax_breakdown).map(([name, info]: [string, any]) => (
+                                        <View key={name} style={styles.fareRow}>
+                                            <Text style={styles.fareLabel}>{name} ({info.rate}%)</Text>
+                                            <Text style={styles.fareValue}>${(info.amount || 0).toFixed(2)}</Text>
+                                        </View>
+                                    ))}
+                                </>
+                            )}
+
                             <View style={styles.fareDivider} />
                             <View style={styles.fareRow}>
                                 <Text style={styles.fareLabel}>Total Fare</Text>
                                 <Text style={[styles.fareValue, { fontSize: 16 }]}>
-                                    ${(ride.total_fare || 0).toFixed(2)}
+                                    ${(ride.grand_total || ride.total_fare || 0).toFixed(2)}
                                 </Text>
                             </View>
                             <View style={styles.fareRow}>

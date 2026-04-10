@@ -7,7 +7,19 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
-    setupFiles: ['./src/__tests__/setup.ts'],
+    setupFiles: ['./vitest.setup.ts', './src/__tests__/setup.ts'],
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    coverage: {
+      provider: 'v8',
+      include: ['src/lib/**', 'src/store/**', 'src/components/**'],
+      exclude: ['src/components/ui/**'],
+      thresholds: {
+        branches: 50,
+        functions: 50,
+        lines: 60,
+        statements: 60,
+      },
+    },
   },
   resolve: {
     alias: {

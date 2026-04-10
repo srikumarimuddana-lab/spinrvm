@@ -38,8 +38,8 @@ export default function DashboardLayout({
     return (
         <div className="min-h-screen bg-background">
             <Sidebar />
-            <main className="transition-all duration-200" style={{ marginLeft: 'var(--sidebar-width, 256px)' }}>
-                <div className="p-6 md:p-8">{children}</div>
+            <main className="transition-all duration-200 md:ml-[var(--sidebar-width,240px)]">
+                <div className="p-4 pt-14 md:pt-6 md:p-8">{children}</div>
             </main>
         </div>
     );

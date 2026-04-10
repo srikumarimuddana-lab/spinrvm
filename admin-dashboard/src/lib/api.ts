@@ -99,17 +99,160 @@ export const getStats = () =>
     }>("/api/admin/stats");
 
 /* ── Rides ────────────────────────────────── */
-export const getRides = () => request<any[]>("/api/admin/rides");
+export const getRides = (limit = 50, offset = 0) =>
+    request<{ rides: any[]; total_count: number; limit: number; offset: number }>(
+        `/api/admin/rides?limit=${limit}&offset=${offset}`
+    );
 export const getRideDetails = (id: string) =>
     request<any>(`/api/admin/rides/${id}/details`);
+export const getRideStats = () =>
+    request<{
+        today_count: number;
+        yesterday_count: number;
+        this_week_count: number;
+        this_month_count: number;
+        week_start: string;
+        week_end: string;
+        month_start: string;
+        month_end: string;
+    }>("/api/admin/rides/stats");
+export const getRideLocationTrail = (rideId: string) =>
+    request<any[]>(`/api/admin/rides/${rideId}/location-trail`);
+export const getLiveRideData = (rideId: string) =>
+    request<any>(`/api/admin/rides/${rideId}/live`);
+export const getRideInvoice = (rideId: string) =>
+    request<any>(`/api/admin/rides/${rideId}/invoice`);
+
+/** Fetch the ride's route map PNG via the backend proxy. Returns a data URL
+ *  (base64) or null on failure. Never exposes the Google Maps API key. */
+export const getRideRouteMapDataUrl = async (rideId: string): Promise<string | null> => {
+    const token = useAuthStore.getState().token;
+    try {
+        const res = await fetch(`${API_BASE}/api/admin/rides/${rideId}/route-map.png`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!res.ok) return null;
+        const blob = await res.blob();
+        return await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    } catch (e) {
+        console.log("Failed to fetch ride route map:", e);
+        return null;
+    }
+};
+export const flagRideParticipant = (rideId: string, data: { target_type: string; reason: string; description?: string; service_area_id?: string | null }) =>
+    request<any>(`/api/admin/rides/${rideId}/flag`, {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+export const createRideComplaint = (rideId: string, data: { against_type: string; category: string; description: string; service_area_id?: string | null }) =>
+    request<any>(`/api/admin/rides/${rideId}/complaint`, {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+export const resolveComplaint = (complaintId: string, data: { status: string; resolution: string }) =>
+    request<any>(`/api/admin/complaints/${complaintId}/resolve`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+    });
+export const reportLostItem = (rideId: string, data: { item_description: string; service_area_id?: string | null }) =>
+    request<any>(`/api/admin/rides/${rideId}/lost-and-found`, {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+export const resolveLostItem = (itemId: string, data: { status: string; admin_notes?: string }) =>
+    request<any>(`/api/admin/lost-and-found/${itemId}/resolve`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+    });
+export const sendRideInvoice = async (rideId: string) => {
+    const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    const token = useAuthStore.getState().token;
+    const res = await fetch(`${API_BASE}/api/v1/rides/${rideId}/process-payment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: JSON.stringify({ tip_amount: 0 }),
+    });
+    if (!res.ok) throw new Error("Failed to send invoice");
+    return res.json();
+};
+export const getFlags = () => request<any[]>("/api/admin/flags");
+export const deactivateFlag = (flagId: string) =>
+    request<any>(`/api/admin/flags/${flagId}/deactivate`, { method: "PUT" });
+export const deleteFlag = (flagId: string) =>
+    request<any>(`/api/admin/flags/${flagId}`, { method: "DELETE" });
+export const getLostAndFoundItems = () => request<any[]>("/api/admin/lost-and-found");
+export const updateLostItem = (itemId: string, data: any) =>
+    request<any>(`/api/admin/lost-and-found/${itemId}`, { method: "PUT", body: JSON.stringify(data) });
+export const deleteLostItem = (itemId: string) =>
+    request<any>(`/api/admin/lost-and-found/${itemId}`, { method: "DELETE" });
+export const deleteDispute = (disputeId: string) =>
+    request<any>(`/api/admin/disputes/${disputeId}`, { method: "DELETE" });
+export const getComplaints = () => request<any[]>("/api/admin/complaints");
+export const deleteComplaint = (complaintId: string) =>
+    request<any>(`/api/admin/complaints/${complaintId}`, { method: "DELETE" });
 
 /* ── Drivers ──────────────────────────────── */
 export const getDrivers = () => request<any[]>("/api/admin/drivers");
 export const getDriverRides = (id: string) =>
     request<any>(`/api/admin/drivers/${id}/rides`);
 
+export const getDriverStats = (params?: {
+    service_area_id?: string;
+    start_date?: string;
+    end_date?: string;
+}) => {
+    const sp = new URLSearchParams();
+    if (params?.service_area_id) sp.set("service_area_id", params.service_area_id);
+    if (params?.start_date) sp.set("start_date", params.start_date);
+    if (params?.end_date) sp.set("end_date", params.end_date);
+    return request<{
+        stats: {
+            total: number;
+            online: number;
+            verified: number;
+            unverified: number;
+            total_rides: number;
+            total_earnings: number;
+            avg_rating: number;
+        };
+        area_stats: {
+            service_area_id: string;
+            service_area_name: string;
+            total: number;
+            online: number;
+            verified: number;
+            unverified: number;
+            total_rides: number;
+            total_earnings: number;
+        }[];
+        charts: {
+            daily_joins: { date: string; date_raw: string; count: number }[];
+            daily_rides: { date: string; date_raw: string; count: number }[];
+            daily_earnings: { date: string; date_raw: string; amount: number }[];
+        };
+        drivers: any[];
+        service_areas: { id: string; name: string }[];
+    }>(`/api/admin/drivers/stats?${sp.toString()}`);
+};
+
+export const updateDriver = (id: string, data: Record<string, any>) =>
+    request<any>(`/api/admin/drivers/${id}`, { method: "PUT", body: JSON.stringify(data) });
+
 /* ── Earnings ─────────────────────────────── */
 export const getEarnings = () => request<any[]>("/api/admin/earnings");
+
+export const getSubscriptionStats = (params?: { start_date?: string; end_date?: string; service_area_ids?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.start_date) sp.set("start_date", params.start_date);
+    if (params?.end_date) sp.set("end_date", params.end_date);
+    if (params?.service_area_ids) sp.set("service_area_ids", params.service_area_ids);
+    return request<any>(`/api/admin/subscription-stats?${sp.toString()}`);
+};
 
 /* ── Settings ─────────────────────────────── */
 export const getSettings = () => request<any>("/api/admin/settings");
@@ -173,25 +316,6 @@ export const updateSurge = (areaId: string, data: any) =>
         method: "PUT",
         body: JSON.stringify(data),
     });
-
-/* ── Document Requirements ───────────────── */
-export const getRequirements = () =>
-    request<any[]>("/api/admin/documents/requirements");
-
-export const createRequirement = (data: any) =>
-    request<any>("/api/admin/documents/requirements", {
-        method: "POST",
-        body: JSON.stringify(data),
-    });
-
-export const updateRequirement = (id: string, data: any) =>
-    request<any>(`/api/admin/documents/requirements/${id}`, {
-        method: "PUT",
-        body: JSON.stringify(data),
-    });
-
-export const deleteRequirement = (id: string) =>
-    request<any>(`/api/admin/documents/requirements/${id}`, { method: "DELETE" });
 
 /* ── Driver Document Verification ────────── */
 export const getDriverDocuments = (driverId: string) =>
@@ -315,6 +439,18 @@ export const getDisputes = () =>
 export const getDisputeDetails = (id: string) =>
     request<any>(`/api/admin/disputes/${id}`);
 
+export const createDispute = (data: any) =>
+    request<any>("/api/admin/disputes", {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+
+export const updateDispute = (id: string, data: any) =>
+    request<any>(`/api/admin/disputes/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+    });
+
 export const resolveDispute = (id: string, resolution: any) =>
     request<any>(`/api/admin/disputes/${id}/resolve`, {
         method: "PUT",
@@ -328,6 +464,18 @@ export const getTickets = () =>
 export const getTicketDetails = (id: string) =>
     request<any>(`/api/admin/tickets/${id}`);
 
+export const createTicket = (data: any) =>
+    request<any>("/api/admin/tickets", {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+
+export const updateTicket = (id: string, data: any) =>
+    request<any>(`/api/admin/tickets/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+    });
+
 export const replyToTicket = (id: string, message: string) =>
     request<any>(`/api/admin/tickets/${id}/reply`, {
         method: "POST",
@@ -336,6 +484,9 @@ export const replyToTicket = (id: string, message: string) =>
 
 export const closeTicket = (id: string) =>
     request<any>(`/api/admin/tickets/${id}/close`, { method: "POST" });
+
+export const deleteTicket = (id: string) =>
+    request<any>(`/api/admin/tickets/${id}`, { method: "DELETE" });
 
 /* ── FAQs ───────────────────────────────────── */
 export const getFaqs = () =>
@@ -394,6 +545,33 @@ export const assignDriverArea = (driverId: string, serviceAreaId: string) =>
     request<any>(`/api/admin/drivers/${driverId}/area?service_area_id=${serviceAreaId}`, {
         method: "PUT",
     });
+
+export const driverAction = (driverId: string, action: string, reason?: string) =>
+    request<{ message: string; new_status: string }>(`/api/admin/drivers/${driverId}/action`, {
+        method: "POST",
+        body: JSON.stringify({ action, reason }),
+    });
+
+export const overrideDriverStatus = (driverId: string, status: string, reason?: string) =>
+    request<any>(`/api/admin/drivers/${driverId}/status-override`, {
+        method: "PUT",
+        body: JSON.stringify({ status, reason }),
+    });
+
+export const getDriverNotes = (driverId: string) =>
+    request<any[]>(`/api/admin/drivers/${driverId}/notes`);
+
+export const addDriverNote = (driverId: string, note: string, category: string = "general") =>
+    request<any>(`/api/admin/drivers/${driverId}/notes`, {
+        method: "POST",
+        body: JSON.stringify({ note, category }),
+    });
+
+export const deleteDriverNote = (noteId: string) =>
+    request<any>(`/api/admin/drivers/notes/${noteId}`, { method: "DELETE" });
+
+export const getDriverActivity = (driverId: string) =>
+    request<any[]>(`/api/admin/drivers/${driverId}/activity`);
 
 
 /* ── Heat Map Data ─────────────────────────── */

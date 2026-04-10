@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Alert, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Polyline, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
 import { useDriverStore } from '../../store/driverStore';
 import { useAuthStore } from '@shared/store/authStore';
@@ -16,6 +17,8 @@ import { CarMarker } from '../../components/CarMarker';
 import { SOSButton } from '@shared/components/SOSButton';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
+
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
 
 // Use Google Maps on Android, Apple Maps (native) on iOS
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
@@ -67,6 +70,40 @@ export default function DriverDashboard() {
     fadeAnim,
   } = useDriverDashboard();
 
+  // Route polyline coordinates for active rides
+  const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
+
+  // Demand heatmap — controlled by admin per service area
+  const [heatmapPoints, setHeatmapPoints] = useState<{ latitude: number; longitude: number; weight: number }[]>([]);
+
+  // Fetch heatmap data when idle (backend returns empty if admin disabled it)
+  useEffect(() => {
+    if (rideState !== 'idle') {
+      setHeatmapPoints([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.get('/drivers/demand-heatmap');
+        if (cancelled) return;
+        if (!res.data.enabled) {
+          setHeatmapPoints([]);
+          return;
+        }
+        const pts = (res.data.points || []).map((p: number[]) => ({
+          latitude: p[0],
+          longitude: p[1],
+          weight: p[2] || 1,
+        }));
+        setHeatmapPoints(pts);
+      } catch (e) {
+        console.log('Heatmap fetch error:', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [rideState]);
+
   const [countdown, setCountdownState] = useState(countdownSeconds);
   // Countdown timer effect
   useEffect(() => {
@@ -89,6 +126,11 @@ export default function DriverDashboard() {
   useEffect(() => {
     setCountdownState(countdownSeconds);
   }, [countdownSeconds]);
+
+  // Clear route when ride state changes (new phase = new route)
+  useEffect(() => {
+    setRouteCoords([]);
+  }, [rideState]);
 
   // Error handling
   useEffect(() => {
@@ -292,6 +334,79 @@ export default function DriverDashboard() {
           />
         )}
         {getMapMarkers()}
+
+        {/* Route polyline during active rides */}
+        {GOOGLE_MAPS_API_KEY && activeRide?.ride && (rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && (() => {
+          const ride = activeRide.ride;
+          // During pickup phase: driver → pickup
+          // During trip phase: pickup → dropoff (or driver → dropoff)
+          const origin = rideState === 'trip_in_progress' && location?.coords
+            ? { latitude: location.coords.latitude, longitude: location.coords.longitude }
+            : location?.coords
+              ? { latitude: location.coords.latitude, longitude: location.coords.longitude }
+              : { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
+
+          const destination = rideState === 'trip_in_progress'
+            ? { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }
+            : { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
+
+          return (
+            <>
+              <MapViewDirections
+                origin={origin}
+                destination={destination}
+                apikey={GOOGLE_MAPS_API_KEY}
+                strokeWidth={0}
+                strokeColor="transparent"
+                onReady={(result) => {
+                  setRouteCoords(result.coordinates);
+                  if (mapRef.current && result.coordinates?.length > 1) {
+                    mapRef.current.fitToCoordinates(result.coordinates, {
+                      edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
+                      animated: true,
+                    });
+                  }
+                }}
+                onError={(err) => console.log('Directions error:', err)}
+                resetOnChange={false}
+              />
+              {routeCoords.length > 1 && (
+                <>
+                  {/* Shadow line */}
+                  <Polyline
+                    coordinates={routeCoords}
+                    strokeWidth={7}
+                    strokeColor="rgba(0, 0, 0, 0.08)"
+                    lineCap="round"
+                    lineJoin="round"
+                  />
+                  {/* Main route line */}
+                  <Polyline
+                    coordinates={routeCoords}
+                    strokeWidth={4}
+                    strokeColor={rideState === 'trip_in_progress' ? '#10B981' : COLORS.accent}
+                    lineCap="round"
+                    lineJoin="round"
+                  />
+                </>
+              )}
+            </>
+          );
+        })()}
+
+        {/* Demand heatmap overlay — admin-controlled per service area */}
+        {heatmapPoints.length > 0 && Platform.OS !== 'web' && (
+          <Heatmap
+            points={heatmapPoints}
+            radius={35}
+            opacity={0.65}
+            gradient={{
+              colors: ['#00D4AA', '#FFD700', '#FF6B35', '#FF2D2D'],
+              startPoints: [0.1, 0.4, 0.65, 0.9],
+              colorMapSize: 256,
+            }}
+          />
+        )}
       </MapView>
 
       {/* Top Bar */}
@@ -334,6 +449,7 @@ export default function DriverDashboard() {
           rideState={rideState}
           ride={activeRide?.ride || null}
           rider={activeRide?.rider || null}
+          driverLocation={location}
           isLoading={false}
           otpInput={otpInput}
           setOtpInput={setOtpInput}

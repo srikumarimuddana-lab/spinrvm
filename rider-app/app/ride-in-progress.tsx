@@ -175,6 +175,11 @@ I've shared my live location with you for safety.
         </View>
       </SafeAreaView>
 
+      {/* SOS — floating top-right, always visible even when bottom sheet is collapsed */}
+      <SafeAreaView edges={['top']} style={styles.sosOverlay} pointerEvents="box-none">
+        <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} size="small" />
+      </SafeAreaView>
+
       {/* Map Area */}
       <View style={styles.mapContainer}>
         {currentRide ? (
@@ -478,6 +483,10 @@ const styles = StyleSheet.create({
   },
   greenDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#10B981', marginRight: 10 },
   statusText: { fontSize: 15, fontWeight: '600', color: '#1A1A1A' },
+  sosOverlay: {
+    position: 'absolute', top: 0, right: 16, zIndex: 20,
+    alignItems: 'flex-end', paddingTop: 8,
+  },
   mapContainer: { flex: 1, position: 'relative' },
   map: { ...StyleSheet.absoluteFillObject },
   mapPlaceholder: { flex: 1, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },

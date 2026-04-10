@@ -29,3 +29,5 @@ git_status.txt
 status.txt
 status_check.txt
 status_full.txt
+.claude/worktrees/
+.claude/settings.local.json

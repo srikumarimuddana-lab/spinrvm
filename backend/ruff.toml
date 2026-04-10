@@ -1,0 +1,25 @@
+# Ruff configuration for Spinr backend
+line-length = 120
+target-version = "py311"
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "S",   # flake8-bandit (security)
+    "B",   # flake8-bugbear
+]
+ignore = [
+    "S101",  # assert statements (used in tests)
+    "S105",  # hardcoded passwords (test fixtures)
+    "S106",  # hardcoded passwords in function args
+    "S311",  # random not for crypto (used for jitter/non-security)
+    "B008",  # function calls in default args (FastAPI Depends pattern)
+    "E501",  # line too long (handled by line-length above)
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["S", "B"]
+"migrations/**" = ["E", "W", "F"]

@@ -54,6 +54,7 @@ export default function DriverDashboard() {
 
   const {
     isOnline,
+    connectionState,
     location,
     otpInput,
     setOtpInput,
@@ -294,7 +295,7 @@ export default function DriverDashboard() {
       </MapView>
 
       {/* Top Bar */}
-      <DriverTopBar driverData={driverData} user={user} isOnline={isOnline} />
+      <DriverTopBar driverData={driverData} user={user} isOnline={isOnline} connectionState={connectionState} />
 
       {/* SOS Button — visible during active ride */}
       {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && activeRide?.ride?.id && (

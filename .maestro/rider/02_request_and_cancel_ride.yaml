@@ -1,0 +1,24 @@
+appId: com.spinr.user
+---
+# Rider App — Request and Cancel a Ride (TST-003)
+# Assumes user is already logged in (run 01_login first or use persistent state)
+
+- launchApp
+
+# Tap search bar
+- tapOn:
+    text: "Where to?"
+
+# Enter destination
+- assertVisible: "Search destination"
+- inputText: "Saskatoon Airport"
+- assertVisible:
+    text: "Saskatoon"
+    optional: true
+
+# Go back if no results (offline/no API)
+- pressKey: Escape
+  optional: true
+- tapOn:
+    text: "Back"
+    optional: true

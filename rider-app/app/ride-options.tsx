@@ -591,6 +591,14 @@ export default function RideOptionsScreen() {
             <Ionicons name="chevron-forward" size={16} color="#999" />
           </TouchableOpacity>
 
+          {/* Cancellation policy disclosure (UX-001) */}
+          <View style={styles.cancelPolicyRow}>
+            <Ionicons name="information-circle-outline" size={15} color="#6B7280" />
+            <Text style={styles.cancelPolicyText}>
+              Free cancellation within 2 min of driver acceptance. A cancellation fee applies after.
+            </Text>
+          </View>
+
           <TouchableOpacity
             style={styles.confirmButton}
             onPress={handleConfirm}
@@ -858,6 +866,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: 'PlusJakartaSans_500Medium',
     color: '#1A1A1A',
+  },
+  cancelPolicyRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    marginBottom: 10,
+    paddingHorizontal: 4,
+  },
+  cancelPolicyText: {
+    flex: 1,
+    fontSize: 12,
+    color: '#6B7280',
+    lineHeight: 17,
   },
   confirmButton: {
     backgroundColor: SpinrConfig.theme.colors.primary,

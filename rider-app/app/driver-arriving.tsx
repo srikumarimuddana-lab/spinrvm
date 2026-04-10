@@ -24,6 +24,7 @@ import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
 import { SOSButton } from '@shared/components/SOSButton';
 import { CarMarker } from '@shared/components/CarMarker';
+import { FreeCancelTimer } from '../components/FreeCancelTimer';
 
 const { width } = Dimensions.get('window');
 
@@ -90,10 +91,14 @@ export default function DriverArrivingScreen() {
 
   const { cancelRide, clearRide } = useRideStore();
 
+  // Use server-provided cancellation fee; fall back to $3 default (matches app_settings).
+  // The old Math.min(5, fare * 0.2) formula did not match the server-side value.
+  const cancellationFee = (currentRide as any)?.cancellation_fee ?? 3.0;
+  const freeCancelWindowSeconds = (currentRide as any)?.free_cancel_window_seconds ?? 120;
+
   const handleBack = () => {
     const status = currentRide?.status;
     const fare = currentRide?.total_fare || 0;
-    const cancellationFee = Math.min(5, fare * 0.2); // 20% of fare or $5, whichever is less
 
     if (status === 'in_progress') {
       // Ride started — full fare
@@ -497,6 +502,18 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                     as soon as they accept.
                   </Text>
                 </View>
+              </View>
+            )}
+
+            {/* Cancellation policy timer — only shown after driver assigned */}
+            {(currentRide?.status === 'driver_accepted' ||
+              currentRide?.status === 'driver_arrived') && (
+              <View style={{ marginBottom: 12 }}>
+                <FreeCancelTimer
+                  driverAcceptedAt={(currentRide as any)?.driver_accepted_at}
+                  freeCancelWindowSeconds={freeCancelWindowSeconds}
+                  cancellationFee={cancellationFee}
+                />
               </View>
             )}
 

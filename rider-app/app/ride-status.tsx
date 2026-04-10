@@ -15,6 +15,7 @@ import { useRideStore } from '../store/rideStore';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
+import { FreeCancelTimer } from '../components/FreeCancelTimer';
 
 export default function RideStatusScreen() {
   const router = useRouter();
@@ -63,30 +64,45 @@ export default function RideStatusScreen() {
       return;
     }
 
-    const fare = currentRide.total_fare || 0;
-    const cancellationFee = Math.min(5, fare * 0.2);
+    // UX-001: Use server-provided cancellation fee (from app_settings) instead
+    // of the old hardcoded Math.min(5, fare * 0.2) formula.
+    const cancellationFee = (currentRide as any).cancellation_fee ?? 3.0;
+    const freeCancelSecondsLeft = (currentRide as any).free_cancel_seconds_remaining ?? null;
+    const isFreeCancel = freeCancelSecondsLeft === null || freeCancelSecondsLeft > 0;
     const status = currentRide.status;
 
     if (status === 'driver_arrived') {
       setAlertState({
         visible: true,
         title: 'Driver is waiting',
-        message: `Your driver has arrived. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`,
+        message: isFreeCancel
+          ? 'Your driver has arrived. Cancel for free before the window closes.'
+          : `Your driver has arrived. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`,
         variant: 'warning',
         buttons: [
           { text: 'Keep Ride', style: 'cancel' },
-          { text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive', onPress: async () => { await cancelRide(); clearRide(); router.replace('/(tabs)' as any); } },
+          {
+            text: isFreeCancel ? 'Cancel (Free)' : `Cancel & Pay $${cancellationFee.toFixed(2)}`,
+            style: 'destructive',
+            onPress: async () => { await cancelRide(); clearRide(); router.replace('/(tabs)' as any); }
+          },
         ],
       });
     } else if (status === 'driver_assigned' || status === 'driver_accepted') {
       setAlertState({
         visible: true,
         title: 'Cancel ride?',
-        message: 'Your driver is on the way. You can cancel for free right now.',
+        message: isFreeCancel
+          ? 'Your driver is on the way. Cancel for free right now.'
+          : `Cancellation fee of $${cancellationFee.toFixed(2)} applies.`,
         variant: 'warning',
         buttons: [
           { text: 'Keep Ride', style: 'cancel' },
-          { text: 'Cancel (Free)', style: 'destructive', onPress: async () => { await cancelRide(); clearRide(); router.replace('/(tabs)' as any); } },
+          {
+            text: isFreeCancel ? 'Cancel (Free)' : `Cancel & Pay $${cancellationFee.toFixed(2)}`,
+            style: 'destructive',
+            onPress: async () => { await cancelRide(); clearRide(); router.replace('/(tabs)' as any); }
+          },
         ],
       });
     } else {
@@ -165,6 +181,15 @@ export default function RideStatusScreen() {
           <Text style={styles.statusLabel}>Driver is on the way</Text>
           <Text style={styles.statusEta}>Arriving in ~5 min</Text>
         </View>
+      </View>
+
+      {/* UX-001: Free cancellation countdown */}
+      <View style={{ marginTop: 12 }}>
+        <FreeCancelTimer
+          driverAcceptedAt={(currentRide as any)?.driver_accepted_at}
+          freeCancelWindowSeconds={(currentRide as any)?.free_cancel_window_seconds ?? 120}
+          cancellationFee={(currentRide as any)?.cancellation_fee ?? 3.0}
+        />
       </View>
 
     </View>

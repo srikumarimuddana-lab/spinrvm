@@ -102,10 +102,10 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                         <div className="divide-y divide-border">
                             {/* Header */}
                             <div className="px-6 py-5 bg-muted/20">
-                                <div className="flex items-start justify-between">
-                                    <div>
+                                <div className="flex items-start justify-between gap-4">
+                                    <div className="flex-1 min-w-0">
                                         <p className="text-[11px] text-muted-foreground font-mono mb-1.5">Ride ID: {ride.id}</p>
-                                        <div className="flex items-center gap-2.5">
+                                        <div className="flex items-center gap-2.5 flex-wrap">
                                             {getStatusBadge(ride.status)}
                                             {isRideLive(ride.status) && (
                                                 <a href={`/dashboard/rides/live/${ride.id}`}
@@ -113,9 +113,9 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     <Radio className="h-3 w-3 animate-pulse" /> Live Track
                                                 </a>
                                             )}
+                                            <RideInvoice rideId={ride.id} status={ride.status} />
                                         </div>
                                     </div>
-                                    <RideInvoice rideId={ride.id} status={ride.status} />
                                 </div>
                             </div>
 

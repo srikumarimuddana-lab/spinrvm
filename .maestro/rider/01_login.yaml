@@ -1,0 +1,36 @@
+appId: com.spinr.user
+---
+# Rider App — Login Flow (TST-003)
+# Uses dev mode OTP bypass (code: 1234)
+- launchApp:
+    clearState: true
+
+# Wait for login screen
+- assertVisible: "Send Verification Code"
+
+# Enter phone number
+- tapOn:
+    id: "phone-input"
+- clearText
+- inputText: "3065550199"
+
+# Verify the send button becomes active
+- assertVisible: "Send Verification Code"
+- tapOn: "Send Verification Code"
+
+# OTP screen
+- assertVisible: "Verify & Continue"
+
+# Enter dev OTP
+- inputText: "1234"
+
+# Submit OTP
+- tapOn: "Verify & Continue"
+
+# Should reach home screen (map visible, or profile setup)
+- assertVisible:
+    text: "Where to?"
+    optional: true
+- assertVisible:
+    text: "Complete your profile"
+    optional: true

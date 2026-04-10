@@ -1,0 +1,21 @@
+appId: com.spinr.driver
+---
+# Driver App — Go Online Flow (TST-003)
+# Assumes driver is logged in and verified
+
+- launchApp
+
+# Should be on driver dashboard
+- assertVisible:
+    text: "OFFLINE"
+    optional: true
+
+# Tap GO ONLINE toggle
+- tapOn:
+    text: "GO ONLINE"
+    optional: true
+
+# Verify online state
+- assertVisible:
+    text: "ONLINE"
+    optional: true

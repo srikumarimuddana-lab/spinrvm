@@ -163,6 +163,7 @@ export default function LoginScreen() {
               editable={!loading}
               onFocus={() => setFocused(true)}
               onBlur={() => setFocused(false)}
+              testID="phone-input"
             />
             {isValid && (
               <View style={styles.checkIcon}>
@@ -187,6 +188,7 @@ export default function LoginScreen() {
           onPress={handleSendCode}
           disabled={loading || !isValid}
           activeOpacity={0.85}
+          testID="send-otp-btn"
         >
           {loading ? (
             <ActivityIndicator color="#fff" size="small" />

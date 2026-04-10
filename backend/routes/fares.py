@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Query
+from decimal import Decimal, ROUND_HALF_UP
 try:
     from ..db import db
     from ..geo_utils import point_in_polygon, get_service_area_polygon
@@ -7,6 +8,13 @@ except ImportError:
     from geo_utils import point_in_polygon, get_service_area_polygon
 
 api_router = APIRouter(tags=["Fares"])
+
+# ── Decimal helpers (mirrored from rides.py — kept local to avoid circular import)
+_TWO_PLACES = Decimal('0.01')
+
+def _fd(v) -> float:
+    """Round a raw DB float to 2 decimal places via Decimal to avoid float drift."""
+    return float(Decimal(str(v)).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP))
 
 def serialize_doc(doc):
     return doc
@@ -29,16 +37,18 @@ async def get_fares_for_location(lat: float = Query(...), lng: float = Query(...
         logger.warning("Fares: No active vehicle types found in database!")
         return []
     
-    # Default fares function (used when no service area or no fare_configs)
+    # Default fares function (used when no service area or no fare_configs).
+    # Literal values are passed through _fd() so they are stored as exact
+    # 2-dp floats rather than raw IEEE 754 representations.
     def build_default_fares(vt_list, surge=1.0):
         return [serialize_doc({
             'vehicle_type': vt,
-            'base_fare': 3.50,
-            'per_km_rate': 1.50,
-            'per_minute_rate': 0.25,
-            'minimum_fare': 8.00,
-            'booking_fee': 2.00,
-            'surge_multiplier': surge
+            'base_fare': _fd(3.50),
+            'per_km_rate': _fd(1.50),
+            'per_minute_rate': _fd(0.25),
+            'minimum_fare': _fd(8.00),
+            'booking_fee': _fd(2.00),
+            'surge_multiplier': _fd(surge),
         }) for vt in vt_list]
     
     # Try to find matching service area
@@ -74,14 +84,16 @@ async def get_fares_for_location(lat: float = Query(...), lng: float = Query(...
     for fare in fares:
         vt = vt_map.get(fare['vehicle_type_id'])
         if vt:
+            # Normalise all monetary values from DB through _fd() so downstream
+            # Decimal arithmetic in rides.py starts from clean 2-dp floats.
             result.append({
                 'vehicle_type': vt,
-                'base_fare': fare['base_fare'],
-                'per_km_rate': fare['per_km_rate'],
-                'per_minute_rate': fare['per_minute_rate'],
-                'minimum_fare': fare['minimum_fare'],
-                'booking_fee': fare['booking_fee'],
-                'surge_multiplier': surge
+                'base_fare': _fd(fare['base_fare']),
+                'per_km_rate': _fd(fare['per_km_rate']),
+                'per_minute_rate': _fd(fare['per_minute_rate']),
+                'minimum_fare': _fd(fare['minimum_fare']),
+                'booking_fee': _fd(fare['booking_fee']),
+                'surge_multiplier': _fd(surge),
             })
     
     # If fare_configs exist but none matched vehicle types, fall back

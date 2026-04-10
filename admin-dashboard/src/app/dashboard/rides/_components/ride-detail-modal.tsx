@@ -64,13 +64,20 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
 
     if (!open) return null;
 
-    const phaseDistances = ride?.location_trail ? computePhaseDistances(ride.location_trail) : [];
+    // Prefer stored aggregates (set once at ride completion) over on-the-fly
+    // computation from raw GPS points. Historical rides read directly from
+    // the ride row — no join against driver_location_history needed.
+    const storedPhases: Record<string, number> | null = ride?.phase_distances && Object.keys(ride.phase_distances).length > 0
+        ? ride.phase_distances : null;
+
+    const phaseDistances = storedPhases
+        ? Object.entries(storedPhases).map(([phase, km]) => ({ phase, distance_km: Number(km) || 0, points: 0 }))
+        : (ride?.location_trail ? computePhaseDistances(ride.location_trail) : []);
+
     const phaseMap: Record<string, number> = {};
     for (const p of phaseDistances) phaseMap[p.phase] = p.distance_km;
 
-    // Fallback: if no GPS trail, derive distances from the ride record.
-    // Driver→pickup distance: haversine between driver's initial location and pickup.
-    // Trip distance: ride.distance_km.
+    // Fallback: if we still have nothing, derive from the ride record fields.
     const haversine = (lat1: number, lng1: number, lat2: number, lng2: number) => {
         const R = 6371;
         const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -79,14 +86,18 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
         return 2 * R * Math.asin(Math.sqrt(a));
     };
     if (ride && !phaseMap.navigating_to_pickup) {
-        const dLat = ride.driver_initial_lat ?? ride.driver_lat;
-        const dLng = ride.driver_initial_lng ?? ride.driver_lng;
-        if (dLat && dLng && ride.pickup_lat && ride.pickup_lng) {
-            phaseMap.navigating_to_pickup = haversine(dLat, dLng, ride.pickup_lat, ride.pickup_lng);
+        if (ride.pickup_to_driver_km) {
+            phaseMap.navigating_to_pickup = ride.pickup_to_driver_km;
+        } else {
+            const dLat = ride.driver_initial_lat ?? ride.driver_lat;
+            const dLng = ride.driver_initial_lng ?? ride.driver_lng;
+            if (dLat && dLng && ride.pickup_lat && ride.pickup_lng) {
+                phaseMap.navigating_to_pickup = haversine(dLat, dLng, ride.pickup_lat, ride.pickup_lng);
+            }
         }
     }
-    if (ride && !phaseMap.trip_in_progress && ride.distance_km) {
-        phaseMap.trip_in_progress = ride.distance_km;
+    if (ride && !phaseMap.trip_in_progress) {
+        phaseMap.trip_in_progress = ride.actual_distance_km || ride.distance_km || 0;
     }
 
     return (
@@ -149,7 +160,13 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                             <RideRouteMap
                                                 pickupLat={ride.pickup_lat} pickupLng={ride.pickup_lng}
                                                 dropoffLat={ride.dropoff_lat} dropoffLng={ride.dropoff_lng}
-                                                locationTrail={ride.location_trail}
+                                                locationTrail={
+                                                    // Prefer stored downsampled polyline (set on completion)
+                                                    // over raw trail so we don't hit driver_location_history
+                                                    Array.isArray(ride.route_polyline) && ride.route_polyline.length > 0
+                                                        ? ride.route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] }))
+                                                        : ride.location_trail
+                                                }
                                             />
                                         ) : (
                                             <div className="bg-muted/30 rounded-xl h-[280px] flex flex-col items-center justify-center gap-2">

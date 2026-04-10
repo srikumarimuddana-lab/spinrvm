@@ -283,6 +283,7 @@ class DB:
         self.driver_requirements = BaseCollection('driver_requirements')
         self.driver_notes = BaseCollection('driver_notes')
         self.driver_activity_log = BaseCollection('driver_activity_log')
+        self.driver_daily_stats = BaseCollection('driver_daily_stats')
         self.cloud_messages = BaseCollection('cloud_messages')
         self.audit_logs = BaseCollection('audit_logs')
         self.push_tokens = BaseCollection('push_tokens')

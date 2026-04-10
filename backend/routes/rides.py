@@ -480,6 +480,9 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
     ride_data = ride.dict()
     if service_area_id:
         ride_data['service_area_id'] = service_area_id
+    # Preserve the original planned (straight-line) distance. ride.distance_km
+    # will be overwritten with the actual GPS-measured distance on completion.
+    ride_data['planned_distance_km'] = round(distance_km, 2)
     # Only store airport surcharge when it actually applies
     if airport_fee > 0:
         ride_data['airport_fee'] = round(airport_fee, 2)

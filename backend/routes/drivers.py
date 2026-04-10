@@ -1125,73 +1125,100 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     if not ride:
         raise HTTPException(status_code=404, detail='Ride not found')
 
-    # Recalculate fare based on actual GPS distance from location history
-    actual_distance_km = ride.get('distance_km', 0)
+    # ── Aggregate all GPS breadcrumbs for this ride ──
+    # On completion we compute everything once and store it on the ride row.
+    # After this the admin dashboard reads from the ride row directly — no
+    # need to join against driver_location_history for historical rides.
+    planned_distance = ride.get('planned_distance_km') or ride.get('distance_km', 0) or 0
+    actual_distance_km = planned_distance
+    phase_distances = {}
+    pickup_to_driver_km = 0.0
+    route_polyline = []
+    gps_points_count = 0
+
     try:
-        breadcrumbs = await db.driver_location_history.find({
+        all_breadcrumbs = await db.driver_location_history.find({
             'ride_id': ride_id,
-            'tracking_phase': 'trip_in_progress'
         }).to_list(10000)
+        all_breadcrumbs = [b for b in all_breadcrumbs if b.get('lat') and b.get('lng')]
+        all_breadcrumbs.sort(key=lambda b: str(b.get('timestamp', '')))
+        gps_points_count = len(all_breadcrumbs)
 
-        if breadcrumbs and len(breadcrumbs) >= 2:
-            breadcrumbs.sort(key=lambda b: str(b.get('timestamp', '')))
-            total_dist = 0.0
-            for i in range(1, len(breadcrumbs)):
-                prev = breadcrumbs[i - 1]
-                curr = breadcrumbs[i]
-                if prev.get('lat') and prev.get('lng') and curr.get('lat') and curr.get('lng'):
-                    total_dist += calculate_distance(prev['lat'], prev['lng'], curr['lat'], curr['lng'])
-            if total_dist > 0:
-                actual_distance_km = round(total_dist, 2)
-                logger.info(f"Ride {ride_id}: Recalculated distance = {actual_distance_km}km (estimated was {ride.get('distance_km', 0)}km)")
+        if gps_points_count >= 2:
+            # Compute per-phase distances (attribute segment to current point's phase)
+            phase_totals: Dict[str, float] = {}
+            for i in range(1, len(all_breadcrumbs)):
+                prev = all_breadcrumbs[i - 1]
+                curr = all_breadcrumbs[i]
+                phase = curr.get('tracking_phase') or 'unknown'
+                seg = calculate_distance(prev['lat'], prev['lng'], curr['lat'], curr['lng'])
+                phase_totals[phase] = phase_totals.get(phase, 0.0) + seg
+            phase_distances = {k: round(v, 3) for k, v in phase_totals.items()}
+
+            # Actual distance = trip_in_progress only (the paid portion)
+            actual_distance_km = round(phase_distances.get('trip_in_progress', 0.0), 2)
+            if actual_distance_km == 0:
+                actual_distance_km = planned_distance
+
+            pickup_to_driver_km = round(phase_distances.get('navigating_to_pickup', 0.0), 2)
+
+            # Downsample route polyline to max ~200 points for fast rendering.
+            # Keep trip_in_progress + navigating_to_pickup (drop idle noise).
+            trip_points = [b for b in all_breadcrumbs
+                           if b.get('tracking_phase') in ('navigating_to_pickup', 'trip_in_progress')]
+            if trip_points:
+                MAX_POINTS = 200
+                step = max(1, len(trip_points) // MAX_POINTS)
+                sampled = trip_points[::step]
+                # Always include the last point so the polyline ends at dropoff
+                if sampled and sampled[-1] is not trip_points[-1]:
+                    sampled.append(trip_points[-1])
+                route_polyline = [
+                    [round(p['lat'], 6), round(p['lng'], 6), p.get('tracking_phase', '')]
+                    for p in sampled
+                ]
     except Exception as e:
-        logger.warning(f"Could not recalculate distance for ride {ride_id}: {e}")
+        logger.warning(f"Could not aggregate GPS data for ride {ride_id}: {e}")
 
-    # Recalculate fare if actual distance differs
-    update_fields = {
+    # ── Build update payload ──
+    update_fields: Dict[str, Any] = {
         'status': 'completed',
         'ride_completed_at': datetime.utcnow(),
         'payment_status': 'completed',
-        'updated_at': datetime.utcnow()
+        'updated_at': datetime.utcnow(),
+        'planned_distance_km': planned_distance,
+        'actual_distance_km': actual_distance_km,
+        'pickup_to_driver_km': pickup_to_driver_km,
+        'phase_distances': phase_distances,
+        'route_polyline': route_polyline,
+        'gps_points_count': gps_points_count,
     }
-    
-    if actual_distance_km != ride.get('distance_km', 0):
-        update_fields['distance_km'] = actual_distance_km
-        # Logic to recalculate final fare would go here if needed.
-        # Assuming the final fare remains what was agreed initially unless surge/etc changes
-        # For this gap fix, we just record the actual distance for audit.
-        
-    await db.rides.update_one(
-        {'id': ride_id},
-        {'$set': update_fields}
-    )
 
-    # GAP FIX: Post-ride receipt (email/in-app)
-    # Stub: Send email receipt to rider
-    rider = await db.users.find_one({'id': ride.get('rider_id')})
-    if rider and rider.get('email'):
-        logger.info(f"Sending email receipt for ride {ride_id} to {rider['email']}")
-        # In a real implementation: send_email(to=rider['email'], template="ride_receipt", data=ride)
-
-
-    if actual_distance_km != ride.get('distance_km', 0) and actual_distance_km > 0:
-        # Recalculate using per_km_rate
-        per_km_rate = ride.get('distance_fare', 0) / ride.get('distance_km', 1) if ride.get('distance_km', 0) > 0 else 0
+    # Recalculate fare if actual distance differs materially from estimate
+    if actual_distance_km > 0 and abs(actual_distance_km - planned_distance) > 0.1:
+        per_km_rate = (ride.get('distance_fare', 0) / planned_distance) if planned_distance > 0 else 0
         new_distance_fare = round(per_km_rate * actual_distance_km, 2)
         new_total_fare = round(
-            ride.get('base_fare', 0) + new_distance_fare + ride.get('time_fare', 0) + ride.get('booking_fee', 0),
-            2
+            ride.get('base_fare', 0) + new_distance_fare + ride.get('time_fare', 0)
+            + ride.get('booking_fee', 0) + (ride.get('airport_fee') or 0),
+            2,
         )
         new_driver_earnings = round(
             ride.get('base_fare', 0) + new_distance_fare + ride.get('time_fare', 0),
-            2
+            2,
         )
         update_fields.update({
-            'actual_distance_km': actual_distance_km,
+            'distance_km': actual_distance_km,  # overwrite with actual
             'distance_fare': new_distance_fare,
             'total_fare': new_total_fare,
             'driver_earnings': new_driver_earnings,
         })
+        logger.info(
+            f"Ride {ride_id}: fare recalculated on completion. "
+            f"planned={planned_distance}km actual={actual_distance_km}km"
+        )
+    else:
+        update_fields['distance_km'] = actual_distance_km
 
     try:
         await db.rides.update_one(
@@ -1199,18 +1226,24 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             {'$set': update_fields}
         )
     except Exception as e:
-        # The `actual_distance_km` column may not exist in older deployments.
-        # Retry without it so ride completion never fails due to a missing column.
+        # Some columns may not exist yet in older deployments. Retry with only
+        # the essential fields so ride completion never fails.
         err_msg = str(e).lower()
-        if 'actual_distance_km' in err_msg or 'column' in err_msg or 'pgrst204' in err_msg:
-            logger.warning(f"Retrying ride update without actual_distance_km: {e}")
-            safe_updates = {k: v for k, v in update_fields.items() if k != 'actual_distance_km'}
+        if 'column' in err_msg or 'pgrst204' in err_msg:
+            logger.warning(f"Retrying ride update with minimal fields: {e}")
+            safe_keys = {'status', 'ride_completed_at', 'payment_status', 'updated_at', 'distance_km'}
+            safe_updates = {k: v for k, v in update_fields.items() if k in safe_keys}
             await db.rides.update_one(
                 {'id': ride_id, 'driver_id': driver['id']},
                 {'$set': safe_updates}
             )
         else:
             raise
+
+    # Post-ride receipt notification stub
+    rider = await db.users.find_one({'id': ride.get('rider_id')})
+    if rider and rider.get('email'):
+        logger.info(f"Sending email receipt for ride {ride_id} to {rider['email']}")
     
     # Update driver stats
     await db.drivers.update_one(

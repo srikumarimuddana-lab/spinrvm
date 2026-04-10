@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { sendRideInvoice, getRideInvoice } from "@/lib/api";
 import { Send, Download } from "lucide-react";
+import { computePhaseDistances } from "./ride-ui-helpers";
 
 interface Props {
     rideId: string;
@@ -116,6 +117,56 @@ export default function RideInvoice({ rideId, status }: Props) {
                 y += 4;
             }
 
+            // Actual vs estimated distance
+            if (data.actual_distance_km && data.actual_distance_km !== data.distance_km) {
+                doc.setTextColor(100);
+                doc.setFontSize(8);
+                y += 2;
+                doc.text(`Actual distance traveled: ${data.actual_distance_km.toFixed(2)} km (estimated: ${data.distance_km?.toFixed(1)} km)`, margin + 8, y);
+                y += 4;
+            }
+
+            // Route map image from GPS trail
+            if (data.location_trail && data.location_trail.length > 1 && data.pickup_lat) {
+                y += 4;
+                doc.setTextColor(0);
+                doc.setFontSize(9);
+                doc.setFont("helvetica", "bold");
+                doc.text("Route Taken", margin + 8, y);
+                y += 2;
+                doc.setFont("helvetica", "normal");
+
+                try {
+                    // Build a static map URL using GPS trail points
+                    // Sample trail to ~30 points for URL length
+                    const trail = data.location_trail;
+                    const step = Math.max(1, Math.floor(trail.length / 30));
+                    const sampled = trail.filter((_: any, i: number) => i % step === 0 || i === trail.length - 1);
+                    const pathCoords = sampled.map((p: any) => `${p.lat},${p.lng}`).join("|");
+
+                    const staticMapUrl = `https://maps.googleapis.com/maps/api/staticmap?size=500x200&maptype=roadmap`
+                        + `&markers=color:green|label:P|${data.pickup_lat},${data.pickup_lng}`
+                        + `&markers=color:red|label:D|${data.dropoff_lat},${data.dropoff_lng}`
+                        + `&path=color:0x3B82F6ff|weight:3|${pathCoords}`
+                        + `&key=${process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ""}`;
+
+                    // Fetch and embed the static map image
+                    const imgResponse = await fetch(staticMapUrl);
+                    if (imgResponse.ok) {
+                        const imgBlob = await imgResponse.blob();
+                        const imgBase64 = await new Promise<string>((resolve) => {
+                            const reader = new FileReader();
+                            reader.onloadend = () => resolve(reader.result as string);
+                            reader.readAsDataURL(imgBlob);
+                        });
+                        doc.addImage(imgBase64, "PNG", margin, y, pageW - 2 * margin, 50);
+                        y += 54;
+                    }
+                } catch (mapErr) {
+                    console.log("Failed to embed route map in invoice:", mapErr);
+                }
+            }
+
             y += 6;
             doc.setDrawColor(200);
             doc.line(margin, y, pageW - margin, y);
@@ -196,8 +247,57 @@ export default function RideInvoice({ rideId, status }: Props) {
             doc.setTextColor(100);
             doc.text(`Payment: ${(data.payment_method || "card").toUpperCase()}  |  Status: ${(data.payment_status || "pending").toUpperCase()}`, margin, y);
 
-            // Footer
-            y = 280;
+            // Phase distance log
+            if (data.location_trail && data.location_trail.length > 1) {
+                const phases = computePhaseDistances(data.location_trail);
+                if (phases.length > 0) {
+                    y += 10;
+                    doc.setDrawColor(200);
+                    doc.line(margin, y, pageW - margin, y);
+                    y += 8;
+
+                    doc.setFontSize(11);
+                    doc.setFont("helvetica", "bold");
+                    doc.setTextColor(0);
+                    doc.text("Distance Log by Phase", margin, y);
+                    y += 8;
+
+                    doc.setFontSize(9);
+                    doc.setFont("helvetica", "normal");
+
+                    const phaseLabels: Record<string, string> = {
+                        navigating_to_pickup: "Navigating to Pickup",
+                        arrived_at_pickup: "Waiting at Pickup",
+                        trip_in_progress: "Trip in Progress",
+                        online_idle: "Online Idle",
+                    };
+
+                    doc.setTextColor(80);
+                    for (const p of phases) {
+                        const label = phaseLabels[p.phase] || p.phase.replace(/_/g, " ");
+                        doc.text(label, margin, y);
+                        doc.text(`${p.distance_km} km (${p.points} GPS pts)`, pageW - margin, y, { align: "right" });
+                        y += lineH;
+                    }
+
+                    // Total GPS distance
+                    y += 2;
+                    doc.setFont("helvetica", "bold");
+                    doc.setTextColor(0);
+                    const totalGps = phases.reduce((s, p) => s + p.distance_km, 0);
+                    doc.text("Total GPS Distance", margin, y);
+                    doc.text(`${totalGps.toFixed(2)} km`, pageW - margin, y, { align: "right" });
+                    y += lineH;
+                }
+            }
+
+            // Footer — check if we need a new page
+            if (y > 265) {
+                doc.addPage();
+                y = margin;
+            } else {
+                y = 280;
+            }
             doc.setFontSize(8);
             doc.setTextColor(160);
             doc.text("Thank you for riding with Spinr!", pageW / 2, y, { align: "center" });

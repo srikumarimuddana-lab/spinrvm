@@ -448,6 +448,7 @@ export default function DriverDashboard() {
           rideState={rideState}
           ride={activeRide?.ride || null}
           rider={activeRide?.rider || null}
+          driverLocation={location}
           isLoading={false}
           otpInput={otpInput}
           setOtpInput={setOtpInput}

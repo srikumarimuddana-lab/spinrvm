@@ -1192,6 +1192,8 @@ async def admin_get_ride_invoice(ride_id: str):
         "pickup_lng": ride.get("pickup_lng"),
         "dropoff_lat": ride.get("dropoff_lat"),
         "dropoff_lng": ride.get("dropoff_lng"),
+        "actual_distance_km": ride.get("actual_distance_km"),
+        "location_trail": ride.get("location_trail", []),
     }
 
 

@@ -66,6 +66,17 @@ export default function DriverDashboard() {
     fadeAnim,
   } = useDriverDashboard();
 
+  const distanceToPickup = React.useMemo(() => {
+    if (!location?.coords || !activeRide?.ride?.pickup_lat || !activeRide?.ride?.pickup_lng) return null;
+    const R = 6371000;
+    const φ1 = (location.coords.latitude * Math.PI) / 180;
+    const φ2 = (activeRide.ride.pickup_lat * Math.PI) / 180;
+    const Δφ = ((activeRide.ride.pickup_lat - location.coords.latitude) * Math.PI) / 180;
+    const Δλ = ((activeRide.ride.pickup_lng - location.coords.longitude) * Math.PI) / 180;
+    const a = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2;
+    return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+  }, [location?.coords, activeRide?.ride?.pickup_lat, activeRide?.ride?.pickup_lng]);
+
   const [countdown, setCountdownState] = useState(countdownSeconds);
   // Countdown timer effect
   useEffect(() => {
@@ -338,12 +349,17 @@ export default function DriverDashboard() {
           setOtpInput={setOtpInput}
           onVerifyOTP={(otp) => verifyOTP(activeRide!.ride.id, otp)}
           onNavigate={openNavigation}
-          onArriveAtPickup={() => arriveAtPickup(activeRide!.ride.id)}
+          onArriveAtPickup={() => arriveAtPickup(
+            activeRide!.ride.id,
+            location?.coords.latitude,
+            location?.coords.longitude,
+          )}
           onStartRide={() => startRide(activeRide!.ride.id)}
           onCompleteRide={() => completeRide(activeRide!.ride.id)}
           onCancelRide={() => cancelRide(activeRide!.ride.id)}
           slideUpAnim={slideUpAnim}
           fadeAnim={fadeAnim}
+          distanceToPickup={distanceToPickup}
         />
       )}
       {rideState === 'trip_completed' && (

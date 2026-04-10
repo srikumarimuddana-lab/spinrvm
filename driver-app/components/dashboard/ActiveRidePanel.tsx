@@ -54,6 +54,7 @@ interface ActiveRidePanelProps {
   onCancelRide: () => void;
   slideUpAnim: Animated.Value;
   fadeAnim: Animated.Value;
+  distanceToPickup?: number | null;
 }
 
 export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
@@ -71,6 +72,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   onCancelRide,
   slideUpAnim,
   fadeAnim,
+  distanceToPickup,
 }) => {
   // All hooks MUST be before any early return to avoid React ordering issues
   const [waitSeconds, setWaitSeconds] = useState(0);
@@ -269,18 +271,25 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               <Ionicons name="navigate" size={20} color="#fff" />
               <Text style={styles.actionPrimaryText}>Navigate to Pickup</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.actionSecondary}
-              onPress={onArriveAtPickup}
-              disabled={isLoading}
-            >
-              {isLoading ? <ActivityIndicator color={ACCENT} /> : (
-                <>
-                  <Ionicons name="flag" size={18} color={ACCENT} />
-                  <Text style={[styles.actionSecondaryText, { color: ACCENT }]}>I've Arrived at Pickup</Text>
-                </>
-              )}
-            </TouchableOpacity>
+            {(() => {
+              const atPickup = distanceToPickup === null || distanceToPickup === undefined || distanceToPickup <= 150;
+              return (
+                <TouchableOpacity
+                  style={[styles.actionSecondary, !atPickup && styles.actionSecondaryDisabled]}
+                  onPress={onArriveAtPickup}
+                  disabled={isLoading || !atPickup}
+                >
+                  {isLoading ? <ActivityIndicator color={ACCENT} /> : (
+                    <>
+                      <Ionicons name="flag" size={18} color={ACCENT} />
+                      <Text style={[styles.actionSecondaryText, { color: ACCENT }]}>
+                        {distanceToPickup !== null && distanceToPickup !== undefined && distanceToPickup > 150 ? `${distanceToPickup}m away` : "I've Arrived at Pickup"}
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              );
+            })()}
           </View>
         ) : null}
 
@@ -524,6 +533,9 @@ const styles = StyleSheet.create({
     borderColor: '#F0F0F0',
   },
   actionSecondaryText: { fontSize: 15, fontWeight: '700' },
+  actionSecondaryDisabled: {
+    opacity: 0.45,
+  },
 
   // Cancel
   cancelBtn: { paddingVertical: 12, alignItems: 'center', marginTop: 4 },

@@ -31,6 +31,11 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 import uuid
 
+try:
+    from ..utils.crypto import hash_otp
+except ImportError:
+    from utils.crypto import hash_otp
+
 logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
 api_router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -95,10 +100,10 @@ async def send_otp(request: Request, body: SendOTPRequest):
     
     otp_record = OTPRecord(
         phone=phone,
-        code=otp_code,
+        code=hash_otp(otp_code),   # stored as SHA-256 hash, never plain text
         expires_at=datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
     )
-    
+
     try:
         await db.otp_records.delete_many({'phone': phone})
         await db.otp_records.insert_one(otp_record.dict())
@@ -137,16 +142,17 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
     try:
         otp_record = await db.otp_records.find_one({
             'phone': phone,
-            'code': code,
+            'code': hash_otp(code),   # compare hashes, never plain text
             'verified': False
         })
     except Exception as e:
         logger.warning(f'Could not query OTP from DB: {e}')
-    
+
     # Dev fallback: accept code 1234 when no OTP record found (Twilio not configured)
+    # ENV gate is enforced separately in the OTP lockout layer (Sprint 4).
     if not otp_record and code == '1234':
-        logger.info(f'Dev mode: accepting code 1234 for {phone}')
-        otp_record = {'id': 'dev', 'phone': phone, 'code': code, 'expires_at': datetime.utcnow() + timedelta(minutes=5)}
+        logger.info(f'Dev mode: accepting code 1234 for {phone[-4:]}')
+        otp_record = {'id': 'dev', 'phone': phone, 'code': hash_otp(code), 'expires_at': datetime.utcnow() + timedelta(minutes=5)}
     
     if not otp_record:
         raise HTTPException(status_code=400, detail='Invalid verification code')

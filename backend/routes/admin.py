@@ -11,11 +11,13 @@ try:
     from ..db import db  # type: ignore
     from ..settings_loader import get_app_settings  # type: ignore
     from ..core.config import settings
+    from ..routes.fares import invalidate_fare_cache  # type: ignore
 except ImportError:
     from dependencies import get_current_user, get_admin_user  # type: ignore
     from db import db  # type: ignore
     from settings_loader import get_app_settings  # type: ignore
     from core.config import settings
+    from routes.fares import invalidate_fare_cache  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -340,6 +342,8 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
     if update_payload:
         update_payload["updated_at"] = datetime.utcnow().isoformat()
         await db.service_areas.update_one({"id": area_id}, {"$set": update_payload})
+    # PERF-001: Invalidate fare cache — surge/pricing may have changed
+    await invalidate_fare_cache()
     return {"message": "Service area updated"}
 
 
@@ -347,6 +351,8 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
 async def admin_delete_service_area(area_id: str):
     """Delete service area."""
     await db.service_areas.delete_many({"id": area_id})
+    # PERF-001: Invalidate fare cache
+    await invalidate_fare_cache()
     return {"message": "Service area deleted"}
 
 

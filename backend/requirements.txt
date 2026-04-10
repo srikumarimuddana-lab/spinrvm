@@ -72,6 +72,9 @@ pytest>=8.0.0
 black>=24.0.0
 flake8>=7.0.0
 
+# Redis (optional — transparent in-process fallback when REDIS_URL unset)
+redis[asyncio]>=5.0.0
+
 # Additional dependencies
 certifi>=2024.0.0
 idna>=3.6

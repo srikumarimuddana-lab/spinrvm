@@ -554,6 +554,46 @@ async def get_ride(ride_id: str, current_user: dict = Depends(get_current_user))
             # Add to response
             ride['driver'] = assigned_driver
 
+    # Derive free_cancel_seconds_remaining + cancellation_fee from app_settings (UX-001).
+    # These allow the frontend to show accurate countdown/fee without hardcoding.
+    try:
+        from settings_loader import get_app_settings  # type: ignore
+    except ImportError:
+        try:
+            from ..settings_loader import get_app_settings  # type: ignore
+        except ImportError:
+            get_app_settings = None  # type: ignore
+
+    free_cancel_window = 120
+    cancellation_fee_amount = 3.0
+    if get_app_settings:
+        try:
+            settings = await get_app_settings()
+            free_cancel_window = int(settings.get('free_cancel_window_seconds', 120))
+            cancellation_fee_amount = float(settings.get('cancellation_fee', 3.0))
+        except Exception:
+            pass
+
+    driver_accepted_at = ride.get('driver_accepted_at')
+    if driver_accepted_at:
+        from datetime import datetime, timezone
+        try:
+            if isinstance(driver_accepted_at, str):
+                accepted_dt = datetime.fromisoformat(driver_accepted_at.replace('Z', '+00:00'))
+            else:
+                accepted_dt = driver_accepted_at
+            if accepted_dt.tzinfo is None:
+                accepted_dt = accepted_dt.replace(tzinfo=timezone.utc)
+            elapsed = int((datetime.now(timezone.utc) - accepted_dt).total_seconds())
+            ride['free_cancel_seconds_remaining'] = max(0, free_cancel_window - elapsed)
+        except Exception:
+            ride['free_cancel_seconds_remaining'] = 0
+    else:
+        ride['free_cancel_seconds_remaining'] = None  # driver not yet accepted
+
+    ride['free_cancel_window_seconds'] = free_cancel_window
+    ride['cancellation_fee'] = cancellation_fee_amount
+
     def serialize_doc(doc): return doc
     return serialize_doc(ride)
 

@@ -15,6 +15,7 @@ import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
 import { SOSButton } from '@shared/components/SOSButton';
+import { FreeCancelTimer } from '../components/FreeCancelTimer';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 const COLORS = SpinrConfig.theme.colors;
@@ -37,7 +38,10 @@ export default function DriverArrivedScreen() {
   const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
   const fare = currentRide?.total_fare || 0;
-  const cancellationFee = Math.min(5, fare * 0.2);
+  // Use server-provided cancellation fee; fall back to $3 default (matches app_settings).
+  // The old Math.min(5, fare * 0.2) formula did not match the server-side value.
+  const cancellationFee = (currentRide as any)?.cancellation_fee ?? 3.0;
+  const freeCancelWindowSeconds = (currentRide as any)?.free_cancel_window_seconds ?? 120;
   const pickupOtp = currentRide?.pickup_otp || '----';
 
   const handleCancelPress = () => {
@@ -55,6 +59,8 @@ export default function DriverArrivedScreen() {
       ],
     });
   };
+
+  const cancelDialogMessage = `Your driver has arrived and is waiting. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`;
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => { handleCancelPress(); return true; });
@@ -328,10 +334,19 @@ export default function DriverArrivedScreen() {
             </TouchableOpacity>
           </View>
 
+          {/* Cancellation policy timer */}
+          <View style={{ marginBottom: 8 }}>
+            <FreeCancelTimer
+              driverAcceptedAt={(currentRide as any)?.driver_accepted_at}
+              freeCancelWindowSeconds={freeCancelWindowSeconds}
+              cancellationFee={cancellationFee}
+            />
+          </View>
+
           {/* Cancel link */}
           <TouchableOpacity style={styles.cancelLink} onPress={handleCancelPress}>
             <Text style={styles.cancelLinkText}>
-              Cancel Ride (fee: ${cancellationFee.toFixed(2)})
+              Cancel Ride
             </Text>
           </TouchableOpacity>
 

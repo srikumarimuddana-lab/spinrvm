@@ -68,6 +68,27 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
     const phaseMap: Record<string, number> = {};
     for (const p of phaseDistances) phaseMap[p.phase] = p.distance_km;
 
+    // Fallback: if no GPS trail, derive distances from the ride record.
+    // Driver→pickup distance: haversine between driver's initial location and pickup.
+    // Trip distance: ride.distance_km.
+    const haversine = (lat1: number, lng1: number, lat2: number, lng2: number) => {
+        const R = 6371;
+        const dLat = ((lat2 - lat1) * Math.PI) / 180;
+        const dLng = ((lng2 - lng1) * Math.PI) / 180;
+        const a = Math.sin(dLat / 2) ** 2 + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+        return 2 * R * Math.asin(Math.sqrt(a));
+    };
+    if (ride && !phaseMap.navigating_to_pickup) {
+        const dLat = ride.driver_initial_lat ?? ride.driver_lat;
+        const dLng = ride.driver_initial_lng ?? ride.driver_lng;
+        if (dLat && dLng && ride.pickup_lat && ride.pickup_lng) {
+            phaseMap.navigating_to_pickup = haversine(dLat, dLng, ride.pickup_lat, ride.pickup_lng);
+        }
+    }
+    if (ride && !phaseMap.trip_in_progress && ride.distance_km) {
+        phaseMap.trip_in_progress = ride.distance_km;
+    }
+
     return (
         <>
             <Dialog open={open} onOpenChange={v => !v && onClose()}>

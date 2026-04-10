@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, validator
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import uuid
@@ -232,3 +232,26 @@ class CreateRideRequest(BaseModel):
     scheduled_time: Optional[datetime] = None
     corporate_account_id: Optional[str] = None
     payment_method: str = "card"
+
+    # ── Input validation (SEC-017) ──────────────────────────────────────── #
+
+    @validator('pickup_address', 'dropoff_address')
+    def validate_address(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) < 3:
+            raise ValueError('Address must be at least 3 characters')
+        if len(v) > 500:
+            raise ValueError('Address must be 500 characters or fewer')
+        return v
+
+    @validator('pickup_lat', 'dropoff_lat')
+    def validate_lat(cls, v: float) -> float:
+        if not (-90.0 <= v <= 90.0):
+            raise ValueError('Latitude must be between -90 and 90')
+        return v
+
+    @validator('pickup_lng', 'dropoff_lng')
+    def validate_lng(cls, v: float) -> float:
+        if not (-180.0 <= v <= 180.0):
+            raise ValueError('Longitude must be between -180 and 180')
+        return v

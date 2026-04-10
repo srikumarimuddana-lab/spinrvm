@@ -1,0 +1,43 @@
+# ── Version control ───────────────────────────────────────────────────────────
+.git
+.gitignore
+.gitattributes
+
+# ── Development / IDE ─────────────────────────────────────────────────────────
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.hypothesis
+htmlcov
+.coverage
+coverage.xml
+*.egg-info
+
+# ── Secrets & credentials — NEVER bake into image ─────────────────────────────
+.env
+.env.*
+*.env
+google-services.json
+GoogleService-Info.plist
+serviceAccountKey.json
+*secret*
+*credential*
+*private_key*
+
+# ── Docs & tests — not needed in runtime image ─────────────────────────────────
+docs/
+tests/
+README*
+*.md
+Makefile
+
+# ── Docker build artefacts ────────────────────────────────────────────────────
+Dockerfile*
+.dockerignore
+docker-compose*.yml

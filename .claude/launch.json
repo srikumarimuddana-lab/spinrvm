@@ -1,0 +1,41 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Admin Dashboard",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "admin-dashboard", "run", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "Rider App (Metro)",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "frontend", "run", "start"],
+      "port": 8081
+    },
+    {
+      "name": "Driver App (Metro)",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "rider-app", "run", "start"],
+      "port": 8082
+    },
+    {
+      "name": "Rider App (Web)",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "frontend", "run", "web"],
+      "port": 19006
+    },
+    {
+      "name": "Driver App (Web)",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "rider-app", "run", "web"],
+      "port": 19007
+    },
+    {
+      "name": "Backend API",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "uvicorn", "backend.server:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],
+      "port": 8000
+    }
+  ]
+}

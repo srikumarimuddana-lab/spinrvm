@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from decimal import Decimal, ROUND_HALF_UP
 try:
     from ..dependencies import get_current_user, generate_otp
     from ..schemas import CreateRideRequest, Ride, UserProfile, RideRatingRequest
@@ -23,6 +24,20 @@ from datetime import datetime, timedelta
 import uuid
 import secrets
 from pydantic import BaseModel
+
+# ── Decimal helpers for accurate currency arithmetic ──────────────────────────
+_TWO_PLACES = Decimal('0.01')
+
+def _d(v) -> Decimal:
+    """Convert any numeric value to Decimal safely (avoids float precision loss)."""
+    return Decimal(str(v))
+
+def _round(v: Decimal) -> Decimal:
+    return v.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
+
+def _f(v: Decimal) -> float:
+    """Convert Decimal back to float for Pydantic / JSON serialisation."""
+    return float(v)
 api_router = APIRouter(prefix="/rides", tags=["Rides"])
 
 async def create_demo_drivers(vehicle_type_id: str, lat: float, lng: float):
@@ -313,36 +328,36 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
     
     estimates = []
     for fare_info in fares:
-        surge_multiplier = fare_info.get('surge_multiplier', 1.0)
-        distance_fare = fare_info['per_km_rate'] * distance_km * surge_multiplier
-        time_fare = fare_info['per_minute_rate'] * duration_minutes * surge_multiplier
-        booking_fee = fare_info.get('booking_fee', 2.0)
-        
-        total_fare = fare_info['base_fare'] + distance_fare + time_fare + booking_fee
-        total_fare = max(total_fare, fare_info['minimum_fare'])
-        
+        # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
+        surge = _d(fare_info.get('surge_multiplier', 1.0))
+        distance_fare = _round(_d(fare_info['per_km_rate']) * _d(distance_km) * surge)
+        time_fare = _round(_d(fare_info['per_minute_rate']) * _d(duration_minutes) * surge)
+        booking_fee = _d(fare_info.get('booking_fee', 2.0))
+        total_fare = _round(_d(fare_info['base_fare']) + distance_fare + time_fare + booking_fee)
+        total_fare = max(total_fare, _d(fare_info['minimum_fare']))
+
         # Check real driver availability for this vehicle type
         vt_id = fare_info['vehicle_type'].get('id')
         nearby_for_type = drivers_by_type.get(vt_id, [])
         driver_count = len(nearby_for_type)
         is_available = driver_count > 0
-        
+
         # Calculate ETA: closest driver's distance / avg speed (30km/h in city)
         eta_minutes = None
         if nearby_for_type:
             closest = min(nearby_for_type, key=lambda x: x['distance_km'])
             eta_minutes = max(2, int(closest['distance_km'] / 30 * 60) + 1)
-        
+
         estimates.append({
             'vehicle_type': fare_info['vehicle_type'],
             'distance_km': round(distance_km, 2),
             'duration_minutes': duration_minutes,
-            'base_fare': fare_info['base_fare'],
-            'distance_fare': round(distance_fare, 2),
-            'time_fare': round(time_fare, 2),
-            'booking_fee': booking_fee,
-            'surge_multiplier': surge_multiplier,
-            'total_fare': round(total_fare, 2),
+            'base_fare': _f(_d(fare_info['base_fare'])),
+            'distance_fare': _f(distance_fare),
+            'time_fare': _f(time_fare),
+            'booking_fee': _f(booking_fee),
+            'surge_multiplier': _f(surge),
+            'total_fare': _f(total_fare),
             'available': is_available,
             'eta_minutes': eta_minutes,
             'driver_count': driver_count,
@@ -369,19 +384,19 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
     if not fare_info:
         raise HTTPException(status_code=400, detail='Invalid vehicle type')
         
-    surge_multiplier = fare_info.get('surge_multiplier', 1.0)
-    
-    distance_fare = fare_info['per_km_rate'] * distance_km * surge_multiplier
-    time_fare = fare_info['per_minute_rate'] * duration_minutes * surge_multiplier
-    booking_fee = fare_info.get('booking_fee', 2.0)
-    
-    total_fare = fare_info['base_fare'] + distance_fare + time_fare + booking_fee
-    total_fare = max(total_fare, fare_info['minimum_fare'])
-    
+    # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
+    surge = _d(fare_info.get('surge_multiplier', 1.0))
+    distance_fare = _round(_d(fare_info['per_km_rate']) * _d(distance_km) * surge)
+    time_fare = _round(_d(fare_info['per_minute_rate']) * _d(duration_minutes) * surge)
+    booking_fee = _d(fare_info.get('booking_fee', 2.0))
+    base_fare = _d(fare_info['base_fare'])
+    total_fare = _round(base_fare + distance_fare + time_fare + booking_fee)
+    total_fare = max(total_fare, _d(fare_info['minimum_fare']))
+
     # Earnings split: Distance fare goes to driver, booking fee goes to admin
-    driver_earnings = fare_info['base_fare'] + distance_fare + time_fare
+    driver_earnings = _round(base_fare + distance_fare + time_fare)
     admin_earnings = booking_fee
-    
+
     ride = Ride(
         rider_id=current_user['id'],
         vehicle_type_id=request.vehicle_type_id,
@@ -393,17 +408,17 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
         dropoff_lng=request.dropoff_lng,
         distance_km=round(distance_km, 2),
         duration_minutes=duration_minutes,
-        base_fare=fare_info['base_fare'],
-        distance_fare=round(distance_fare, 2),
-        time_fare=round(time_fare, 2),
-        booking_fee=booking_fee,
-        surge_multiplier=surge_multiplier,
-        total_fare=round(total_fare, 2),
+        base_fare=_f(base_fare),
+        distance_fare=_f(distance_fare),
+        time_fare=_f(time_fare),
+        booking_fee=_f(booking_fee),
+        surge_multiplier=_f(surge),
+        total_fare=_f(total_fare),
         stops=request.stops,
         is_scheduled=request.is_scheduled,
         scheduled_time=request.scheduled_time,
-        driver_earnings=round(driver_earnings, 2),
-        admin_earnings=round(admin_earnings, 2),
+        driver_earnings=_f(driver_earnings),
+        admin_earnings=_f(admin_earnings),
         payment_method=request.payment_method,
         status='searching',
         pickup_otp=generate_otp(),

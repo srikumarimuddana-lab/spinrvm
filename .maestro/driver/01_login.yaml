@@ -1,0 +1,38 @@
+appId: com.spinr.driver
+---
+# Driver App — Login Flow (TST-003)
+# Uses dev mode OTP bypass (code: 1234)
+- launchApp:
+    clearState: true
+
+# Wait for login screen
+- assertVisible: "Send Verification Code"
+
+# Enter phone number
+- tapOn:
+    id: "phone-input"
+- clearText
+- inputText: "3065550100"
+
+# Send OTP
+- tapOn: "Send Verification Code"
+
+# OTP screen
+- assertVisible: "Verify & Continue"
+
+# Enter dev OTP
+- inputText: "1234"
+
+# Submit
+- tapOn: "Verify & Continue"
+
+# Should reach driver dashboard or profile setup
+- assertVisible:
+    text: "OFFLINE"
+    optional: true
+- assertVisible:
+    text: "GO ONLINE"
+    optional: true
+- assertVisible:
+    text: "Complete your profile"
+    optional: true

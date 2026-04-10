@@ -51,6 +51,20 @@ export function setInMemoryToken(token: string | null) {
   console.log('[API] In-memory token:', token ? 'SET' : 'CLEARED');
 }
 
+// ── Token refresh callback ──
+// The auth store registers a refresh function here during initialization.
+// This avoids a circular import between client.ts ↔ authStore.ts.
+// On a 401, the client calls this once; if it returns true, the original
+// request is retried with the newly-stored in-memory token.
+type RefreshFn = () => Promise<boolean>;
+let _refreshCallback: RefreshFn | null = null;
+let _isRefreshing = false;
+let _refreshPromise: Promise<boolean> | null = null;
+
+export function setRefreshCallback(fn: RefreshFn): void {
+  _refreshCallback = fn;
+}
+
 // Helper to get stored token
 const getStoredToken = async (): Promise<string | null> => {
   try {
@@ -137,7 +151,27 @@ const recordApiError = (entry: ApiErrorLogEntry) => {
   );
 };
 
-const handleApiError = async (response: Response, method: string, url: string): Promise<never> => {
+const handleApiError = async (response: Response, method: string, url: string, retryFn?: () => Promise<any>): Promise<never> => {
+  // On 401, attempt a single silent token refresh then retry the original request.
+  if (response.status === 401 && _refreshCallback && retryFn && url !== '/auth/refresh') {
+    try {
+      // Deduplicate concurrent refresh calls — only one in-flight at a time.
+      if (!_isRefreshing) {
+        _isRefreshing = true;
+        _refreshPromise = _refreshCallback().finally(() => {
+          _isRefreshing = false;
+          _refreshPromise = null;
+        });
+      }
+      const refreshed = await _refreshPromise!;
+      if (refreshed) {
+        return retryFn() as any; // retry with the new token now in _inMemoryToken
+      }
+    } catch {
+      // refresh failed — fall through to throw the original 401
+    }
+  }
+
   const errorData = await response.json().catch(() => ({}));
   const message = extractErrorMessage(errorData);
   const requestId = response.headers.get('x-request-id') || errorData?.error?.request_id;
@@ -178,7 +212,7 @@ const client = {
       headers,
     });
 
-    if (!response.ok) await handleApiError(response, 'GET', url);
+    if (!response.ok) await handleApiError(response, 'GET', url, () => client.get(url, config));
 
     const data = await response.json();
     return { data, status: response.status };
@@ -200,7 +234,7 @@ const client = {
       body: body ? JSON.stringify(body) : undefined,
     });
 
-    if (!response.ok) await handleApiError(response, 'POST', url);
+    if (!response.ok) await handleApiError(response, 'POST', url, () => client.post(url, body, config));
 
     const data = await response.json();
     return { data, status: response.status };
@@ -227,7 +261,7 @@ const client = {
       body: body === undefined || body === null ? undefined : (isFormData ? body : JSON.stringify(body)),
     });
 
-    if (!response.ok) await handleApiError(response, 'PUT', url);
+    if (!response.ok) await handleApiError(response, 'PUT', url, () => client.put(url, body, config));
 
     const data = await response.json();
     return { data, status: response.status };
@@ -249,7 +283,7 @@ const client = {
       body: body ? JSON.stringify(body) : undefined,
     });
 
-    if (!response.ok) await handleApiError(response, 'PATCH', url);
+    if (!response.ok) await handleApiError(response, 'PATCH', url, () => client.patch(url, body, config));
 
     const data = await response.json();
     return { data, status: response.status };
@@ -270,7 +304,7 @@ const client = {
       headers,
     });
 
-    if (!response.ok) await handleApiError(response, 'DELETE', url);
+    if (!response.ok) await handleApiError(response, 'DELETE', url, () => client.delete(url, config));
 
     const data = await response.json().catch(() => ({} as T));
     return { data, status: response.status };

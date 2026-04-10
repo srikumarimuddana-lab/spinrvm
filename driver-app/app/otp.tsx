@@ -143,14 +143,12 @@ export default function OtpScreen() {
           phone: phoneNumber,
           code: code,
         });
-        const { token, user: userData } = response.data;
+        const { token, refresh_token, expires_in, user: userData } = response.data;
         if (token) {
-          setInMemoryToken(token);
-          await storage.setItem('auth_token', token);
+          await useAuthStore.getState().setTokens(token, refresh_token ?? '', expires_in ?? 900);
           if (userData) {
             useAuthStore.setState({
               user: userData,
-              token: token,
               isInitialized: true,
               isLoading: false,
             });

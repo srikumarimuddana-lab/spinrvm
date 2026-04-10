@@ -25,7 +25,8 @@ class Settings(BaseSettings):
     # Security settings
     JWT_SECRET: str = "your-strong-secret-key"  # Default for development only
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15   # Short-lived access token
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30     # Long-lived refresh token
     
     # CORS settings
     ALLOWED_ORIGINS: str = "*"

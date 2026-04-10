@@ -3,7 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import { auth } from '../config/firebaseConfig';
 import { PhoneAuthProvider, signInWithCredential, signOut, User as FirebaseUser } from 'firebase/auth';
-import api, { setInMemoryToken } from '../api/client';
+import api, { setInMemoryToken, setRefreshCallback } from '../api/client';
 import { appCache, CACHE_KEYS, CACHE_CONFIG } from '../cache';
 
 // Platform-safe secure storage
@@ -104,6 +104,8 @@ interface AuthState {
   driver: Driver | null;
   isDriverMode: boolean;
   token: string | null;
+  refreshToken: string | null;
+  tokenExpiresAt: number | null;   // Unix ms — when the access token expires
   isLoading: boolean;
   isInitialized: boolean;
   error: string | null;
@@ -111,6 +113,8 @@ interface AuthState {
   // Actions
   initialize: () => Promise<void>;
   verifyOTP: (verificationId: string, code: string) => Promise<void>;
+  setTokens: (token: string, refreshToken: string, expiresIn: number) => Promise<void>;
+  refreshTokens: () => Promise<boolean>;
   createProfile: (data: { first_name: string; last_name: string; email: string; gender: string }) => Promise<void>;
   fetchDriverProfile: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -127,11 +131,42 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
   driver: null,
   isDriverMode: false,
   token: null,
+  refreshToken: null,
+  tokenExpiresAt: null,
   isLoading: false,
   isInitialized: false,
   error: null,
 
+  // ── Token helpers ──────────────────────────────────────────────────────── //
+
+  setTokens: async (token: string, refreshToken: string, expiresIn: number) => {
+    const expiresAt = Date.now() + expiresIn * 1000;
+    setInMemoryToken(token);
+    await storage.setItem('auth_token', token);
+    await storage.setItem('refresh_token', refreshToken);
+    await storage.setItem('token_expires_at', String(expiresAt));
+    set({ token, refreshToken, tokenExpiresAt: expiresAt });
+  },
+
+  refreshTokens: async (): Promise<boolean> => {
+    const storedRefresh = get().refreshToken ?? await storage.getItem('refresh_token');
+    if (!storedRefresh) return false;
+    try {
+      const res = await api.post('/auth/refresh', { refresh_token: storedRefresh });
+      const { token, refresh_token: newRefresh, expires_in } = res.data as any;
+      await get().setTokens(token, newRefresh, expires_in);
+      return true;
+    } catch (e) {
+      console.log('[Auth] Token refresh failed — logging out');
+      await get().logout();
+      return false;
+    }
+  },
+
   initialize: async () => {
+    // Register the silent-refresh callback with the API client once.
+    setRefreshCallback(() => get().refreshTokens());
+
     console.log('Auth initializing...');
     set({ isLoading: true });
 
@@ -397,9 +432,11 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
     }
     setInMemoryToken(null);
     await storage.deleteItem('auth_token');
+    await storage.deleteItem('refresh_token');
+    await storage.deleteItem('token_expires_at');
     // Clear user cache on logout
     await appCache.clearUserCache();
-    set({ user: null, driver: null, token: null, isDriverMode: false });
+    set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isDriverMode: false });
   },
 
   updateProfileImage: async (imageUri: string) => {

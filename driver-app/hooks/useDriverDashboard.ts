@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Animated } from 'react-native';
 import * as Location from 'expo-location';
 import { Platform, Alert, Vibration, Linking, AppState } from 'react-native';
+
+export type ConnectionState = 'connected' | 'reconnecting' | 'disconnected';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { router } from 'expo-router';
 
@@ -29,6 +31,7 @@ const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
 interface UseDriverDashboardReturn {
   // State
   isOnline: boolean;
+  connectionState: ConnectionState;
   location: Location.LocationObject | null;
   otpInput: string;
   setOtpInput: (value: string) => void;
@@ -69,6 +72,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
   // State
   const [isOnline, setIsOnline] = useState(driverData?.is_online || false);
+  const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [otpInput, setOtpInput] = useState('');
 
@@ -81,11 +85,17 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const reconnectAttemptRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const locationBufferRef = useRef<any[]>([]);
+  // Refs used inside WebSocket callbacks to avoid stale closure values
+  const isOnlineRef = useRef(isOnline);
+  const locationRef = useRef<Location.LocationObject | null>(null);
 
   // Animations
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const slideUpAnim = useRef(new Animated.Value(height)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  // Keep refs in sync so WebSocket callbacks always see current values
+  useEffect(() => { isOnlineRef.current = isOnline; }, [isOnline]);
 
   // ─── Animate ActiveRidePanel in/out based on rideState ──────────
   // The panel starts at translateY=screenHeight + opacity=0 (invisible).
@@ -149,13 +159,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       // 1. Fast: OS cached location
       try {
         const lastKnown = await Location.getLastKnownPositionAsync();
-        if (lastKnown) setLocation(lastKnown);
+        if (lastKnown) { setLocation(lastKnown); locationRef.current = lastKnown; }
       } catch {}
 
       // 2. Accurate position (non-blocking)
       Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
         .then(loc => {
           setLocation(loc);
+          locationRef.current = loc;
           // Save for next cold start
           try {
             const AsyncStorage = require('@react-native-async-storage/async-storage').default;
@@ -209,6 +220,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         },
         (loc) => {
           setLocation(loc);
+          locationRef.current = loc;
 
           const { rideState: currentRideState, activeRide: currentActiveRide } = useDriverStore.getState();
           const rideId = currentActiveRide?.ride?.id || null;
@@ -287,7 +299,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
   // ─── WebSocket Connection ────────────────────────────────────────
   const connectWebSocket = useCallback(() => {
-    if (!isOnline || !user) return;
+    if (!isOnlineRef.current || !user) return;
 
     const token = useAuthStore.getState().token;
     if (!token) {
@@ -303,13 +315,28 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     ws.onopen = () => {
       console.log('WebSocket connected, sending auth...');
       reconnectAttemptRef.current = 0;
-      const token = useAuthStore.getState().token;
-      console.log('Auth token exists:', !!token, 'User ID:', user?.id);
+      setConnectionState('connected');
+      const currentToken = useAuthStore.getState().token;
       ws.send(JSON.stringify({
         type: 'auth',
-        token: token,
+        token: currentToken,
         client_type: 'driver',
       }));
+      // Re-send last known location so backend has fresh position after reconnect
+      const loc = locationRef.current;
+      if (loc) {
+        ws.send(JSON.stringify({
+          type: 'driver_location',
+          lat: loc.coords.latitude,
+          lng: loc.coords.longitude,
+          speed: loc.coords.speed ?? null,
+          heading: loc.coords.heading ?? null,
+          accuracy: loc.coords.accuracy ?? null,
+          altitude: loc.coords.altitude ?? null,
+          ride_id: null,
+          tracking_phase: 'online_idle',
+        }));
+      }
     };
 
     ws.onmessage = (event) => {
@@ -328,16 +355,22 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
     ws.onclose = (event) => {
       console.log('WebSocket closed:', event.code, event.reason);
-      if (isOnline && user) {
-        const delay = RECONNECT_DELAYS[Math.min(reconnectAttemptRef.current, RECONNECT_DELAYS.length - 1)];
-        console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttemptRef.current + 1})`);
+      // Use ref — not the closure value — so going offline stops reconnects immediately
+      if (isOnlineRef.current && user) {
+        setConnectionState('reconnecting');
+        const baseDelay = RECONNECT_DELAYS[Math.min(reconnectAttemptRef.current, RECONNECT_DELAYS.length - 1)];
+        const jitter = Math.random() * 1000 - 500; // ±500 ms
+        const delay = Math.max(500, baseDelay + jitter);
+        console.log(`Reconnecting in ${Math.round(delay)}ms (attempt ${reconnectAttemptRef.current + 1})`);
         reconnectTimeoutRef.current = setTimeout(() => {
           reconnectAttemptRef.current++;
           connectWebSocket();
         }, delay);
+      } else {
+        setConnectionState('disconnected');
       }
     };
-  }, [isOnline, user, handleWSMessage]);
+  }, [user, handleWSMessage]);
 
   useEffect(() => {
     if (!isOnline || !user) {
@@ -349,6 +382,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         wsRef.current.close();
         wsRef.current = null;
       }
+      setConnectionState('disconnected');
       return;
     }
 
@@ -363,7 +397,26 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         wsRef.current = null;
       }
     };
-  }, [isOnline, user, connectWebSocket, handleWSMessage]);
+  }, [isOnline, user, connectWebSocket]);
+
+  // Re-connect when app returns to foreground (mobile networks drop on background)
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active' && isOnlineRef.current && user) {
+        const ws = wsRef.current;
+        if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+          console.log('App foregrounded — reconnecting WebSocket');
+          if (reconnectTimeoutRef.current) {
+            clearTimeout(reconnectTimeoutRef.current);
+            reconnectTimeoutRef.current = null;
+          }
+          reconnectAttemptRef.current = 0;
+          connectWebSocket();
+        }
+      }
+    });
+    return () => sub.remove();
+  }, [user, connectWebSocket]);
 
   // ─── Toggle Online/Offline ───────────────────────────────────────
   const toggleOnline = async () => {
@@ -507,6 +560,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   return {
     // State
     isOnline,
+    connectionState,
     location,
     otpInput,
     setOtpInput,

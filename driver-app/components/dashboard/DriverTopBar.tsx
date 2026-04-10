@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
 import SpinrConfig from '@shared/config/spinr.config';
+import type { ConnectionState } from '../../hooks/useDriverDashboard';
 
 const COLORS = {
   overlay: 'rgba(255, 255, 255, 0.75)',
@@ -25,18 +26,34 @@ interface DriverTopBarProps {
   driverData?: DriverData;
   user?: { first_name?: string };
   isOnline: boolean;
+  connectionState?: ConnectionState;
 }
 
 export const DriverTopBar: React.FC<DriverTopBarProps> = ({
   driverData,
   user,
   isOnline,
+  connectionState,
 }) => {
   const insets = useSafeAreaInsets();
-  
+  const showBanner = isOnline && connectionState && connectionState !== 'connected';
+  const isReconnecting = connectionState === 'reconnecting';
+
   return (
     <View style={[styles.topBarContainer, { top: Math.max(insets.top, 20) }]}>
       <BlurView intensity={Platform.OS === 'ios' ? 60 : 100} tint="light" style={styles.blurContainer}>
+        {showBanner && (
+          <View style={[styles.connectionBanner, isReconnecting ? styles.bannerReconnecting : styles.bannerDisconnected]}>
+            <Ionicons
+              name={isReconnecting ? 'wifi-outline' : 'wifi-outline'}
+              size={13}
+              color={isReconnecting ? '#92400E' : '#991B1B'}
+            />
+            <Text style={[styles.bannerText, isReconnecting ? styles.bannerTextReconnecting : styles.bannerTextDisconnected]}>
+              {isReconnecting ? 'Reconnecting…' : 'Connection lost'}
+            </Text>
+          </View>
+        )}
         <View style={styles.topBarInner}>
           <View style={styles.driverInfo}>
             <View style={styles.avatarWrapper}>
@@ -168,6 +185,33 @@ const styles = StyleSheet.create({
   },
   onlineBadgeTextInactive: {
     color: COLORS.textDim,
+  },
+  connectionBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 5,
+    paddingHorizontal: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  bannerReconnecting: {
+    backgroundColor: 'rgba(254, 243, 199, 0.9)',
+    borderBottomColor: 'rgba(217, 119, 6, 0.25)',
+  },
+  bannerDisconnected: {
+    backgroundColor: 'rgba(254, 226, 226, 0.9)',
+    borderBottomColor: 'rgba(239, 68, 68, 0.25)',
+  },
+  bannerText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  bannerTextReconnecting: {
+    color: '#92400E',
+  },
+  bannerTextDisconnected: {
+    color: '#991B1B',
   },
 });
 

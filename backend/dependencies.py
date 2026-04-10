@@ -2,6 +2,8 @@ import os
 import jwt
 import random
 import string
+import secrets
+import hashlib
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 from fastapi import HTTPException, Depends
@@ -24,6 +26,8 @@ if not JWT_SECRET:
 
 JWT_ALGORITHM = 'HS256'
 OTP_EXPIRY_MINUTES = 5
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get('ACCESS_TOKEN_EXPIRE_MINUTES', '15'))
+REFRESH_TOKEN_EXPIRE_DAYS = int(os.environ.get('REFRESH_TOKEN_EXPIRE_DAYS', '30'))
 
 security = HTTPBearer(auto_error=False)
 from loguru import logger
@@ -32,18 +36,23 @@ from loguru import logger
 def generate_otp() -> str:
     return ''.join(random.choices(string.digits, k=4))
 
+def hash_token(raw: str) -> str:
+    """SHA-256 hash of a raw token — used to store refresh tokens safely."""
+    return hashlib.sha256(raw.encode()).hexdigest()
+
 def create_jwt_token(user_id: str, phone: str, session_id: str = None) -> str:
     payload = {
         'user_id': user_id,
         'phone': phone,
-        'exp': datetime.utcnow() + timedelta(days=30)
+        'exp': datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
     }
     if session_id:
         payload['session_id'] = session_id
-        
-    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
-    logger.info(f"DEBUG: Created JWT token for user_id={user_id}, session_id={session_id}, JWT_SECRET prefix used: {JWT_SECRET[:10] if JWT_SECRET else 'None'}...")
-    return token
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def create_refresh_token(user_id: str) -> str:
+    """Generate a cryptographically random opaque refresh token."""
+    return secrets.token_urlsafe(32)
 
 def verify_jwt_token(token: str) -> dict:
     try:
@@ -101,9 +110,8 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         payload = verify_jwt_token(token)
         # logger.info(f"JWT Valid. Payload: {payload}")
     except Exception as e:
-        logger.error(f"JWT Verification Failed: {e} | Token prefix: {token[:20] if token else 'None'}...")
-        logger.error(f"DEBUG: Active JWT_SECRET being used for verification: '{JWT_SECRET}' (length: {len(JWT_SECRET) if JWT_SECRET else 0})")
-        raise HTTPException(status_code=401, detail=f'Invalid token: {str(e)}')
+        logger.warning(f"JWT Verification Failed: {e}")
+        raise HTTPException(status_code=401, detail='Invalid or expired token')
 
     user = None
     try:

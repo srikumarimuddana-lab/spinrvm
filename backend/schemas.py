@@ -48,8 +48,13 @@ class OTPRecord(BaseModel):
     verified: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
 class AuthResponse(BaseModel):
     token: str
+    refresh_token: str
+    expires_in: int          # access token lifetime in seconds
     user: UserProfile
     is_new_user: bool
 

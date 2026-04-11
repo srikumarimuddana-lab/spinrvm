@@ -1,11 +1,11 @@
 import os
-import jwt
 import random
 import string
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
-from fastapi import HTTPException, Depends
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+import jwt
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from firebase_admin import auth as firebase_auth
 
 try:
@@ -25,8 +25,10 @@ if not JWT_SECRET:
 JWT_ALGORITHM = 'HS256'
 OTP_EXPIRY_MINUTES = 5
 
-security = HTTPBearer(auto_error=False)
 from loguru import logger
+
+security = HTTPBearer(auto_error=False)
+
 
 # Helper Functions
 def generate_otp() -> str:
@@ -40,7 +42,7 @@ def create_jwt_token(user_id: str, phone: str, session_id: str = None) -> str:
     }
     if session_id:
         payload['session_id'] = session_id
-        
+
     token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
     logger.info(f"DEBUG: Created JWT token for user_id={user_id}, session_id={session_id}, JWT_SECRET prefix used: {JWT_SECRET[:10] if JWT_SECRET else 'None'}...")
     return token

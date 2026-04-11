@@ -1,6 +1,7 @@
-from typing import Dict, List
-from fastapi import WebSocket
 from datetime import datetime
+from typing import Dict
+
+from fastapi import WebSocket
 from loguru import logger
 
 try:
@@ -53,18 +54,18 @@ class ConnectionManager:
                 f"type={msg_type} "
                 f"currently_connected={list(self.active_connections.keys())}"
             )
-    
+
     async def broadcast(self, message: dict):
         for connection in self.active_connections.values():
             await connection.send_json(message)
-    
+
     def update_driver_location(self, driver_id: str, lat: float, lng: float):
         self.driver_locations[driver_id] = {
             'lat': lat,
             'lng': lng,
             'updated_at': datetime.utcnow().isoformat()
         }
-    
+
     def get_driver_location(self, driver_id: str):
         return self.driver_locations.get(driver_id)
 

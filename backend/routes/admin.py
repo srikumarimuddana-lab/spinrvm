@@ -1,23 +1,24 @@
-from fastapi import APIRouter, Depends, Query, HTTPException, Header, Response  # type: ignore
-from typing import Dict, Any, Optional, List
-from pydantic import BaseModel  # type: ignore
-from datetime import datetime, timedelta
-import jwt
-import uuid
 import logging
+import uuid
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+
+import jwt
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response  # type: ignore
+from pydantic import BaseModel  # type: ignore
 
 try:
-    from ..dependencies import get_current_user, get_admin_user  # type: ignore
-    from ..db import db  # type: ignore
-    from ..settings_loader import get_app_settings  # type: ignore
-    from ..core.config import settings
     from .. import db_supabase  # type: ignore
+    from ..core.config import settings
+    from ..db import db  # type: ignore
+    from ..dependencies import get_admin_user, get_current_user  # type: ignore
+    from ..settings_loader import get_app_settings  # type: ignore
 except ImportError:
-    from dependencies import get_current_user, get_admin_user  # type: ignore
-    from db import db  # type: ignore
-    from settings_loader import get_app_settings  # type: ignore
-    from core.config import settings
     import db_supabase  # type: ignore
+    from core.config import settings
+    from db import db  # type: ignore
+    from dependencies import get_admin_user  # type: ignore
+    from settings_loader import get_app_settings  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -270,7 +271,7 @@ async def admin_create_service_area(area: Dict[str, Any]):
         "show_demand_heatmap": area.get("show_demand_heatmap", False),
         "created_at": datetime.utcnow().isoformat(),
     }
-    row = await db.service_areas.insert_one(doc)
+    await db.service_areas.insert_one(doc)
     return {"area_id": doc["id"]}
 
 
@@ -301,15 +302,15 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
         "min_driver_rating",
         "show_demand_heatmap",
     ]
-    
+
     # Map geojson from frontend to polygon in DB schema if present
     if "geojson" in area:
         area["polygon"] = area["geojson"]
-        
+
     # Map surge_enabled to surge_active
     if "surge_enabled" in area:
         area["surge_active"] = area["surge_enabled"]
-        
+
     update_payload = {k: v for k, v in area.items() if k in allowed and v is not None}
 
     if update_payload:
@@ -1032,7 +1033,6 @@ async def admin_cleanup_location_history(days: int = 30):
     Also deletes online_idle points older than 24 hours regardless (they are
     never useful for historical analysis).
     """
-    from datetime import timezone
     now = datetime.utcnow()
     cutoff_historical = (now - timedelta(days=days)).isoformat()
     cutoff_idle = (now - timedelta(hours=24)).isoformat()
@@ -1091,8 +1091,8 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
     Run nightly via a cron job hitting this endpoint with yesterday's date.
     Idempotent — upserts by (driver_id, stat_date).
     """
-    from collections import defaultdict
     import math
+    from collections import defaultdict
 
     # Default to yesterday (UTC)
     if target_date:

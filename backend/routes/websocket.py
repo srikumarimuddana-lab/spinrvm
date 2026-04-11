@@ -1,17 +1,19 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
 try:
-    from ..socket_manager import manager
     from ..db import db
     from ..dependencies import verify_jwt_token
+    from ..socket_manager import manager
 except ImportError:
-    from socket_manager import manager
     from db import db
     from dependencies import verify_jwt_token
-from firebase_admin import auth as firebase_auth
-from datetime import datetime
-import uuid
-import logging
+    from socket_manager import manager
 import asyncio
+import logging
+import uuid
+from datetime import datetime
+
+from firebase_admin import auth as firebase_auth
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +52,6 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
     After successful verification we register the connection as '{client_type}_{user_id}' and proceed to handle messages.
     """
     await websocket.accept()
-    authenticated = False
     user = None
     connection_key = None
     hb_task = None
@@ -107,7 +108,6 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
         # Register the connection with a server-controlled key to prevent impersonation
         connection_key = f"{client_type}_{user['id']}"
         await manager.connect(websocket, connection_key)
-        authenticated = True
 
         # GAP FIX: Start heartbeat background task
         hb_task = asyncio.create_task(heartbeat_task(websocket, connection_key))
@@ -174,7 +174,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                         'timestamp': datetime.utcnow(),
                     }
                     # 'accuracy' and 'altitude' columns seem missing in Supabase schema, so omitted for now.
-                    
+
                     await db.driver_location_history.insert_one(breadcrumb)
 
                     # Forward to rider in real-time
@@ -279,8 +279,8 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                             driver = await db.drivers.find_one({'id': ride['driver_id']})
                             if driver and driver.get('user_id'):
                                 target = f"driver_{driver['user_id']}"
-                        
-                        
+
+
                         msg_data = {
                             'id': str(uuid.uuid4()),
                             'ride_id': ride_id,
@@ -288,10 +288,10 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                             'sender': sender,
                             'timestamp': datetime.utcnow()
                         }
-                        
+
                         # Persist message to database
                         await db.ride_messages.insert_one(msg_data)
-                        
+
                         # Forward to connected target
                         if target:
                             # Format timestamp strings for JSON

@@ -1,23 +1,24 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request
-from typing import Optional, List, Union, Dict, Any
+from typing import Any, Dict, List, Optional, Union
+
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+
 try:
-    from ..dependencies import get_current_user, get_admin_user
-    from ..schemas import Driver, Ride, RideRatingRequest
     from ..db import db, diag_logger
-    from ..socket_manager import manager
+    from ..dependencies import get_admin_user, get_current_user
     from ..features import send_push_notification
     from ..geo_utils import calculate_distance
+    from ..schemas import Driver, Ride, RideRatingRequest
+    from ..socket_manager import manager
 except ImportError:
-    from dependencies import get_current_user, get_admin_user
-    from schemas import Driver, Ride, RideRatingRequest
     from db import db, diag_logger
-    from socket_manager import manager
+    from dependencies import get_admin_user, get_current_user
     from features import send_push_notification
     from geo_utils import calculate_distance
-from datetime import datetime, timedelta
-import json
+    from schemas import Driver, RideRatingRequest
+    from socket_manager import manager
 import logging
-import os
+from datetime import datetime, timedelta
+
 import stripe
 from pydantic import BaseModel
 
@@ -290,7 +291,7 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     if not driver:
         raise HTTPException(status_code=404, detail='Driver not found')
-    
+
     try:
         rides = await db.get_rows("rides", {
             "driver_id": driver['id'], "status": "completed",
@@ -306,7 +307,7 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Error fetching balance: {e}")
         total_earnings = total_tips = total_rides = pending_payouts = 0
-    
+
     return {
         'total_earnings': total_earnings,
         'available_balance': total_earnings - pending_payouts,
@@ -330,9 +331,9 @@ async def get_driver_earnings(
         # Try to find by id directly in case user_id isn't set, or log error
         logger.error(f"Driver not found for user {current_user['id']}")
         raise HTTPException(status_code=404, detail='Driver not found')
-    
+
     logger.info(f"Fetching earnings for driver {driver['id']} period {period}")
-    
+
     # Calculate date range
     now = datetime.utcnow()
     # 'today' and 'day' both mean since midnight today
@@ -350,7 +351,7 @@ async def get_driver_earnings(
     else:
         # Fallback: treat unknown period as 'week'
         start_date = now - timedelta(days=7)
-    
+
     try:
         filters: Dict[str, Any] = {"driver_id": driver['id'], "status": "completed"}
         if use_date_filter and start_date:
@@ -368,7 +369,7 @@ async def get_driver_earnings(
     except Exception as e:
         logger.error(f"Error fetching earnings: {e}")
         stats = {'total_earnings': 0, 'total_tips': 0, 'total_rides': 0, 'total_distance_km': 0, 'total_duration_minutes': 0}
-    
+
     return {
         'period': period,
         'total_earnings': stats.get('total_earnings', 0),
@@ -388,9 +389,9 @@ async def get_driver_daily_earnings(
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     if not driver:
         raise HTTPException(status_code=404, detail='Driver not found')
-    
+
     start_date = datetime.utcnow() - timedelta(days=days)
-    
+
     # Fetch completed rides in the period using the shared db layer
     try:
         rides = await db.get_rows("rides", {
@@ -429,7 +430,7 @@ async def get_driver_trip_earnings(
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     if not driver:
         raise HTTPException(status_code=404, detail='Driver not found')
-    
+
     try:
         rides = await db.get_rows("rides", {
             "driver_id": driver['id'], "status": "completed",
@@ -437,7 +438,7 @@ async def get_driver_trip_earnings(
     except Exception as e:
         logger.error(f"Error fetching trip earnings: {e}")
         rides = []
-    
+
     return [
         {
             'ride_id': r['id'],
@@ -471,7 +472,7 @@ async def get_nearby_drivers_public(
 
     # Get all matching drivers — service area filtering by distance (not polygon yet)
     drivers = await db.drivers.find(query).to_list(100)
-    
+
     # Manual filtering by distance
     nearby = []
     for d in drivers:
@@ -512,7 +513,7 @@ async def get_drivers(
         # For now, simplistic implementation as seen in other parts
         drivers = await db.drivers.find({'is_online': True}).to_list(100)
         return serialize_doc(drivers)
-    
+
     # Return all drivers for admin
     drivers = await db.drivers.find({}).to_list(100)
     return serialize_doc(drivers)
@@ -523,32 +524,32 @@ async def create_driver(driver: Driver, admin_user: dict = Depends(get_admin_use
     existing = await db.drivers.find_one({'phone': driver.phone})
     if existing:
         raise HTTPException(status_code=400, detail='Driver with this phone already exists')
-    
+
     await db.drivers.insert_one(driver.dict())
     return driver.dict()
 
 @api_router.post("/location-batch")
 async def update_location_batch(
-    batch: Union[List[dict], dict], 
+    batch: Union[List[dict], dict],
     current_user: dict = Depends(get_current_user)
 ):
     """Update driver location in batch (from background tracking)."""
-    
+
     points = []
     if isinstance(batch, list):
         points = batch
     elif isinstance(batch, dict):
         points = batch.get('locations') or batch.get('points') or []
-        
+
     # Simply take the last point and update current location
     if not points:
         return {'success': True}
-        
+
     latest = points[-1]
     lat = latest.get('latitude') or latest.get('lat')
     lng = latest.get('longitude') or latest.get('lng')
-    heading = latest.get('heading', 0)
-    
+    latest.get('heading', 0)
+
     if lat and lng:
         # Update via Supabase wrapper which now handles casting
         # Note: 'heading' column might not exist in Supabase 'drivers' table yet.
@@ -560,7 +561,7 @@ async def update_location_batch(
         # If heading is supported later, add it back. Currently causing 500 error if column missing.
         # if heading:
         #    update_data['heading'] = heading
-            
+
         await db.drivers.update_one(
             {'user_id': current_user['id']},
             {'$set': update_data}
@@ -568,10 +569,11 @@ async def update_location_batch(
         # Also sync to generic lat/lng fields if they exist to support legacy queries
         # (Though update_one might not support setting multiple top-level fields easily if we rely on $set mapping)
         # Let's trust db.drivers.update_one to handle the schema or the wrapper.
-        
+
     return {'success': True}
 
 import uuid
+
 
 class BankAccountCreate(BaseModel):
     bank_name: str
@@ -589,14 +591,14 @@ async def get_bank_account(current_user: dict = Depends(get_current_user)):
     driver = await db.drivers.find_one({'user_id': current_user.get('id')})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
-        
+
     account = await db.bank_accounts.find_one({'driver_id': driver['id']})
     if account:
         return {'has_bank_account': True, 'bank_account': serialize_doc(account)}
-        
+
     if driver.get('stripe_account_onboarded'):
         return {'has_bank_account': True, 'bank_account': {'bank_name': 'Stripe Connect', 'account_number_last4': '****'}}
-        
+
     return {'has_bank_account': False, 'bank_account': None}
 
 @api_router.post("/stripe-onboard")
@@ -605,21 +607,21 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
     user = await db.users.find_one({'id': current_user.get('id')})
     if not driver or not user:
         raise HTTPException(status_code=404, detail="Driver/User profile not found")
-        
+
     try:
         from ..settings_loader import get_app_settings
     except ImportError:
         from settings_loader import get_app_settings
     settings = await get_app_settings()
     stripe_secret = settings.get('stripe_secret_key', '')
-    
+
     if not stripe_secret:
         return {'url': 'https://spinr-demo-onboard.com', 'mock': True}
-        
+
     try:
         stripe.api_key = stripe_secret
         account_id = driver.get('stripe_account_id')
-        
+
         if not account_id:
             account = stripe.Account.create(
                 type='express',
@@ -632,7 +634,7 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
             )
             account_id = account.id
             await db.drivers.update_one({'id': driver['id']}, {'$set': {'stripe_account_id': account_id}})
-            
+
         account_link = stripe.AccountLink.create(
             account=account_id,
             refresh_url=f"{settings.get('base_url', 'http://localhost:8000')}/api/drivers/stripe-refresh",
@@ -641,7 +643,7 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
         )
         # Mark as onboarded optimistically or handle via webhook/return_url properly in production
         await db.drivers.update_one({'id': driver['id']}, {'$set': {'stripe_account_onboarded': True}})
-        
+
         return {'url': account_link.url, 'mock': False}
     except Exception as e:
         logger.error(f"Stripe error: {e}")
@@ -653,28 +655,28 @@ async def save_bank_account(req: BankAccountCreate, current_user: dict = Depends
     driver = await db.drivers.find_one({'user_id': current_user.get('id')})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
-    
+
     account_data = req.dict()
     account_data['id'] = str(uuid.uuid4())
     account_data['driver_id'] = driver['id']
     acc_num = account_data.pop('account_number')
-    
+
     # Canadian routing number for Stripe is generally 0 + Institution (3) + Transit (5)
     # Ensure zero-padding if needed
     inst = req.institution_number.zfill(3)
     trans = req.transit_number.zfill(5)
     account_data['routing_number'] = f"0{inst}{trans}"
-    
+
     account_data['account_number_last4'] = acc_num[-4:] if len(acc_num) >= 4 else acc_num
     account_data['stripe_bank_id'] = None # Would be populated after calling Stripe's API
     account_data['currency'] = 'cad'
     account_data['country'] = 'CA'
     account_data['is_verified'] = False
     account_data['created_at'] = datetime.utcnow().isoformat()
-    
+
     await db.bank_accounts.delete_many({'driver_id': driver['id']})
     await db.bank_accounts.insert_one(account_data)
-    
+
     return {'success': True, 'bank_account': serialize_doc(account_data)}
 
 @api_router.delete("/bank-account")
@@ -692,27 +694,27 @@ async def request_payout(req: PayoutRequest, current_user: dict = Depends(get_cu
     driver = await db.drivers.find_one({'user_id': current_user.get('id')})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
-    
+
     balance = await get_driver_balance(current_user)
     if req.amount > balance.get('available_balance', 0):
         raise HTTPException(status_code=400, detail="Insufficient funds")
-        
+
     stripe_account_id = driver.get('stripe_account_id')
     account = await db.bank_accounts.find_one({'driver_id': driver['id']})
-    
+
     if not stripe_account_id and not account:
         raise HTTPException(status_code=400, detail="No bank account linked")
-    
+
     try:
         from ..settings_loader import get_app_settings
     except ImportError:
         from settings_loader import get_app_settings
     settings = await get_app_settings()
     stripe_secret = settings.get('stripe_secret_key', '')
-    
+
     status = 'pending'
     stripe_payout_id = None
-    
+
     if stripe_secret and stripe_account_id:
         try:
             stripe.api_key = stripe_secret
@@ -726,7 +728,7 @@ async def request_payout(req: PayoutRequest, current_user: dict = Depends(get_cu
         except Exception as e:
             logger.error(f"Stripe transfer failed: {e}")
             raise HTTPException(status_code=500, detail=f"Payout failed: {str(e)}")
-            
+
     payout = {
         'id': str(uuid.uuid4()),
         'driver_id': driver['id'],
@@ -745,11 +747,11 @@ async def get_payout_history(limit: int = Query(20), offset: int = Query(0), cur
     driver = await db.drivers.find_one({'user_id': current_user.get('id')})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
-        
+
     payouts_cursor = db.payouts.find({'driver_id': driver['id']})
     if hasattr(payouts_cursor, 'sort'):
         payouts_cursor = payouts_cursor.sort('created_at', -1).skip(offset).limit(limit)
-    
+
     payouts = await payouts_cursor.to_list(length=limit) if hasattr(payouts_cursor, 'to_list') else list(payouts_cursor)
     return {'success': True, 'payouts': [serialize_doc(p) for p in payouts]}
 
@@ -758,19 +760,19 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
     driver = await db.drivers.find_one({'user_id': current_user.get('id')})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
-        
+
     start_date = datetime(year, 1, 1).isoformat()
     end_date = datetime(year, 12, 31, 23, 59, 59).isoformat()
-    
+
     rides_cursor = db.rides.find({
         'driver_id': driver['id'],
         'status': 'completed',
         'created_at': {'$gte': start_date, '$lte': end_date}
     })
     rides = await rides_cursor.to_list(length=10000) if hasattr(rides_cursor, 'to_list') else list(rides_cursor)
-    
+
     total_earnings = sum(r.get('driver_earnings', 0) for r in rides)
-    
+
     return {
         'year': year,
         'total_earnings': total_earnings,
@@ -784,12 +786,12 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
 async def export_earnings(year: int = Query(None), current_user: dict = Depends(get_current_user)):
     if not year:
         year = datetime.utcnow().year
-        
+
     summary_data = await get_t4a_summary(year, current_user)
-    
+
     csv_data = f"Year,Total Earnings,Total Trips,Net Earnings\n{year},{summary_data['total_earnings']},{summary_data['total_trips']},{summary_data['net_earnings']}"
     filename = f"earnings_export_{year}.csv"
-    
+
     return {"data": csv_data, "filename": filename}
 
 # ==========================================
@@ -876,7 +878,7 @@ async def get_ride_history(
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     if not driver:
         raise HTTPException(status_code=404, detail='Driver not found')
-    
+
     try:
         total = await db.rides.count_documents({"driver_id": driver['id']})
         rides = await db.get_rows("rides", {
@@ -886,7 +888,7 @@ async def get_ride_history(
         logger.error(f"Error fetching ride history: {e}")
         total = 0
         rides = []
-    
+
     return {
         'total': total,
         'rides': [serialize_doc(r) for r in rides]
@@ -958,7 +960,7 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             f"'driver_accepted'. This will cause the driver-app to render a "
             f"blank state because /drivers/rides/active query will mismatch."
         )
-    
+
     # Notify rider
     if ride.get('rider_id'):
         await manager.send_personal_message(
@@ -970,7 +972,7 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             "Driver Assigned! 🚗",
             "Your driver has accepted the ride and is on the way."
         )
-        
+
     return {'success': True}
 
 @api_router.post("/rides/{ride_id}/decline")
@@ -978,7 +980,7 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     if not driver:
         raise HTTPException(status_code=404, detail='Driver not found')
-        
+
     # If assigned, unassign. If searching, just ignore/record decline.
     await db.rides.update_one(
         {'id': ride_id, 'driver_id': driver['id']},
@@ -991,13 +993,14 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
 
     # GAP FIX: Re-match to find the next available driver
     try:
-        from .rides import match_driver_to_ride
         import asyncio
+
+        from .rides import match_driver_to_ride
         asyncio.create_task(match_driver_to_ride(ride_id))
         logger.info(f"Re-matching ride {ride_id} after driver {driver['id']} declined")
     except Exception as e:
         logger.warning(f"Could not trigger re-matching for ride {ride_id}: {e}")
-    
+
     return {'success': True}
 
 @api_router.post("/rides/{ride_id}/arrive")
@@ -1035,7 +1038,7 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
             'updated_at': datetime.utcnow()
         }}
     )
-    
+
     if ride.get('rider_id'):
         await manager.send_personal_message(
             {'type': 'driver_arrived', 'ride_id': ride_id},
@@ -1046,7 +1049,7 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
             "Driver Arrived! 📍",
             "Your driver has arrived at the pickup location."
         )
-        
+
     return {'success': True}
 
 @api_router.post("/rides/{ride_id}/verify-otp")
@@ -1054,14 +1057,14 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     if not driver:
         raise HTTPException(status_code=404, detail='Driver not found')
-        
+
     ride = await db.rides.find_one({'id': ride_id, 'driver_id': driver['id']})
     if not ride:
         raise HTTPException(status_code=404, detail='Ride not found')
-        
+
     if ride.get('pickup_otp') != request.otp:
         raise HTTPException(status_code=400, detail='Invalid OTP')
-        
+
     # OTP correct, start ride
     await db.rides.update_one(
         {'id': ride_id},
@@ -1071,7 +1074,7 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
             'updated_at': datetime.utcnow()
         }}
     )
-    
+
     if ride.get('rider_id'):
         await manager.send_personal_message(
             {'type': 'ride_started', 'ride_id': ride_id},
@@ -1082,7 +1085,7 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
             "Ride Started! ▶️",
             "Your ride has started. Have a safe trip!"
         )
-        
+
     return {'success': True}
 
 @api_router.post("/rides/{ride_id}/start")
@@ -1092,7 +1095,7 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     if not driver:
         raise HTTPException(status_code=404, detail='Driver not found')
-        
+
     await db.rides.update_one(
         {'id': ride_id, 'driver_id': driver['id']},
         {'$set': {
@@ -1101,7 +1104,7 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
             'updated_at': datetime.utcnow()
         }}
     )
-    
+
     ride = await db.rides.find_one({'id': ride_id})
     if ride and ride.get('rider_id'):
         await manager.send_personal_message(
@@ -1244,7 +1247,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     rider = await db.users.find_one({'id': ride.get('rider_id')})
     if rider and rider.get('email'):
         logger.info(f"Sending email receipt for ride {ride_id} to {rider['email']}")
-    
+
     # Update driver stats
     await db.drivers.update_one(
         {'id': driver['id']},
@@ -1253,13 +1256,13 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             '$set': {'is_available': True}
         }
     )
-    
+
     completed_ride = await db.rides.find_one({'id': ride_id})
-    
+
     if completed_ride and completed_ride.get('rider_id'):
         await manager.send_personal_message(
             {
-                'type': 'ride_completed', 
+                'type': 'ride_completed',
                 'ride_id': ride_id,
                 'total_fare': completed_ride.get('total_fare', ride.get('total_fare', 0))
             },
@@ -1270,7 +1273,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             "Ride Completed! ✅",
             f"Your ride has finished. Total fare: ${completed_ride.get('total_fare', ride.get('total_fare', 0))}"
         )
-        
+
     return serialize_doc(completed_ride)
 
 @api_router.post("/rides/{ride_id}/cancel")
@@ -1296,7 +1299,7 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
         {'id': driver['id']},
         {'$set': {'is_available': True}}
     )
-    
+
     ride = await db.rides.find_one({'id': ride_id})
     if ride and ride.get('rider_id'):
         await manager.send_personal_message(
@@ -1306,9 +1309,9 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
         await send_push_notification(
             ride['rider_id'],
             "Ride Cancelled ❌",
-            f"Your driver has cancelled the ride."
+            "Your driver has cancelled the ride."
         )
-        
+
     return {'success': True}
 
 @api_router.post("/rides/{ride_id}/rate-rider")

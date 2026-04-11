@@ -2,16 +2,17 @@
 Cloudinary Integration for Spinr
 Provides image upload, transformation, and management capabilities.
 """
+from typing import Any, Dict, List, Optional
+
 import cloudinary
-import cloudinary.uploader
 import cloudinary.api
-from typing import Optional, Dict, Any, List
+import cloudinary.uploader
 from loguru import logger
 
 
 class CloudinaryService:
     """Service for Cloudinary image management."""
-    
+
     def __init__(
         self,
         cloud_name: str = '',
@@ -21,7 +22,7 @@ class CloudinaryService:
     ):
         """
         Initialize Cloudinary service.
-        
+
         Args:
             cloud_name: Cloudinary cloud name
             api_key: Cloudinary API key
@@ -29,7 +30,7 @@ class CloudinaryService:
             secure: Use HTTPS for URLs
         """
         self.configured = bool(cloud_name and api_key and api_secret)
-        
+
         if self.configured:
             cloudinary.config(
                 cloud_name=cloud_name,
@@ -40,7 +41,7 @@ class CloudinaryService:
             logger.info('Cloudinary configured successfully')
         else:
             logger.warning('Cloudinary not configured - using mock mode')
-    
+
     async def upload_image(
         self,
         file_path: str,
@@ -51,14 +52,14 @@ class CloudinaryService:
     ) -> Dict[str, Any]:
         """
         Upload an image to Cloudinary.
-        
+
         Args:
             file_path: Path to the file to upload
             folder: Folder in Cloudinary to store the image
             public_id: Optional custom public ID for the image
             tags: Optional list of tags for the image
             transformation: Optional transformation options
-        
+
         Returns:
             Dict with upload result including secure_url, public_id, etc.
         """
@@ -72,24 +73,24 @@ class CloudinaryService:
                 'width': 800,
                 'height': 600
             }
-        
+
         try:
             upload_options = {
                 'folder': folder,
                 'tags': tags or [],
                 'resource_type': 'image'
             }
-            
+
             if public_id:
                 upload_options['public_id'] = public_id
-            
+
             if transformation:
                 upload_options.update(transformation)
-            
+
             result = cloudinary.uploader.upload(file_path, **upload_options)
-            
+
             logger.info(f'Image uploaded to Cloudinary: {result["public_id"]}')
-            
+
             return {
                 'success': True,
                 'secure_url': result['secure_url'],
@@ -105,7 +106,7 @@ class CloudinaryService:
                 'success': False,
                 'error': str(e)
             }
-    
+
     async def upload_from_url(
         self,
         image_url: str,
@@ -115,13 +116,13 @@ class CloudinaryService:
     ) -> Dict[str, Any]:
         """
         Upload an image from a URL to Cloudinary.
-        
+
         Args:
             image_url: URL of the image to upload
             folder: Folder in Cloudinary to store the image
             public_id: Optional custom public ID for the image
             tags: Optional list of tags for the image
-        
+
         Returns:
             Dict with upload result
         """
@@ -132,7 +133,7 @@ class CloudinaryService:
                 'secure_url': image_url,
                 'public_id': public_id or 'mock_image'
             }
-        
+
         try:
             result = cloudinary.uploader.upload(
                 image_url,
@@ -141,9 +142,9 @@ class CloudinaryService:
                 tags=tags or [],
                 resource_type='image'
             )
-            
+
             logger.info(f'Image uploaded from URL to Cloudinary: {result["public_id"]}')
-            
+
             return {
                 'success': True,
                 'secure_url': result['secure_url'],
@@ -155,7 +156,7 @@ class CloudinaryService:
                 'success': False,
                 'error': str(e)
             }
-    
+
     def get_image_url(
         self,
         public_id: str,
@@ -167,7 +168,7 @@ class CloudinaryService:
     ) -> str:
         """
         Generate a transformed image URL.
-        
+
         Args:
             public_id: Public ID of the image in Cloudinary
             width: Optional target width
@@ -175,15 +176,15 @@ class CloudinaryService:
             crop: Crop mode (fill, fit, crop, thumb, etc.)
             quality: Quality setting (auto, best, good, eco, low)
             format: Output format (auto, jpg, png, webp)
-        
+
         Returns:
             Transformed image URL
         """
         if not self.configured:
             return f'https://mock.cloudinary.com/{public_id}'
-        
+
         transformations = []
-        
+
         if width and height:
             transformations.append(f'w_{width}')
             transformations.append(f'h_{height}')
@@ -192,36 +193,36 @@ class CloudinaryService:
             transformations.append(f'w_{width}')
         elif height:
             transformations.append(f'h_{height}')
-        
+
         transformations.append(f'q_{quality}')
         transformations.append(f'f_{format}')
-        
+
         transformation_str = ','.join(transformations)
-        
+
         return cloudinary.utils.cloudinary_url(
             public_id,
             transformation=transformation_str
         )[0]
-    
+
     async def delete_image(self, public_id: str) -> Dict[str, Any]:
         """
         Delete an image from Cloudinary.
-        
+
         Args:
             public_id: Public ID of the image to delete
-        
+
         Returns:
             Dict with deletion result
         """
         if not self.configured:
             logger.info(f'[MOCK] Would delete image: {public_id}')
             return {'success': True, 'result': 'ok'}
-        
+
         try:
             result = cloudinary.uploader.destroy(public_id)
-            
+
             logger.info(f'Image deleted from Cloudinary: {public_id}')
-            
+
             return {
                 'success': True,
                 'result': result.get('result', 'ok')
@@ -232,7 +233,7 @@ class CloudinaryService:
                 'success': False,
                 'error': str(e)
             }
-    
+
     async def list_images(
         self,
         folder: str = 'spinr',
@@ -240,11 +241,11 @@ class CloudinaryService:
     ) -> Dict[str, Any]:
         """
         List images in a Cloudinary folder.
-        
+
         Args:
             folder: Folder to list images from
             max_results: Maximum number of results to return
-    
+
         Returns:
             Dict with list of images
         """
@@ -255,14 +256,14 @@ class CloudinaryService:
                 'resources': [],
                 'total': 0
             }
-        
+
         try:
             result = cloudinary.api.resources(
                 type='upload',
                 prefix=folder + '/',
                 max_results=max_results
             )
-            
+
             return {
                 'success': True,
                 'resources': result.get('resources', []),
@@ -295,12 +296,12 @@ def init_cloudinary(
 ) -> CloudinaryService:
     """
     Initialize the global Cloudinary service.
-    
+
     Args:
         cloud_name: Cloudinary cloud name
         api_key: Cloudinary API key
         api_secret: Cloudinary API secret
-    
+
     Returns:
         Configured CloudinaryService instance
     """

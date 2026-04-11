@@ -3,11 +3,12 @@ Main router aggregator
 Import all route modules and combine them here
 """
 from fastapi import APIRouter
-from .auth import router as auth_router
-from .rides import router as rides_router
-from .drivers import router as drivers_router
+
 from .admin import router as admin_router
+from .auth import router as auth_router
 from .corporate_accounts import router as corporate_accounts_router
+from .drivers import router as drivers_router
+from .rides import router as rides_router
 
 # Create the main API router
 api_router = APIRouter()

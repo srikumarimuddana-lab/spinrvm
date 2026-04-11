@@ -1,7 +1,7 @@
-import os
-import sys
 import logging
-from typing import Any, Dict, Optional, List, Union
+import sys
+from typing import Any, Dict, List, Optional
+
 try:
     from . import db_supabase
 except ImportError:
@@ -65,7 +65,7 @@ class MockCursor:
         # Override limit if set by .limit()
         if hasattr(self, '_limit'):
             limit = self._limit
-        
+
         offset = getattr(self, '_offset', None)
 
         if self.collection_name == 'rides' and 'rider_id' in (self.filter or {}):
@@ -298,11 +298,11 @@ class DB:
     async def fetchall(self, query: str, params: Optional[Dict[str, Any]] = None):
         """
         Execute a raw SQL SELECT query and return all rows.
-        
+
         Args:
             query: SQL query string (e.g., 'SELECT * FROM settings')
             params: Optional dictionary of query parameters
-            
+
         Returns:
             List of dictionaries representing rows
         """
@@ -311,11 +311,11 @@ class DB:
     async def fetchone(self, query: str, params: Optional[Dict[str, Any]] = None):
         """
         Execute a raw SQL SELECT query and return the first row.
-        
+
         Args:
             query: SQL query string (e.g., 'SELECT * FROM settings WHERE id = $1')
             params: Optional dictionary of query parameters
-            
+
         Returns:
             Dictionary representing the first row, or None if no results
         """
@@ -325,11 +325,11 @@ class DB:
     async def execute(self, query: str, params: Optional[Dict[str, Any]] = None):
         """
         Execute a raw SQL INSERT, UPDATE, or DELETE query.
-        
+
         Args:
             query: SQL query string (e.g., 'INSERT INTO settings (key, value) VALUES ($1, $2)')
             params: Optional dictionary of query parameters
-            
+
         Returns:
             Dictionary with execution results
         """
@@ -368,13 +368,13 @@ class DriverCollection(BaseCollection):
         # pass an unwrapped update dict hit these branches directly.
         if 'id' in _filter and 'lat' in update and 'lng' in update:
             _goonline_logger.info(
-                f"DriverCollection.update_one BRANCH=update_driver_location"
+                "DriverCollection.update_one BRANCH=update_driver_location"
             )
             return await db_supabase.update_driver_location(_filter['id'], update['lat'], update['lng'])
         if 'id' in _filter and 'is_available' in update:
             if update['is_available'] is False and _filter.get('is_available') is True:
                 _goonline_logger.info(
-                    f"DriverCollection.update_one BRANCH=atomic_claim (unwrapped)"
+                    "DriverCollection.update_one BRANCH=atomic_claim (unwrapped)"
                 )
                 success = await db_supabase.claim_driver_atomic(_filter['id'])
                 return type('Result', (), {'modified_count': 1 if success else 0, 'matched_count': 1 if success else 0})()
@@ -385,7 +385,7 @@ class DriverCollection(BaseCollection):
             other_keys = [k for k in update.keys() if k != 'is_available' and not k.startswith('$')]
             if not other_keys:
                 _goonline_logger.info(
-                    f"DriverCollection.update_one BRANCH=set_driver_available (unwrapped, pure toggle)"
+                    "DriverCollection.update_one BRANCH=set_driver_available (unwrapped, pure toggle)"
                 )
                 inc_val = 0
                 if isinstance(update, dict) and '$inc' in update and 'total_rides' in update['$inc']:
@@ -396,7 +396,7 @@ class DriverCollection(BaseCollection):
                 f"(unwrapped, is_available + other keys: {other_keys})"
             )
         _goonline_logger.info(
-            f"DriverCollection.update_one BRANCH=super().update_one"
+            "DriverCollection.update_one BRANCH=super().update_one"
         )
         return await super().update_one(_filter, update, upsert)
 

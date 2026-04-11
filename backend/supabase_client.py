@@ -1,6 +1,7 @@
 import os
-from supabase import create_client
+
 from dotenv import load_dotenv
+from supabase import create_client
 
 # Load .env file from backend directory
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))

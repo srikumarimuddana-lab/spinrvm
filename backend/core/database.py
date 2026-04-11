@@ -17,20 +17,19 @@ Example:
 
 # Re-export for backward compatibility during transition
 # TODO: Remove this file after all imports are updated
-from supabase_client import supabase as SupabaseClient
 
 def get_db(app_state):
     """Get database connection from app state.
-    
+
     Args:
         app_state: The FastAPI app.state object
-        
+
     Returns:
         SupabaseClient instance
-        
+
     Raises:
         RuntimeError: If database is not initialized
     """
-    if not hasattr(app_state, 'db') or app.state.db is None:
+    if not hasattr(app_state, 'db') or app_state.db is None:
         raise RuntimeError("Database not initialized. Ensure lifespan is properly configured.")
-    return app.state.db
+    return app_state.db

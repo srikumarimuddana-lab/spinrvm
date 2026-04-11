@@ -1,5 +1,7 @@
 import asyncio
+
 from db import db
+
 
 async def list_users():
     print("Listing all users...")

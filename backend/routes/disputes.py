@@ -1,20 +1,20 @@
 """
 disputes.py – Payment dispute/refund request endpoints for Spinr.
 """
-import uuid
 import logging
+import uuid
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 try:
-    from ..dependencies import get_current_user, get_admin_user
     from ..db import db
+    from ..dependencies import get_admin_user, get_current_user
 except ImportError:
-    from dependencies import get_current_user, get_admin_user
     from db import db
+    from dependencies import get_current_user
 
 logger = logging.getLogger(__name__)
 

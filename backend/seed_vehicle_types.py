@@ -1,19 +1,21 @@
 import asyncio
-from dotenv import load_dotenv
-import os
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 # Load env before importing db to ensure client is initialized
 env_path = Path(__file__).resolve().parent / '.env'
 load_dotenv(env_path)
 
-from db import db
-from datetime import datetime
 import uuid
+from datetime import datetime
+
+from db import db
+
 
 async def seed_vehicle_types():
     print("Seeding vehicle types...")
-    
+
     vehicle_types = [
         {
             "id": str(uuid.uuid4()),

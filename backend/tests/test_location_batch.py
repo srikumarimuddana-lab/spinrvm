@@ -1,7 +1,5 @@
 """Tests for the location-batch endpoint's input parsing logic."""
-import asyncio
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 @pytest.fixture(autouse=True)

@@ -1,20 +1,20 @@
 """
 notifications.py – In-app notification system for Spinr.
 """
-import uuid
 import logging
+import uuid
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 try:
-    from ..dependencies import get_current_user
     from ..db import db
+    from ..dependencies import get_current_user
 except ImportError:
-    from dependencies import get_current_user
     from db import db
+    from dependencies import get_current_user
 
 logger = logging.getLogger(__name__)
 

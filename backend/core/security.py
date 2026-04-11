@@ -1,7 +1,10 @@
+import json
+
 import firebase_admin
 from firebase_admin import credentials as firebase_credentials
-import json
+
 from .config import settings
+
 
 def init_firebase():
     """Initialize Firebase Admin SDK"""

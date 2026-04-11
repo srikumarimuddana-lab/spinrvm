@@ -1,8 +1,7 @@
+import os
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
-import asyncio
-import sys
-import os
 
 # Mock external dependencies before importing backend modules
 sys.modules['supabase'] = MagicMock()
@@ -19,8 +18,9 @@ if 'backend.db' in sys.modules:
 if 'backend.db_supabase' in sys.modules:
     del sys.modules['backend.db_supabase']
 
-from backend.db import db
 import backend.db_supabase as db_supabase
+from backend.db import db
+
 
 class TestDBWrapper(unittest.IsolatedAsyncioTestCase):
 

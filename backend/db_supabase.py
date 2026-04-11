@@ -1,16 +1,15 @@
-import re
 import asyncio
-from typing import Optional, List, Dict, Any, Union
-from datetime import datetime, date
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional
 
 try:
     from .supabase_client import supabase  # type: ignore
 except ImportError:
     from supabase_client import supabase  # type: ignore
 
-from loguru import logger
+from typing import Callable, TypeVar
 
-from typing import TypeVar, Callable
+from loguru import logger
 
 T = TypeVar('T')
 
@@ -61,58 +60,58 @@ def _rows_from_res(res: Any) -> List[Dict[str, Any]]:
 # ============ Corporate Accounts Functions ============
 
 async def get_all_corporate_accounts(
-    skip: int = 0, 
-    limit: int = 100, 
-    search: Optional[str] = None, 
+    skip: int = 0,
+    limit: int = 100,
+    search: Optional[str] = None,
     is_active: Optional[bool] = None
 ) -> List[Dict[str, Any]]:
     """
     Get all corporate accounts with optional filtering and pagination.
-    
+
     Args:
         skip: Number of records to skip
         limit: Maximum number of records to return
         search: Search term for company name, contact name, or email
         is_active: Filter by active status
-    
+
     Returns:
         List of corporate accounts
     """
     if not supabase:
         return []
-    
+
     def _fn():
         query = supabase.table('corporate_accounts').select('*').range(skip, skip + limit - 1)
-        
+
         if search:
             # Search in name, contact_name, and contact_email
             # Using ilike for case-insensitive search
             query = query.or_(
                 f"name.ilike.%{search}%,contact_name.ilike.%{search}%,contact_email.ilike.%{search}%"
             )
-        
+
         if is_active is not None:
             query = query.eq('is_active', is_active)
-        
+
         query = query.order('created_at', desc=True)
         return _rows_from_res(query.execute())
-    
+
     return await run_sync(_fn)
 
 
 async def get_corporate_account_by_id(validated_id: str) -> Optional[Dict[str, Any]]:
     """
     Get a corporate account by ID.
-    
+
     Args:
         validated_id: Validated corporate account ID
-    
+
     Returns:
         Corporate account data or None if not found
     """
     if not supabase:
         return None
-    
+
     def _fn():
         try:
             res = supabase.table('corporate_accounts').select('*').eq('id', validated_id).single().execute()
@@ -121,73 +120,73 @@ async def get_corporate_account_by_id(validated_id: str) -> Optional[Dict[str, A
             # If no rows found, Supabase raises an exception
             logger.debug(f"No corporate account found with ID {validated_id}: {e}")
             return None
-    
+
     return await run_sync(_fn)
 
 
 async def insert_corporate_account(account_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Insert a new corporate account.
-    
+
     Args:
         account_data: Corporate account data to insert
-    
+
     Returns:
         Created corporate account data or None if failed
     """
     if not supabase:
         raise RuntimeError('Supabase client not configured')
-    
+
     account_data = _serialize_for_api(account_data)
-    
+
     def _fn():
         res = supabase.table('corporate_accounts').insert(account_data).execute()
         return _single_row_from_res(res)
-    
+
     return await run_sync(_fn)
 
 
 async def update_corporate_account(account_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Update an existing corporate account.
-    
+
     Args:
         account_id: ID of the account to update
         update_data: Data to update
-    
+
     Returns:
         Updated corporate account data or None if failed
     """
     if not supabase:
         return None
-    
+
     update_data = _serialize_for_api(update_data)
-    
+
     def _fn():
         res = supabase.table('corporate_accounts').update(update_data).eq('id', account_id).execute()
         return _single_row_from_res(res)
-    
+
     return await run_sync(_fn)
 
 
 async def delete_corporate_account(account_id: str) -> bool:
     """
     Delete a corporate account.
-    
+
     Args:
         account_id: ID of the account to delete
-    
+
     Returns:
         True if successful, False otherwise
     """
     if not supabase:
         return False
-    
+
     def _fn():
         res = supabase.table('corporate_accounts').delete().eq('id', account_id).execute()
         # If deletion was successful, affected rows will be > 0
         return res.count > 0 if res.count is not None else False
-    
+
     return await run_sync(_fn)
 
 # ============ User Helpers ============
@@ -242,15 +241,15 @@ async def update_driver_location(driver_id: str, lat: float, lng: float):
     if not supabase:
         return None
 
-    
+
     def _update():
         # The Supabase RPC seems to have a type mismatch (text vs uuid) error.
         # We'll bypass the RPC and update the table directly.
         # Assuming table has 'lat' and 'lng' columns (or 'location' if that works, but Traceback used lat/lng).
-        
+
         # Note: If 'location' is a PostGIS column, we might need to update it too.
         # But failing RPC prevents any update. Direct update is safer for now.
-        
+
         data = {'lat': lat, 'lng': lng, 'updated_at': datetime.utcnow().isoformat()}
         supabase.table('drivers').update(data).eq('id', str(driver_id)).execute()
         return True
@@ -531,17 +530,17 @@ async def execute_query(query: str, params: Optional[Dict[str, Any]] = None):
     """
     Execute a raw SQL SELECT query and return all rows.
     Uses Supabase's raw API to execute queries.
-    
+
     Args:
         query: SQL query string (e.g., 'SELECT * FROM settings')
         params: Optional dictionary of query parameters
-        
+
     Returns:
         List of dictionaries representing rows
     """
     if not supabase:
         return []
-    
+
     def _fn():
         try:
             # Use Supabase's raw() method for SELECT queries
@@ -553,7 +552,7 @@ async def execute_query(query: str, params: Optional[Dict[str, Any]] = None):
         except Exception as e:
             logger.warning(f"execute_query warning: {e}")
             return []
-    
+
     return await run_sync(_fn)
 
 
@@ -561,17 +560,17 @@ async def execute_write(query: str, params: Optional[Dict[str, Any]] = None):
     """
     Execute a raw SQL INSERT, UPDATE, or DELETE query.
     Uses Supabase's raw API to execute queries.
-    
+
     Args:
         query: SQL query string (e.g., 'INSERT INTO settings (key, value) VALUES ($1, $2)')
         params: Optional dictionary of query parameters
-        
+
     Returns:
         Dictionary with execution results
     """
     if not supabase:
         return {'success': False, 'error': 'No supabase connection'}
-    
+
     def _fn():
         try:
             # Use Supabase's raw() method for write queries

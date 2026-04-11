@@ -1,32 +1,36 @@
+from decimal import ROUND_HALF_UP, Decimal
+
 from fastapi import APIRouter, Depends, HTTPException
-from decimal import Decimal, ROUND_HALF_UP
+
 try:
-    from ..dependencies import get_current_user, generate_otp
-    from ..schemas import CreateRideRequest, Ride, UserProfile, RideRatingRequest
-    from ..db import db
-    from ..utils import calculate_distance
-    from ..socket_manager import manager
-    from ..settings_loader import get_app_settings
-    from ..features import send_push_notification, calculate_all_fees, calculate_airport_fee
     from .. import db_supabase
-    from ..geo_utils import point_in_polygon, get_service_area_polygon
+    from ..db import db
+    from ..dependencies import generate_otp, get_current_user
+    from ..features import calculate_airport_fee, calculate_all_fees, send_push_notification
+    from ..geo_utils import get_service_area_polygon, point_in_polygon
+    from ..schemas import CreateRideRequest, Ride, RideRatingRequest, UserProfile
+    from ..settings_loader import get_app_settings
+    from ..socket_manager import manager
+    from ..utils import calculate_distance
 except ImportError:
-    from dependencies import get_current_user, generate_otp
-    from schemas import CreateRideRequest, Ride, UserProfile, RideRatingRequest
-    from db import db
-    from geo_utils import calculate_distance, point_in_polygon, get_service_area_polygon
-    from socket_manager import manager
-    from settings_loader import get_app_settings
-    from features import send_push_notification, calculate_all_fees, calculate_airport_fee
     import db_supabase
-from .fares import get_fares_for_location
+    from db import db
+    from dependencies import generate_otp, get_current_user
+    from features import calculate_airport_fee, calculate_all_fees, send_push_notification
+    from geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
+    from schemas import CreateRideRequest, Ride, RideRatingRequest
+    from settings_loader import get_app_settings
+    from socket_manager import manager
 import asyncio
-from loguru import logger
-from typing import List, Tuple, Optional
-from datetime import datetime, timedelta
-import uuid
 import secrets
+import uuid
+from datetime import datetime
+from typing import List, Optional
+
+from loguru import logger
 from pydantic import BaseModel
+
+from .fares import get_fares_for_location
 
 # ── Decimal helpers for accurate currency arithmetic ──────────────────────────
 _TWO_PLACES = Decimal('0.01')
@@ -135,9 +139,9 @@ async def match_driver_to_ride(ride_id: str):
     if not drivers_with_distance:
         logger.info(f"[DISPATCH] no eligible drivers for ride {ride_id} — ride stays in searching")
         return
-    
+
     selected_driver = None
-    
+
     if algorithm == 'nearest' or algorithm == 'combined':
         drivers_with_distance.sort(key=lambda x: x[1])
         selected_driver = drivers_with_distance[0][0]
@@ -158,7 +162,7 @@ async def match_driver_to_ride(ride_id: str):
             selected_driver = drivers_with_distance[next_idx][0]
         else:
             selected_driver = drivers_with_distance[0][0]
-    
+
     if selected_driver:
         # Attempt to atomically claim the driver (only if still available)
         claim_result = await db.drivers.update_one(
@@ -308,9 +312,9 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
         request.dropoff_lat, request.dropoff_lng
     )
     duration_minutes = int(distance_km / 30 * 60) + 5
-    
+
     fares = await get_fares_for_location(request.pickup_lat, request.pickup_lng)
-    
+
     # Fetch all nearby online+available drivers once
     all_drivers = await db.drivers.find({
         'is_online': True,
@@ -336,7 +340,7 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
                     'driver': d,
                     'distance_km': dist,
                 })
-    
+
     # Check airport surcharge (pickup, dropoff, or any stop in airport sub-region)
     airport_result = await calculate_airport_fee(
         request.pickup_lat, request.pickup_lng,
@@ -404,17 +408,17 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
         request.dropoff_lat, request.dropoff_lng
     )
     duration_minutes = int(distance_km / 30 * 60) + 5
-    
+
     fares = await get_fares_for_location(request.pickup_lat, request.pickup_lng)
-    
+
     # Serialize the fare objects if they aren't dicts, or just access them if they are
     # get_fares_for_location returns a list of dictionaries as seen in server.py
-    
+
     fare_info = next((f for f in fares if f['vehicle_type']['id'] == request.vehicle_type_id), fares[0] if fares else None)
-    
+
     if not fare_info:
         raise HTTPException(status_code=400, detail='Invalid vehicle type')
-        
+
     # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
     surge = _d(fare_info.get('surge_multiplier', 1.0))
     distance_fare = _round(_d(fare_info['per_km_rate']) * _d(distance_km) * surge)
@@ -512,10 +516,10 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
     ride_data['grand_total'] = grand_total
 
     await db.rides.insert_one(ride_data)
-    
+
     # Match driver
     await match_driver_to_ride(ride.id)
-    
+
     updated_ride = await db.rides.find_one({'id': ride.id})
     # Small helper to ensure we return a clean dict
     def serialize_doc(doc): return doc
@@ -555,6 +559,7 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
     return serialize_doc(updated_ride)
 
 from fastapi import Request
+
 
 @api_router.get("/active")
 async def get_active_ride(current_user: dict = Depends(get_current_user)):
@@ -637,17 +642,17 @@ async def get_ride(ride_id: str, current_user: dict = Depends(get_current_user))
     ride = await db.rides.find_one({'id': ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
-        
+
     # Security check: must be rider or driver of this ride
     is_rider = ride.get('rider_id') == current_user['id']
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     is_driver = driver and ride.get('driver_id') == driver['id']
-    
+
     if not (is_rider or is_driver):
         # Admin check
         if current_user.get('role') != 'admin':
             raise HTTPException(status_code=403, detail="Not authorized to view this ride")
-            
+
     # Include driver details if assigned
     if ride.get('driver_id'):
         assigned_driver = await db.drivers.find_one({'id': ride['driver_id']})
@@ -704,20 +709,20 @@ async def add_tip(ride_id: str, request: Request, current_user: dict = Depends(g
     tip_amount = float(data.get('amount', 0))
     if tip_amount <= 0:
         raise HTTPException(status_code=400, detail="Invalid tip amount")
-        
+
     ride = await db.rides.find_one({'id': ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
-        
+
     if ride.get('rider_id') != current_user.get('id'):
         raise HTTPException(status_code=403, detail="Not authorized to tip this ride")
-        
+
     if ride.get('status') != 'completed':
         raise HTTPException(status_code=400, detail="Can only tip completed rides")
-        
+
     new_tip = ride.get('tip_amount', 0) + tip_amount
     new_driver_earnings = ride.get('driver_earnings', 0) + tip_amount
-    
+
     await db.rides.update_one(
         {'id': ride_id},
         {'$set': {
@@ -725,7 +730,7 @@ async def add_tip(ride_id: str, request: Request, current_user: dict = Depends(g
             'driver_earnings': new_driver_earnings
         }}
     )
-    
+
     return {'success': True, 'tip_amount': new_tip}
 
 
@@ -788,13 +793,13 @@ async def get_share_trip_link(ride_id: str, current_user: dict = Depends(get_cur
     ride = await db.rides.find_one({'id': ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
-    
+
     if ride.get('rider_id') != current_user['id']:
         raise HTTPException(status_code=403, detail="Not authorized to share this ride")
-    
+
     if ride.get('status') in ['completed', 'cancelled']:
         raise HTTPException(status_code=400, detail="Cannot share a completed or cancelled ride")
-    
+
     # Generate or reuse a share token
     share_token = ride.get('shared_trip_token')
     if not share_token:
@@ -803,11 +808,11 @@ async def get_share_trip_link(ride_id: str, current_user: dict = Depends(get_cur
             {'id': ride_id},
             {'$set': {'shared_trip_token': share_token}}
         )
-    
+
     # The frontend would use this token to show a read-only tracking page
     # In production, this would be a full URL like: https://spinr.app/track/{share_token}
     share_url = f"/track/{share_token}"
-    
+
     return {
         'success': True,
         'share_token': share_token,
@@ -821,7 +826,7 @@ async def track_shared_ride(share_token: str):
     ride = await db.rides.find_one({'shared_trip_token': share_token})
     if not ride:
         raise HTTPException(status_code=404, detail="Shared ride not found or link expired")
-    
+
     if ride.get('status') in ['completed', 'cancelled']:
         return {
             'status': ride.get('status'),
@@ -829,7 +834,7 @@ async def track_shared_ride(share_token: str):
             'pickup_address': ride.get('pickup_address'),
             'dropoff_address': ride.get('dropoff_address'),
         }
-    
+
     # Get driver location for live tracking
     driver_info = None
     if ride.get('driver_id'):
@@ -844,7 +849,7 @@ async def track_shared_ride(share_token: str):
                 'vehicle_color': driver.get('vehicle_color'),
                 'license_plate': driver.get('license_plate'),
             }
-    
+
     return {
         'status': ride.get('status'),
         'pickup_address': ride.get('pickup_address'),
@@ -862,7 +867,7 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
     ride = await db.rides.find_one({'id': ride_id})
     if not ride or ride.get('rider_id') != current_user['id']:
         raise HTTPException(status_code=404, detail="Ride not found or unauthorized")
-        
+
     # Save rating using existing columns (rider_rating = rating rider gave the driver)
     await db.rides.update_one(
         {'id': ride_id},
@@ -876,7 +881,7 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
     driver_id = ride.get('driver_id')
     if not driver_id:
         return {'success': True}
-    
+
     if rating_data.tip_amount > 0:
         new_tip = ride.get('tip_amount', 0) + rating_data.tip_amount
         new_driver_earnings = ride.get('driver_earnings', 0) + rating_data.tip_amount
@@ -894,7 +899,7 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
         # Fetch all rides for this driver to compute precise average
         driver_rides = await db.rides.find({'driver_id': driver_id}).to_list(1000)
         rated_rides = [float(r.get('driver_rating')) for r in driver_rides if r.get('driver_rating') is not None]
-        
+
         if rated_rides:
             average_rating = round(sum(rated_rides) / len(rated_rides), 2)
             await db.drivers.update_one(
@@ -941,10 +946,10 @@ async def cancel_ride_rider(ride_id: str, current_user: dict = Depends(get_curre
     settings = await get_app_settings()
     cancellation_fee_admin = settings.get('cancellation_fee_admin', 0.50)
     cancellation_fee_driver = settings.get('cancellation_fee_driver', 2.50)
-    
+
     charged_admin = 0.0
     charged_driver = 0.0
-    
+
     # Calculate fee if driver was already assigned and some time passed (e.g. 2 mins)
     if driver_id and ride.get('driver_accepted_at'):
         accepted_at = ride['driver_accepted_at']
@@ -960,7 +965,7 @@ async def cancel_ride_rider(ride_id: str, current_user: dict = Depends(get_curre
         if time_diff > 120:  # 2 minutes
             charged_admin = cancellation_fee_admin
             charged_driver = cancellation_fee_driver
-            
+
             # Here we would charge the user's stripe card using stripe API for the fee
             # ... (omitted for brevity, assume successful)
 
@@ -1019,7 +1024,7 @@ async def cancel_ride_rider(ride_id: str, current_user: dict = Depends(get_curre
             {'id': driver_id},
             {'$set': {'is_available': True}}
         )
-        
+
         # Notify driver
         driver = await db.drivers.find_one({'id': driver_id})
         if driver and driver.get('user_id'):
@@ -1041,15 +1046,15 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
     ride = await db.rides.find_one({'id': ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
-        
+
     # Verify the user is part of the ride
     is_rider = ride.get('rider_id') == current_user['id']
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     is_driver = driver and ride.get('driver_id') == driver['id']
-    
+
     if not (is_rider or is_driver):
         raise HTTPException(status_code=403, detail="Not authorized to trigger emergency for this ride")
-        
+
     incident = {
         'id': str(uuid.uuid4()),
         'ride_id': ride_id,
@@ -1061,9 +1066,9 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
         'longitude': request.longitude,
         'created_at': datetime.utcnow().isoformat()
     }
-    
+
     await db.emergencies.insert_one(incident)
-    
+
     # Notify admin dashboard via Websocket
     await manager.send_personal_message(
         {'type': 'emergency_alert', 'incident': incident},
@@ -1075,10 +1080,10 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
     try:
         contacts_cursor = db.emergency_contacts.find({'user_id': current_user['id']})
         contacts = await contacts_cursor.to_list(length=5) if hasattr(contacts_cursor, 'to_list') else list(contacts_cursor)
-        
+
         user = await db.users.find_one({'id': current_user['id']})
         user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else 'A Spinr user'
-        
+
         for contact in contacts:
             # In production, this would send an actual SMS via Twilio
             logger.info(
@@ -1086,12 +1091,12 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
                 f"{user_name} triggered an emergency alert during their Spinr ride. "
                 f"Location: {request.latitude}, {request.longitude}"
             )
-        
+
         if contacts:
             logger.info(f"Notified {len(contacts)} emergency contacts for user {current_user['id']}")
     except Exception as e:
         logger.warning(f"Could not notify emergency contacts: {e}")
-    
+
     return {'success': True, 'incident_id': incident['id'], 'contacts_notified': len(contacts) if 'contacts' in dir() else 0}
 
 @api_router.get("/{ride_id}/messages")
@@ -1100,18 +1105,18 @@ async def get_ride_messages(ride_id: str, current_user: dict = Depends(get_curre
     ride = await db.rides.find_one({'id': ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
-        
+
     # Verify the user is part of the ride
     is_rider = ride.get('rider_id') == current_user['id']
     driver = await db.drivers.find_one({'user_id': current_user['id']})
     is_driver = driver and ride.get('driver_id') == driver['id']
-    
+
     if not (is_rider or is_driver):
         raise HTTPException(status_code=403, detail="Not authorized to track this ride")
-        
+
     messages_cursor = db.ride_messages.find({'ride_id': ride_id}).sort('timestamp', 1)
     messages = await messages_cursor.to_list(length=100) if hasattr(messages_cursor, 'to_list') else list(messages_cursor)
-    
+
     # Serialize datetime
     serialized = []
     for msg in messages:
@@ -1119,7 +1124,7 @@ async def get_ride_messages(ride_id: str, current_user: dict = Depends(get_curre
         if 'timestamp' in msg and isinstance(msg['timestamp'], datetime):
             msg['timestamp'] = msg['timestamp'].isoformat()
         serialized.append(msg)
-        
+
     return {'success': True, 'messages': serialized}
 
 @api_router.get("/scheduled")
@@ -1211,25 +1216,25 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
     ride = await db.rides.find_one({'id': ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
-        
+
     if ride.get('rider_id') != current_user['id']:
         raise HTTPException(status_code=403, detail="Not authorized to view this receipt")
-        
+
     if ride.get('status') not in ['completed', 'cancelled']:
         raise HTTPException(status_code=400, detail="Receipts are only available for completed or cancelled rides")
-        
+
     driver = None
     if ride.get('driver_id'):
         driver = await db.drivers.find_one({'id': ride['driver_id']})
-    
+
     driver_profile = None
     if driver and driver.get('user_id'):
          driver_profile = await db.users.find_one({'id': driver['user_id']})
-         
+
     vehicle = None
     if ride.get('vehicle_type_id'):
         vehicle = await db.vehicle_types.find_one({'id': ride['vehicle_type_id']})
-        
+
     corporate_account = None
     if ride.get('corporate_account_id'):
         corporate_account = await db.corporate_accounts.find_one({'id': ride['corporate_account_id']})
@@ -1256,7 +1261,7 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
         'driver_name': f"{driver_profile.get('first_name', '')} {driver_profile.get('last_name', '')}".strip() if driver_profile else "Unknown Driver",
         'vehicle_type': vehicle.get('name') if vehicle else "Standard"
     }
-    
+
     # Ideally send email here via SendGrid/Mailgun if POST
-    
+
     return {'success': True, 'receipt': receipt_data}

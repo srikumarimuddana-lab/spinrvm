@@ -1,8 +1,8 @@
+import asyncio
+import os
+import sys
 import unittest
 from unittest.mock import MagicMock, patch
-import asyncio
-import sys
-import os
 
 # Add repo root and backend dir to path to allow importing backend modules
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -65,10 +65,10 @@ if 'backend.db' in sys.modules:
 # We need to mock db in server explicitly because it imports it
 # And we need to ensure admin_get_stats uses our mocked DB
 with patch.dict(sys.modules, {'backend.db': MagicMock()}):
-    import backend.server
     # But server.py imports db from backend.db, so we need to patch that attribute
     # Actually, let's just import server and patch the db object on it
-    from backend.server import admin_get_stats, db as server_db
+    from backend.server import admin_get_stats
+    from backend.server import db as server_db
 
 # We will patch server_db in the test method
 

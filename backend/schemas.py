@@ -1,7 +1,8 @@
-from pydantic import BaseModel, Field, EmailStr
-from typing import List, Optional, Dict, Any
-from datetime import datetime
 import uuid
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, EmailStr, Field
 
 # ============ Models ============
 
@@ -139,7 +140,7 @@ class Driver(BaseModel):
     vehicle_color: str
     license_plate: str
     city: Optional[str] = None
-    
+
     # Verification & Compliance Fields
     license_number: Optional[str] = None
     license_expiry_date: Optional[datetime] = None

@@ -1,9 +1,9 @@
 from fastapi import APIRouter
+
 try:
     from ..db import db
     from ..settings_loader import get_app_settings
 except ImportError:
-    from db import db
     from settings_loader import get_app_settings
 
 api_router = APIRouter(tags=["Settings"])

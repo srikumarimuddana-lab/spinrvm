@@ -1,6 +1,7 @@
 """Tests for geo_utils — pure math, no external deps."""
 import pytest
-from geo_utils import calculate_distance, point_in_polygon, get_service_area_polygon
+
+from geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
 
 
 @pytest.fixture(autouse=True)

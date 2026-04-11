@@ -1,17 +1,16 @@
-import os
 import asyncio
-from dotenv import load_dotenv
 from pathlib import Path
-from pprint import pprint
+
+from dotenv import load_dotenv
 
 # Load env
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-import sys
 # sys.path.append('.') # Not needed if run as module
 
-from backend.db_supabase import create_user, find_nearby_drivers, insert_ride, get_ride
+from backend.db_supabase import create_user, find_nearby_drivers
+
 
 async def main():
     print('Running smoke tests...')

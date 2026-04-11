@@ -1,20 +1,20 @@
 """
 promotions.py – Promo codes & referral system for Spinr.
 """
-import uuid
 import logging
+import uuid
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 try:
-    from ..dependencies import get_current_user, get_admin_user
     from ..db import db
+    from ..dependencies import get_admin_user, get_current_user
 except ImportError:
-    from dependencies import get_current_user, get_admin_user
     from db import db
+    from dependencies import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +223,7 @@ async def get_available_promos(
     user = await db.users.find_one({"id": current_user["id"]})
     total_rides = await db.rides.count_documents({"rider_id": current_user["id"], "status": "completed"})
     recent_cutoff_30 = (now - timedelta(days=30)).isoformat()
-    recent_rides_30 = await db.rides.count_documents({
+    await db.rides.count_documents({
         "rider_id": current_user["id"], "status": "completed",
         "ride_completed_at": {"$gte": recent_cutoff_30},
     })

@@ -2,16 +2,15 @@
 Enhanced Error Handling Patterns for Spinr
 Provides structured error handling, custom exceptions, and error middleware.
 """
-from enum import Enum
-from typing import Optional, Dict, Any, List, Union
-from fastapi import HTTPException, Request, status
-from fastapi.responses import JSONResponse
-from fastapi.exceptions import RequestValidationError
-from pydantic import ValidationError
-from loguru import logger
 import traceback
-import json
 from datetime import datetime
+from enum import Enum
+from typing import Any, Dict, Optional
+
+from fastapi import HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from loguru import logger
 
 
 class ErrorCode(Enum):
@@ -25,39 +24,39 @@ class ErrorCode(Enum):
     AUTH_ACCOUNT_DISABLED = 1006
     AUTH_OTP_EXPIRED = 1007
     AUTH_OTP_INVALID = 1008
-    
+
     # Validation errors (2000-2999)
     VALIDATION_ERROR = 2001
     VALIDATION_INVALID_FORMAT = 2002
     VALIDATION_MISSING_FIELD = 2003
     VALIDATION_INVALID_RANGE = 2004
-    
+
     # Resource errors (3000-3999)
     RESOURCE_NOT_FOUND = 3001
     RESOURCE_ALREADY_EXISTS = 3002
     RESOURCE_CONFLICT = 3003
     RESOURCE_LOCKED = 3004
-    
+
     # Ride errors (4000-4999)
     RIDE_NOT_FOUND = 4001
     RIDE_INVALID_STATUS = 4002
     RIDE_ALREADY_CANCELLED = 4003
     RIDE_NO_DRIVERS_AVAILABLE = 4004
     RIDE_PRICE_MISMATCH = 4005
-    
+
     # Driver errors (5000-5999)
     DRIVER_NOT_FOUND = 5001
     DRIVER_NOT_AVAILABLE = 5002
     DRIVER_OFFLINE = 5003
     DRIVER_DOCUMENTS_PENDING = 5004
     DRIVER_DOCUMENTS_REJECTED = 5005
-    
+
     # Payment errors (6000-6999)
     PAYMENT_FAILED = 6001
     PAYMENT_METHOD_INVALID = 6002
     PAYMENT_INSUFFICIENT_FUNDS = 6003
     PAYMENT_REFUND_FAILED = 6004
-    
+
     # System errors (9000-9999)
     INTERNAL_ERROR = 9001
     SERVICE_UNAVAILABLE = 9002
@@ -67,7 +66,7 @@ class ErrorCode(Enum):
 
 class SpinrException(Exception):
     """Base exception for Spinr application."""
-    
+
     def __init__(
         self,
         message: str,
@@ -82,9 +81,9 @@ class SpinrException(Exception):
         self.details = details or {}
         self.should_log = should_log
         self.timestamp = datetime.utcnow().isoformat()
-        
+
         super().__init__(self.message)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert exception to dictionary for JSON response."""
         return {
@@ -222,7 +221,7 @@ class InvalidRangeException(ValidationException):
             range_str.append(f'>= {min_val}')
         if max_val is not None:
             range_str.append(f'<= {max_val}')
-        
+
         super().__init__(
             message=f'{field} must be {" and ".join(range_str)}',
             error_code=ErrorCode.VALIDATION_INVALID_RANGE,
@@ -364,7 +363,7 @@ class InternalErrorException(SpinrException):
 class ServiceUnavailableException(SpinrException):
     """Service temporarily unavailable."""
     def __init__(self, service_name: str = ''):
-        message = f'Service temporarily unavailable'
+        message = 'Service temporarily unavailable'
         if service_name:
             message += f': {service_name}'
         super().__init__(
@@ -408,7 +407,7 @@ async def spinr_exception_handler(request: Request, exc: SpinrException) -> JSON
                 'error_code': exc.error_code.value
             }
         )
-    
+
     return JSONResponse(
         status_code=exc.status_code,
         content=exc.to_dict()
@@ -427,12 +426,12 @@ async def validation_exception_handler(
             'message': error.get('msg', 'Invalid value'),
             'type': error.get('type', 'value_error')
         })
-    
+
     logger.warning(
         f'Validation error: {errors}',
         extra={'path': request.url.path, 'method': request.method}
     )
-    
+
     return JSONResponse(
         status_code=422,
         content={

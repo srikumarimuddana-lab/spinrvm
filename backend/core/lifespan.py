@@ -1,11 +1,9 @@
-import asyncio
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from loguru import logger
 
-from features import check_scheduled_rides
 from supabase_client import supabase
-from core.config import settings
 
 
 # Global database reference accessible via app state
@@ -16,16 +14,16 @@ async def init_database():
         if not supabase:
             raise Exception("Supabase client not configured")
         return supabase
-        
+
         # Verify connection with a simple query
         response = await supabase.table('test').select('*').limit(1).execute()
         if response.status_code == 200:
             logger.info("Supabase connection established successfully")
         else:
             logger.warning(f"Supabase connection test returned status: {response.status_code}")
-        
+
         return supabase
-    
+
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         raise
@@ -52,22 +50,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         raise
-    
+
     # Start background tasks
     logger.info("Starting scheduled rides checker...")
     # Note: scheduler_task is disabled - scheduled rides feature needs Supabase migration
-    
+
     # Perform startup checks
     logger.info("Spinr API startup complete")
-    
+
     yield
-    
+
     # Cleanup on shutdown
     logger.info("Shutting down Spinr API...")
     # Note: Background tasks are disabled - no cleanup needed
-    
+
     # Cleanup database
     if hasattr(app.state, 'db') and app.state.db:
         await cleanup_database(app.state.db)
-    
+
     logger.info("Spinr API shutdown complete")

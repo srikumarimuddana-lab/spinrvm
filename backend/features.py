@@ -3,22 +3,22 @@ features.py – Extended feature endpoints for Spinr.
 Includes: Support Tickets, FAQs, Surge Pricing, Scheduled Rides,
            Multi-stop Rides, Safety Toolkit, Push Notifications.
 """
-import uuid
-import secrets
 import asyncio
+import secrets
+import uuid
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Depends, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 try:
-    from .dependencies import get_current_user
     from .db import db
+    from .dependencies import get_current_user
     from .geo_utils import get_service_area_polygon
 except ImportError:
-    from dependencies import get_current_user
     from db import db
+    from dependencies import get_current_user
     from geo_utils import get_service_area_polygon
 
 from loguru import logger

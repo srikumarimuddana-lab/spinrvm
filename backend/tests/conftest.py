@@ -2,13 +2,14 @@
 Pytest configuration and fixtures for Spinr backend tests.
 This file provides shared fixtures for all test modules.
 """
+import asyncio
 import os
 import sys
-import pytest
-import asyncio
-from unittest.mock import MagicMock, AsyncMock, patch
-from typing import Generator, Any, Dict, Optional
+from typing import Any, Dict, Generator
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 # Add backend to path
@@ -27,7 +28,7 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
 def mock_supabase_client() -> MagicMock:
     """Create a mock Supabase client for testing."""
     mock_client = MagicMock()
-    
+
     # Mock table method with chainable responses
     mock_table = MagicMock()
     mock_table.select.return_value = mock_table
@@ -49,25 +50,25 @@ def mock_supabase_client() -> MagicMock:
     mock_table.limit.return_value = mock_table
     mock_table.offset.return_value = mock_table
     mock_table.single.return_value = mock_table
-    
+
     # Mock execute to return async response
     async def mock_execute():
         response = MagicMock()
         response.data = []
         response.count = 0
         return response
-    
+
     mock_table.execute = AsyncMock(side_effect=mock_execute)
     mock_client.table.return_value = mock_table
-    
+
     # Mock RPC method
     async def mock_rpc(*args, **kwargs):
         response = MagicMock()
         response.data = None
         return response
-    
+
     mock_client.rpc = AsyncMock(side_effect=mock_rpc)
-    
+
     # Mock auth methods
     mock_client.auth = MagicMock()
     mock_client.auth.sign_in_with_password = AsyncMock(return_value=MagicMock())
@@ -75,7 +76,7 @@ def mock_supabase_client() -> MagicMock:
     mock_client.auth.refresh_session = AsyncMock(return_value=MagicMock())
     mock_client.auth.get_user = AsyncMock(return_value=MagicMock())
     mock_client.auth.admin_get_user = AsyncMock(return_value=MagicMock())
-    
+
     return mock_client
 
 
@@ -83,7 +84,7 @@ def mock_supabase_client() -> MagicMock:
 def mock_db_collections() -> Dict[str, MagicMock]:
     """Create mock database collections for testing."""
     collections = {}
-    
+
     for collection_name in [
         'users', 'drivers', 'rides', 'otps', 'otp_records',
         'vehicle_types', 'fare_configs', 'service_areas',
@@ -104,7 +105,7 @@ def mock_db_collections() -> Dict[str, MagicMock]:
         mock_collection.delete_many = AsyncMock(return_value=MagicMock(deleted_count=0))
         mock_collection.count_documents = AsyncMock(return_value=0)
         collections[collection_name] = mock_collection
-    
+
     return collections
 
 
@@ -115,7 +116,7 @@ def mock_firebase_admin() -> MagicMock:
     mock_firebase.credentials = MagicMock()
     mock_firebase.cert = MagicMock()
     mock_firebase.initialize_app = MagicMock()
-    
+
     mock_auth = MagicMock()
     mock_auth.create_user = AsyncMock(return_value=MagicMock(uid='test_uid'))
     mock_auth.get_user = AsyncMock(return_value=MagicMock(uid='test_uid', phone_number='+1234567890'))
@@ -123,7 +124,7 @@ def mock_firebase_admin() -> MagicMock:
     mock_auth.delete_user = AsyncMock(return_value=MagicMock())
     mock_auth.get_user_by_phone_number = AsyncMock(return_value=MagicMock(uid='test_uid'))
     mock_auth.set_custom_user_claims = AsyncMock(return_value=None)
-    
+
     mock_firebase.auth = mock_auth
     return mock_firebase
 
@@ -243,12 +244,12 @@ def patch_external_dependencies(
         patch('backend.sms_service.send_sms', mock_sms_service.send),
         patch('backend.sms_service.send_otp_sms', mock_sms_service.send_otp),
     ]
-    
+
     for p in patches:
         p.start()
-    
+
     yield
-    
+
     for p in patches:
         p.stop()
 
@@ -257,7 +258,7 @@ def patch_external_dependencies(
 def test_client() -> TestClient:
     """Create a test client for the FastAPI app."""
     from backend.server import app
-    
+
     with TestClient(app) as client:
         yield client
 

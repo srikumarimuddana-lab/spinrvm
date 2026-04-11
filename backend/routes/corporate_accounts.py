@@ -4,22 +4,29 @@ Corporate accounts API routes for managing business clients and billing.
 This module implements CRUD operations for corporate accounts that can be used
 for business rides and expense management.
 """
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Request
-from pydantic import BaseModel, Field
 from datetime import datetime
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
 
 from dependencies import get_admin_user
+
 # Alias for backward compatibility
 get_current_admin = get_admin_user
 try:
     from utils.rate_limiter import admin_rate_limit
 except ImportError:
-    from utils.rate_limiter import admin_rate_limit
-from validators import validate_id, validate_email, validate_phone, sanitize_string
-
+    pass
 # Validate that we're importing the right function
-from db_supabase import get_all_corporate_accounts, get_corporate_account_by_id, insert_corporate_account, update_corporate_account, delete_corporate_account
+from db_supabase import (
+    delete_corporate_account,
+    get_all_corporate_accounts,
+    get_corporate_account_by_id,
+    insert_corporate_account,
+    update_corporate_account,
+)
+from validators import sanitize_string, validate_email, validate_id, validate_phone
 
 router = APIRouter(prefix="/admin/corporate-accounts", tags=["Corporate Accounts"])
 
@@ -67,7 +74,7 @@ async def get_corporate_accounts(
 ):
     """
     Get all corporate accounts with optional filtering and pagination.
-    
+
     Args:
         skip: Number of records to skip (for pagination)
         limit: Maximum number of records to return
@@ -98,7 +105,7 @@ async def create_corporate_account(
 ):
     """
     Create a new corporate account.
-    
+
     Args:
         account: Corporate account data
         current_admin: Authenticated admin user
@@ -107,17 +114,17 @@ async def create_corporate_account(
     if account.contact_email:
         valid, normalized_email = validate_email(account.contact_email, raise_exception=True)
         account.contact_email = normalized_email
-    
+
     if account.contact_phone:
         valid, normalized_phone = validate_phone(account.contact_phone, raise_exception=True)
         account.contact_phone = normalized_phone
-    
+
     if account.name:
         account.name = sanitize_string(account.name, max_length=200, raise_exception=True)
-    
+
     if account.contact_name:
         account.contact_name = sanitize_string(account.contact_name, max_length=100, raise_exception=True)
-    
+
     try:
         created_account = await insert_corporate_account(account.model_dump())
         return created_account
@@ -135,14 +142,14 @@ async def get_corporate_account(
 ):
     """
     Get a specific corporate account by ID.
-    
+
     Args:
         account_id: ID of the corporate account
         current_admin: Authenticated admin user
     """
     # Validate account ID
     valid, normalized_id = validate_id(account_id, "Corporate Account ID", raise_exception=True)
-    
+
     try:
         account = await get_corporate_account_by_id(validated_id=normalized_id)
         if not account:
@@ -168,7 +175,7 @@ async def update_corporate_account(
 ):
     """
     Update an existing corporate account.
-    
+
     Args:
         account_id: ID of the corporate account to update
         account_update: Updated account data
@@ -176,7 +183,7 @@ async def update_corporate_account(
     """
     # Validate account ID
     valid, normalized_id = validate_id(account_id, "Corporate Account ID", raise_exception=True)
-    
+
     # Check if account exists
     existing_account = await get_corporate_account_by_id(validated_id=normalized_id)
     if not existing_account:
@@ -184,7 +191,7 @@ async def update_corporate_account(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Corporate account not found"
         )
-    
+
     # Prepare update data
     update_data = {}
     for field, value in account_update.model_dump(exclude_unset=True).items():
@@ -201,7 +208,7 @@ async def update_corporate_account(
                 update_data[field] = sanitize_string(value, max_length=100, raise_exception=True)
             else:
                 update_data[field] = value
-    
+
     try:
         updated_account = await update_corporate_account(normalized_id, update_data)
         return updated_account
@@ -219,14 +226,14 @@ async def delete_corporate_account(
 ):
     """
     Delete a corporate account.
-    
+
     Args:
         account_id: ID of the corporate account to delete
         current_admin: Authenticated admin user
     """
     # Validate account ID
     valid, normalized_id = validate_id(account_id, "Corporate Account ID", raise_exception=True)
-    
+
     # Check if account exists
     existing_account = await get_corporate_account_by_id(validated_id=normalized_id)
     if not existing_account:
@@ -234,7 +241,7 @@ async def delete_corporate_account(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Corporate account not found"
         )
-    
+
     try:
         await delete_corporate_account(normalized_id)
         return  # 204 No Content

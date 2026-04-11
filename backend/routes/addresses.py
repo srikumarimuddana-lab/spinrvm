@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
+
 try:
+    from ..db import db
     from ..dependencies import get_current_user
     from ..schemas import SavedAddress, SavedAddressCreate
-    from ..db import db
 except ImportError:
+    from db import db
     from dependencies import get_current_user
     from schemas import SavedAddress, SavedAddressCreate
-    from db import db
 
 api_router = APIRouter(prefix="/addresses", tags=["Addresses"])
 

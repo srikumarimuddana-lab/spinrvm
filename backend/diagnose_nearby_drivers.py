@@ -10,10 +10,11 @@ The script inspects the same data the /rides/estimate and /drivers/nearby
 endpoints read, applies the same filters, and prints exactly why an XL driver
 is or isn't being surfaced to the rider app. No writes.
 """
-import asyncio
 import argparse
+import asyncio
 import math
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 # Load env the same way seed_vehicle_types.py does
@@ -161,9 +162,9 @@ async def main(pickup_lat, pickup_lng):
                         v = vt_by_id.get(f.get('vehicle_type_id'))
                         configured_names.append(v.get('name') if v else f"orphan:{f.get('vehicle_type_id')}")
                     print(f"       (this area has fare_configs only for: {', '.join(configured_names)})")
-                    print(f"       → pickups inside this area will NOT see the XL tile.")
+                    print("       → pickups inside this area will NOT see the XL tile.")
                 else:
-                    print(f"       (this area has zero fare_configs — falls through to defaults, XL should still show)")
+                    print("       (this area has zero fare_configs — falls through to defaults, XL should still show)")
 
     section("Done")
 

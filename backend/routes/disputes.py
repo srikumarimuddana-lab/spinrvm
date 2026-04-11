@@ -1,20 +1,21 @@
 """
 disputes.py – Payment dispute/refund request endpoints for Spinr.
 """
-import uuid
-import logging
-from datetime import datetime
-from typing import Optional, Dict, Any
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+import logging
+import uuid
+from datetime import datetime
+from typing import Any, Dict, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 try:
-    from ..dependencies import get_current_user, get_admin_user
     from ..db import db
+    from ..dependencies import get_current_user
 except ImportError:
-    from dependencies import get_current_user, get_admin_user
     from db import db
+    from dependencies import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -48,18 +49,12 @@ async def create_dispute(
         raise HTTPException(status_code=403, detail="Not authorized for this ride")
 
     if ride.get("status") not in ("completed", "cancelled"):
-        raise HTTPException(
-            status_code=400, detail="Can only dispute completed or cancelled rides"
-        )
+        raise HTTPException(status_code=400, detail="Can only dispute completed or cancelled rides")
 
     # Check for existing open dispute on same ride
-    existing = await db.disputes.find_one(
-        {"ride_id": req.ride_id, "status": {"$in": ["open", "under_review"]}}
-    )
+    existing = await db.disputes.find_one({"ride_id": req.ride_id, "status": {"$in": ["open", "under_review"]}})
     if existing:
-        raise HTTPException(
-            status_code=400, detail="A dispute is already open for this ride"
-        )
+        raise HTTPException(status_code=400, detail="A dispute is already open for this ride")
 
     dispute = {
         "id": str(uuid.uuid4()),
@@ -117,22 +112,22 @@ async def admin_get_disputes(
     filters: Dict[str, Any] = {}
     if status:
         filters["status"] = status
-    disputes = await db.get_rows(
-        "disputes", filters, order="created_at", desc=True, limit=limit, offset=offset
-    )
+    disputes = await db.get_rows("disputes", filters, order="created_at", desc=True, limit=limit, offset=offset)
 
     # Enrich with user + ride info
     enriched = []
     for d in disputes:
         user = await db.users.find_one({"id": d.get("user_id")}) if d.get("user_id") else None
         ride = await db.rides.find_one({"id": d.get("ride_id")}) if d.get("ride_id") else None
-        enriched.append({
-            **d,
-            "user_name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Unknown",
-            "user_phone": user.get("phone") if user else None,
-            "ride_status": ride.get("status") if ride else None,
-            "ride_fare": ride.get("total_fare") if ride else None,
-        })
+        enriched.append(
+            {
+                **d,
+                "user_name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Unknown",
+                "user_phone": user.get("phone") if user else None,
+                "ride_status": ride.get("status") if ride else None,
+                "ride_fare": ride.get("total_fare") if ride else None,
+            }
+        )
     return enriched
 
 
@@ -159,9 +154,7 @@ async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
 
     # If approved, initiate refund via Stripe (stub for now)
     if req.resolution in ("approved", "partial_refund") and req.refund_amount:
-        logger.info(
-            f"Refund of ${req.refund_amount} initiated for dispute {dispute_id}"
-        )
+        logger.info(f"Refund of ${req.refund_amount} initiated for dispute {dispute_id}")
         # In production: stripe.Refund.create(payment_intent=..., amount=...)
 
     return {"success": True, "dispute_id": dispute_id, "resolution": req.resolution}

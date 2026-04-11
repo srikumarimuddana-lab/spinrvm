@@ -2,6 +2,7 @@
 Receipt generator for Spinr rides.
 Generates HTML receipt and sends via email (SendGrid when configured, logs otherwise).
 """
+
 import logging
 from datetime import datetime
 
@@ -10,19 +11,21 @@ logger = logging.getLogger(__name__)
 
 def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: float = 0) -> str:
     """Generate HTML receipt for a completed ride."""
-    fare = ride.get('total_fare', 0) or 0
+    fare = ride.get("total_fare", 0) or 0
     total = fare + tip
-    rider_name = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or 'Rider'
-    driver_name = 'Unknown'
+    rider_name = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or "Rider"
+    driver_name = "Unknown"
     if driver:
-        driver_name = f"{driver.get('first_name', '')} {driver.get('last_name', '')}".strip() or driver.get('name', 'Driver')
+        driver_name = f"{driver.get('first_name', '')} {driver.get('last_name', '')}".strip() or driver.get(
+            "name", "Driver"
+        )
 
-    ride_date = ride.get('ride_completed_at') or ride.get('created_at') or ''
+    ride_date = ride.get("ride_completed_at") or ride.get("created_at") or ""
     if ride_date:
         try:
-            dt = datetime.fromisoformat(str(ride_date).replace('Z', '+00:00').replace('+00:00', ''))
-            ride_date = dt.strftime('%B %d, %Y at %I:%M %p')
-        except:
+            dt = datetime.fromisoformat(str(ride_date).replace("Z", "+00:00").replace("+00:00", ""))
+            ride_date = dt.strftime("%B %d, %Y at %I:%M %p")
+        except Exception:  # noqa: S110
             pass
 
     return f"""
@@ -60,9 +63,9 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: flo
               </td>
               <td>
                 <p style="color:#999;font-size:10px;margin:0;text-transform:uppercase;letter-spacing:0.5px;">Pickup</p>
-                <p style="color:#1a1a1a;font-size:14px;margin:2px 0 16px;font-weight:500;">{ride.get('pickup_address', 'N/A')}</p>
+                <p style="color:#1a1a1a;font-size:14px;margin:2px 0 16px;font-weight:500;">{ride.get("pickup_address", "N/A")}</p>
                 <p style="color:#999;font-size:10px;margin:0;text-transform:uppercase;letter-spacing:0.5px;">Dropoff</p>
-                <p style="color:#1a1a1a;font-size:14px;margin:2px 0 0;font-weight:500;">{ride.get('dropoff_address', 'N/A')}</p>
+                <p style="color:#1a1a1a;font-size:14px;margin:2px 0 0;font-weight:500;">{ride.get("dropoff_address", "N/A")}</p>
               </td>
             </tr>
           </table>
@@ -71,11 +74,11 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: flo
         <!-- Fare Breakdown -->
         <tr><td style="padding:0 24px 16px;">
           <table width="100%" style="font-size:14px;">
-            <tr><td style="color:#666;padding:4px 0;">Base fare</td><td style="text-align:right;color:#1a1a1a;">${ride.get('base_fare', 0) or 0:.2f}</td></tr>
-            <tr><td style="color:#666;padding:4px 0;">Distance ({ride.get('distance_km', 0):.1f} km)</td><td style="text-align:right;color:#1a1a1a;">${ride.get('distance_fare', 0) or 0:.2f}</td></tr>
-            <tr><td style="color:#666;padding:4px 0;">Time ({ride.get('duration_minutes', 0)} min)</td><td style="text-align:right;color:#1a1a1a;">${ride.get('time_fare', 0) or 0:.2f}</td></tr>
-            <tr><td style="color:#666;padding:4px 0;">Booking fee</td><td style="text-align:right;color:#1a1a1a;">${ride.get('booking_fee', 0) or 0:.2f}</td></tr>
-            {'<tr><td style="color:#10b981;padding:4px 0;">Tip</td><td style="text-align:right;color:#10b981;">$' + f"{tip:.2f}" + '</td></tr>' if tip > 0 else ''}
+            <tr><td style="color:#666;padding:4px 0;">Base fare</td><td style="text-align:right;color:#1a1a1a;">${ride.get("base_fare", 0) or 0:.2f}</td></tr>
+            <tr><td style="color:#666;padding:4px 0;">Distance ({ride.get("distance_km", 0):.1f} km)</td><td style="text-align:right;color:#1a1a1a;">${ride.get("distance_fare", 0) or 0:.2f}</td></tr>
+            <tr><td style="color:#666;padding:4px 0;">Time ({ride.get("duration_minutes", 0)} min)</td><td style="text-align:right;color:#1a1a1a;">${ride.get("time_fare", 0) or 0:.2f}</td></tr>
+            <tr><td style="color:#666;padding:4px 0;">Booking fee</td><td style="text-align:right;color:#1a1a1a;">${ride.get("booking_fee", 0) or 0:.2f}</td></tr>
+            {'<tr><td style="color:#10b981;padding:4px 0;">Tip</td><td style="text-align:right;color:#10b981;">$' + f"{tip:.2f}" + "</td></tr>" if tip > 0 else ""}
             <tr><td colspan="2" style="border-top:1px solid #eee;padding:0;"></td></tr>
             <tr><td style="color:#1a1a1a;padding:8px 0;font-weight:700;font-size:16px;">Total</td><td style="text-align:right;color:#ee2b2b;font-weight:800;font-size:18px;">${total:.2f}</td></tr>
           </table>
@@ -85,7 +88,7 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: flo
         <tr><td style="padding:0 24px 16px;">
           <table width="100%" style="background:#f9f9f9;border-radius:12px;padding:12px 16px;">
             <tr>
-              <td style="width:40px;"><div style="width:36px;height:36px;border-radius:18px;background:#e8e8e8;text-align:center;line-height:36px;color:#888;font-weight:700;">{driver_name[0] if driver_name else '?'}</div></td>
+              <td style="width:40px;"><div style="width:36px;height:36px;border-radius:18px;background:#e8e8e8;text-align:center;line-height:36px;color:#888;font-weight:700;">{driver_name[0] if driver_name else "?"}</div></td>
               <td style="padding-left:12px;">
                 <p style="margin:0;font-size:14px;font-weight:600;color:#1a1a1a;">{driver_name}</p>
                 <p style="margin:2px 0 0;font-size:12px;color:#999;">Your driver</p>
@@ -107,31 +110,33 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: flo
 
 async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: float = 0):
     """Send receipt email. Uses SendGrid when configured, logs otherwise."""
-    email = rider.get('email', '')
+    email = rider.get("email", "")
     if not email:
         logger.warning(f"No email for rider {rider.get('id')} — skipping receipt")
         return False
 
     html = generate_receipt_html(ride, rider, driver, tip)
-    total = (ride.get('total_fare', 0) or 0) + tip
+    total = (ride.get("total_fare", 0) or 0) + tip
 
     # Try SendGrid
     try:
         from ..settings_loader import get_app_settings
+
         settings = await get_app_settings()
-        sendgrid_key = settings.get('sendgrid_api_key', '')
+        sendgrid_key = settings.get("sendgrid_api_key", "")
 
         if sendgrid_key:
             import httpx
+
             response = await httpx.AsyncClient().post(
-                'https://api.sendgrid.com/v3/mail/send',
-                headers={'Authorization': f'Bearer {sendgrid_key}', 'Content-Type': 'application/json'},
+                "https://api.sendgrid.com/v3/mail/send",
+                headers={"Authorization": f"Bearer {sendgrid_key}", "Content-Type": "application/json"},
                 json={
-                    'personalizations': [{'to': [{'email': email}]}],
-                    'from': {'email': 'receipts@spinr.ca', 'name': 'Spinr'},
-                    'subject': f'Your Spinr ride receipt — ${total:.2f}',
-                    'content': [{'type': 'text/html', 'value': html}],
-                }
+                    "personalizations": [{"to": [{"email": email}]}],
+                    "from": {"email": "receipts@spinr.ca", "name": "Spinr"},
+                    "subject": f"Your Spinr ride receipt — ${total:.2f}",
+                    "content": [{"type": "text/html", "value": html}],
+                },
             )
             logger.info(f"[EMAIL] SendGrid receipt sent to {email} (status: {response.status_code})")
             return response.status_code in (200, 201, 202)

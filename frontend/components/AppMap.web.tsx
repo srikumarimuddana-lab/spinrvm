@@ -9,6 +9,7 @@ const AppMap = React.forwardRef((props: any, ref: any) => {
         </View>
     );
 });
+AppMap.displayName = 'AppMap';
 
 const styles = StyleSheet.create({
     container: {

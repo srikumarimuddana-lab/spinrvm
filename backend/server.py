@@ -1,31 +1,33 @@
-import sys
 import os
+import sys
 
 # Add the current directory to Python path to allow absolute imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fastapi import FastAPI, APIRouter
+from fastapi import APIRouter, FastAPI
+
 from core.config import settings
-from core.middleware import init_middleware
 from core.lifespan import lifespan
+from core.middleware import init_middleware
 from core.security import init_firebase
-from utils.error_handling import register_exception_handlers
-from routes.rides import api_router as rides_router
-from routes.drivers import api_router as drivers_router
-from routes.admin import admin_router as admin_router, admin_auth_router
-from documents import documents_router, admin_documents_router, files_router, upload_router
-from features import support_router, admin_support_router, pricing_router
-from routes.corporate_accounts import router as corporate_accounts_router
-from routes.auth import api_router as auth_router
-from routes.users import api_router as users_router
+from documents import admin_documents_router, documents_router, files_router, upload_router
+from features import admin_support_router, pricing_router, support_router
 from routes.addresses import api_router as addresses_router
-from routes.payments import api_router as payments_router
-from routes.notifications import api_router as notifications_router
-from routes.fares import api_router as fares_router
-from routes.promotions import api_router as promotions_router
+from routes.admin import admin_auth_router
+from routes.admin import admin_router as admin_router
+from routes.auth import api_router as auth_router
+from routes.corporate_accounts import router as corporate_accounts_router
 from routes.disputes import api_router as disputes_router
+from routes.drivers import api_router as drivers_router
+from routes.fares import api_router as fares_router
+from routes.notifications import api_router as notifications_router
+from routes.payments import api_router as payments_router
+from routes.promotions import api_router as promotions_router
+from routes.rides import api_router as rides_router
+from routes.users import api_router as users_router
 from routes.webhooks import api_router as webhooks_router
 from routes.websocket import router as websocket_router
+from utils.error_handling import register_exception_handlers
 
 # Initialize Firebase
 init_firebase()
@@ -81,8 +83,9 @@ app.include_router(corporate_accounts_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 
 # Configure structured logging with Loguru
-from loguru import logger
-import sys
+import sys  # noqa: E402
+
+from loguru import logger  # noqa: E402
 
 # Remove default handler and add custom JSON handler
 logger.remove()
@@ -94,25 +97,19 @@ logger.add(
 )
 
 # Add file logging for production
-logger.add(
-    "logs/app.log", rotation="500 MB", retention="7 days", level="INFO", serialize=True
-)
+logger.add("logs/app.log", rotation="500 MB", retention="7 days", level="INFO", serialize=True)
 
 # Configure Sentry for error monitoring
-import sentry_sdk
-from sentry_sdk.integrations.fastapi import FastApiIntegration
+import sentry_sdk  # noqa: E402
+from sentry_sdk.integrations.fastapi import FastApiIntegration  # noqa: E402
 
 try:
     from sentry_sdk.integrations.starlette import StarletteMiddleware
 except ImportError:
     StarletteMiddleware = None
-from sentry_sdk.integrations.logging import LoggingIntegration
+from sentry_sdk.integrations.logging import LoggingIntegration  # noqa: E402
 
-sentry_dsn = (
-    settings.sentry_dsn
-    if hasattr(settings, "sentry_dsn") and settings.sentry_dsn
-    else None
-)
+sentry_dsn = settings.sentry_dsn if hasattr(settings, "sentry_dsn") and settings.sentry_dsn else None
 
 if sentry_dsn:
     integrations = [
@@ -136,4 +133,4 @@ if sentry_dsn:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)  # noqa: S104

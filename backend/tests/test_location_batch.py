@@ -1,7 +1,6 @@
 """Tests for the location-batch endpoint's input parsing logic."""
-import asyncio
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 @pytest.fixture(autouse=True)
@@ -14,25 +13,27 @@ def patch_external_dependencies():
 # The endpoint accepts Union[List[dict], dict] and normalizes to a list of points,
 # then picks the last point and extracts lat/lng with multiple key name support.
 
+
 def _extract_points(batch):
     """Mirrors the point extraction logic from update_location_batch."""
     points = []
     if isinstance(batch, list):
         points = batch
     elif isinstance(batch, dict):
-        points = batch.get('locations') or batch.get('points') or []
+        points = batch.get("locations") or batch.get("points") or []
     return points
 
 
 def _extract_coords(point):
     """Mirrors the coordinate extraction from the latest point."""
-    lat = point.get('latitude') or point.get('lat')
-    lng = point.get('longitude') or point.get('lng')
-    heading = point.get('heading', 0)
+    lat = point.get("latitude") or point.get("lat")
+    lng = point.get("longitude") or point.get("lng")
+    heading = point.get("heading", 0)
     return lat, lng, heading
 
 
 # ── Point extraction from different input shapes ──
+
 
 class TestExtractPoints:
     def test_list_input(self):
@@ -71,6 +72,7 @@ class TestExtractPoints:
 
 
 # ── Coordinate extraction with different key names ──
+
 
 class TestExtractCoords:
     def test_lat_lng_keys(self):
@@ -111,5 +113,5 @@ class TestExtractCoords:
 
 # ── Integration: full flow with mocked DB ──
 
-    # NOTE: Full endpoint integration tests require firebase_admin + full backend deps.
-    # The parsing logic above covers all input shapes without needing the full import chain.
+# NOTE: Full endpoint integration tests require firebase_admin + full backend deps.
+# The parsing logic above covers all input shapes without needing the full import chain.

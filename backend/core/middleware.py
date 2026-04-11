@@ -16,20 +16,34 @@ def init_middleware(app):
     # Always allow the admin and default apps explicitly regardless of env variables
     always_allowed = ["https://spinr-admin.vercel.app", "http://localhost:3000", "http://localhost:3001"]
     origins.extend(always_allowed)
-    # Remove empty strings
-    origins = list(set([o for o in origins if o]))
-    # Validate origins in production
-    if not settings.DEBUG:  # Production mode
-        if "*" in origins:
-            logger.warning(
-                "WARNING: CORS allows all origins (*) in production! "
-                "This is a security risk. Configure specific allowed origins."
-            )
+    # Remove empty strings and duplicates (preserve order for determinism)
+    origins = list(dict.fromkeys(o for o in origins if o))
+
+    is_production = settings.ENV.lower() == "production"
+    wildcard = "*" in origins
+
+    if wildcard and is_production:
+        # Fail fast: refuse to start with wide-open CORS in production.
+        # Set ALLOWED_ORIGINS in the environment to a comma-separated list.
+        raise RuntimeError(
+            "CORS is configured with wildcard '*' while ENV=production. "
+            "Set ALLOWED_ORIGINS to an explicit comma-separated list of origins."
+        )
+
+    # CORS spec forbids credentials with wildcard origin — browsers will drop
+    # the Access-Control-Allow-Credentials header if origin is '*'. Disable
+    # credentials in that case so dev requests fail loudly rather than silently.
+    allow_credentials = not wildcard
+    if wildcard:
+        logger.warning(
+            "CORS: wildcard '*' in ALLOWED_ORIGINS — allow_credentials disabled. "
+            "This is acceptable for local dev only."
+        )
 
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_credentials=True,
+        allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -52,12 +66,13 @@ def init_middleware(app):
             if origin in origins:
                 # Explicit match — safe to allow credentials
                 response.headers["Access-Control-Allow-Origin"] = origin
-                response.headers["Access-Control-Allow-Credentials"] = "true"
+                if allow_credentials:
+                    response.headers["Access-Control-Allow-Credentials"] = "true"
                 response.headers["Access-Control-Allow-Methods"] = "*"
                 response.headers["Access-Control-Allow-Headers"] = "*"
                 response.headers["Vary"] = "Origin"
-            elif "*" in origins:
-                # Wildcard (dev only) — no credentials to avoid browser rejection
+            elif wildcard:
+                # Wildcard (dev only) — credentials already disabled above
                 response.headers["Access-Control-Allow-Origin"] = "*"
                 response.headers["Access-Control-Allow-Methods"] = "*"
                 response.headers["Access-Control-Allow-Headers"] = "*"

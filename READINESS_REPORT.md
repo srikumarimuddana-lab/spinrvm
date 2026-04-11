@@ -87,16 +87,22 @@ The admin dashboard at `spinr/admin-dashboard/` has **NO login protection**. Any
 
 From [`spinr/admin-dashboard/src/app/dashboard/page.tsx`](spinr/admin-dashboard/src/app/dashboard/page.tsx) - there's no authentication check.
 
-### 5. CORS Allows All Origins
+### 5. CORS Allows All Origins — ✅ RESOLVED
 
-In [`spinr/backend/server.py:121`](spinr/backend/server.py:121):
-```python
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # SECURITY RISK IN PRODUCTION
-    ...
-)
-```
+Previously `core/config.py` defaulted `ALLOWED_ORIGINS` to `"*"`, making a
+fresh deploy wide-open. As of 2026-04-11:
+
+- The default in `core/config.py` is now
+  `"http://localhost:3000,http://localhost:8081,http://localhost:19006"`
+  (Expo dev + admin dashboard).
+- `core/middleware.py` **fail-fast-refuses to start** if `ENV=production`
+  and `ALLOWED_ORIGINS` still contains `"*"` (raises `RuntimeError`).
+- When `"*"` is present in dev, `allow_credentials` is forced to `False`
+  (the CORS spec forbids wildcard + credentials anyway), and a warning
+  is logged.
+
+Override in each environment's `.env` with a comma-separated list of
+allowed origins, e.g. `ALLOWED_ORIGINS=https://spinr.ca,https://admin.spinr.ca`.
 
 ---
 
@@ -129,21 +135,31 @@ deprecated and ignore it when standing up a fresh project.
    `supabase_schema.sql`. Skipping this will produce table-not-found errors.
 6. Run `backend/migrations/*.sql` in numeric order (001, 02, 03, 04, 05, 06,
    07, 08, 09, 10_disputes_table, 10_service_area_driver_matching, 11, 12,
-   13, 14, 15, 16, plus `add_profile_image_url.sql`).
+   13, 14, 15, 16, 17, plus `add_profile_image_url.sql`). Migration 17
+   (`17_corporate_accounts_fk.sql`) adds the FK constraints that link
+   `users.corporate_account_id` / `rides.corporate_account_id` to
+   `corporate_accounts.id` and enables RLS on the corporate_accounts table.
 7. Run `backend/supabase_rls.sql` last to enable RLS policies.
 
-**Known drift / gotchas:**
+**Resolved drift (2026-04-11):**
 
-- **`corporate_accounts` is defined 3 times** with conflicting schemas
-  (`migrations/03_corporate_accounts_heatmap.sql` uses TEXT id + old columns;
-  `migrations/05_corporate_accounts.sql` and `corporate_accounts_schema.sql`
-  use UUID id + new columns). The code expects the migration-05 shape.
-  Running migration 05 after 03 relies on `IF NOT EXISTS` semantics and may
-  leave you with the old shape. Investigate before first prod deploy.
-- **`exec_sql` RPC is referenced but never defined** (`db_supabase.py:585`,
-  `db_supabase.py:615`). The two wrappers (`execute_query`, `execute_write`)
-  have **no callers in the codebase** — dead plumbing, but worth deleting so
-  it doesn't mislead the next reader.
+- ✅ **`corporate_accounts` triple-definition** — Previously defined in three
+  places with conflicting shapes. Resolution:
+  `migrations/05_corporate_accounts.sql` is now the single source of truth
+  (UUID id, `name`, `credit_limit` — matches `routes/corporate_accounts.py`
+  Pydantic models); `migrations/03_corporate_accounts_heatmap.sql` has been
+  gutted of its conflicting CREATE TABLE / seed / RLS (it now only adds
+  heat-map settings columns and the UUID FK-link columns on users/rides,
+  without the REFERENCES clauses); `backend/corporate_accounts_schema.sql`
+  has been deleted; and `migrations/17_corporate_accounts_fk.sql` adds the
+  FK constraints and RLS policy after 05 creates the table.
+- ✅ **Dead `exec_sql` plumbing** — `execute_query`/`execute_write` in
+  `db_supabase.py` and their callers in `db.py` (`fetchall`, `fetchone`,
+  `execute`) have been deleted. They had zero callers in the codebase and
+  referenced an undefined Supabase RPC (`exec_sql`).
+
+**Remaining drift / gotchas:**
+
 - **PostGIS is not required by current code**. `find_nearby_drivers` in
   `supabase_schema.sql:323` uses haversine math, not `ST_Distance`. PostGIS
   only becomes mandatory if future work adopts geography columns.
@@ -272,7 +288,7 @@ This will fail if not configured properly.
   - [ ] Add Privacy Policy text to database settings
 
 - [ ] **Security Hardening**
-  - [ ] Configure CORS for specific origins
+  - [x] Configure CORS for specific origins (production now fails fast on wildcard; default is localhost-only)
   - [ ] Set strong JWT_SECRET
   - [ ] Enable Firebase properly
 

@@ -493,8 +493,9 @@ WHERE NOT EXISTS (SELECT 1 FROM public.document_requirements WHERE name = 'Vehic
 -- ============================================================
 -- 13. CORPORATE ACCOUNTS
 -- ============================================================
--- Note: Corporate accounts schema is in a separate file: corporate_accounts_schema.sql
--- Run that file in Supabase SQL Editor to create the corporate_accounts table and RLS policies
+-- Defined in migrations/05_corporate_accounts.sql (UUID id + name/credit_limit
+-- columns, matching the Pydantic models in routes/corporate_accounts.py).
+-- FK constraints from users/rides are added by migrations/17_corporate_accounts_fk.sql.
 
 -- ============================================================
 -- 14. PAYOUTS & BANK ACCOUNTS (added for missing links)

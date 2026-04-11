@@ -564,66 +564,6 @@ async def rpc(func_name: str, params: Dict[str, Any]):
     return await run_sync(_fn)
 
 
-async def execute_query(query: str, params: Optional[Dict[str, Any]] = None):
-    """
-    Execute a raw SQL SELECT query and return all rows.
-    Uses Supabase's raw API to execute queries.
-
-    Args:
-        query: SQL query string (e.g., 'SELECT * FROM settings')
-        params: Optional dictionary of query parameters
-
-    Returns:
-        List of dictionaries representing rows
-    """
-    if not supabase:
-        return []
-
-    def _fn():
-        try:
-            # Use Supabase's raw() method for SELECT queries
-            response = supabase.rpc("exec_sql", {"query": query, "params": params or {}})
-            if hasattr(response, "execute"):
-                result = response.execute()
-                return result.data if result.data else []
-            return response.data if response.data else []
-        except Exception as e:
-            logger.warning(f"execute_query warning: {e}")
-            return []
-
-    return await run_sync(_fn)
-
-
-async def execute_write(query: str, params: Optional[Dict[str, Any]] = None):
-    """
-    Execute a raw SQL INSERT, UPDATE, or DELETE query.
-    Uses Supabase's raw API to execute queries.
-
-    Args:
-        query: SQL query string (e.g., 'INSERT INTO settings (key, value) VALUES ($1, $2)')
-        params: Optional dictionary of query parameters
-
-    Returns:
-        Dictionary with execution results
-    """
-    if not supabase:
-        return {"success": False, "error": "No supabase connection"}
-
-    def _fn():
-        try:
-            # Use Supabase's raw() method for write queries
-            response = supabase.rpc("exec_sql", {"query": query, "params": params or {}})
-            if hasattr(response, "execute"):
-                result = response.execute()
-                return {"success": True, "data": result.data}
-            return {"success": True, "data": response.data}
-        except Exception as e:
-            logger.warning(f"execute_write warning: {e}")
-            return {"success": False, "error": str(e)}
-
-    return await run_sync(_fn)
-
-
 # ============ Rides Admin Dashboard – New Helpers ============
 
 

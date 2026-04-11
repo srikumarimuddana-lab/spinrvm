@@ -19,17 +19,18 @@
 
 ## High Priority
 
-- [ ] **Backend: CORS allows all origins** - Security risk in production
-  - File: `backend/server.py`
-  - Action: Restrict to specific origins in production
+- [x] **Backend: CORS allows all origins** - ✅ Fixed 2026-04-11.
+  `core/config.py` default is now localhost-only; `core/middleware.py`
+  raises `RuntimeError` if `ENV=production` and `ALLOWED_ORIGINS`
+  contains `"*"`.
 
 - [ ] **Backend: Hardcoded JWT secret** - Dev mode security issue
   - File: `backend/server.py`
   - Action: Ensure strong secret required in production
 
-- [ ] **Backend: Large server.py** - 3800+ lines, needs modularization
-  - File: `backend/server.py`
-  - Action: Split into route modules
+- [x] **Backend: Large server.py** - ✅ Already resolved.
+  `backend/server.py` is now 136 lines; route modules live under
+  `backend/routes/` and are mounted in `server.py`.
 
 - [ ] **Driver App: 4-digit OTP** - Should be 6-digit for production
   - Files: `backend/server.py`, `driver-app/app/otp.tsx`

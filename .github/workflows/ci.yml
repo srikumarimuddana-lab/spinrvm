@@ -392,12 +392,28 @@ jobs:
         working-directory: rider-app
         run: eas build --platform android --non-interactive
 
-  # Security Scan — filesystem (dependency CVEs)
+  # Security Scan — filesystem (dependency CVEs) + secrets
   security-scan:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history required for trufflehog --since-commit
+
+      - name: Install trufflehog v3
+        run: |
+          curl -sLo trufflehog.tar.gz \
+            https://github.com/trufflesecurity/trufflehog/releases/download/v3.94.3/trufflehog_3.94.3_linux_amd64.tar.gz
+          tar -xzf trufflehog.tar.gz trufflehog
+          chmod +x trufflehog && sudo mv trufflehog /usr/local/bin/
+
+      - name: Secrets scan (verified only)
+        run: |
+          trufflehog git file://. \
+            --only-verified \
+            --since-commit HEAD~1 \
+            --fail
 
       - name: Run Trivy vulnerability scanner (filesystem)
         uses: aquasecurity/trivy-action@v0.35.0

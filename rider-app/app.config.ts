@@ -1,7 +1,7 @@
 import { ExpoConfig, ConfigContext } from 'expo/config';
 
 const APP_NAME = 'Spinr';
-const BUNDLE_ID = 'com.spinr.user';
+const BUNDLE_ID = 'com.spinr.user'; // rider-only ID — driver app uses com.spinr.driver (no clash)
 const SCHEME = 'spinr-user';
 
 export default ({ config }: ConfigContext): ExpoConfig => ({

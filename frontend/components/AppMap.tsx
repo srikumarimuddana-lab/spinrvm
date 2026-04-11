@@ -16,5 +16,6 @@ const AppMap = React.forwardRef((props: any, ref: any) => {
         />
     );
 });
+AppMap.displayName = 'AppMap';
 
 export default AppMap;

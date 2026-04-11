@@ -4,22 +4,30 @@ Corporate accounts API routes for managing business clients and billing.
 This module implements CRUD operations for corporate accounts that can be used
 for business rides and expense management.
 """
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Request
-from pydantic import BaseModel, Field
+
 from datetime import datetime
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from pydantic import BaseModel, Field
 
 from dependencies import get_admin_user
+
 # Alias for backward compatibility
 get_current_admin = get_admin_user
-try:
-    from utils.rate_limiter import admin_rate_limit
-except ImportError:
-    from utils.rate_limiter import admin_rate_limit
-from validators import validate_id, validate_email, validate_phone, sanitize_string
-
 # Validate that we're importing the right function
-from db_supabase import get_all_corporate_accounts, get_corporate_account_by_id, insert_corporate_account, update_corporate_account, delete_corporate_account
+from db_supabase import (  # noqa: E402
+    delete_corporate_account as db_delete_corporate_account,
+)
+from db_supabase import (  # noqa: E402
+    get_all_corporate_accounts,
+    get_corporate_account_by_id,
+    insert_corporate_account,
+)
+from db_supabase import (  # noqa: E402
+    update_corporate_account as db_update_corporate_account,
+)
+from validators import sanitize_string, validate_email, validate_id, validate_phone  # noqa: E402
 
 router = APIRouter(prefix="/admin/corporate-accounts", tags=["Corporate Accounts"])
 
@@ -63,11 +71,11 @@ async def get_corporate_accounts(
     limit: int = 100,
     search: Optional[str] = None,
     is_active: Optional[bool] = None,
-    current_admin: dict = Depends(get_current_admin)
+    current_admin: dict = Depends(get_current_admin),
 ):
     """
     Get all corporate accounts with optional filtering and pagination.
-    
+
     Args:
         skip: Number of records to skip (for pagination)
         limit: Maximum number of records to return
@@ -76,29 +84,21 @@ async def get_corporate_accounts(
         current_admin: Authenticated admin user
     """
     try:
-        accounts = await get_all_corporate_accounts(
-            skip=skip,
-            limit=limit,
-            search=search,
-            is_active=is_active
-        )
+        accounts = await get_all_corporate_accounts(skip=skip, limit=limit, search=search, is_active=is_active)
         return accounts
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch corporate accounts: {str(e)}"
-        )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch corporate accounts: {str(e)}"
+        ) from e
 
 
 @router.post("/", response_model=CorporateAccountResponse, status_code=status.HTTP_201_CREATED)
 async def create_corporate_account(
-    request: Request,
-    account: CorporateAccountCreate,
-    current_admin: dict = Depends(get_current_admin)
+    request: Request, account: CorporateAccountCreate, current_admin: dict = Depends(get_current_admin)
 ):
     """
     Create a new corporate account.
-    
+
     Args:
         account: Corporate account data
         current_admin: Authenticated admin user
@@ -107,68 +107,58 @@ async def create_corporate_account(
     if account.contact_email:
         valid, normalized_email = validate_email(account.contact_email, raise_exception=True)
         account.contact_email = normalized_email
-    
+
     if account.contact_phone:
         valid, normalized_phone = validate_phone(account.contact_phone, raise_exception=True)
         account.contact_phone = normalized_phone
-    
+
     if account.name:
         account.name = sanitize_string(account.name, max_length=200, raise_exception=True)
-    
+
     if account.contact_name:
         account.contact_name = sanitize_string(account.contact_name, max_length=100, raise_exception=True)
-    
+
     try:
         created_account = await insert_corporate_account(account.model_dump())
         return created_account
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create corporate account: {str(e)}"
-        )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create corporate account: {str(e)}"
+        ) from e
 
 
 @router.get("/{account_id}", response_model=CorporateAccountResponse)
-async def get_corporate_account(
-    account_id: str,
-    current_admin: dict = Depends(get_current_admin)
-):
+async def get_corporate_account(account_id: str, current_admin: dict = Depends(get_current_admin)):
     """
     Get a specific corporate account by ID.
-    
+
     Args:
         account_id: ID of the corporate account
         current_admin: Authenticated admin user
     """
     # Validate account ID
     valid, normalized_id = validate_id(account_id, "Corporate Account ID", raise_exception=True)
-    
+
     try:
         account = await get_corporate_account_by_id(validated_id=normalized_id)
         if not account:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Corporate account not found"
-            )
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Corporate account not found")
         return account
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to fetch corporate account: {str(e)}"
-        )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch corporate account: {str(e)}"
+        ) from e
 
 
 @router.put("/{account_id}", response_model=CorporateAccountResponse)
 async def update_corporate_account(
-    account_id: str,
-    account_update: CorporateAccountUpdate,
-    current_admin: dict = Depends(get_current_admin)
+    account_id: str, account_update: CorporateAccountUpdate, current_admin: dict = Depends(get_current_admin)
 ):
     """
     Update an existing corporate account.
-    
+
     Args:
         account_id: ID of the corporate account to update
         account_update: Updated account data
@@ -176,15 +166,12 @@ async def update_corporate_account(
     """
     # Validate account ID
     valid, normalized_id = validate_id(account_id, "Corporate Account ID", raise_exception=True)
-    
+
     # Check if account exists
     existing_account = await get_corporate_account_by_id(validated_id=normalized_id)
     if not existing_account:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Corporate account not found"
-        )
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Corporate account not found")
+
     # Prepare update data
     update_data = {}
     for field, value in account_update.model_dump(exclude_unset=True).items():
@@ -201,45 +188,37 @@ async def update_corporate_account(
                 update_data[field] = sanitize_string(value, max_length=100, raise_exception=True)
             else:
                 update_data[field] = value
-    
+
     try:
-        updated_account = await update_corporate_account(normalized_id, update_data)
+        updated_account = await db_update_corporate_account(normalized_id, update_data)
         return updated_account
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to update corporate account: {str(e)}"
-        )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update corporate account: {str(e)}"
+        ) from e
 
 
 @router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_corporate_account(
-    account_id: str,
-    current_admin: dict = Depends(get_current_admin)
-):
+async def delete_corporate_account(account_id: str, current_admin: dict = Depends(get_current_admin)):
     """
     Delete a corporate account.
-    
+
     Args:
         account_id: ID of the corporate account to delete
         current_admin: Authenticated admin user
     """
     # Validate account ID
     valid, normalized_id = validate_id(account_id, "Corporate Account ID", raise_exception=True)
-    
+
     # Check if account exists
     existing_account = await get_corporate_account_by_id(validated_id=normalized_id)
     if not existing_account:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Corporate account not found"
-        )
-    
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Corporate account not found")
+
     try:
-        await delete_corporate_account(normalized_id)
+        await db_delete_corporate_account(normalized_id)
         return  # 204 No Content
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete corporate account: {str(e)}"
-        )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete corporate account: {str(e)}"
+        ) from e

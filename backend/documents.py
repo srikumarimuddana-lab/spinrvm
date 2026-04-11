@@ -1,11 +1,10 @@
-from fastapi import APIRouter, HTTPException, Depends, Query, UploadFile, File, Form
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-from datetime import datetime
-import uuid
 import os
-import shutil
-from pathlib import Path
+import uuid
+from datetime import datetime
+from typing import Any, Dict, Optional
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from pydantic import BaseModel
 
 try:
     from .db import db
@@ -25,6 +24,7 @@ admin_documents_router = APIRouter(prefix="/documents", tags=["Admin Documents"]
 
 # --- Models ---
 
+
 class DocumentRequirement(BaseModel):
     id: str
     name: str
@@ -33,11 +33,13 @@ class DocumentRequirement(BaseModel):
     requires_back_side: bool
     created_at: datetime
 
+
 class CreateRequirementRequest(BaseModel):
     name: str
     description: Optional[str] = None
     is_mandatory: bool = True
     requires_back_side: bool = False
+
 
 class UpdateRequirementRequest(BaseModel):
     name: Optional[str] = None
@@ -45,12 +47,14 @@ class UpdateRequirementRequest(BaseModel):
     is_mandatory: Optional[bool] = None
     requires_back_side: Optional[bool] = None
 
+
 class LinkDocumentRequest(BaseModel):
     requirement_id: str
     document_url: str
     document_type: str = "image/jpeg"
     side: Optional[str] = "front"
     expiry_date: Optional[datetime] = None
+
 
 class DriverDocument(BaseModel):
     id: str
@@ -73,14 +77,14 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # the `drivers` row. Used so that approving a re-uploaded document refreshes
 # the expiry that `update_driver_status` (go-online) checks against.
 _REQUIREMENT_EXPIRY_FIELD_KEYWORDS = (
-    ('license',     'license_expiry_date'),
-    ('driving',     'license_expiry_date'),
-    ('permit',      'license_expiry_date'),
-    ('insurance',   'insurance_expiry_date'),
-    ('inspection',  'vehicle_inspection_expiry_date'),
-    ('background',  'background_check_expiry_date'),
-    ('work',        'work_eligibility_expiry_date'),
-    ('eligibility', 'work_eligibility_expiry_date'),
+    ("license", "license_expiry_date"),
+    ("driving", "license_expiry_date"),
+    ("permit", "license_expiry_date"),
+    ("insurance", "insurance_expiry_date"),
+    ("inspection", "vehicle_inspection_expiry_date"),
+    ("background", "background_check_expiry_date"),
+    ("work", "work_eligibility_expiry_date"),
+    ("eligibility", "work_eligibility_expiry_date"),
 )
 
 
@@ -108,60 +112,63 @@ async def _supersede_and_flag_pending_review(
     """
     try:
         query: Dict[str, Any] = {
-            'driver_id': driver_id,
-            'requirement_id': requirement_id,
-            'status': {'$in': ['approved', 'pending']},
+            "driver_id": driver_id,
+            "requirement_id": requirement_id,
+            "status": {"$in": ["approved", "pending"]},
         }
         if side is not None:
-            query['side'] = side
+            query["side"] = side
         await db.driver_documents.update_many(
             query,
-            {'$set': {'status': 'superseded', 'updated_at': datetime.utcnow()}},
+            {"$set": {"status": "superseded", "updated_at": datetime.utcnow()}},
         )
     except Exception as e:
         logger.warning(f"Could not supersede prior docs for driver {driver_id}: {e}")
 
     # Set driver to needs_review so they can't go online until admin re-approves.
     try:
-        driver = await db.drivers.find_one({'id': driver_id})
-        if driver and driver.get('status') == 'active':
+        driver = await db.drivers.find_one({"id": driver_id})
+        if driver and driver.get("status") == "active":
             await db.drivers.update_one(
-                {'id': driver_id},
-                {'$set': {
-                    'status': 'needs_review',
-                    'is_online': False,
-                    'is_available': False,
-                    'updated_at': datetime.utcnow(),
-                }},
+                {"id": driver_id},
+                {
+                    "$set": {
+                        "status": "needs_review",
+                        "is_online": False,
+                        "is_available": False,
+                        "updated_at": datetime.utcnow(),
+                    }
+                },
             )
         else:
             await db.drivers.update_one(
-                {'id': driver_id},
-                {'$set': {'updated_at': datetime.utcnow()}},
+                {"id": driver_id},
+                {"$set": {"updated_at": datetime.utcnow()}},
             )
     except Exception as e:
         logger.warning(f"Could not flag driver {driver_id} for review: {e}")
 
+
 async def save_upload(file: UploadFile) -> str:
     file_ext = os.path.splitext(file.filename)[1]
     filename = f"{uuid.uuid4()}{file_ext}"
-    
+
     try:
         file_bytes = await file.read()
-        res = supabase.storage.from_("driver-documents").upload(
-            file=file_bytes,
-            path=filename,
-            file_options={"content-type": file.content_type}
+        supabase.storage.from_("driver-documents").upload(
+            file=file_bytes, path=filename, file_options={"content-type": file.content_type}
         )
-        
+
         # Get public URL
         url_res = supabase.storage.from_("driver-documents").get_public_url(filename)
         return url_res
     except Exception as e:
         logger.error(f"Failed to upload to Supabase Storage: {e}")
-        raise HTTPException(status_code=500, detail=f"Could not save file: {e}")
+        raise HTTPException(status_code=500, detail=f"Could not save file: {e}") from e
+
 
 # --- Public/Driver Endpoints ---
+
 
 @documents_router.get("/requirements")
 async def get_document_requirements(
@@ -180,108 +187,108 @@ async def get_document_requirements(
 
     # Try to get area from driver profile if not explicitly passed
     if not area_id and current_user:
-        driver = await db.drivers.find_one({'user_id': current_user.get('id')})
+        driver = await db.drivers.find_one({"user_id": current_user.get("id")})
         if driver:
-            area_id = driver.get('service_area_id')
+            area_id = driver.get("service_area_id")
 
     # If we have an area, return its required_documents
     if area_id:
-        area = await db.service_areas.find_one({'id': area_id})
-        if area and area.get('required_documents'):
-            area_docs = area['required_documents']
+        area = await db.service_areas.find_one({"id": area_id})
+        if area and area.get("required_documents"):
+            area_docs = area["required_documents"]
             # Transform to match DocumentRequirement shape so driver app works
             result = []
             for doc in area_docs:
-                result.append({
-                    'id': doc.get('key', ''),
-                    'name': doc.get('label', ''),
-                    'description': None,
-                    'is_mandatory': doc.get('required', True),
-                    'requires_back_side': doc.get('requires_back_side', False),
-                    'has_expiry': doc.get('has_expiry', False),
-                    'created_at': area.get('created_at', datetime.utcnow().isoformat()),
-                })
+                result.append(
+                    {
+                        "id": doc.get("key", ""),
+                        "name": doc.get("label", ""),
+                        "description": None,
+                        "is_mandatory": doc.get("required", True),
+                        "requires_back_side": doc.get("requires_back_side", False),
+                        "has_expiry": doc.get("has_expiry", False),
+                        "created_at": area.get("created_at", datetime.utcnow().isoformat()),
+                    }
+                )
             return result
 
     # Fallback: global document_requirements table
-    requirements = await db.document_requirements.find().sort('created_at', 1).to_list(100)
+    requirements = await db.document_requirements.find().sort("created_at", 1).to_list(100)
     return requirements
+
 
 @documents_router.get("/documents")
 async def get_driver_documents(current_user: dict = Depends(get_current_user)):
     """Get all documents uploaded by the current driver."""
     # Look up the driver profile directly — avoids a stale is_driver flag and
     # returns an empty list gracefully during the onboarding flow.
-    driver = await db.drivers.find_one({'user_id': current_user['id']})
+    driver = await db.drivers.find_one({"user_id": current_user["id"]})
     if not driver:
-        return []   # No driver profile yet — not an error
-        
-    documents = await db.driver_documents.find({'driver_id': driver['id']}).sort('uploaded_at', -1).to_list(100)
+        return []  # No driver profile yet — not an error
+
+    documents = await db.driver_documents.find({"driver_id": driver["id"]}).sort("uploaded_at", -1).to_list(100)
     return documents
 
+
 @documents_router.post("/documents")
-async def link_driver_document(
-    doc_data: LinkDocumentRequest,
-    current_user: dict = Depends(get_current_user)
-):
+async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict = Depends(get_current_user)):
     """Link an uploaded document to the current driver."""
-    if not current_user.get('is_driver'):
+    if not current_user.get("is_driver"):
         raise HTTPException(status_code=403, detail="User is not a driver")
-        
-    driver = await db.drivers.find_one({'user_id': current_user['id']})
+
+    driver = await db.drivers.find_one({"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
     # Validate requirement exists — check global table first, then
     # fall back to the driver's service area required_documents list
     # (since we moved to per-area docs, requirement_id is now the area doc key).
-    req = await db.document_requirements.find_one({'id': doc_data.requirement_id})
+    req = await db.document_requirements.find_one({"id": doc_data.requirement_id})
     if not req:
         # Try looking it up from the driver's service area
         area_req = None
-        if driver.get('service_area_id'):
-            area = await db.service_areas.find_one({'id': driver['service_area_id']})
+        if driver.get("service_area_id"):
+            area = await db.service_areas.find_one({"id": driver["service_area_id"]})
             if area:
                 area_req = next(
-                    (d for d in (area.get('required_documents') or [])
-                     if d.get('key') == doc_data.requirement_id),
-                    None
+                    (d for d in (area.get("required_documents") or []) if d.get("key") == doc_data.requirement_id), None
                 )
         if not area_req:
             raise HTTPException(status_code=404, detail="Requirement not found")
         # Synthesise a req-like dict so downstream code works uniformly
         req = {
-            'id': area_req.get('key'),
-            'name': area_req.get('label', doc_data.requirement_id),
-            'requires_back_side': area_req.get('requires_back_side', False),
+            "id": area_req.get("key"),
+            "name": area_req.get("label", doc_data.requirement_id),
+            "requires_back_side": area_req.get("requires_back_side", False),
         }
 
     # Supersede any prior docs for this requirement+side and flip the
     # driver back to unverified so admin re-reviews this upload.
-    await _supersede_and_flag_pending_review(driver['id'], doc_data.requirement_id, doc_data.side)
+    await _supersede_and_flag_pending_review(driver["id"], doc_data.requirement_id, doc_data.side)
 
     # Create document record.
     # NOTE: Only columns that exist on the Supabase driver_documents table —
     # writing `expiry_date` here raises PGRST204. Expiry is stored on the
     # drivers row via admin approval in the legacy *_expiry_date columns.
     doc_record = {
-        'id': str(uuid.uuid4()),
-        'driver_id': driver['id'],
-        'requirement_id': doc_data.requirement_id,
-        'document_type': doc_data.document_type,
-        'document_url': doc_data.document_url,
-        'side': doc_data.side,
-        'status': 'pending',
-        'uploaded_at': datetime.utcnow(),
-        'updated_at': datetime.utcnow()
+        "id": str(uuid.uuid4()),
+        "driver_id": driver["id"],
+        "requirement_id": doc_data.requirement_id,
+        "document_type": doc_data.document_type,
+        "document_url": doc_data.document_url,
+        "side": doc_data.side,
+        "status": "pending",
+        "uploaded_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
     }
 
     await db.driver_documents.insert_one(doc_record)
     # Stash the admin-facing expiry on the response so the caller can
     # display it back, without persisting a non-existent column.
     if doc_data.expiry_date:
-        doc_record['expiry_date'] = doc_data.expiry_date.isoformat()
+        doc_record["expiry_date"] = doc_data.expiry_date.isoformat()
     return doc_record
+
 
 @documents_router.post("/documents/upload")
 async def upload_driver_document(
@@ -296,32 +303,30 @@ async def upload_driver_document(
     url = await save_upload(file)
 
     # Validate requirement — check global table first, then service area docs.
-    req = await db.document_requirements.find_one({'id': requirement_id})
+    req = await db.document_requirements.find_one({"id": requirement_id})
     if not req:
         area_req = None
         if driver_id:
-            drv = await db.drivers.find_one({'id': driver_id})
-            if drv and drv.get('service_area_id'):
-                area = await db.service_areas.find_one({'id': drv['service_area_id']})
+            drv = await db.drivers.find_one({"id": driver_id})
+            if drv and drv.get("service_area_id"):
+                area = await db.service_areas.find_one({"id": drv["service_area_id"]})
                 if area:
                     area_req = next(
-                        (d for d in (area.get('required_documents') or [])
-                         if d.get('key') == requirement_id),
-                        None
+                        (d for d in (area.get("required_documents") or []) if d.get("key") == requirement_id), None
                     )
         if not area_req:
             raise HTTPException(status_code=404, detail="Requirement not found")
         req = {
-            'id': area_req.get('key'),
-            'name': area_req.get('label', requirement_id),
-            'requires_back_side': area_req.get('requires_back_side', False),
+            "id": area_req.get("key"),
+            "name": area_req.get("label", requirement_id),
+            "requires_back_side": area_req.get("requires_back_side", False),
         }
 
     # Normalise expiry_date input — accept ISO string, store as ISO string.
     expiry_iso: Optional[str] = None
     if expiry_date:
         try:
-            expiry_iso = datetime.fromisoformat(expiry_date.replace('Z', '+00:00')).isoformat()
+            expiry_iso = datetime.fromisoformat(expiry_date.replace("Z", "+00:00")).isoformat()
         except ValueError:
             expiry_iso = None
 
@@ -335,15 +340,15 @@ async def upload_driver_document(
     # exist, would cause PGRST204). Expiry lives in the drivers row legacy
     # columns, refreshed on admin approval.
     doc_record = {
-        'id': str(uuid.uuid4()),
-        'driver_id': driver_id,
-        'requirement_id': requirement_id,
-        'document_type': req.get('name'), # Denormalize name for easy display
-        'document_url': url,
-        'side': side,
-        'status': 'pending',
-        'uploaded_at': datetime.utcnow(),
-        'updated_at': datetime.utcnow()
+        "id": str(uuid.uuid4()),
+        "driver_id": driver_id,
+        "requirement_id": requirement_id,
+        "document_type": req.get("name"),  # Denormalize name for easy display
+        "document_url": url,
+        "side": side,
+        "status": "pending",
+        "uploaded_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
     }
 
     await db.driver_documents.insert_one(doc_record)
@@ -351,70 +356,81 @@ async def upload_driver_document(
     # Return the admin-facing expiry as part of the response without
     # persisting it to a non-existent column.
     if expiry_iso:
-        doc_record['expiry_date'] = expiry_iso
+        doc_record["expiry_date"] = expiry_iso
     return doc_record
 
 
 # --- Admin Endpoints ---
 
+
 @admin_documents_router.get("/requirements")
 async def admin_get_requirements():
     """Get all document requirements."""
-    requirements = await db.document_requirements.find().sort('created_at', 1).to_list(100)
+    requirements = await db.document_requirements.find().sort("created_at", 1).to_list(100)
     return requirements
+
 
 @admin_documents_router.post("/requirements")
 async def admin_create_requirement(req: CreateRequirementRequest):
     """Create a new document requirement."""
     new_req = {
-        'id': str(uuid.uuid4()),
-        'name': req.name,
-        'description': req.description,
-        'is_mandatory': req.is_mandatory,
-        'requires_back_side': req.requires_back_side,
-        'created_at': datetime.utcnow()
+        "id": str(uuid.uuid4()),
+        "name": req.name,
+        "description": req.description,
+        "is_mandatory": req.is_mandatory,
+        "requires_back_side": req.requires_back_side,
+        "created_at": datetime.utcnow(),
     }
     await db.document_requirements.insert_one(new_req)
     return new_req
+
 
 @admin_documents_router.put("/requirements/{req_id}")
 async def admin_update_requirement(req_id: str, req: UpdateRequirementRequest):
     """Update a document requirement."""
     update_data = {}
-    if req.name is not None: update_data['name'] = req.name
-    if req.description is not None: update_data['description'] = req.description
-    if req.is_mandatory is not None: update_data['is_mandatory'] = req.is_mandatory
-    if req.requires_back_side is not None: update_data['requires_back_side'] = req.requires_back_side
-    
+    if req.name is not None:
+        update_data["name"] = req.name  # noqa: E701
+    if req.description is not None:
+        update_data["description"] = req.description  # noqa: E701
+    if req.is_mandatory is not None:
+        update_data["is_mandatory"] = req.is_mandatory  # noqa: E701
+    if req.requires_back_side is not None:
+        update_data["requires_back_side"] = req.requires_back_side  # noqa: E701
+
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
-        
-    result = await db.document_requirements.update_one({'id': req_id}, {'$set': update_data})
+
+    result = await db.document_requirements.update_one({"id": req_id}, {"$set": update_data})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Requirement not found")
-        
-    return await db.document_requirements.find_one({'id': req_id})
+
+    return await db.document_requirements.find_one({"id": req_id})
+
 
 @admin_documents_router.delete("/requirements/{req_id}")
 async def admin_delete_requirement(req_id: str):
     """Delete a document requirement."""
     # Check if used?
     # For now, allow delete.
-    result = await db.document_requirements.delete_one({'id': req_id})
+    result = await db.document_requirements.delete_one({"id": req_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Requirement not found")
-    return {'deleted': True}
+    return {"deleted": True}
+
 
 @admin_documents_router.get("/drivers/{driver_id}")
 async def admin_get_driver_documents(driver_id: str):
     """Get all documents uploaded by a specific driver."""
-    documents = await db.driver_documents.find({'driver_id': driver_id}).sort('uploaded_at', -1).to_list(100)
+    documents = await db.driver_documents.find({"driver_id": driver_id}).sort("uploaded_at", -1).to_list(100)
     return documents
+
 
 class ReviewDocumentRequest(BaseModel):
     status: str
     rejection_reason: Optional[str] = None
     expiry_date: Optional[datetime] = None
+
 
 @admin_documents_router.post("/{doc_id}/review")
 async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
@@ -425,55 +441,55 @@ async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
     the ``drivers`` row so that the go-online check in
     ``update_driver_status`` sees the new date.
     """
-    if req.status not in ['approved', 'rejected']:
+    if req.status not in ["approved", "rejected"]:
         raise HTTPException(status_code=400, detail="Status must be 'approved' or 'rejected'")
 
     # Pull the existing doc so we know which driver/requirement this is.
-    existing = await db.driver_documents.find_one({'id': doc_id})
+    existing = await db.driver_documents.find_one({"id": doc_id})
     if not existing:
         raise HTTPException(status_code=404, detail="Document not found")
 
     # Only write columns that exist on the driver_documents Supabase table.
     # `expiry_date` is NOT a column — we propagate it to the legacy
     # drivers.*_expiry_date column below instead.
-    update_data: Dict[str, Any] = {
-        'status': req.status,
-        'updated_at': datetime.utcnow()
-    }
+    update_data: Dict[str, Any] = {"status": req.status, "updated_at": datetime.utcnow()}
     if req.rejection_reason is not None:
-        update_data['rejection_reason'] = req.rejection_reason
+        update_data["rejection_reason"] = req.rejection_reason
 
-    await db.driver_documents.update_one({'id': doc_id}, {'$set': update_data})
+    await db.driver_documents.update_one({"id": doc_id}, {"$set": update_data})
 
     # On approval, propagate the expiry to the legacy drivers.* column so the
     # go-online check in routes/drivers.py update_driver_status stops blocking
     # this driver based on stale onboarding-time values.
-    if req.status == 'approved':
+    if req.status == "approved":
         effective_expiry = req.expiry_date
 
         # Look up requirement name — first from global table, then from
         # the driver's service area required_documents (since requirement_id
         # may now be a service-area doc key like "drivers_license").
-        req_row = await db.document_requirements.find_one({'id': existing.get('requirement_id')})
-        req_name = req_row.get('name') if req_row else None
+        req_row = await db.document_requirements.find_one({"id": existing.get("requirement_id")})
+        req_name = req_row.get("name") if req_row else None
 
         if not req_name:
             # Try the service area's required_documents
-            driver = await db.drivers.find_one({'id': existing.get('driver_id')})
-            if driver and driver.get('service_area_id'):
-                area = await db.service_areas.find_one({'id': driver['service_area_id']})
+            driver = await db.drivers.find_one({"id": existing.get("driver_id")})
+            if driver and driver.get("service_area_id"):
+                area = await db.service_areas.find_one({"id": driver["service_area_id"]})
                 if area:
                     area_doc = next(
-                        (d for d in (area.get('required_documents') or [])
-                         if d.get('key') == existing.get('requirement_id')),
-                        None
+                        (
+                            d
+                            for d in (area.get("required_documents") or [])
+                            if d.get("key") == existing.get("requirement_id")
+                        ),
+                        None,
                     )
                     if area_doc:
-                        req_name = area_doc.get('label')
+                        req_name = area_doc.get("label")
 
             # Last resort: use the document_type field from the uploaded doc
             if not req_name:
-                req_name = existing.get('document_type')
+                req_name = existing.get("document_type")
 
         legacy_field = _legacy_expiry_field_for_requirement(req_name)
         if legacy_field:
@@ -483,16 +499,16 @@ async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
             new_val = effective_expiry.isoformat() if effective_expiry else None
             try:
                 await db.drivers.update_one(
-                    {'id': existing.get('driver_id')},
-                    {'$set': {legacy_field: new_val, 'updated_at': datetime.utcnow()}},
+                    {"id": existing.get("driver_id")},
+                    {"$set": {legacy_field: new_val, "updated_at": datetime.utcnow()}},
                 )
             except Exception as e:
                 logger.warning(
-                    f"Could not update legacy expiry field {legacy_field} "
-                    f"for driver {existing.get('driver_id')}: {e}"
+                    f"Could not update legacy expiry field {legacy_field} for driver {existing.get('driver_id')}: {e}"
                 )
 
-    return await db.driver_documents.find_one({'id': doc_id})
+    return await db.driver_documents.find_one({"id": doc_id})
+
 
 # --- File Serving Router ---
 files_router = APIRouter(prefix="/documents", tags=["Files"])
@@ -500,8 +516,9 @@ files_router = APIRouter(prefix="/documents", tags=["Files"])
 # --- Generic Upload Router (no prefix so it mounts at /api/v1/upload) ---
 upload_router = APIRouter(tags=["Upload"])
 
-from fastapi import Response
-import base64
+import base64  # noqa: E402
+
+from fastapi import Response  # noqa: E402
 
 
 @upload_router.post("/upload")
@@ -527,8 +544,8 @@ async def upload_file(
 
         file_id = str(uuid.uuid4())
         size = len(content)
-        filename = file.filename or 'upload'
-        content_type = file.content_type or 'application/octet-stream'
+        filename = file.filename or "upload"
+        content_type = file.content_type or "application/octet-stream"
 
         # Only insert columns that actually exist on the Supabase
         # `document_files` table. Historically this table was created with
@@ -538,10 +555,10 @@ async def upload_file(
         # cache"). We still return size/filename in the response so the
         # client gets full metadata without us having to touch the schema.
         record = {
-            'id': file_id,
-            'content_type': content_type,
-            'data': base64.b64encode(content).decode('utf-8'),
-            'created_at': datetime.utcnow().isoformat(),
+            "id": file_id,
+            "content_type": content_type,
+            "data": base64.b64encode(content).decode("utf-8"),
+            "created_at": datetime.utcnow().isoformat(),
         }
 
         try:
@@ -550,59 +567,62 @@ async def upload_file(
             # If a newer schema has the extra columns, retry with them
             # included so we don't silently lose metadata on upgraded DBs.
             err_msg = str(e)
-            if 'PGRST204' in err_msg or 'schema cache' in err_msg:
+            if "PGRST204" in err_msg or "schema cache" in err_msg:
                 # Already using minimal columns — re-raise with context.
                 raise HTTPException(
                     status_code=500,
                     detail=f"Upload insert rejected by DB schema: {err_msg}",
-                )
+                ) from e
             # Not a schema error — bubble up as-is.
             raise
 
         # Relative URL served by files_router (GET /api/documents/{file_id})
         url = f"/api/documents/{file_id}"
         return {
-            'success': True,
-            'url': url,
-            'file_id': file_id,
-            'filename': filename,
-            'content_type': content_type,
-            'size': size,
+            "success": True,
+            "url": url,
+            "file_id": file_id,
+            "filename": filename,
+            "content_type": content_type,
+            "size": size,
         }
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Upload failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {e}") from e
+
 
 @files_router.get("/{file_id}")
 async def get_document_file(file_id: str):
     """Serve a document file by ID."""
     # check if it's in document_files (DB storage)
-    video_file = await db.document_files.find_one({'id': file_id})
+    video_file = await db.document_files.find_one({"id": file_id})
     if video_file:
         try:
-            content = base64.b64decode(video_file.get('data', ''))
-            media_type = video_file.get('content_type', 'application/octet-stream')
+            content = base64.b64decode(video_file.get("data", ""))
+            media_type = video_file.get("content_type", "application/octet-stream")
             return Response(content=content, media_type=media_type)
         except Exception as e:
             logger.error(f"Error serving file {file_id}: {e}")
-            raise HTTPException(status_code=500, detail="Error serving file")
-            
+            raise HTTPException(status_code=500, detail="Error serving file") from e
+
     # If not found in DB files, maybe it's a direct reference to a driver document
     # which might have a URL. But the request is specifically for /ids that are likely file IDs if generated by the legacy upload.
-    
+
     # If the ID passed is actually a driver_document ID, we might want to redirect to its document_url
-    doc = await db.driver_documents.find_one({'id': file_id})
-    if doc and doc.get('document_url'):
-         # If it's a relative URL (local upload), we might need to serve it from disk if we used disk storage
-         # But current implementation uses /uploads/filename for disk
-         if doc['document_url'].startswith('/uploads/'):
-             # This should be handled by StaticFiles in server.py if mounted
-             from fastapi.responses import RedirectResponse
-             return RedirectResponse(doc['document_url'])
-         # If it's a full URL (Supabase), redirect
-         from fastapi.responses import RedirectResponse
-         return RedirectResponse(doc['document_url'])
+    doc = await db.driver_documents.find_one({"id": file_id})
+    if doc and doc.get("document_url"):
+        # If it's a relative URL (local upload), we might need to serve it from disk if we used disk storage
+        # But current implementation uses /uploads/filename for disk
+        if doc["document_url"].startswith("/uploads/"):
+            # This should be handled by StaticFiles in server.py if mounted
+            from fastapi.responses import RedirectResponse
+
+            return RedirectResponse(doc["document_url"])
+        # If it's a full URL (Supabase), redirect
+        from fastapi.responses import RedirectResponse
+
+        return RedirectResponse(doc["document_url"])
 
     raise HTTPException(status_code=404, detail="File not found")

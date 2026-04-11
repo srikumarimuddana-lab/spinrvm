@@ -18,6 +18,24 @@ Based on my thorough analysis of the entire Spinr project, **the code is NOT yet
 
 ---
 
+## 🚨 Top-Priority Action: Rotate Leaked Credentials
+
+The following real-looking credentials were found committed to this repository
+on 2026-04-11. **Rotate them in the respective provider consoles before any
+further deployment**, and consider using `git filter-repo` (or BFG) if the
+history needs to be scrubbed on a rewritten branch.
+
+| Credential | Found In | Action |
+|---|---|---|
+| Supabase **service-role** JWT (project `dbbadhihiwztmnqnbdke`) | `backend/.env.example` (now sanitized) | Revoke & regenerate in Supabase → Settings → API |
+| Google Maps API key `AIzaSy…M5m9M` | `rider-app/eas.json`, `driver-app/eas.json` | Delete key in Google Cloud Console → APIs & Services → Credentials, create a new restricted key |
+
+The repo now ships sanitized `.env.example` files in `backend/`, `rider-app/`,
+`driver-app/`, and `admin-dashboard/`. Copy each to `.env` (or `.env.local`
+for admin) and fill in values locally.
+
+---
+
 ## Critical Issues (Must Fix Before Release)
 
 ### 1. Missing Environment Variables
@@ -84,12 +102,55 @@ app.add_middleware(
 
 ## Missing Features & Broken Links
 
-### A. Missing Database Schema Setup
+### A. Database Schema Setup — Bootstrap Sequence
 
-The Supabase database needs the following to be created:
-- All tables from [`spinr/backend/supabase_schema.sql`](spinr/backend/supabase_schema.sql)
-- PostGIS extension for geospatial queries
-- RPC functions for `find_nearby_drivers`
+A schema-drift audit on 2026-04-11 produced the following findings:
+
+**Do NOT use `backend/FINAL_SCHEMA.sql`** — it's abandoned/incomplete. It uses
+`UUID` primary keys while the application code expects `TEXT` ids, omits
+`document_requirements`, `driver_documents`, `corporate_accounts`,
+`emergency_contacts`, `area_fees`, `payouts`, `bank_accounts`, and defines
+`find_nearby_drivers` twice (lines 159–188 and 249–278). Treat this file as
+deprecated and ignore it when standing up a fresh project.
+
+**Canonical apply order for a fresh Supabase project:**
+
+1. Run `backend/supabase_schema.sql` (core tables, `uuid-ossp`,
+   `find_nearby_drivers`, `update_driver_location`)
+2. Run `backend/sql/01_postgis_schema.sql` _(optional — only needed if you
+   plan to use PostGIS queries; current code uses haversine math, so you can
+   skip this)_
+3. Run `backend/sql/02_add_updated_at.sql`
+4. Run `backend/sql/03_features.sql` (tax/surge/airport fee columns,
+   subscription/dispute tables)
+5. Run `backend/sql/04_rides_admin_overhaul.sql` — **REQUIRED**. Creates
+   `flags`, `complaints`, `lost_and_found`, and `driver_location_history`,
+   which are referenced by code (`db_supabase.py`) but are NOT in
+   `supabase_schema.sql`. Skipping this will produce table-not-found errors.
+6. Run `backend/migrations/*.sql` in numeric order (001, 02, 03, 04, 05, 06,
+   07, 08, 09, 10_disputes_table, 10_service_area_driver_matching, 11, 12,
+   13, 14, 15, 16, plus `add_profile_image_url.sql`).
+7. Run `backend/supabase_rls.sql` last to enable RLS policies.
+
+**Known drift / gotchas:**
+
+- **`corporate_accounts` is defined 3 times** with conflicting schemas
+  (`migrations/03_corporate_accounts_heatmap.sql` uses TEXT id + old columns;
+  `migrations/05_corporate_accounts.sql` and `corporate_accounts_schema.sql`
+  use UUID id + new columns). The code expects the migration-05 shape.
+  Running migration 05 after 03 relies on `IF NOT EXISTS` semantics and may
+  leave you with the old shape. Investigate before first prod deploy.
+- **`exec_sql` RPC is referenced but never defined** (`db_supabase.py:585`,
+  `db_supabase.py:615`). The two wrappers (`execute_query`, `execute_write`)
+  have **no callers in the codebase** — dead plumbing, but worth deleting so
+  it doesn't mislead the next reader.
+- **PostGIS is not required by current code**. `find_nearby_drivers` in
+  `supabase_schema.sql:323` uses haversine math, not `ST_Distance`. PostGIS
+  only becomes mandatory if future work adopts geography columns.
+- **Duplicate `status` column on `users`/`drivers`**: added by both
+  `sql/04_rides_admin_overhaul.sql` and `migrations/12_driver_lifecycle_status.sql`.
+  No runtime conflict thanks to `IF NOT EXISTS`, but clean this up before
+  it bites someone.
 
 ### B. Missing Legal Content
 
@@ -99,13 +160,13 @@ The Terms of Service and Privacy Policy are **empty strings** by default:
 
 These need to be set in the database settings.
 
-### C. Legal Pages Not Linked Properly
+### C. Legal Pages Not Linked Properly — ✅ RESOLVED
 
-The legal pages in both apps reference a non-existent API:
-- [`spinr/driver-app/app/legal.tsx:33`](spinr/driver-app/app/legal.tsx:33): `fetch(${SpinrConfig.api.baseUrl}/settings/legal)`
-- Note: `SpinrConfig.api` doesn't exist in [`spinr/shared/config/spinr.config.ts`](spinr/shared/config/spinr.config.ts)
-
-This will cause the legal pages to fail.
+Previously flagged: legal pages referenced `SpinrConfig.api.baseUrl`, which
+does not exist. Verified on 2026-04-11 — both
+[`rider-app/app/legal.tsx:33`](rider-app/app/legal.tsx:33) and
+[`driver-app/app/legal.tsx:33`](driver-app/app/legal.tsx:33) now use
+`SpinrConfig.backendUrl`. No code change needed.
 
 ### D. Missing Google Maps API Key
 
@@ -116,14 +177,8 @@ script.src = `https://maps.googleapis.com/maps/api/js?key=${process.env.EXPO_PUB
 
 This will fail without proper API key configuration.
 
-### E. Missing API Base URL Configuration
-
-In [`spinr/driver-app/app/legal.tsx:33`](spinr/driver-app/app/legal.tsx:33) and [`spinr/rider-app/app/legal.tsx:33`](spinr/rider-app/app/legal.tsx:33):
-```typescript
-fetch(`${SpinrConfig.api.baseUrl}/settings/legal`)
-```
-
-But `SpinrConfig` does NOT have an `api` property - only `backendUrl`. This is a **broken link**.
+### E. Missing API Base URL Configuration — ✅ RESOLVED
+See §C above. Both legal screens now call `${SpinrConfig.backendUrl}/settings/legal`.
 
 ---
 
@@ -205,8 +260,8 @@ This will fail if not configured properly.
   - [ ] Backend: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, JWT_SECRET
   - [ ] Apps: EXPO_PUBLIC_BACKEND_URL, EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
 
-- [ ] **Fix Broken Links**
-  - [ ] Fix legal page API URL (use `SpinrConfig.backendUrl` instead of `SpinrConfig.api.baseUrl`)
+- [x] **Fix Broken Links**
+  - [x] Fix legal page API URL (verified 2026-04-11 — both apps already use `SpinrConfig.backendUrl`)
 
 - [ ] **Add Admin Authentication**
   - [ ] Implement login page for admin dashboard

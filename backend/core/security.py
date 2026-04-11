@@ -1,7 +1,10 @@
+import json
+
 import firebase_admin
 from firebase_admin import credentials as firebase_credentials
-import json
+
 from .config import settings
+
 
 def init_firebase():
     """Initialize Firebase Admin SDK"""
@@ -17,7 +20,7 @@ def init_firebase():
         else:
             try:
                 firebase_admin.initialize_app()
-            except Exception:
+            except Exception:  # noqa: S110
                 pass
     except Exception as e:
         print(f"Firebase initialization failed: {e}")

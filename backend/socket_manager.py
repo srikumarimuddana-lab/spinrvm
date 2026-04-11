@@ -1,6 +1,7 @@
-from typing import Dict, List
-from fastapi import WebSocket
 from datetime import datetime
+from typing import Dict
+
+from fastapi import WebSocket
 from loguru import logger
 
 try:
@@ -35,37 +36,29 @@ class ConnectionManager:
         )
 
     async def send_personal_message(self, message: dict, client_id: str):
-        msg_type = message.get('type', '?') if isinstance(message, dict) else '?'
+        msg_type = message.get("type", "?") if isinstance(message, dict) else "?"
         if client_id in self.active_connections:
             try:
                 await self.active_connections[client_id].send_json(message)
-                diag_logger.info(
-                    f"[WS] SEND ok client_id={client_id} type={msg_type}"
-                )
+                diag_logger.info(f"[WS] SEND ok client_id={client_id} type={msg_type}")
             except Exception as e:
-                diag_logger.info(
-                    f"[WS] SEND FAILED client_id={client_id} type={msg_type} "
-                    f"err={e}"
-                )
+                diag_logger.info(f"[WS] SEND FAILED client_id={client_id} type={msg_type} err={e}")
         else:
             diag_logger.info(
                 f"[WS] SEND DROPPED (not connected) client_id={client_id} "
                 f"type={msg_type} "
                 f"currently_connected={list(self.active_connections.keys())}"
             )
-    
+
     async def broadcast(self, message: dict):
         for connection in self.active_connections.values():
             await connection.send_json(message)
-    
+
     def update_driver_location(self, driver_id: str, lat: float, lng: float):
-        self.driver_locations[driver_id] = {
-            'lat': lat,
-            'lng': lng,
-            'updated_at': datetime.utcnow().isoformat()
-        }
-    
+        self.driver_locations[driver_id] = {"lat": lat, "lng": lng, "updated_at": datetime.utcnow().isoformat()}
+
     def get_driver_location(self, driver_id: str):
         return self.driver_locations.get(driver_id)
+
 
 manager = ConnectionManager()

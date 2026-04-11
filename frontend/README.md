@@ -1,4 +1,18 @@
-# Welcome to your Expo app 👋
+# frontend/ — DEPRECATED (legacy combined app)
+
+> **This directory is the legacy single-codebase Expo app that previously served both
+> rider and driver via `APP_VARIANT`. It is kept alive in CI while the migration
+> completes, but active development has moved to the dedicated apps:**
+>
+> - Rider app → `rider-app/`
+> - Driver app → `driver-app/`
+>
+> **Do not add new features here.** New features go in `rider-app/` or `driver-app/`.
+> Once `rider-app/` reaches feature parity and CI coverage, this directory will be removed.
+
+---
+
+# Welcome to your Expo app
 
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
 

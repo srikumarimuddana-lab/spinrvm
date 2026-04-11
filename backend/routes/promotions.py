@@ -1,20 +1,21 @@
 """
 promotions.py – Promo codes & referral system for Spinr.
 """
-import uuid
-import logging
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+import logging
+import uuid
+from datetime import datetime, timedelta
+from typing import Any, Dict, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 try:
-    from ..dependencies import get_current_user, get_admin_user
     from ..db import db
+    from ..dependencies import get_current_user
 except ImportError:
-    from dependencies import get_current_user, get_admin_user
     from db import db
+    from dependencies import get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ api_router = APIRouter(prefix="/promo", tags=["Promotions"])
 
 # ============ Pydantic Models ============
 
+
 class ValidatePromoRequest(BaseModel):
     code: str
     ride_fare: float = 0.0  # So we can calculate actual discount
@@ -30,12 +32,12 @@ class ValidatePromoRequest(BaseModel):
 
 class CreatePromoCodeRequest(BaseModel):
     code: str
-    discount_type: str = "flat"         # flat | percentage
-    discount_value: float               # e.g. 5.00 for $5 off, or 10.0 for 10%
+    discount_type: str = "flat"  # flat | percentage
+    discount_value: float  # e.g. 5.00 for $5 off, or 10.0 for 10%
     max_discount: Optional[float] = None  # Cap for percentage discounts
     max_uses: int = 100
     max_uses_per_user: int = 1
-    expiry_date: Optional[str] = None   # ISO 8601
+    expiry_date: Optional[str] = None  # ISO 8601
     is_active: bool = True
     description: Optional[str] = None
 
@@ -52,6 +54,7 @@ class UpdatePromoCodeRequest(BaseModel):
 
 
 # ============ User-Facing Endpoints ============
+
 
 @api_router.post("/validate")
 async def validate_promo(
@@ -79,7 +82,8 @@ async def validate_promo(
             if exp_dt < now:
                 raise HTTPException(status_code=400, detail="This promo code has expired")
         except (ValueError, HTTPException) as e:
-            if isinstance(e, HTTPException): raise
+            if isinstance(e, HTTPException):
+                raise  # noqa: E701
 
     # 2. Total usage limit (0 = unlimited)
     max_uses = promo.get("max_uses", 0)
@@ -89,12 +93,16 @@ async def validate_promo(
     # 3. Per-user usage limit (0 = unlimited)
     max_per_user = promo.get("max_uses_per_user", 1)
     if max_per_user > 0:
-        user_uses = await db.promo_applications.count_documents({
-            "promo_id": promo["id"],
-            "user_id": current_user["id"],
-        })
+        user_uses = await db.promo_applications.count_documents(
+            {
+                "promo_id": promo["id"],
+                "user_id": current_user["id"],
+            }
+        )
         if user_uses >= max_per_user:
-            raise HTTPException(status_code=400, detail="You have already used this promo code the maximum number of times")
+            raise HTTPException(
+                status_code=400, detail="You have already used this promo code the maximum number of times"
+            )
 
     # 4. Minimum ride fare
     min_fare = promo.get("min_ride_fare", 0)
@@ -122,19 +130,24 @@ async def validate_promo(
                 if (now - created).days > new_user_days:
                     raise HTTPException(status_code=400, detail="This promo is for new users only")
             except (ValueError, HTTPException) as e:
-                if isinstance(e, HTTPException): raise
+                if isinstance(e, HTTPException):
+                    raise  # noqa: E701
 
     # 8. Inactive user targeting (no rides in X days)
     inactive_days = promo.get("inactive_days", 0)
     if inactive_days > 0:
         cutoff = (now - timedelta(days=inactive_days)).isoformat()
-        recent_rides = await db.rides.count_documents({
-            "rider_id": current_user["id"],
-            "status": "completed",
-            "ride_completed_at": {"$gte": cutoff},
-        })
+        recent_rides = await db.rides.count_documents(
+            {
+                "rider_id": current_user["id"],
+                "status": "completed",
+                "ride_completed_at": {"$gte": cutoff},
+            }
+        )
         if recent_rides > 0:
-            raise HTTPException(status_code=400, detail="This promo is for returning riders who haven't ridden recently")
+            raise HTTPException(
+                status_code=400, detail="This promo is for returning riders who haven't ridden recently"
+            )
 
     # 9. Minimum / maximum total rides
     min_rides = promo.get("min_total_rides", 0)
@@ -142,7 +155,9 @@ async def validate_promo(
     if min_rides > 0 or max_rides > 0:
         total_rides = await db.rides.count_documents({"rider_id": current_user["id"], "status": "completed"})
         if min_rides > 0 and total_rides < min_rides:
-            raise HTTPException(status_code=400, detail=f"You need at least {min_rides} completed rides to use this promo")
+            raise HTTPException(
+                status_code=400, detail=f"You need at least {min_rides} completed rides to use this promo"
+            )
         if max_rides > 0 and total_rides >= max_rides:
             raise HTTPException(status_code=400, detail="This promo is not available for your ride count")
 
@@ -223,10 +238,13 @@ async def get_available_promos(
     user = await db.users.find_one({"id": current_user["id"]})
     total_rides = await db.rides.count_documents({"rider_id": current_user["id"], "status": "completed"})
     recent_cutoff_30 = (now - timedelta(days=30)).isoformat()
-    recent_rides_30 = await db.rides.count_documents({
-        "rider_id": current_user["id"], "status": "completed",
-        "ride_completed_at": {"$gte": recent_cutoff_30},
-    })
+    await db.rides.count_documents(
+        {
+            "rider_id": current_user["id"],
+            "status": "completed",
+            "ride_completed_at": {"$gte": recent_cutoff_30},
+        }
+    )
 
     available = []
     for p in promos:
@@ -235,48 +253,64 @@ async def get_available_promos(
             expiry = p.get("expiry_date")
             if expiry and isinstance(expiry, str):
                 exp_dt = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
-                if exp_dt.tzinfo: exp_dt = exp_dt.replace(tzinfo=None)
-                if exp_dt < now: continue
+                if exp_dt.tzinfo:
+                    exp_dt = exp_dt.replace(tzinfo=None)  # noqa: E701
+                if exp_dt < now:
+                    continue  # noqa: E701
 
             # Total usage (0 = unlimited)
             max_uses = p.get("max_uses", 0)
-            if max_uses > 0 and p.get("uses", 0) >= max_uses: continue
+            if max_uses > 0 and p.get("uses", 0) >= max_uses:
+                continue  # noqa: E701
 
             # Per-user usage (0 = unlimited)
             max_per_user = p.get("max_uses_per_user", 1)
             if max_per_user > 0:
-                user_uses = await db.promo_applications.count_documents({"promo_id": p["id"], "user_id": current_user["id"]})
-                if user_uses >= max_per_user: continue
+                user_uses = await db.promo_applications.count_documents(
+                    {"promo_id": p["id"], "user_id": current_user["id"]}
+                )
+                if user_uses >= max_per_user:
+                    continue  # noqa: E701
 
             # Min fare
-            if p.get("min_ride_fare", 0) > 0 and ride_fare < p["min_ride_fare"]: continue
+            if p.get("min_ride_fare", 0) > 0 and ride_fare < p["min_ride_fare"]:
+                continue  # noqa: E701
 
             # Private coupon
             assigned = p.get("assigned_user_ids", [])
-            if assigned and current_user["id"] not in assigned: continue
+            if assigned and current_user["id"] not in assigned:
+                continue  # noqa: E701
 
             # First ride only
-            if p.get("first_ride_only") and total_rides > 0: continue
+            if p.get("first_ride_only") and total_rides > 0:
+                continue  # noqa: E701
 
             # New user only
             new_days = p.get("new_user_days", 0)
             if new_days > 0 and user and user.get("created_at"):
                 created = datetime.fromisoformat(str(user["created_at"]).replace("Z", "+00:00").replace("+00:00", ""))
-                if (now - created).days > new_days: continue
+                if (now - created).days > new_days:
+                    continue  # noqa: E701
 
             # Inactive user targeting
             inactive_days = p.get("inactive_days", 0)
             if inactive_days > 0:
                 cutoff = (now - timedelta(days=inactive_days)).isoformat()
-                recent = await db.rides.count_documents({"rider_id": current_user["id"], "status": "completed", "ride_completed_at": {"$gte": cutoff}})
-                if recent > 0: continue
+                recent = await db.rides.count_documents(
+                    {"rider_id": current_user["id"], "status": "completed", "ride_completed_at": {"$gte": cutoff}}
+                )
+                if recent > 0:
+                    continue  # noqa: E701
 
             # Min/max ride count
-            if p.get("min_total_rides", 0) > 0 and total_rides < p["min_total_rides"]: continue
-            if p.get("max_total_rides", 0) > 0 and total_rides >= p["max_total_rides"]: continue
+            if p.get("min_total_rides", 0) > 0 and total_rides < p["min_total_rides"]:
+                continue  # noqa: E701
+            if p.get("max_total_rides", 0) > 0 and total_rides >= p["max_total_rides"]:
+                continue  # noqa: E701
 
             # Budget
-            if p.get("total_budget", 0) > 0 and p.get("budget_used", 0) >= p["total_budget"]: continue
+            if p.get("total_budget", 0) > 0 and p.get("budget_used", 0) >= p["total_budget"]:
+                continue  # noqa: E701
 
             # Calculate discount
             discount_type = p.get("discount_type", "flat")
@@ -284,22 +318,25 @@ async def get_available_promos(
             if discount_type == "percentage":
                 discount = round(ride_fare * (discount_value / 100), 2) if ride_fare > 0 else 0
                 max_cap = p.get("max_discount")
-                if max_cap and discount > max_cap: discount = max_cap
+                if max_cap and discount > max_cap:
+                    discount = max_cap  # noqa: E701
             else:
                 discount = min(discount_value, ride_fare) if ride_fare > 0 else discount_value
 
-            available.append({
-                "promo_id": p["id"],
-                "code": p.get("code"),
-                "discount_type": discount_type,
-                "discount_value": discount_value,
-                "max_discount": p.get("max_discount"),
-                "discount_amount": discount,
-                "description": p.get("description", ""),
-                "expiry_date": p.get("expiry_date"),
-                "min_ride_fare": p.get("min_ride_fare", 0),
-            })
-        except Exception:
+            available.append(
+                {
+                    "promo_id": p["id"],
+                    "code": p.get("code"),
+                    "discount_type": discount_type,
+                    "discount_value": discount_value,
+                    "max_discount": p.get("max_discount"),
+                    "discount_amount": discount,
+                    "description": p.get("description", ""),
+                    "expiry_date": p.get("expiry_date"),
+                    "min_ride_fare": p.get("min_ride_fare", 0),
+                }
+            )
+        except Exception:  # noqa: S112
             continue  # skip broken promos
 
     # Sort by biggest discount first
@@ -357,9 +394,14 @@ async def admin_update_promo_code(promo_id: str, req: UpdatePromoCodeRequest):
     """Update an existing promo code."""
     update_data: Dict[str, Any] = {"updated_at": datetime.utcnow().isoformat()}
     for field in [
-        "discount_type", "discount_value", "max_discount",
-        "max_uses", "max_uses_per_user", "expiry_date",
-        "is_active", "description",
+        "discount_type",
+        "discount_value",
+        "max_discount",
+        "max_uses",
+        "max_uses_per_user",
+        "expiry_date",
+        "is_active",
+        "description",
     ]:
         val = getattr(req, field)
         if val is not None:

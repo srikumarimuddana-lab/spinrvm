@@ -1,45 +1,48 @@
+from typing import Any, Dict
+
 from fastapi import APIRouter, Depends, HTTPException, Request
-from typing import Dict, Any
-from datetime import datetime
+
 try:
-    from ..dependencies import get_current_user
     from ..db import db
+    from ..dependencies import get_current_user
     from ..settings_loader import get_app_settings
 except ImportError:
-    from dependencies import get_current_user
     from db import db
+    from dependencies import get_current_user
     from settings_loader import get_app_settings
-import uuid
 import logging
+import uuid
+
 import stripe
 
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/payments", tags=["Payments"])
 
+
 async def get_or_create_stripe_customer(user_id: str):
-    user = await db.users.find_one({'id': user_id})
+    user = await db.users.find_one({"id": user_id})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-        
-    stripe_customer_id = user.get('stripe_customer_id')
+
+    stripe_customer_id = user.get("stripe_customer_id")
     settings = await get_app_settings()
-    stripe_secret = settings.get('stripe_secret_key', '')
-    
+    stripe_secret = settings.get("stripe_secret_key", "")
+
     if not stripe_secret:
         return None
-        
+
     stripe.api_key = stripe_secret
-    
+
     if not stripe_customer_id:
         # Create a new Stripe customer
         customer = stripe.Customer.create(
-            email=user.get('email'),
+            email=user.get("email"),
             name=f"{user.get('first_name', '')} {user.get('last_name', '')}".strip(),
-            metadata={'user_id': user_id}
+            metadata={"user_id": user_id},
         )
         stripe_customer_id = customer.id
-        await db.users.update_one({'id': user_id}, {'$set': {'stripe_customer_id': stripe_customer_id}})
-        
+        await db.users.update_one({"id": user_id}, {"$set": {"stripe_customer_id": stripe_customer_id}})
+
     return stripe_customer_id
 
 
@@ -47,167 +50,165 @@ async def get_or_create_stripe_customer(user_id: str):
 async def create_payment_intent(request: Dict[str, Any], current_user: dict = Depends(get_current_user)):
     """Create a Stripe payment intent"""
     settings = await get_app_settings()
-    stripe_secret = settings.get('stripe_secret_key', '')
-    
+    stripe_secret = settings.get("stripe_secret_key", "")
+
     if not stripe_secret:
         # Return mock response if Stripe not configured
         return {
-            'client_secret': 'mock_secret_' + str(uuid.uuid4()),
-            'payment_intent_id': 'pi_mock_' + str(uuid.uuid4()),
-            'mock': True
+            "client_secret": "mock_secret_" + str(uuid.uuid4()),
+            "payment_intent_id": "pi_mock_" + str(uuid.uuid4()),
+            "mock": True,
         }
-    
+
     try:
         import stripe
+
         stripe.api_key = stripe_secret
-        
-        amount = int(request.get('amount', 0) * 100)  # Convert to cents
-        
+
+        amount = int(request.get("amount", 0) * 100)  # Convert to cents
+
         # Get or create customer for saved payments
-        stripe_customer_id = await get_or_create_stripe_customer(current_user['id'])
-        
+        stripe_customer_id = await get_or_create_stripe_customer(current_user["id"])
+
         intent_params = {
-            'amount': amount,
-            'currency': 'cad',
-            'automatic_payment_methods': {'enabled': True},
-            'metadata': {
-                'user_id': current_user['id'],
-                'ride_id': request.get('ride_id', '')
-            }
+            "amount": amount,
+            "currency": "cad",
+            "automatic_payment_methods": {"enabled": True},
+            "metadata": {"user_id": current_user["id"], "ride_id": request.get("ride_id", "")},
         }
-        
+
         if stripe_customer_id:
-            intent_params['customer'] = stripe_customer_id
-            
-        payment_method_id = request.get('payment_method_id')
+            intent_params["customer"] = stripe_customer_id
+
+        payment_method_id = request.get("payment_method_id")
         if payment_method_id:
-            intent_params['payment_method'] = payment_method_id
-            
+            intent_params["payment_method"] = payment_method_id
+
         intent = stripe.PaymentIntent.create(**intent_params)
-        
-        return {
-            'client_secret': intent.client_secret,
-            'payment_intent_id': intent.id,
-            'mock': False
-        }
+
+        return {"client_secret": intent.client_secret, "payment_intent_id": intent.id, "mock": False}
     except Exception as e:
         logger.error(f"Stripe error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @api_router.post("/confirm")
 async def confirm_payment(request: Dict[str, Any], current_user: dict = Depends(get_current_user)):
     """Confirm payment was successful"""
-    payment_intent_id = request.get('payment_intent_id')
-    ride_id = request.get('ride_id')
-    
-    if payment_intent_id and payment_intent_id.startswith('pi_mock_'):
+    payment_intent_id = request.get("payment_intent_id")
+    ride_id = request.get("ride_id")
+
+    if payment_intent_id and payment_intent_id.startswith("pi_mock_"):
         # Mock payment
         if ride_id:
             await db.rides.update_one(
-                {'id': ride_id},
-                {'$set': {'payment_status': 'paid', 'payment_intent_id': payment_intent_id}}
+                {"id": ride_id}, {"$set": {"payment_status": "paid", "payment_intent_id": payment_intent_id}}
             )
-        return {'status': 'succeeded', 'mock': True}
+        return {"status": "succeeded", "mock": True}
 
     settings = await get_app_settings()
-    stripe_secret = settings.get('stripe_secret_key', '')
-    
+    stripe_secret = settings.get("stripe_secret_key", "")
+
     if stripe_secret:
         try:
             import stripe
+
             stripe.api_key = stripe_secret
             intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-            
+
             if ride_id:
                 await db.rides.update_one(
-                    {'id': ride_id},
-                    {'$set': {'payment_status': intent.status, 'payment_intent_id': payment_intent_id}}
+                    {"id": ride_id}, {"$set": {"payment_status": intent.status, "payment_intent_id": payment_intent_id}}
                 )
-            
-            return {'status': intent.status, 'mock': False}
+
+            return {"status": intent.status, "mock": False}
         except Exception as e:
             logger.error(f"Stripe error: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
-    
-    return {'status': 'unknown', 'mock': True}
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+    return {"status": "unknown", "mock": True}
+
 
 @api_router.post("/setup-intent")
 async def create_setup_intent(current_user: dict = Depends(get_current_user)):
     """Create a SetupIntent to save a new payment method"""
     settings = await get_app_settings()
-    stripe_secret = settings.get('stripe_secret_key', '')
-    
+    stripe_secret = settings.get("stripe_secret_key", "")
+
     if not stripe_secret:
-        return {'client_secret': 'mock_setup_secret', 'mock': True}
-        
+        return {"client_secret": "mock_setup_secret", "mock": True}
+
     try:
         stripe.api_key = stripe_secret
-        customer_id = await get_or_create_stripe_customer(current_user['id'])
-        
+        customer_id = await get_or_create_stripe_customer(current_user["id"])
+
         if not customer_id:
             raise HTTPException(status_code=400, detail="Could not create Stripe customer")
-            
+
         setup_intent = stripe.SetupIntent.create(
             customer=customer_id,
-            payment_method_types=['card'],
+            payment_method_types=["card"],
         )
-        
+
         return {
-            'client_secret': setup_intent.client_secret,
-            'setup_intent_id': setup_intent.id,
-            'customer_id': customer_id,
-            'mock': False
+            "client_secret": setup_intent.client_secret,
+            "setup_intent_id": setup_intent.id,
+            "customer_id": customer_id,
+            "mock": False,
         }
     except Exception as e:
         logger.error(f"Stripe error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
 
 @api_router.get("/methods")
 async def get_payment_methods(current_user: dict = Depends(get_current_user)):
     """Get saved payment methods for the user"""
     settings = await get_app_settings()
-    stripe_secret = settings.get('stripe_secret_key', '')
-    
+    stripe_secret = settings.get("stripe_secret_key", "")
+
     if not stripe_secret:
-        return {'methods': [], 'mock': True}
-        
+        return {"methods": [], "mock": True}
+
     try:
         stripe.api_key = stripe_secret
-        user = await db.users.find_one({'id': current_user['id']})
-        stripe_customer_id = user.get('stripe_customer_id') if user else None
-        
+        user = await db.users.find_one({"id": current_user["id"]})
+        stripe_customer_id = user.get("stripe_customer_id") if user else None
+
         if not stripe_customer_id:
-            return {'methods': [], 'mock': False}
-            
+            return {"methods": [], "mock": False}
+
         methods = stripe.PaymentMethod.list(
             customer=stripe_customer_id,
-            type='card',
+            type="card",
         )
-        
+
         return {
-            'methods': [
+            "methods": [
                 {
-                    'id': m.id,
-                    'brand': m.card.brand,
-                    'last4': m.card.last4,
-                    'exp_month': m.card.exp_month,
-                    'exp_year': m.card.exp_year,
-                } for m in methods.data
+                    "id": m.id,
+                    "brand": m.card.brand,
+                    "last4": m.card.last4,
+                    "exp_month": m.card.exp_month,
+                    "exp_year": m.card.exp_year,
+                }
+                for m in methods.data
             ],
-            'mock': False
+            "mock": False,
         }
     except Exception as e:
         logger.error(f"Stripe error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # ─── Cards CRUD via Stripe ───
+
 
 @api_router.get("/cards")
 async def get_cards(current_user: dict = Depends(get_current_user)):
     """Get user's saved cards from Stripe. Last4, brand, expiry all from Stripe."""
     settings = await get_app_settings()
-    stripe_secret = settings.get('stripe_secret_key', '')
+    stripe_secret = settings.get("stripe_secret_key", "")
 
     if not stripe_secret:
         # Demo mode — return empty
@@ -215,18 +216,21 @@ async def get_cards(current_user: dict = Depends(get_current_user)):
 
     try:
         stripe.api_key = stripe_secret
-        customer_id = await get_or_create_stripe_customer(current_user['id'])
-        methods = stripe.PaymentMethod.list(customer=customer_id, type='card')
-        user = await db.users.find_one({'id': current_user['id']})
-        default_pm = user.get('default_payment_method') if user else None
-        return [{
-            'id': m.id,
-            'brand': m.card.brand.capitalize(),
-            'last4': m.card.last4,
-            'exp_month': m.card.exp_month,
-            'exp_year': m.card.exp_year,
-            'is_default': m.id == default_pm,
-        } for m in methods.data]
+        customer_id = await get_or_create_stripe_customer(current_user["id"])
+        methods = stripe.PaymentMethod.list(customer=customer_id, type="card")
+        user = await db.users.find_one({"id": current_user["id"]})
+        default_pm = user.get("default_payment_method") if user else None
+        return [
+            {
+                "id": m.id,
+                "brand": m.card.brand.capitalize(),
+                "last4": m.card.last4,
+                "exp_month": m.card.exp_month,
+                "exp_year": m.card.exp_year,
+                "is_default": m.id == default_pm,
+            }
+            for m in methods.data
+        ]
     except Exception as e:
         logger.error(f"Get cards error: {e}")
         return []
@@ -237,27 +241,37 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
     """Add card via Stripe. Creates PaymentMethod + SetupIntent, saves ack."""
     data = await request.json()
     settings = await get_app_settings()
-    stripe_secret = settings.get('stripe_secret_key', '')
+    stripe_secret = settings.get("stripe_secret_key", "")
 
     if not stripe_secret:
         # Demo — fake card
-        num = data.get('card_number', '')
-        last4 = num[-4:] if len(num) >= 4 else '0000'
-        brand = 'Visa' if num.startswith('4') else 'Mastercard' if num[:2] in ('51','52','53','54','55') else 'Card'
+        num = data.get("card_number", "")
+        last4 = num[-4:] if len(num) >= 4 else "0000"
+        brand = "Visa" if num.startswith("4") else "Mastercard" if num[:2] in ("51", "52", "53", "54", "55") else "Card"
         logger.info(f"[DEMO] Card added: {brand} ****{last4}")
-        return {'id': str(uuid.uuid4()), 'brand': brand, 'last4': last4, 'exp_month': data.get('exp_month',1), 'exp_year': data.get('exp_year',2030), 'is_default': True}
+        return {
+            "id": str(uuid.uuid4()),
+            "brand": brand,
+            "last4": last4,
+            "exp_month": data.get("exp_month", 1),
+            "exp_year": data.get("exp_year", 2030),
+            "is_default": True,
+        }
 
     try:
         stripe.api_key = stripe_secret
-        customer_id = await get_or_create_stripe_customer(current_user['id'])
+        customer_id = await get_or_create_stripe_customer(current_user["id"])
 
         # Create PaymentMethod (in prod use Stripe.js tokenization on frontend)
-        pm = stripe.PaymentMethod.create(type='card', card={
-            'number': data.get('card_number'),
-            'exp_month': int(data.get('exp_month')),
-            'exp_year': int(data.get('exp_year')),
-            'cvc': data.get('cvc'),
-        })
+        pm = stripe.PaymentMethod.create(
+            type="card",
+            card={
+                "number": data.get("card_number"),
+                "exp_month": int(data.get("exp_month")),
+                "exp_year": int(data.get("exp_year")),
+                "cvc": data.get("cvc"),
+            },
+        )
 
         # Attach to customer
         stripe.PaymentMethod.attach(pm.id, customer=customer_id)
@@ -267,55 +281,59 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
             customer=customer_id,
             payment_method=pm.id,
             confirm=True,
-            automatic_payment_methods={'enabled': True, 'allow_redirects': 'never'},
+            automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
         )
 
         # Set as default if first card
-        user = await db.users.find_one({'id': current_user['id']})
-        if not user.get('default_payment_method'):
-            await db.users.update_one({'id': current_user['id']}, {'$set': {'default_payment_method': pm.id}})
-            stripe.Customer.modify(customer_id, invoice_settings={'default_payment_method': pm.id})
+        user = await db.users.find_one({"id": current_user["id"]})
+        if not user.get("default_payment_method"):
+            await db.users.update_one({"id": current_user["id"]}, {"$set": {"default_payment_method": pm.id}})
+            stripe.Customer.modify(customer_id, invoice_settings={"default_payment_method": pm.id})
 
         logger.info(f"Card added: {pm.card.brand} ****{pm.card.last4} | SetupIntent: {si.id} ({si.status})")
 
         return {
-            'id': pm.id, 'brand': pm.card.brand.capitalize(), 'last4': pm.card.last4,
-            'exp_month': pm.card.exp_month, 'exp_year': pm.card.exp_year,
-            'is_default': not bool(user.get('default_payment_method')),
-            'setup_intent_id': si.id, 'setup_intent_status': si.status,
+            "id": pm.id,
+            "brand": pm.card.brand.capitalize(),
+            "last4": pm.card.last4,
+            "exp_month": pm.card.exp_month,
+            "exp_year": pm.card.exp_year,
+            "is_default": not bool(user.get("default_payment_method")),
+            "setup_intent_id": si.id,
+            "setup_intent_status": si.status,
         }
     except stripe.error.CardError as e:
-        raise HTTPException(status_code=400, detail=e.user_message or 'Card declined')
+        raise HTTPException(status_code=400, detail=e.user_message or "Card declined") from e
     except Exception as e:
         logger.error(f"Add card error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 @api_router.post("/cards/{card_id}/default")
 async def set_default_card(card_id: str, current_user: dict = Depends(get_current_user)):
     """Set card as default. Updates both our DB and Stripe customer."""
-    await db.users.update_one({'id': current_user['id']}, {'$set': {'default_payment_method': card_id}})
+    await db.users.update_one({"id": current_user["id"]}, {"$set": {"default_payment_method": card_id}})
 
     settings = await get_app_settings()
-    stripe_secret = settings.get('stripe_secret_key', '')
+    stripe_secret = settings.get("stripe_secret_key", "")
     if stripe_secret:
         try:
             stripe.api_key = stripe_secret
-            user = await db.users.find_one({'id': current_user['id']})
-            cid = user.get('stripe_customer_id')
+            user = await db.users.find_one({"id": current_user["id"]})
+            cid = user.get("stripe_customer_id")
             if cid:
-                stripe.Customer.modify(cid, invoice_settings={'default_payment_method': card_id})
+                stripe.Customer.modify(cid, invoice_settings={"default_payment_method": card_id})
         except Exception as e:
             logger.warning(f"Stripe set default: {e}")
 
-    return {'success': True}
+    return {"success": True}
 
 
 @api_router.delete("/cards/{card_id}")
 async def delete_card(card_id: str, current_user: dict = Depends(get_current_user)):
     """Detach card from Stripe and clear default if needed."""
     settings = await get_app_settings()
-    stripe_secret = settings.get('stripe_secret_key', '')
+    stripe_secret = settings.get("stripe_secret_key", "")
     if stripe_secret:
         try:
             stripe.api_key = stripe_secret
@@ -323,8 +341,8 @@ async def delete_card(card_id: str, current_user: dict = Depends(get_current_use
         except Exception as e:
             logger.warning(f"Stripe detach: {e}")
 
-    user = await db.users.find_one({'id': current_user['id']})
-    if user and user.get('default_payment_method') == card_id:
-        await db.users.update_one({'id': current_user['id']}, {'$set': {'default_payment_method': None}})
+    user = await db.users.find_one({"id": current_user["id"]})
+    if user and user.get("default_payment_method") == card_id:
+        await db.users.update_one({"id": current_user["id"]}, {"$set": {"default_payment_method": None}})
 
-    return {'success': True}
+    return {"success": True}

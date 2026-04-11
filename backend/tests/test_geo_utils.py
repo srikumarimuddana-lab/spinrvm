@@ -1,4 +1,5 @@
 """Tests for geo_utils — pure math, no external deps."""
+
 import pytest
 
 from geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
@@ -11,6 +12,7 @@ def patch_external_dependencies():
 
 
 # ── calculate_distance ──
+
 
 class TestCalculateDistance:
     def test_same_point_is_zero(self):
@@ -54,6 +56,7 @@ SASKATOON_POLYGON = [
     {"lat": 52.08, "lng": -106.55},
     {"lat": 52.08, "lng": -106.75},
 ]
+
 
 class TestPointInPolygon:
     def test_point_inside(self):
@@ -130,22 +133,27 @@ class TestPointInPolygonEdgeCases:
 
 # ── get_service_area_polygon ──
 
+
 class TestGetServiceAreaPolygon:
     def test_from_polygon_field(self):
-        area = {"polygon": [
-            {"lat": 52.19, "lng": -106.75},
-            {"lat": 52.19, "lng": -106.55},
-            {"lat": 52.08, "lng": -106.55},
-        ]}
+        area = {
+            "polygon": [
+                {"lat": 52.19, "lng": -106.75},
+                {"lat": 52.19, "lng": -106.55},
+                {"lat": 52.08, "lng": -106.55},
+            ]
+        }
         result = get_service_area_polygon(area)
         assert len(result) == 3
         assert result[0]["lat"] == 52.19
 
     def test_from_geojson(self):
-        area = {"geojson": {
-            "type": "Polygon",
-            "coordinates": [[[-106.75, 52.19], [-106.55, 52.19], [-106.55, 52.08], [-106.75, 52.08]]]
-        }}
+        area = {
+            "geojson": {
+                "type": "Polygon",
+                "coordinates": [[[-106.75, 52.19], [-106.55, 52.19], [-106.55, 52.08], [-106.75, 52.08]]],
+            }
+        }
         result = get_service_area_polygon(area)
         assert len(result) == 4
         assert result[0]["lat"] == 52.19

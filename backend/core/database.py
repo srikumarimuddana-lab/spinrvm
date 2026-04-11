@@ -18,6 +18,7 @@ Example:
 # Re-export for backward compatibility during transition
 # TODO: Remove this file after all imports are updated
 
+
 def get_db(app_state):
     """Get database connection from app state.
 
@@ -30,6 +31,6 @@ def get_db(app_state):
     Raises:
         RuntimeError: If database is not initialized
     """
-    if not hasattr(app_state, 'db') or app_state.db is None:
+    if not hasattr(app_state, "db") or app_state.db is None:
         raise RuntimeError("Database not initialized. Ensure lifespan is properly configured.")
     return app_state.db

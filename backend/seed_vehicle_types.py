@@ -4,13 +4,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Load env before importing db to ensure client is initialized
-env_path = Path(__file__).resolve().parent / '.env'
+env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(env_path)
 
-import uuid
-from datetime import datetime
+import uuid  # noqa: E402
+from datetime import datetime  # noqa: E402
 
-from db import db
+from db import db  # noqa: E402
 
 
 async def seed_vehicle_types():
@@ -24,7 +24,7 @@ async def seed_vehicle_types():
             "icon": "car-compact",
             "capacity": 4,
             "is_active": True,
-            "created_at": datetime.utcnow().isoformat()
+            "created_at": datetime.utcnow().isoformat(),
         },
         {
             "id": str(uuid.uuid4()),
@@ -33,7 +33,7 @@ async def seed_vehicle_types():
             "icon": "car-sport",
             "capacity": 4,
             "is_active": True,
-            "created_at": datetime.utcnow().isoformat()
+            "created_at": datetime.utcnow().isoformat(),
         },
         {
             "id": str(uuid.uuid4()),
@@ -42,7 +42,7 @@ async def seed_vehicle_types():
             "icon": "bus",
             "capacity": 6,
             "is_active": True,
-            "created_at": datetime.utcnow().isoformat()
+            "created_at": datetime.utcnow().isoformat(),
         },
         {
             "id": str(uuid.uuid4()),
@@ -51,8 +51,8 @@ async def seed_vehicle_types():
             "icon": "bus-outline",
             "capacity": 6,
             "is_active": True,
-            "created_at": datetime.utcnow().isoformat()
-        }
+            "created_at": datetime.utcnow().isoformat(),
+        },
     ]
 
     # Check for existing types to avoid duplicates
@@ -63,6 +63,7 @@ async def seed_vehicle_types():
 
     result = await db.vehicle_types.insert_many(vehicle_types)
     print(f"Successfully inserted {len(result.inserted_ids)} vehicle types.")
+
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()

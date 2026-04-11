@@ -1,6 +1,7 @@
 """
 notifications.py – In-app notification system for Spinr.
 """
+
 import logging
 import uuid
 from datetime import datetime
@@ -41,34 +42,37 @@ class PreferencesUpdate(BaseModel):
 async def register_push_token(request: Request, current_user: dict = Depends(get_current_user)):
     """Save FCM push token for this user/device."""
     data = await request.json()
-    token = data.get('token')
-    platform = data.get('platform', 'unknown')
+    token = data.get("token")
+    platform = data.get("platform", "unknown")
 
     if not token:
         raise HTTPException(status_code=400, detail="Token is required")
 
     # Upsert: one token per user per platform
-    existing = await db.push_tokens.find_one({
-        'user_id': current_user['id'],
-        'platform': platform,
-    })
+    existing = await db.push_tokens.find_one(
+        {
+            "user_id": current_user["id"],
+            "platform": platform,
+        }
+    )
 
     if existing:
         await db.push_tokens.update_one(
-            {'id': existing['id']},
-            {'$set': {'token': token, 'updated_at': datetime.utcnow().isoformat()}}
+            {"id": existing["id"]}, {"$set": {"token": token, "updated_at": datetime.utcnow().isoformat()}}
         )
     else:
-        await db.push_tokens.insert_one({
-            'id': str(uuid.uuid4()),
-            'user_id': current_user['id'],
-            'token': token,
-            'platform': platform,
-            'created_at': datetime.utcnow().isoformat(),
-        })
+        await db.push_tokens.insert_one(
+            {
+                "id": str(uuid.uuid4()),
+                "user_id": current_user["id"],
+                "token": token,
+                "platform": platform,
+                "created_at": datetime.utcnow().isoformat(),
+            }
+        )
 
     logger.info(f"FCM token registered for user {current_user['id']} ({platform})")
-    return {'success': True}
+    return {"success": True}
 
 
 @api_router.get("")
@@ -95,19 +99,15 @@ async def get_notifications(
     # Count unread
     unread_count = 0
     try:
-        unread_count = await db.notifications.count_documents(
-            {"user_id": current_user["id"], "is_read": False}
-        )
-    except Exception:
+        unread_count = await db.notifications.count_documents({"user_id": current_user["id"], "is_read": False})
+    except Exception:  # noqa: S110
         pass
 
     return {"notifications": notifications, "unread_count": unread_count}
 
 
 @api_router.put("/{notification_id}/read")
-async def mark_as_read(
-    notification_id: str, current_user: dict = Depends(get_current_user)
-):
+async def mark_as_read(notification_id: str, current_user: dict = Depends(get_current_user)):
     """Mark a single notification as read."""
     await db.notifications.update_one(
         {"id": notification_id, "user_id": current_user["id"]},
@@ -129,9 +129,7 @@ async def mark_all_read(current_user: dict = Depends(get_current_user)):
 @api_router.get("/preferences")
 async def get_preferences(current_user: dict = Depends(get_current_user)):
     """Get user's notification preferences."""
-    prefs = await db.notification_preferences.find_one(
-        {"user_id": current_user["id"]}
-    )
+    prefs = await db.notification_preferences.find_one({"user_id": current_user["id"]})
     if not prefs:
         # Return defaults
         return {
@@ -146,26 +144,24 @@ async def get_preferences(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.put("/preferences")
-async def update_preferences(
-    req: PreferencesUpdate, current_user: dict = Depends(get_current_user)
-):
+async def update_preferences(req: PreferencesUpdate, current_user: dict = Depends(get_current_user)):
     """Update notification preferences."""
     update_data: Dict[str, Any] = {"updated_at": datetime.utcnow().isoformat()}
     for field in [
-        "push_enabled", "email_enabled", "sms_enabled",
-        "ride_updates", "promotions", "safety_alerts",
+        "push_enabled",
+        "email_enabled",
+        "sms_enabled",
+        "ride_updates",
+        "promotions",
+        "safety_alerts",
     ]:
         val = getattr(req, field)
         if val is not None:
             update_data[field] = val
 
-    existing = await db.notification_preferences.find_one(
-        {"user_id": current_user["id"]}
-    )
+    existing = await db.notification_preferences.find_one({"user_id": current_user["id"]})
     if existing:
-        await db.notification_preferences.update_one(
-            {"user_id": current_user["id"]}, {"$set": update_data}
-        )
+        await db.notification_preferences.update_one({"user_id": current_user["id"]}, {"$set": update_data})
     else:
         update_data["id"] = str(uuid.uuid4())
         update_data["user_id"] = current_user["id"]
@@ -175,6 +171,7 @@ async def update_preferences(
 
 
 # ============ Helper function for sending notifications ============
+
 
 async def create_notification(
     user_id: str,

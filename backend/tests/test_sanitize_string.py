@@ -1,4 +1,5 @@
 """Tests for validators.sanitize_string() — pure unit tests, no DB/external deps."""
+
 import pytest
 from fastapi import HTTPException
 
@@ -12,6 +13,7 @@ def patch_external_dependencies():
 
 
 # ── Happy path ──
+
 
 class TestBasicSanitization:
     def test_normal_string(self):
@@ -37,6 +39,7 @@ class TestBasicSanitization:
 
 # ── HTML stripping ──
 
+
 class TestHTMLStripping:
     def test_strips_html_by_default(self):
         ok, val = sanitize_string("<b>bold</b>")
@@ -61,6 +64,7 @@ class TestHTMLStripping:
 
 # ── Length validation ──
 
+
 class TestMaxLength:
     def test_within_limit(self):
         ok, val = sanitize_string("short", max_length=10)
@@ -84,6 +88,7 @@ class TestMaxLength:
 
 
 # ── None / empty ──
+
 
 class TestNoneAndEmpty:
     def test_none_raises(self):
@@ -112,6 +117,7 @@ class TestNoneAndEmpty:
 
 # ── Suspicious patterns (logged but not rejected) ──
 
+
 class TestSuspiciousPatterns:
     def test_sql_injection_still_passes(self):
         ok, val = sanitize_string("SELECT * FROM users")
@@ -128,6 +134,7 @@ class TestSuspiciousPatterns:
 
 
 # ── Real-world inputs ──
+
 
 class TestRealWorldInputs:
     def test_address(self):

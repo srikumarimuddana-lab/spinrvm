@@ -1,8 +1,8 @@
-
 #!/usr/bin/env python3
 """
 Test script to check corporate accounts database connection and API
 """
+
 import asyncio
 import json
 import os
@@ -33,8 +33,10 @@ async def test_corporate_accounts():
     except Exception as e:
         print(f"✗ Error: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 async def test_api_route():
     """Test the API route directly"""
@@ -62,8 +64,10 @@ async def test_api_route():
     except Exception as e:
         print(f"✗ API route error: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 async def main():
     """Run all tests"""
@@ -88,6 +92,7 @@ async def main():
     else:
         print("\n❌ Some tests failed. Check the errors above.")
         return False
+
 
 if __name__ == "__main__":
     success = asyncio.run(main())

@@ -20,7 +20,7 @@ def init_firebase():
         else:
             try:
                 firebase_admin.initialize_app()
-            except Exception:
+            except Exception:  # noqa: S110
                 pass
     except Exception as e:
         print(f"Firebase initialization failed: {e}")

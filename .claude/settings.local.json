@@ -3,7 +3,34 @@
     "allow": [
       "Bash(npx expo:*)",
       "Bash(npx expo-doctor:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(git push origin main)",
+      "Bash(git push origin main --force-with-lease)",
+      "Bash(git push origin sprint1/backend-security --force-with-lease)",
+      "Bash(git push origin sprint1/admin-hardening --force-with-lease)",
+      "Bash(git push origin sprint1/cicd-hardening --force-with-lease)",
+      "Bash(git fetch upstream)",
+      "Bash(git fetch origin)",
+      "Bash(git rebase upstream/main)",
+      "Bash(git rebase main)",
+      "Bash(git rebase --continue)",
+      "Bash(git rebase --abort)",
+      "Bash(py -3 -m pip --version)",
+      "Bash(py -3 -m pip install --quiet pip-audit)",
+      "Bash(py -3 -m pip_audit -r /c/Users/TabUsrDskOff111/spinr/spinr/backend/requirements.txt --format=json)",
+      "Bash(xargs grep:*)",
+      "Bash(trufflehog git:*)",
+      "Bash(py -3 -m trufflehog)",
+      "Bash(where trufflehog:*)",
+      "Bash(py -3 -m pip_audit -r /c/Users/TabUsrDskOff111/spinr/spinr/backend/requirements.txt --format=json --no-deps)",
+      "Bash(py -3 -m pip_audit -r /c/Users/TabUsrDskOff111/spinr/spinr/backend/requirements.txt --skip-editable -l)",
+      "Bash(py -3 -m pip install --quiet safety)",
+      "Bash(py -3 -m safety check -r /c/Users/TabUsrDskOff111/spinr/spinr/backend/requirements.txt --short-report)",
+      "Bash(py -3 -m pip show aiohttp requests jinja2 urllib3 fastapi cryptography)",
+      "Bash(py -3 -m pip show aiohttp fastapi uvicorn stripe twilio firebase-admin)",
+      "Bash(py -3 -m pip list)",
+      "Bash(git stash:*)",
+      "Bash(pip-audit -r requirements.txt)"
     ]
   }
 }

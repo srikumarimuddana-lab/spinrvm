@@ -2,6 +2,7 @@
 Unit tests for document management functionality.
 Tests cover document requirements, driver documents, file uploads, and document review.
 """
+
 import os
 import sys
 from datetime import datetime
@@ -21,18 +22,16 @@ class TestDocumentRequirements:
         from backend.db_supabase import get_rows
 
         mock_requirements = [
-            {'id': 'req_1', 'name': 'Driver License', 'document_type': 'license', 'required': True},
-            {'id': 'req_2', 'name': 'Vehicle Registration', 'document_type': 'registration', 'required': True},
-            {'id': 'req_3', 'name': 'Insurance', 'document_type': 'insurance', 'required': True}
+            {"id": "req_1", "name": "Driver License", "document_type": "license", "required": True},
+            {"id": "req_2", "name": "Vehicle Registration", "document_type": "registration", "required": True},
+            {"id": "req_3", "name": "Insurance", "document_type": "insurance", "required": True},
         ]
 
         mock_response = MagicMock()
         mock_response.data = mock_requirements
-        mock_supabase_client.table.return_value.select.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_supabase_client.table.return_value.select.return_value.execute = AsyncMock(return_value=mock_response)
 
-        result = await get_rows('document_requirements')
+        result = await get_rows("document_requirements")
 
         assert len(result) == 3
 
@@ -42,19 +41,17 @@ class TestDocumentRequirements:
         from backend.db_supabase import insert_one
 
         requirement_data = {
-            'name': 'Background Check',
-            'document_type': 'background_check',
-            'required': True,
-            'expiry_days': 365
+            "name": "Background Check",
+            "document_type": "background_check",
+            "required": True,
+            "expiry_days": 365,
         }
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'req_4'}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_response.data = [{"id": "req_4"}]
+        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
 
-        result = await insert_one('document_requirements', requirement_data)
+        result = await insert_one("document_requirements", requirement_data)
 
         assert result is not None
 
@@ -64,7 +61,7 @@ class TestDocumentRequirements:
         from backend.db_supabase import update_one
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'req_1', 'required': False}]
+        mock_response.data = [{"id": "req_1", "required": False}]
 
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
@@ -72,9 +69,9 @@ class TestDocumentRequirements:
         mock_query.execute = AsyncMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
-        result = await update_one('document_requirements', {'id': 'req_1'}, {'required': False})
+        result = await update_one("document_requirements", {"id": "req_1"}, {"required": False})
 
-        assert result['required'] is False
+        assert result["required"] is False
 
     @pytest.mark.asyncio
     async def test_delete_document_requirement(self, mock_supabase_client):
@@ -90,7 +87,7 @@ class TestDocumentRequirements:
         mock_query.execute = AsyncMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
-        result = await delete_one('document_requirements', {'id': 'req_1'})
+        result = await delete_one("document_requirements", {"id": "req_1"})
 
         assert result is not None
 
@@ -102,11 +99,11 @@ class TestDriverDocuments:
     def sample_document(self):
         """Sample driver document data."""
         return {
-            'driver_id': 'driver_123',
-            'document_type': 'license',
-            'file_url': 'https://storage.example.com/license.pdf',
-            'status': 'pending',
-            'uploaded_at': datetime.utcnow().isoformat()
+            "driver_id": "driver_123",
+            "document_type": "license",
+            "file_url": "https://storage.example.com/license.pdf",
+            "status": "pending",
+            "uploaded_at": datetime.utcnow().isoformat(),
         }
 
     @pytest.mark.asyncio
@@ -115,12 +112,10 @@ class TestDriverDocuments:
         from backend.db_supabase import insert_one
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'doc_123'}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_response.data = [{"id": "doc_123"}]
+        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
 
-        result = await insert_one('driver_documents', sample_document)
+        result = await insert_one("driver_documents", sample_document)
 
         assert result is not None
 
@@ -130,8 +125,8 @@ class TestDriverDocuments:
         from backend.db_supabase import get_rows
 
         mock_documents = [
-            {'id': 'doc_1', 'document_type': 'license', 'status': 'approved'},
-            {'id': 'doc_2', 'document_type': 'registration', 'status': 'pending'}
+            {"id": "doc_1", "document_type": "license", "status": "approved"},
+            {"id": "doc_2", "document_type": "registration", "status": "pending"},
         ]
 
         mock_response = MagicMock()
@@ -140,7 +135,7 @@ class TestDriverDocuments:
             return_value=mock_response
         )
 
-        result = await get_rows('driver_documents', {'driver_id': 'driver_123'})
+        result = await get_rows("driver_documents", {"driver_id": "driver_123"})
 
         assert len(result) == 2
 
@@ -150,7 +145,7 @@ class TestDriverDocuments:
         from backend.db_supabase import update_one
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'doc_123', 'status': 'approved', 'approved_at': '2024-01-01'}]
+        mock_response.data = [{"id": "doc_123", "status": "approved", "approved_at": "2024-01-01"}]
 
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
@@ -158,12 +153,11 @@ class TestDriverDocuments:
         mock_query.execute = AsyncMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
-        result = await update_one('driver_documents', {'id': 'doc_123'}, {
-            'status': 'approved',
-            'approved_at': '2024-01-01'
-        })
+        result = await update_one(
+            "driver_documents", {"id": "doc_123"}, {"status": "approved", "approved_at": "2024-01-01"}
+        )
 
-        assert result['status'] == 'approved'
+        assert result["status"] == "approved"
 
     @pytest.mark.asyncio
     async def test_reject_driver_document(self, mock_supabase_client):
@@ -171,7 +165,7 @@ class TestDriverDocuments:
         from backend.db_supabase import update_one
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'doc_123', 'status': 'rejected', 'rejection_reason': 'Document expired'}]
+        mock_response.data = [{"id": "doc_123", "status": "rejected", "rejection_reason": "Document expired"}]
 
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
@@ -179,13 +173,12 @@ class TestDriverDocuments:
         mock_query.execute = AsyncMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
-        result = await update_one('driver_documents', {'id': 'doc_123'}, {
-            'status': 'rejected',
-            'rejection_reason': 'Document expired'
-        })
+        result = await update_one(
+            "driver_documents", {"id": "doc_123"}, {"status": "rejected", "rejection_reason": "Document expired"}
+        )
 
-        assert result['status'] == 'rejected'
-        assert result['rejection_reason'] == 'Document expired'
+        assert result["status"] == "rejected"
+        assert result["rejection_reason"] == "Document expired"
 
     @pytest.mark.asyncio
     async def test_get_pending_documents(self, mock_supabase_client):
@@ -193,8 +186,8 @@ class TestDriverDocuments:
         from backend.db_supabase import get_rows
 
         mock_documents = [
-            {'id': 'doc_1', 'driver_id': 'driver_1', 'document_type': 'license'},
-            {'id': 'doc_2', 'driver_id': 'driver_2', 'document_type': 'insurance'}
+            {"id": "doc_1", "driver_id": "driver_1", "document_type": "license"},
+            {"id": "doc_2", "driver_id": "driver_2", "document_type": "insurance"},
         ]
 
         mock_response = MagicMock()
@@ -203,7 +196,7 @@ class TestDriverDocuments:
             return_value=mock_response
         )
 
-        result = await get_rows('driver_documents', {'status': 'pending'})
+        result = await get_rows("driver_documents", {"status": "pending"})
 
         assert len(result) == 2
 
@@ -217,8 +210,8 @@ class TestDocumentExpiry:
         from backend.db_supabase import get_rows
 
         mock_documents = [
-            {'id': 'doc_1', 'document_type': 'license', 'expires_at': '2024-02-01'},
-            {'id': 'doc_2', 'document_type': 'insurance', 'expires_at': '2024-01-15'}
+            {"id": "doc_1", "document_type": "license", "expires_at": "2024-02-01"},
+            {"id": "doc_2", "document_type": "insurance", "expires_at": "2024-01-15"},
         ]
 
         mock_response = MagicMock()
@@ -227,7 +220,7 @@ class TestDocumentExpiry:
             return_value=mock_response
         )
 
-        result = await get_rows('driver_documents', {'status': 'approved'})
+        result = await get_rows("driver_documents", {"status": "approved"})
 
         assert len(result) == 2
 
@@ -237,7 +230,7 @@ class TestDocumentExpiry:
         from backend.db_supabase import update_one
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'doc_123', 'status': 'expired'}]
+        mock_response.data = [{"id": "doc_123", "status": "expired"}]
 
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
@@ -245,9 +238,9 @@ class TestDocumentExpiry:
         mock_query.execute = AsyncMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
-        result = await update_one('driver_documents', {'id': 'doc_123'}, {'status': 'expired'})
+        result = await update_one("driver_documents", {"id": "doc_123"}, {"status": "expired"})
 
-        assert result['status'] == 'expired'
+        assert result["status"] == "expired"
 
 
 class TestDocumentFileStorage:
@@ -259,20 +252,18 @@ class TestDocumentFileStorage:
         from backend.db_supabase import insert_one
 
         file_data = {
-            'document_id': 'doc_123',
-            'file_name': 'license.pdf',
-            'file_size': 1024000,
-            'mime_type': 'application/pdf',
-            'storage_url': 's3://bucket/files/license.pdf'
+            "document_id": "doc_123",
+            "file_name": "license.pdf",
+            "file_size": 1024000,
+            "mime_type": "application/pdf",
+            "storage_url": "s3://bucket/files/license.pdf",
         }
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'file_123'}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_response.data = [{"id": "file_123"}]
+        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
 
-        result = await insert_one('document_files', file_data)
+        result = await insert_one("document_files", file_data)
 
         assert result is not None
 
@@ -281,11 +272,7 @@ class TestDocumentFileStorage:
         """Test getting a document file."""
         from backend.db_supabase import get_rows
 
-        mock_file = [{
-            'id': 'file_123',
-            'file_name': 'license.pdf',
-            'storage_url': 's3://bucket/files/license.pdf'
-        }]
+        mock_file = [{"id": "file_123", "file_name": "license.pdf", "storage_url": "s3://bucket/files/license.pdf"}]
 
         mock_response = MagicMock()
         mock_response.data = mock_file
@@ -293,10 +280,10 @@ class TestDocumentFileStorage:
             return_value=mock_response
         )
 
-        result = await get_rows('document_files', {'document_id': 'doc_123'})
+        result = await get_rows("document_files", {"document_id": "doc_123"})
 
         assert len(result) == 1
-        assert result[0]['file_name'] == 'license.pdf'
+        assert result[0]["file_name"] == "license.pdf"
 
     @pytest.mark.asyncio
     async def test_delete_document_file(self, mock_supabase_client):
@@ -312,7 +299,7 @@ class TestDocumentFileStorage:
         mock_query.execute = AsyncMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
-        result = await delete_one('document_files', {'id': 'file_123'})
+        result = await delete_one("document_files", {"id": "file_123"})
 
         assert result is not None
 
@@ -322,22 +309,22 @@ class TestDocumentValidation:
 
     def test_validate_file_type_pdf(self):
         """Test validating PDF file type."""
-        allowed_types = ['application/pdf', 'image/jpeg', 'image/png']
-        file_type = 'application/pdf'
+        allowed_types = ["application/pdf", "image/jpeg", "image/png"]
+        file_type = "application/pdf"
 
         assert file_type in allowed_types
 
     def test_validate_file_type_image(self):
         """Test validating image file type."""
-        allowed_types = ['application/pdf', 'image/jpeg', 'image/png']
-        file_type = 'image/jpeg'
+        allowed_types = ["application/pdf", "image/jpeg", "image/png"]
+        file_type = "image/jpeg"
 
         assert file_type in allowed_types
 
     def test_validate_file_type_invalid(self):
         """Test validating invalid file type."""
-        allowed_types = ['application/pdf', 'image/jpeg', 'image/png']
-        file_type = 'application/x-executable'
+        allowed_types = ["application/pdf", "image/jpeg", "image/png"]
+        file_type = "application/x-executable"
 
         assert file_type not in allowed_types
 
@@ -352,17 +339,17 @@ class TestDocumentValidation:
 
     def test_validate_file_extension(self):
         """Test validating file extension."""
-        allowed_extensions = ['.pdf', '.jpg', '.jpeg', '.png']
+        allowed_extensions = [".pdf", ".jpg", ".jpeg", ".png"]
 
-        valid_files = ['license.pdf', 'photo.jpg', 'document.png']
-        invalid_files = ['malware.exe', 'script.sh']
+        valid_files = ["license.pdf", "photo.jpg", "document.png"]
+        invalid_files = ["malware.exe", "script.sh"]
 
         for filename in valid_files:
-            ext = '.' + filename.split('.')[-1]
+            ext = "." + filename.split(".")[-1]
             assert ext.lower() in allowed_extensions
 
         for filename in invalid_files:
-            ext = '.' + filename.split('.')[-1]
+            ext = "." + filename.split(".")[-1]
             assert ext.lower() not in allowed_extensions
 
 
@@ -374,14 +361,12 @@ class TestDocumentEndpoints:
         from fastapi.testclient import TestClient
 
         from backend.server import app
+
         return TestClient(app)
 
     def test_get_document_requirements_endpoint(self, test_client, auth_headers):
         """Test getting document requirements endpoint."""
-        response = test_client.get(
-            '/api/v1/documents/requirements',
-            headers=auth_headers
-        )
+        response = test_client.get("/api/v1/documents/requirements", headers=auth_headers)
 
         assert response.status_code in [200, 401]
 
@@ -389,31 +374,23 @@ class TestDocumentEndpoints:
         """Test uploading document endpoint."""
         # This would be a multipart form upload in real usage
         response = test_client.post(
-            '/api/v1/documents/upload',
+            "/api/v1/documents/upload",
             headers=auth_headers,
-            json={
-                'document_type': 'license',
-                'file_name': 'license.pdf'
-            }
+            json={"document_type": "license", "file_name": "license.pdf"},
         )
 
         assert response.status_code in [200, 201, 401, 422]
 
     def test_get_driver_documents_endpoint(self, test_client, auth_headers):
         """Test getting driver documents endpoint."""
-        response = test_client.get(
-            '/api/v1/drivers/me/documents',
-            headers=auth_headers
-        )
+        response = test_client.get("/api/v1/drivers/me/documents", headers=auth_headers)
 
         assert response.status_code in [200, 401, 404]
 
     def test_admin_review_document_endpoint(self, test_client, auth_headers):
         """Test admin document review endpoint."""
         response = test_client.post(
-            '/api/v1/admin/documents/doc_123/review',
-            headers=auth_headers,
-            json={'status': 'approved'}
+            "/api/v1/admin/documents/doc_123/review", headers=auth_headers, json={"status": "approved"}
         )
 
         assert response.status_code in [200, 401, 403, 404, 422]
@@ -430,10 +407,8 @@ class TestDocumentRegressions:
         403 Forbidden instead of 101 Switching Protocols.
         """
         from server import app
-        ws_routes = [
-            r for r in app.routes
-            if hasattr(r, 'path') and r.path.startswith('/ws/')
-        ]
+
+        ws_routes = [r for r in app.routes if hasattr(r, "path") and r.path.startswith("/ws/")]
         assert len(ws_routes) > 0, (
             "No WebSocket routes found — did you forget to include websocket_router in server.py?"
         )
@@ -451,11 +426,10 @@ class TestDocumentRegressions:
         mock_db = MagicMock()
         mock_db.drivers.find_one = AsyncMock(return_value=None)  # no driver profile
 
-        mock_user = {'id': 'user_999', 'role': 'driver', 'is_driver': False}
+        mock_user = {"id": "user_999", "role": "driver", "is_driver": False}
 
-        with patch('documents.db', mock_db):
+        with patch("documents.db", mock_db):
             from documents import get_driver_documents
+
             result = await get_driver_documents(current_user=mock_user)
-            assert result == [], (
-                "Expected empty list when driver profile is absent, not an exception"
-            )
+            assert result == [], "Expected empty list when driver profile is absent, not an exception"

@@ -83,9 +83,9 @@ app.include_router(corporate_accounts_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 
 # Configure structured logging with Loguru
-import sys
+import sys  # noqa: E402
 
-from loguru import logger
+from loguru import logger  # noqa: E402
 
 # Remove default handler and add custom JSON handler
 logger.remove()
@@ -97,25 +97,19 @@ logger.add(
 )
 
 # Add file logging for production
-logger.add(
-    "logs/app.log", rotation="500 MB", retention="7 days", level="INFO", serialize=True
-)
+logger.add("logs/app.log", rotation="500 MB", retention="7 days", level="INFO", serialize=True)
 
 # Configure Sentry for error monitoring
-import sentry_sdk
-from sentry_sdk.integrations.fastapi import FastApiIntegration
+import sentry_sdk  # noqa: E402
+from sentry_sdk.integrations.fastapi import FastApiIntegration  # noqa: E402
 
 try:
     from sentry_sdk.integrations.starlette import StarletteMiddleware
 except ImportError:
     StarletteMiddleware = None
-from sentry_sdk.integrations.logging import LoggingIntegration
+from sentry_sdk.integrations.logging import LoggingIntegration  # noqa: E402
 
-sentry_dsn = (
-    settings.sentry_dsn
-    if hasattr(settings, "sentry_dsn") and settings.sentry_dsn
-    else None
-)
+sentry_dsn = settings.sentry_dsn if hasattr(settings, "sentry_dsn") and settings.sentry_dsn else None
 
 if sentry_dsn:
     integrations = [
@@ -139,4 +133,4 @@ if sentry_dsn:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)  # noqa: S104

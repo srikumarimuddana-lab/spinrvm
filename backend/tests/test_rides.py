@@ -2,6 +2,7 @@
 Unit tests for rides API and related functionality.
 Tests cover ride creation, updates, fare calculation, and ride lifecycle.
 """
+
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock
@@ -18,14 +19,14 @@ class TestRideCreation:
     def sample_ride_request(self):
         """Sample ride creation request data."""
         return {
-            'pickup_lat': 52.1333,
-            'pickup_lng': -106.6667,
-            'dropoff_lat': 52.1500,
-            'dropoff_lng': -106.6500,
-            'pickup_address': '123 Test St',
-            'dropoff_address': '456 Main Ave',
-            'vehicle_type': 'sedan',
-            'rider_id': 'user_123'
+            "pickup_lat": 52.1333,
+            "pickup_lng": -106.6667,
+            "dropoff_lat": 52.1500,
+            "dropoff_lng": -106.6500,
+            "pickup_address": "123 Test St",
+            "dropoff_address": "456 Main Ave",
+            "vehicle_type": "sedan",
+            "rider_id": "user_123",
         }
 
     @pytest.mark.asyncio
@@ -34,29 +35,25 @@ class TestRideCreation:
         from backend.db_supabase import insert_ride
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'ride_123', 'status': 'requested'}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_response.data = [{"id": "ride_123", "status": "requested"}]
+        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
 
         result = await insert_ride(sample_ride_request)
 
         assert result is not None
-        assert result['id'] == 'ride_123'
-        assert result['status'] == 'requested'
+        assert result["id"] == "ride_123"
+        assert result["status"] == "requested"
 
     @pytest.mark.asyncio
     async def test_create_ride_with_promo(self, sample_ride_request, mock_supabase_client):
         """Test ride creation with promo code."""
         from backend.db_supabase import insert_ride
 
-        ride_with_promo = {**sample_ride_request, 'promo_code': 'SAVE10'}
+        ride_with_promo = {**sample_ride_request, "promo_code": "SAVE10"}
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'ride_123', 'status': 'requested', 'promo_applied': True}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_response.data = [{"id": "ride_123", "status": "requested", "promo_applied": True}]
+        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
 
         result = await insert_ride(ride_with_promo)
 
@@ -69,6 +66,7 @@ class TestRideStatusUpdates:
     @pytest.fixture
     def ride_collection(self):
         from backend.db import db
+
         return db.rides
 
     @pytest.mark.asyncio
@@ -77,15 +75,15 @@ class TestRideStatusUpdates:
         from backend.db_supabase import update_ride
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'ride_123', 'status': 'in_progress'}]
+        mock_response.data = [{"id": "ride_123", "status": "in_progress"}]
         mock_supabase_client.table.return_value.update.return_value.eq.return_value.execute = AsyncMock(
             return_value=mock_response
         )
 
-        result = await update_ride('ride_123', {'status': 'in_progress'})
+        result = await update_ride("ride_123", {"status": "in_progress"})
 
         assert result is not None
-        assert result['status'] == 'in_progress'
+        assert result["status"] == "in_progress"
 
     @pytest.mark.asyncio
     async def test_update_ride_driver_assignment(self, ride_collection, mock_supabase_client):
@@ -93,17 +91,14 @@ class TestRideStatusUpdates:
         from backend.db_supabase import update_ride
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'ride_123', 'driver_id': 'driver_123', 'status': 'accepted'}]
+        mock_response.data = [{"id": "ride_123", "driver_id": "driver_123", "status": "accepted"}]
         mock_supabase_client.table.return_value.update.return_value.eq.return_value.execute = AsyncMock(
             return_value=mock_response
         )
 
-        result = await update_ride('ride_123', {
-            'driver_id': 'driver_123',
-            'status': 'accepted'
-        })
+        result = await update_ride("ride_123", {"driver_id": "driver_123", "status": "accepted"})
 
-        assert result['driver_id'] == 'driver_123'
+        assert result["driver_id"] == "driver_123"
 
     @pytest.mark.asyncio
     async def test_complete_ride(self, ride_collection, mock_supabase_client):
@@ -111,14 +106,14 @@ class TestRideStatusUpdates:
         from backend.db_supabase import update_ride
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'ride_123', 'status': 'completed'}]
+        mock_response.data = [{"id": "ride_123", "status": "completed"}]
         mock_supabase_client.table.return_value.update.return_value.eq.return_value.execute = AsyncMock(
             return_value=mock_response
         )
 
-        result = await update_ride('ride_123', {'status': 'completed'})
+        result = await update_ride("ride_123", {"status": "completed"})
 
-        assert result['status'] == 'completed'
+        assert result["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_cancel_ride(self, ride_collection, mock_supabase_client):
@@ -126,14 +121,14 @@ class TestRideStatusUpdates:
         from backend.db_supabase import update_ride
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'ride_123', 'status': 'cancelled'}]
+        mock_response.data = [{"id": "ride_123", "status": "cancelled"}]
         mock_supabase_client.table.return_value.update.return_value.eq.return_value.execute = AsyncMock(
             return_value=mock_response
         )
 
-        result = await update_ride('ride_123', {'status': 'cancelled'})
+        result = await update_ride("ride_123", {"status": "cancelled"})
 
-        assert result['status'] == 'cancelled'
+        assert result["status"] == "cancelled"
 
 
 class TestFareCalculation:
@@ -199,8 +194,8 @@ class TestRideMatching:
         from backend.db_supabase import find_nearby_drivers
 
         mock_drivers = [
-            {'id': 'driver_1', 'lat': 52.1350, 'lng': -106.6680, 'is_available': True},
-            {'id': 'driver_2', 'lat': 52.1400, 'lng': -106.6700, 'is_available': True}
+            {"id": "driver_1", "lat": 52.1350, "lng": -106.6680, "is_available": True},
+            {"id": "driver_2", "lat": 52.1400, "lng": -106.6700, "is_available": True},
         ]
 
         mock_response = MagicMock()
@@ -217,7 +212,7 @@ class TestRideMatching:
         from backend.db_supabase import claim_driver_atomic
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'driver_1', 'is_available': False}]
+        mock_response.data = [{"id": "driver_1", "is_available": False}]
 
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
@@ -225,7 +220,7 @@ class TestRideMatching:
         mock_query.execute = AsyncMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
-        result = await claim_driver_atomic('driver_1')
+        result = await claim_driver_atomic("driver_1")
 
         assert result is True
 
@@ -239,9 +234,9 @@ class TestRideHistory:
         from backend.db_supabase import get_rides_for_user
 
         mock_rides = [
-            {'id': 'ride_1', 'status': 'completed', 'created_at': '2024-01-01'},
-            {'id': 'ride_2', 'status': 'completed', 'created_at': '2024-01-02'},
-            {'id': 'ride_3', 'status': 'cancelled', 'created_at': '2024-01-03'}
+            {"id": "ride_1", "status": "completed", "created_at": "2024-01-01"},
+            {"id": "ride_2", "status": "completed", "created_at": "2024-01-02"},
+            {"id": "ride_3", "status": "cancelled", "created_at": "2024-01-03"},
         ]
 
         mock_response = MagicMock()
@@ -250,7 +245,7 @@ class TestRideHistory:
             return_value=mock_response
         )
 
-        result = await get_rides_for_user('user_123', limit=10)
+        result = await get_rides_for_user("user_123", limit=10)
 
         assert len(result) == 3
 
@@ -260,8 +255,8 @@ class TestRideHistory:
         from backend.db_supabase import get_rides_for_driver
 
         mock_rides = [
-            {'id': 'ride_1', 'status': 'completed', 'driver_id': 'driver_123'},
-            {'id': 'ride_2', 'status': 'completed', 'driver_id': 'driver_123'}
+            {"id": "ride_1", "status": "completed", "driver_id": "driver_123"},
+            {"id": "ride_2", "status": "completed", "driver_id": "driver_123"},
         ]
 
         mock_response = MagicMock()
@@ -270,7 +265,7 @@ class TestRideHistory:
             return_value=mock_response
         )
 
-        result = await get_rides_for_driver('driver_123', statuses=['completed'])
+        result = await get_rides_for_driver("driver_123", statuses=["completed"])
 
         assert len(result) == 2
 
@@ -279,12 +274,7 @@ class TestRideHistory:
         """Test getting a specific ride by ID."""
         from backend.db_supabase import get_ride
 
-        mock_ride = {
-            'id': 'ride_123',
-            'rider_id': 'user_123',
-            'status': 'completed',
-            'fare_amount': 15.50
-        }
+        mock_ride = {"id": "ride_123", "rider_id": "user_123", "status": "completed", "fare_amount": 15.50}
 
         mock_response = MagicMock()
         mock_response.data = [mock_ride]
@@ -292,10 +282,10 @@ class TestRideHistory:
             return_value=mock_response
         )
 
-        result = await get_ride('ride_123')
+        result = await get_ride("ride_123")
 
         assert result is not None
-        assert result['id'] == 'ride_123'
+        assert result["id"] == "ride_123"
 
 
 class TestRideRatings:
@@ -307,18 +297,15 @@ class TestRideRatings:
         from backend.db_supabase import update_ride
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'ride_123', 'rating': 5, 'tip_amount': 5.00}]
+        mock_response.data = [{"id": "ride_123", "rating": 5, "tip_amount": 5.00}]
         mock_supabase_client.table.return_value.update.return_value.eq.return_value.execute = AsyncMock(
             return_value=mock_response
         )
 
-        result = await update_ride('ride_123', {
-            'rating': 5,
-            'tip_amount': 5.00
-        })
+        result = await update_ride("ride_123", {"rating": 5, "tip_amount": 5.00})
 
-        assert result['rating'] == 5
-        assert result['tip_amount'] == 5.00
+        assert result["rating"] == 5
+        assert result["tip_amount"] == 5.00
 
     @pytest.mark.asyncio
     async def test_rate_rider(self, mock_supabase_client):
@@ -326,14 +313,14 @@ class TestRideRatings:
         from backend.db_supabase import update_ride
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'ride_123', 'rider_rating': 4}]
+        mock_response.data = [{"id": "ride_123", "rider_rating": 4}]
         mock_supabase_client.table.return_value.update.return_value.eq.return_value.execute = AsyncMock(
             return_value=mock_response
         )
 
-        result = await update_ride('ride_123', {'rider_rating': 4})
+        result = await update_ride("ride_123", {"rider_rating": 4})
 
-        assert result['rider_rating'] == 4
+        assert result["rider_rating"] == 4
 
 
 class TestScheduledRides:
@@ -345,24 +332,22 @@ class TestScheduledRides:
         from backend.db_supabase import insert_ride
 
         scheduled_ride = {
-            'pickup_lat': 52.1333,
-            'pickup_lng': -106.6667,
-            'dropoff_lat': 52.1500,
-            'dropoff_lng': -106.6500,
-            'scheduled_for': '2024-01-15T08:00:00Z',
-            'status': 'scheduled',
-            'rider_id': 'user_123'
+            "pickup_lat": 52.1333,
+            "pickup_lng": -106.6667,
+            "dropoff_lat": 52.1500,
+            "dropoff_lng": -106.6500,
+            "scheduled_for": "2024-01-15T08:00:00Z",
+            "status": "scheduled",
+            "rider_id": "user_123",
         }
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'ride_123', 'status': 'scheduled'}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_response.data = [{"id": "ride_123", "status": "scheduled"}]
+        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
 
         result = await insert_ride(scheduled_ride)
 
-        assert result['status'] == 'scheduled'
+        assert result["status"] == "scheduled"
 
     @pytest.mark.asyncio
     async def test_cancel_scheduled_ride(self, mock_supabase_client):
@@ -370,14 +355,14 @@ class TestScheduledRides:
         from backend.db_supabase import update_ride
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'ride_123', 'status': 'cancelled'}]
+        mock_response.data = [{"id": "ride_123", "status": "cancelled"}]
         mock_supabase_client.table.return_value.update.return_value.eq.return_value.execute = AsyncMock(
             return_value=mock_response
         )
 
-        result = await update_ride('ride_123', {'status': 'cancelled'})
+        result = await update_ride("ride_123", {"status": "cancelled"})
 
-        assert result['status'] == 'cancelled'
+        assert result["status"] == "cancelled"
 
 
 class TestRideEndpoints:
@@ -388,20 +373,21 @@ class TestRideEndpoints:
         from fastapi.testclient import TestClient
 
         from backend.server import app
+
         return TestClient(app)
 
     def test_create_ride_endpoint(self, test_client, auth_headers):
         """Test ride creation endpoint."""
         response = test_client.post(
-            '/api/v1/rides',
+            "/api/v1/rides",
             json={
-                'pickup_lat': 52.1333,
-                'pickup_lng': -106.6667,
-                'dropoff_lat': 52.1500,
-                'dropoff_lng': -106.6500,
-                'vehicle_type': 'sedan'
+                "pickup_lat": 52.1333,
+                "pickup_lng": -106.6667,
+                "dropoff_lat": 52.1500,
+                "dropoff_lng": -106.6500,
+                "vehicle_type": "sedan",
             },
-            headers=auth_headers
+            headers=auth_headers,
         )
 
         # Should succeed or fail with appropriate error
@@ -409,30 +395,21 @@ class TestRideEndpoints:
 
     def test_get_ride_endpoint(self, test_client, auth_headers):
         """Test get ride endpoint."""
-        response = test_client.get(
-            '/api/v1/rides/ride_123',
-            headers=auth_headers
-        )
+        response = test_client.get("/api/v1/rides/ride_123", headers=auth_headers)
 
         # Should succeed or return 404
         assert response.status_code in [200, 404, 401]
 
     def test_get_user_rides_endpoint(self, test_client, auth_headers):
         """Test get user rides endpoint."""
-        response = test_client.get(
-            '/api/v1/rides',
-            headers=auth_headers
-        )
+        response = test_client.get("/api/v1/rides", headers=auth_headers)
 
         # Should succeed or fail with appropriate error
         assert response.status_code in [200, 401]
 
     def test_cancel_ride_endpoint(self, test_client, auth_headers):
         """Test cancel ride endpoint."""
-        response = test_client.post(
-            '/api/v1/rides/ride_123/cancel',
-            headers=auth_headers
-        )
+        response = test_client.post("/api/v1/rides/ride_123/cancel", headers=auth_headers)
 
         # Should succeed or fail with appropriate error
         assert response.status_code in [200, 400, 401, 404]
@@ -453,18 +430,18 @@ class TestRideSharing:
     def test_share_trip_data_structure(self):
         """Test share trip data structure."""
         share_data = {
-            'ride_id': 'ride_123',
-            'driver_name': 'Test Driver',
-            'vehicle': 'Toyota Camry',
-            'license_plate': 'ABC123',
-            'current_lat': 52.1333,
-            'current_lng': -106.6667,
-            'eta_minutes': 5
+            "ride_id": "ride_123",
+            "driver_name": "Test Driver",
+            "vehicle": "Toyota Camry",
+            "license_plate": "ABC123",
+            "current_lat": 52.1333,
+            "current_lng": -106.6667,
+            "eta_minutes": 5,
         }
 
-        assert 'ride_id' in share_data
-        assert 'current_lat' in share_data
-        assert 'current_lng' in share_data
+        assert "ride_id" in share_data
+        assert "current_lat" in share_data
+        assert "current_lng" in share_data
 
 
 class TestRideDisputes:
@@ -476,20 +453,18 @@ class TestRideDisputes:
         from backend.db_supabase import insert_one
 
         dispute_data = {
-            'ride_id': 'ride_123',
-            'user_id': 'user_123',
-            'reason': 'overcharged',
-            'description': 'The fare was higher than estimated',
-            'status': 'pending'
+            "ride_id": "ride_123",
+            "user_id": "user_123",
+            "reason": "overcharged",
+            "description": "The fare was higher than estimated",
+            "status": "pending",
         }
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'dispute_123'}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_response.data = [{"id": "dispute_123"}]
+        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
 
-        result = await insert_one('disputes', dispute_data)
+        result = await insert_one("disputes", dispute_data)
 
         assert result is not None
 
@@ -499,7 +474,7 @@ class TestRideDisputes:
         from backend.db_supabase import update_one
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'dispute_123', 'status': 'resolved'}]
+        mock_response.data = [{"id": "dispute_123", "status": "resolved"}]
 
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
@@ -507,4 +482,4 @@ class TestRideDisputes:
         mock_query.execute = AsyncMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
-        await update_one('disputes', {'id': 'dispute_123'}, {'status': 'resolved'})
+        await update_one("disputes", {"id": "dispute_123"}, {"status": "resolved"})

@@ -6,12 +6,15 @@ from pydantic import BaseModel, EmailStr, Field
 
 # ============ Models ============
 
+
 class SendOTPRequest(BaseModel):
     phone: str
+
 
 class VerifyOTPRequest(BaseModel):
     phone: str
     code: str
+
 
 class CreateProfileRequest(BaseModel):
     first_name: str
@@ -19,6 +22,7 @@ class CreateProfileRequest(BaseModel):
     email: EmailStr
     gender: str
     role: Optional[str] = None  # 'driver' when coming from driver app
+
 
 class UserProfile(BaseModel):
     id: str
@@ -29,7 +33,7 @@ class UserProfile(BaseModel):
     gender: Optional[str] = None
     profile_image: Optional[str] = None  # Base64 encoded image
     profile_image_status: Optional[str] = None  # pending_review | approved | rejected
-    role: str = 'rider'
+    role: str = "rider"
     corporate_account_id: Optional[str] = None
     created_at: datetime
     profile_complete: bool = False
@@ -42,6 +46,7 @@ class UserProfile(BaseModel):
     driver_onboarding_detail: Optional[str] = None  # human-readable explanation
     driver_onboarding_next_screen: Optional[str] = None  # route hint for the app
 
+
 class OTPRecord(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     phone: str
@@ -50,10 +55,12 @@ class OTPRecord(BaseModel):
     verified: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+
 class AuthResponse(BaseModel):
     token: str
     user: UserProfile
     is_new_user: bool
+
 
 class AppSettings(BaseModel):
     id: str = "app_settings"
@@ -78,6 +85,7 @@ class AppSettings(BaseModel):
     privacy_policy_text: str = ""
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
+
 class ServiceArea(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     name: str
@@ -89,6 +97,7 @@ class ServiceArea(BaseModel):
     surge_multiplier: float = 1.0
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+
 class VehicleType(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     name: str
@@ -98,6 +107,7 @@ class VehicleType(BaseModel):
     image_url: Optional[str] = None
     is_active: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
 
 class FareConfig(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -111,6 +121,7 @@ class FareConfig(BaseModel):
     is_active: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+
 class SavedAddress(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
@@ -121,12 +132,14 @@ class SavedAddress(BaseModel):
     icon: str = "location"
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+
 class SavedAddressCreate(BaseModel):
     name: str
     address: str
     lat: float
     lng: float
     icon: str = "location"
+
 
 class Driver(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -162,6 +175,7 @@ class Driver(BaseModel):
     is_online: bool = True
     is_available: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
 
 class Ride(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -202,7 +216,7 @@ class Ride(BaseModel):
     cancelled_at: Optional[datetime] = None
     # Earnings split
     driver_earnings: float = 0.0  # Distance fare goes to driver
-    admin_earnings: float = 0.0   # Booking fee goes to admin
+    admin_earnings: float = 0.0  # Booking fee goes to admin
     cancellation_fee_driver: float = 0.0
     cancellation_fee_admin: float = 0.0
     # Rating
@@ -211,10 +225,12 @@ class Ride(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
+
 class RideRatingRequest(BaseModel):
     rating: int = Field(ge=1, le=5, description="Rating must be between 1 and 5")
     comment: Optional[str] = None
     tip_amount: float = Field(default=0.0, ge=0, description="Tip amount must be non-negative")
+
 
 class CreateRideRequest(BaseModel):
     vehicle_type_id: str

@@ -16,7 +16,7 @@ async def init_database():
         return supabase
 
         # Verify connection with a simple query
-        response = await supabase.table('test').select('*').limit(1).execute()
+        response = await supabase.table("test").select("*").limit(1).execute()
         if response.status_code == 200:
             logger.info("Supabase connection established successfully")
         else:
@@ -65,7 +65,7 @@ async def lifespan(app: FastAPI):
     # Note: Background tasks are disabled - no cleanup needed
 
     # Cleanup database
-    if hasattr(app.state, 'db') and app.state.db:
+    if hasattr(app.state, "db") and app.state.db:
         await cleanup_database(app.state.db)
 
     logger.info("Spinr API shutdown complete")

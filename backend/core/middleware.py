@@ -14,11 +14,7 @@ def init_middleware(app):
     origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
 
     # Always allow the admin and default apps explicitly regardless of env variables
-    always_allowed = [
-        "https://spinr-admin.vercel.app",
-        "http://localhost:3000",
-        "http://localhost:3001"
-    ]
+    always_allowed = ["https://spinr-admin.vercel.app", "http://localhost:3000", "http://localhost:3001"]
     origins.extend(always_allowed)
     # Remove empty strings
     origins = list(set([o for o in origins if o]))
@@ -44,18 +40,12 @@ def init_middleware(app):
         origin = request.headers.get("origin")
 
         # Handle standard HTTP exceptions
-        if hasattr(exc, 'status_code') and hasattr(exc, 'detail'):
-            response = JSONResponse(
-                status_code=exc.status_code,
-                content={"detail": exc.detail}
-            )
+        if hasattr(exc, "status_code") and hasattr(exc, "detail"):
+            response = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         else:
             # Handle unhandled exceptions
             logger.error(f"Unhandled exception: {exc}")
-            response = JSONResponse(
-                status_code=500,
-                content={"detail": "Internal Server Error"}
-            )
+            response = JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
         # Add CORS headers if origin is allowed
         if origin:

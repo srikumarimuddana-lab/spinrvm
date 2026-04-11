@@ -3,6 +3,7 @@ Single source of truth for app settings.
 Settings are stored as one row: id='app_settings' with flat keys.
 All readers use get_app_settings() for consistent defaults and shape.
 """
+
 from typing import Any, Dict
 
 try:

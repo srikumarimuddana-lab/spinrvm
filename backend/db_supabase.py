@@ -11,11 +11,13 @@ from typing import Callable, TypeVar
 
 from loguru import logger
 
-T = TypeVar('T')
+T = TypeVar("T")
+
 
 async def run_sync(func: Callable[[], T]) -> T:
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, func)  # type: ignore
+
 
 def _serialize_for_api(data: Any) -> Any:
     """Recursively convert datetime/date objects to ISO format strings."""
@@ -27,16 +29,17 @@ def _serialize_for_api(data: Any) -> Any:
         return data.isoformat()
     return data
 
+
 def _single_row_from_res(res: Any) -> Optional[Dict[str, Any]]:
     if not res:
         return None
     # Handle both dict-based responses and supabase APIResponse objects
     data = None
     if isinstance(res, dict):
-        data = res.get('data')
+        data = res.get("data")
     else:
         # supabase-py returns an APIResponse with .data attribute
-        data = getattr(res, 'data', None)
+        data = getattr(res, "data", None)
 
     if not data:
         return None
@@ -45,25 +48,25 @@ def _single_row_from_res(res: Any) -> Optional[Dict[str, Any]]:
         return data[0] if len(data) > 0 else None
     return data
 
+
 def _rows_from_res(res: Any) -> List[Dict[str, Any]]:
     if not res:
         return []
 
     data = None
     if isinstance(res, dict):
-        data = res.get('data')
+        data = res.get("data")
     else:
-        data = getattr(res, 'data', None)
+        data = getattr(res, "data", None)
 
     return data or []
 
+
 # ============ Corporate Accounts Functions ============
 
+
 async def get_all_corporate_accounts(
-    skip: int = 0,
-    limit: int = 100,
-    search: Optional[str] = None,
-    is_active: Optional[bool] = None
+    skip: int = 0, limit: int = 100, search: Optional[str] = None, is_active: Optional[bool] = None
 ) -> List[Dict[str, Any]]:
     """
     Get all corporate accounts with optional filtering and pagination.
@@ -81,19 +84,17 @@ async def get_all_corporate_accounts(
         return []
 
     def _fn():
-        query = supabase.table('corporate_accounts').select('*').range(skip, skip + limit - 1)
+        query = supabase.table("corporate_accounts").select("*").range(skip, skip + limit - 1)
 
         if search:
             # Search in name, contact_name, and contact_email
             # Using ilike for case-insensitive search
-            query = query.or_(
-                f"name.ilike.%{search}%,contact_name.ilike.%{search}%,contact_email.ilike.%{search}%"
-            )
+            query = query.or_(f"name.ilike.%{search}%,contact_name.ilike.%{search}%,contact_email.ilike.%{search}%")
 
         if is_active is not None:
-            query = query.eq('is_active', is_active)
+            query = query.eq("is_active", is_active)
 
-        query = query.order('created_at', desc=True)
+        query = query.order("created_at", desc=True)
         return _rows_from_res(query.execute())
 
     return await run_sync(_fn)
@@ -114,7 +115,7 @@ async def get_corporate_account_by_id(validated_id: str) -> Optional[Dict[str, A
 
     def _fn():
         try:
-            res = supabase.table('corporate_accounts').select('*').eq('id', validated_id).single().execute()
+            res = supabase.table("corporate_accounts").select("*").eq("id", validated_id).single().execute()
             return _single_row_from_res(res)
         except Exception as e:
             # If no rows found, Supabase raises an exception
@@ -135,12 +136,12 @@ async def insert_corporate_account(account_data: Dict[str, Any]) -> Optional[Dic
         Created corporate account data or None if failed
     """
     if not supabase:
-        raise RuntimeError('Supabase client not configured')
+        raise RuntimeError("Supabase client not configured")
 
     account_data = _serialize_for_api(account_data)
 
     def _fn():
-        res = supabase.table('corporate_accounts').insert(account_data).execute()
+        res = supabase.table("corporate_accounts").insert(account_data).execute()
         return _single_row_from_res(res)
 
     return await run_sync(_fn)
@@ -163,7 +164,7 @@ async def update_corporate_account(account_id: str, update_data: Dict[str, Any])
     update_data = _serialize_for_api(update_data)
 
     def _fn():
-        res = supabase.table('corporate_accounts').update(update_data).eq('id', account_id).execute()
+        res = supabase.table("corporate_accounts").update(update_data).eq("id", account_id).execute()
         return _single_row_from_res(res)
 
     return await run_sync(_fn)
@@ -183,44 +184,47 @@ async def delete_corporate_account(account_id: str) -> bool:
         return False
 
     def _fn():
-        res = supabase.table('corporate_accounts').delete().eq('id', account_id).execute()
+        res = supabase.table("corporate_accounts").delete().eq("id", account_id).execute()
         # If deletion was successful, affected rows will be > 0
         return res.count > 0 if res.count is not None else False
 
     return await run_sync(_fn)
 
+
 # ============ User Helpers ============
+
 
 async def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table('users').select('*').eq('id', user_id).execute()
-    ))
+    return await run_sync(lambda: _single_row_from_res(supabase.table("users").select("*").eq("id", user_id).execute()))
+
 
 async def get_user_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table('users').select('*').eq('phone', phone).execute()
-    ))
+    return await run_sync(
+        lambda: _single_row_from_res(supabase.table("users").select("*").eq("phone", phone).execute())
+    )
+
 
 async def create_user(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not supabase:
-        raise RuntimeError('Supabase client not configured')
+        raise RuntimeError("Supabase client not configured")
     payload = _serialize_for_api(payload)
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table('users').insert(payload).execute()
-    ))
+    return await run_sync(lambda: _single_row_from_res(supabase.table("users").insert(payload).execute()))
+
 
 # ============ Driver Helpers ============
+
 
 async def get_driver_by_id(driver_id: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table('drivers').select('*').eq('id', driver_id).execute()
-    ))
+    return await run_sync(
+        lambda: _single_row_from_res(supabase.table("drivers").select("*").eq("id", driver_id).execute())
+    )
+
 
 async def find_nearby_drivers(lat: float, lng: float, radius_meters: float) -> List[Dict[str, Any]]:
     """Use PostGIS RPC to find nearby drivers."""
@@ -228,19 +232,15 @@ async def find_nearby_drivers(lat: float, lng: float, radius_meters: float) -> L
         return []
 
     def _fn():
-        res = supabase.rpc('find_nearby_drivers', {
-            'lat': lat,
-            'lng': lng,
-            'radius_meters': radius_meters
-        }).execute()
+        res = supabase.rpc("find_nearby_drivers", {"lat": lat, "lng": lng, "radius_meters": radius_meters}).execute()
         return _rows_from_res(res)
 
     return await run_sync(_fn)
 
+
 async def update_driver_location(driver_id: str, lat: float, lng: float):
     if not supabase:
         return None
-
 
     def _update():
         # The Supabase RPC seems to have a type mismatch (text vs uuid) error.
@@ -250,11 +250,12 @@ async def update_driver_location(driver_id: str, lat: float, lng: float):
         # Note: If 'location' is a PostGIS column, we might need to update it too.
         # But failing RPC prevents any update. Direct update is safer for now.
 
-        data = {'lat': lat, 'lng': lng, 'updated_at': datetime.utcnow().isoformat()}
-        supabase.table('drivers').update(data).eq('id', str(driver_id)).execute()
+        data = {"lat": lat, "lng": lng, "updated_at": datetime.utcnow().isoformat()}
+        supabase.table("drivers").update(data).eq("id", str(driver_id)).execute()
         return True
 
     return await run_sync(_update)
+
 
 async def set_driver_available(driver_id: str, available: bool = True, total_rides_inc: int = 0):
     if not supabase:
@@ -262,7 +263,7 @@ async def set_driver_available(driver_id: str, available: bool = True, total_rid
         return None
 
     def _update():
-        payload: Dict[str, Any] = {'is_available': available}
+        payload: Dict[str, Any] = {"is_available": available}
         logger.info(
             f"[GO-ONLINE] set_driver_available CALLED driver_id={driver_id} "
             f"available={available} total_rides_inc={total_rides_inc} "
@@ -270,24 +271,22 @@ async def set_driver_available(driver_id: str, available: bool = True, total_rid
             f"other fields the caller may have passed)"
         )
         if total_rides_inc == 0:
-            res = supabase.table('drivers').update(payload).eq('id', driver_id).execute()
-            logger.info(
-                f"[GO-ONLINE] set_driver_available executed, "
-                f"res.data={getattr(res, 'data', None)}"
-            )
+            res = supabase.table("drivers").update(payload).eq("id", driver_id).execute()
+            logger.info(f"[GO-ONLINE] set_driver_available executed, res.data={getattr(res, 'data', None)}")
             return _single_row_from_res(res)
 
         # If increment needed, read then write (simulated atomic)
         # Ideally this should be an RPC or a better query if Supabase supported $inc
-        cur = supabase.table('drivers').select('total_rides').eq('id', driver_id).execute()
+        cur = supabase.table("drivers").select("total_rides").eq("id", driver_id).execute()
         cur_data = _rows_from_res(cur)
-        cur_val = cur_data[0].get('total_rides', 0) if cur_data else 0
+        cur_val = cur_data[0].get("total_rides", 0) if cur_data else 0
 
-        payload['total_rides'] = cur_val + total_rides_inc
-        res = supabase.table('drivers').update(payload).eq('id', driver_id).execute()
+        payload["total_rides"] = cur_val + total_rides_inc
+        res = supabase.table("drivers").update(payload).eq("id", driver_id).execute()
         return _single_row_from_res(res)
 
     return await run_sync(_update)
+
 
 async def claim_driver_atomic(driver_id: str) -> bool:
     """Atomically set is_available = false for driver if currently available."""
@@ -295,121 +294,158 @@ async def claim_driver_atomic(driver_id: str) -> bool:
         return False
 
     def _claim():
-        res = supabase.table('drivers').update({'is_available': False}).eq('id', driver_id).eq('is_available', True).execute()
+        res = (
+            supabase.table("drivers")
+            .update({"is_available": False})
+            .eq("id", driver_id)
+            .eq("is_available", True)
+            .execute()
+        )
         data = _rows_from_res(res)
         return len(data) > 0
 
     return await run_sync(_claim)
 
+
 # ============ Ride Helpers ============
+
 
 async def get_ride(ride_id: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table('rides').select('*').eq('id', ride_id).execute()
-    ))
+    return await run_sync(lambda: _single_row_from_res(supabase.table("rides").select("*").eq("id", ride_id).execute()))
+
 
 async def insert_ride(payload: Dict[str, Any]):
     if not supabase:
-        raise RuntimeError('Supabase client not configured')
+        raise RuntimeError("Supabase client not configured")
     payload = _serialize_for_api(payload)
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table('rides').insert(payload).execute()
-    ))
+    return await run_sync(lambda: _single_row_from_res(supabase.table("rides").insert(payload).execute()))
+
 
 async def update_ride(ride_id: str, updates: Dict[str, Any]):
     if not supabase:
         return None
     # Strip MongoDB-style $set wrapper if present
-    updates = updates.get('$set', updates)
+    updates = updates.get("$set", updates)
     updates = _serialize_for_api(updates)
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table('rides').update(updates).eq('id', ride_id).execute()
-    ))
+    return await run_sync(
+        lambda: _single_row_from_res(supabase.table("rides").update(updates).eq("id", ride_id).execute())
+    )
+
 
 async def get_rides_for_user(rider_id: str, limit: int = 100):
     if not supabase:
         return []
-    return await run_sync(lambda: _rows_from_res(
-        supabase.table('rides').select('*').eq('rider_id', rider_id).order('created_at', desc=True).limit(limit).execute()
-    ))
+    return await run_sync(
+        lambda: _rows_from_res(
+            supabase.table("rides")
+            .select("*")
+            .eq("rider_id", rider_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+    )
+
 
 async def get_rides_for_driver(driver_id: str, statuses: Optional[List[str]] = None, limit: int = 100):
     if not supabase:
         return []
 
     def _fn():
-        q = supabase.table('rides').select('*').eq('driver_id', driver_id)
+        q = supabase.table("rides").select("*").eq("driver_id", driver_id)
         if statuses:
-            status_filters = ','.join([f"status.eq.{s}" for s in statuses])
+            status_filters = ",".join([f"status.eq.{s}" for s in statuses])
             q = q.or_(status_filters)
-        q = q.order('created_at', desc=True).limit(limit)
+        q = q.order("created_at", desc=True).limit(limit)
         return _rows_from_res(q.execute())
 
     return await run_sync(_fn)
 
+
 # ============ OTP Helpers ============
+
 
 async def insert_otp_record(payload: Dict[str, Any]):
     if not supabase:
-        raise RuntimeError('Supabase client not configured')
+        raise RuntimeError("Supabase client not configured")
     payload = _serialize_for_api(payload)
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table('otp_records').insert(payload).execute()
-    ))
+    return await run_sync(lambda: _single_row_from_res(supabase.table("otp_records").insert(payload).execute()))
+
 
 async def get_otp_record(phone: str, code: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table('otp_records').select('*').eq('phone', phone).eq('code', code).eq('verified', False).execute()
-    ))
+    return await run_sync(
+        lambda: _single_row_from_res(
+            supabase.table("otp_records")
+            .select("*")
+            .eq("phone", phone)
+            .eq("code", code)
+            .eq("verified", False)
+            .execute()
+        )
+    )
+
 
 async def verify_otp_record(record_id: str):
     if not supabase:
         return None
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table('otp_records').update({'verified': True}).eq('id', record_id).execute()
-    ))
+    return await run_sync(
+        lambda: _single_row_from_res(
+            supabase.table("otp_records").update({"verified": True}).eq("id", record_id).execute()
+        )
+    )
+
 
 async def delete_otp_record(record_id: str):
     if not supabase:
         return None
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table('otp_records').delete().eq('id', record_id).execute()
-    ))
+    return await run_sync(
+        lambda: _single_row_from_res(supabase.table("otp_records").delete().eq("id", record_id).execute())
+    )
+
 
 # ============ Query Helpers ============
+
 
 def _apply_filters(q, filters: Optional[Dict[str, Any]]):
     if not filters:
         return q
     for k, v in filters.items():
         if isinstance(v, dict):
-            if '$in' in v and isinstance(v['$in'], (list, tuple)):
-                q = q.in_(k, list(v['$in']))
-            elif '$gt' in v:
-                q = q.gt(k, v['$gt'])
-            elif '$gte' in v:
-                q = q.gte(k, v['$gte'])
-            elif '$lt' in v:
-                q = q.lt(k, v['$lt'])
-            elif '$lte' in v:
-                q = q.lte(k, v['$lte'])
-            elif '$ne' in v:
-                q = q.neq(k, v['$ne'])
+            if "$in" in v and isinstance(v["$in"], (list, tuple)):
+                q = q.in_(k, list(v["$in"]))
+            elif "$gt" in v:
+                q = q.gt(k, v["$gt"])
+            elif "$gte" in v:
+                q = q.gte(k, v["$gte"])
+            elif "$lt" in v:
+                q = q.lt(k, v["$lt"])
+            elif "$lte" in v:
+                q = q.lte(k, v["$lte"])
+            elif "$ne" in v:
+                q = q.neq(k, v["$ne"])
             # Add more query operators as needed
         else:
             q = q.eq(k, v)
     return q
 
-async def get_rows(table: str, filters: Optional[Dict[str, Any]] = None, order: Optional[str] = None, desc: bool = False, limit: Optional[int] = None, offset: Optional[int] = None):
+
+async def get_rows(
+    table: str,
+    filters: Optional[Dict[str, Any]] = None,
+    order: Optional[str] = None,
+    desc: bool = False,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+):
     if not supabase:
         return []
 
     def _fn():
-        q = supabase.table(table).select('*')
+        q = supabase.table(table).select("*")
         q = _apply_filters(q, filters)
         if order:
             q = q.order(order, desc=desc)
@@ -424,49 +460,48 @@ async def get_rows(table: str, filters: Optional[Dict[str, Any]] = None, order: 
 
     return await run_sync(_fn)
 
+
 async def count_documents(table: str, filters: Optional[Dict[str, Any]] = None) -> int:
     if not supabase:
         return 0
 
     def _fn():
-        q = supabase.table(table).select('id', count='exact', head=True)
+        q = supabase.table(table).select("id", count="exact", head=True)
         q = _apply_filters(q, filters)
         res = q.execute()
-        if hasattr(res, 'count') and res.count is not None:
+        if hasattr(res, "count") and res.count is not None:
             return int(res.count)
         return 0
 
     return await run_sync(_fn)
 
+
 async def insert_one(table: str, doc: Dict[str, Any]):
     if not supabase:
         return None
     doc = _serialize_for_api(doc)
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table(table).insert(doc).execute()
-    ))
+    return await run_sync(lambda: _single_row_from_res(supabase.table(table).insert(doc).execute()))
+
 
 async def insert_many(table: str, docs: List[Dict[str, Any]]):
     """Bulk insert using Supabase's native batch insert (single round-trip)."""
     if not supabase or not docs:
         return []
     serialized = [_serialize_for_api(d) for d in docs]
-    return await run_sync(lambda: _rows_from_res(
-        supabase.table(table).insert(serialized).execute()
-    ))
+    return await run_sync(lambda: _rows_from_res(supabase.table(table).insert(serialized).execute()))
 
 
 async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any], upsert: bool = False):
     if not supabase:
-        if table == 'drivers':
+        if table == "drivers":
             logger.warning("[GO-ONLINE] db_supabase.update_one: supabase client is None!")
         return None
 
     def _fn():
-        update_data = update.get('$set', update)
+        update_data = update.get("$set", update)
         update_data = _serialize_for_api(update_data)
 
-        if table == 'drivers':
+        if table == "drivers":
             logger.info(
                 f"[GO-ONLINE] db_supabase.update_one about to execute: "
                 f"table={table} filters={filters} payload={update_data} upsert={upsert}"
@@ -481,12 +516,12 @@ async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any]
             q = _apply_filters(q, filters)
             res = q.execute()
 
-        if table == 'drivers':
+        if table == "drivers":
             raw_data = None
             try:
-                raw_data = getattr(res, 'data', None) if res else None
+                raw_data = getattr(res, "data", None) if res else None
             except Exception:
-                raw_data = '<error reading res.data>'
+                raw_data = "<error reading res.data>"
             logger.info(
                 f"[GO-ONLINE] db_supabase.update_one executed: "
                 f"res_type={type(res).__name__ if res else 'None'} "
@@ -496,6 +531,7 @@ async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any]
         return _single_row_from_res(res)
 
     return await run_sync(_fn)
+
 
 async def delete_many(table: str, filters: Dict[str, Any]):
     if not supabase:
@@ -509,11 +545,13 @@ async def delete_many(table: str, filters: Dict[str, Any]):
 
     return await run_sync(_fn)
 
+
 async def delete_one(table: str, filters: Dict[str, Any]):
     # Note: Supabase delete is always "delete matching rows".
     # To delete strictly one, we'd need to limit, but delete doesn't support limit easily in basic client.
     # We'll just use delete_many logic but maybe warn if we wanted only one.
     return await delete_many(table, filters)
+
 
 async def rpc(func_name: str, params: Dict[str, Any]):
     if not supabase:
@@ -544,8 +582,8 @@ async def execute_query(query: str, params: Optional[Dict[str, Any]] = None):
     def _fn():
         try:
             # Use Supabase's raw() method for SELECT queries
-            response = supabase.rpc('exec_sql', {'query': query, 'params': params or {}})
-            if hasattr(response, 'execute'):
+            response = supabase.rpc("exec_sql", {"query": query, "params": params or {}})
+            if hasattr(response, "execute"):
                 result = response.execute()
                 return result.data if result.data else []
             return response.data if response.data else []
@@ -569,24 +607,25 @@ async def execute_write(query: str, params: Optional[Dict[str, Any]] = None):
         Dictionary with execution results
     """
     if not supabase:
-        return {'success': False, 'error': 'No supabase connection'}
+        return {"success": False, "error": "No supabase connection"}
 
     def _fn():
         try:
             # Use Supabase's raw() method for write queries
-            response = supabase.rpc('exec_sql', {'query': query, 'params': params or {}})
-            if hasattr(response, 'execute'):
+            response = supabase.rpc("exec_sql", {"query": query, "params": params or {}})
+            if hasattr(response, "execute"):
                 result = response.execute()
-                return {'success': True, 'data': result.data}
-            return {'success': True, 'data': response.data}
+                return {"success": True, "data": result.data}
+            return {"success": True, "data": response.data}
         except Exception as e:
             logger.warning(f"execute_write warning: {e}")
-            return {'success': False, 'error': str(e)}
+            return {"success": False, "error": str(e)}
 
     return await run_sync(_fn)
 
 
 # ============ Rides Admin Dashboard – New Helpers ============
+
 
 async def get_ride_count_by_date_range(start_iso: str, end_iso: str) -> int:
     """Count rides created within a date range using Supabase SDK."""
@@ -595,13 +634,13 @@ async def get_ride_count_by_date_range(start_iso: str, end_iso: str) -> int:
 
     def _fn():
         res = (
-            supabase.table('rides')
-            .select('id', count='exact', head=True)
-            .gte('created_at', start_iso)
-            .lt('created_at', end_iso)
+            supabase.table("rides")
+            .select("id", count="exact", head=True)
+            .gte("created_at", start_iso)
+            .lt("created_at", end_iso)
             .execute()
         )
-        if hasattr(res, 'count') and res.count is not None:
+        if hasattr(res, "count") and res.count is not None:
             return int(res.count)
         return 0
 
@@ -614,134 +653,205 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
         return None
 
     def _get_ride():
-        return _single_row_from_res(
-            supabase.table('rides').select('*').eq('id', ride_id).execute()
-        )
+        return _single_row_from_res(supabase.table("rides").select("*").eq("id", ride_id).execute())
 
     ride = await run_sync(_get_ride)
     if not ride:
         return None
 
     # Fetch rider details
-    rider_id = ride.get('rider_id')
+    rider_id = ride.get("rider_id")
     if rider_id:
-        rider = await run_sync(lambda rid=rider_id: _single_row_from_res(
-            supabase.table('users').select('first_name,last_name,phone,email,profile_image,status,created_at').eq('id', rid).execute()
-        ))
+        rider = await run_sync(
+            lambda rid=rider_id: _single_row_from_res(
+                supabase.table("users")
+                .select("first_name,last_name,phone,email,profile_image,status,created_at")
+                .eq("id", rid)
+                .execute()
+            )
+        )
         if rider:
-            ride['rider_name'] = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or rider_id[:12]
-            ride['rider_phone'] = rider.get('phone', '')
-            ride['rider_email'] = rider.get('email', '')
-            ride['rider_profile_image'] = rider.get('profile_image', '')
-            ride['rider_status'] = rider.get('status', 'active')
-            ride['rider_joined'] = rider.get('created_at', '')
+            ride["rider_name"] = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or rider_id[:12]
+            ride["rider_phone"] = rider.get("phone", "")
+            ride["rider_email"] = rider.get("email", "")
+            ride["rider_profile_image"] = rider.get("profile_image", "")
+            ride["rider_status"] = rider.get("status", "active")
+            ride["rider_joined"] = rider.get("created_at", "")
 
         # Rider's service area (region) from most recent ride
-        rider_area = await run_sync(lambda rid=rider_id: _single_row_from_res(
-            supabase.table('rides').select('service_area_id').eq('rider_id', rid).neq('service_area_id', 'null').order('created_at', desc=True).limit(1).execute()
-        ))
-        rider_area_id = rider_area.get('service_area_id') if rider_area else None
+        rider_area = await run_sync(
+            lambda rid=rider_id: _single_row_from_res(
+                supabase.table("rides")
+                .select("service_area_id")
+                .eq("rider_id", rid)
+                .neq("service_area_id", "null")
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+        )
+        rider_area_id = rider_area.get("service_area_id") if rider_area else None
         if rider_area_id:
-            area = await run_sync(lambda aid=rider_area_id: _single_row_from_res(
-                supabase.table('service_areas').select('name,city').eq('id', aid).execute()
-            ))
-            ride['rider_region'] = area.get('name', '') if area else ''
-            ride['rider_city'] = area.get('city', '') if area else ''
+            area = await run_sync(
+                lambda aid=rider_area_id: _single_row_from_res(
+                    supabase.table("service_areas").select("name,city").eq("id", aid).execute()
+                )
+            )
+            ride["rider_region"] = area.get("name", "") if area else ""
+            ride["rider_city"] = area.get("city", "") if area else ""
         else:
-            ride['rider_region'] = ''
-            ride['rider_city'] = ''
+            ride["rider_region"] = ""
+            ride["rider_city"] = ""
 
         # Rider's total past rides count
-        rider_count_res = await run_sync(lambda rid=rider_id: (
-            supabase.table('rides').select('id', count='exact', head=True).eq('rider_id', rid).execute()
-        ))
-        ride['rider_total_rides'] = int(rider_count_res.count) if hasattr(rider_count_res, 'count') and rider_count_res.count is not None else 0
+        rider_count_res = await run_sync(
+            lambda rid=rider_id: (
+                supabase.table("rides").select("id", count="exact", head=True).eq("rider_id", rid).execute()
+            )
+        )
+        ride["rider_total_rides"] = (
+            int(rider_count_res.count) if hasattr(rider_count_res, "count") and rider_count_res.count is not None else 0
+        )
 
     # Fetch driver details
-    driver_id = ride.get('driver_id')
+    driver_id = ride.get("driver_id")
     if driver_id:
-        driver = await run_sync(lambda did=driver_id: _single_row_from_res(
-            supabase.table('drivers').select('name,phone,vehicle_make,vehicle_model,vehicle_color,vehicle_year,vehicle_vin,license_plate,rating,status,photo_url,vehicle_type_id,total_rides,service_area_id').eq('id', did).execute()
-        ))
+        driver = await run_sync(
+            lambda did=driver_id: _single_row_from_res(
+                supabase.table("drivers")
+                .select(
+                    "name,phone,vehicle_make,vehicle_model,vehicle_color,vehicle_year,vehicle_vin,license_plate,rating,status,photo_url,vehicle_type_id,total_rides,service_area_id"
+                )
+                .eq("id", did)
+                .execute()
+            )
+        )
         if driver:
-            ride['driver_name'] = driver.get('name', driver_id[:12])
-            ride['driver_phone'] = driver.get('phone', '')
-            ride['driver_vehicle_make'] = driver.get('vehicle_make', '')
-            ride['driver_vehicle_model'] = driver.get('vehicle_model', '')
-            ride['driver_vehicle_color'] = driver.get('vehicle_color', '')
-            ride['driver_vehicle_year'] = driver.get('vehicle_year')
-            ride['driver_vehicle_vin'] = driver.get('vehicle_vin', '')
-            ride['driver_license_plate'] = driver.get('license_plate', '')
-            ride['driver_rating'] = driver.get('rating', 0)
-            ride['driver_status'] = driver.get('status', 'active')
-            ride['driver_photo_url'] = driver.get('photo_url', '')
+            ride["driver_name"] = driver.get("name", driver_id[:12])
+            ride["driver_phone"] = driver.get("phone", "")
+            ride["driver_vehicle_make"] = driver.get("vehicle_make", "")
+            ride["driver_vehicle_model"] = driver.get("vehicle_model", "")
+            ride["driver_vehicle_color"] = driver.get("vehicle_color", "")
+            ride["driver_vehicle_year"] = driver.get("vehicle_year")
+            ride["driver_vehicle_vin"] = driver.get("vehicle_vin", "")
+            ride["driver_license_plate"] = driver.get("license_plate", "")
+            ride["driver_rating"] = driver.get("rating", 0)
+            ride["driver_status"] = driver.get("status", "active")
+            ride["driver_photo_url"] = driver.get("photo_url", "")
 
             # Driver region/service area
-            driver_area_id = driver.get('service_area_id')
+            driver_area_id = driver.get("service_area_id")
             if driver_area_id:
-                d_area = await run_sync(lambda aid=driver_area_id: _single_row_from_res(
-                    supabase.table('service_areas').select('name,city').eq('id', aid).execute()
-                ))
-                ride['driver_region'] = d_area.get('name', '') if d_area else ''
-                ride['driver_city'] = d_area.get('city', '') if d_area else ''
+                d_area = await run_sync(
+                    lambda aid=driver_area_id: _single_row_from_res(
+                        supabase.table("service_areas").select("name,city").eq("id", aid).execute()
+                    )
+                )
+                ride["driver_region"] = d_area.get("name", "") if d_area else ""
+                ride["driver_city"] = d_area.get("city", "") if d_area else ""
             else:
-                ride['driver_region'] = ''
-                ride['driver_city'] = ''
-            ride['driver_vehicle'] = f"{driver.get('vehicle_make', '')} {driver.get('vehicle_model', '')}".strip()
-            ride['driver_total_rides'] = driver.get('total_rides', 0)
+                ride["driver_region"] = ""
+                ride["driver_city"] = ""
+            ride["driver_vehicle"] = f"{driver.get('vehicle_make', '')} {driver.get('vehicle_model', '')}".strip()
+            ride["driver_total_rides"] = driver.get("total_rides", 0)
 
             # Compute acceptance rate: completed / (completed + cancelled as driver)
-            vtype_id = driver.get('vehicle_type_id')
+            vtype_id = driver.get("vehicle_type_id")
             if vtype_id:
-                vtype = await run_sync(lambda vid=vtype_id: _single_row_from_res(
-                    supabase.table('vehicle_types').select('name,description,capacity').eq('id', vid).execute()
-                ))
+                vtype = await run_sync(
+                    lambda vid=vtype_id: _single_row_from_res(
+                        supabase.table("vehicle_types").select("name,description,capacity").eq("id", vid).execute()
+                    )
+                )
                 if vtype:
-                    ride['driver_vehicle_type_name'] = vtype.get('name', '')
-                    ride['driver_vehicle_capacity'] = vtype.get('capacity', 0)
+                    ride["driver_vehicle_type_name"] = vtype.get("name", "")
+                    ride["driver_vehicle_capacity"] = vtype.get("capacity", 0)
 
             # Acceptance rate: total rides assigned to driver vs cancelled by driver
-            driver_completed_res = await run_sync(lambda did=driver_id: (
-                supabase.table('rides').select('id', count='exact', head=True).eq('driver_id', did).eq('status', 'completed').execute()
-            ))
-            completed = int(driver_completed_res.count) if hasattr(driver_completed_res, 'count') and driver_completed_res.count is not None else 0
-            driver_total_assigned_res = await run_sync(lambda did=driver_id: (
-                supabase.table('rides').select('id', count='exact', head=True).eq('driver_id', did).execute()
-            ))
-            total_assigned = int(driver_total_assigned_res.count) if hasattr(driver_total_assigned_res, 'count') and driver_total_assigned_res.count is not None else 0
-            ride['driver_acceptance_rate'] = round((completed / total_assigned * 100), 1) if total_assigned > 0 else 0
-            ride['driver_completed_rides'] = completed
+            driver_completed_res = await run_sync(
+                lambda did=driver_id: (
+                    supabase.table("rides")
+                    .select("id", count="exact", head=True)
+                    .eq("driver_id", did)
+                    .eq("status", "completed")
+                    .execute()
+                )
+            )
+            completed = (
+                int(driver_completed_res.count)
+                if hasattr(driver_completed_res, "count") and driver_completed_res.count is not None
+                else 0
+            )
+            driver_total_assigned_res = await run_sync(
+                lambda did=driver_id: (
+                    supabase.table("rides").select("id", count="exact", head=True).eq("driver_id", did).execute()
+                )
+            )
+            total_assigned = (
+                int(driver_total_assigned_res.count)
+                if hasattr(driver_total_assigned_res, "count") and driver_total_assigned_res.count is not None
+                else 0
+            )
+            ride["driver_acceptance_rate"] = round((completed / total_assigned * 100), 1) if total_assigned > 0 else 0
+            ride["driver_completed_rides"] = completed
 
     # Fetch flags for both rider and driver
     flags = []
     if rider_id:
-        rider_flags = await run_sync(lambda rid=rider_id: _rows_from_res(
-            supabase.table('flags').select('*').eq('target_type', 'rider').eq('target_id', rid).eq('is_active', True).order('created_at', desc=True).execute()
-        ))
-        flags.extend([{**f, '_party': 'rider'} for f in rider_flags])
+        rider_flags = await run_sync(
+            lambda rid=rider_id: _rows_from_res(
+                supabase.table("flags")
+                .select("*")
+                .eq("target_type", "rider")
+                .eq("target_id", rid)
+                .eq("is_active", True)
+                .order("created_at", desc=True)
+                .execute()
+            )
+        )
+        flags.extend([{**f, "_party": "rider"} for f in rider_flags])
     if driver_id:
-        driver_flags = await run_sync(lambda did=driver_id: _rows_from_res(
-            supabase.table('flags').select('*').eq('target_type', 'driver').eq('target_id', did).eq('is_active', True).order('created_at', desc=True).execute()
-        ))
-        flags.extend([{**f, '_party': 'driver'} for f in driver_flags])
-    ride['flags'] = flags
-    ride['rider_flag_count'] = sum(1 for f in flags if f.get('_party') == 'rider')
-    ride['driver_flag_count'] = sum(1 for f in flags if f.get('_party') == 'driver')
+        driver_flags = await run_sync(
+            lambda did=driver_id: _rows_from_res(
+                supabase.table("flags")
+                .select("*")
+                .eq("target_type", "driver")
+                .eq("target_id", did)
+                .eq("is_active", True)
+                .order("created_at", desc=True)
+                .execute()
+            )
+        )
+        flags.extend([{**f, "_party": "driver"} for f in driver_flags])
+    ride["flags"] = flags
+    ride["rider_flag_count"] = sum(1 for f in flags if f.get("_party") == "rider")
+    ride["driver_flag_count"] = sum(1 for f in flags if f.get("_party") == "driver")
 
     # Fetch complaints for this ride
-    ride['complaints'] = await run_sync(lambda: _rows_from_res(
-        supabase.table('complaints').select('*').eq('ride_id', ride_id).order('created_at', desc=True).execute()
-    ))
+    ride["complaints"] = await run_sync(
+        lambda: _rows_from_res(
+            supabase.table("complaints").select("*").eq("ride_id", ride_id).order("created_at", desc=True).execute()
+        )
+    )
 
     # Fetch lost and found items for this ride
-    ride['lost_and_found'] = await run_sync(lambda: _rows_from_res(
-        supabase.table('lost_and_found').select('*').eq('ride_id', ride_id).order('created_at', desc=True).execute()
-    ))
+    ride["lost_and_found"] = await run_sync(
+        lambda: _rows_from_res(
+            supabase.table("lost_and_found").select("*").eq("ride_id", ride_id).order("created_at", desc=True).execute()
+        )
+    )
 
     # Fetch location trail for this ride
-    ride['location_trail'] = await run_sync(lambda: _rows_from_res(
-        supabase.table('driver_location_history').select('lat,lng,speed,heading,tracking_phase,timestamp').eq('ride_id', ride_id).order('timestamp').limit(5000).execute()
-    ))
+    ride["location_trail"] = await run_sync(
+        lambda: _rows_from_res(
+            supabase.table("driver_location_history")
+            .select("lat,lng,speed,heading,tracking_phase,timestamp")
+            .eq("ride_id", ride_id)
+            .order("timestamp")
+            .limit(5000)
+            .execute()
+        )
+    )
 
     return ride
 
@@ -749,48 +859,44 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
 async def create_flag(flag_data: Dict[str, Any]) -> Dict[str, Any]:
     """Create a flag and check if auto-ban threshold (3) is reached."""
     if not supabase:
-        raise RuntimeError('Supabase client not configured')
+        raise RuntimeError("Supabase client not configured")
 
     flag_data = _serialize_for_api(flag_data)
 
     # Insert flag
-    flag = await run_sync(lambda: _single_row_from_res(
-        supabase.table('flags').insert(flag_data).execute()
-    ))
+    flag = await run_sync(lambda: _single_row_from_res(supabase.table("flags").insert(flag_data).execute()))
 
     # Count active flags for this target
-    target_type = flag_data['target_type']
-    target_id = flag_data['target_id']
+    target_type = flag_data["target_type"]
+    target_id = flag_data["target_id"]
 
-    count_res = await run_sync(lambda: (
-        supabase.table('flags')
-        .select('id', count='exact', head=True)
-        .eq('target_type', target_type)
-        .eq('target_id', target_id)
-        .eq('is_active', True)
-        .execute()
-    ))
-    active_count = int(count_res.count) if hasattr(count_res, 'count') and count_res.count is not None else 0
+    count_res = await run_sync(
+        lambda: (
+            supabase.table("flags")
+            .select("id", count="exact", head=True)
+            .eq("target_type", target_type)
+            .eq("target_id", target_id)
+            .eq("is_active", True)
+            .execute()
+        )
+    )
+    active_count = int(count_res.count) if hasattr(count_res, "count") and count_res.count is not None else 0
 
     auto_banned = False
     if active_count >= 3:
-        ban_table = 'users' if target_type == 'rider' else 'drivers'
-        await run_sync(lambda: (
-            supabase.table(ban_table).update({'status': 'banned'}).eq('id', target_id).execute()
-        ))
+        ban_table = "users" if target_type == "rider" else "drivers"
+        await run_sync(lambda: supabase.table(ban_table).update({"status": "banned"}).eq("id", target_id).execute())
         auto_banned = True
 
-    return {'flag': flag, 'active_flag_count': active_count, 'auto_banned': auto_banned}
+    return {"flag": flag, "active_flag_count": active_count, "auto_banned": auto_banned}
 
 
 async def create_complaint(complaint_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Insert a complaint record."""
     if not supabase:
-        raise RuntimeError('Supabase client not configured')
+        raise RuntimeError("Supabase client not configured")
     complaint_data = _serialize_for_api(complaint_data)
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table('complaints').insert(complaint_data).execute()
-    ))
+    return await run_sync(lambda: _single_row_from_res(supabase.table("complaints").insert(complaint_data).execute()))
 
 
 async def resolve_complaint(complaint_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -798,19 +904,17 @@ async def resolve_complaint(complaint_id: str, update_data: Dict[str, Any]) -> O
     if not supabase:
         return None
     update_data = _serialize_for_api(update_data)
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table('complaints').update(update_data).eq('id', complaint_id).execute()
-    ))
+    return await run_sync(
+        lambda: _single_row_from_res(supabase.table("complaints").update(update_data).eq("id", complaint_id).execute())
+    )
 
 
 async def create_lost_and_found(item_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Insert a lost and found report."""
     if not supabase:
-        raise RuntimeError('Supabase client not configured')
+        raise RuntimeError("Supabase client not configured")
     item_data = _serialize_for_api(item_data)
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table('lost_and_found').insert(item_data).execute()
-    ))
+    return await run_sync(lambda: _single_row_from_res(supabase.table("lost_and_found").insert(item_data).execute()))
 
 
 async def update_lost_and_found(item_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -818,23 +922,25 @@ async def update_lost_and_found(item_id: str, update_data: Dict[str, Any]) -> Op
     if not supabase:
         return None
     update_data = _serialize_for_api(update_data)
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table('lost_and_found').update(update_data).eq('id', item_id).execute()
-    ))
+    return await run_sync(
+        lambda: _single_row_from_res(supabase.table("lost_and_found").update(update_data).eq("id", item_id).execute())
+    )
 
 
 async def get_ride_location_trail(ride_id: str) -> List[Dict[str, Any]]:
     """Get driver location trail for a specific ride."""
     if not supabase:
         return []
-    return await run_sync(lambda: _rows_from_res(
-        supabase.table('driver_location_history')
-        .select('lat,lng,speed,heading,tracking_phase,timestamp')
-        .eq('ride_id', ride_id)
-        .order('timestamp')
-        .limit(5000)
-        .execute()
-    ))
+    return await run_sync(
+        lambda: _rows_from_res(
+            supabase.table("driver_location_history")
+            .select("lat,lng,speed,heading,tracking_phase,timestamp")
+            .eq("ride_id", ride_id)
+            .order("timestamp")
+            .limit(5000)
+            .execute()
+        )
+    )
 
 
 async def get_live_ride_data(ride_id: str) -> Optional[Dict[str, Any]]:
@@ -842,35 +948,40 @@ async def get_live_ride_data(ride_id: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
 
-    ride = await run_sync(lambda: _single_row_from_res(
-        supabase.table('rides').select('*').eq('id', ride_id).execute()
-    ))
+    ride = await run_sync(lambda: _single_row_from_res(supabase.table("rides").select("*").eq("id", ride_id).execute()))
     if not ride:
         return None
 
-    driver_id = ride.get('driver_id')
+    driver_id = ride.get("driver_id")
     if driver_id:
-        driver = await run_sync(lambda did=driver_id: _single_row_from_res(
-            supabase.table('drivers').select('name,phone,lat,lng,vehicle_make,vehicle_model,vehicle_color,license_plate,rating,photo_url').eq('id', did).execute()
-        ))
+        driver = await run_sync(
+            lambda did=driver_id: _single_row_from_res(
+                supabase.table("drivers")
+                .select("name,phone,lat,lng,vehicle_make,vehicle_model,vehicle_color,license_plate,rating,photo_url")
+                .eq("id", did)
+                .execute()
+            )
+        )
         if driver:
-            ride['driver_current_lat'] = driver.get('lat', 0)
-            ride['driver_current_lng'] = driver.get('lng', 0)
-            ride['driver_name'] = driver.get('name', '')
-            ride['driver_phone'] = driver.get('phone', '')
-            ride['driver_vehicle'] = f"{driver.get('vehicle_make', '')} {driver.get('vehicle_model', '')}".strip()
-            ride['driver_license_plate'] = driver.get('license_plate', '')
-            ride['driver_rating'] = driver.get('rating', 0)
-            ride['driver_photo_url'] = driver.get('photo_url', '')
+            ride["driver_current_lat"] = driver.get("lat", 0)
+            ride["driver_current_lng"] = driver.get("lng", 0)
+            ride["driver_name"] = driver.get("name", "")
+            ride["driver_phone"] = driver.get("phone", "")
+            ride["driver_vehicle"] = f"{driver.get('vehicle_make', '')} {driver.get('vehicle_model', '')}".strip()
+            ride["driver_license_plate"] = driver.get("license_plate", "")
+            ride["driver_rating"] = driver.get("rating", 0)
+            ride["driver_photo_url"] = driver.get("photo_url", "")
 
-    rider_id = ride.get('rider_id')
+    rider_id = ride.get("rider_id")
     if rider_id:
-        rider = await run_sync(lambda rid=rider_id: _single_row_from_res(
-            supabase.table('users').select('first_name,last_name,phone').eq('id', rid).execute()
-        ))
+        rider = await run_sync(
+            lambda rid=rider_id: _single_row_from_res(
+                supabase.table("users").select("first_name,last_name,phone").eq("id", rid).execute()
+            )
+        )
         if rider:
-            ride['rider_name'] = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip()
-            ride['rider_phone'] = rider.get('phone', '')
+            ride["rider_name"] = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip()
+            ride["rider_phone"] = rider.get("phone", "")
 
     return ride
 
@@ -879,32 +990,34 @@ async def get_user_status(user_id: str) -> Optional[str]:
     """Get user account status (active/suspended/banned)."""
     if not supabase:
         return None
-    user = await run_sync(lambda: _single_row_from_res(
-        supabase.table('users').select('status').eq('id', user_id).execute()
-    ))
-    return user.get('status', 'active') if user else None
+    user = await run_sync(
+        lambda: _single_row_from_res(supabase.table("users").select("status").eq("id", user_id).execute())
+    )
+    return user.get("status", "active") if user else None
 
 
 async def get_driver_status_by_user(user_id: str) -> Optional[str]:
     """Get driver account status by user_id (active/suspended/banned)."""
     if not supabase:
         return None
-    driver = await run_sync(lambda: _single_row_from_res(
-        supabase.table('drivers').select('status').eq('user_id', user_id).execute()
-    ))
-    return driver.get('status', 'active') if driver else None
+    driver = await run_sync(
+        lambda: _single_row_from_res(supabase.table("drivers").select("status").eq("user_id", user_id).execute())
+    )
+    return driver.get("status", "active") if driver else None
 
 
 async def get_flags_for_target(target_type: str, target_id: str) -> List[Dict[str, Any]]:
     """Get all active flags for a rider or driver."""
     if not supabase:
         return []
-    return await run_sync(lambda: _rows_from_res(
-        supabase.table('flags')
-        .select('*')
-        .eq('target_type', target_type)
-        .eq('target_id', target_id)
-        .eq('is_active', True)
-        .order('created_at', desc=True)
-        .execute()
-    ))
+    return await run_sync(
+        lambda: _rows_from_res(
+            supabase.table("flags")
+            .select("*")
+            .eq("target_type", target_type)
+            .eq("target_id", target_id)
+            .eq("is_active", True)
+            .order("created_at", desc=True)
+            .execute()
+        )
+    )

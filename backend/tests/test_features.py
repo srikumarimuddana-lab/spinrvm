@@ -2,6 +2,7 @@
 Unit tests for features module.
 Tests cover support tickets, FAQs, surge pricing, notifications, and other features.
 """
+
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock
@@ -20,20 +21,18 @@ class TestSupportTickets:
         from backend.db_supabase import insert_one
 
         ticket_data = {
-            'user_id': 'user_123',
-            'subject': 'Payment issue',
-            'description': 'I was charged twice for my ride',
-            'category': 'billing',
-            'status': 'open'
+            "user_id": "user_123",
+            "subject": "Payment issue",
+            "description": "I was charged twice for my ride",
+            "category": "billing",
+            "status": "open",
         }
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'ticket_123'}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_response.data = [{"id": "ticket_123"}]
+        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
 
-        result = await insert_one('support_tickets', ticket_data)
+        result = await insert_one("support_tickets", ticket_data)
 
         assert result is not None
 
@@ -43,8 +42,8 @@ class TestSupportTickets:
         from backend.db_supabase import get_rows
 
         mock_tickets = [
-            {'id': 'ticket_1', 'status': 'open', 'subject': 'Payment issue'},
-            {'id': 'ticket_2', 'status': 'closed', 'subject': 'Driver behavior'}
+            {"id": "ticket_1", "status": "open", "subject": "Payment issue"},
+            {"id": "ticket_2", "status": "closed", "subject": "Driver behavior"},
         ]
 
         mock_response = MagicMock()
@@ -53,7 +52,7 @@ class TestSupportTickets:
             return_value=mock_response
         )
 
-        result = await get_rows('support_tickets', {'user_id': 'user_123'})
+        result = await get_rows("support_tickets", {"user_id": "user_123"})
 
         assert len(result) == 2
 
@@ -63,7 +62,7 @@ class TestSupportTickets:
         from backend.db_supabase import update_one
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'ticket_123', 'status': 'closed'}]
+        mock_response.data = [{"id": "ticket_123", "status": "closed"}]
 
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
@@ -71,9 +70,9 @@ class TestSupportTickets:
         mock_query.execute = AsyncMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
-        result = await update_one('support_tickets', {'id': 'ticket_123'}, {'status': 'closed'})
+        result = await update_one("support_tickets", {"id": "ticket_123"}, {"status": "closed"})
 
-        assert result['status'] == 'closed'
+        assert result["status"] == "closed"
 
     @pytest.mark.asyncio
     async def test_reply_to_ticket(self, mock_supabase_client):
@@ -81,19 +80,17 @@ class TestSupportTickets:
         from backend.db_supabase import insert_one
 
         reply_data = {
-            'ticket_id': 'ticket_123',
-            'user_id': 'admin_1',
-            'message': 'We have reviewed your case and issued a refund.',
-            'is_admin_reply': True
+            "ticket_id": "ticket_123",
+            "user_id": "admin_1",
+            "message": "We have reviewed your case and issued a refund.",
+            "is_admin_reply": True,
         }
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'reply_123'}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_response.data = [{"id": "reply_123"}]
+        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
 
-        result = await insert_one('ticket_replies', reply_data)
+        result = await insert_one("ticket_replies", reply_data)
 
         assert result is not None
 
@@ -107,19 +104,17 @@ class TestFAQs:
         from backend.db_supabase import insert_one
 
         faq_data = {
-            'question': 'How do I request a ride?',
-            'answer': 'Open the app and enter your destination...',
-            'category': 'rides',
-            'order': 1
+            "question": "How do I request a ride?",
+            "answer": "Open the app and enter your destination...",
+            "category": "rides",
+            "order": 1,
         }
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'faq_123'}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_response.data = [{"id": "faq_123"}]
+        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
 
-        result = await insert_one('faqs', faq_data)
+        result = await insert_one("faqs", faq_data)
 
         assert result is not None
 
@@ -129,17 +124,17 @@ class TestFAQs:
         from backend.db_supabase import get_rows
 
         mock_faqs = [
-            {'id': 'faq_1', 'question': 'How do I request a ride?', 'category': 'rides'},
-            {'id': 'faq_2', 'question': 'How do I pay?', 'category': 'rides'}
+            {"id": "faq_1", "question": "How do I request a ride?", "category": "rides"},
+            {"id": "faq_2", "question": "How do I pay?", "category": "rides"},
         ]
 
         mock_response = MagicMock()
         mock_response.data = mock_faqs
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.order.return_value.execute = AsyncMock(
-            return_value=mock_response
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.order.return_value.execute = (
+            AsyncMock(return_value=mock_response)
         )
 
-        result = await get_rows('faqs', {'category': 'rides'})
+        result = await get_rows("faqs", {"category": "rides"})
 
         assert len(result) == 2
 
@@ -149,7 +144,7 @@ class TestFAQs:
         from backend.db_supabase import update_one
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'faq_123', 'answer': 'Updated answer...'}]
+        mock_response.data = [{"id": "faq_123", "answer": "Updated answer..."}]
 
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
@@ -157,9 +152,9 @@ class TestFAQs:
         mock_query.execute = AsyncMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
-        result = await update_one('faqs', {'id': 'faq_123'}, {'answer': 'Updated answer...'})
+        result = await update_one("faqs", {"id": "faq_123"}, {"answer": "Updated answer..."})
 
-        assert result['answer'] == 'Updated answer...'
+        assert result["answer"] == "Updated answer..."
 
 
 class TestSurgePricing:
@@ -171,7 +166,7 @@ class TestSurgePricing:
         from backend.db_supabase import update_one
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'surge_123', 'multiplier': 1.5}]
+        mock_response.data = [{"id": "surge_123", "multiplier": 1.5}]
 
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
@@ -179,16 +174,16 @@ class TestSurgePricing:
         mock_query.execute = AsyncMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
-        result = await update_one('surge_pricing', {'id': 'surge_123'}, {'multiplier': 1.5})
+        result = await update_one("surge_pricing", {"id": "surge_123"}, {"multiplier": 1.5})
 
-        assert result['multiplier'] == 1.5
+        assert result["multiplier"] == 1.5
 
     @pytest.mark.asyncio
     async def test_get_surge_for_area(self, mock_supabase_client):
         """Test getting surge pricing for an area."""
         from backend.db_supabase import get_rows
 
-        mock_surge = [{'id': 'surge_123', 'area_id': 'area_1', 'multiplier': 1.25}]
+        mock_surge = [{"id": "surge_123", "area_id": "area_1", "multiplier": 1.25}]
 
         mock_response = MagicMock()
         mock_response.data = mock_surge
@@ -196,10 +191,10 @@ class TestSurgePricing:
             return_value=mock_response
         )
 
-        result = await get_rows('surge_pricing', {'area_id': 'area_1'})
+        result = await get_rows("surge_pricing", {"area_id": "area_1"})
 
         assert len(result) == 1
-        assert result[0]['multiplier'] == 1.25
+        assert result[0]["multiplier"] == 1.25
 
     def test_calculate_surge_price(self):
         """Test calculating price with surge multiplier."""
@@ -220,20 +215,18 @@ class TestNotifications:
         from backend.db_supabase import insert_one
 
         notification_data = {
-            'user_id': 'user_123',
-            'title': 'Your driver has arrived',
-            'body': 'John is waiting in a white Toyota Camry',
-            'type': 'ride_update',
-            'data': {'ride_id': 'ride_123'}
+            "user_id": "user_123",
+            "title": "Your driver has arrived",
+            "body": "John is waiting in a white Toyota Camry",
+            "type": "ride_update",
+            "data": {"ride_id": "ride_123"},
         }
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'notif_123'}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_response.data = [{"id": "notif_123"}]
+        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
 
-        result = await insert_one('notifications', notification_data)
+        result = await insert_one("notifications", notification_data)
 
         assert result is not None
 
@@ -243,8 +236,8 @@ class TestNotifications:
         from backend.db_supabase import get_rows
 
         mock_notifications = [
-            {'id': 'notif_1', 'title': 'Ride confirmed', 'read': False},
-            {'id': 'notif_2', 'title': 'Driver arrived', 'read': True}
+            {"id": "notif_1", "title": "Ride confirmed", "read": False},
+            {"id": "notif_2", "title": "Driver arrived", "read": True},
         ]
 
         mock_response = MagicMock()
@@ -253,7 +246,7 @@ class TestNotifications:
             return_value=mock_response
         )
 
-        result = await get_rows('notifications', {'user_id': 'user_123'})
+        result = await get_rows("notifications", {"user_id": "user_123"})
 
         assert len(result) == 2
 
@@ -263,7 +256,7 @@ class TestNotifications:
         from backend.db_supabase import update_one
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'notif_123', 'read': True}]
+        mock_response.data = [{"id": "notif_123", "read": True}]
 
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
@@ -271,9 +264,9 @@ class TestNotifications:
         mock_query.execute = AsyncMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
-        result = await update_one('notifications', {'id': 'notif_123'}, {'read': True})
+        result = await update_one("notifications", {"id": "notif_123"}, {"read": True})
 
-        assert result['read'] is True
+        assert result["read"] is True
 
     @pytest.mark.asyncio
     async def test_register_fcm_token(self, mock_supabase_client):
@@ -281,7 +274,7 @@ class TestNotifications:
         from backend.db_supabase import update_one
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'user_123', 'fcm_token': 'token_abc'}]
+        mock_response.data = [{"id": "user_123", "fcm_token": "token_abc"}]
 
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
@@ -289,9 +282,9 @@ class TestNotifications:
         mock_query.execute = AsyncMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
-        result = await update_one('users', {'id': 'user_123'}, {'fcm_token': 'token_abc'})
+        result = await update_one("users", {"id": "user_123"}, {"fcm_token": "token_abc"})
 
-        assert result['fcm_token'] == 'token_abc'
+        assert result["fcm_token"] == "token_abc"
 
 
 class TestServiceAreas:
@@ -303,17 +296,15 @@ class TestServiceAreas:
         from backend.db_supabase import get_rows
 
         mock_areas = [
-            {'id': 'area_1', 'name': 'Downtown', 'active': True},
-            {'id': 'area_2', 'name': 'Airport', 'active': True}
+            {"id": "area_1", "name": "Downtown", "active": True},
+            {"id": "area_2", "name": "Airport", "active": True},
         ]
 
         mock_response = MagicMock()
         mock_response.data = mock_areas
-        mock_supabase_client.table.return_value.select.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_supabase_client.table.return_value.select.return_value.execute = AsyncMock(return_value=mock_response)
 
-        result = await get_rows('service_areas')
+        result = await get_rows("service_areas")
 
         assert len(result) == 2
 
@@ -322,18 +313,13 @@ class TestServiceAreas:
         """Test assigning a driver to a service area."""
         from backend.db_supabase import insert_one
 
-        assignment_data = {
-            'driver_id': 'driver_123',
-            'area_id': 'area_1'
-        }
+        assignment_data = {"driver_id": "driver_123", "area_id": "area_1"}
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'assignment_123'}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_response.data = [{"id": "assignment_123"}]
+        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
 
-        result = await insert_one('driver_areas', assignment_data)
+        result = await insert_one("driver_areas", assignment_data)
 
         assert result is not None
 
@@ -343,10 +329,10 @@ class TestServiceAreas:
 
         # Simple square polygon
         polygon = [
-            {'lat': 52.1, 'lng': -106.7},
-            {'lat': 52.1, 'lng': -106.6},
-            {'lat': 52.2, 'lng': -106.6},
-            {'lat': 52.2, 'lng': -106.7}
+            {"lat": 52.1, "lng": -106.7},
+            {"lat": 52.1, "lng": -106.6},
+            {"lat": 52.2, "lng": -106.6},
+            {"lat": 52.2, "lng": -106.7},
         ]
 
         # Point inside polygon
@@ -365,20 +351,18 @@ class TestSavedAddresses:
         from backend.db_supabase import insert_one
 
         address_data = {
-            'user_id': 'user_123',
-            'label': 'Home',
-            'address': '123 Main St',
-            'lat': 52.1333,
-            'lng': -106.6667
+            "user_id": "user_123",
+            "label": "Home",
+            "address": "123 Main St",
+            "lat": 52.1333,
+            "lng": -106.6667,
         }
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'addr_123'}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_response.data = [{"id": "addr_123"}]
+        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
 
-        result = await insert_one('saved_addresses', address_data)
+        result = await insert_one("saved_addresses", address_data)
 
         assert result is not None
 
@@ -388,8 +372,8 @@ class TestSavedAddresses:
         from backend.db_supabase import get_rows
 
         mock_addresses = [
-            {'id': 'addr_1', 'label': 'Home', 'address': '123 Main St'},
-            {'id': 'addr_2', 'label': 'Work', 'address': '456 Office Blvd'}
+            {"id": "addr_1", "label": "Home", "address": "123 Main St"},
+            {"id": "addr_2", "label": "Work", "address": "456 Office Blvd"},
         ]
 
         mock_response = MagicMock()
@@ -398,7 +382,7 @@ class TestSavedAddresses:
             return_value=mock_response
         )
 
-        result = await get_rows('saved_addresses', {'user_id': 'user_123'})
+        result = await get_rows("saved_addresses", {"user_id": "user_123"})
 
         assert len(result) == 2
 
@@ -416,7 +400,7 @@ class TestSavedAddresses:
         mock_query.execute = AsyncMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
-        result = await delete_one('saved_addresses', {'id': 'addr_123'})
+        result = await delete_one("saved_addresses", {"id": "addr_123"})
 
         assert result is not None
 
@@ -429,20 +413,13 @@ class TestEmergencyContacts:
         """Test adding an emergency contact."""
         from backend.db_supabase import insert_one
 
-        contact_data = {
-            'user_id': 'user_123',
-            'name': 'John Doe',
-            'phone': '+1234567890',
-            'relationship': 'spouse'
-        }
+        contact_data = {"user_id": "user_123", "name": "John Doe", "phone": "+1234567890", "relationship": "spouse"}
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'contact_123'}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_response.data = [{"id": "contact_123"}]
+        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
 
-        result = await insert_one('emergency_contacts', contact_data)
+        result = await insert_one("emergency_contacts", contact_data)
 
         assert result is not None
 
@@ -452,8 +429,8 @@ class TestEmergencyContacts:
         from backend.db_supabase import get_rows
 
         mock_contacts = [
-            {'id': 'contact_1', 'name': 'John Doe', 'phone': '+1234567890'},
-            {'id': 'contact_2', 'name': 'Jane Doe', 'phone': '+0987654321'}
+            {"id": "contact_1", "name": "John Doe", "phone": "+1234567890"},
+            {"id": "contact_2", "name": "Jane Doe", "phone": "+0987654321"},
         ]
 
         mock_response = MagicMock()
@@ -462,7 +439,7 @@ class TestEmergencyContacts:
             return_value=mock_response
         )
 
-        result = await get_rows('emergency_contacts', {'user_id': 'user_123'})
+        result = await get_rows("emergency_contacts", {"user_id": "user_123"})
 
         assert len(result) == 2
 
@@ -476,19 +453,17 @@ class TestCorporateAccounts:
         from backend.db_supabase import insert_one
 
         corporate_data = {
-            'company_name': 'Acme Corp',
-            'admin_user_id': 'user_123',
-            'billing_email': 'billing@acme.com',
-            'status': 'active'
+            "company_name": "Acme Corp",
+            "admin_user_id": "user_123",
+            "billing_email": "billing@acme.com",
+            "status": "active",
         }
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'corp_123'}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_response.data = [{"id": "corp_123"}]
+        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
 
-        result = await insert_one('corporate_accounts', corporate_data)
+        result = await insert_one("corporate_accounts", corporate_data)
 
         assert result is not None
 
@@ -497,18 +472,12 @@ class TestCorporateAccounts:
         """Test adding employee to corporate account."""
         from backend.db_supabase import insert_one
 
-        employee_data = {
-            'corporate_id': 'corp_123',
-            'user_id': 'user_456',
-            'role': 'employee'
-        }
+        employee_data = {"corporate_id": "corp_123", "user_id": "user_456", "role": "employee"}
 
         mock_response = MagicMock()
-        mock_response.data = [{'id': 'emp_123'}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+        mock_response.data = [{"id": "emp_123"}]
+        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
 
-        result = await insert_one('corporate_employees', employee_data)
+        result = await insert_one("corporate_employees", employee_data)
 
         assert result is not None

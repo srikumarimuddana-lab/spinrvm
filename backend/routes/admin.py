@@ -11,7 +11,7 @@ try:
     from .. import db_supabase  # type: ignore
     from ..core.config import settings
     from ..db import db  # type: ignore
-    from ..dependencies import get_admin_user, get_current_user  # type: ignore
+    from ..dependencies import get_admin_user  # type: ignore
     from ..settings_loader import get_app_settings  # type: ignore
 except ImportError:
     import db_supabase  # type: ignore
@@ -54,9 +54,7 @@ async def get_session(authorization: Optional[str] = Header(None)):
 
     # Verify the JWT token
     try:
-        payload = jwt.decode(
-            token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM]
-        )
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
         user_id = payload.get("user_id")
         role = payload.get("role")
         email = payload.get("email")
@@ -110,10 +108,7 @@ async def admin_login(request: LoginRequest):
     ]
 
     # 1. Super admin from env
-    if (
-        request.email == settings.ADMIN_EMAIL
-        and request.password == settings.ADMIN_PASSWORD
-    ):
+    if request.email == settings.ADMIN_EMAIL and request.password == settings.ADMIN_PASSWORD:
         token = jwt.encode(
             {
                 "user_id": "admin-001",
@@ -281,7 +276,7 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
     allowed = [
         "name",
         "city",
-        "polygon", # previously geojson mapped to polygon below
+        "polygon",  # previously geojson mapped to polygon below
         "is_active",
         "parent_service_area_id",
         "is_airport",
@@ -391,9 +386,7 @@ async def admin_delete_vehicle_type(type_id: str):
 @admin_router.get("/fare-configs")
 async def admin_get_fare_configs():
     """Get all fare configurations."""
-    configs = await db.get_rows(
-        "fare_configs", order="created_at", desc=True, limit=200
-    )
+    configs = await db.get_rows("fare_configs", order="created_at", desc=True, limit=200)
     return configs
 
 
@@ -406,9 +399,7 @@ async def admin_create_fare_config(config: Dict[str, Any]):
         "vehicle_type_id": config.get("vehicle_type_id", ""),
         "base_fare": config.get("base_fare", 0),
         "per_km_rate": config.get("price_per_km", config.get("per_km_rate", 0)),
-        "per_minute_rate": config.get(
-            "price_per_minute", config.get("per_minute_rate", 0)
-        ),
+        "per_minute_rate": config.get("price_per_minute", config.get("per_minute_rate", 0)),
         "minimum_fare": config.get("minimum_fare", 0),
         "booking_fee": config.get("booking_fee", 2.0),
         "is_active": config.get("is_active", True),
@@ -425,9 +416,7 @@ async def admin_update_fare_config(config_id: str, config: Dict[str, Any]):
         "name": config.get("name"),
         "base_fare": config.get("base_fare"),
         "per_km_rate": config.get("price_per_km", config.get("per_km_rate")),
-        "per_minute_rate": config.get(
-            "price_per_minute", config.get("per_minute_rate")
-        ),
+        "per_minute_rate": config.get("price_per_minute", config.get("per_minute_rate")),
         "area_geojson": config.get("area_geojson"),
         "is_active": config.get("is_active"),
     }
@@ -455,23 +444,23 @@ def _user_display_name(user: Optional[Dict]) -> str:
     return f"{fn} {ln}".strip() or user.get("email") or user.get("phone") or ""
 
 
-async def _batch_fetch_drivers_and_users(
-    rider_ids: List[str], driver_ids: List[str]
-) -> tuple:
+async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[str]) -> tuple:
     """Batch-fetch drivers and users in 2-3 queries instead of N+1 loops."""
     drivers_list = (
-        await db.get_rows("drivers", {"id": {"$in": driver_ids}}, limit=max(len(driver_ids), 1))
-        if driver_ids else []
+        await db.get_rows("drivers", {"id": {"$in": driver_ids}}, limit=max(len(driver_ids), 1)) if driver_ids else []
     )
     drivers_map = {d["id"]: d for d in drivers_list if d.get("id")}
 
-    all_user_ids = list({
-        *rider_ids,
-        *(d.get("user_id") for d in drivers_list if d.get("user_id")),
-    })
+    all_user_ids = list(
+        {
+            *rider_ids,
+            *(d.get("user_id") for d in drivers_list if d.get("user_id")),
+        }
+    )
     users_list = (
         await db.get_rows("users", {"id": {"$in": all_user_ids}}, limit=max(len(all_user_ids), 1))
-        if all_user_ids else []
+        if all_user_ids
+        else []
     )
     users_map = {u["id"]: u for u in users_list if u.get("id")}
 
@@ -491,9 +480,7 @@ async def admin_get_drivers(
         filters["is_verified"] = is_verified
     if is_online is not None:
         filters["is_online"] = is_online
-    drivers = await db.get_rows(
-        "drivers", filters, order="created_at", desc=True, limit=limit, offset=offset
-    )
+    drivers = await db.get_rows("drivers", filters, order="created_at", desc=True, limit=limit, offset=offset)
     user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
     users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
     users_map = {u["id"]: u for u in users_list if u.get("id")}
@@ -559,8 +546,10 @@ async def admin_get_driver_stats(
 
     now_iso = datetime.utcnow().isoformat()
     expiry_fields = [
-        "license_expiry_date", "insurance_expiry_date",
-        "vehicle_inspection_expiry_date", "background_check_expiry_date",
+        "license_expiry_date",
+        "insurance_expiry_date",
+        "vehicle_inspection_expiry_date",
+        "background_check_expiry_date",
     ]
 
     enriched_drivers = []
@@ -578,15 +567,17 @@ async def admin_get_driver_stats(
             if driver_status == "active" and d.get("id") in pending_doc_driver_ids:
                 driver_status = "needs_review"
 
-        enriched_drivers.append({
-            **d,
-            "status": driver_status,
-            "first_name": u.get("first_name") if u else d.get("first_name"),
-            "last_name": u.get("last_name") if u else d.get("last_name"),
-            "name": _user_display_name(u) or d.get("name"),
-            "email": u.get("email") if u else None,
-            "phone": u.get("phone") if u else d.get("phone"),
-        })
+        enriched_drivers.append(
+            {
+                **d,
+                "status": driver_status,
+                "first_name": u.get("first_name") if u else d.get("first_name"),
+                "last_name": u.get("last_name") if u else d.get("last_name"),
+                "name": _user_display_name(u) or d.get("name"),
+                "email": u.get("email") if u else None,
+                "phone": u.get("phone") if u else d.get("phone"),
+            }
+        )
 
     # ── Compute overall driver stats ──
     total = len(enriched_drivers)
@@ -611,8 +602,12 @@ async def admin_get_driver_stats(
             area_stats[aid] = {
                 "service_area_id": aid,
                 "service_area_name": area_map.get(aid, "Unassigned"),
-                "total": 0, "online": 0, "verified": 0, "unverified": 0,
-                "total_rides": 0, "total_earnings": 0.0,
+                "total": 0,
+                "online": 0,
+                "verified": 0,
+                "unverified": 0,
+                "total_rides": 0,
+                "total_earnings": 0.0,
             }
         area_stats[aid]["total"] += 1
         if d.get("is_online"):
@@ -637,7 +632,7 @@ async def admin_get_driver_stats(
             continue
         try:
             dt = datetime.fromisoformat(str(ca).replace("Z", "+00:00").replace("+00:00", ""))
-        except Exception:
+        except Exception:  # noqa: S112
             continue
         if range_start <= dt <= range_end:
             day_key = dt.strftime("%Y-%m-%d")
@@ -659,7 +654,7 @@ async def admin_get_driver_stats(
             continue
         try:
             dt = datetime.fromisoformat(str(ca).replace("Z", "+00:00").replace("+00:00", ""))
-        except Exception:
+        except Exception:  # noqa: S112
             continue
         if range_start <= dt <= range_end:
             day_key = dt.strftime("%Y-%m-%d")
@@ -677,7 +672,9 @@ async def admin_get_driver_stats(
         day_label = day.strftime("%b %d")
         joins_chart.append({"date": day_label, "date_raw": day_key, "count": daily_joins.get(day_key, 0)})
         rides_chart.append({"date": day_label, "date_raw": day_key, "count": daily_rides.get(day_key, 0)})
-        earnings_chart.append({"date": day_label, "date_raw": day_key, "amount": round(daily_earnings.get(day_key, 0), 2)})
+        earnings_chart.append(
+            {"date": day_label, "date_raw": day_key, "amount": round(daily_earnings.get(day_key, 0), 2)}
+        )
 
     return {
         "stats": {
@@ -717,9 +714,7 @@ async def admin_get_rides(
     # Get total count for pagination
     total_count = await db.rides.count_documents(filters)
 
-    rides = await db.get_rows(
-        "rides", filters, order="created_at", desc=True, limit=limit, offset=offset
-    )
+    rides = await db.get_rows("rides", filters, order="created_at", desc=True, limit=limit, offset=offset)
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
     drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
@@ -744,12 +739,25 @@ async def admin_get_rides(
 async def admin_update_driver(driver_id: str, updates: Dict[str, Any]):
     """Update driver details from admin dashboard."""
     allowed = {
-        "first_name", "last_name", "email", "phone", "gender", "city",
-        "service_area_id", "vehicle_type_id",
-        "vehicle_make", "vehicle_model", "vehicle_color", "vehicle_year",
-        "license_plate", "vehicle_vin",
-        "license_number", "license_expiry_date", "insurance_expiry_date",
-        "vehicle_inspection_expiry_date", "background_check_expiry_date",
+        "first_name",
+        "last_name",
+        "email",
+        "phone",
+        "gender",
+        "city",
+        "service_area_id",
+        "vehicle_type_id",
+        "vehicle_make",
+        "vehicle_model",
+        "vehicle_color",
+        "vehicle_year",
+        "license_plate",
+        "vehicle_vin",
+        "license_number",
+        "license_expiry_date",
+        "insurance_expiry_date",
+        "vehicle_inspection_expiry_date",
+        "background_check_expiry_date",
         "work_eligibility_expiry_date",
     }
     filtered = {k: v for k, v in updates.items() if k in allowed}
@@ -764,7 +772,7 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any]):
         await db.drivers.update_one({"id": driver_id}, {"$set": filtered})
     except Exception as e:
         logger.error(f"Failed to update driver {driver_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}") from e
     return {"message": "Driver updated", "updated_fields": list(filtered.keys())}
 
 
@@ -796,7 +804,7 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest):
         raise
     except Exception as e:
         logger.error(f"Failed to update driver {driver_id} verify flag: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}") from e
     return {"message": f"Driver {'verified' if req.verified else 'unverified'}"}
 
 
@@ -872,7 +880,7 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
         await db.drivers.update_one({"id": driver_id}, {"$set": updates})
     except Exception as e:
         logger.error(f"Failed driver action {req.action} on {driver_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
     logger.info(f"[ADMIN] Driver {driver_id} action={req.action} reason={req.reason}")
 
@@ -886,7 +894,8 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
         "reactivate": "Driver Reactivated",
     }
     await _log_driver_activity(
-        driver_id, req.action,
+        driver_id,
+        req.action,
         action_titles.get(req.action, f"Action: {req.action}"),
         req.reason or "",
         {"old_status": current_status, "new_status": updates.get("status"), "reason": req.reason},
@@ -935,7 +944,9 @@ async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride
     await db.drivers.update_one({"id": driver_id}, {"$set": updates})
     logger.info(f"[ADMIN] Driver {driver_id} status overridden to {req.status} reason={req.reason}")
     await _log_driver_activity(
-        driver_id, "status_override", f"Status changed to {req.status}",
+        driver_id,
+        "status_override",
+        f"Status changed to {req.status}",
         req.reason or "Manual admin override",
         {"old_status": driver.get("status"), "new_status": req.status, "reason": req.reason},
     )
@@ -948,9 +959,7 @@ async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride
 @admin_router.get("/drivers/{driver_id}/notes")
 async def admin_get_driver_notes(driver_id: str):
     """Get all notes for a driver, newest first."""
-    notes = await db.get_rows(
-        "driver_notes", {"driver_id": driver_id}, order="created_at", desc=True, limit=200
-    )
+    notes = await db.get_rows("driver_notes", {"driver_id": driver_id}, order="created_at", desc=True, limit=200)
     return notes or []
 
 
@@ -973,8 +982,11 @@ async def admin_add_driver_note(driver_id: str, req: DriverNoteCreate):
     }
     await db.driver_notes.insert_one(doc)
     await _log_driver_activity(
-        driver_id, "note_added", f"Note added ({req.category})",
-        req.note[:100], {"category": req.category},
+        driver_id,
+        "note_added",
+        f"Note added ({req.category})",
+        req.note[:100],
+        {"category": req.category},
     )
     return doc
 
@@ -990,21 +1002,27 @@ async def admin_delete_driver_note(note_id: str):
 
 
 async def _log_driver_activity(
-    driver_id: str, event_type: str, title: str,
-    description: str = "", metadata: dict = None, actor: str = "admin",
+    driver_id: str,
+    event_type: str,
+    title: str,
+    description: str = "",
+    metadata: dict = None,
+    actor: str = "admin",
 ):
     """Helper to record a driver lifecycle event."""
     try:
-        await db.driver_activity_log.insert_one({
-            "id": str(uuid.uuid4()),
-            "driver_id": driver_id,
-            "event_type": event_type,
-            "title": title,
-            "description": description,
-            "metadata": metadata or {},
-            "actor": actor,
-            "created_at": datetime.utcnow().isoformat(),
-        })
+        await db.driver_activity_log.insert_one(
+            {
+                "id": str(uuid.uuid4()),
+                "driver_id": driver_id,
+                "event_type": event_type,
+                "title": title,
+                "description": description,
+                "metadata": metadata or {},
+                "actor": actor,
+                "created_at": datetime.utcnow().isoformat(),
+            }
+        )
     except Exception as e:
         logger.warning(f"Failed to log driver activity: {e}")
 
@@ -1013,8 +1031,11 @@ async def _log_driver_activity(
 async def admin_get_driver_activity(driver_id: str, limit: int = 100):
     """Get full activity timeline for a driver, newest first."""
     activities = await db.get_rows(
-        "driver_activity_log", {"driver_id": driver_id},
-        order="created_at", desc=True, limit=limit,
+        "driver_activity_log",
+        {"driver_id": driver_id},
+        order="created_at",
+        desc=True,
+        limit=limit,
     )
     return activities or []
 
@@ -1060,10 +1081,12 @@ async def admin_cleanup_location_history(days: int = 30):
         )
         deleted_idle = len(idle_rows or [])
         if deleted_idle > 0:
-            await db.driver_location_history.delete_many({
-                "timestamp": {"$lt": cutoff_idle},
-                "tracking_phase": "online_idle",
-            })
+            await db.driver_location_history.delete_many(
+                {
+                    "timestamp": {"$lt": cutoff_idle},
+                    "tracking_phase": "online_idle",
+                }
+            )
     except Exception as e:
         logger.warning(f"Cleanup idle GPS failed: {e}")
 
@@ -1109,7 +1132,10 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         R = 6371.0
         dlat = math.radians(lat2 - lat1)
         dlng = math.radians(lng2 - lng1)
-        a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng / 2) ** 2
+        a = (
+            math.sin(dlat / 2) ** 2
+            + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng / 2) ** 2
+        )
         return 2 * R * math.asin(math.sqrt(a))
 
     # Pull all GPS points from that day
@@ -1158,7 +1184,7 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
                 t_first = datetime.fromisoformat(str(first_online_at).replace("Z", "+00:00").replace("+00:00", ""))
                 t_last = datetime.fromisoformat(str(last_online_at).replace("Z", "+00:00").replace("+00:00", ""))
                 online_minutes = max(0, int((t_last - t_first).total_seconds() / 60))
-            except Exception:
+            except Exception:  # noqa: S110
                 pass
 
         # Per-phase distances
@@ -1261,9 +1287,7 @@ async def admin_get_stats():
     total_drivers = await db.drivers.count_documents({})
     active_drivers = await db.drivers.count_documents({"is_online": True})
     total_rides = await db.rides.count_documents({})
-    today_start = (
-        datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    )
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     rides_today = await db.rides.count_documents({"created_at": {"$gte": today_start}})
     completed_today = await db.get_rows(
         "rides",
@@ -1271,9 +1295,7 @@ async def admin_get_stats():
         limit=10000,
     )
     revenue_today = sum(float(r.get("total_fare") or 0) for r in completed_today)
-    month_start = (
-        datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    ).isoformat()
+    month_start = (datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)).isoformat()
     completed_month = await db.get_rows(
         "rides",
         {"status": "completed", "ride_completed_at": {"$gte": month_start}},
@@ -1307,18 +1329,12 @@ async def admin_get_ride_stats():
     month_start = today_start.replace(day=1)
     next_month = (month_start + timedelta(days=32)).replace(day=1)
 
-    today_count = await db_supabase.get_ride_count_by_date_range(
-        today_start.isoformat(), now.isoformat()
-    )
+    today_count = await db_supabase.get_ride_count_by_date_range(today_start.isoformat(), now.isoformat())
     yesterday_count = await db_supabase.get_ride_count_by_date_range(
         yesterday_start.isoformat(), today_start.isoformat()
     )
-    this_week_count = await db_supabase.get_ride_count_by_date_range(
-        week_start.isoformat(), week_end.isoformat()
-    )
-    this_month_count = await db_supabase.get_ride_count_by_date_range(
-        month_start.isoformat(), next_month.isoformat()
-    )
+    this_week_count = await db_supabase.get_ride_count_by_date_range(week_start.isoformat(), week_end.isoformat())
+    this_month_count = await db_supabase.get_ride_count_by_date_range(month_start.isoformat(), next_month.isoformat())
 
     # Revenue stats from completed rides
     completed_today = await db_supabase.get_rows(
@@ -1339,13 +1355,13 @@ async def admin_get_ride_stats():
     for i in range(13, -1, -1):
         day_start = today_start - timedelta(days=i)
         day_end = day_start + timedelta(days=1)
-        count = await db_supabase.get_ride_count_by_date_range(
-            day_start.isoformat(), day_end.isoformat()
+        count = await db_supabase.get_ride_count_by_date_range(day_start.isoformat(), day_end.isoformat())
+        daily_chart.append(
+            {
+                "date": day_start.strftime("%b %d"),
+                "rides": count,
+            }
         )
-        daily_chart.append({
-            "date": day_start.strftime("%b %d"),
-            "rides": count,
-        })
 
     return {
         "today_count": today_count,
@@ -1430,7 +1446,8 @@ async def admin_get_ride_invoice(ride_id: str):
         # Filters out `online_idle` and any other pre-trip wandering so the
         # invoice cannot leak the driver's unrelated movements.
         "location_trail": [
-            p for p in (ride.get("location_trail") or [])
+            p
+            for p in (ride.get("location_trail") or [])
             if p.get("tracking_phase") in ("navigating_to_pickup", "trip_in_progress")
         ],
     }
@@ -1462,9 +1479,11 @@ async def admin_get_ride_route_map(
 
     # Only include ride-relevant phases (same privacy filter as invoice).
     trail = [
-        p for p in (ride.get("location_trail") or [])
+        p
+        for p in (ride.get("location_trail") or [])
         if p.get("tracking_phase") in ("navigating_to_pickup", "trip_in_progress")
-        and p.get("lat") is not None and p.get("lng") is not None
+        and p.get("lat") is not None
+        and p.get("lng") is not None
     ]
 
     # Sample to keep the URL under Google's ~8192 char limit.
@@ -1509,7 +1528,7 @@ async def admin_get_ride_route_map(
         )
     except httpx.HTTPError as e:
         logger.warning(f"Static Maps fetch error for ride {ride_id}: {e}")
-        raise HTTPException(status_code=502, detail="Failed to fetch route map")
+        raise HTTPException(status_code=502, detail="Failed to fetch route map") from e
 
 
 class FlagRequest(BaseModel):
@@ -1590,12 +1609,15 @@ class ComplaintResolveRequest(BaseModel):
 @admin_router.put("/complaints/{complaint_id}/resolve")
 async def admin_resolve_complaint(complaint_id: str, req: ComplaintResolveRequest):
     """Resolve or dismiss a complaint."""
-    result = await db_supabase.resolve_complaint(complaint_id, {
-        "status": req.status,
-        "resolution": req.resolution,
-        "resolved_by": "admin",
-        "updated_at": datetime.utcnow().isoformat(),
-    })
+    result = await db_supabase.resolve_complaint(
+        complaint_id,
+        {
+            "status": req.status,
+            "resolution": req.resolution,
+            "resolved_by": "admin",
+            "updated_at": datetime.utcnow().isoformat(),
+        },
+    )
     if not result:
         raise HTTPException(status_code=404, detail="Complaint not found")
     return result
@@ -1646,10 +1668,13 @@ async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
                     {"type": "lost_and_found", "ride_id": ride_id},
                 )
                 # Update status to driver_notified
-                await db_supabase.update_lost_and_found(item["id"], {
-                    "status": "driver_notified",
-                    "notified_at": datetime.utcnow().isoformat(),
-                })
+                await db_supabase.update_lost_and_found(
+                    item["id"],
+                    {
+                        "status": "driver_notified",
+                        "notified_at": datetime.utcnow().isoformat(),
+                    },
+                )
     except Exception as e:
         logger.warning(f"Failed to send lost item notification: {e}")
 
@@ -1685,9 +1710,7 @@ async def admin_list_flags(
     offset: int = 0,
 ):
     """List all flags with optional pagination."""
-    flags = await db_supabase.get_rows(
-        "flags", order="created_at", desc=True, limit=limit, offset=offset
-    )
+    flags = await db_supabase.get_rows("flags", order="created_at", desc=True, limit=limit, offset=offset)
     return flags
 
 
@@ -1697,9 +1720,7 @@ async def admin_list_lost_and_found(
     offset: int = 0,
 ):
     """List all lost and found items."""
-    items = await db_supabase.get_rows(
-        "lost_and_found", order="created_at", desc=True, limit=limit, offset=offset
-    )
+    items = await db_supabase.get_rows("lost_and_found", order="created_at", desc=True, limit=limit, offset=offset)
     return items
 
 
@@ -1737,19 +1758,10 @@ async def admin_delete_lost_item(item_id: str):
     return {"message": "Item deleted"}
 
 
-@admin_router.delete("/disputes/{dispute_id}")
-async def admin_delete_dispute(dispute_id: str):
-    """Delete a dispute."""
-    await db_supabase.delete_one("disputes", {"id": dispute_id})
-    return {"message": "Dispute deleted"}
-
-
 @admin_router.get("/complaints")
 async def admin_list_complaints(limit: int = 100, offset: int = 0):
     """List all complaints."""
-    return await db_supabase.get_rows(
-        "complaints", order="created_at", desc=True, limit=limit, offset=offset
-    )
+    return await db_supabase.get_rows("complaints", order="created_at", desc=True, limit=limit, offset=offset)
 
 
 @admin_router.delete("/complaints/{complaint_id}")
@@ -1762,9 +1774,7 @@ async def admin_delete_complaint(complaint_id: str):
 @admin_router.get("/drivers/{driver_id}/rides")
 async def admin_get_driver_rides(driver_id: str):
     """Get all rides for a specific driver."""
-    rides = await db.get_rows(
-        "rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=500
-    )
+    rides = await db.get_rows("rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=500)
     return rides
 
 
@@ -1886,9 +1896,7 @@ async def admin_get_users(
             {"phone": {"$regex": search, "$options": "i"}},
         ]
 
-    users = await db.get_rows(
-        "users", filters, order="created_at", desc=True, limit=limit, offset=offset
-    )
+    users = await db.get_rows("users", filters, order="created_at", desc=True, limit=limit, offset=offset)
     return users
 
 
@@ -1900,9 +1908,7 @@ async def admin_get_user_details(user_id: str):
         raise HTTPException(status_code=404, detail="User not found")
 
     # Get user's recent rides
-    rides = await db.get_rows(
-        "rides", {"rider_id": user_id}, order="created_at", desc=True, limit=10
-    )
+    rides = await db.get_rows("rides", {"rider_id": user_id}, order="created_at", desc=True, limit=10)
 
     return {
         **user,
@@ -1918,9 +1924,7 @@ async def admin_update_user_status(user_id: str, status_data: Dict[str, Any]):
     new_status = status_data.get("status")
 
     if new_status not in valid_status:
-        raise HTTPException(
-            status_code=400, detail=f"Invalid status. Must be one of: {valid_status}"
-        )
+        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_status}")
 
     await db.users.update_one(
         {"id": user_id},
@@ -1935,9 +1939,7 @@ async def admin_update_user_status(user_id: str, status_data: Dict[str, Any]):
 @admin_router.get("/promotions")
 async def admin_get_promotions():
     """Get all promotions/discount codes."""
-    promotions = await db.get_rows(
-        "promotions", order="created_at", desc=True, limit=500
-    )
+    promotions = await db.get_rows("promotions", order="created_at", desc=True, limit=500)
     return promotions
 
 
@@ -2081,7 +2083,16 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
     # Promo counts
     total_codes = len([p for p in all_promos if p.get("promo_type") != "private"])
     active_codes = len([p for p in all_promos if p.get("promo_type") != "private" and p.get("is_active")])
-    expired_codes = len([p for p in all_promos if p.get("promo_type") != "private" and not p.get("is_active") and p.get("expiry_date") and p.get("expiry_date", "") < now.isoformat()])
+    expired_codes = len(
+        [
+            p
+            for p in all_promos
+            if p.get("promo_type") != "private"
+            and not p.get("is_active")
+            and p.get("expiry_date")
+            and p.get("expiry_date", "") < now.isoformat()
+        ]
+    )
     total_private = len([p for p in all_promos if p.get("promo_type") == "private"])
     active_private = len([p for p in all_promos if p.get("promo_type") == "private" and p.get("is_active")])
 
@@ -2146,9 +2157,7 @@ async def admin_update_promotion(promotion_id: str, promotion: Dict[str, Any]):
         "min_total_rides",
         "max_total_rides",
     ]
-    updates = {
-        k: v for k, v in promotion.items() if k in allowed_fields and v is not None
-    }
+    updates = {k: v for k, v in promotion.items() if k in allowed_fields and v is not None}
 
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
@@ -2255,9 +2264,7 @@ async def admin_delete_dispute(dispute_id: str):
 @admin_router.get("/tickets")
 async def admin_get_tickets():
     """Get all support tickets."""
-    tickets = await db.get_rows(
-        "support_tickets", order="created_at", desc=True, limit=500
-    )
+    tickets = await db.get_rows("support_tickets", order="created_at", desc=True, limit=500)
     return tickets
 
 
@@ -2289,9 +2296,7 @@ async def admin_get_ticket_details(ticket_id: str):
         raise HTTPException(status_code=404, detail="Ticket not found")
 
     # Get ticket messages
-    messages = await db.get_rows(
-        "support_messages", {"ticket_id": ticket_id}, order="created_at", limit=100
-    )
+    messages = await db.get_rows("support_messages", {"ticket_id": ticket_id}, order="created_at", limit=100)
 
     return {**ticket, "messages": messages}
 
@@ -2463,9 +2468,7 @@ async def admin_get_notifications(
     notifications = await db.get_rows(
         "notifications",
         filters,
-        order="created_at"
-        if "created_at" in (await db.notifications.find_one({}) or {})
-        else "sent_at",
+        order="created_at" if "created_at" in (await db.notifications.find_one({}) or {}) else "sent_at",
         desc=True,
         limit=limit,
         offset=offset,
@@ -2479,9 +2482,7 @@ async def admin_get_notifications(
 @admin_router.get("/areas/{area_id}/fees")
 async def admin_get_area_fees(area_id: str):
     """Get all fees for a service area."""
-    fees = await db.get_rows(
-        "area_fees", {"service_area_id": area_id}, order="created_at", limit=100
-    )
+    fees = await db.get_rows("area_fees", {"service_area_id": area_id}, order="created_at", limit=100)
     return fees
 
 
@@ -2530,7 +2531,15 @@ async def admin_get_area_tax(area_id: str):
     """Get tax configuration for a service area."""
     area = await db.service_areas.find_one({"id": area_id})
     if not area:
-        return {"service_area_id": area_id, "gst_enabled": True, "gst_rate": 5.0, "pst_enabled": False, "pst_rate": 0, "hst_enabled": False, "hst_rate": 0}
+        return {
+            "service_area_id": area_id,
+            "gst_enabled": True,
+            "gst_rate": 5.0,
+            "pst_enabled": False,
+            "pst_rate": 0,
+            "hst_enabled": False,
+            "hst_rate": 0,
+        }
     return {
         "service_area_id": area_id,
         "gst_enabled": area.get("gst_enabled", True),
@@ -2601,9 +2610,7 @@ async def admin_update_surge_pricing(area_id: str, surge: Dict[str, Any]):
 
     existing = await db.surge_pricing.find_one({"service_area_id": area_id})
     if existing:
-        await db.surge_pricing.update_one(
-            {"service_area_id": area_id}, {"$set": surge_doc}
-        )
+        await db.surge_pricing.update_one({"service_area_id": area_id}, {"$set": surge_doc})
     else:
         await db.surge_pricing.insert_one(surge_doc)
 
@@ -2639,9 +2646,7 @@ async def admin_get_driver_location_trail(
 @admin_router.get("/documents/requirements")
 async def admin_get_document_requirements():
     """Get all document requirements."""
-    requirements = await db.get_rows(
-        "document_requirements", order="created_at", limit=100
-    )
+    requirements = await db.get_rows("document_requirements", order="created_at", limit=100)
     return requirements or []
 
 
@@ -2653,21 +2658,15 @@ async def admin_create_document_requirement(requirement: Dict[str, Any]):
         "description": requirement.get("description", ""),
         "document_type": requirement.get("document_type"),
         "is_required": requirement.get("is_required", True),
-        "applicable_to": requirement.get(
-            "applicable_to", "driver"
-        ),  # driver, rider, vehicle
+        "applicable_to": requirement.get("applicable_to", "driver"),  # driver, rider, vehicle
         "created_at": datetime.utcnow().isoformat(),
     }
     row = await db.document_requirements.insert_one(doc)
-    return {
-        "requirement_id": str(row.get("id") if row and isinstance(row, dict) else "")
-    }
+    return {"requirement_id": str(row.get("id") if row and isinstance(row, dict) else "")}
 
 
 @admin_router.put("/documents/requirements/{requirement_id}")
-async def admin_update_document_requirement(
-    requirement_id: str, requirement: Dict[str, Any]
-):
+async def admin_update_document_requirement(requirement_id: str, requirement: Dict[str, Any]):
     """Update a document requirement."""
     updates = {}
     if requirement.get("name") is not None:
@@ -2683,9 +2682,7 @@ async def admin_update_document_requirement(
 
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
-        await db.document_requirements.update_one(
-            {"id": requirement_id}, {"$set": updates}
-        )
+        await db.document_requirements.update_one({"id": requirement_id}, {"$set": updates})
     return {"message": "Document requirement updated"}
 
 
@@ -2764,9 +2761,7 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
     new_expiry_iso: Optional[str] = None
     if expiry_raw:
         try:
-            new_expiry_iso = datetime.fromisoformat(
-                str(expiry_raw).replace("Z", "+00:00")
-            ).isoformat()
+            new_expiry_iso = datetime.fromisoformat(str(expiry_raw).replace("Z", "+00:00")).isoformat()
         except ValueError:
             new_expiry_iso = None
 
@@ -2790,7 +2785,7 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
         )
     except Exception as e:
         logger.error(f"Failed to update driver_document {document_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update document: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update document: {e}") from e
 
     # On approval, propagate the expiry to the legacy drivers.* column so the
     # go-online check stops blocking based on stale onboarding-time values.
@@ -2799,15 +2794,11 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
 
         req_row = None
         try:
-            req_row = await db.document_requirements.find_one(
-                {"id": existing.get("requirement_id")}
-            )
+            req_row = await db.document_requirements.find_one({"id": existing.get("requirement_id")})
         except Exception:
             req_row = None
 
-        legacy_field = _legacy_expiry_field_for_requirement(
-            req_row.get("name") if req_row else None
-        )
+        legacy_field = _legacy_expiry_field_for_requirement(req_row.get("name") if req_row else None)
         if legacy_field:
             # If admin did not supply a new expiry, clear the stale legacy
             # value (None) so the go-online check skips it instead of
@@ -2824,8 +2815,7 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
                 )
             except Exception as e:
                 logger.warning(
-                    f"Could not update legacy expiry field {legacy_field} "
-                    f"for driver {existing.get('driver_id')}: {e}"
+                    f"Could not update legacy expiry field {legacy_field} for driver {existing.get('driver_id')}: {e}"
                 )
 
     # After approving, check if this driver has no more pending docs → clear needs_review
@@ -2846,13 +2836,14 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
                             {"id": driver_id},
                             {"$set": {"status": "active", "is_verified": True}},
                         )
-                except Exception:
+                except Exception:  # noqa: S110
                     pass
 
     # Log to activity timeline
     doc_type = existing.get("document_type", "Document")
     await _log_driver_activity(
-        existing.get("driver_id", ""), f"document_{status}",
+        existing.get("driver_id", ""),
+        f"document_{status}",
         f"Document {status}: {doc_type}",
         rejection_reason or "",
         {"document_id": document_id, "document_type": doc_type, "status": status},
@@ -2898,9 +2889,7 @@ async def admin_get_heatmap_data(
     if service_area_id:
         query_filters["service_area_id"] = service_area_id
 
-    rides = await db.get_rows(
-        "rides", query_filters, order="created_at", desc=True, limit=10000
-    )
+    rides = await db.get_rows("rides", query_filters, order="created_at", desc=True, limit=10000)
 
     pickup_points = []
     dropoff_points = []
@@ -2978,9 +2967,7 @@ async def admin_update_heatmap_settings(data: Dict[str, Any]):
     existing = await db.settings.find_one({"id": _HEATMAP_SETTINGS_ID})
     if existing:
         update_fields = {k: v for k, v in payload.items() if k != "id"}
-        await db.settings.update_one(
-            {"id": _HEATMAP_SETTINGS_ID}, {"$set": update_fields}
-        )
+        await db.settings.update_one({"id": _HEATMAP_SETTINGS_ID}, {"$set": update_fields})
     else:
         await db.settings.insert_one(payload)
 
@@ -3064,9 +3051,7 @@ async def list_staff(authorization: Optional[str] = Header(None)):
 
 
 @admin_router.post("/staff")
-async def create_staff(
-    req: StaffCreateRequest, authorization: Optional[str] = Header(None)
-):
+async def create_staff(req: StaffCreateRequest, authorization: Optional[str] = Header(None)):
     """Create a new staff member with role-based module access."""
     import hashlib
 
@@ -3341,23 +3326,27 @@ async def admin_get_subscription_stats(
         day = range_start + timedelta(days=i)
         day_key = day.strftime("%Y-%m-%d")
         day_label = day.strftime("%b %d")
-        revenue_chart.append({"date": day_label, "date_raw": day_key, "amount": round(daily_revenue.get(day_key, 0), 2)})
+        revenue_chart.append(
+            {"date": day_label, "date_raw": day_key, "amount": round(daily_revenue.get(day_key, 0), 2)}
+        )
         subscribers_chart.append({"date": day_label, "date_raw": day_key, "count": daily_new_subs.get(day_key, 0)})
 
     # Transaction list (in range, enriched)
     transactions = []
     for s in sorted(in_range, key=lambda x: x.get("created_at", ""), reverse=True):
-        transactions.append({
-            "id": s.get("id"),
-            "driver_id": s.get("driver_id"),
-            "driver_name": drivers_map.get(s.get("driver_id"), s.get("driver_id", "")[:8]),
-            "plan_name": s.get("plan_name") or plan_map.get(s.get("plan_id", ""), {}).get("name", "Unknown"),
-            "price": float(s.get("price") or 0),
-            "status": s.get("status", "unknown"),
-            "started_at": s.get("started_at"),
-            "expires_at": s.get("expires_at"),
-            "created_at": s.get("created_at"),
-        })
+        transactions.append(
+            {
+                "id": s.get("id"),
+                "driver_id": s.get("driver_id"),
+                "driver_name": drivers_map.get(s.get("driver_id"), s.get("driver_id", "")[:8]),
+                "plan_name": s.get("plan_name") or plan_map.get(s.get("plan_id", ""), {}).get("name", "Unknown"),
+                "price": float(s.get("price") or 0),
+                "status": s.get("status", "unknown"),
+                "started_at": s.get("started_at"),
+                "expires_at": s.get("expires_at"),
+                "created_at": s.get("created_at"),
+            }
+        )
 
     return {
         "stats": {
@@ -3376,9 +3365,11 @@ async def admin_get_subscription_stats(
             "daily_subscribers": subscribers_chart,
         },
         "transactions": transactions,
-        "service_areas": [{"id": a["id"], "name": a.get("name", "Unknown")}
-                          for a in await db.get_rows("service_areas", order="name", limit=200)
-                          if not a.get("parent_service_area_id")],
+        "service_areas": [
+            {"id": a["id"], "name": a.get("name", "Unknown")}
+            for a in await db.get_rows("service_areas", order="name", limit=200)
+            if not a.get("parent_service_area_id")
+        ],
     }
 
 
@@ -3394,9 +3385,7 @@ async def get_audit_logs(limit: int = Query(50), offset: int = Query(0)):
     return logs
 
 
-async def log_audit(
-    action: str, entity_type: str, entity_id: str, user_email: str, details: str = ""
-):
+async def log_audit(action: str, entity_type: str, entity_id: str, user_email: str, details: str = ""):
     """Record an audit log entry. Call from admin endpoints."""
     await db.audit_logs.insert_one(
         {
@@ -3480,7 +3469,10 @@ async def admin_send_cloud_message(payload: Dict[str, Any]):
         await db.cloud_messages.insert_one(doc)
     except Exception as e:
         logger.error(f"Failed to insert cloud message: {e}")
-        raise HTTPException(status_code=500, detail="Failed to save message. The cloud_messages table may not exist yet. Please run migration 06_cloud_messaging.sql.")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to save message. The cloud_messages table may not exist yet. Please run migration 06_cloud_messaging.sql.",
+        ) from e
     return {"success": True, "message": doc}
 
 

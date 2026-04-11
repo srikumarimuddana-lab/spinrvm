@@ -7,6 +7,7 @@ This module provides configurable rate limiting with support for:
 - Per-endpoint limits
 - Redis-backed distributed limiting (for production)
 """
+
 import hashlib
 import time
 from functools import wraps
@@ -34,6 +35,7 @@ default_limiter = Limiter(
 # Custom Key Functions
 # ============================================================================
 
+
 def get_client_identifier(request: Request) -> str:
     """
     Get a unique client identifier combining IP and user info.
@@ -44,8 +46,8 @@ def get_client_identifier(request: Request) -> str:
     3. IP address (fallback)
     """
     # Try to get user ID from request state (set by auth middleware)
-    if hasattr(request.state, 'user') and request.state.user:
-        user_id = request.state.user.get('id')
+    if hasattr(request.state, "user") and request.state.user:
+        user_id = request.state.user.get("id")
         if user_id:
             return f"user:{user_id}"
 
@@ -54,7 +56,7 @@ def get_client_identifier(request: Request) -> str:
         pass
         # Note: This is a best-effort attempt, body may already be consumed
         # For actual phone-based limiting, apply decorator directly with phone param
-    except Exception:
+    except Exception:  # noqa: S110
         pass
 
     # Fallback to IP
@@ -64,7 +66,7 @@ def get_client_identifier(request: Request) -> str:
 def get_phone_based_key(request: Request) -> str:
     """Get rate limit key based on phone number for OTP endpoints."""
     # Try to extract phone from path or query params
-    phone = request.path_params.get('phone') or request.query_params.get('phone')
+    phone = request.path_params.get("phone") or request.query_params.get("phone")
     if phone:
         # Hash the phone for privacy in logs
         phone_hash = hashlib.sha256(phone.encode()).hexdigest()[:16]
@@ -78,11 +80,8 @@ def get_phone_based_key(request: Request) -> str:
 # Rate Limit Decorators
 # ============================================================================
 
-def rate_limit_auth(
-    requests: int = 5,
-    period: int = 60,
-    key_func: Callable = get_client_identifier
-):
+
+def rate_limit_auth(requests: int = 5, period: int = 60, key_func: Callable = get_client_identifier):
     """
     Rate limit decorator for authentication endpoints.
 
@@ -91,6 +90,7 @@ def rate_limit_auth(
         period: Time period in seconds
         key_func: Function to extract the rate limit key
     """
+
     def decorator(func: Callable):
         @wraps(func)
         async def wrapper(*args, **kwargs):
@@ -99,10 +99,7 @@ def rate_limit_auth(
             try:
                 return await func(*args, **kwargs)
             except RateLimitExceeded:
-                logger.warning(
-                    f"Rate limit exceeded for {key_func.__name__}: "
-                    f"{requests} requests per {period}s"
-                )
+                logger.warning(f"Rate limit exceeded for {key_func.__name__}: {requests} requests per {period}s")
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail={
@@ -110,15 +107,17 @@ def rate_limit_auth(
                         "message": f"Too many requests. Please wait {period} seconds before trying again.",
                         "retry_after": period,
                         "limit": requests,
-                        "period": period
+                        "period": period,
                     },
                     headers={
                         "Retry-After": str(period),
                         "X-RateLimit-Limit": str(requests),
-                        "X-RateLimit-Remaining": "0"
-                    }
-                )
+                        "X-RateLimit-Remaining": "0",
+                    },
+                ) from None
+
         return wrapper
+
     return decorator
 
 
@@ -152,6 +151,7 @@ admin_rate_limit = default_limiter.limit("100/minute")
 # Rate Limit Exceeded Handler
 # ============================================================================
 
+
 async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> Dict[str, Any]:
     """
     Custom handler for rate limit exceeded errors.
@@ -159,7 +159,7 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
     Returns a structured JSON response with retry information.
     """
     # Calculate retry time from the exception
-    retry_after = getattr(exc, 'retry_after', 60)
+    retry_after = getattr(exc, "retry_after", 60)
 
     logger.warning(
         f"Rate limit exceeded | "
@@ -173,13 +173,14 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
         "error": "rate_limit_exceeded",
         "message": "Too many requests. Please slow down and try again later.",
         "retry_after": retry_after,
-        "documentation_url": "https://spinr.app/docs/rate-limits"
+        "documentation_url": "https://spinr.app/docs/rate-limits",
     }
 
 
 # ============================================================================
 # Sliding Window Rate Limiter (Redis-backed for production)
 # ============================================================================
+
 
 class RedisRateLimiter:
     """
@@ -199,6 +200,7 @@ class RedisRateLimiter:
         if self._redis is None:
             try:
                 import redis.asyncio as redis
+
                 self._redis = redis.from_url(self.redis_url)
                 await self._redis.ping()
                 logger.info("Connected to Redis for rate limiting")
@@ -210,12 +212,7 @@ class RedisRateLimiter:
                 self._redis = "memory"
         return self._redis
 
-    async def is_rate_limited(
-        self,
-        key: str,
-        limit: int = None,
-        window: int = None
-    ) -> tuple[bool, int]:
+    async def is_rate_limited(self, key: str, limit: int = None, window: int = None) -> tuple[bool, int]:
         """
         Check if a key is rate limited.
 
@@ -262,7 +259,7 @@ class RedisRateLimiter:
     def _memory_check(self, key: str, limit: int, window: int) -> tuple[bool, int]:
         """In-memory fallback (not thread-safe, use only for development)."""
         # This is a simple implementation - in production use Redis
-        if not hasattr(self, '_memory_store'):
+        if not hasattr(self, "_memory_store"):
             self._memory_store: Dict[str, list] = {}
 
         now = time.time()
@@ -270,9 +267,7 @@ class RedisRateLimiter:
 
         # Clean old entries
         if key in self._memory_store:
-            self._memory_store[key] = [
-                t for t in self._memory_store[key] if t > window_start
-            ]
+            self._memory_store[key] = [t for t in self._memory_store[key] if t > window_start]
         else:
             self._memory_store[key] = []
 
@@ -291,6 +286,7 @@ class RedisRateLimiter:
 # Integration with FastAPI
 # ============================================================================
 
+
 def init_rate_limiting(app):
     """
     Initialize rate limiting for a FastAPI application.
@@ -303,10 +299,7 @@ def init_rate_limiting(app):
     app.state.limiter = default_limiter
 
     # Add exception handler
-    app.add_exception_handler(
-        RateLimitExceeded,
-        rate_limit_exceeded_handler
-    )
+    app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
     logger.info("Rate limiting initialized")
 

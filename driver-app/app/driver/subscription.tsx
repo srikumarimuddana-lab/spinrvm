@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  ActivityIndicator, Alert, Platform,
+  ActivityIndicator, Alert, Platform, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -41,6 +41,41 @@ export default function SubscriptionScreen() {
   const [subscribing, setSubscribing] = useState<string | null>(null);
 
   useEffect(() => { loadData(); }, []);
+
+  // Handle deep-link return from Stripe Checkout.
+  // URL format: spinr-driver://subscription/success?session_id=cs_xxx
+  useEffect(() => {
+    const handleUrl = async (event: { url: string }) => {
+      const url = event.url;
+      if (!url.includes('subscription/success')) return;
+
+      const match = url.match(/session_id=([^&]+)/);
+      if (!match) return;
+      const sessionId = match[1];
+
+      setLoading(true);
+      try {
+        const res = await api.get(`/drivers/subscription/verify-session?session_id=${sessionId}`);
+        if (res.data?.status === 'active') {
+          Alert.alert('Payment Successful!', 'Your Spinr Pass is now active. Go online and start earning!');
+        } else {
+          Alert.alert('Processing...', 'Your payment is being confirmed. This may take a moment.');
+        }
+      } catch (e) {
+        console.log('[Subscription] verify-session error:', e);
+      }
+      loadData();
+    };
+
+    const sub = Linking.addEventListener('url', handleUrl);
+
+    // Also check if the app was opened via the URL (cold start)
+    Linking.getInitialURL().then((url) => {
+      if (url) handleUrl({ url });
+    });
+
+    return () => sub.remove();
+  }, []);
 
   const loadData = async () => {
     setLoading(true);
@@ -90,9 +125,44 @@ export default function SubscriptionScreen() {
   const doSubscribe = async (plan: Plan) => {
     setSubscribing(plan.id);
     try {
-      await api.post('/drivers/subscription/subscribe', { plan_id: plan.id });
-      Alert.alert('Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`);
-      loadData();
+      const res = await api.post('/drivers/subscription/subscribe', { plan_id: plan.id });
+
+      if (res.data?.checkout_url) {
+        // Stripe Checkout path — open the payment page in the browser.
+        // After payment, Stripe redirects to spinr-driver://subscription/success
+        // which brings the driver back to the app.
+        await Linking.openURL(res.data.checkout_url);
+
+        // The user is now in the browser paying. When they come back
+        // (via deep-link), the app will call verify-session. For now
+        // we poll briefly to catch the webhook activation.
+        // G11: Retry verification 3 times over 30s instead of a single 5s
+        // attempt. Stripe webhooks can take 5-15s depending on network and
+        // event queue depth; a single 5s poll often missed the activation.
+        const sessionId = res.data.session_id;
+        if (sessionId) {
+          const retryDelays = [5000, 10000, 15000]; // 5s, 10s, 15s (cumulative ~30s)
+          for (const delay of retryDelays) {
+            await new Promise(r => setTimeout(r, delay));
+            try {
+              const verifyRes = await api.get(`/drivers/subscription/verify-session?session_id=${sessionId}`);
+              if (verifyRes.data?.status === 'active') {
+                Alert.alert('Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`);
+                loadData();
+                return;
+              }
+            } catch { /* keep retrying */ }
+          }
+          // All retries exhausted — still pending. The deep-link handler
+          // or next screen load will catch it.
+          Alert.alert('Processing...', 'Your payment is being confirmed. This may take a moment.');
+          loadData();
+        }
+      } else {
+        // Dev/test mode — subscription activated immediately
+        Alert.alert('Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`);
+        loadData();
+      }
     } catch (e: any) {
       Alert.alert('Error', e.response?.data?.detail || 'Failed to subscribe');
     } finally { setSubscribing(null); }

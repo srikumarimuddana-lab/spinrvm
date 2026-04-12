@@ -35,8 +35,10 @@ export default function RideStatusScreen() {
   useEffect(() => {
     if (rideId) {
       fetchRide(rideId);
-      // Poll for updates
-      const interval = setInterval(() => fetchRide(rideId), 3000);
+      // Poll as a fallback. The WebSocket client in
+      // hooks/useRiderSocket.ts delivers ride-state updates in
+      // real-time, so this only fires if the WS drops.
+      const interval = setInterval(() => fetchRide(rideId), 15000);
       return () => clearInterval(interval);
     }
   }, [rideId]);

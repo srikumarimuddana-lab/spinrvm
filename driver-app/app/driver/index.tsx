@@ -15,6 +15,8 @@ import {
 import { useDriverDashboard } from '../../hooks/useDriverDashboard';
 import { CarMarker } from '../../components/CarMarker';
 import { SOSButton } from '@shared/components/SOSButton';
+import { OfflineBanner } from '@shared/components/OfflineBanner';
+import { useLanguageStore } from '../../store/languageStore';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 
@@ -42,6 +44,7 @@ export default function DriverDashboard() {
     activeRide,
     completedRide,
     countdownSeconds,
+    configuredCountdownSeconds,
     setCountdown,
     acceptRide,
     declineRide,
@@ -53,7 +56,10 @@ export default function DriverDashboard() {
     resetRideState,
     clearError,
     earnings,
+    rateRider,
   } = useDriverStore();
+
+  const { t } = useLanguageStore();
 
   const {
     isOnline,
@@ -72,6 +78,21 @@ export default function DriverDashboard() {
 
   // Route polyline coordinates for active rides
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
+
+  // Live ETA from Google Directions — updated every 30s via the
+  // directionsKey mechanism below.
+  const [routeEtaMinutes, setRouteEtaMinutes] = useState<number | null>(null);
+  const [routeDistanceKm, setRouteDistanceKm] = useState<number | null>(null);
+
+  // Force MapViewDirections to re-compute every 30 seconds by changing
+  // a key prop. This gives the driver a road-aware ETA that accounts
+  // for traffic and route changes without hammering the Directions API.
+  const [directionsKey, setDirectionsKey] = useState(0);
+  useEffect(() => {
+    if (rideState !== 'navigating_to_pickup' && rideState !== 'trip_in_progress') return;
+    const interval = setInterval(() => setDirectionsKey((k) => k + 1), 30000);
+    return () => clearInterval(interval);
+  }, [rideState]);
 
   // Demand heatmap — controlled by admin per service area
   const [heatmapPoints, setHeatmapPoints] = useState<{ latitude: number; longitude: number; weight: number }[]>([]);
@@ -127,9 +148,12 @@ export default function DriverDashboard() {
     setCountdownState(countdownSeconds);
   }, [countdownSeconds]);
 
-  // Clear route when ride state changes (new phase = new route)
+  // Clear route + ETA when ride state changes (new phase = new route)
   useEffect(() => {
     setRouteCoords([]);
+    setRouteEtaMinutes(null);
+    setRouteDistanceKm(null);
+    setDirectionsKey(0);
   }, [rideState]);
 
   // Error handling
@@ -186,7 +210,12 @@ export default function DriverDashboard() {
   // Ride Offer Panel
   const renderRideOfferPanel = () => {
     if (!incomingRide) return null;
-    const progress = countdown / 15;
+    // Timer-bar progress tracks remaining countdown as a fraction of the
+    // configured max. Previously this was `/ 15` hardcoded, so bumping
+    // ride_offer_timeout_seconds in backend settings would have left
+    // the visual bar stuck past 100%.
+    const maxCountdown = configuredCountdownSeconds || 15;
+    const progress = Math.max(0, Math.min(1, countdown / maxCountdown));
     const fare = (incomingRide.fare || 0).toFixed(2);
 
     return (
@@ -203,14 +232,14 @@ export default function DriverDashboard() {
               <Text style={styles.countdownText}>{countdown}</Text>
             </View>
             <View style={{ flex: 1, marginLeft: 14 }}>
-              <Text style={styles.rideOfferTitle}>New Ride Request!</Text>
+              <Text style={styles.rideOfferTitle}>{t('rideOffer.newRideRequest')}</Text>
               <View style={styles.rideTypeBadge}>
                 <Ionicons name="car-sport" size={12} color={COLORS.accent} />
-                <Text style={styles.rideTypeText}>Standard Ride</Text>
+                <Text style={styles.rideTypeText}>{t('rideOffer.standardRide')}</Text>
               </View>
             </View>
             <View style={styles.fareContainer}>
-              <Text style={styles.fareLabel}>Fare</Text>
+              <Text style={styles.fareLabel}>{t('rideOffer.fare')}</Text>
               <Text style={styles.fareAmount}>${fare}</Text>
             </View>
           </View>
@@ -224,16 +253,16 @@ export default function DriverDashboard() {
             </View>
             <View style={styles.routeDetails}>
               <View style={styles.routeRow}>
-                <Text style={styles.routeLabel}>PICKUP</Text>
+                <Text style={styles.routeLabel}>{t('rideOffer.pickup')}</Text>
                 <Text style={styles.routeAddress} numberOfLines={1}>
-                  {incomingRide.pickup_address || 'Pickup location'}
+                  {incomingRide.pickup_address || t('rideOffer.pickupLocation')}
                 </Text>
               </View>
               <View style={styles.routeDivider} />
               <View style={styles.routeRow}>
-                <Text style={styles.routeLabel}>DROP-OFF</Text>
+                <Text style={styles.routeLabel}>{t('rideOffer.dropoff')}</Text>
                 <Text style={styles.routeAddress} numberOfLines={1}>
-                  {incomingRide.dropoff_address || 'Dropoff location'}
+                  {incomingRide.dropoff_address || t('rideOffer.dropoffLocation')}
                 </Text>
               </View>
             </View>
@@ -275,7 +304,7 @@ export default function DriverDashboard() {
               activeOpacity={0.8}
             >
               <Ionicons name="close-circle" size={24} color="#FF4757" />
-              <Text style={styles.declineText}>Decline</Text>
+              <Text style={styles.declineText}>{t('rideOffer.decline')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.acceptBtn}
@@ -283,7 +312,7 @@ export default function DriverDashboard() {
               activeOpacity={0.8}
             >
               <Ionicons name="checkmark-circle" size={24} color="#fff" />
-              <Text style={styles.acceptText}>Accept Ride</Text>
+              <Text style={styles.acceptText}>{t('rideOffer.acceptRide')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -295,13 +324,16 @@ export default function DriverDashboard() {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator size="large" color={COLORS.accent} />
-        <Text style={{ color: COLORS.text, marginTop: 12, fontSize: 15 }}>Getting your location...</Text>
+        <Text style={{ color: COLORS.text, marginTop: 12, fontSize: 15 }}>{t('home.gettingLocation')}</Text>
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
+      {/* Offline indicator — slides in from the top when network drops */}
+      <OfflineBanner />
+
       {/* Map */}
       <MapView
         ref={mapRef}
@@ -353,6 +385,7 @@ export default function DriverDashboard() {
           return (
             <>
               <MapViewDirections
+                key={directionsKey}
                 origin={origin}
                 destination={destination}
                 apikey={GOOGLE_MAPS_API_KEY}
@@ -360,7 +393,13 @@ export default function DriverDashboard() {
                 strokeColor="transparent"
                 onReady={(result) => {
                   setRouteCoords(result.coordinates);
-                  if (mapRef.current && result.coordinates?.length > 1) {
+                  // Capture live ETA + road-distance from the Directions API.
+                  // result.duration is in minutes, result.distance in km.
+                  if (result.duration != null) setRouteEtaMinutes(Math.round(result.duration));
+                  if (result.distance != null) setRouteDistanceKm(Math.round(result.distance * 10) / 10);
+                  // Only fit-to-coordinates on the first computation (key=0)
+                  // to avoid the map jumping every 30s.
+                  if (directionsKey === 0 && mapRef.current && result.coordinates?.length > 1) {
                     mapRef.current.fitToCoordinates(result.coordinates, {
                       edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
                       animated: true,
@@ -368,7 +407,6 @@ export default function DriverDashboard() {
                   }
                 }}
                 onError={(err) => console.log('Directions error:', err)}
-                resetOnChange={false}
               />
               {routeCoords.length > 1 && (
                 <>
@@ -455,10 +493,19 @@ export default function DriverDashboard() {
           setOtpInput={setOtpInput}
           onVerifyOTP={(otp) => verifyOTP(activeRide!.ride.id, otp)}
           onNavigate={openNavigation}
-          onArriveAtPickup={() => arriveAtPickup(activeRide!.ride.id)}
+          // Pass current coordinates so driverStore.arriveAtPickup can run
+          // its 100m haversine geofence check. Without the coords the check
+          // silently skips and drivers can mark "arrived" from anywhere.
+          onArriveAtPickup={() => arriveAtPickup(
+            activeRide!.ride.id,
+            location?.coords.latitude,
+            location?.coords.longitude,
+          )}
           onStartRide={() => startRide(activeRide!.ride.id)}
           onCompleteRide={() => completeRide(activeRide!.ride.id)}
           onCancelRide={() => cancelRide(activeRide!.ride.id)}
+          routeEtaMinutes={routeEtaMinutes}
+          routeDistanceKm={routeDistanceKm}
           slideUpAnim={slideUpAnim}
           fadeAnim={fadeAnim}
         />
@@ -467,6 +514,7 @@ export default function DriverDashboard() {
         <TripCompletedPanel
           completedRide={completedRide}
           onDone={resetRideState}
+          onRateRider={rateRider}
         />
       )}
     </View>

@@ -30,7 +30,11 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
     # CORS settings
-    ALLOWED_ORIGINS: str = "*"
+    # Comma-separated list of origins. Defaults to localhost dev ports so a
+    # fresh deploy is not wide-open. Override in .env for staging/prod.
+    # Set to "*" ONLY for local development — wildcard is rejected in production
+    # (see core/middleware.init_middleware).
+    ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:8081,http://localhost:19006"
 
     # Admin credentials
     ADMIN_EMAIL: str = "admin@spinr.ca"

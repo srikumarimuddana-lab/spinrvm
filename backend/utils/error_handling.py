@@ -434,26 +434,57 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     )
 
 
-# Origins that are always permitted for cross-origin requests. Kept in sync
-# with the `always_allowed` list in core/middleware.py. These are echoed
-# manually on error responses because the generic Exception handler runs in
-# Starlette's ServerErrorMiddleware — which sits OUTSIDE CORSMiddleware — so
-# without this, 500s come back without CORS headers and surface in the
-# browser as a CORS error instead of a real 500.
-_CORS_ALLOWED_ORIGINS = {
+# Origins that are always permitted for cross-origin requests. These are
+# echoed manually on error responses because the generic Exception handler
+# runs in Starlette's ServerErrorMiddleware — which sits OUTSIDE
+# CORSMiddleware — so without this, 500s come back without CORS headers
+# and surface in the browser as a CORS error instead of a real 500.
+#
+# Sourced from the same `settings.ALLOWED_ORIGINS` env var that
+# `core/middleware.py` reads, plus the same hardcoded always-allowed
+# list, so the two code paths can't drift. Resolved once at import
+# time since app settings don't change between restarts.
+_ALWAYS_ALLOWED = {
     "https://spinr-admin.vercel.app",
     "http://localhost:3000",
     "http://localhost:3001",
 }
 
 
+def _resolve_cors_origins() -> set[str]:
+    try:
+        from core.config import settings  # local import to avoid a hard
+                                          # dependency if utils is imported
+                                          # before the settings module is
+                                          # available (e.g. test harness).
+    except Exception:
+        return set(_ALWAYS_ALLOWED)
+
+    raw = settings.ALLOWED_ORIGINS or ""
+    env_origins = {o.strip() for o in raw.split(",") if o.strip()}
+    return env_origins | _ALWAYS_ALLOWED
+
+
+_CORS_ALLOWED_ORIGINS = _resolve_cors_origins()
+_WILDCARD = "*" in _CORS_ALLOWED_ORIGINS
+
+
 def _cors_headers_for(request: Request) -> Dict[str, str]:
     origin = request.headers.get("origin", "")
-    if origin and origin in _CORS_ALLOWED_ORIGINS:
+    if not origin:
+        return {}
+    if origin in _CORS_ALLOWED_ORIGINS:
         return {
             "Access-Control-Allow-Origin": origin,
-            "Access-Control-Allow-Credentials": "true",
+            # Wildcard + credentials is forbidden by the CORS spec; mirror
+            # core/middleware.py which disables credentials whenever the
+            # allow list contains "*".
+            **({"Access-Control-Allow-Credentials": "true"} if not _WILDCARD else {}),
             "Vary": "Origin",
+        }
+    if _WILDCARD:
+        return {
+            "Access-Control-Allow-Origin": "*",
         }
     return {}
 

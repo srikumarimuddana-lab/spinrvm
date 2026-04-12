@@ -144,6 +144,15 @@ interface RideState {
   setUserLocation: (loc: { latitude: number; longitude: number } | null) => void;
   fetchAvailablePromos: (rideFare?: number) => Promise<void>;
   applyPromo: (promo: any | null) => void;
+
+  // WebSocket-driven updates (see rider-app/hooks/useRiderSocket.ts).
+  updateDriverLocation: (lat: number, lng: number, speed?: number | null, heading?: number | null) => void;
+  applyRideStatusFromWS: (rideId: string, status: string, extra?: Record<string, any>) => void;
+
+  // Chat
+  chatMessages: any[];
+  addChatMessage: (msg: any) => void;
+  setChatMessages: (msgs: any[]) => void;
 }
 
 export const useRideStore = create<RideState>((set, get) => ({
@@ -155,6 +164,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   selectedVehicle: null,
   currentRide: null,
   currentDriver: null,
+  chatMessages: [],
   savedAddresses: [],
   recentSearches: [],
   availablePromos: [],
@@ -412,6 +422,15 @@ export const useRideStore = create<RideState>((set, get) => ({
     }
   },
 
+  addChatMessage: (msg) => {
+    const { chatMessages } = get();
+    // Deduplicate by id (WS + poll can deliver the same message).
+    if (chatMessages.some((m: any) => m.id === msg.id)) return;
+    set({ chatMessages: [...chatMessages, msg] });
+  },
+
+  setChatMessages: (msgs) => set({ chatMessages: msgs }),
+
   // Clear ONLY the live-ride fields so the rider can immediately re-book
   // using the same trip inputs after a cancellation. We deliberately keep
   // pickup / dropoff / estimates / selectedVehicle / scheduledTime because
@@ -421,6 +440,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   clearRide: () => set({
     currentRide: null,
     currentDriver: null,
+    chatMessages: [],
     error: null,
   }),
 
@@ -469,5 +489,40 @@ export const useRideStore = create<RideState>((set, get) => ({
     } catch (error: any) {
       set({ error: error.message });
     }
+  },
+
+  // ── WebSocket-driven updates ────────────────────────────────────
+
+  updateDriverLocation: (lat, lng, speed, heading) => {
+    const driver = get().currentDriver;
+    if (!driver) return;
+    // Only update the coordinate fields — leave everything else (name,
+    // rating, vehicle info) untouched.
+    set({
+      currentDriver: {
+        ...driver,
+        lat,
+        lng,
+        ...(speed !== null && speed !== undefined ? { speed } : {}),
+        ...(heading !== null && heading !== undefined ? { heading } : {}),
+      },
+    });
+  },
+
+  applyRideStatusFromWS: (rideId, status, extra) => {
+    const { currentRide } = get();
+    if (!currentRide || currentRide.id !== rideId) return;
+
+    // Apply the status transition and any extra fields (like total_fare
+    // on ride_completed). This provides an instant in-app state change
+    // while the next poll (reduced to 15 s via the WS fallback) fills
+    // in any remaining details the WS message doesn't carry.
+    set({
+      currentRide: {
+        ...currentRide,
+        status,
+        ...(extra || {}),
+      },
+    });
   },
 }));

@@ -16,6 +16,7 @@ except ImportError:
     from geo_utils import calculate_distance
     from schemas import Driver, RideRatingRequest
     from socket_manager import manager
+import asyncio
 import logging
 from datetime import datetime, timedelta
 
@@ -30,6 +31,48 @@ class RideOTPRequest(BaseModel):
 
 
 api_router = APIRouter(prefix="/drivers", tags=["Drivers"])
+
+
+@api_router.get("/config")
+async def get_driver_config(current_user: dict = Depends(get_current_user)):
+    """Return operational settings the driver-app should honor at runtime.
+
+    Driver-app constants that used to live hardcoded in
+    `driver-app/shared/config/spinr.config.ts` and
+    `driver-app/store/driverStore.ts` are now served from the backend
+    so operations can tune them per deploy without shipping a new app
+    build. Fields fall back to sensible defaults when the DB
+    `settings` row doesn't include them yet.
+
+    * ``ride_offer_timeout_seconds`` — how long a driver has to
+      accept/decline a ride offer before it auto-declines. Default 15.
+      Capped to [5, 60] so a bad admin input can't brick the UX.
+    * ``pickup_radius_meters`` — how close the driver must be to the
+      pickup point to mark "arrived" (geofence check). Default 100.
+      Capped to [10, 1000].
+    """
+    try:
+        from ..settings_loader import get_app_settings  # type: ignore
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+
+    try:
+        app_settings = await get_app_settings() or {}
+    except Exception as e:
+        logger.warning(f"get_driver_config: failed to read app_settings: {e}")
+        app_settings = {}
+
+    def _clamp(value, lo, hi, default):
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            return default
+        return max(lo, min(hi, n))
+
+    return {
+        "ride_offer_timeout_seconds": _clamp(app_settings.get("ride_offer_timeout_seconds"), 5, 60, 15),
+        "pickup_radius_meters": _clamp(app_settings.get("pickup_radius_meters"), 10, 1000, 100),
+    }
 
 
 def serialize_doc(doc):
@@ -947,80 +990,64 @@ async def get_ride_history(
 
 @api_router.post("/rides/{ride_id}/accept")
 async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """Accept a ride offer.
+
+    Uses a single atomic conditional UPDATE (see
+    ``db_supabase.claim_ride_atomic``) so two drivers racing to accept
+    the same offer cannot both succeed — the loser's UPDATE matches zero
+    rows and we return 400. This replaces an earlier read-modify-write
+    implementation that had a real time-of-check-time-of-use race: two
+    drivers reading `searching` simultaneously could both pass the
+    status check and both overwrite `driver_id`, leaving the second
+    write as the "winner" without either side knowing they raced.
+    """
+    try:
+        from ..db_supabase import claim_ride_atomic  # noqa: E402
+    except ImportError:
+        from db_supabase import claim_ride_atomic  # noqa: E402
+
     driver = await db.drivers.find_one({"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    ride = await db.rides.find_one({"id": ride_id})
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+    diag_logger.info(f"[ACCEPT] attempt ride_id={ride_id} driver_id={driver.get('id')}")
 
-    diag_logger.info(
-        f"[ACCEPT] entry ride_id={ride_id} driver_id={driver.get('id')} "
-        f"pre_status={ride.get('status')} pre_driver_id={ride.get('driver_id')}"
-    )
-
-    # Verify this driver was assigned
-    if ride.get("driver_id") != driver["id"]:
-        # Check if it's open (searching) and we can claim it?
-        # For now assume mostly assigned flow.
-        # If status is searching, we might allow claim if using broadcast.
-        if ride["status"] == "searching":
-            # Allow claim
-            pass
-        else:
-            diag_logger.info(
-                f"[ACCEPT] ride_id={ride_id} not assigned to this driver: "
-                f"ride.driver_id={ride.get('driver_id')} != this_driver.id={driver['id']} "
-                f"and status={ride.get('status')} != 'searching'"
-            )
-            raise HTTPException(status_code=400, detail="Ride not assigned to you")
-
-    await db.rides.update_one(
-        {"id": ride_id},
-        {
-            "$set": {
-                "status": "driver_accepted",
-                "driver_id": driver["id"],  # ensure set
-                "driver_accepted_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
-            }
-        },
-    )
-
-    # Verify the update landed. The RideCollection.update_one wrapper routes
-    # to db_supabase.update_ride which returns None on zero-rows-affected
-    # silently, and this handler would otherwise return {success: true} while
-    # the ride is still in its previous state — causing /drivers/rides/active
-    # to still see 'driver_assigned' (or similar) and the driver-app to render
-    # the wrong state, OR worse if some column silently blocks the write.
-    try:
-        verify_ride = await db.rides.find_one({"id": ride_id})
-    except Exception as e:
-        verify_ride = None
-        diag_logger.info(f"[ACCEPT] verify re-read failed: {e}")
-
-    diag_logger.info(
-        f"[ACCEPT] post-update ride_id={ride_id} "
-        f"post_status={verify_ride.get('status') if verify_ride else 'ROW_GONE'} "
-        f"post_driver_id={verify_ride.get('driver_id') if verify_ride else 'ROW_GONE'} "
-        f"post_driver_accepted_at={verify_ride.get('driver_accepted_at') if verify_ride else 'ROW_GONE'}"
-    )
-
-    if not verify_ride or verify_ride.get("status") != "driver_accepted":
+    claimed = await claim_ride_atomic(ride_id, driver["id"])
+    if not claimed:
+        # Distinguish "ride doesn't exist" from "ride already taken" so
+        # the driver-app can surface the right UX — driverStore.acceptRide
+        # maps the 400 with `already` in the detail into a graceful
+        # "next offer coming" toast instead of a hard error.
+        ride = await db.rides.find_one({"id": ride_id})
+        if not ride:
+            raise HTTPException(status_code=404, detail="Ride not found")
         diag_logger.info(
-            f"[ACCEPT] SILENT NO-OP: ride_id={ride_id} did not flip to "
-            f"'driver_accepted'. This will cause the driver-app to render a "
-            f"blank state because /drivers/rides/active query will mismatch."
+            f"[ACCEPT] claim rejected ride_id={ride_id} "
+            f"current_status={ride.get('status')} current_driver_id={ride.get('driver_id')}"
         )
+        raise HTTPException(status_code=400, detail="Ride already accepted by another driver")
 
-    # Notify rider
-    if ride.get("rider_id"):
+    # Re-read the now-claimed ride so we can notify the rider with fresh data.
+    ride = await db.rides.find_one({"id": ride_id})
+    diag_logger.info(
+        f"[ACCEPT] success ride_id={ride_id} driver_id={driver['id']} "
+        f"post_status={ride.get('status') if ride else 'ROW_GONE'}"
+    )
+
+    # Notify rider via both WebSocket (for the instant in-app
+    # transition) AND FCM push (so the rider still gets the update
+    # if the app was backgrounded when the driver accepted).
+    # The `data` payload lets the rider-app foreground FCM handler in
+    # app/_layout.tsx route the event without reparsing the title.
+    if ride and ride.get("rider_id"):
         await manager.send_personal_message(
             {"type": "driver_accepted", "ride_id": ride_id}, f"rider_{ride['rider_id']}"
         )
         await send_push_notification(
-            ride["rider_id"], "Driver Assigned! 🚗", "Your driver has accepted the ride and is on the way."
+            ride["rider_id"],
+            "Driver Assigned! 🚗",
+            "Your driver has accepted the ride and is on the way.",
+            data={"type": "driver_accepted", "ride_id": str(ride_id)},
         )
 
     return {"success": True}
@@ -1093,7 +1120,10 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
     if ride.get("rider_id"):
         await manager.send_personal_message({"type": "driver_arrived", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
         await send_push_notification(
-            ride["rider_id"], "Driver Arrived! 📍", "Your driver has arrived at the pickup location."
+            ride["rider_id"],
+            "Driver Arrived! 📍",
+            "Your driver has arrived at the pickup location.",
+            data={"type": "driver_arrived", "ride_id": str(ride_id)},
         )
 
     return {"success": True}
@@ -1120,7 +1150,12 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
 
     if ride.get("rider_id"):
         await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
-        await send_push_notification(ride["rider_id"], "Ride Started! ▶️", "Your ride has started. Have a safe trip!")
+        await send_push_notification(
+            ride["rider_id"],
+            "Ride Started! ▶️",
+            "Your ride has started. Have a safe trip!",
+            data={"type": "ride_started", "ride_id": str(ride_id)},
+        )
 
     return {"success": True}
 
@@ -1141,7 +1176,12 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
     ride = await db.rides.find_one({"id": ride_id})
     if ride and ride.get("rider_id"):
         await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
-        await send_push_notification(ride["rider_id"], "Ride Started! ▶️", "Your ride has started. Have a safe trip!")
+        await send_push_notification(
+            ride["rider_id"],
+            "Ride Started! ▶️",
+            "Your ride has started. Have a safe trip!",
+            data={"type": "ride_started", "ride_id": str(ride_id)},
+        )
     return {"success": True}
 
 
@@ -1294,6 +1334,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             completed_ride["rider_id"],
             "Ride Completed! ✅",
             f"Your ride has finished. Total fare: ${completed_ride.get('total_fare', ride.get('total_fare', 0))}",
+            data={"type": "ride_completed", "ride_id": str(ride_id)},
         )
 
     return serialize_doc(completed_ride)
@@ -1327,7 +1368,12 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
         await manager.send_personal_message(
             {"type": "ride_cancelled", "ride_id": ride_id, "reason": reason}, f"rider_{ride['rider_id']}"
         )
-        await send_push_notification(ride["rider_id"], "Ride Cancelled ❌", "Your driver has cancelled the ride.")
+        await send_push_notification(
+            ride["rider_id"],
+            "Ride Cancelled ❌",
+            "Your driver has cancelled the ride.",
+            data={"type": "ride_cancelled", "ride_id": str(ride_id)},
+        )
 
     return {"success": True}
 
@@ -1415,10 +1461,31 @@ async def apply_referral_code(req: ApplyReferralCodeRequest, current_user: dict 
     # Validate referral code exists (check if any driver has this code)
     ref_driver = await db.drivers.find_one({"referral_code": code})
     if not ref_driver:
-        # Check if code matches driver ID pattern
+        # Legacy fallback: allow `DRIVER<id-suffix>` format where the
+        # suffix is the last 8 chars of a driver ID. The original
+        # implementation used a `$regex` filter which (a) the Supabase
+        # translator silently dropped, so this path never matched, and
+        # (b) would have been a ReDoS vector on MongoDB.
+        #
+        # Replacement: accept only an 8-char alphanumeric suffix, then
+        # use a bounded PostgREST `.ilike()` lookup. The `%` suffix
+        # wildcard means "id ends with this string" — exactly what the
+        # original code was trying to do.
         potential_id = code.replace("DRIVER", "")
-        if len(potential_id) == 8:
-            ref_driver = await db.drivers.find_one({"id": {"$regex": f".*{potential_id}.*"}})
+        if len(potential_id) == 8 and potential_id.isalnum():
+            try:
+                from ..db_supabase import run_sync, supabase  # type: ignore
+            except ImportError:
+                from db_supabase import run_sync, supabase  # type: ignore
+
+            if supabase:
+
+                def _lookup():
+                    res = supabase.table("drivers").select("*").ilike("id", f"%{potential_id}").limit(1).execute()
+                    rows = res.data if res.data else []
+                    return rows[0] if rows else None
+
+                ref_driver = await run_sync(_lookup)
 
     if not ref_driver:
         raise HTTPException(status_code=404, detail="Invalid referral code")
@@ -1819,7 +1886,19 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
 
 @api_router.post("/subscription/subscribe")
 async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_current_user)):
-    """Subscribe driver to a plan."""
+    """Subscribe driver to a plan.
+
+    **With Stripe configured** (`stripe_secret_key` in app_settings):
+    creates a Stripe Checkout Session and returns `{checkout_url}`.
+    The driver-app opens this URL in the browser; after payment,
+    Stripe redirects back via the app's deep-link scheme and the
+    webhook activates the subscription.
+
+    **Without Stripe** (dev/internal testing): creates and activates
+    the subscription immediately with `payment_status: "paid"`, same
+    as the pre-checkout behavior. This preserves the internal test
+    flow where no real payment is needed.
+    """
     data = await request.json()
     plan_id = data.get("plan_id")
 
@@ -1837,20 +1916,99 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found or inactive")
 
-    # Check for existing active subscription
-    existing = await db.driver_subscriptions.find_one(
-        {
+    try:
+        from ..settings_loader import get_app_settings  # type: ignore
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+
+    app_settings = await get_app_settings() or {}
+    stripe_key = app_settings.get("stripe_secret_key", "")
+
+    # ── Stripe Checkout path ────────────────────────────────────
+    if stripe_key:
+        stripe.api_key = stripe_key
+
+        # Create a pending subscription row so the webhook can find it.
+        sub_id = str(uuid.uuid4())
+        now = datetime.utcnow()
+        expires = now + timedelta(days=plan.get("duration_days", 30))
+
+        pending_sub = {
+            "id": sub_id,
             "driver_id": driver["id"],
-            "status": "active",
+            "plan_id": plan["id"],
+            "plan_name": plan["name"],
+            "price": plan["price"],
+            "rides_per_day": plan.get("rides_per_day", -1),
+            "duration_days": plan.get("duration_days", 30),
+            "status": "pending",
+            "started_at": now.isoformat(),
+            "expires_at": expires.isoformat(),
+            "payment_status": "pending",
+            "created_at": now.isoformat(),
         }
-    )
-    if existing:
-        # Cancel old subscription
-        await db.driver_subscriptions.update_one(
-            {"id": existing["id"]}, {"$set": {"status": "cancelled", "cancelled_at": datetime.utcnow().isoformat()}}
+        await db.driver_subscriptions.insert_one(pending_sub)
+
+        # Stripe Checkout Session — one-time payment matching the plan price.
+        # success_url uses the driver-app's deep-link scheme so the browser
+        # bounces back into the app after payment. {CHECKOUT_SESSION_ID} is
+        # a Stripe template variable that Stripe replaces with the real ID.
+        session = stripe.checkout.Session.create(
+            mode="payment",
+            payment_method_types=["card"],
+            line_items=[
+                {
+                    "price_data": {
+                        "currency": "cad",
+                        "product_data": {
+                            "name": f"Spinr Pass — {plan['name']}",
+                            "description": f"{plan.get('duration_days', 30)}-day driver subscription",
+                        },
+                        "unit_amount": int(float(plan["price"]) * 100),  # cents
+                    },
+                    "quantity": 1,
+                }
+            ],
+            metadata={
+                "subscription_id": sub_id,
+                "driver_id": driver["id"],
+                "plan_id": plan["id"],
+            },
+            success_url="spinr-driver://subscription/success?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url="spinr-driver://subscription/cancelled",
+            customer_email=current_user.get("email"),
         )
 
-    # Create new subscription
+        # Store the Stripe session ID on the pending subscription so the
+        # webhook can match it.
+        await db.driver_subscriptions.update_one(
+            {"id": sub_id},
+            {"$set": {"stripe_session_id": session.id}},
+        )
+
+        logger.info(
+            f"[SUBSCRIBE] Checkout session created for driver {driver['id']} "
+            f"plan={plan['name']} session={session.id}"
+        )
+
+        return {
+            "success": True,
+            "checkout_url": session.url,
+            "session_id": session.id,
+            "mode": "stripe",
+        }
+
+    # ── Dev/test fallback — no Stripe key configured ────────────
+    # Check for existing active subscription
+    existing = await db.driver_subscriptions.find_one(
+        {"driver_id": driver["id"], "status": "active"}
+    )
+    if existing:
+        await db.driver_subscriptions.update_one(
+            {"id": existing["id"]},
+            {"$set": {"status": "cancelled", "cancelled_at": datetime.utcnow().isoformat()}},
+        )
+
     now = datetime.utcnow()
     expires = now + timedelta(days=plan.get("duration_days", 30))
 
@@ -1865,20 +2023,123 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
         "status": "active",
         "started_at": now.isoformat(),
         "expires_at": expires.isoformat(),
-        "payment_status": "paid",  # TODO: Stripe charge
+        "payment_status": "paid",
         "created_at": now.isoformat(),
     }
 
     await db.driver_subscriptions.insert_one(subscription)
 
-    # Update plan subscriber count
     await db.subscription_plans.update_one(
-        {"id": plan_id}, {"$set": {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1}}
+        {"id": plan_id},
+        {"$set": {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1}},
     )
 
-    logger.info(f"Driver {driver['id']} subscribed to {plan['name']} (${plan['price']})")
+    logger.info(f"[SUBSCRIBE] Dev mode: driver {driver['id']} subscribed to {plan['name']} (${plan['price']})")
 
-    return {"success": True, "subscription": subscription}
+    return {"success": True, "subscription": subscription, "mode": "dev"}
+
+
+@api_router.get("/subscription/verify-session")
+async def verify_subscription_session(
+    session_id: str = Query(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """Verify a Stripe Checkout Session and return the subscription status.
+
+    Called by the driver-app after the Stripe Checkout deep-link returns
+    to the app. The webhook may or may not have fired by this point — if
+    it has, the subscription is already active; if not, we check the
+    Stripe session directly and activate it here (idempotent).
+
+    Returns `{status: "active"}` if payment succeeded or `{status: "pending"}`
+    if Stripe hasn't confirmed yet (caller should poll).
+    """
+    sub = await db.driver_subscriptions.find_one({"stripe_session_id": session_id})
+    if not sub:
+        raise HTTPException(status_code=404, detail="Subscription session not found")
+
+    # Already activated (webhook beat us)
+    if sub.get("status") == "active" and sub.get("payment_status") == "paid":
+        return {"status": "active", "subscription": sub}
+
+    # Check with Stripe directly
+    try:
+        from ..settings_loader import get_app_settings  # type: ignore
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+
+    app_settings = await get_app_settings() or {}
+    stripe_key = app_settings.get("stripe_secret_key", "")
+    if not stripe_key:
+        return {"status": "pending"}
+
+    stripe.api_key = stripe_key
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+    except Exception as e:
+        logger.warning(f"[SUBSCRIBE] verify-session Stripe error: {e}")
+        return {"status": "pending"}
+
+    if session.payment_status == "paid":
+        # Activate the subscription (same as webhook path, idempotent).
+        await _activate_subscription(sub["id"], sub.get("plan_id"))
+        sub = await db.driver_subscriptions.find_one({"id": sub["id"]})
+        return {"status": "active", "subscription": sub}
+
+    return {"status": "pending"}
+
+
+async def _activate_subscription(subscription_id: str, plan_id: str | None = None):
+    """Activate a pending subscription after payment confirmation.
+
+    Called by both the webhook handler and the verify-session endpoint
+    (whichever runs first). Idempotent — skips if already active.
+    """
+    sub = await db.driver_subscriptions.find_one({"id": subscription_id})
+    if not sub or sub.get("status") == "active":
+        return  # already done
+
+    driver_id = sub.get("driver_id")
+
+    # Cancel any prior active subscription for this driver.
+    existing = await db.driver_subscriptions.find_one(
+        {"driver_id": driver_id, "status": "active"}
+    )
+    if existing and existing["id"] != subscription_id:
+        await db.driver_subscriptions.update_one(
+            {"id": existing["id"]},
+            {"$set": {"status": "cancelled", "cancelled_at": datetime.utcnow().isoformat()}},
+        )
+
+    # Activate.
+    await db.driver_subscriptions.update_one(
+        {"id": subscription_id},
+        {"$set": {"status": "active", "payment_status": "paid"}},
+    )
+
+    # Increment subscriber count.
+    if plan_id:
+        plan = await db.subscription_plans.find_one({"id": plan_id})
+        if plan:
+            await db.subscription_plans.update_one(
+                {"id": plan_id},
+                {"$set": {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1}},
+            )
+
+    logger.info(f"[SUBSCRIBE] Subscription {subscription_id} activated for driver {driver_id}")
+
+    # Push notification to driver.
+    if driver_id:
+        driver = await db.drivers.find_one({"id": driver_id})
+        if driver and driver.get("user_id"):
+            try:
+                await send_push_notification(
+                    driver["user_id"],
+                    "Spinr Pass Activated! 🎉",
+                    f"Your {sub.get('plan_name', 'Spinr Pass')} subscription is now active. Go online and start earning!",
+                )
+            except Exception as push_err:
+                logger.warning(f"[SUBSCRIBE] Push notification failed: {push_err}")
 
 
 @api_router.post("/subscription/cancel")
@@ -1902,3 +2163,68 @@ async def cancel_subscription(current_user: dict = Depends(get_current_user)):
     )
 
     return {"success": True}
+
+
+# ── G5: Subscription expiry warning background task ──────────────
+
+async def check_expiring_subscriptions():
+    """Background task: sends push notifications to drivers whose
+    Spinr Pass expires within 24 hours.
+
+    Runs periodically (every 6 hours) from the FastAPI lifespan.
+    Marks warned subscriptions with `expiry_warned: true` so the
+    driver isn't notified more than once.
+    """
+    while True:
+        try:
+            now = datetime.utcnow()
+            window = now + timedelta(hours=24)
+
+            active_subs = await db.driver_subscriptions.find(
+                {"status": "active"}
+            ).to_list(500)
+
+            warned_count = 0
+            for sub in active_subs:
+                if sub.get("expiry_warned"):
+                    continue
+
+                expires_at = sub.get("expires_at")
+                if not expires_at:
+                    continue
+
+                if isinstance(expires_at, str):
+                    try:
+                        expires_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00")).replace(tzinfo=None)
+                    except ValueError:
+                        continue
+                else:
+                    expires_dt = expires_at
+
+                if now < expires_dt <= window:
+                    driver = await db.drivers.find_one({"id": sub["driver_id"]})
+                    if driver and driver.get("user_id"):
+                        hours_left = max(1, int((expires_dt - now).total_seconds() / 3600))
+                        plan_name = sub.get("plan_name", "Spinr Pass")
+                        try:
+                            await send_push_notification(
+                                driver["user_id"],
+                                "Spinr Pass Expiring Soon ⏰",
+                                f"Your {plan_name} plan expires in ~{hours_left} hours. Renew now to keep driving!",
+                                {"type": "subscription_expiring", "hours_left": str(hours_left)},
+                            )
+                            warned_count += 1
+                        except Exception as e:
+                            logger.warning(f"[SUB-EXPIRY] Push failed for driver {sub['driver_id']}: {e}")
+
+                    await db.driver_subscriptions.update_one(
+                        {"id": sub["id"]},
+                        {"$set": {"expiry_warned": True}},
+                    )
+
+            logger.info(f"[SUB-EXPIRY] Check complete. {len(active_subs)} scanned, {warned_count} warned.")
+
+        except Exception as e:
+            logger.warning(f"[SUB-EXPIRY] Background check error: {e}")
+
+        await asyncio.sleep(6 * 3600)

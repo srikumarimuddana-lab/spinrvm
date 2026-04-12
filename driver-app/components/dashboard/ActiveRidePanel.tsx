@@ -12,6 +12,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
+import { useLanguageStore } from '../../store/languageStore';
 
 const ACCENT = SpinrConfig.theme.colors.primary;
 
@@ -57,6 +58,8 @@ interface ActiveRidePanelProps {
   onStartRide: () => void;
   onCompleteRide: () => void;
   onCancelRide: () => void;
+  routeEtaMinutes?: number | null;
+  routeDistanceKm?: number | null;
   slideUpAnim: Animated.Value;
   fadeAnim: Animated.Value;
   distanceToPickup?: number | null;
@@ -86,11 +89,14 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   onStartRide,
   onCompleteRide,
   onCancelRide,
+  routeEtaMinutes,
+  routeDistanceKm,
   slideUpAnim,
   fadeAnim,
   distanceToPickup,
 }) => {
   // All hooks MUST be before any early return to avoid React ordering issues
+  const { t } = useLanguageStore();
   const [waitSeconds, setWaitSeconds] = useState(0);
   const waitTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [alertVisible, setAlertVisible] = useState(false);
@@ -155,7 +161,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   // ── Helpers ─────────────────────────────────────────────────
   const riderName = rider?.first_name
     ? `${rider.first_name}${rider.last_name ? ' ' + rider.last_name[0] + '.' : ''}`
-    : rider?.name || 'Rider';
+    : rider?.name || t('activeRide.rider');
 
   const earnings = ride.driver_earnings ?? ride.total_fare ?? 0;
   const distKm = ride.distance_km ?? 0;
@@ -190,10 +196,31 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   };
 
   // ── Status config ───────────────────────────────────────────
+  // Build the status label with live ETA when available.
+  // During navigating_to_pickup: "~X min to pickup (Y km)"
+  // During trip_in_progress: "~X min to dropoff (Y km)"
+  // During arrived_at_pickup: "Waiting · Xm XXs" (no ETA, driver is stationary)
+  const etaSuffix =
+    routeEtaMinutes != null && routeDistanceKm != null
+      ? ` · ~${routeEtaMinutes} min (${routeDistanceKm} km)`
+      : '';
+
   const statusMap = {
-    navigating_to_pickup: { icon: 'navigate-circle' as const, label: 'En Route to Pickup', color: ACCENT },
-    arrived_at_pickup: { icon: 'time' as const, label: `Waiting · ${formatWait(waitSeconds)}`, color: '#F59E0B' },
-    trip_in_progress: { icon: 'car-sport' as const, label: 'Trip in Progress', color: '#22C55E' },
+    navigating_to_pickup: {
+      icon: 'navigate-circle' as const,
+      label: `${t('activeRide.enRouteToPickup')}${etaSuffix}`,
+      color: ACCENT,
+    },
+    arrived_at_pickup: {
+      icon: 'time' as const,
+      label: `${t('activeRide.waiting')} · ${formatWait(waitSeconds)}`,
+      color: '#F59E0B',
+    },
+    trip_in_progress: {
+      icon: 'car-sport' as const,
+      label: `${t('activeRide.tripInProgress')}${etaSuffix}`,
+      color: '#22C55E',
+    },
   };
   const status = statusMap[rideState];
 
@@ -218,7 +245,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         <View style={styles.tripInfoRow}>
           <View style={styles.tripInfoItem}>
             <Text style={styles.tripInfoValue}>${earnings.toFixed(2)}</Text>
-            <Text style={styles.tripInfoLabel}>Your Earnings</Text>
+            <Text style={styles.tripInfoLabel}>{t('activeRide.yourEarnings')}</Text>
           </View>
           <View style={styles.tripInfoDivider} />
           <View style={styles.tripInfoItem}>
@@ -228,13 +255,13 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                 : `${distKm.toFixed(1)} km`}
             </Text>
             <Text style={styles.tripInfoLabel}>
-              {rideState === 'trip_in_progress' && hasLiveData ? 'Traveled' : 'Distance'}
+              {rideState === 'trip_in_progress' && hasLiveData ? t('activeRide.traveled') : t('activeRide.distance')}
             </Text>
           </View>
           <View style={styles.tripInfoDivider} />
           <View style={styles.tripInfoItem}>
             <Text style={styles.tripInfoValue}>{durMin} min</Text>
-            <Text style={styles.tripInfoLabel}>Est. Time</Text>
+            <Text style={styles.tripInfoLabel}>{t('activeRide.estTime')}</Text>
           </View>
         </View>
 
@@ -262,7 +289,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <View style={styles.routeRow}>
             <View style={[styles.dot, { backgroundColor: ACCENT }]} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.routeLabel}>PICKUP</Text>
+              <Text style={styles.routeLabel}>{t('rideOffer.pickup')}</Text>
               <Text style={styles.routeAddress} numberOfLines={2}>{ride.pickup_address}</Text>
             </View>
           </View>
@@ -272,7 +299,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <View style={styles.routeRow}>
             <View style={[styles.dot, { backgroundColor: '#22C55E' }]} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.routeLabel}>DROPOFF</Text>
+              <Text style={styles.routeLabel}>{t('rideOffer.dropoff')}</Text>
               <Text style={styles.routeAddress} numberOfLines={2}>{ride.dropoff_address}</Text>
             </View>
           </View>
@@ -283,7 +310,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <View style={styles.otpCard}>
             <View style={styles.otpHeader}>
               <Ionicons name="shield-checkmark" size={18} color={ACCENT} />
-              <Text style={styles.otpTitle}>Verify Rider's PIN</Text>
+              <Text style={styles.otpTitle}>{t('activeRide.verifyRiderPin')}</Text>
             </View>
             <Text style={styles.otpSub}>Ask rider for their 4-digit code</Text>
             <View style={styles.otpBoxRow}>
@@ -316,7 +343,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               ))}
             </View>
             <TouchableOpacity style={styles.skipBtn} onPress={onStartRide} disabled={isLoading}>
-              <Text style={styles.skipText}>Start Without PIN</Text>
+              <Text style={styles.skipText}>{t('activeRide.startWithoutPin')}</Text>
             </TouchableOpacity>
           </View>
         ) : null}
@@ -329,7 +356,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               onPress={() => openMapsNavigation(ride.pickup_lat, ride.pickup_lng, 'Pickup')}
             >
               <Ionicons name="navigate" size={20} color="#fff" />
-              <Text style={styles.actionPrimaryText}>Navigate to Pickup</Text>
+              <Text style={styles.actionPrimaryText}>{t('activeRide.navigateToPickup')}</Text>
             </TouchableOpacity>
             {(() => {
               const atPickup = distanceToPickup === null || distanceToPickup === undefined || distanceToPickup <= 150;
@@ -343,7 +370,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                     <>
                       <Ionicons name="flag" size={18} color={ACCENT} />
                       <Text style={[styles.actionSecondaryText, { color: ACCENT }]}>
-                        {distanceToPickup !== null && distanceToPickup !== undefined && distanceToPickup > 150 ? `${distanceToPickup}m away` : "I've Arrived at Pickup"}
+                        {distanceToPickup !== null && distanceToPickup !== undefined && distanceToPickup > 150 ? `${distanceToPickup}m` : t('activeRide.arrivedAtPickup')}
                       </Text>
                     </>
                   )}
@@ -360,17 +387,17 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               onPress={() => openMapsNavigation(ride.dropoff_lat, ride.dropoff_lng, 'Dropoff')}
             >
               <Ionicons name="navigate" size={20} color="#fff" />
-              <Text style={styles.actionPrimaryText}>Navigate to Dropoff</Text>
+              <Text style={styles.actionPrimaryText}>{t('activeRide.navigateToDropoff')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.actionPrimary, { backgroundColor: '#22C55E' }]}
               onPress={() => showAlert(
-                'Complete Trip',
-                `End this trip? Rider will be charged $${(ride.total_fare ?? 0).toFixed(2)}.`,
+                t('activeRide.completeTrip'),
+                `${t('activeRide.endTripConfirm')} $${(ride.total_fare ?? 0).toFixed(2)}.`,
                 'success',
                 [
-                  { text: 'Not Yet', style: 'cancel' },
-                  { text: 'Complete', onPress: onCompleteRide },
+                  { text: t('common.notYet'), style: 'cancel' },
+                  { text: t('activeRide.complete'), onPress: onCompleteRide },
                 ],
               )}
               disabled={isLoading}
@@ -378,7 +405,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               {isLoading ? <ActivityIndicator color="#fff" /> : (
                 <>
                   <Ionicons name="checkmark-circle" size={20} color="#fff" />
-                  <Text style={styles.actionPrimaryText}>Complete Trip</Text>
+                  <Text style={styles.actionPrimaryText}>{t('activeRide.completeTrip')}</Text>
                 </>
               )}
             </TouchableOpacity>
@@ -390,12 +417,12 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <TouchableOpacity
             style={styles.cancelBtn}
             onPress={() => showAlert(
-              'Cancel Ride?',
-              'Frequent cancellations may affect your rating.',
+              t('activeRide.cancelRide'),
+              t('activeRide.cancelRideWarning'),
               'warning',
               [
-                { text: 'Keep Ride', style: 'cancel' },
-                { text: 'Yes, Cancel', style: 'destructive', onPress: onCancelRide },
+                { text: t('activeRide.keepRide'), style: 'cancel' },
+                { text: t('activeRide.yesCancel'), style: 'destructive', onPress: onCancelRide },
               ],
             )}
           >

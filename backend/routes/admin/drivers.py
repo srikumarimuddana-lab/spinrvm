@@ -8,8 +8,10 @@ from pydantic import BaseModel
 
 try:
     from ...db import db
+    from ...features import send_push_notification
 except ImportError:
     from db import db
+    from features import send_push_notification
 
 logger = logging.getLogger(__name__)
 
@@ -408,6 +410,27 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest):
     except Exception as e:
         logger.error(f"Failed to update driver {driver_id} verify flag: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}") from e
+    # G4: Notify the driver via push so they know their verification status
+    # changed without having to manually check the Documents screen.
+    try:
+        if existing_driver.get("user_id"):
+            if req.verified:
+                await send_push_notification(
+                    existing_driver["user_id"],
+                    "Account Verified! ✅",
+                    "Your driver account has been verified. You can now go online and start accepting rides!",
+                    {"type": "driver_verified"},
+                )
+            else:
+                await send_push_notification(
+                    existing_driver["user_id"],
+                    "Verification Update ⚠️",
+                    "Your driver verification status has been updated. Please check your documents.",
+                    {"type": "driver_unverified"},
+                )
+    except Exception as e:
+        logger.warning(f"[ADMIN] Push notification failed for driver {driver_id}: {e}")
+
     return {"message": f"Driver {'verified' if req.verified else 'unverified'}"}
 
 
@@ -498,6 +521,29 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
         req.reason or "",
         {"old_status": current_status, "new_status": updates.get("status"), "reason": req.reason},
     )
+
+    # G4: Notify the driver about their status change. Critical for
+    # approve/reject/suspend — without this, drivers wait days not knowing
+    # their application was processed.
+    action_push_map = {
+        "approve": ("You're Approved! 🎉", "Your driver application has been approved. You can now go online and start earning!"),
+        "reject": ("Application Update", "Your driver application needs attention. Please check your documents."),
+        "suspend": ("Account Suspended ⚠️", f"Your account has been suspended. Reason: {req.reason or 'Contact support for details.'}"),
+        "ban": ("Account Deactivated", "Your driver account has been deactivated. Contact support for more information."),
+        "unban": ("Account Restored! ✅", "Your driver account has been restored. You can now go online again."),
+        "reactivate": ("Account Reactivated! ✅", "Your account has been reactivated. You can now go online and accept rides!"),
+    }
+    push_info = action_push_map.get(req.action)
+    if push_info and driver.get("user_id"):
+        try:
+            await send_push_notification(
+                driver["user_id"],
+                push_info[0],
+                push_info[1],
+                {"type": f"driver_{req.action}", "new_status": updates.get("status", "")},
+            )
+        except Exception as e:
+            logger.warning(f"[ADMIN] Push notification failed for driver action {req.action}: {e}")
 
     return {
         "message": f"Driver {req.action}d successfully",

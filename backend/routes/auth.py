@@ -54,8 +54,10 @@ async def send_otp(request: Request, body: SendOTPRequest):
         and settings.get("twilio_from_number")
     )
 
-    # Use fixed 1234 OTP when Twilio is not configured (dev mode)
-    otp_code = generate_otp() if twilio_configured else "1234"
+    # Use fixed 123456 OTP when Twilio is not configured (dev mode).
+    # Dev OTP must be the same length as the real generated one (6 digits)
+    # so the driver/rider OTP screens validate it correctly.
+    otp_code = generate_otp() if twilio_configured else "123456"
 
     otp_record = OTPRecord(
         phone=phone, code=otp_code, expires_at=datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
@@ -80,7 +82,7 @@ async def send_otp(request: Request, body: SendOTPRequest):
         raise HTTPException(status_code=500, detail="Failed to send verification code")
 
     response = {"success": True, "message": f"OTP sent to {phone}"}
-    # Include dev_otp when Twilio is NOT configured (always shows 1234 in dev)
+    # Include dev_otp when Twilio is NOT configured (always shows 123456 in dev)
     if not twilio_configured:
         response["dev_otp"] = otp_code
 
@@ -99,9 +101,9 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
     except Exception as e:
         logger.warning(f"Could not query OTP from DB: {e}")
 
-    # Dev fallback: accept code 1234 when no OTP record found (Twilio not configured)
-    if not otp_record and code == "1234":
-        logger.info(f"Dev mode: accepting code 1234 for {phone}")
+    # Dev fallback: accept code 123456 when no OTP record found (Twilio not configured)
+    if not otp_record and code == "123456":
+        logger.info(f"Dev mode: accepting code 123456 for {phone}")
         otp_record = {"id": "dev", "phone": phone, "code": code, "expires_at": datetime.utcnow() + timedelta(minutes=5)}
 
     if not otp_record:

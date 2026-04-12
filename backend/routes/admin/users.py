@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -6,8 +7,24 @@ from fastapi import APIRouter, HTTPException
 
 try:
     from ...db import db
+    from ...db_supabase import supabase
 except ImportError:
     from db import db
+    from db_supabase import supabase
+
+# User-supplied search strings reach PostgREST's `.ilike()` filter. The
+# operator treats `%` and `_` as wildcards, so we strip them + any
+# PostgREST control characters (commas, parens, backslashes) before
+# substituting into the filter pattern. Match length is capped so a
+# single abusive query can't trigger a full-table scan.
+_SEARCH_SAFE = re.compile(r"[%_,()\\]")
+_MAX_SEARCH_LEN = 64
+
+
+def _sanitize_search(raw: str) -> str:
+    trimmed = raw.strip()[:_MAX_SEARCH_LEN]
+    return _SEARCH_SAFE.sub("", trimmed)
+
 
 logger = logging.getLogger(__name__)
 
@@ -22,19 +39,46 @@ async def admin_get_users(
     offset: int = 0,
     search: Optional[str] = None,
 ):
-    """Get all users (riders) with optional search and pagination."""
-    filters = {}
-    if search:
-        # Search across name, email, phone
-        filters["$or"] = [
-            {"first_name": {"$regex": search, "$options": "i"}},
-            {"last_name": {"$regex": search, "$options": "i"}},
-            {"email": {"$regex": search, "$options": "i"}},
-            {"phone": {"$regex": search, "$options": "i"}},
-        ]
+    """Get all users (riders) with optional search and pagination.
 
-    users = await db.get_rows("users", filters, order="created_at", desc=True, limit=limit, offset=offset)
-    return users
+    The old implementation passed the raw `search` string into a
+    MongoDB-style ``{"$or": [{"first_name": {"$regex": search, ...}}, ...]}``
+    filter. Two problems: (a) `db_supabase._apply_filters` does not
+    understand ``$or`` or ``$regex``, so the search silently returned
+    the unfiltered user list; and (b) even if the translator were
+    fixed, piping unescaped user input into a regex is a ReDoS / query
+    manipulation risk.
+
+    The fix bypasses the generic filter abstraction and calls the
+    Supabase client directly with an ``.or_()`` PostgREST filter
+    composed of ``ilike`` clauses. User input is sanitized by
+    :func:`_sanitize_search` first.
+    """
+    if not supabase:
+        return []
+
+    def _fn():
+        q = supabase.table("users").select("*")
+        if search:
+            clean = _sanitize_search(search)
+            if clean:
+                # PostgREST .or_() takes a comma-separated filter list.
+                # `ilike.*foo*` is case-insensitive substring match.
+                q = q.or_(
+                    f"first_name.ilike.%{clean}%,last_name.ilike.%{clean}%,email.ilike.%{clean}%,phone.ilike.%{clean}%"
+                )
+        q = q.order("created_at", desc=True).range(offset, offset + limit - 1)
+        res = q.execute()
+        return res.data if res.data else []
+
+    # get_rows is async; the filter path here is sync because we need
+    # to chain Supabase query-builder calls that aren't awaitable.
+    # Re-use the shared run_sync helper to dispatch it on a thread.
+    try:
+        from ...db_supabase import run_sync
+    except ImportError:
+        from db_supabase import run_sync
+    return await run_sync(_fn)
 
 
 @router.get("/users/{user_id}")

@@ -52,8 +52,16 @@ async def lifespan(app: FastAPI):
         raise
 
     # Start background tasks
-    logger.info("Starting scheduled rides checker...")
-    # Note: scheduler_task is disabled - scheduled rides feature needs Supabase migration
+    import asyncio
+
+    # G5: Subscription expiry warning — checks every 6h for subscriptions
+    # expiring within 24h and sends push notifications.
+    try:
+        from routes.drivers import check_expiring_subscriptions
+        asyncio.create_task(check_expiring_subscriptions())
+        logger.info("Started subscription expiry checker (every 6h)")
+    except Exception as e:
+        logger.warning(f"Failed to start subscription expiry checker: {e}")
 
     # Perform startup checks
     logger.info("Spinr API startup complete")

@@ -19,6 +19,7 @@ import { useAuthStore } from '@shared/store/authStore';
 import api, { setInMemoryToken } from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
+import { useLanguageStore } from '../store/languageStore';
 
 const THEME = SpinrConfig.theme.colors;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -44,8 +45,12 @@ export default function OtpScreen() {
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ verificationId?: string; phoneNumber: string; mode?: string }>();
   const { phoneNumber, verificationId, mode } = params;
+  const { t } = useLanguageStore();
   const isBackendMode = mode === 'backend' || !verificationId;
-  const codeLength = isBackendMode ? 4 : 6;
+  // Unified 6-digit OTP across both backend-issued and Firebase Phone Auth
+  // flows. Previously the backend-issued code was 4 digits, which was
+  // insufficient entropy for phone auth (1/10,000 guess odds per try).
+  const codeLength = 6;
 
   const [code, setCode] = useState('');
   const [verifying, setVerifying] = useState(false);
@@ -231,9 +236,9 @@ export default function OtpScreen() {
 
         {/* Title section */}
         <View style={styles.titleSection}>
-          <Text style={styles.title}>Verify Your Number</Text>
+          <Text style={styles.title}>{t('otp.title')}</Text>
           <Text style={styles.subtitle}>
-            We sent a {codeLength}-digit code to
+            {t('otp.subtitle').replace('{{length}}', String(codeLength))}
           </Text>
           <Text style={styles.phoneDisplay}>{phoneNumber}</Text>
         </View>
@@ -316,7 +321,7 @@ export default function OtpScreen() {
                   code.length !== codeLength && styles.verifyBtnTextInactive,
                 ]}
               >
-                Verify & Continue
+                {t('otp.verifyAndContinue')}
               </Text>
               <Ionicons
                 name="checkmark-circle"
@@ -332,20 +337,20 @@ export default function OtpScreen() {
           {canResend ? (
             <TouchableOpacity onPress={handleResend} style={styles.resendBtn}>
               <Ionicons name="refresh" size={16} color={THEME.primary} />
-              <Text style={styles.resendText}>Resend Code</Text>
+              <Text style={styles.resendText}>{t('otp.resendCode')}</Text>
             </TouchableOpacity>
           ) : (
             <View style={styles.resendCountdown}>
               <Ionicons name="time-outline" size={16} color={THEME.textDim} />
               <Text style={styles.countdownText}>
-                Resend code in <Text style={styles.countdownNumber}>{countdown}s</Text>
+                {t('otp.resendIn')} <Text style={styles.countdownNumber}>{countdown}s</Text>
               </Text>
             </View>
           )}
 
           <TouchableOpacity onPress={() => router.back()} style={styles.changeNumberBtn}>
             <Ionicons name="call-outline" size={14} color={THEME.textDim} />
-            <Text style={styles.changeNumberText}>Change phone number</Text>
+            <Text style={styles.changeNumberText}>{t('otp.changeNumber')}</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>

@@ -18,8 +18,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://spinr-backend-test.up.railway.app",
-        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "AIzaSyC5i7lhtfXDoyYOB3KdyJtZ-CtKDzM5m9M"
+        "EXPO_PUBLIC_BACKEND_URL": "https://spinr-backend-test.up.railway.app"
       }
     },
     "preview": {

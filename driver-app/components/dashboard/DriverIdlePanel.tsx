@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useAuthStore, DriverOnboardingStatus } from '@shared/store/authStore';
+import { useLanguageStore } from '../../store/languageStore';
 
 const COLORS = {
   primary: SpinrConfig.theme.colors.background,
@@ -39,64 +40,52 @@ interface IdlePanelProps {
   pulseAnim: any;
 }
 
-const STATE_BANNERS = {
-  profile_incomplete: { 
-    title: 'Complete Your Profile', 
-    subtitle: 'We need a bit more information about you.',
-    button: 'Finish Profile',
-    icon: 'person', 
-    tone: 'info', 
-    target: '/profile-setup' 
-  },
-  vehicle_required: {
-    title: 'Add Your Vehicle',
-    subtitle: 'Enter your vehicle details to start driving.',
-    button: 'Add Vehicle Details',
-    icon: 'car',
-    tone: 'info',
-    target: '/vehicle-info'
-  },
-  documents_required: { 
-    title: 'Action Required', 
-    subtitle: 'Upload your documents (License, Insurance) to get approved.',
-    button: 'Upload Docs',
-    icon: 'document-text', 
-    tone: 'warning', 
-    target: '/documents' 
-  },
-  documents_rejected: { 
-    title: 'Documents Rejected', 
-    subtitle: 'Some documents were not approved. Please re-upload.',
-    button: 'Fix Documents',
-    icon: 'alert-circle', 
-    tone: 'danger', 
-    target: '/documents' 
-  },
-  documents_expired: { 
-    title: 'Documents Expired', 
-    subtitle: 'Your driving documents have expired.',
-    button: 'Update Docs',
-    icon: 'time', 
-    tone: 'warning', 
-    target: '/documents' 
-  },
-  pending_review: { 
-    title: 'Under Review', 
-    subtitle: 'Your documents are being reviewed by our team.',
-    button: 'View Status',
-    icon: 'hourglass', 
-    tone: 'info', 
-    target: '/documents' 
-  },
-  suspended: { 
-    title: 'Account Suspended', 
-    subtitle: 'You cannot go online at this time.',
-    button: 'Contact Support',
-    icon: 'ban', 
-    tone: 'danger', 
-    target: '/driver/settings' 
-  },
-};
+function getStateBanners(t: (key: string) => string, driverData?: any) {
+  return {
+    profile_incomplete: {
+      title: t('dashboard.completeProfile'),
+      subtitle: t('dashboard.profileIncompleteMsg'),
+      button: t('dashboard.finishProfile'),
+      icon: 'person', tone: 'info', target: '/profile-setup',
+    },
+    vehicle_required: {
+      title: t('dashboard.addVehicle'),
+      subtitle: t('dashboard.profileIncompleteMsg'),
+      button: t('dashboard.addVehicleDetails'),
+      icon: 'car', tone: 'info', target: '/vehicle-info',
+    },
+    documents_required: {
+      title: t('dashboard.actionRequired'),
+      subtitle: t('dashboard.uploadDocs'),
+      button: t('dashboard.uploadDocs'),
+      icon: 'document-text', tone: 'warning', target: '/documents',
+    },
+    documents_rejected: {
+      title: t('dashboard.docsRejected'),
+      subtitle: t('dashboard.fixDocuments'),
+      button: t('dashboard.fixDocuments'),
+      icon: 'alert-circle', tone: 'danger', target: '/documents',
+    },
+    documents_expired: {
+      title: t('dashboard.docsExpired'),
+      subtitle: t('dashboard.updateDocs'),
+      button: t('dashboard.updateDocs'),
+      icon: 'time', tone: 'warning', target: '/documents',
+    },
+    pending_review: {
+      title: t('dashboard.underReview'),
+      subtitle: t('dashboard.viewStatus'),
+      button: t('dashboard.viewStatus'),
+      icon: 'hourglass', tone: 'info', target: '/documents',
+    },
+    suspended: {
+      title: t('dashboard.accountSuspended'),
+      subtitle: driverData?.suspension_reason || driverData?.ban_reason || t('dashboard.contactSupport'),
+      button: t('dashboard.contactSupport'),
+      icon: 'ban', tone: 'danger', target: 'mailto:support@spinr.ca?subject=Account%20Suspended',
+    },
+  };
+}
 
 export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   isOnline,
@@ -104,6 +93,8 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   earnings,
   onToggleOnline,
 }) => {
+  const { t } = useLanguageStore();
+  const STATE_BANNERS = getStateBanners(t, driverData);
   const insets = useSafeAreaInsets();
   const router = useRouter();
   let onboardingStatus = useAuthStore(s => s.user?.driver_onboarding_status ?? null);
@@ -194,7 +185,13 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
             </View>
             <TouchableOpacity
               style={[styles.actionCardButton, banner.tone === 'danger' && styles.actionCardButtonDanger, banner.tone === 'warning' && styles.actionCardButtonWarning]}
-              onPress={() => router.push(banner.target as any)}
+              onPress={() => {
+                if (banner.target.startsWith('mailto:') || banner.target.startsWith('http')) {
+                  require('react-native').Linking.openURL(banner.target);
+                } else {
+                  router.push(banner.target as any);
+                }
+              }}
               activeOpacity={0.85}
             >
               <Text style={styles.actionCardButtonText}>{banner.button}</Text>
@@ -209,12 +206,12 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
             {isOnline ? (
                 <View style={styles.statusPillOnline}>
                     <Ionicons name="pulse" size={14} color="#059669" />
-                    <Text style={styles.statusPillTextOnline}>Finding rides...</Text>
+                    <Text style={styles.statusPillTextOnline}>{t('dashboard.findingRides')}</Text>
                 </View>
             ) : (
                 <View style={styles.statusPillOffline}>
                     <View style={styles.offlineDot} />
-                    <Text style={styles.statusPillTextOffline}>Offline</Text>
+                    <Text style={styles.statusPillTextOffline}>{t('home.offline')}</Text>
                 </View>
             )}
         </View>
@@ -245,7 +242,7 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
               style={styles.goButtonInner}
             >
               <Text style={[styles.goButtonText, !canGoOnline && styles.goButtonTextDisabled]}>
-                {isOnline ? 'STOP' : 'GO'}
+                {isOnline ? t('home.stop') : t('home.go')}
               </Text>
             </LinearGradient>
           </Animated.View>

@@ -1,5 +1,4 @@
-import os
-import random
+import secrets
 import string
 from datetime import datetime, timedelta
 
@@ -10,28 +9,37 @@ from firebase_admin import auth as firebase_auth
 from loguru import logger
 
 try:
+    from .core.config import settings
     from .db import db
 except ImportError:
+    from core.config import settings
     from db import db
 
 # Security Configuration
-_env = os.environ.get("ENV", "development")
-JWT_SECRET = os.environ.get("JWT_SECRET")
-if not JWT_SECRET:
-    if _env == "production":
-        # In a real app we might raise error, but to avoid breaking things during migration we'll warn
-        logger.warning("JWT_SECRET not set — using insecure dev key.")
-    JWT_SECRET = "spinr-dev-secret-key-NOT-FOR-PRODUCTION"
-
+# JWT signing secret is the single `settings.JWT_SECRET` defined in
+# core/config.py (loaded from the `JWT_SECRET` environment variable).
+# Previously this module read its own env var with a separate hardcoded
+# fallback, which meant regular-user tokens and admin tokens were signed
+# with DIFFERENT secrets — a silent auth hazard. Unified here so both
+# `routes/admin/auth.py` and this module share the same source of truth.
 JWT_ALGORITHM = "HS256"
 OTP_EXPIRY_MINUTES = 5
+# 6 digits gives ~1/1,000,000 guessing odds per attempt. 4-digit OTPs
+# only give 1/10,000 and are considered insufficient for phone auth.
+OTP_LENGTH = 6
 
 security = HTTPBearer(auto_error=False)
 
 
 # Helper Functions
 def generate_otp() -> str:
-    return "".join(random.choices(string.digits, k=4))
+    """Generate a cryptographically secure numeric OTP.
+
+    Uses `secrets.choice` (not `random.choices`) so the OTP can't be
+    predicted from wall-clock time / PID state — which matters because
+    a predictable OTP lets anyone take over an account they can SMS.
+    """
+    return "".join(secrets.choice(string.digits) for _ in range(OTP_LENGTH))
 
 
 def create_jwt_token(user_id: str, phone: str, session_id: str = None) -> str:
@@ -39,16 +47,12 @@ def create_jwt_token(user_id: str, phone: str, session_id: str = None) -> str:
     if session_id:
         payload["session_id"] = session_id
 
-    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
-    logger.info(
-        f"DEBUG: Created JWT token for user_id={user_id}, session_id={session_id}, JWT_SECRET prefix used: {JWT_SECRET[:10] if JWT_SECRET else 'None'}..."
-    )
-    return token
+    return jwt.encode(payload, settings.JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
 def verify_jwt_token(token: str) -> dict:
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[JWT_ALGORITHM])
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token has expired") from None
@@ -101,12 +105,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     # Fallback: existing JWT behavior
     try:
         payload = verify_jwt_token(token)
-        # logger.info(f"JWT Valid. Payload: {payload}")
     except Exception as e:
-        logger.error(f"JWT Verification Failed: {e} | Token prefix: {token[:20] if token else 'None'}...")
-        logger.error(
-            f"DEBUG: Active JWT_SECRET being used for verification: '{JWT_SECRET}' (length: {len(JWT_SECRET) if JWT_SECRET else 0})"
-        )
+        # Never log the signing secret, even partially — it's a credential.
+        logger.error(f"JWT verification failed: {e}")
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}") from e
 
     user = None

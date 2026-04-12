@@ -4,25 +4,13 @@ import * as Location from 'expo-location';
 import { Platform, Alert, Vibration, Linking, AppState } from 'react-native';
 
 export type ConnectionState = 'connected' | 'reconnecting' | 'disconnected';
-import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { router } from 'expo-router';
 
-// expo-notifications throws at import time inside Expo Go since SDK 53 because
-// push-token APIs were removed from Expo Go. Lazy-load it only in real builds
-// (standalone / dev-client) so the dashboard still mounts in Expo Go.
-const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
-let Notifications: any = null;
-if (!isExpoGo) {
-  try {
-    Notifications = require('expo-notifications');
-  } catch (e) {
-    console.log('expo-notifications unavailable:', e);
-  }
-}
 import { useAuthStore } from '@shared/store/authStore';
 import { useDriverStore } from '../store/driverStore';
 import api from '@shared/api/client';
 import { API_URL } from '@shared/config';
+import { onForegroundMessage } from '@shared/services/firebase';
 import { Dimensions } from 'react-native';
 
 const { height } = Dimensions.get('window');
@@ -494,68 +482,53 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     }
   }, [isOnline]);
 
-  // ─── Push Notifications Setup ────────────────────────────────────
+  // ─── Foreground FCM Message Handler ──────────────────────────────
+  // FCM token registration + permissions live in app/_layout.tsx via
+  // @shared/services/firebase. Here we only subscribe to foreground
+  // messages so we can bridge them into the driver store — ride offers
+  // that arrive via FCM (e.g. when the WebSocket connection is stale
+  // or the device was briefly backgrounded) follow the same path as
+  // the WebSocket `new_ride_assignment` handler above.
+  //
+  // Background / quit-state FCM messages are handled by the top-level
+  // setBackgroundMessageHandler in _layout.tsx and surfaced as OS
+  // notifications via the `ride-offers` Android channel.
   useEffect(() => {
-    if (!isOnline) return;
-    // Skip entirely in Expo Go — push APIs were removed from Expo Go in SDK 53.
-    if (!Notifications) {
-      console.log('[Push] Skipping — Notifications not available (Expo Go)');
-      return;
-    }
+    if (!isOnline || !user) return;
 
-    const setupNotifications = async () => {
-      const { status: existingStatus } = await Notifications.getPermissionsAsync();
-      let finalStatus = existingStatus;
+    const unsubscribe = onForegroundMessage((remoteMessage: any) => {
+      const data = remoteMessage?.data || {};
+      console.log('[Push] Driver foreground FCM:', data?.type || remoteMessage?.notification?.title);
 
-      if (existingStatus !== 'granted') {
-        const { status } = await Notifications.requestPermissionsAsync();
-        finalStatus = status;
-      }
-
-      if (finalStatus !== 'granted') {
-        console.log('Push notification permission not granted');
-        return;
-      }
-
-      const token = await Notifications.getExpoPushTokenAsync();
-      console.log('Push token:', token.data);
-
-      try {
-        await api.post('/drivers/push-token', {
-          push_token: token.data,
-          platform: Platform.OS,
-        });
-      } catch (err) {
-        console.log('Failed to register push token:', err);
-      }
-    };
-
-    setupNotifications();
-
-    const notificationListener = Notifications.addNotificationReceivedListener((notification: any) => {
-      const data = notification.request.content.data;
-      console.log('Push notification received:', data);
-
-      if (data?.type === 'new_ride_offer') {
+      if (data?.type === 'new_ride_assignment' && data?.ride_id) {
         Vibration.vibrate([0, 500, 200, 500]);
-        fetchActiveRide();
-      }
-    });
-
-    const responseListener = Notifications.addNotificationResponseReceivedListener((response: any) => {
-      const data = response.notification.request.content.data;
-      console.log('Notification tapped:', data);
-
-      if (data?.ride_id) {
-        fetchActiveRide();
+        // Hydrate an incoming ride offer from the FCM payload. Backend
+        // sends coordinates/addresses as strings in the `data` field
+        // (FCM data-only messages are all string-typed).
+        setIncomingRide({
+          ride_id: data.ride_id,
+          pickup_address: data.pickup_address || '',
+          dropoff_address: data.dropoff_address || '',
+          pickup_lat: parseFloat(data.pickup_lat || '0'),
+          pickup_lng: parseFloat(data.pickup_lng || '0'),
+          dropoff_lat: parseFloat(data.dropoff_lat || '0'),
+          dropoff_lng: parseFloat(data.dropoff_lng || '0'),
+          fare: parseFloat(data.fare || '0'),
+          distance_km: data.distance_km ? parseFloat(data.distance_km) : undefined,
+          duration_minutes: data.duration_minutes ? parseFloat(data.duration_minutes) : undefined,
+          rider_name: data.rider_name,
+          rider_rating: data.rider_rating ? parseFloat(data.rider_rating) : undefined,
+        });
+      } else if (data?.type === 'ride_cancelled') {
+        Alert.alert('Ride Cancelled', 'The rider has cancelled this ride.');
+        resetRideState();
       }
     });
 
     return () => {
-      notificationListener.remove();
-      responseListener.remove();
+      if (typeof unsubscribe === 'function') unsubscribe();
     };
-  }, [isOnline]);
+  }, [isOnline, user, setIncomingRide, resetRideState]);
 
   return {
     // State

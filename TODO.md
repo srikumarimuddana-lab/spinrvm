@@ -2,20 +2,44 @@
 
 ## Critical Issues (Must Fix)
 
-- [ ] **Driver App: No push notifications** - App won't receive rides when in background
-  - File: `driver-app/app/driver/index.tsx`
-  - Action: Implement Expo Notifications with FCM
-  - Test: Background ride offer reception
+- [x] **Driver App: No push notifications** - ✅ Fixed 2026-04-11.
+  FCM registration was already wired via `@shared/services/firebase`
+  in `driver-app/app/_layout.tsx` but had several gaps that blocked
+  end-to-end delivery. This pass added:
+  - `Notifications.setNotificationHandler` at module level so
+    foreground FCM messages actually render a banner + sound.
+  - Android `ride-offers` channel at MAX importance with
+    `bypassDnd: true`, so ride offers wake the device on Android 8+.
+  - `setBackgroundMessageHandler` at module level so the JS runtime
+    wakes on background/quit-state FCM messages.
+  - FCM token registration gated on `isAuthInitialized && authToken`
+    (previously it ran on cold start before login and silently 401'd).
+  - Removed the duplicate, broken `expo-notifications` /
+    `getExpoPushTokenAsync` block in `useDriverDashboard.ts` that was
+    posting Expo push tokens (not FCM) to a non-existent
+    `/drivers/push-token` endpoint.
+  - New foreground FCM handler in `useDriverDashboard.ts` that
+    bridges `new_ride_assignment` payloads into `setIncomingRide`
+    (same path as the WebSocket handler).
+  - Backend `/notifications/register-token` now mirrors the token
+    onto `users.fcm_token` so `features.send_push_notification`
+    can actually find it.
+  - Test: trigger a ride offer with the driver app in the background
+    on a physical Android device + physical iOS device.
 
-- [ ] **Driver App: No WebSocket reconnection** - Lost rides if connection drops
-  - File: `driver-app/app/driver/index.tsx`
-  - Action: Add reconnection logic with exponential backoff
-  - Test: Network dropout simulation
+- [x] **Driver App: No WebSocket reconnection** - ✅ Already
+  implemented in `driver-app/hooks/useDriverDashboard.ts:360-372`.
+  Exponential backoff `[1s, 2s, 5s, 10s, 30s]` with ±500ms jitter,
+  `connectionState` surfaced through the dashboard hook,
+  auto-reconnect on `AppState` → `active`, reset counter on successful
+  reconnect, re-sends last known location on reconnect so the
+  backend has a fresh position.
 
-- [ ] **Driver App: Location not batched** - Inefficient individual updates
-  - File: `driver-app/app/driver/index.tsx`
-  - Action: Use `/api/drivers/location-batch` endpoint
-  - Test: Verify batched location updates
+- [x] **Driver App: Location not batched** - ✅ Already implemented
+  in `driver-app/hooks/useDriverDashboard.ts:181-271`. Posts to
+  `/drivers/location-batch` every 30s. Retry-on-failure re-prepends
+  failed points back to the buffer. 500-point cap prevents OOM if
+  the device is offline for long periods.
 
 ## High Priority
 

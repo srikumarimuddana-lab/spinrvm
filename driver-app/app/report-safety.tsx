@@ -13,6 +13,7 @@ import {
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SpinrConfig } from '@shared/config/spinr.config';
+import api from '@shared/api/client';
 
 const THEME = SpinrConfig.theme.colors;
 
@@ -30,11 +31,9 @@ export default function ReportSafetyScreen() {
         setSubmitting(true);
         // Submit to the safety-report endpoint
         try {
-            await fetch(`${SpinrConfig.backendUrl}/support/tickets/safety-report`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ description: issue })
-            });
+            // G22: Use the shared API client which attaches the auth token.
+            // Previously used raw fetch without Authorization header.
+            await api.post('/support/tickets/safety-report', { description: issue });
 
 
             Alert.alert(

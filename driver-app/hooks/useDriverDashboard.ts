@@ -188,6 +188,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   }, []);
 
   // ─── Batch Location Upload ───────────────────────────────────────
+  // G16: Persist buffer to AsyncStorage so crash doesn't lose GPS
+  // breadcrumbs. On upload success, clear both in-memory + persisted.
+  // On cold start, the buffer initializes from in-memory (empty) but
+  // a recovery effect below loads any persisted points.
+  const LOCATION_BUFFER_KEY = 'spinr_location_buffer';
+
   const uploadLocationBatch = useCallback(async () => {
     if (locationBufferRef.current.length === 0) return;
 
@@ -199,10 +205,37 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         points: pointsToUpload,
       });
       console.log(`Uploaded ${pointsToUpload.length} location points`);
+      // Clear persisted buffer on success
+      try {
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        await AsyncStorage.removeItem(LOCATION_BUFFER_KEY);
+      } catch {}
     } catch (err) {
       console.log('Location batch upload failed:', err);
       locationBufferRef.current = [...pointsToUpload, ...locationBufferRef.current];
+      // Persist to AsyncStorage so crash doesn't lose them
+      try {
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        await AsyncStorage.setItem(LOCATION_BUFFER_KEY, JSON.stringify(locationBufferRef.current.slice(-500)));
+      } catch {}
     }
+  }, []);
+
+  // Recover persisted location buffer on cold start (G16)
+  useEffect(() => {
+    (async () => {
+      try {
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        const saved = await AsyncStorage.getItem(LOCATION_BUFFER_KEY);
+        if (saved) {
+          const points = JSON.parse(saved);
+          if (Array.isArray(points) && points.length > 0) {
+            locationBufferRef.current = [...points, ...locationBufferRef.current];
+            console.log(`[Location] Recovered ${points.length} persisted GPS points`);
+          }
+        }
+      } catch {}
+    })();
   }, []);
 
   // Upload batch every 30 seconds

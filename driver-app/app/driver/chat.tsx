@@ -15,7 +15,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { useDriverStore } from '../../store/driverStore';
-import { API_URL } from '@shared/config';
+import api from '@shared/api/client';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import SpinrConfig from '@shared/config/spinr.config';
 
@@ -57,69 +58,83 @@ export default function ChatScreen() {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [inputText, setInputText] = useState('');
     const [showQuickReplies, setShowQuickReplies] = useState(true);
+    const [sending, setSending] = useState(false);
     const flatListRef = useRef<FlatList>(null);
-    const wsRef = useRef<WebSocket | null>(null);
 
     const riderName = activeRide?.rider?.first_name || activeRide?.rider?.name || 'Rider';
     const rideId = activeRide?.ride?.id;
+    const CHAT_STORAGE_KEY = rideId ? `spinr_chat_${rideId}` : null;
 
+    // G12: Load chat history from backend + merge with any persisted messages
     useEffect(() => {
-        // Connect to chat WebSocket
         if (!rideId) return;
-
-        const wsUrl = API_URL.replace('http', 'ws') + `/ws/chat/${rideId}`;
-        const ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-            ws.send(JSON.stringify({
-                type: 'auth',
-                token: useAuthStore.getState().token,
-                role: 'driver',
-            }));
-        };
-
-        ws.onmessage = (event) => {
+        (async () => {
+            // Load from AsyncStorage first (instant, offline-safe)
             try {
-                const data = JSON.parse(event.data);
-                if (data.type === 'chat_message') {
-                    setMessages((prev) => [...prev, {
-                        id: Date.now().toString(),
-                        text: data.message,
-                        sender: data.sender === 'driver' ? 'driver' : 'rider',
-                        timestamp: new Date().toISOString(),
-                    }]);
+                if (CHAT_STORAGE_KEY) {
+                    const saved = await AsyncStorage.getItem(CHAT_STORAGE_KEY);
+                    if (saved) setMessages(JSON.parse(saved));
                 }
-            } catch { }
-        };
-
-        return () => {
-            ws.close();
-            wsRef.current = null;
-        };
+            } catch {}
+            // Then fetch from backend (authoritative, may have messages from rider)
+            try {
+                const res = await api.get(`/rides/${rideId}/messages`);
+                if (res.data?.messages?.length) {
+                    setMessages(res.data.messages);
+                    // Persist the authoritative list
+                    if (CHAT_STORAGE_KEY) {
+                        await AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(res.data.messages));
+                    }
+                }
+            } catch (e) {
+                console.log('[Chat] Failed to load history:', e);
+            }
+        })();
     }, [rideId]);
 
-    const sendMessage = useCallback((text: string) => {
-        if (!text.trim()) return;
+        return () => {
+        // Poll for new messages every 10s (incoming messages from rider)
+    useEffect(() => {
+        if (!rideId) return;
+        const interval = setInterval(async () => {
+            try {
+                const res = await api.get(`/rides/${rideId}/messages`);
+                if (res.data?.messages?.length) {
+                    setMessages(res.data.messages);
+                    if (CHAT_STORAGE_KEY) {
+                        await AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(res.data.messages));
+                    }
+                }
+            } catch {}
+        }, 10000);
+        return () => clearInterval(interval);
+    }, [rideId]);
 
-        const newMsg: ChatMessage = {
-            id: Date.now().toString(),
-            text: text.trim(),
-            sender: 'driver',
-            timestamp: new Date().toISOString(),
-        };
+    const sendMessage = useCallback(async (text: string) => {
+        if (!text.trim() || !rideId || sending) return;
+        setSending(true);
 
-        setMessages((prev) => [...prev, newMsg]);
+        const trimmed = text.trim();
         setInputText('');
         setShowQuickReplies(false);
 
-        // Send via WebSocket
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({
-                type: 'chat_message',
-                message: text.trim(),
-                ride_id: rideId,
-            }));
+        try {
+            const res = await api.post(`/rides/${rideId}/messages`, { text: trimmed });
+            if (res.data?.message) {
+                setMessages((prev) => {
+                    const exists = prev.some((m) => m.id === res.data.message.id);
+                    const updated = exists ? prev : [...prev, res.data.message];
+                    // Persist
+                    if (CHAT_STORAGE_KEY) {
+                        AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(updated)).catch(() => {});
+                    }
+                    return updated;
+                });
+            }
+        } catch (e) {
+            console.log('[Chat] Send failed:', e);
+        } finally {
+            setSending(false);
         }
 
         setTimeout(() => {

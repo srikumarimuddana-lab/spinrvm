@@ -82,7 +82,7 @@ function getStateBanners(t: (key: string) => string, driverData?: any) {
       title: t('dashboard.accountSuspended'),
       subtitle: driverData?.suspension_reason || driverData?.ban_reason || t('dashboard.contactSupport'),
       button: t('dashboard.contactSupport'),
-      icon: 'ban', tone: 'danger', target: '/driver/settings',
+      icon: 'ban', tone: 'danger', target: 'mailto:support@spinr.ca?subject=Account%20Suspended',
     },
   };
 }
@@ -185,7 +185,13 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
             </View>
             <TouchableOpacity
               style={[styles.actionCardButton, banner.tone === 'danger' && styles.actionCardButtonDanger, banner.tone === 'warning' && styles.actionCardButtonWarning]}
-              onPress={() => router.push(banner.target as any)}
+              onPress={() => {
+                if (banner.target.startsWith('mailto:') || banner.target.startsWith('http')) {
+                  require('react-native').Linking.openURL(banner.target);
+                } else {
+                  router.push(banner.target as any);
+                }
+              }}
               activeOpacity={0.85}
             >
               <Text style={styles.actionCardButtonText}>{banner.button}</Text>

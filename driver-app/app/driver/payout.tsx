@@ -413,7 +413,7 @@ export default function PayoutScreen() {
                                 onPress={() => setPayoutAmount(driverBalance.available_balance.toString())}
                             >
                                 <Text style={styles.maxAmount}>
-                                    Available: {formatCurrency(driverBalance.available_balance)}
+                                    Available: {formatCurrency(driverBalance.available_balance)} · Min $10.00
                                 </Text>
                             </TouchableOpacity>
                         </View>

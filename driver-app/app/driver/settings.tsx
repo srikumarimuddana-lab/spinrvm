@@ -265,6 +265,14 @@ export default function SettingsScreen() {
                             <Text style={styles.settingLabel}>Report Safety Issue</Text>
                             <Ionicons name="chevron-forward" size={18} color={COLORS.textDim} />
                         </TouchableOpacity>
+                        <View style={styles.cardDivider} />
+                        <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/driver/emergency-contacts' as any)}>
+                            <View style={[styles.settingIcon, { backgroundColor: 'rgba(34,197,94,0.1)' }]}>
+                                <Ionicons name="people" size={18} color="#22C55E" />
+                            </View>
+                            <Text style={styles.settingLabel}>Emergency Contacts</Text>
+                            <Ionicons name="chevron-forward" size={18} color={COLORS.textDim} />
+                        </TouchableOpacity>
                     </View>
                 </View>
 

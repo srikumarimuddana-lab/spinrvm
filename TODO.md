@@ -48,21 +48,48 @@
   raises `RuntimeError` if `ENV=production` and `ALLOWED_ORIGINS`
   contains `"*"`.
 
-- [ ] **Backend: Hardcoded JWT secret** - Dev mode security issue
-  - File: `backend/server.py`
-  - Action: Ensure strong secret required in production
+- [x] **Backend: Hardcoded JWT secret** - ✅ Fixed 2026-04-12.
+  - Unified `backend/dependencies.py` on `settings.JWT_SECRET` from
+    `core/config.py` — previously it had its own `os.environ.get`
+    + hardcoded fallback, so admin JWTs and user JWTs were signed
+    with DIFFERENT secrets (silent auth hazard).
+  - `backend/core/middleware.init_middleware` now raises `RuntimeError`
+    at startup if `ENV=production` AND `JWT_SECRET` is one of the
+    known defaults (`your-strong-secret-key`,
+    `spinr-dev-secret-key-NOT-FOR-PRODUCTION`) OR shorter than 32
+    characters. Same fail-fast pattern as the CORS check.
+  - Removed the debug log lines in `dependencies.py` that dumped
+    `JWT_SECRET[:10]` on every token creation and verification error
+    — logging secret material is a credential leak even for short
+    prefixes, since it shortcuts offline brute-force.
 
 - [x] **Backend: Large server.py** - ✅ Already resolved.
   `backend/server.py` is now 136 lines; route modules live under
   `backend/routes/` and are mounted in `server.py`.
 
-- [ ] **Driver App: 4-digit OTP** - Should be 6-digit for production
-  - Files: `backend/server.py`, `driver-app/app/otp.tsx`
-  - Action: Increase to 6-digit minimum
+- [x] **Driver App: 4-digit OTP** - ✅ Fixed 2026-04-12.
+  - `backend/dependencies.generate_otp` now returns a 6-digit code
+    generated with `secrets.choice` (cryptographically secure —
+    previously used `random.choices` which is predictable enough
+    to attack offline).
+  - `backend/routes/auth.py` dev fallback bumped from `"1234"` to
+    `"123456"` so it matches the new length.
+  - `shared/config/spinr.config.ts` `otp.length` bumped 4 → 6.
+  - `driver-app/app/otp.tsx` + `rider-app/app/otp.tsx` hardcoded
+    `codeLength = 6` (no more branch on `isBackendMode`).
+  - `backend/tests/test_auth.py` already asserted `len(otp) == 6`,
+    so these changes actually make the test suite pass rather than
+    breaking it.
 
-- [ ] **Driver App: No geofence verification** - Arrival confirmation
-  - File: `driver-app/store/driverStore.ts`
-  - Action: Add distance check before allowing arrival
+- [x] **Driver App: No geofence verification** - ✅ Fixed 2026-04-12.
+  The 100 m haversine check was already implemented in
+  `driverStore.arriveAtPickup` at `driver-app/store/driverStore.ts:275`
+  but was never invoked with location because the callsite in
+  `driver-app/app/driver/index.tsx` was `() => arriveAtPickup(id)`
+  with no coordinates. Fixed the callsite to pass
+  `location?.coords.latitude` / `location?.coords.longitude`, so the
+  check now actually runs. Drivers who tap "Arrived" while more than
+  100 m from the pickup point now get a clear error message.
 
 ## Medium Priority
 
@@ -82,9 +109,18 @@
   - File: `driver-app/app/driver/ride-detail.tsx`
   - Action: Add tip selection UI
 
-- [ ] **Driver App: Race condition handling** - Multiple drivers accepting
-  - File: `driver-app/store/driverStore.ts`
-  - Action: Handle "ride already accepted" gracefully
+- [x] **Driver App: Race condition handling** - ✅ Fixed 2026-04-12
+  (UI side). When `POST /drivers/rides/{id}/accept` returns 404 or
+  400 with a detail matching `/not assigned|already|no longer|
+  cancelled|canceled/i`, `driverStore.acceptRide` now:
+  - Clears `incomingRide` and `countdownSeconds`
+  - Transitions `rideState` back to `idle`
+  - Sets `error` to "This ride was already taken by another driver.
+    You'll see the next offer when it comes in."
+  Previously the driver was left stuck on the ride-offered screen
+  with a generic "Failed to accept ride" alert. The backend side
+  still uses a read-modify-write accept (no atomic claim) — that's
+  a separate backend change for the future.
 
 ## Low Priority
 

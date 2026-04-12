@@ -455,7 +455,14 @@ export default function DriverDashboard() {
           setOtpInput={setOtpInput}
           onVerifyOTP={(otp) => verifyOTP(activeRide!.ride.id, otp)}
           onNavigate={openNavigation}
-          onArriveAtPickup={() => arriveAtPickup(activeRide!.ride.id)}
+          // Pass current coordinates so driverStore.arriveAtPickup can run
+          // its 100m haversine geofence check. Without the coords the check
+          // silently skips and drivers can mark "arrived" from anywhere.
+          onArriveAtPickup={() => arriveAtPickup(
+            activeRide!.ride.id,
+            location?.coords.latitude,
+            location?.coords.longitude,
+          )}
           onStartRide={() => startRide(activeRide!.ride.id)}
           onCompleteRide={() => completeRide(activeRide!.ride.id)}
           onCancelRide={() => cancelRide(activeRide!.ride.id)}

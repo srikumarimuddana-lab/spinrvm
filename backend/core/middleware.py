@@ -8,8 +8,34 @@ from core.config import settings
 from utils.rate_limiter import default_limiter, rate_limit_exceeded_handler
 
 
+_INSECURE_JWT_DEFAULTS = {
+    "your-strong-secret-key",  # core/config.py default
+    "spinr-dev-secret-key-NOT-FOR-PRODUCTION",  # previous dependencies.py fallback
+}
+_MIN_JWT_SECRET_LENGTH = 32
+
+
 def init_middleware(app):
     """Initialize all middleware components"""
+    # JWT secret validation (production fail-fast).
+    # Same pattern as the CORS wildcard check below: refuse to start a
+    # production server with an insecure signing secret instead of
+    # log-and-continue. Dev environments still get a usable default.
+    is_production = settings.ENV.lower() == "production"
+    if is_production:
+        secret = settings.JWT_SECRET or ""
+        if secret in _INSECURE_JWT_DEFAULTS:
+            raise RuntimeError(
+                "JWT_SECRET is set to a well-known default while ENV=production. "
+                "Generate a strong secret (python -c 'import secrets; print(secrets.token_urlsafe(64))') "
+                "and set JWT_SECRET in the environment."
+            )
+        if len(secret) < _MIN_JWT_SECRET_LENGTH:
+            raise RuntimeError(
+                f"JWT_SECRET is shorter than {_MIN_JWT_SECRET_LENGTH} characters while "
+                "ENV=production. Use a longer, random secret."
+            )
+
     # CORS Middleware
     origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
 
@@ -19,7 +45,6 @@ def init_middleware(app):
     # Remove empty strings and duplicates (preserve order for determinism)
     origins = list(dict.fromkeys(o for o in origins if o))
 
-    is_production = settings.ENV.lower() == "production"
     wildcard = "*" in origins
 
     if wildcard and is_production:

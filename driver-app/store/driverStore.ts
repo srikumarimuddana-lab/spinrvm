@@ -256,8 +256,30 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             const after = get();
             console.log('[DRV-DBG] acceptRide after fetchActiveRide: rideState=', after.rideState, 'activeRide.ride?=', !!after.activeRide?.ride, 'ride_id=', after.activeRide?.ride?.id, 'status=', after.activeRide?.ride?.status);
         } catch (err: any) {
-            console.log('[DRV-DBG] acceptRide ERROR:', err?.response?.status, err?.response?.data, err?.message);
-            set({ error: err.response?.data?.detail || 'Failed to accept ride' });
+            const status = err?.response?.status;
+            const detail: string = err?.response?.data?.detail || '';
+            console.log('[DRV-DBG] acceptRide ERROR:', status, err?.response?.data, err?.message);
+
+            // Race-condition handling: another driver beat us to the ride, or
+            // the rider cancelled between dispatch and accept. Backend returns
+            // 400 with detail "Ride not assigned to you" (see
+            // backend/routes/drivers.py accept_ride) or 404 if the ride row is
+            // gone. Either way the right UX is to clear the incoming offer,
+            // drop back to `idle`, and surface a short, non-alarming toast —
+            // NOT leave the driver stuck staring at the accept/decline panel.
+            const alreadyTakenDetail = /not assigned|already|no longer|cancelled|canceled/i.test(detail);
+            const alreadyTakenStatus = status === 404 || (status === 400 && alreadyTakenDetail);
+
+            if (alreadyTakenStatus) {
+                set({
+                    rideState: 'idle',
+                    incomingRide: null,
+                    countdownSeconds: 0,
+                    error: 'This ride was already taken by another driver. You\'ll see the next offer when it comes in.',
+                });
+            } else {
+                set({ error: detail || 'Failed to accept ride' });
+            }
         } finally {
             set({ isLoading: false });
         }

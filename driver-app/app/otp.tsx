@@ -45,7 +45,10 @@ export default function OtpScreen() {
   const params = useLocalSearchParams<{ verificationId?: string; phoneNumber: string; mode?: string }>();
   const { phoneNumber, verificationId, mode } = params;
   const isBackendMode = mode === 'backend' || !verificationId;
-  const codeLength = isBackendMode ? 4 : 6;
+  // Unified 6-digit OTP across both backend-issued and Firebase Phone Auth
+  // flows. Previously the backend-issued code was 4 digits, which was
+  // insufficient entropy for phone auth (1/10,000 guess odds per try).
+  const codeLength = 6;
 
   const [code, setCode] = useState('');
   const [verifying, setVerifying] = useState(false);

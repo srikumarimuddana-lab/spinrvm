@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, Share, Alert } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import SpinrConfig from '@shared/config/spinr.config';
@@ -21,9 +21,15 @@ interface CompletedRide {
   base_fare?: number;
   distance_fare?: number;
   time_fare?: number;
+  booking_fee?: number;
+  tip_amount?: number;
+  total_fare?: number;
   driver_earnings?: number;
   distance_km?: number;
   duration_minutes?: number;
+  pickup_address?: string;
+  dropoff_address?: string;
+  ride_completed_at?: string;
 }
 
 interface TripCompletedPanelProps {
@@ -105,6 +111,56 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
             <Text style={styles.tripStatValue}>{completedRide.duration_minutes || 0} min</Text>
           </View>
         </View>
+
+        {/* Share Receipt */}
+        <TouchableOpacity
+          style={styles.shareReceiptBtn}
+          onPress={async () => {
+            const date = completedRide.ride_completed_at
+              ? new Date(completedRide.ride_completed_at).toLocaleString('en-CA', {
+                  dateStyle: 'medium',
+                  timeStyle: 'short',
+                })
+              : new Date().toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
+
+            const receipt = [
+              '🚗 SPINR — Trip Receipt',
+              '━━━━━━━━━━━━━━━━━━━━━━━',
+              '',
+              completedRide.pickup_address ? `📍 Pickup: ${completedRide.pickup_address}` : null,
+              completedRide.dropoff_address ? `🏁 Dropoff: ${completedRide.dropoff_address}` : null,
+              `📅 ${date}`,
+              '',
+              `Distance: ${(completedRide.distance_km || 0).toFixed(1)} km`,
+              `Duration: ${completedRide.duration_minutes || 0} min`,
+              '',
+              '── Fare Breakdown ──',
+              `Base Fare:     $${(completedRide.base_fare || 0).toFixed(2)}`,
+              `Distance Fare: $${(completedRide.distance_fare || 0).toFixed(2)}`,
+              `Time Fare:     $${(completedRide.time_fare || 0).toFixed(2)}`,
+              completedRide.booking_fee ? `Booking Fee:   $${completedRide.booking_fee.toFixed(2)}` : null,
+              completedRide.tip_amount ? `Tip:           $${completedRide.tip_amount.toFixed(2)}` : null,
+              '━━━━━━━━━━━━━━━━━━━━━━━',
+              `YOUR EARNINGS: $${(completedRide.driver_earnings || 0).toFixed(2)}`,
+              '',
+              completedRide.id ? `Trip ID: ${completedRide.id}` : null,
+              '',
+              'Powered by Spinr — 0% commission rideshare',
+            ]
+              .filter(Boolean)
+              .join('\n');
+
+            try {
+              await Share.share({ title: 'Spinr Trip Receipt', message: receipt });
+            } catch {
+              Alert.alert('Receipt', receipt);
+            }
+          }}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="receipt-outline" size={16} color={COLORS.accent} />
+          <Text style={styles.shareReceiptText}>Share Receipt</Text>
+        </TouchableOpacity>
 
         {/* Rate your rider */}
         {!submitted && (
@@ -268,6 +324,22 @@ const styles = StyleSheet.create({
     maxHeight: 100,
     borderWidth: 1,
     borderColor: COLORS.border,
+  },
+  shareReceiptBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    marginBottom: 16,
+    backgroundColor: COLORS.surfaceLight,
+    borderRadius: 12,
+    width: '100%',
+  },
+  shareReceiptText: {
+    color: COLORS.accent,
+    fontSize: 14,
+    fontWeight: '600',
   },
   doneBtn: {
     borderRadius: 16,

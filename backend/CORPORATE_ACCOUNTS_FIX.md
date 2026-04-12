@@ -1,5 +1,15 @@
 # Corporate Accounts API Fix
 
+> **Status: historical.** As of 2026-04-11, the canonical `corporate_accounts`
+> schema lives in `migrations/05_corporate_accounts.sql`, and FK constraints
+> are added by `migrations/17_corporate_accounts_fk.sql`. The standalone
+> `corporate_accounts_schema.sql` file referenced below has been deleted.
+> The old, conflicting `corporate_accounts` CREATE TABLE has been removed
+> from `migrations/03_corporate_accounts_heatmap.sql` (which now only adds
+> heat-map settings and FK link columns). This document is kept as a
+> historical record of the drift and how it was resolved; follow the
+> current migration order in `READINESS_REPORT.md` § A instead.
+
 ## Problem
 The admin dashboard was showing a console error when trying to access the corporate accounts page:
 ```

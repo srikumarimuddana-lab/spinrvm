@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { loginAdminSession } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
@@ -10,8 +10,21 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Eye, EyeOff } from "lucide-react";
 
-export default function LoginPage() {
+// Only allow same-origin relative paths as `next` redirects so a malicious
+// URL like /login?next=https://evil.example can't bounce the user off-site.
+function sanitizeNextPath(next: string | null): string {
+    if (!next) return "/dashboard";
+    if (!next.startsWith("/") || next.startsWith("//")) return "/dashboard";
+    return next;
+}
+
+// useSearchParams() must live under a Suspense boundary in Next.js 13+ —
+// calling it in the page's default export would fail the production build
+// with "useSearchParams() should be wrapped in a suspense boundary".
+// Split into an inner client component + a Suspense-wrapped default export.
+function LoginForm() {
     const router = useRouter();
+    const searchParams = useSearchParams();
     const { setToken, setUser } = useAuthStore();
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
@@ -26,7 +39,9 @@ export default function LoginPage() {
             // Call the admin login API
             const data = await loginAdminSession(email, password);
 
-            // Store token and user in Zustand
+            // Store token and user in Zustand. setToken also dual-writes
+            // the `admin_token` cookie so src/middleware.ts will let the
+            // next navigation through to /dashboard.
             setToken(data.token);
             setUser({
                 id: data.user.id,
@@ -34,8 +49,10 @@ export default function LoginPage() {
                 role: data.user.role,
             });
 
-            // Redirect to dashboard
-            router.push('/dashboard');
+            // Bounce back to the originally requested page if middleware
+            // redirected the user here, otherwise land on /dashboard.
+            const next = sanitizeNextPath(searchParams.get("next"));
+            router.push(next);
         } catch (e: any) {
             console.error('Login error:', e);
             setError(e.message || "Invalid credentials");
@@ -112,5 +129,19 @@ export default function LoginPage() {
                 </CardContent>
             </Card>
         </div>
+    );
+}
+
+export default function LoginPage() {
+    return (
+        <Suspense
+            fallback={
+                <div className="flex min-h-screen items-center justify-center bg-background p-4">
+                    <div className="text-sm text-muted-foreground">Loading…</div>
+                </div>
+            }
+        >
+            <LoginForm />
+        </Suspense>
     );
 }

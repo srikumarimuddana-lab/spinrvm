@@ -8,7 +8,9 @@ import {
     Platform,
     ActivityIndicator,
     Alert,
+    Share,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -239,12 +241,44 @@ export default function TaxDocumentsScreen() {
                             onPress={async () => {
                                 try {
                                     const res = await api.get(`/drivers/earnings/export?year=${selectedYear}`);
-                                    Alert.alert(
-                                        'Export Ready',
-                                        `Your ${selectedYear} earnings data is ready. Data includes ride details, tips, and payouts.`
-                                    );
+                                    const csv: string = res.data?.data || '';
+                                    const filename: string = res.data?.filename || `earnings_${selectedYear}.csv`;
+                                    if (!csv) {
+                                        Alert.alert('Export Failed', 'No data returned for this year.');
+                                        return;
+                                    }
+
+                                    // Hand the CSV to the OS share sheet. Most relevant
+                                    // targets (Mail, Drive, Files, Notes) accept long
+                                    // text payloads, which is exactly what an accountant
+                                    // needs. Falls back to clipboard if Share fails or
+                                    // the user dismisses the sheet on a platform that
+                                    // doesn't support file attachment for plain strings.
+                                    try {
+                                        const result = await Share.share({
+                                            title: filename,
+                                            message: csv,
+                                        });
+                                        if (result.action === Share.dismissedAction) {
+                                            // User dismissed the sheet — offer clipboard
+                                            // as a graceful fallback so the data isn't lost.
+                                            await Clipboard.setStringAsync(csv);
+                                            Alert.alert(
+                                                'Copied to Clipboard',
+                                                `${filename} is on your clipboard. Paste into Mail, Notes, or your accountant tool.`
+                                            );
+                                        }
+                                    } catch (shareErr) {
+                                        console.log('[earnings export] Share failed:', shareErr);
+                                        await Clipboard.setStringAsync(csv);
+                                        Alert.alert(
+                                            'Copied to Clipboard',
+                                            `${filename} is on your clipboard. Paste into Mail, Notes, or your accountant tool.`
+                                        );
+                                    }
                                 } catch (err) {
-                                    Alert.alert('Error', 'Failed to export data');
+                                    console.log('[earnings export] API failed:', err);
+                                    Alert.alert('Error', 'Failed to export data. Please try again.');
                                 }
                             }}
                         >

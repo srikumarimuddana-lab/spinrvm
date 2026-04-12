@@ -42,6 +42,7 @@ export default function DriverDashboard() {
     activeRide,
     completedRide,
     countdownSeconds,
+    configuredCountdownSeconds,
     setCountdown,
     acceptRide,
     declineRide,
@@ -186,7 +187,12 @@ export default function DriverDashboard() {
   // Ride Offer Panel
   const renderRideOfferPanel = () => {
     if (!incomingRide) return null;
-    const progress = countdown / 15;
+    // Timer-bar progress tracks remaining countdown as a fraction of the
+    // configured max. Previously this was `/ 15` hardcoded, so bumping
+    // ride_offer_timeout_seconds in backend settings would have left
+    // the visual bar stuck past 100%.
+    const maxCountdown = configuredCountdownSeconds || 15;
+    const progress = Math.max(0, Math.min(1, countdown / maxCountdown));
     const fare = (incomingRide.fare || 0).toFixed(2);
 
     return (
@@ -455,7 +461,14 @@ export default function DriverDashboard() {
           setOtpInput={setOtpInput}
           onVerifyOTP={(otp) => verifyOTP(activeRide!.ride.id, otp)}
           onNavigate={openNavigation}
-          onArriveAtPickup={() => arriveAtPickup(activeRide!.ride.id)}
+          // Pass current coordinates so driverStore.arriveAtPickup can run
+          // its 100m haversine geofence check. Without the coords the check
+          // silently skips and drivers can mark "arrived" from anywhere.
+          onArriveAtPickup={() => arriveAtPickup(
+            activeRide!.ride.id,
+            location?.coords.latitude,
+            location?.coords.longitude,
+          )}
           onStartRide={() => startRide(activeRide!.ride.id)}
           onCompleteRide={() => completeRide(activeRide!.ride.id)}
           onCancelRide={() => cancelRide(activeRide!.ride.id)}

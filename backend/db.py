@@ -301,47 +301,6 @@ class DB:
         """Paginated row fetch for admin and other callers."""
         return await db_supabase.get_rows(table, filters, order, desc, limit, offset)
 
-    async def fetchall(self, query: str, params: Optional[Dict[str, Any]] = None):
-        """
-        Execute a raw SQL SELECT query and return all rows.
-
-        Args:
-            query: SQL query string (e.g., 'SELECT * FROM settings')
-            params: Optional dictionary of query parameters
-
-        Returns:
-            List of dictionaries representing rows
-        """
-        return await db_supabase.execute_query(query, params)
-
-    async def fetchone(self, query: str, params: Optional[Dict[str, Any]] = None):
-        """
-        Execute a raw SQL SELECT query and return the first row.
-
-        Args:
-            query: SQL query string (e.g., 'SELECT * FROM settings WHERE id = $1')
-            params: Optional dictionary of query parameters
-
-        Returns:
-            Dictionary representing the first row, or None if no results
-        """
-        rows = await db_supabase.execute_query(query, params)
-        return rows[0] if rows else None
-
-    async def execute(self, query: str, params: Optional[Dict[str, Any]] = None):
-        """
-        Execute a raw SQL INSERT, UPDATE, or DELETE query.
-
-        Args:
-            query: SQL query string (e.g., 'INSERT INTO settings (key, value) VALUES ($1, $2)')
-            params: Optional dictionary of query parameters
-
-        Returns:
-            Dictionary with execution results
-        """
-        return await db_supabase.execute_write(query, params)
-
-
 class BaseCollection(Collection):
     def __init__(self, name: str):
         super().__init__(name)

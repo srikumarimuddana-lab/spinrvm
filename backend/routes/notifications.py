@@ -40,7 +40,22 @@ class PreferencesUpdate(BaseModel):
 
 @api_router.post("/register-token")
 async def register_push_token(request: Request, current_user: dict = Depends(get_current_user)):
-    """Save FCM push token for this user/device."""
+    """Save FCM push token for this user/device.
+
+    Writes to two places:
+
+    * `push_tokens` table — the canonical, multi-device store keyed by
+      (user_id, platform). Used for per-device bookkeeping and future
+      multi-device delivery.
+    * `users.fcm_token` column — the "current device" shortcut used by
+      `features.send_push_notification`, which looks the token up here
+      rather than joining against `push_tokens`. Keeping both in sync
+      means a single registration actually makes the notification
+      delivery path work.
+
+    When the same user registers a new token (e.g. they reinstalled the
+    app), the new token replaces the old one on both rows.
+    """
     data = await request.json()
     token = data.get("token")
     platform = data.get("platform", "unknown")
@@ -70,6 +85,14 @@ async def register_push_token(request: Request, current_user: dict = Depends(get
                 "created_at": datetime.utcnow().isoformat(),
             }
         )
+
+    # Mirror to users.fcm_token so features.send_push_notification can find it.
+    # This is best-effort: if the column doesn't exist yet (pre sql/03_features),
+    # the update is a no-op rather than a hard failure.
+    try:
+        await db.users.update_one({"id": current_user["id"]}, {"$set": {"fcm_token": token}})
+    except Exception as exc:
+        logger.warning(f"Failed to mirror FCM token onto users.fcm_token: {exc}")
 
     logger.info(f"FCM token registered for user {current_user['id']} ({platform})")
     return {"success": True}

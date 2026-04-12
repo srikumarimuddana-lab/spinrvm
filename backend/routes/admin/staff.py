@@ -8,8 +8,10 @@ from pydantic import BaseModel
 
 try:
     from ...db import db
+    from ...utils.password import hash_password
 except ImportError:
     from db import db
+    from utils.password import hash_password
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +89,14 @@ async def list_staff(authorization: Optional[str] = Header(None)):
 @router.post("/staff")
 async def create_staff(req: StaffCreateRequest, authorization: Optional[str] = Header(None)):
     """Create a new staff member with role-based module access."""
-    import hashlib
+    # Basic password policy: short passwords defeat bcrypt's cost factor
+    # because the keyspace is too small. 12 chars is the floor; operators
+    # should pick much longer in practice.
+    if not req.password or len(req.password) < 12:
+        raise HTTPException(
+            status_code=400,
+            detail="Password must be at least 12 characters long.",
+        )
 
     # Check if email already exists
     existing = await db.admin_staff.find_one({"email": req.email.lower()})
@@ -105,7 +114,9 @@ async def create_staff(req: StaffCreateRequest, authorization: Optional[str] = H
     staff = {
         "id": str(uuid.uuid4()),
         "email": req.email.lower(),
-        "password_hash": hashlib.sha256(req.password.encode()).hexdigest(),
+        # bcrypt, not sha256. See utils/password.py for the rationale
+        # + the legacy SHA256 auto-upgrade path on login.
+        "password_hash": hash_password(req.password),
         "first_name": req.first_name,
         "last_name": req.last_name,
         "role": req.role,

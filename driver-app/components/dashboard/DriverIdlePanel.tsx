@@ -40,7 +40,7 @@ interface IdlePanelProps {
   pulseAnim: any;
 }
 
-function getStateBanners(t: (key: string) => string) {
+function getStateBanners(t: (key: string) => string, driverData?: any) {
   return {
     profile_incomplete: {
       title: t('dashboard.completeProfile'),
@@ -80,7 +80,7 @@ function getStateBanners(t: (key: string) => string) {
     },
     suspended: {
       title: t('dashboard.accountSuspended'),
-      subtitle: t('dashboard.contactSupport'),
+      subtitle: driverData?.suspension_reason || driverData?.ban_reason || t('dashboard.contactSupport'),
       button: t('dashboard.contactSupport'),
       icon: 'ban', tone: 'danger', target: '/driver/settings',
     },
@@ -94,7 +94,7 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   onToggleOnline,
 }) => {
   const { t } = useLanguageStore();
-  const STATE_BANNERS = getStateBanners(t);
+  const STATE_BANNERS = getStateBanners(t, driverData);
   const insets = useSafeAreaInsets();
   const router = useRouter();
   let onboardingStatus = useAuthStore(s => s.user?.driver_onboarding_status ?? null);

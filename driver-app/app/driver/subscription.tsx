@@ -136,18 +136,27 @@ export default function SubscriptionScreen() {
         // The user is now in the browser paying. When they come back
         // (via deep-link), the app will call verify-session. For now
         // we poll briefly to catch the webhook activation.
+        // G11: Retry verification 3 times over 30s instead of a single 5s
+        // attempt. Stripe webhooks can take 5-15s depending on network and
+        // event queue depth; a single 5s poll often missed the activation.
         const sessionId = res.data.session_id;
         if (sessionId) {
-          // Give the webhook ~5s to fire, then verify.
-          setTimeout(async () => {
+          const retryDelays = [5000, 10000, 15000]; // 5s, 10s, 15s (cumulative ~30s)
+          for (const delay of retryDelays) {
+            await new Promise(r => setTimeout(r, delay));
             try {
               const verifyRes = await api.get(`/drivers/subscription/verify-session?session_id=${sessionId}`);
               if (verifyRes.data?.status === 'active') {
                 Alert.alert('Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`);
+                loadData();
+                return;
               }
-            } catch { /* webhook may not have fired yet — loadData will catch up */ }
-            loadData();
-          }, 5000);
+            } catch { /* keep retrying */ }
+          }
+          // All retries exhausted — still pending. The deep-link handler
+          // or next screen load will catch it.
+          Alert.alert('Processing...', 'Your payment is being confirmed. This may take a moment.');
+          loadData();
         }
       } else {
         // Dev/test mode — subscription activated immediately

@@ -355,6 +355,30 @@ export default function PayoutScreen() {
                     )}
                 </View>
 
+                {/* G14: Show a clear CTA when Stripe isn't set up yet */}
+                {!isStripeReady && !initialLoading && (
+                    <View style={styles.section}>
+                        <View style={[styles.payoutCard, { alignItems: 'center', paddingVertical: 24 }]}>
+                            <Ionicons name="card-outline" size={40} color={COLORS.textDim} />
+                            <Text style={[styles.sectionTitle, { marginTop: 12, textAlign: 'center' }]}>
+                                Set Up Payouts
+                            </Text>
+                            <Text style={{ color: COLORS.textDim, fontSize: 13, textAlign: 'center', marginTop: 4, marginBottom: 16, lineHeight: 18 }}>
+                                Connect your bank account via Stripe to start receiving your earnings.
+                            </Text>
+                            <TouchableOpacity
+                                style={[styles.payoutButton, { paddingHorizontal: 24, paddingVertical: 12, opacity: stripeOnboarding ? 0.6 : 1 }]}
+                                onPress={handleStripeOnboarding}
+                                disabled={stripeOnboarding}
+                            >
+                                <Text style={styles.payoutButtonText}>
+                                    {stripeOnboarding ? 'Opening Stripe...' : 'Connect Bank Account'}
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                )}
+
                 {/* Payout Request */}
                 {isStripeReady && driverBalance && driverBalance.available_balance > 0 && (
                     <View style={styles.section}>

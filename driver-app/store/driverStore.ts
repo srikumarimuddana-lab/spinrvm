@@ -263,10 +263,13 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     setCountdown: (seconds) => {
         set({ countdownSeconds: seconds });
         if (seconds <= 0 && get().rideState === 'ride_offered') {
-            // Auto-decline on timeout
+            // Auto-decline on timeout + show a clear toast so the driver
+            // knows the offer expired (G10). Previously the offer just
+            // silently disappeared with no feedback.
             const incoming = get().incomingRide;
             if (incoming) {
                 get().declineRide(incoming.ride_id).catch(console.log);
+                set({ error: 'Ride offer expired. You\'ll see the next one when it comes in.' });
             }
         }
     },

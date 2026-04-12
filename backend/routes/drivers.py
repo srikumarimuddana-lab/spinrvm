@@ -1885,7 +1885,19 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
 
 @api_router.post("/subscription/subscribe")
 async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_current_user)):
-    """Subscribe driver to a plan."""
+    """Subscribe driver to a plan.
+
+    **With Stripe configured** (`stripe_secret_key` in app_settings):
+    creates a Stripe Checkout Session and returns `{checkout_url}`.
+    The driver-app opens this URL in the browser; after payment,
+    Stripe redirects back via the app's deep-link scheme and the
+    webhook activates the subscription.
+
+    **Without Stripe** (dev/internal testing): creates and activates
+    the subscription immediately with `payment_status: "paid"`, same
+    as the pre-checkout behavior. This preserves the internal test
+    flow where no real payment is needed.
+    """
     data = await request.json()
     plan_id = data.get("plan_id")
 
@@ -1903,20 +1915,99 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found or inactive")
 
-    # Check for existing active subscription
-    existing = await db.driver_subscriptions.find_one(
-        {
+    try:
+        from ..settings_loader import get_app_settings  # type: ignore
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+
+    app_settings = await get_app_settings() or {}
+    stripe_key = app_settings.get("stripe_secret_key", "")
+
+    # ── Stripe Checkout path ────────────────────────────────────
+    if stripe_key:
+        stripe.api_key = stripe_key
+
+        # Create a pending subscription row so the webhook can find it.
+        sub_id = str(uuid.uuid4())
+        now = datetime.utcnow()
+        expires = now + timedelta(days=plan.get("duration_days", 30))
+
+        pending_sub = {
+            "id": sub_id,
             "driver_id": driver["id"],
-            "status": "active",
+            "plan_id": plan["id"],
+            "plan_name": plan["name"],
+            "price": plan["price"],
+            "rides_per_day": plan.get("rides_per_day", -1),
+            "duration_days": plan.get("duration_days", 30),
+            "status": "pending",
+            "started_at": now.isoformat(),
+            "expires_at": expires.isoformat(),
+            "payment_status": "pending",
+            "created_at": now.isoformat(),
         }
-    )
-    if existing:
-        # Cancel old subscription
-        await db.driver_subscriptions.update_one(
-            {"id": existing["id"]}, {"$set": {"status": "cancelled", "cancelled_at": datetime.utcnow().isoformat()}}
+        await db.driver_subscriptions.insert_one(pending_sub)
+
+        # Stripe Checkout Session — one-time payment matching the plan price.
+        # success_url uses the driver-app's deep-link scheme so the browser
+        # bounces back into the app after payment. {CHECKOUT_SESSION_ID} is
+        # a Stripe template variable that Stripe replaces with the real ID.
+        session = stripe.checkout.Session.create(
+            mode="payment",
+            payment_method_types=["card"],
+            line_items=[
+                {
+                    "price_data": {
+                        "currency": "cad",
+                        "product_data": {
+                            "name": f"Spinr Pass — {plan['name']}",
+                            "description": f"{plan.get('duration_days', 30)}-day driver subscription",
+                        },
+                        "unit_amount": int(float(plan["price"]) * 100),  # cents
+                    },
+                    "quantity": 1,
+                }
+            ],
+            metadata={
+                "subscription_id": sub_id,
+                "driver_id": driver["id"],
+                "plan_id": plan["id"],
+            },
+            success_url="spinr-driver://subscription/success?session_id={CHECKOUT_SESSION_ID}",
+            cancel_url="spinr-driver://subscription/cancelled",
+            customer_email=current_user.get("email"),
         )
 
-    # Create new subscription
+        # Store the Stripe session ID on the pending subscription so the
+        # webhook can match it.
+        await db.driver_subscriptions.update_one(
+            {"id": sub_id},
+            {"$set": {"stripe_session_id": session.id}},
+        )
+
+        logger.info(
+            f"[SUBSCRIBE] Checkout session created for driver {driver['id']} "
+            f"plan={plan['name']} session={session.id}"
+        )
+
+        return {
+            "success": True,
+            "checkout_url": session.url,
+            "session_id": session.id,
+            "mode": "stripe",
+        }
+
+    # ── Dev/test fallback — no Stripe key configured ────────────
+    # Check for existing active subscription
+    existing = await db.driver_subscriptions.find_one(
+        {"driver_id": driver["id"], "status": "active"}
+    )
+    if existing:
+        await db.driver_subscriptions.update_one(
+            {"id": existing["id"]},
+            {"$set": {"status": "cancelled", "cancelled_at": datetime.utcnow().isoformat()}},
+        )
+
     now = datetime.utcnow()
     expires = now + timedelta(days=plan.get("duration_days", 30))
 
@@ -1931,20 +2022,123 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
         "status": "active",
         "started_at": now.isoformat(),
         "expires_at": expires.isoformat(),
-        "payment_status": "paid",  # TODO: Stripe charge
+        "payment_status": "paid",
         "created_at": now.isoformat(),
     }
 
     await db.driver_subscriptions.insert_one(subscription)
 
-    # Update plan subscriber count
     await db.subscription_plans.update_one(
-        {"id": plan_id}, {"$set": {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1}}
+        {"id": plan_id},
+        {"$set": {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1}},
     )
 
-    logger.info(f"Driver {driver['id']} subscribed to {plan['name']} (${plan['price']})")
+    logger.info(f"[SUBSCRIBE] Dev mode: driver {driver['id']} subscribed to {plan['name']} (${plan['price']})")
 
-    return {"success": True, "subscription": subscription}
+    return {"success": True, "subscription": subscription, "mode": "dev"}
+
+
+@api_router.get("/subscription/verify-session")
+async def verify_subscription_session(
+    session_id: str = Query(...),
+    current_user: dict = Depends(get_current_user),
+):
+    """Verify a Stripe Checkout Session and return the subscription status.
+
+    Called by the driver-app after the Stripe Checkout deep-link returns
+    to the app. The webhook may or may not have fired by this point — if
+    it has, the subscription is already active; if not, we check the
+    Stripe session directly and activate it here (idempotent).
+
+    Returns `{status: "active"}` if payment succeeded or `{status: "pending"}`
+    if Stripe hasn't confirmed yet (caller should poll).
+    """
+    sub = await db.driver_subscriptions.find_one({"stripe_session_id": session_id})
+    if not sub:
+        raise HTTPException(status_code=404, detail="Subscription session not found")
+
+    # Already activated (webhook beat us)
+    if sub.get("status") == "active" and sub.get("payment_status") == "paid":
+        return {"status": "active", "subscription": sub}
+
+    # Check with Stripe directly
+    try:
+        from ..settings_loader import get_app_settings  # type: ignore
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+
+    app_settings = await get_app_settings() or {}
+    stripe_key = app_settings.get("stripe_secret_key", "")
+    if not stripe_key:
+        return {"status": "pending"}
+
+    stripe.api_key = stripe_key
+    try:
+        session = stripe.checkout.Session.retrieve(session_id)
+    except Exception as e:
+        logger.warning(f"[SUBSCRIBE] verify-session Stripe error: {e}")
+        return {"status": "pending"}
+
+    if session.payment_status == "paid":
+        # Activate the subscription (same as webhook path, idempotent).
+        await _activate_subscription(sub["id"], sub.get("plan_id"))
+        sub = await db.driver_subscriptions.find_one({"id": sub["id"]})
+        return {"status": "active", "subscription": sub}
+
+    return {"status": "pending"}
+
+
+async def _activate_subscription(subscription_id: str, plan_id: str | None = None):
+    """Activate a pending subscription after payment confirmation.
+
+    Called by both the webhook handler and the verify-session endpoint
+    (whichever runs first). Idempotent — skips if already active.
+    """
+    sub = await db.driver_subscriptions.find_one({"id": subscription_id})
+    if not sub or sub.get("status") == "active":
+        return  # already done
+
+    driver_id = sub.get("driver_id")
+
+    # Cancel any prior active subscription for this driver.
+    existing = await db.driver_subscriptions.find_one(
+        {"driver_id": driver_id, "status": "active"}
+    )
+    if existing and existing["id"] != subscription_id:
+        await db.driver_subscriptions.update_one(
+            {"id": existing["id"]},
+            {"$set": {"status": "cancelled", "cancelled_at": datetime.utcnow().isoformat()}},
+        )
+
+    # Activate.
+    await db.driver_subscriptions.update_one(
+        {"id": subscription_id},
+        {"$set": {"status": "active", "payment_status": "paid"}},
+    )
+
+    # Increment subscriber count.
+    if plan_id:
+        plan = await db.subscription_plans.find_one({"id": plan_id})
+        if plan:
+            await db.subscription_plans.update_one(
+                {"id": plan_id},
+                {"$set": {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1}},
+            )
+
+    logger.info(f"[SUBSCRIBE] Subscription {subscription_id} activated for driver {driver_id}")
+
+    # Push notification to driver.
+    if driver_id:
+        driver = await db.drivers.find_one({"id": driver_id})
+        if driver and driver.get("user_id"):
+            try:
+                await send_push_notification(
+                    driver["user_id"],
+                    "Spinr Pass Activated! 🎉",
+                    f"Your {sub.get('plan_name', 'Spinr Pass')} subscription is now active. Go online and start earning!",
+                )
+            except Exception as push_err:
+                logger.warning(f"[SUBSCRIBE] Push notification failed: {push_err}")
 
 
 @api_router.post("/subscription/cancel")

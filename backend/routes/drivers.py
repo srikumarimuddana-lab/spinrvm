@@ -1033,13 +1033,20 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         f"post_status={ride.get('status') if ride else 'ROW_GONE'}"
     )
 
-    # Notify rider
+    # Notify rider via both WebSocket (for the instant in-app
+    # transition) AND FCM push (so the rider still gets the update
+    # if the app was backgrounded when the driver accepted).
+    # The `data` payload lets the rider-app foreground FCM handler in
+    # app/_layout.tsx route the event without reparsing the title.
     if ride and ride.get("rider_id"):
         await manager.send_personal_message(
             {"type": "driver_accepted", "ride_id": ride_id}, f"rider_{ride['rider_id']}"
         )
         await send_push_notification(
-            ride["rider_id"], "Driver Assigned! 🚗", "Your driver has accepted the ride and is on the way."
+            ride["rider_id"],
+            "Driver Assigned! 🚗",
+            "Your driver has accepted the ride and is on the way.",
+            data={"type": "driver_accepted", "ride_id": str(ride_id)},
         )
 
     return {"success": True}
@@ -1112,7 +1119,10 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
     if ride.get("rider_id"):
         await manager.send_personal_message({"type": "driver_arrived", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
         await send_push_notification(
-            ride["rider_id"], "Driver Arrived! 📍", "Your driver has arrived at the pickup location."
+            ride["rider_id"],
+            "Driver Arrived! 📍",
+            "Your driver has arrived at the pickup location.",
+            data={"type": "driver_arrived", "ride_id": str(ride_id)},
         )
 
     return {"success": True}
@@ -1139,7 +1149,12 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
 
     if ride.get("rider_id"):
         await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
-        await send_push_notification(ride["rider_id"], "Ride Started! ▶️", "Your ride has started. Have a safe trip!")
+        await send_push_notification(
+            ride["rider_id"],
+            "Ride Started! ▶️",
+            "Your ride has started. Have a safe trip!",
+            data={"type": "ride_started", "ride_id": str(ride_id)},
+        )
 
     return {"success": True}
 
@@ -1160,7 +1175,12 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
     ride = await db.rides.find_one({"id": ride_id})
     if ride and ride.get("rider_id"):
         await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
-        await send_push_notification(ride["rider_id"], "Ride Started! ▶️", "Your ride has started. Have a safe trip!")
+        await send_push_notification(
+            ride["rider_id"],
+            "Ride Started! ▶️",
+            "Your ride has started. Have a safe trip!",
+            data={"type": "ride_started", "ride_id": str(ride_id)},
+        )
     return {"success": True}
 
 
@@ -1313,6 +1333,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             completed_ride["rider_id"],
             "Ride Completed! ✅",
             f"Your ride has finished. Total fare: ${completed_ride.get('total_fare', ride.get('total_fare', 0))}",
+            data={"type": "ride_completed", "ride_id": str(ride_id)},
         )
 
     return serialize_doc(completed_ride)
@@ -1346,7 +1367,12 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
         await manager.send_personal_message(
             {"type": "ride_cancelled", "ride_id": ride_id, "reason": reason}, f"rider_{ride['rider_id']}"
         )
-        await send_push_notification(ride["rider_id"], "Ride Cancelled ❌", "Your driver has cancelled the ride.")
+        await send_push_notification(
+            ride["rider_id"],
+            "Ride Cancelled ❌",
+            "Your driver has cancelled the ride.",
+            data={"type": "ride_cancelled", "ride_id": str(ride_id)},
+        )
 
     return {"success": True}
 

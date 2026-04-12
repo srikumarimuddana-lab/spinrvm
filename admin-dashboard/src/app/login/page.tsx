@@ -47,6 +47,9 @@ function LoginForm() {
                 id: data.user.id,
                 email: data.user.email,
                 role: data.user.role,
+                first_name: data.user.first_name,
+                last_name: data.user.last_name,
+                modules: data.user.modules,
             });
 
             // Bounce back to the originally requested page if middleware

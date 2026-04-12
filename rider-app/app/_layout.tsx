@@ -9,6 +9,7 @@ import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useRideStore } from '../store/rideStore';
+import { useRiderSocket } from '../hooks/useRiderSocket';
 import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
@@ -17,6 +18,7 @@ import {
   requestPushPermissionAndGetToken,
   onForegroundMessage,
   setBackgroundMessageHandler,
+  onTokenRefresh,
 } from '@shared/services/firebase';
 
 // expo-notifications' push-token APIs were removed from Expo Go in SDK 53,
@@ -80,6 +82,14 @@ export default function RootLayout() {
   const [isOffline, setIsOffline] = useState(false);
   // Guard so we only register the FCM token once per auth session.
   const fcmRegisteredRef = useRef(false);
+
+  // ── Real-time WebSocket for ride-state + driver-location updates ─
+  // Connects when the rider has an active ride (currentRide is set in
+  // the store by ride-options.tsx after createRide). Disconnects
+  // automatically when the ride finishes or is cancelled. Screens that
+  // previously polled every 3s now poll every 15s as a fallback — the
+  // WebSocket delivers the same updates in <100ms.
+  const { connectionState: wsState } = useRiderSocket();
 
   // ── Cold-start init: auth, location, Firebase, Android channel ──
   useEffect(() => {
@@ -165,6 +175,25 @@ export default function RootLayout() {
         console.log('[Push] Rider FCM token registration failed:', e);
       }
     })();
+
+    // Subscribe to FCM token rotations so push delivery doesn't
+    // silently fail when Firebase rotates the device token.
+    const unsubTokenRefresh = onTokenRefresh(async (newToken: string) => {
+      try {
+        const api = (await import('@shared/api/client')).default;
+        await api.post('/notifications/register-token', {
+          token: newToken,
+          platform: Platform.OS,
+        });
+        console.log('[Push] Rider refreshed FCM token registered with backend');
+      } catch (e) {
+        console.log('[Push] Rider refreshed FCM token registration failed:', e);
+      }
+    });
+
+    return () => {
+      if (typeof unsubTokenRefresh === 'function') unsubTokenRefresh();
+    };
   }, [isAuthInitialized, authToken]);
 
   // ── Foreground FCM message handler ──

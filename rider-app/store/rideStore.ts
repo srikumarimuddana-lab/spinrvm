@@ -144,6 +144,12 @@ interface RideState {
   setUserLocation: (loc: { latitude: number; longitude: number } | null) => void;
   fetchAvailablePromos: (rideFare?: number) => Promise<void>;
   applyPromo: (promo: any | null) => void;
+
+  // WebSocket-driven updates (see rider-app/hooks/useRiderSocket.ts).
+  // These are called by the WebSocket message handler to update the
+  // store in real-time rather than waiting for the next poll cycle.
+  updateDriverLocation: (lat: number, lng: number, speed?: number | null, heading?: number | null) => void;
+  applyRideStatusFromWS: (rideId: string, status: string, extra?: Record<string, any>) => void;
 }
 
 export const useRideStore = create<RideState>((set, get) => ({
@@ -469,5 +475,40 @@ export const useRideStore = create<RideState>((set, get) => ({
     } catch (error: any) {
       set({ error: error.message });
     }
+  },
+
+  // ── WebSocket-driven updates ────────────────────────────────────
+
+  updateDriverLocation: (lat, lng, speed, heading) => {
+    const driver = get().currentDriver;
+    if (!driver) return;
+    // Only update the coordinate fields — leave everything else (name,
+    // rating, vehicle info) untouched.
+    set({
+      currentDriver: {
+        ...driver,
+        lat,
+        lng,
+        ...(speed !== null && speed !== undefined ? { speed } : {}),
+        ...(heading !== null && heading !== undefined ? { heading } : {}),
+      },
+    });
+  },
+
+  applyRideStatusFromWS: (rideId, status, extra) => {
+    const { currentRide } = get();
+    if (!currentRide || currentRide.id !== rideId) return;
+
+    // Apply the status transition and any extra fields (like total_fare
+    // on ride_completed). This provides an instant in-app state change
+    // while the next poll (reduced to 15 s via the WS fallback) fills
+    // in any remaining details the WS message doesn't carry.
+    set({
+      currentRide: {
+        ...currentRide,
+        status,
+        ...(extra || {}),
+      },
+    });
   },
 }));

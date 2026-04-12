@@ -73,8 +73,8 @@ export default function RideInProgressScreen() {
   useEffect(() => {
     if (rideId) {
       fetchRide(rideId);
-      // Poll every 5 seconds for driver position + ride status updates
-      const interval = setInterval(() => fetchRide(rideId), 5000);
+      // Fallback poll — WS delivers driver position + ride status in real-time.
+      const interval = setInterval(() => fetchRide(rideId), 15000);
       return () => clearInterval(interval);
     }
   }, [rideId]);

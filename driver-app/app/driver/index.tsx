@@ -16,6 +16,7 @@ import { useDriverDashboard } from '../../hooks/useDriverDashboard';
 import { CarMarker } from '../../components/CarMarker';
 import { SOSButton } from '@shared/components/SOSButton';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
+import { useLanguageStore } from '../../store/languageStore';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 
@@ -57,6 +58,8 @@ export default function DriverDashboard() {
     earnings,
     rateRider,
   } = useDriverStore();
+
+  const { t } = useLanguageStore();
 
   const {
     isOnline,
@@ -229,14 +232,14 @@ export default function DriverDashboard() {
               <Text style={styles.countdownText}>{countdown}</Text>
             </View>
             <View style={{ flex: 1, marginLeft: 14 }}>
-              <Text style={styles.rideOfferTitle}>New Ride Request!</Text>
+              <Text style={styles.rideOfferTitle}>{t('rideOffer.newRideRequest')}</Text>
               <View style={styles.rideTypeBadge}>
                 <Ionicons name="car-sport" size={12} color={COLORS.accent} />
-                <Text style={styles.rideTypeText}>Standard Ride</Text>
+                <Text style={styles.rideTypeText}>{t('rideOffer.standardRide')}</Text>
               </View>
             </View>
             <View style={styles.fareContainer}>
-              <Text style={styles.fareLabel}>Fare</Text>
+              <Text style={styles.fareLabel}>{t('rideOffer.fare')}</Text>
               <Text style={styles.fareAmount}>${fare}</Text>
             </View>
           </View>
@@ -250,16 +253,16 @@ export default function DriverDashboard() {
             </View>
             <View style={styles.routeDetails}>
               <View style={styles.routeRow}>
-                <Text style={styles.routeLabel}>PICKUP</Text>
+                <Text style={styles.routeLabel}>{t('rideOffer.pickup')}</Text>
                 <Text style={styles.routeAddress} numberOfLines={1}>
-                  {incomingRide.pickup_address || 'Pickup location'}
+                  {incomingRide.pickup_address || t('rideOffer.pickupLocation')}
                 </Text>
               </View>
               <View style={styles.routeDivider} />
               <View style={styles.routeRow}>
-                <Text style={styles.routeLabel}>DROP-OFF</Text>
+                <Text style={styles.routeLabel}>{t('rideOffer.dropoff')}</Text>
                 <Text style={styles.routeAddress} numberOfLines={1}>
-                  {incomingRide.dropoff_address || 'Dropoff location'}
+                  {incomingRide.dropoff_address || t('rideOffer.dropoffLocation')}
                 </Text>
               </View>
             </View>
@@ -301,7 +304,7 @@ export default function DriverDashboard() {
               activeOpacity={0.8}
             >
               <Ionicons name="close-circle" size={24} color="#FF4757" />
-              <Text style={styles.declineText}>Decline</Text>
+              <Text style={styles.declineText}>{t('rideOffer.decline')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.acceptBtn}
@@ -309,7 +312,7 @@ export default function DriverDashboard() {
               activeOpacity={0.8}
             >
               <Ionicons name="checkmark-circle" size={24} color="#fff" />
-              <Text style={styles.acceptText}>Accept Ride</Text>
+              <Text style={styles.acceptText}>{t('rideOffer.acceptRide')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -321,7 +324,7 @@ export default function DriverDashboard() {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator size="large" color={COLORS.accent} />
-        <Text style={{ color: COLORS.text, marginTop: 12, fontSize: 15 }}>Getting your location...</Text>
+        <Text style={{ color: COLORS.text, marginTop: 12, fontSize: 15 }}>{t('home.gettingLocation')}</Text>
       </View>
     );
   }

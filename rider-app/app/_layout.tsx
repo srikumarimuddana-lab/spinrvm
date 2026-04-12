@@ -18,6 +18,7 @@ import {
   requestPushPermissionAndGetToken,
   onForegroundMessage,
   setBackgroundMessageHandler,
+  onTokenRefresh,
 } from '@shared/services/firebase';
 
 // expo-notifications' push-token APIs were removed from Expo Go in SDK 53,
@@ -174,6 +175,25 @@ export default function RootLayout() {
         console.log('[Push] Rider FCM token registration failed:', e);
       }
     })();
+
+    // Subscribe to FCM token rotations so push delivery doesn't
+    // silently fail when Firebase rotates the device token.
+    const unsubTokenRefresh = onTokenRefresh(async (newToken: string) => {
+      try {
+        const api = (await import('@shared/api/client')).default;
+        await api.post('/notifications/register-token', {
+          token: newToken,
+          platform: Platform.OS,
+        });
+        console.log('[Push] Rider refreshed FCM token registered with backend');
+      } catch (e) {
+        console.log('[Push] Rider refreshed FCM token registration failed:', e);
+      }
+    });
+
+    return () => {
+      if (typeof unsubTokenRefresh === 'function') unsubTokenRefresh();
+    };
   }, [isAuthInitialized, authToken]);
 
   // ── Foreground FCM message handler ──

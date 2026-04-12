@@ -1066,6 +1066,22 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
                 },
             )
 
+    # G19: Notify the driver that they received a rating. This creates a
+    # feedback loop — drivers see their rating improve/decline in real time
+    # instead of only noticing on their next profile check.
+    if driver and driver.get("user_id") and rating_data.rating:
+        stars = "⭐" * int(rating_data.rating)
+        tip_note = f" + ${rating_data.tip_amount:.2f} tip!" if rating_data.tip_amount > 0 else ""
+        try:
+            await send_push_notification(
+                driver["user_id"],
+                f"New Rating: {stars}",
+                f"A rider rated you {rating_data.rating}/5{tip_note}",
+                {"type": "rating_received", "rating": str(rating_data.rating), "ride_id": ride_id},
+            )
+        except Exception as push_err:
+            logger.warning(f"[RATING] Push notification failed: {push_err}")
+
     return {"success": True}
 
 

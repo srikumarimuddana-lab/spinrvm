@@ -57,6 +57,8 @@ interface ActiveRidePanelProps {
   onStartRide: () => void;
   onCompleteRide: () => void;
   onCancelRide: () => void;
+  routeEtaMinutes?: number | null;
+  routeDistanceKm?: number | null;
   slideUpAnim: Animated.Value;
   fadeAnim: Animated.Value;
   distanceToPickup?: number | null;
@@ -86,6 +88,8 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   onStartRide,
   onCompleteRide,
   onCancelRide,
+  routeEtaMinutes,
+  routeDistanceKm,
   slideUpAnim,
   fadeAnim,
   distanceToPickup,
@@ -190,10 +194,31 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   };
 
   // ── Status config ───────────────────────────────────────────
+  // Build the status label with live ETA when available.
+  // During navigating_to_pickup: "~X min to pickup (Y km)"
+  // During trip_in_progress: "~X min to dropoff (Y km)"
+  // During arrived_at_pickup: "Waiting · Xm XXs" (no ETA, driver is stationary)
+  const etaSuffix =
+    routeEtaMinutes != null && routeDistanceKm != null
+      ? ` · ~${routeEtaMinutes} min (${routeDistanceKm} km)`
+      : '';
+
   const statusMap = {
-    navigating_to_pickup: { icon: 'navigate-circle' as const, label: 'En Route to Pickup', color: ACCENT },
-    arrived_at_pickup: { icon: 'time' as const, label: `Waiting · ${formatWait(waitSeconds)}`, color: '#F59E0B' },
-    trip_in_progress: { icon: 'car-sport' as const, label: 'Trip in Progress', color: '#22C55E' },
+    navigating_to_pickup: {
+      icon: 'navigate-circle' as const,
+      label: `En Route to Pickup${etaSuffix}`,
+      color: ACCENT,
+    },
+    arrived_at_pickup: {
+      icon: 'time' as const,
+      label: `Waiting · ${formatWait(waitSeconds)}`,
+      color: '#F59E0B',
+    },
+    trip_in_progress: {
+      icon: 'car-sport' as const,
+      label: `Trip in Progress${etaSuffix}`,
+      color: '#22C55E',
+    },
   };
   const status = statusMap[rideState];
 

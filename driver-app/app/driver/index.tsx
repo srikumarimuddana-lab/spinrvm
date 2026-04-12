@@ -15,6 +15,7 @@ import {
 import { useDriverDashboard } from '../../hooks/useDriverDashboard';
 import { CarMarker } from '../../components/CarMarker';
 import { SOSButton } from '@shared/components/SOSButton';
+import { OfflineBanner } from '@shared/components/OfflineBanner';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 
@@ -54,6 +55,7 @@ export default function DriverDashboard() {
     resetRideState,
     clearError,
     earnings,
+    rateRider,
   } = useDriverStore();
 
   const {
@@ -308,6 +310,9 @@ export default function DriverDashboard() {
 
   return (
     <View style={styles.container}>
+      {/* Offline indicator — slides in from the top when network drops */}
+      <OfflineBanner />
+
       {/* Map */}
       <MapView
         ref={mapRef}
@@ -480,6 +485,7 @@ export default function DriverDashboard() {
         <TripCompletedPanel
           completedRide={completedRide}
           onDone={resetRideState}
+          onRateRider={rateRider}
         />
       )}
     </View>

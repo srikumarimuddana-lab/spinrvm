@@ -10,6 +10,7 @@ try:
     )
     from ..schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
     from ..sms_service import send_otp_sms
+    from ..validators import validate_phone
 except ImportError:
     from db import db
     from dependencies import (
@@ -21,6 +22,7 @@ except ImportError:
     from schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
     from settings_loader import get_app_settings
     from sms_service import send_otp_sms
+    from validators import validate_phone
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -37,8 +39,9 @@ api_router = APIRouter(prefix="/auth", tags=["Authentication"])
 @limiter.limit("5/minute")
 async def send_otp(request: Request, body: SendOTPRequest):
     phone = body.phone.strip()
-    if len(phone) < 10:
-        raise HTTPException(status_code=400, detail="Invalid phone number")
+    # Validate phone using E.164 format validator (raises HTTPException on failure)
+    _, normalized = validate_phone(phone)
+    phone = normalized or phone
 
     # Check if Twilio is configured via DB settings
     settings = None
@@ -82,9 +85,8 @@ async def send_otp(request: Request, body: SendOTPRequest):
         raise HTTPException(status_code=500, detail="Failed to send verification code")
 
     response = {"success": True, "message": f"OTP sent to {phone}"}
-    # Include dev_otp when Twilio is NOT configured (always shows 123456 in dev)
-    if not twilio_configured:
-        response["dev_otp"] = otp_code
+    # Dev OTP is logged to server console via sms_service.py — never return it
+    # in the API response to avoid accidental exposure in client-side logs.
 
     return response
 

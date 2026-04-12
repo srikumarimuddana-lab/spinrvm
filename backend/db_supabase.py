@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
@@ -99,9 +100,11 @@ async def get_all_corporate_accounts(
         query = supabase.table("corporate_accounts").select("*").range(skip, skip + limit - 1)
 
         if search:
-            # Search in name, contact_name, and contact_email
-            # Using ilike for case-insensitive search
-            query = query.or_(f"name.ilike.%{search}%,contact_name.ilike.%{search}%,contact_email.ilike.%{search}%")
+            # Escape special PostgREST ilike characters to prevent filter injection
+            safe = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            # Strip characters that could break PostgREST filter syntax
+            safe = re.sub(r"[,\.\(\)]", "", safe)
+            query = query.or_(f"name.ilike.%{safe}%,contact_name.ilike.%{safe}%,contact_email.ilike.%{safe}%")
 
         if is_active is not None:
             query = query.eq("is_active", is_active)

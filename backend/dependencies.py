@@ -6,6 +6,13 @@ import jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from firebase_admin import auth as firebase_auth
+from firebase_admin.auth import (
+    CertificateFetchError,
+    ExpiredIdTokenError,
+    InvalidIdTokenError,
+    RevokedIdTokenError,
+    UserDisabledError,
+)
 from loguru import logger
 
 try:
@@ -70,7 +77,13 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     try:
         try:
             payload = firebase_auth.verify_id_token(token)
-        except Exception:
+        except ExpiredIdTokenError:
+            raise HTTPException(status_code=401, detail="Firebase token has expired") from None
+        except (InvalidIdTokenError, RevokedIdTokenError, UserDisabledError, CertificateFetchError) as e:
+            logger.debug(f"Firebase token verification failed, falling through to JWT: {type(e).__name__}")
+            payload = None
+        except ValueError:
+            # Token doesn't look like a Firebase token at all — fall through to JWT
             payload = None
 
         if payload:
@@ -87,7 +100,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                     new_user = {
                         "id": uid,
                         "phone": phone or "",
-                        "role": "rider",
+                        "role": "rider",  # Always default — never trust token claims
                         "created_at": datetime.utcnow(),
                         "profile_complete": False,
                     }
@@ -99,8 +112,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 user["is_driver"] = True if driver else False
             return user
     except HTTPException:
-        # fall through to try legacy JWT
-        pass
+        raise
 
     # Fallback: existing JWT behavior
     try:
@@ -122,17 +134,16 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         db_session = user.get("current_session_id")
         if db_session and token_session != db_session:
             raise HTTPException(status_code=401, detail="Session expired. Logged in from another device.")
-        # If the JWT carries a role claim (e.g. admin), honour it over the DB value
-        jwt_role = payload.get("role")
-        if jwt_role:
-            user["role"] = jwt_role
+        # Role is always determined by the DB — never trust JWT role claims.
+        # A forged JWT with "role": "super_admin" must not grant escalated access.
 
     if not user:
-        # User not in DB yet — create them (preserve role from JWT if present)
+        # User not in DB yet — create with default rider role.
+        # Never trust the JWT role claim for auto-created users.
         user = {
             "id": payload["user_id"],
             "phone": payload.get("phone", ""),
-            "role": payload.get("role", "rider"),
+            "role": "rider",
             "created_at": datetime.utcnow().isoformat(),
             "profile_complete": False,
         }

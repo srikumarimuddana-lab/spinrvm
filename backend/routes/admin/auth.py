@@ -3,8 +3,10 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 import jwt
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 try:
     from ...core.config import settings
@@ -14,6 +16,12 @@ except ImportError:
     from db import db
 
 logger = logging.getLogger(__name__)
+
+# Per-router rate limiter. Admin login is a high-value brute-force
+# target (one correct hit → full super-admin access), so we cap it
+# to 5 attempts per minute per IP. Matches the pattern already used
+# for the rider/driver OTP endpoint in routes/auth.py.
+limiter = Limiter(key_func=get_remote_address)
 
 # Auth sub-router — mounted at /admin/auth by server.py directly
 admin_auth_router = APIRouter(prefix="/admin/auth", tags=["Admin Auth"])
@@ -78,8 +86,16 @@ async def get_session(authorization: Optional[str] = Header(None)):
 
 
 @admin_auth_router.post("/login")
-async def admin_login(request: LoginRequest):
-    """Admin login — supports super admin + staff members with module access."""
+@limiter.limit("5/minute")
+async def admin_login(request: Request, body: LoginRequest):
+    """Admin login — supports super admin + staff members with module access.
+
+    Rate-limited to 5 attempts per minute per IP (see `limiter` above)
+    to make password brute-force impractical. slowapi requires the
+    FastAPI ``Request`` parameter to be named ``request`` so it can
+    extract the client address; the Pydantic body has been renamed
+    from ``request`` to ``body`` to free up the name.
+    """
     import hashlib
 
     ALL_MODULES = [
@@ -104,14 +120,14 @@ async def admin_login(request: LoginRequest):
     ]
 
     # 1. Super admin from env
-    if request.email == settings.ADMIN_EMAIL and request.password == settings.ADMIN_PASSWORD:
+    if body.email == settings.ADMIN_EMAIL and body.password == settings.ADMIN_PASSWORD:
         token = jwt.encode(
             {
                 "user_id": "admin-001",
-                "email": request.email,
+                "email": body.email,
                 "role": "super_admin",
                 "modules": ALL_MODULES,
-                "phone": request.email,
+                "phone": body.email,
             },
             settings.JWT_SECRET,
             algorithm=settings.ALGORITHM,
@@ -119,7 +135,7 @@ async def admin_login(request: LoginRequest):
         return {
             "user": {
                 "id": "admin-001",
-                "email": request.email,
+                "email": body.email,
                 "role": "super_admin",
                 "first_name": "Super",
                 "last_name": "Admin",
@@ -129,9 +145,9 @@ async def admin_login(request: LoginRequest):
         }
 
     # 2. Staff member
-    staff = await db.admin_staff.find_one({"email": request.email.lower()})
+    staff = await db.admin_staff.find_one({"email": body.email.lower()})
     if staff:
-        pw_hash = hashlib.sha256(request.password.encode()).hexdigest()
+        pw_hash = hashlib.sha256(body.password.encode()).hexdigest()
         if staff.get("password_hash") == pw_hash:
             if not staff.get("is_active", True):
                 raise HTTPException(status_code=403, detail="Account is deactivated")

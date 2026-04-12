@@ -137,13 +137,25 @@
     so bumping the timeout in settings doesn't leave the bar stuck
     past 100%. Clamped to [0, 1] for safety.
 
-- [ ] **Driver App: External navigation** - Leaves the app
-  - File: `driver-app/app/driver/index.tsx`
-  - Action: Add in-app navigation option
+- [x] **Driver App: External navigation** - Intentional, not a bug.
+  Drivers already have Google Maps (Android) / Apple Maps (iOS)
+  installed and expect to route through them. The
+  `openNavigation(lat, lng)` deep-link in
+  `driver-app/hooks/useDriverDashboard.ts` uses `maps:` / `google.navigation:`
+  URIs, which is the correct pattern for a driver app — popping a
+  wrapped in-app map view would reimplement turn-by-turn navigation
+  we'd never match. Leave as-is.
 
-- [ ] **Driver App: No tip collection** - Incomplete payment flow
-  - File: `driver-app/app/driver/ride-detail.tsx`
-  - Action: Add tip selection UI
+- [x] **Driver App: No tip collection** - ✅ Already implemented,
+  claim was stale. Tips are fully collected on the rider side in
+  `rider-app/app/ride-completed.tsx` (preset tip buttons, custom
+  tip input, send handler at line 105, payment integration at
+  line 130). The backend endpoints `POST /rides/{id}/tip` and the
+  tip-aware `POST /rides/{id}/process-payment` already persist
+  `tip_amount` + roll it into `driver_earnings` in the rides table.
+  The driver-app's `driver/ride-detail.tsx` correctly renders
+  `ride.tip_amount` when > 0 (line 284-288). This is the right UX:
+  riders tip, drivers see the tip.
 
 - [x] **Driver App: Race condition handling** - ✅ Fixed 2026-04-12,
   both sides.
@@ -180,9 +192,11 @@
   - No new native dependencies. Doesn't require `expo-file-system`
     / `expo-sharing`, which would need a prebuild.
 
-- [ ] **Driver App: No dark mode** - Light theme only
-  - Files: `driver-app/`
-  - Action: Implement theme system
+- [ ] **Driver App: No dark mode** - Nice-to-have, not shipped.
+  Would require a theme provider, inverting all `SpinrConfig.theme.colors`
+  usages, and auditing every screen for hardcoded `#fff` / `#000`.
+  Significant UX scope that's orthogonal to ship-readiness. Leave
+  open for a dedicated design pass.
 
 - [x] **API: No versioning** - ✅ Already done; claim was stale.
   `backend/server.py:46-72` mounts `v1_api_router` at `/api/v1`
@@ -193,9 +207,13 @@
   for backwards compat with existing mobile clients — intentional
   and should stay until all clients are migrated.
 
-- [ ] **Error handling** - Could be more robust
-  - Files: `driver-app/`, `frontend/`
-  - Action: Improve error messages
+- [ ] **Error handling** - Too vague to scope as a single item.
+  Concrete error-handling improvements have been shipped as part of
+  the other fixes (accept-race graceful fallback, geofence error
+  message, FCM registration failure paths, earnings-export fallback
+  to clipboard, admin middleware `?next=` redirect, etc.). If this
+  catches a specific screen with a bad error path, file it as a
+  targeted TODO with the file + line.
 
 ---
 
@@ -204,3 +222,53 @@
 - All critical and high priority items should be completed before production launch
 - Medium priority items improve user experience significantly
 - Low priority items are nice-to-have enhancements
+
+## Blockers that require human action (not code changes)
+
+The following items can't be closed by a code change — they need you
+to act in a dashboard, console, or legal review. They're tracked here
+so they don't get lost between commits.
+
+- [ ] **Rotate leaked Supabase service-role JWT** for project
+  `dbbadhihiwztmnqnbdke` (Supabase → Settings → API). See the
+  "Rotate Leaked Credentials" section in `READINESS_REPORT.md`.
+- [ ] **Rotate leaked Google Maps API key** `AIzaSy…M5m9M` committed
+  to `rider-app/eas.json` and `driver-app/eas.json` (Google Cloud
+  Console → APIs & Services → Credentials). Create a new restricted
+  key scoped to the Android package + iOS bundle IDs.
+- [ ] **Provision Supabase project** and walk the bootstrap runbook
+  in `READINESS_REPORT.md` § A (run `supabase_schema.sql` →
+  `sql/01..04` → `migrations/001..17` → `supabase_rls.sql`).
+- [ ] **Populate `terms_of_service_text` and `privacy_policy_text`**
+  in the Supabase `settings` table with real legal copy. The
+  driver/rider legal screens already fetch from
+  `/settings/legal` — they just render empty strings today.
+- [ ] **Firebase project configuration**:
+  - Verify `google-services.json` (Android) and
+    `GoogleService-Info.plist` (iOS) in both apps are for a real
+    Firebase project.
+  - Upload APNs auth key in Firebase → Project Settings → Cloud
+    Messaging so iOS push actually delivers.
+  - Enable Firebase App Check with reCAPTCHA (web) / DeviceCheck
+    (iOS) / Play Integrity (Android) if you want to stop fake API
+    traffic. The client-side `initFirebaseServices()` already calls
+    `initializeAppCheck()` — it's a no-op until the Firebase
+    console side is configured.
+- [ ] **EAS Build secrets** — once the Google Maps key is rotated,
+  move `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` out of
+  `rider-app/eas.json` and `driver-app/eas.json` and into EAS
+  Secrets (`eas secret:create`) so the key is no longer in git
+  history going forward.
+- [ ] **End-to-end device verification**:
+  - Physical Android: FCM push with app backgrounded + DND on.
+    Expect heads-up notification via `ride-offers` channel.
+  - Physical iOS: APNs push with app killed. Expect lockscreen
+    notification → cold-start to populated panel.
+  - Full ride cycle (rider request → driver accept → arrive → OTP
+    → start → complete → tip → rating) on both apps against a
+    real Supabase + backend.
+- [ ] **Production env setup**: `JWT_SECRET` (≥ 32 chars, see
+  `backend/core/middleware.py` fail-fast check), `ALLOWED_ORIGINS`
+  (comma-separated explicit list), `FIREBASE_SERVICE_ACCOUNT_JSON`,
+  `SUPABASE_SERVICE_ROLE_KEY`, Stripe keys in the `settings` table
+  (not env), Twilio creds in the `settings` table.

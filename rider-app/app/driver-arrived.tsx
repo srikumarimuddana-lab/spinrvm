@@ -70,7 +70,8 @@ export default function DriverArrivedScreen() {
   useEffect(() => {
     if (rideId) {
       fetchRide(rideId);
-      const interval = setInterval(() => fetchRide(rideId), 3000);
+      // Fallback poll — WS delivers updates in real-time.
+      const interval = setInterval(() => fetchRide(rideId), 15000);
       return () => clearInterval(interval);
     }
   }, [rideId]);

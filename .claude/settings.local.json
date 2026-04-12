@@ -30,7 +30,10 @@
       "Bash(py -3 -m pip show aiohttp fastapi uvicorn stripe twilio firebase-admin)",
       "Bash(py -3 -m pip list)",
       "Bash(git stash:*)",
-      "Bash(pip-audit -r requirements.txt)"
+      "Bash(pip-audit -r requirements.txt)",
+      "Bash(python3 -m py_compile routes/rides.py)",
+      "Bash(python3 -c ':*)",
+      "Bash(python:*)"
     ]
   }
 }

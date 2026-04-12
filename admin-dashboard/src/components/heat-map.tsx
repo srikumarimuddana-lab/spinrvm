@@ -98,10 +98,17 @@ export default function HeatMap({
 
         mapRef.current = map;
 
-        // Resize fix for dialog mount timing
-        setTimeout(() => map.invalidateSize(), 200);
+        // Resize fix for dialog mount timing — must be cancelled on
+        // unmount to avoid calling invalidateSize() on a destroyed map
+        // (triggers "Cannot read properties of undefined ('_leaflet_pos')").
+        const resizeTimer = setTimeout(() => {
+            if (mapRef.current) {
+                mapRef.current.invalidateSize();
+            }
+        }, 200);
 
         return () => {
+            clearTimeout(resizeTimer);
             map.remove();
             mapRef.current = null;
         };

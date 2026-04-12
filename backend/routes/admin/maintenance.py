@@ -139,6 +139,19 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         if did:
             rides_by_driver[did].append(r)
 
+    # Pull decline audit log entries for the day to count per driver
+    decline_logs = await db.get_rows(
+        "audit_logs",
+        {"action": "ride_declined", "created_at": {"$gte": day_start_iso, "$lt": day_end_iso}},
+        limit=100000,
+    )
+    declines_by_driver: Dict[str, int] = defaultdict(int)
+    for entry in decline_logs or []:
+        # user_email column stores driver_id for decline entries (see decline_ride endpoint)
+        did = entry.get("user_email")
+        if did:
+            declines_by_driver[did] += 1
+
     all_driver_ids = set(by_driver.keys()) | set(rides_by_driver.keys())
 
     created = 0
@@ -202,7 +215,7 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
             "last_online_at": last_online_at,
             "rides_completed": rides_completed,
             "rides_cancelled": rides_cancelled,
-            "rides_declined": 0,  # TODO: wire up if we track declines
+            "rides_declined": declines_by_driver.get(driver_id, 0),
             "total_earnings": round(total_earnings, 2),
             "total_tips": round(total_tips, 2),
             "updated_at": datetime.utcnow().isoformat(),

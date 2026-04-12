@@ -55,10 +55,32 @@ async def admin_send_cloud_message(payload: Dict[str, Any]):
         total_recipients = count if count > 0 else 0
 
     if not is_scheduled:
-        # TODO: Integrate with FCM / email service
-        successful = total_recipients
-        failed_count = 0
-        logger.info(f"Cloud message sent to {audience}: {title}")
+        try:
+            from ...features import send_push_notification
+        except ImportError:
+            from features import send_push_notification
+
+        target_users: list = []
+        if audience in ("particular_customer", "particular_driver"):
+            target_users = [{"id": uid} for uid in particular_ids]
+        elif audience == "customers":
+            target_users = await db.users.find({"role": "rider"}).to_list(10000)
+        elif audience == "drivers":
+            target_users = await db.users.find({"role": "driver"}).to_list(10000)
+
+        for u in target_users:
+            uid = u.get("id") if isinstance(u, dict) else u
+            if uid:
+                ok = await send_push_notification(uid, title, description)
+                if ok:
+                    successful += 1
+                else:
+                    failed_count += 1
+
+        logger.info(
+            f"Cloud message sent to {audience}: {title} "
+            f"(success={successful}, failed={failed_count})"
+        )
 
     doc = {
         "id": str(uuid.uuid4()),

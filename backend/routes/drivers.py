@@ -304,10 +304,9 @@ async def register_driver_push_token(
 
     The driver-app's useDriverDashboard.ts calls this with an Expo push
     token from Notifications.getExpoPushTokenAsync(). We store it on the
-    user row. Note: features.py:send_push_notification currently uses
-    Firebase Admin SDK and expects a native FCM token, so Expo push tokens
-    won't deliver via that path. TODO: add Expo push service support or
-    convert Expo tokens server-side via Expo's /push/send API.
+    user row. features.py:send_push_notification detects Expo tokens
+    (ExponentPushToken[...]) and routes them via Expo's /push/send API;
+    native FCM tokens are sent via Firebase Admin SDK.
     """
     diag_logger.info(
         f"[PUSH-TOKEN] register user_id={current_user.get('id')} "
@@ -1070,6 +1069,21 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
             }
         },
     )
+
+    # Record the decline in audit_logs so daily stats can count it
+    try:
+        import uuid as _uuid
+        await db.audit_logs.insert_one({
+            "id": str(_uuid.uuid4()),
+            "action": "ride_declined",
+            "entity_type": "ride",
+            "entity_id": ride_id,
+            "user_email": driver["id"],   # reuse user_email column to store driver_id
+            "details": f"driver_id={driver['id']}",
+            "created_at": datetime.utcnow().isoformat(),
+        })
+    except Exception as _e:
+        logger.warning(f"Could not log ride decline to audit_logs: {_e}")
 
     # GAP FIX: Re-match to find the next available driver
     try:
@@ -2012,6 +2026,41 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
     now = datetime.utcnow()
     expires = now + timedelta(days=plan.get("duration_days", 30))
 
+    # Attempt Stripe charge if configured; fall back gracefully if not.
+    payment_status = "paid"
+    stripe_charge_id = None
+    plan_price = plan.get("price", 0)
+    if plan_price and plan_price > 0:
+        try:
+            from ..settings_loader import get_app_settings
+            _settings = await get_app_settings()
+            _stripe_secret = _settings.get("stripe_secret_key", "")
+            if _stripe_secret:
+                stripe.api_key = _stripe_secret
+                # Use the driver's saved default payment method via their Stripe customer
+                _user = await db.users.find_one({"id": current_user["id"]})
+                _customer_id = _user.get("stripe_customer_id") if _user else None
+                if _customer_id:
+                    _amount_cents = int(float(plan_price) * 100)
+                    _charge = stripe.PaymentIntent.create(
+                        amount=_amount_cents,
+                        currency="cad",
+                        customer=_customer_id,
+                        confirm=True,
+                        off_session=True,
+                        metadata={"driver_id": driver["id"], "plan_id": plan["id"]},
+                    )
+                    stripe_charge_id = _charge.id
+                    payment_status = _charge.status  # "succeeded" | "requires_action" | …
+                    logger.info(f"Stripe charge {stripe_charge_id} status={payment_status} for driver {driver['id']}")
+                else:
+                    logger.info(f"No Stripe customer for driver {driver['id']}, marking paid without charge")
+            else:
+                logger.info("Stripe not configured; marking subscription paid without charge")
+        except Exception as _stripe_err:
+            logger.error(f"Stripe charge failed for driver {driver['id']}: {_stripe_err}")
+            raise HTTPException(status_code=402, detail=f"Payment failed: {_stripe_err}") from _stripe_err
+
     subscription = {
         "id": str(uuid.uuid4()),
         "driver_id": driver["id"],
@@ -2023,7 +2072,8 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
         "status": "active",
         "started_at": now.isoformat(),
         "expires_at": expires.isoformat(),
-        "payment_status": "paid",
+        "payment_status": payment_status,
+        "stripe_charge_id": stripe_charge_id,
         "created_at": now.isoformat(),
     }
 

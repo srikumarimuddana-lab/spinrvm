@@ -11,7 +11,7 @@ try:
     from ..schemas import CreateRideRequest, Ride, RideRatingRequest
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
-    from ..utils import calculate_distance
+    from ..geo_utils import calculate_distance
 except ImportError:
     import db_supabase
     from db import db
@@ -806,13 +806,47 @@ async def process_payment(ride_id: str, request: Request, current_user: dict = D
 
     total_charge = (ride.get("total_fare", 0) or 0) + tip_amount
 
-    # TODO: Stripe charge — for now mark as paid
+    # Attempt Stripe charge if the rider has a saved payment method; fall back
+    # to marking paid directly when Stripe is not configured (dev / cash rides).
+    stripe_charge_id = None
+    payment_status = "paid"
+    try:
+        import stripe as _stripe
+        from ..settings_loader import get_app_settings as _get_settings
+        _app_settings = await _get_settings()
+        _stripe_secret = _app_settings.get("stripe_secret_key", "")
+        if _stripe_secret and total_charge > 0:
+            _stripe.api_key = _stripe_secret
+            _user = await db.users.find_one({"id": current_user["id"]})
+            _customer_id = _user.get("stripe_customer_id") if _user else None
+            if _customer_id:
+                _amount_cents = int(total_charge * 100)
+                _intent = _stripe.PaymentIntent.create(
+                    amount=_amount_cents,
+                    currency="cad",
+                    customer=_customer_id,
+                    confirm=True,
+                    off_session=True,
+                    metadata={"ride_id": ride_id, "user_id": current_user["id"]},
+                )
+                stripe_charge_id = _intent.id
+                payment_status = _intent.status
+                logger.info(f"[PAYMENT] Stripe charge {stripe_charge_id} status={payment_status} for ride {ride_id}")
+            else:
+                logger.info(f"[PAYMENT] No Stripe customer for user {current_user['id']}, marking paid without charge")
+        else:
+            logger.info("[PAYMENT] Stripe not configured or zero charge; marking paid without charge")
+    except Exception as _stripe_err:
+        logger.error(f"[PAYMENT] Stripe error for ride {ride_id}: {_stripe_err}")
+        raise HTTPException(status_code=402, detail=f"Payment failed: {_stripe_err}") from _stripe_err
+
     await db.rides.update_one(
         {"id": ride_id},
         {
             "$set": {
-                "payment_status": "paid",
+                "payment_status": payment_status,
                 "tip_amount": tip_amount,
+                "stripe_charge_id": stripe_charge_id,
                 "updated_at": datetime.utcnow().isoformat(),
             }
         },

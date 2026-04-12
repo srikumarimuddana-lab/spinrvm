@@ -285,6 +285,8 @@ class DB:
         self.cloud_messages = BaseCollection("cloud_messages")
         self.audit_logs = BaseCollection("audit_logs")
         self.push_tokens = BaseCollection("push_tokens")
+        self.admin_staff = BaseCollection("admin_staff")
+        self.support_messages = BaseCollection("support_messages")
 
     async def rpc(self, func_name: str, params: Dict[str, Any]):
         return await db_supabase.rpc(func_name, params)

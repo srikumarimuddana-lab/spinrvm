@@ -89,19 +89,30 @@ async def admin_send_notification(notification: Dict[str, Any]):
         "sent_count": 1 if user_id else 0,
     }
 
+    try:
+        from ...features import send_push_notification
+    except ImportError:
+        from features import send_push_notification
+
     # If targeting specific user, insert and send
     if user_id:
         await db.notifications.insert_one(notification_doc)
-        # TODO: Integrate with push notification service (FCM)
+        await send_push_notification(user_id, title, body)
         logger.info(f"Notification sent to user {user_id}: {title}")
     elif audience == "all":
-        # Broadcast to all users - just log for now
+        all_users = await db.users.find({}).to_list(10000)
+        for u in all_users or []:
+            await send_push_notification(u["id"], title, body)
         logger.info(f"Broadcast notification to all users: {title}")
     elif audience == "riders":
-        # Broadcast to all riders
+        riders = await db.users.find({"role": "rider"}).to_list(10000)
+        for u in riders or []:
+            await send_push_notification(u["id"], title, body)
         logger.info(f"Broadcast notification to all riders: {title}")
     elif audience == "drivers":
-        # Broadcast to all drivers
+        drivers = await db.users.find({"role": "driver"}).to_list(10000)
+        for u in drivers or []:
+            await send_push_notification(u["id"], title, body)
         logger.info(f"Broadcast notification to all drivers: {title}")
 
     return {"success": True, "notification": notification_doc}

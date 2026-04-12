@@ -1028,24 +1028,69 @@ async def register_fcm_token(req: RegisterFcmTokenRequest, user_id: str = Query(
     return {"registered": True}
 
 
+def _is_expo_token(token: str) -> bool:
+    """Return True if the token is an Expo push token (not a native FCM token)."""
+    return token.startswith("ExponentPushToken[") or token.startswith("ExpoPushToken[")
+
+
+async def _send_expo_push(token: str, title: str, body: str, data: Dict[str, str] | None = None) -> bool:
+    """Send a push notification via Expo's push API (for Expo-managed tokens)."""
+    import httpx
+
+    payload = {
+        "to": token,
+        "title": title,
+        "body": body,
+        "data": data or {},
+        "sound": "default",
+        "priority": "high",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                "https://exp.host/--/api/v2/push/send",
+                json=payload,
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+            )
+            result = resp.json()
+            status = result.get("data", {}).get("status") if isinstance(result.get("data"), dict) else None
+            if status == "ok":
+                logger.info(f"Expo push sent OK to {token[:35]}...")
+                return True
+            logger.warning(f"Expo push non-ok response: {result}")
+            return False
+    except Exception as e:
+        logger.error(f"Failed to send Expo push notification: {e}")
+        return False
+
+
 async def send_push_notification(user_id: str, title: str, body: str, data: Dict[str, str] | None = None):
-    """Send a push notification to a user via Firebase Cloud Messaging."""
+    """Send a push notification to a user.
+
+    Routes automatically: Expo push tokens go via Expo's REST API; all other
+    tokens are assumed to be FCM and sent via Firebase Admin SDK.
+    """
+    user = await db.users.find_one({"id": user_id})
+    if not user or not user.get("fcm_token"):
+        logger.info(f"No push token for user {user_id}")
+        return False
+
+    token: str = user["fcm_token"]
+
+    if _is_expo_token(token):
+        return await _send_expo_push(token, title, body, data)
+
     try:
         from firebase_admin import messaging
     except ImportError:
         logger.warning("firebase_admin not available for push notifications")
         return False
 
-    user = await db.users.find_one({"id": user_id})
-    if not user or not user.get("fcm_token"):
-        logger.info(f"No FCM token for user {user_id}")
-        return False
-
     try:
         message = messaging.Message(
             notification=messaging.Notification(title=title, body=body),
             data=data or {},
-            token=user["fcm_token"],
+            token=token,
         )
         response = await asyncio.to_thread(messaging.send, message)
         logger.info(f"Push notification sent to {user_id}: {response}")

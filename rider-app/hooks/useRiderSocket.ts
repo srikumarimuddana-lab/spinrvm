@@ -108,6 +108,12 @@ export function useRiderSocket() {
         clearRide();
         break;
 
+      // Driver didn't respond in time — backend is re-dispatching.
+      // Refetch the ride so the UI shows the "searching" state again.
+      case 'driver_timeout':
+        if (rideId) fetchRide(rideId);
+        break;
+
       // Generic status change (catch-all from the backend's
       // ride_status_update handler at websocket.py:236-245).
       case 'ride_status_changed':
@@ -117,9 +123,10 @@ export function useRiderSocket() {
         }
         break;
 
-      // Chat — log only. The chat screen has its own fetcher.
+      // Chat — push into the store so the chat screen updates live.
       case 'chat_message':
         console.log('[WS] Chat message received:', data.text?.slice(0, 40));
+        useRideStore.getState().addChatMessage(data);
         break;
 
       // Auth errors — shouldn't happen after connect, but handle

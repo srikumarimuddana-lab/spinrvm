@@ -255,8 +255,8 @@ Step 11: Return to idle
 | `startRide` | Start ride state transition | High |
 | `documentStore` | Document upload, requirements fetching | Medium |
 | `languageStore` | Language switching, AsyncStorage persistence | Low |
-| `useLocation` hook | Location tracking, permission handling, batch upload | High |
-| `useWebSocket` hook | WebSocket connection, reconnection, message handling | High |
+| `useDriverDashboard` hook (location) | Location tracking, permission handling, batch upload | High |
+| `useDriverDashboard` hook (WebSocket) | WebSocket connection, reconnection, message handling | High |
 | `ActiveRidePanel` component | UI rendering for each ride state | Medium |
 | Payout flow | `setBankAccount`, `requestPayout`, `fetchPayoutHistory` | Medium |
 | T4A tax documents | `fetchT4ASummaries`, `fetchT4ADetails` | Low |

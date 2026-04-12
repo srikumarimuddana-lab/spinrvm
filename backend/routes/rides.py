@@ -294,6 +294,100 @@ async def match_driver_to_ride(ride_id: str):
                 f"This row is likely an orphan demo driver; clean up the drivers table."
             )
 
+    # ── Backend-enforced offer TTL ─────────────────────────────────
+    # The driver-app's countdown timer handles the happy path (driver
+    # taps Decline before timeout), but if the device dies, loses
+    # network, or the app crashes, the ride is stuck in
+    # `driver_assigned` forever and the rider waits endlessly.
+    #
+    # This background task fires after the configured timeout + a
+    # 15 s grace period (for network latency and FCM delivery). If
+    # the ride is STILL `driver_assigned` to THIS specific driver,
+    # it unassigns and re-dispatches.
+    offer_timeout = int(
+        app_settings.get("ride_offer_timeout_seconds", 15)
+    )
+    asyncio.create_task(
+        _offer_timeout_handler(
+            ride_id,
+            selected_driver["id"],
+            rider_id=ride.get("rider_id"),
+            timeout_seconds=offer_timeout + 15,
+        )
+    )
+
+
+async def _offer_timeout_handler(
+    ride_id: str,
+    driver_id: str,
+    rider_id: str | None,
+    timeout_seconds: int = 30,
+):
+    """Auto-expire a driver's ride offer if they don't accept/decline.
+
+    Sleeps for `timeout_seconds` then checks whether the ride is still
+    in `driver_assigned` status with this specific `driver_id`. If yes,
+    releases the driver, sets the ride back to `searching`, notifies the
+    rider, and re-dispatches.
+
+    This mirrors the driver-app's client-side countdown timer but is
+    authoritative — it fires even if the device crashes or loses network.
+    The 15 s grace period between the driver-app countdown (default 15 s)
+    and this handler (default 30 s = 15 + 15) avoids racing the
+    client-side decline call.
+    """
+    await asyncio.sleep(timeout_seconds)
+    try:
+        ride = await db.rides.find_one({"id": ride_id})
+        if not ride:
+            return
+
+        # Only act if the ride hasn't progressed past assignment.
+        if ride.get("status") != "driver_assigned" or ride.get("driver_id") != driver_id:
+            return
+
+        logger.info(
+            f"[DISPATCH] Offer expired: ride {ride_id} driver {driver_id} "
+            f"didn't respond within {timeout_seconds}s — re-searching"
+        )
+
+        # Release the driver back to the available pool.
+        await db.drivers.update_one(
+            {"id": driver_id},
+            {"$set": {"is_available": True}},
+        )
+
+        # Put the ride back in the searching state so it can be
+        # re-dispatched or picked up by the next dispatch cycle.
+        await db.rides.update_one(
+            {"id": ride_id},
+            {
+                "$set": {
+                    "status": "searching",
+                    "driver_id": None,
+                    "driver_notified_at": None,
+                    "updated_at": datetime.utcnow(),
+                }
+            },
+        )
+
+        # Notify rider via WebSocket.
+        if rider_id:
+            await manager.send_personal_message(
+                {
+                    "type": "driver_timeout",
+                    "ride_id": ride_id,
+                    "message": "Driver didn't respond. Finding another driver...",
+                },
+                f"rider_{rider_id}",
+            )
+
+        # Attempt re-dispatch to the next available driver.
+        await match_driver_to_ride(ride_id)
+
+    except Exception as e:
+        logger.warning(f"[DISPATCH] Offer timeout handler error for ride {ride_id}: {e}")
+
 
 class RideEstimateRequest(BaseModel):
     pickup_lat: float
@@ -1184,6 +1278,58 @@ async def get_ride_messages(ride_id: str, current_user: dict = Depends(get_curre
         serialized.append(msg)
 
     return {"success": True, "messages": serialized}
+
+
+class SendMessageRequest(BaseModel):
+    text: str
+
+
+@api_router.post("/{ride_id}/messages")
+async def send_ride_message(ride_id: str, body: SendMessageRequest, current_user: dict = Depends(get_current_user)):
+    """Send a chat message for an active ride.
+
+    Persists the message in `ride_messages` and forwards it to the
+    other party via WebSocket (if they're connected). Works as a REST
+    fallback for screens that don't hold a direct WS reference (e.g.
+    the rider-app chat screen).
+
+    Only the rider or the assigned driver of the ride can send.
+    """
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    is_rider = ride.get("rider_id") == current_user["id"]
+    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    is_driver = driver and ride.get("driver_id") == driver["id"]
+
+    if not (is_rider or is_driver):
+        raise HTTPException(status_code=403, detail="Not authorized to send messages in this ride")
+
+    sender = "rider" if is_rider else "driver"
+    msg_data = {
+        "id": str(uuid.uuid4()),
+        "ride_id": ride_id,
+        "text": body.text.strip(),
+        "sender": sender,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+    await db.ride_messages.insert_one(msg_data)
+
+    # Forward to the other party via WebSocket.
+    target = None
+    if sender == "rider" and ride.get("driver_id"):
+        d = await db.drivers.find_one({"id": ride["driver_id"]})
+        if d and d.get("user_id"):
+            target = f"driver_{d['user_id']}"
+    elif sender == "driver":
+        target = f"rider_{ride['rider_id']}"
+
+    if target:
+        await manager.send_personal_message({**msg_data, "type": "chat_message"}, target)
+
+    return {"success": True, "message": msg_data}
 
 
 @api_router.get("/scheduled")

@@ -11,9 +11,11 @@ from slowapi.util import get_remote_address
 try:
     from ...core.config import settings
     from ...db import db
+    from ...utils.password import hash_password, verify_password
 except ImportError:
     from core.config import settings
     from db import db
+    from utils.password import hash_password, verify_password
 
 logger = logging.getLogger(__name__)
 
@@ -96,8 +98,6 @@ async def admin_login(request: Request, body: LoginRequest):
     extract the client address; the Pydantic body has been renamed
     from ``request`` to ``body`` to free up the name.
     """
-    import hashlib
-
     ALL_MODULES = [
         "dashboard",
         "users",
@@ -147,13 +147,31 @@ async def admin_login(request: Request, body: LoginRequest):
     # 2. Staff member
     staff = await db.admin_staff.find_one({"email": body.email.lower()})
     if staff:
-        pw_hash = hashlib.sha256(body.password.encode()).hexdigest()
-        if staff.get("password_hash") == pw_hash:
+        stored_hash = staff.get("password_hash", "") or ""
+        ok, needs_upgrade = verify_password(body.password, stored_hash)
+        if ok:
             if not staff.get("is_active", True):
                 raise HTTPException(status_code=403, detail="Account is deactivated")
+
+            update_payload: Dict[str, Any] = {"last_login": datetime.utcnow().isoformat()}
+            # Transparent upgrade: legacy SHA256 rows (and any bcrypt
+            # hashes at a lower cost factor than the current target)
+            # get re-hashed to the current bcrypt cost on successful
+            # login. The next login will find a modern hash and skip
+            # the upgrade. No operator action required.
+            if needs_upgrade:
+                try:
+                    update_payload["password_hash"] = hash_password(body.password)
+                    logger.info(f"Upgraded password hash for admin_staff id={staff.get('id')}")
+                except Exception as e:
+                    # Never fail a login because the upgrade path hit
+                    # a bcrypt hiccup; just leave the legacy hash in
+                    # place and try again next time.
+                    logger.warning(f"Password upgrade failed for staff id={staff.get('id')}: {e}")
+
             await db.admin_staff.update_one(
                 {"id": staff["id"]},
-                {"$set": {"last_login": datetime.utcnow().isoformat()}},
+                {"$set": update_payload},
             )
             modules = staff.get("modules", ["dashboard"])
             token = jwt.encode(

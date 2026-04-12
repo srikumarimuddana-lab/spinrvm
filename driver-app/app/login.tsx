@@ -20,6 +20,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { auth } from '@shared/config/firebaseConfig';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
+import { useLanguageStore } from '../store/languageStore';
 import CustomAlert from '@shared/components/CustomAlert';
 
 const THEME = SpinrConfig.theme.colors;
@@ -38,6 +39,7 @@ if (isFirebaseConfigured) {
 
 export default function LoginScreen() {
   const router = useRouter();
+  const { t } = useLanguageStore();
   const insets = useSafeAreaInsets();
   const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
@@ -271,10 +273,10 @@ export default function LoginScreen() {
       {/* Terms */}
       <View style={[styles.terms, { paddingBottom: insets.bottom + 16 }]}>
         <Text style={styles.termsText}>
-          By continuing, you agree to our{' '}
-          <Text style={styles.termsLink}>Terms of Service</Text>
-          {' '}and{' '}
-          <Text style={styles.termsLink}>Privacy Policy</Text>
+          {t('login.termsPrefix')}{' '}
+          <Text style={styles.termsLink}>{t('login.termsOfService')}</Text>
+          {' '}{t('login.and')}{' '}
+          <Text style={styles.termsLink}>{t('login.privacyPolicy')}</Text>
         </Text>
       </View>
 

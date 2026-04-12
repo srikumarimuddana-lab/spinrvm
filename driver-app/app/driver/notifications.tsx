@@ -13,8 +13,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import api from '@shared/api/client';
-
 import SpinrConfig from '@shared/config/spinr.config';
+import { useLanguageStore } from '../../store/languageStore';
 
 const THEME = SpinrConfig.theme.colors;
 const COLORS = {
@@ -54,6 +54,7 @@ const iconMap: Record<string, { name: string; color: string }> = {
 export default function NotificationsScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
+    const { t } = useLanguageStore();
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [unreadCount, setUnreadCount] = useState(0);
     const [refreshing, setRefreshing] = useState(false);
@@ -145,17 +146,17 @@ export default function NotificationsScreen() {
                     <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
                         <Ionicons name="arrow-back" size={22} color={COLORS.text} />
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>Notifications</Text>
+                    <Text style={styles.headerTitle}>{t('notifications.title')}</Text>
                     {unreadCount > 0 ? (
                         <TouchableOpacity onPress={markAllRead} style={styles.markAllBtn}>
-                            <Text style={styles.markAllText}>Mark All Read</Text>
+                            <Text style={styles.markAllText}>{t('notifications.markAllRead')}</Text>
                         </TouchableOpacity>
                     ) : (
                         <View style={{ width: 80 }} />
                     )}
                 </View>
                 {unreadCount > 0 && (
-                    <Text style={styles.unreadCountText}>{unreadCount} unread notification{unreadCount !== 1 ? 's' : ''}</Text>
+                    <Text style={styles.unreadCountText}>{unreadCount} {unreadCount !== 1 ? t('notifications.unreadCountPlural').replace('{{count}}', '') : t('notifications.unreadCount').replace('{{count}}', '')}</Text>
                 )}
             </LinearGradient>
 
@@ -171,8 +172,8 @@ export default function NotificationsScreen() {
                 ListEmptyComponent={
                     <View style={styles.emptyState}>
                         <Ionicons name="notifications-off-outline" size={56} color={COLORS.surfaceLight} />
-                        <Text style={styles.emptyTitle}>No notifications</Text>
-                        <Text style={styles.emptySub}>You're all caught up!</Text>
+                        <Text style={styles.emptyTitle}>{t('notifications.noNotifications')}</Text>
+                        <Text style={styles.emptySub}>{t('notifications.allCaughtUp')}</Text>
                     </View>
                 }
             />

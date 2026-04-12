@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, TextInput, Share, Alert } fro
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import SpinrConfig from '@shared/config/spinr.config';
+import { useLanguageStore } from '../../store/languageStore';
 
 const COLORS = {
   primary: SpinrConfig.theme.colors.background,
@@ -43,6 +44,7 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
   onDone,
   onRateRider,
 }) => {
+  const { t } = useLanguageStore();
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
   const [submitted, setSubmitted] = useState(false);
@@ -75,25 +77,25 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
         <View style={styles.completedIcon}>
           <Ionicons name="checkmark-circle" size={60} color={COLORS.accent} />
         </View>
-        <Text style={styles.completedTitle}>Trip Completed!</Text>
+        <Text style={styles.completedTitle}>{t('tripCompleted.title')}</Text>
 
         {/* Fare breakdown */}
         <View style={styles.fareBreakdown}>
           <View style={styles.fareRow}>
-            <Text style={styles.fareItemLabel}>Base Fare</Text>
+            <Text style={styles.fareItemLabel}>{t('tripCompleted.baseFare')}</Text>
             <Text style={styles.fareItemValue}>${(completedRide.base_fare || 0).toFixed(2)}</Text>
           </View>
           <View style={styles.fareRow}>
-            <Text style={styles.fareItemLabel}>Distance</Text>
+            <Text style={styles.fareItemLabel}>{t('tripCompleted.distanceFare')}</Text>
             <Text style={styles.fareItemValue}>${(completedRide.distance_fare || 0).toFixed(2)}</Text>
           </View>
           <View style={styles.fareRow}>
-            <Text style={styles.fareItemLabel}>Time</Text>
+            <Text style={styles.fareItemLabel}>{t('tripCompleted.timeFare')}</Text>
             <Text style={styles.fareItemValue}>${(completedRide.time_fare || 0).toFixed(2)}</Text>
           </View>
           <View style={styles.fareDivider} />
           <View style={styles.fareRow}>
-            <Text style={styles.fareEarningsLabel}>Your Earnings</Text>
+            <Text style={styles.fareEarningsLabel}>{t('tripCompleted.yourEarnings')}</Text>
             <Text style={styles.fareEarningsValue}>
               ${(completedRide.driver_earnings || 0).toFixed(2)}
             </Text>
@@ -124,28 +126,28 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
               : new Date().toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' });
 
             const receipt = [
-              '🚗 SPINR — Trip Receipt',
+              `🚗 ${t('tripCompleted.receiptTitle')}`,
               '━━━━━━━━━━━━━━━━━━━━━━━',
               '',
-              completedRide.pickup_address ? `📍 Pickup: ${completedRide.pickup_address}` : null,
-              completedRide.dropoff_address ? `🏁 Dropoff: ${completedRide.dropoff_address}` : null,
+              completedRide.pickup_address ? `📍 ${t('tripCompleted.receiptPickup')}: ${completedRide.pickup_address}` : null,
+              completedRide.dropoff_address ? `🏁 ${t('tripCompleted.receiptDropoff')}: ${completedRide.dropoff_address}` : null,
               `📅 ${date}`,
               '',
-              `Distance: ${(completedRide.distance_km || 0).toFixed(1)} km`,
-              `Duration: ${completedRide.duration_minutes || 0} min`,
+              `${t('tripCompleted.receiptDistance')}: ${(completedRide.distance_km || 0).toFixed(1)} km`,
+              `${t('tripCompleted.receiptDuration')}: ${completedRide.duration_minutes || 0} min`,
               '',
-              '── Fare Breakdown ──',
-              `Base Fare:     $${(completedRide.base_fare || 0).toFixed(2)}`,
-              `Distance Fare: $${(completedRide.distance_fare || 0).toFixed(2)}`,
-              `Time Fare:     $${(completedRide.time_fare || 0).toFixed(2)}`,
-              completedRide.booking_fee ? `Booking Fee:   $${completedRide.booking_fee.toFixed(2)}` : null,
-              completedRide.tip_amount ? `Tip:           $${completedRide.tip_amount.toFixed(2)}` : null,
+              `── ${t('tripCompleted.receiptFareBreakdown')} ──`,
+              `${t('tripCompleted.baseFare')}:     $${(completedRide.base_fare || 0).toFixed(2)}`,
+              `${t('tripCompleted.distanceFare')}: $${(completedRide.distance_fare || 0).toFixed(2)}`,
+              `${t('tripCompleted.timeFare')}:     $${(completedRide.time_fare || 0).toFixed(2)}`,
+              completedRide.booking_fee ? `${t('tripCompleted.bookingFee')}:   $${completedRide.booking_fee.toFixed(2)}` : null,
+              completedRide.tip_amount ? `${t('tripCompleted.tip')}:           $${completedRide.tip_amount.toFixed(2)}` : null,
               '━━━━━━━━━━━━━━━━━━━━━━━',
-              `YOUR EARNINGS: $${(completedRide.driver_earnings || 0).toFixed(2)}`,
+              `${t('tripCompleted.receiptYourEarnings')}: $${(completedRide.driver_earnings || 0).toFixed(2)}`,
               '',
-              completedRide.id ? `Trip ID: ${completedRide.id}` : null,
+              completedRide.id ? `${t('tripCompleted.receiptTripId')}: ${completedRide.id}` : null,
               '',
-              'Powered by Spinr — 0% commission rideshare',
+              t('tripCompleted.receiptFooter'),
             ]
               .filter(Boolean)
               .join('\n');
@@ -159,13 +161,13 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
           activeOpacity={0.7}
         >
           <Ionicons name="receipt-outline" size={16} color={COLORS.accent} />
-          <Text style={styles.shareReceiptText}>Share Receipt</Text>
+          <Text style={styles.shareReceiptText}>{t('tripCompleted.shareReceipt')}</Text>
         </TouchableOpacity>
 
         {/* Rate your rider */}
         {!submitted && (
           <View style={styles.ratingSection}>
-            <Text style={styles.ratingLabel}>How was your rider?</Text>
+            <Text style={styles.ratingLabel}>{t('tripCompleted.howWasRider')}</Text>
             <View style={styles.starsRow}>
               {[1, 2, 3, 4, 5].map((star) => (
                 <TouchableOpacity
@@ -185,7 +187,7 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
             {rating > 0 && (
               <TextInput
                 style={styles.commentInput}
-                placeholder="Any comments? (optional)"
+                placeholder={t('tripCompleted.anyComments')}
                 placeholderTextColor={COLORS.textDim}
                 value={comment}
                 onChangeText={setComment}
@@ -204,7 +206,7 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
         >
           <LinearGradient colors={[COLORS.accent, COLORS.accentDim]} style={styles.actionGradient}>
             <Text style={styles.actionBtnText}>
-              {submitting ? 'Submitting...' : rating > 0 ? 'Rate & Done' : 'Skip Rating'}
+              {submitting ? t('tripCompleted.submitting') : rating > 0 ? t('tripCompleted.rateDone') : t('tripCompleted.skipRating')}
             </Text>
           </LinearGradient>
         </TouchableOpacity>

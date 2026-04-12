@@ -76,6 +76,21 @@ export default function DriverDashboard() {
   // Route polyline coordinates for active rides
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
 
+  // Live ETA from Google Directions — updated every 30s via the
+  // directionsKey mechanism below.
+  const [routeEtaMinutes, setRouteEtaMinutes] = useState<number | null>(null);
+  const [routeDistanceKm, setRouteDistanceKm] = useState<number | null>(null);
+
+  // Force MapViewDirections to re-compute every 30 seconds by changing
+  // a key prop. This gives the driver a road-aware ETA that accounts
+  // for traffic and route changes without hammering the Directions API.
+  const [directionsKey, setDirectionsKey] = useState(0);
+  useEffect(() => {
+    if (rideState !== 'navigating_to_pickup' && rideState !== 'trip_in_progress') return;
+    const interval = setInterval(() => setDirectionsKey((k) => k + 1), 30000);
+    return () => clearInterval(interval);
+  }, [rideState]);
+
   // Demand heatmap — controlled by admin per service area
   const [heatmapPoints, setHeatmapPoints] = useState<{ latitude: number; longitude: number; weight: number }[]>([]);
 
@@ -130,9 +145,12 @@ export default function DriverDashboard() {
     setCountdownState(countdownSeconds);
   }, [countdownSeconds]);
 
-  // Clear route when ride state changes (new phase = new route)
+  // Clear route + ETA when ride state changes (new phase = new route)
   useEffect(() => {
     setRouteCoords([]);
+    setRouteEtaMinutes(null);
+    setRouteDistanceKm(null);
+    setDirectionsKey(0);
   }, [rideState]);
 
   // Error handling
@@ -364,6 +382,7 @@ export default function DriverDashboard() {
           return (
             <>
               <MapViewDirections
+                key={directionsKey}
                 origin={origin}
                 destination={destination}
                 apikey={GOOGLE_MAPS_API_KEY}
@@ -371,7 +390,13 @@ export default function DriverDashboard() {
                 strokeColor="transparent"
                 onReady={(result) => {
                   setRouteCoords(result.coordinates);
-                  if (mapRef.current && result.coordinates?.length > 1) {
+                  // Capture live ETA + road-distance from the Directions API.
+                  // result.duration is in minutes, result.distance in km.
+                  if (result.duration != null) setRouteEtaMinutes(Math.round(result.duration));
+                  if (result.distance != null) setRouteDistanceKm(Math.round(result.distance * 10) / 10);
+                  // Only fit-to-coordinates on the first computation (key=0)
+                  // to avoid the map jumping every 30s.
+                  if (directionsKey === 0 && mapRef.current && result.coordinates?.length > 1) {
                     mapRef.current.fitToCoordinates(result.coordinates, {
                       edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
                       animated: true,
@@ -379,7 +404,6 @@ export default function DriverDashboard() {
                   }
                 }}
                 onError={(err) => console.log('Directions error:', err)}
-                resetOnChange={false}
               />
               {routeCoords.length > 1 && (
                 <>
@@ -477,6 +501,8 @@ export default function DriverDashboard() {
           onStartRide={() => startRide(activeRide!.ride.id)}
           onCompleteRide={() => completeRide(activeRide!.ride.id)}
           onCancelRide={() => cancelRide(activeRide!.ride.id)}
+          routeEtaMinutes={routeEtaMinutes}
+          routeDistanceKm={routeDistanceKm}
           slideUpAnim={slideUpAnim}
           fadeAnim={fadeAnim}
         />

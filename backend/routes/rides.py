@@ -677,12 +677,37 @@ async def get_ride(ride_id: str, current_user: dict = Depends(get_current_user))
         if current_user.get("role") != "admin":
             raise HTTPException(status_code=403, detail="Not authorized to view this ride")
 
-    # Include driver details if assigned
+    # Include driver details if assigned.
+    # Previously this dumped the ENTIRE driver row to the rider, which
+    # included license_number, insurance_expiry_date,
+    # background_check_expiry_date, work_eligibility_expiry_date,
+    # vehicle_vin, document URLs, and the driver's stored phone — a
+    # material PII leak to any rider on any ride. Only surface the
+    # fields the rider actually needs to identify the driver and the
+    # car pulling up (name, plate + make/model/color, rating, and the
+    # live coordinates used for the map marker).
     if ride.get("driver_id"):
         assigned_driver = await db.drivers.find_one({"id": ride["driver_id"]})
         if assigned_driver:
-            # Add to response
-            ride["driver"] = assigned_driver
+            ride["driver"] = {
+                "id": assigned_driver.get("id"),
+                "name": assigned_driver.get("name"),
+                "rating": assigned_driver.get("rating"),
+                "total_rides": assigned_driver.get("total_rides"),
+                "profile_image_url": assigned_driver.get("profile_image_url"),
+                "vehicle_make": assigned_driver.get("vehicle_make"),
+                "vehicle_model": assigned_driver.get("vehicle_model"),
+                "vehicle_color": assigned_driver.get("vehicle_color"),
+                "license_plate": assigned_driver.get("license_plate"),
+                "vehicle_year": assigned_driver.get("vehicle_year"),
+                "lat": assigned_driver.get("lat"),
+                "lng": assigned_driver.get("lng"),
+                # NOTE: deliberately excluded: phone, license_number,
+                # vehicle_vin, insurance_expiry_date,
+                # background_check_expiry_date, work_eligibility_expiry_date,
+                # documents, stripe_account_id, fcm_token, user_id,
+                # bank_account details, onboarding flags.
+            }
 
     # Derive free_cancel_seconds_remaining + cancellation_fee from app_settings (UX-001).
     # These allow the frontend to show accurate countdown/fee without hardcoding.

@@ -7,7 +7,6 @@ from slowapi.errors import RateLimitExceeded
 from core.config import settings
 from utils.rate_limiter import default_limiter, rate_limit_exceeded_handler
 
-
 _INSECURE_JWT_DEFAULTS = {
     "your-strong-secret-key",  # core/config.py default
     "spinr-dev-secret-key-NOT-FOR-PRODUCTION",  # previous dependencies.py fallback

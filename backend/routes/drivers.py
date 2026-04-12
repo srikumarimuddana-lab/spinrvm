@@ -69,12 +69,8 @@ async def get_driver_config(current_user: dict = Depends(get_current_user)):
         return max(lo, min(hi, n))
 
     return {
-        "ride_offer_timeout_seconds": _clamp(
-            app_settings.get("ride_offer_timeout_seconds"), 5, 60, 15
-        ),
-        "pickup_radius_meters": _clamp(
-            app_settings.get("pickup_radius_meters"), 10, 1000, 100
-        ),
+        "ride_offer_timeout_seconds": _clamp(app_settings.get("ride_offer_timeout_seconds"), 5, 60, 15),
+        "pickup_radius_meters": _clamp(app_settings.get("pickup_radius_meters"), 10, 1000, 100),
     }
 
 
@@ -1438,10 +1434,31 @@ async def apply_referral_code(req: ApplyReferralCodeRequest, current_user: dict 
     # Validate referral code exists (check if any driver has this code)
     ref_driver = await db.drivers.find_one({"referral_code": code})
     if not ref_driver:
-        # Check if code matches driver ID pattern
+        # Legacy fallback: allow `DRIVER<id-suffix>` format where the
+        # suffix is the last 8 chars of a driver ID. The original
+        # implementation used a `$regex` filter which (a) the Supabase
+        # translator silently dropped, so this path never matched, and
+        # (b) would have been a ReDoS vector on MongoDB.
+        #
+        # Replacement: accept only an 8-char alphanumeric suffix, then
+        # use a bounded PostgREST `.ilike()` lookup. The `%` suffix
+        # wildcard means "id ends with this string" — exactly what the
+        # original code was trying to do.
         potential_id = code.replace("DRIVER", "")
-        if len(potential_id) == 8:
-            ref_driver = await db.drivers.find_one({"id": {"$regex": f".*{potential_id}.*"}})
+        if len(potential_id) == 8 and potential_id.isalnum():
+            try:
+                from ..db_supabase import run_sync, supabase  # type: ignore
+            except ImportError:
+                from db_supabase import run_sync, supabase  # type: ignore
+
+            if supabase:
+
+                def _lookup():
+                    res = supabase.table("drivers").select("*").ilike("id", f"%{potential_id}").limit(1).execute()
+                    rows = res.data if res.data else []
+                    return rows[0] if rows else None
+
+                ref_driver = await run_sync(_lookup)
 
     if not ref_driver:
         raise HTTPException(status_code=404, detail="Invalid referral code")

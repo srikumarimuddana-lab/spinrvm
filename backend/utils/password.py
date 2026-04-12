@@ -118,6 +118,8 @@ def _constant_time_equal(a: str, b: str) -> bool:
     if len(a) != len(b):
         return False
     result = 0
-    for x, y in zip(a, b):
+    # `strict=True` is redundant after the length check above, but ruff's
+    # B905 rule requires it to be explicit so the intent is unambiguous.
+    for x, y in zip(a, b, strict=True):
         result |= ord(x) ^ ord(y)
     return result == 0

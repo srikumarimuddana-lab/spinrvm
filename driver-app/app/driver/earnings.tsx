@@ -20,6 +20,7 @@ import { useDriverStore } from '../../store/driverStore';
 const { width } = Dimensions.get('window');
 
 import SpinrConfig from '@shared/config/spinr.config';
+import { useLanguageStore } from '../../store/languageStore';
 
 const THEME = SpinrConfig.theme.colors;
 const COLORS = {
@@ -43,6 +44,7 @@ type Period = 'today' | 'week' | 'month' | 'all';
 export default function EarningsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { t } = useLanguageStore();
   const {
     earnings,
     dailyEarnings,
@@ -95,7 +97,7 @@ export default function EarningsScreen() {
             activeOpacity={0.7}
           >
             <Text style={[styles.filterPillText, period === item && styles.filterPillTextActive]}>
-              {item === 'all' ? 'All Time' : item === 'today' ? 'Today' : item === 'week' ? 'This Week' : 'This Month'}
+              {item === 'all' ? t('earnings.allTime') : item === 'today' ? t('earnings.today') : item === 'week' ? t('earnings.thisWeek') : t('earnings.thisMonth')}
             </Text>
           </TouchableOpacity>
         )}
@@ -114,18 +116,18 @@ export default function EarningsScreen() {
           <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color="#fff" />
           </TouchableOpacity>
-          <Text style={styles.headerHeroTitle}>Earnings</Text>
+          <Text style={styles.headerHeroTitle}>{t('earnings.title')}</Text>
           <TouchableOpacity
             style={styles.payoutBtn}
             onPress={() => router.push('/driver/payout' as any)}
           >
             <Ionicons name="wallet-outline" size={16} color={COLORS.accentDark} />
-            <Text style={styles.payoutBtnText}>Payout</Text>
+            <Text style={styles.payoutBtnText}>{t('earnings.payout')}</Text>
           </TouchableOpacity>
         </View>
 
         <View style={styles.totalBox}>
-          <Text style={styles.totalLabel}>TOTAL EARNINGS</Text>
+          <Text style={styles.totalLabel}>{t('earnings.totalEarnings')}</Text>
           <Text style={styles.totalAmount}>
             ${loading ? '--' : (earnings?.total_earnings || 0).toFixed(2)}
           </Text>

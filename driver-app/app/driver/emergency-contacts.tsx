@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import SpinrConfig from '@shared/config/spinr.config';
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
+import { useLanguageStore } from '../../store/languageStore';
 
 const THEME = SpinrConfig.theme.colors;
 const MAX_CONTACTS = 3;
@@ -33,6 +34,7 @@ const RELATIONSHIPS = [
 
 export default function EmergencyContactsScreen() {
   const router = useRouter();
+  const { t } = useLanguageStore();
   const [contacts, setContacts] = useState<EmergencyContact[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -152,7 +154,7 @@ export default function EmergencyContactsScreen() {
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Emergency Contacts</Text>
+        <Text style={styles.headerTitle}>{t('emergencyContacts.title')}</Text>
         <View style={{ width: 44 }} />
       </View>
 
@@ -165,7 +167,7 @@ export default function EmergencyContactsScreen() {
           <View style={styles.infoBanner}>
             <Ionicons name="shield-checkmark" size={24} color={THEME.primary} />
             <Text style={styles.infoText}>
-              Your emergency contacts will be notified automatically when you use the Emergency button during a ride. You can add up to {MAX_CONTACTS} contacts.
+              {t('emergencyContacts.infoBanner').replace('{{max}}', String(MAX_CONTACTS))}
             </Text>
           </View>
 
@@ -179,7 +181,7 @@ export default function EmergencyContactsScreen() {
               <View style={styles.emptyIcon}>
                 <Ionicons name="people-outline" size={48} color="#CCC" />
               </View>
-              <Text style={styles.emptyTitle}>No emergency contacts yet</Text>
+              <Text style={styles.emptyTitle}>{t('emergencyContacts.noContacts')}</Text>
               <Text style={styles.emptySubtitle}>
                 Add a trusted contact so they can be reached in case of an emergency during your ride.
               </Text>
@@ -220,16 +222,16 @@ export default function EmergencyContactsScreen() {
               onPress={() => setShowAdd(true)}
             >
               <Ionicons name="add-circle" size={22} color={THEME.primary} />
-              <Text style={styles.addButtonText}>Add Emergency Contact</Text>
+              <Text style={styles.addButtonText}>{t('emergencyContacts.addContact')}</Text>
             </TouchableOpacity>
           )}
 
           {/* Add Contact Form */}
           {showAdd && (
             <View style={styles.addForm}>
-              <Text style={styles.formTitle}>New Emergency Contact</Text>
+              <Text style={styles.formTitle}>{t('emergencyContacts.newContact')}</Text>
 
-              <Text style={styles.formLabel}>Full Name</Text>
+              <Text style={styles.formLabel}>{t('emergencyContacts.fullName')}</Text>
               <TextInput
                 style={styles.formInput}
                 placeholder="e.g. Sarah Johnson"
@@ -239,7 +241,7 @@ export default function EmergencyContactsScreen() {
                 autoCapitalize="words"
               />
 
-              <Text style={styles.formLabel}>Phone Number</Text>
+              <Text style={styles.formLabel}>{t('emergencyContacts.phoneNumber')}</Text>
               <TextInput
                 style={styles.formInput}
                 placeholder="e.g. (306) 555-1234"
@@ -249,7 +251,7 @@ export default function EmergencyContactsScreen() {
                 keyboardType="phone-pad"
               />
 
-              <Text style={styles.formLabel}>Relationship</Text>
+              <Text style={styles.formLabel}>{t('emergencyContacts.relationship')}</Text>
               <View style={styles.relationshipRow}>
                 {RELATIONSHIPS.map((rel) => (
                   <TouchableOpacity
@@ -287,7 +289,7 @@ export default function EmergencyContactsScreen() {
                   {saving ? (
                     <ActivityIndicator color="#FFF" size="small" />
                   ) : (
-                    <Text style={styles.saveButtonText}>Save Contact</Text>
+                    <Text style={styles.saveButtonText}>{t('emergencyContacts.saveContact')}</Text>
                   )}
                 </TouchableOpacity>
               </View>

@@ -1,6 +1,32 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 
+// ── Cookie helpers ───────────────────────────────────────────────
+// The JWT is dual-written to localStorage (for Zustand/api.ts) AND to
+// an `admin_token` cookie (for the Next.js middleware at src/middleware.ts,
+// which runs on the edge and cannot read localStorage). Both sides must
+// stay in lockstep — see middleware.ts for the full rationale.
+const COOKIE_NAME = 'admin_token';
+const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30; // 30 days, matches JWT expiry
+
+function setAuthCookie(token: string) {
+    if (typeof document === 'undefined') return;
+    const secure = typeof window !== 'undefined' && window.location.protocol === 'https:';
+    const parts = [
+        `${COOKIE_NAME}=${encodeURIComponent(token)}`,
+        'path=/',
+        `max-age=${COOKIE_MAX_AGE_SECONDS}`,
+        'SameSite=Lax',
+    ];
+    if (secure) parts.push('Secure');
+    document.cookie = parts.join('; ');
+}
+
+function clearAuthCookie() {
+    if (typeof document === 'undefined') return;
+    document.cookie = `${COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
+}
+
 interface User {
     id: string;
     phone?: string;
@@ -44,6 +70,11 @@ export const useAuthStore = create<AuthState>()(
 
             setToken: (token) => {
                 set({ token });
+                if (token) {
+                    setAuthCookie(token);
+                } else {
+                    clearAuthCookie();
+                }
             },
 
             setLoading: (loading) => {
@@ -51,6 +82,7 @@ export const useAuthStore = create<AuthState>()(
             },
 
             logout: () => {
+                clearAuthCookie();
                 set({
                     user: null,
                     token: null,
@@ -103,8 +135,14 @@ export const useAuthStore = create<AuthState>()(
                 isAuthenticated: state.isAuthenticated,
             }),
             onRehydrateStorage: () => (state) => {
-                // Check auth when store is rehydrated from localStorage
+                // Check auth when store is rehydrated from localStorage.
+                // Also re-sync the cookie so middleware sees the session
+                // after a page reload (Zustand rehydrates from localStorage,
+                // but the cookie may have been cleared independently).
                 if (state) {
+                    if (state.token) {
+                        setAuthCookie(state.token);
+                    }
                     state.checkAuth();
                 }
             },

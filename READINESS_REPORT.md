@@ -81,11 +81,21 @@ twilio: {
 
 This affects SMS OTP functionality.
 
-### 4. Admin Dashboard Has No Authentication
+### 4. Admin Dashboard Has No Authentication — ✅ RESOLVED
 
-The admin dashboard at `spinr/admin-dashboard/` has **NO login protection**. Anyone can access the dashboard at `/dashboard`.
+Previously, `/dashboard` had no login protection. Resolution (2026-04-12):
 
-From [`spinr/admin-dashboard/src/app/dashboard/page.tsx`](spinr/admin-dashboard/src/app/dashboard/page.tsx) - there's no authentication check.
+- **Edge middleware** at `admin-dashboard/src/middleware.ts` redirects
+  any non-public request without an `admin_token` cookie to
+  `/login?next=<original>`. Public paths: `/login`, `/register/*`,
+  `/track/*`, Next internals, static assets.
+- **Cookie bridge**: `authStore.setToken` dual-writes the JWT to
+  localStorage (for React + `api.ts`) and to the `admin_token`
+  cookie (for the edge middleware). `logout` clears both.
+- **Backend endpoints already existed** (`POST /api/admin/auth/login`,
+  `GET /api/admin/auth/session`, `POST /api/admin/auth/logout` in
+  `backend/routes/admin/auth.py`) — the gap was purely the Next.js
+  middleware.
 
 ### 5. CORS Allows All Origins — ✅ RESOLVED
 

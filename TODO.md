@@ -93,9 +93,29 @@
 
 ## Medium Priority
 
-- [ ] **Admin Dashboard: No authentication** - No visible auth implementation
-  - File: `admin-dashboard/src/app/`
-  - Action: Implement admin auth
+- [x] **Admin Dashboard: No authentication** - ✅ Fixed 2026-04-12.
+  The Zustand store + login page + dashboard layout client-side
+  redirect were already in place; the real gap was no Next.js
+  middleware, so unauthenticated users saw dashboard HTML before
+  React hydrated.
+  - New `admin-dashboard/src/middleware.ts` runs at the edge and
+    redirects any non-public request without the `admin_token`
+    cookie to `/login?next=<original>`. Public paths allowed
+    through: `/login`, `/register/*`, `/track/*` (rider share
+    links), Next internals, and static assets.
+  - `authStore.setToken` now dual-writes the JWT to both
+    localStorage (existing) and the `admin_token` cookie (new;
+    `SameSite=Lax`, 30-day max-age, `Secure` when served over
+    HTTPS). `authStore.logout` clears the cookie too, so the
+    sidebar logout button works end-to-end.
+  - `authStore.onRehydrateStorage` re-seeds the cookie from the
+    persisted token on page reload, so the cookie and localStorage
+    can't drift after a refresh.
+  - Login page split into a `LoginForm` client component wrapped in
+    `<Suspense>` (Next.js 16 requires `useSearchParams()` to live
+    under a suspense boundary) and now honors `?next=<path>` with
+    sanitization (only same-origin relative paths accepted; blocks
+    protocol-relative `//evil.com` and absolute URLs).
 
 - [ ] **Driver App: Hardcoded 15s timeout** - Should be configurable
   - File: `driver-app/app/driver/index.tsx`

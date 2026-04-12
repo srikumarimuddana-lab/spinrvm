@@ -152,6 +152,35 @@ const handleApiError = async (response: Response, method: string, url: string): 
     exception_type: exceptionType,
     data: errorData,
   });
+
+  // ── G2: Catch expired / invalid tokens globally ──────────────
+  // If the backend returns 401, the JWT has expired or been revoked.
+  // Clear the in-memory token and the persisted auth state so the
+  // Zustand auth store flips `isAuthenticated` to false — which
+  // triggers the layout's redirect-to-login effect in both apps.
+  // This prevents the "session limbo" state where API calls silently
+  // fail 401 while the driver/rider still sees the dashboard.
+  if (response.status === 401) {
+    console.log('[API] 401 Unauthorized — clearing session');
+    setInMemoryToken(null);
+    try {
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        localStorage.removeItem('auth_token');
+      } else {
+        const SecureStore = require('expo-secure-store');
+        await SecureStore.deleteItemAsync('auth_token');
+      }
+    } catch { /* best-effort clear */ }
+
+    // Lazily import the auth store to avoid circular deps. The store's
+    // logout() clears user/token/isAuthenticated — the layout effects
+    // in both apps watch isAuthenticated and redirect to /login.
+    try {
+      const { useAuthStore } = require('../store/authStore');
+      useAuthStore.getState().logout();
+    } catch { /* store may not be initialized yet on cold start */ }
+  }
+
   const error: any = new Error(message);
   error.response = { data: errorData, status: response.status };
   error.requestId = requestId;

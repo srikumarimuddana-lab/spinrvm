@@ -304,6 +304,27 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         Alert.alert('Ride Cancelled', 'The rider has cancelled this ride.');
         resetRideState();
         break;
+
+      // G20: Reply to server heartbeat so the backend doesn't mark
+      // this connection as dead after HEARTBEAT_TIMEOUT (10s).
+      case 'ping':
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'pong' }));
+        }
+        break;
+
+      // G3: Rider-to-driver chat messages. The backend's WebSocket
+      // handler at websocket.py:272-303 forwards chat_message to
+      // `driver_{user_id}`. Previously this case was missing so
+      // driver never saw rider's messages during a ride.
+      case 'chat_message':
+        console.log('[WS] Chat from rider:', data.text?.slice(0, 40));
+        // If the chat screen ever maintains a store (like the rider-app
+        // does via rideStore.addChatMessage), wire it here. For now we
+        // surface a small vibration so the driver knows a message arrived
+        // even if they're not on the chat screen.
+        Vibration.vibrate(100);
+        break;
     }
   }, [setIncomingRide, resetRideState]);
 
@@ -496,10 +517,20 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     if (url) Linking.openURL(url);
   };
 
-  // ─── Fetch active ride on mount ──────────────────────────────────
+  // ─── Crash recovery: fetch active ride on mount regardless of online state ─
+  // If the app was killed during an active ride, the backend still has the
+  // ride assigned to this driver. Fetching on mount (not gated on isOnline)
+  // ensures the driver sees the ride and can resume navigating / completing
+  // instead of landing on a blank "idle" dashboard.
+  useEffect(() => {
+    if (user) {
+      fetchActiveRide();
+    }
+  }, [user]);
+
+  // ─── Fetch earnings when online ─────────────────────────────────
   useEffect(() => {
     if (isOnline) {
-      fetchActiveRide();
       fetchEarnings('today');
     }
   }, [isOnline]);

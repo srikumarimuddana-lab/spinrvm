@@ -16,6 +16,7 @@ except ImportError:
     from geo_utils import calculate_distance
     from schemas import Driver, RideRatingRequest
     from socket_manager import manager
+import asyncio
 import logging
 from datetime import datetime, timedelta
 
@@ -2162,3 +2163,68 @@ async def cancel_subscription(current_user: dict = Depends(get_current_user)):
     )
 
     return {"success": True}
+
+
+# ── G5: Subscription expiry warning background task ──────────────
+
+async def check_expiring_subscriptions():
+    """Background task: sends push notifications to drivers whose
+    Spinr Pass expires within 24 hours.
+
+    Runs periodically (every 6 hours) from the FastAPI lifespan.
+    Marks warned subscriptions with `expiry_warned: true` so the
+    driver isn't notified more than once.
+    """
+    while True:
+        try:
+            now = datetime.utcnow()
+            window = now + timedelta(hours=24)
+
+            active_subs = await db.driver_subscriptions.find(
+                {"status": "active"}
+            ).to_list(500)
+
+            warned_count = 0
+            for sub in active_subs:
+                if sub.get("expiry_warned"):
+                    continue
+
+                expires_at = sub.get("expires_at")
+                if not expires_at:
+                    continue
+
+                if isinstance(expires_at, str):
+                    try:
+                        expires_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00")).replace(tzinfo=None)
+                    except ValueError:
+                        continue
+                else:
+                    expires_dt = expires_at
+
+                if now < expires_dt <= window:
+                    driver = await db.drivers.find_one({"id": sub["driver_id"]})
+                    if driver and driver.get("user_id"):
+                        hours_left = max(1, int((expires_dt - now).total_seconds() / 3600))
+                        plan_name = sub.get("plan_name", "Spinr Pass")
+                        try:
+                            await send_push_notification(
+                                driver["user_id"],
+                                "Spinr Pass Expiring Soon ⏰",
+                                f"Your {plan_name} plan expires in ~{hours_left} hours. Renew now to keep driving!",
+                                {"type": "subscription_expiring", "hours_left": str(hours_left)},
+                            )
+                            warned_count += 1
+                        except Exception as e:
+                            logger.warning(f"[SUB-EXPIRY] Push failed for driver {sub['driver_id']}: {e}")
+
+                    await db.driver_subscriptions.update_one(
+                        {"id": sub["id"]},
+                        {"$set": {"expiry_warned": True}},
+                    )
+
+            logger.info(f"[SUB-EXPIRY] Check complete. {len(active_subs)} scanned, {warned_count} warned.")
+
+        except Exception as e:
+            logger.warning(f"[SUB-EXPIRY] Background check error: {e}")
+
+        await asyncio.sleep(6 * 3600)

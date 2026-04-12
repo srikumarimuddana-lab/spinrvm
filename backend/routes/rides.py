@@ -644,7 +644,7 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
                         }
                     },
                 )
-                # Notify rider
+                # Notify rider via WebSocket (instant if app is open)
                 await manager.send_personal_message(
                     {
                         "type": "ride_cancelled",
@@ -652,6 +652,16 @@ async def create_ride(request: CreateRideRequest, current_user: dict = Depends(g
                         "reason": "No nearby drivers available. Your ride has been automatically cancelled.",
                     },
                     f"rider_{current_ride['rider_id']}",
+                )
+                # G6: Also send a push notification so the rider gets alerted
+                # even if the app is backgrounded or killed. Previously only
+                # the WS message was sent, which was silently lost if the rider
+                # wasn't actively looking at the app.
+                await send_push_notification(
+                    current_ride["rider_id"],
+                    "Ride Cancelled ❌",
+                    "No nearby drivers were found. Your ride has been automatically cancelled. Please try again.",
+                    {"type": "ride_auto_cancelled", "ride_id": r_id},
                 )
                 logger.info(f"Ride {r_id} auto-cancelled after {timeout_seconds}s - no driver found")
         except Exception as e:

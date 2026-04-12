@@ -254,11 +254,14 @@ so they don't get lost between commits.
     traffic. The client-side `initFirebaseServices()` already calls
     `initializeAppCheck()` — it's a no-op until the Firebase
     console side is configured.
-- [ ] **EAS Build secrets** — once the Google Maps key is rotated,
-  move `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` out of
-  `rider-app/eas.json` and `driver-app/eas.json` and into EAS
-  Secrets (`eas secret:create`) so the key is no longer in git
-  history going forward.
+- [x] **EAS Build secrets** — ✅ Done 2026-04-12.
+  `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` was removed from
+  `rider-app/eas.json` and `driver-app/eas.json` in commit
+  `4d75c28`. New `scripts/setup-eas-secrets.sh` creates the EAS
+  Secrets for both projects using the existing dev/test key. Run
+  the script once after `eas login`, then every `eas build` will
+  have the key injected automatically. Rotate the key value in the
+  script + Google Cloud Console before going to production.
 - [ ] **End-to-end device verification**:
   - Physical Android: FCM push with app backgrounded + DND on.
     Expect heads-up notification via `ride-offers` channel.

@@ -26,31 +26,42 @@ interface Message {
 export default function ChatDriverScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
-  const { currentDriver } = useRideStore();
+  const { currentDriver, chatMessages, addChatMessage, setChatMessages } = useRideStore();
   const scrollViewRef = useRef<ScrollView>(null);
   const [message, setMessage] = useState('');
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      text: "Hi " + (currentDriver?.name?.split(' ')[0] || 'Driver') + ", I'm waiting near the main entrance.",
-      isUser: true,
-      time: '10:42 AM',
-      status: 'read',
-    },
-    {
-      id: '2',
-      text: "Got it! I'm just turning the corner now. Be there in 1 min.",
-      isUser: false,
-      time: '10:43 AM',
-    },
-    {
-      id: '3',
-      text: 'Perfect, see you soon.',
-      isUser: true,
-      time: '10:44 AM',
-      status: 'delivered',
-    },
-  ]);
+  const [sending, setSending] = useState(false);
+
+  // Load chat history from the backend on mount.
+  useEffect(() => {
+    if (!rideId) return;
+    (async () => {
+      try {
+        const api = (await import('@shared/api/client')).default;
+        const res = await api.get(`/rides/${rideId}/messages`);
+        if (res.data?.messages) {
+          setChatMessages(res.data.messages);
+        }
+      } catch (e) {
+        console.log('[Chat] Failed to load history:', e);
+      }
+    })();
+  }, [rideId]);
+
+  // Scroll to bottom when new messages arrive (via WS or local send).
+  useEffect(() => {
+    setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+  }, [chatMessages.length]);
+
+  // Map backend message shape to the UI's Message interface.
+  const messages: Message[] = chatMessages.map((m: any) => ({
+    id: m.id,
+    text: m.text,
+    isUser: m.sender === 'rider',
+    time: m.timestamp
+      ? new Date(m.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      : '',
+    status: m.sender === 'rider' ? 'sent' : undefined,
+  }));
 
   const quickReplies = [
     { id: '1', text: "\ud83d\udc4b I'm here", icon: null },
@@ -63,39 +74,25 @@ export default function ChatDriverScreen() {
   };
 
   const handleCall = () => {
-    // Initiate call
+    // TODO: wire Twilio Proxy or direct call
   };
 
-  const sendMessage = (text: string) => {
-    if (!text.trim()) return;
-
-    const newMsg: Message = {
-      id: Date.now().toString(),
-      text: text.trim(),
-      isUser: true,
-      time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-      status: 'sent',
-    };
-
-    setMessages([...messages, newMsg]);
-    setMessage('');
-
-    // Scroll to bottom
-    setTimeout(() => {
-      scrollViewRef.current?.scrollToEnd({ animated: true });
-    }, 100);
-
-    // Simulate driver response
-    setTimeout(() => {
-      const reply: Message = {
-        id: (Date.now() + 1).toString(),
-        text: "Thanks for letting me know!",
-        isUser: false,
-        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-      };
-      setMessages(prev => [...prev, reply]);
-      scrollViewRef.current?.scrollToEnd({ animated: true });
-    }, 2000);
+  const sendMessage = async (text: string) => {
+    if (!text.trim() || !rideId || sending) return;
+    setSending(true);
+    try {
+      const api = (await import('@shared/api/client')).default;
+      const res = await api.post(`/rides/${rideId}/messages`, { text: text.trim() });
+      if (res.data?.message) {
+        // Optimistically add to local state (deduplicated by the store).
+        addChatMessage(res.data.message);
+      }
+    } catch (e) {
+      console.log('[Chat] Send failed:', e);
+    } finally {
+      setSending(false);
+      setMessage('');
+    }
   };
 
   const handleQuickReply = (text: string) => {

@@ -90,33 +90,19 @@ export const useLocationStore = create<LocationState>()(
             error: null,
           });
 
-          // Start watching position with platform-specific options
-          const watchOptions: PositionOptions = {
-            enableHighAccuracy: true,
-            timeout: 10000,
-            maximumAge: 5000
-          };
-
-          // Only add distanceFilter for non-web platforms (React Native)
-          if (Platform.OS !== 'web') {
-            (watchOptions as any).distanceFilter = 10;
-          }
-
-          navigator.geolocation.watchPosition(
-            (position) => {
-              set({
-                currentLocation: {
-                  latitude: position.coords.latitude,
-                  longitude: position.coords.longitude,
-                  timestamp: position.timestamp,
-                },
-              });
-            },
-            (error) => {
-              set({ error: error.message });
-            },
-            watchOptions
-          );
+          // NOTE: watchPosition was removed here. Previously this store
+          // started a continuous geolocation watcher that ran for the
+          // entire app session. Neither the rider-app nor the driver-app
+          // consumed the resulting `currentLocation` updates — the
+          // driver-app uses its own high-accuracy watcher in
+          // useDriverDashboard.ts, and the rider-app reads a one-shot
+          // position from expo-location for pickup selection. The
+          // continuous watcher just drained battery on both platforms
+          // with no consumer.
+          //
+          // If a new feature needs continuous background position in
+          // the shared store, add an explicit `startWatching()` action
+          // that callers opt into rather than running on init.
         } catch (err: any) {
           set({ 
             error: err.message || 'Failed to initialize location services',

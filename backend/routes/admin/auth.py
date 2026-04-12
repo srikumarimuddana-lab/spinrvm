@@ -204,3 +204,68 @@ async def admin_login(request: Request, body: LoginRequest):
 async def admin_logout():
     """Admin logout endpoint"""
     return {"message": "Logged out successfully"}
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@admin_auth_router.post("/change-password")
+@limiter.limit("3/minute")
+async def change_password(request: Request, body: ChangePasswordRequest, authorization: Optional[str] = Header(None)):
+    """Change the authenticated staff member's own password.
+
+    Requires the current password for verification (prevents session
+    hijacking from escalating to a permanent credential change). The
+    new password must be at least 12 characters — same policy enforced
+    by the staff-creation endpoint in routes/admin/staff.py.
+
+    The super-admin account (credentials in env vars) cannot change
+    their password via this endpoint — that's a config change, not a
+    DB write.
+
+    Rate-limited to 3 attempts per minute per IP.
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    # Decode the JWT to find the staff member.
+    try:
+        scheme, token = authorization.split()
+        if scheme.lower() != "bearer":
+            raise HTTPException(status_code=401, detail="Invalid auth scheme")
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+    except (ValueError, jwt.InvalidTokenError) as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {e}") from e
+
+    user_id = payload.get("user_id")
+    if not user_id or user_id == "admin-001":
+        # admin-001 is the super-admin; their password lives in env vars.
+        raise HTTPException(
+            status_code=400,
+            detail="Super admin password cannot be changed here. Update ADMIN_PASSWORD in the environment.",
+        )
+
+    staff = await db.admin_staff.find_one({"id": user_id})
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+
+    # Verify current password (supports both bcrypt and legacy SHA256).
+    ok, _ = verify_password(body.current_password, staff.get("password_hash", ""))
+    if not ok:
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    # Enforce minimum length on the new password.
+    if len(body.new_password) < 12:
+        raise HTTPException(status_code=400, detail="New password must be at least 12 characters")
+
+    # Hash + store.
+    new_hash = hash_password(body.new_password)
+    await db.admin_staff.update_one(
+        {"id": user_id},
+        {"$set": {"password_hash": new_hash}},
+    )
+
+    logger.info(f"Password changed for admin_staff id={user_id}")
+    return {"success": True, "message": "Password changed successfully"}

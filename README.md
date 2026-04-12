@@ -84,4 +84,4 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed step-by-step instructions.
 
 ## Notes
 
-*   Ensure Supabase RPC functions (`find_nearby_drivers`, `update_driver_location`, etc.) are created in your database. See `backend/FINAL_SCHEMA.sql` (if available) or migration files.
+*   Ensure Supabase RPC functions (`find_nearby_drivers`, `update_driver_location`, etc.) are created in your database. See `READINESS_REPORT.md` § A for the canonical migration order (`supabase_schema.sql` → `sql/01..04` → `migrations/001..17` → `supabase_rls.sql`).

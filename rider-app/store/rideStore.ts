@@ -146,10 +146,13 @@ interface RideState {
   applyPromo: (promo: any | null) => void;
 
   // WebSocket-driven updates (see rider-app/hooks/useRiderSocket.ts).
-  // These are called by the WebSocket message handler to update the
-  // store in real-time rather than waiting for the next poll cycle.
   updateDriverLocation: (lat: number, lng: number, speed?: number | null, heading?: number | null) => void;
   applyRideStatusFromWS: (rideId: string, status: string, extra?: Record<string, any>) => void;
+
+  // Chat
+  chatMessages: any[];
+  addChatMessage: (msg: any) => void;
+  setChatMessages: (msgs: any[]) => void;
 }
 
 export const useRideStore = create<RideState>((set, get) => ({
@@ -161,6 +164,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   selectedVehicle: null,
   currentRide: null,
   currentDriver: null,
+  chatMessages: [],
   savedAddresses: [],
   recentSearches: [],
   availablePromos: [],
@@ -418,6 +422,15 @@ export const useRideStore = create<RideState>((set, get) => ({
     }
   },
 
+  addChatMessage: (msg) => {
+    const { chatMessages } = get();
+    // Deduplicate by id (WS + poll can deliver the same message).
+    if (chatMessages.some((m: any) => m.id === msg.id)) return;
+    set({ chatMessages: [...chatMessages, msg] });
+  },
+
+  setChatMessages: (msgs) => set({ chatMessages: msgs }),
+
   // Clear ONLY the live-ride fields so the rider can immediately re-book
   // using the same trip inputs after a cancellation. We deliberately keep
   // pickup / dropoff / estimates / selectedVehicle / scheduledTime because
@@ -427,6 +440,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   clearRide: () => set({
     currentRide: null,
     currentDriver: null,
+    chatMessages: [],
     error: null,
   }),
 

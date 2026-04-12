@@ -416,11 +416,22 @@ export default function DocumentsScreen() {
                                 )}
                             </View>
 
-                            {/* Rejection reason */}
-                            {frontStatus === 'rejected' && frontDoc !== 'missing' && frontDoc.rejection_reason && (
-                                <View style={styles.rejectionRow}>
-                                    <Ionicons name="alert-circle" size={14} color={THEME.error} />
-                                    <Text style={styles.rejectReason}>{frontDoc.rejection_reason}</Text>
+                            {/* Rejection reason + re-upload nudge */}
+                            {frontStatus === 'rejected' && frontDoc !== 'missing' && (
+                                <View style={styles.rejectionBlock}>
+                                    {frontDoc.rejection_reason && (
+                                        <View style={styles.rejectionRow}>
+                                            <Ionicons name="alert-circle" size={14} color={THEME.error} />
+                                            <Text style={styles.rejectReason}>{frontDoc.rejection_reason}</Text>
+                                        </View>
+                                    )}
+                                    <TouchableOpacity
+                                        style={styles.reuploadBtn}
+                                        onPress={() => handleUpload(req.id, 'front')}
+                                    >
+                                        <Ionicons name="cloud-upload-outline" size={16} color="#fff" />
+                                        <Text style={styles.reuploadBtnText}>Re-upload Document</Text>
+                                    </TouchableOpacity>
                                 </View>
                             )}
 
@@ -583,6 +594,9 @@ const styles = StyleSheet.create({
         fontSize: 11,
         fontWeight: '600',
     },
+    rejectionBlock: {
+        marginBottom: 14,
+    },
     rejectionRow: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -591,7 +605,21 @@ const styles = StyleSheet.create({
         paddingHorizontal: 10,
         paddingVertical: 6,
         borderRadius: 8,
-        marginBottom: 14,
+    },
+    reuploadBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        backgroundColor: THEME.primary,
+        paddingVertical: 10,
+        borderRadius: 10,
+        marginTop: 8,
+    },
+    reuploadBtnText: {
+        color: '#fff',
+        fontSize: 13,
+        fontWeight: '600',
     },
     uploadBtn: {
         padding: 8,

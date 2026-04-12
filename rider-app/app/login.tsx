@@ -172,10 +172,12 @@ export default function LoginScreen() {
             )}
           </TouchableOpacity>
 
-          <View style={styles.devHintContainer}>
-            <Ionicons name="information-circle" size={14} color={THEME.primary} />
-            <Text style={styles.devHint}>Dev mode — OTP is 1234</Text>
-          </View>
+          {__DEV__ && (
+            <View style={styles.devHintContainer}>
+              <Ionicons name="information-circle" size={14} color={THEME.primary} />
+              <Text style={styles.devHint}>Dev mode — OTP is 1234</Text>
+            </View>
+          )}
         </View>
 
         {/* Continue Button */}

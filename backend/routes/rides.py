@@ -1,6 +1,6 @@
 from decimal import ROUND_HALF_UP, Decimal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 try:
     from .. import db_supabase
@@ -12,6 +12,7 @@ try:
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
     from ..geo_utils import calculate_distance
+    from ..validators import validate_ride_location
 except ImportError:
     import db_supabase
     from db import db
@@ -21,6 +22,7 @@ except ImportError:
     from schemas import CreateRideRequest, Ride, RideRatingRequest
     from settings_loader import get_app_settings
     from socket_manager import manager
+    from validators import validate_ride_location
 import asyncio
 import secrets
 import uuid
@@ -31,6 +33,11 @@ from loguru import logger
 from pydantic import BaseModel
 
 from .fares import get_fares_for_location
+
+try:
+    from ..utils.rate_limiter import ride_request_limit
+except ImportError:
+    from utils.rate_limiter import ride_request_limit
 
 # ── Decimal helpers for accurate currency arithmetic ──────────────────────────
 _TWO_PLACES = Decimal("0.01")
@@ -399,6 +406,7 @@ class RideEstimateRequest(BaseModel):
 
 @api_router.post("/estimate")
 async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depends(get_current_user)):
+    validate_ride_location(request.pickup_lat, request.pickup_lng, request.dropoff_lat, request.dropoff_lng)
     distance_km = calculate_distance(request.pickup_lat, request.pickup_lng, request.dropoff_lat, request.dropoff_lng)
     duration_minutes = int(distance_km / 30 * 60) + 5
 
@@ -491,7 +499,16 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
 
 
 @api_router.post("")
-async def create_ride(request: CreateRideRequest, current_user: dict = Depends(get_current_user)):
+@ride_request_limit
+async def create_ride(http_request: Request, request: CreateRideRequest, current_user: dict = Depends(get_current_user)):
+    validate_ride_location(request.pickup_lat, request.pickup_lng, request.dropoff_lat, request.dropoff_lng)
+
+    # Pre-ride payment method validation: ensure rider has a card on file
+    if request.payment_method == "card":
+        _rider = await db.users.find_one({"id": current_user["id"]})
+        if not _rider or not _rider.get("stripe_customer_id"):
+            raise HTTPException(status_code=400, detail="No payment method on file. Please add a card first.")
+
     # Ban check: prevent banned users from creating rides
     user_status = await db_supabase.get_user_status(current_user["id"])
     if user_status == "banned":
@@ -866,6 +883,8 @@ async def add_tip(ride_id: str, request: Request, current_user: dict = Depends(g
     tip_amount = float(data.get("amount", 0))
     if tip_amount <= 0:
         raise HTTPException(status_code=400, detail="Invalid tip amount")
+    if tip_amount > 500:
+        raise HTTPException(status_code=400, detail="Tip amount exceeds maximum ($500)")
 
     ride = await db.rides.find_one({"id": ride_id})
     if not ride:
@@ -900,13 +919,27 @@ async def process_payment(ride_id: str, request: Request, current_user: dict = D
         raise HTTPException(status_code=403, detail="Not authorized")
 
     # IDEMPOTENCY: if already paid, return success without charging again
-    if ride.get("payment_status") == "paid":
-        logger.info(f"[PAYMENT] Ride {ride_id} already paid — skipping duplicate charge")
+    if ride.get("payment_status") in ("paid", "processing"):
+        logger.info(f"[PAYMENT] Ride {ride_id} already {ride['payment_status']} — skipping duplicate charge")
         return {
             "success": True,
             "charged_amount": ride.get("total_fare", 0) + (ride.get("tip_amount", 0) or 0),
             "already_paid": True,
         }
+
+    # Atomic guard: set payment_status to "processing" only if it's still pending.
+    # This prevents race conditions when two concurrent payment requests hit the endpoint.
+    guard_result = await db.rides.update_one(
+        {"id": ride_id, "payment_status": {"$nin": ["paid", "processing"]}},
+        {"$set": {"payment_status": "processing"}},
+    )
+    if hasattr(guard_result, "modified_count") and guard_result.modified_count == 0:
+        return {"success": True, "already_paid": True, "charged_amount": 0}
+
+    if tip_amount < 0:
+        raise HTTPException(status_code=400, detail="Tip amount cannot be negative")
+    if tip_amount > 500:
+        raise HTTPException(status_code=400, detail="Tip amount exceeds maximum ($500)")
 
     total_charge = (ride.get("total_fare", 0) or 0) + tip_amount
 
@@ -931,6 +964,7 @@ async def process_payment(ride_id: str, request: Request, current_user: dict = D
                     customer=_customer_id,
                     confirm=True,
                     off_session=True,
+                    idempotency_key=f"ride_{ride_id}_payment",
                     metadata={"ride_id": ride_id, "user_id": current_user["id"]},
                 )
                 stripe_charge_id = _intent.id
@@ -941,6 +975,8 @@ async def process_payment(ride_id: str, request: Request, current_user: dict = D
         else:
             logger.info("[PAYMENT] Stripe not configured or zero charge; marking paid without charge")
     except Exception as _stripe_err:
+        # Revert payment_status back from "processing" on failure
+        await db.rides.update_one({"id": ride_id}, {"$set": {"payment_status": "pending"}})
         logger.error(f"[PAYMENT] Stripe error for ride {ride_id}: {_stripe_err}")
         raise HTTPException(status_code=402, detail=f"Payment failed: {_stripe_err}") from _stripe_err
 
@@ -995,11 +1031,17 @@ async def get_share_trip_link(ride_id: str, current_user: dict = Depends(get_cur
     if ride.get("status") in ["completed", "cancelled"]:
         raise HTTPException(status_code=400, detail="Cannot share a completed or cancelled ride")
 
-    # Generate or reuse a share token
+    # Generate or reuse a share token (with creation timestamp for expiry)
     share_token = ride.get("shared_trip_token")
     if not share_token:
         share_token = secrets.token_urlsafe(32)
-        await db.rides.update_one({"id": ride_id}, {"$set": {"shared_trip_token": share_token}})
+        await db.rides.update_one(
+            {"id": ride_id},
+            {"$set": {
+                "shared_trip_token": share_token,
+                "shared_trip_token_created_at": datetime.utcnow().isoformat(),
+            }},
+        )
 
     # The frontend would use this token to show a read-only tracking page
     # In production, this would be a full URL like: https://spinr.app/track/{share_token}
@@ -1015,6 +1057,18 @@ async def track_shared_ride(share_token: str):
     if not ride:
         raise HTTPException(status_code=404, detail="Shared ride not found or link expired")
 
+    # Expire share tokens after 24 hours
+    token_created = ride.get("shared_trip_token_created_at")
+    if token_created:
+        from datetime import timedelta
+        try:
+            created_dt = datetime.fromisoformat(token_created) if isinstance(token_created, str) else token_created
+            if datetime.utcnow() - created_dt > timedelta(hours=24):
+                raise HTTPException(status_code=404, detail="Share link has expired")
+        except (ValueError, TypeError):
+            pass  # Malformed timestamp — allow access but log
+            logger.warning(f"Malformed shared_trip_token_created_at for ride {ride.get('id')}")
+
     if ride.get("status") in ["completed", "cancelled"]:
         return {
             "status": ride.get("status"),
@@ -1023,7 +1077,7 @@ async def track_shared_ride(share_token: str):
             "dropoff_address": ride.get("dropoff_address"),
         }
 
-    # Get driver location for live tracking
+    # Get driver location for live tracking — only expose what safety contacts need
     driver_info = None
     if ride.get("driver_id"):
         driver = await db.drivers.find_one({"id": ride["driver_id"]})
@@ -1035,17 +1089,12 @@ async def track_shared_ride(share_token: str):
                 "vehicle_make": driver.get("vehicle_make"),
                 "vehicle_model": driver.get("vehicle_model"),
                 "vehicle_color": driver.get("vehicle_color"),
-                "license_plate": driver.get("license_plate"),
             }
 
     return {
         "status": ride.get("status"),
         "pickup_address": ride.get("pickup_address"),
         "dropoff_address": ride.get("dropoff_address"),
-        "pickup_lat": ride.get("pickup_lat"),
-        "pickup_lng": ride.get("pickup_lng"),
-        "dropoff_lat": ride.get("dropoff_lat"),
-        "dropoff_lng": ride.get("dropoff_lng"),
         "driver": driver_info,
     }
 

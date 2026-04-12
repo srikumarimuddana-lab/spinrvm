@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -42,12 +42,17 @@ export default function PaymentConfirmScreen() {
 
   const selectedEstimate = estimates.find((e) => e.vehicle_type.id === selectedVehicle?.id);
 
+  const isSubmitting = useRef(false);
   const handleBookRide = async () => {
+    if (isSubmitting.current) return;
+    isSubmitting.current = true;
     try {
       const ride = await createRide(selectedPayment);
       router.replace('/driver-arriving?rideId=' + ride.id);
     } catch (error: any) {
       setAlertState({ visible: true, title: 'Error', message: error.message || 'Failed to book ride', variant: 'danger' });
+    } finally {
+      isSubmitting.current = false;
     }
   };
 

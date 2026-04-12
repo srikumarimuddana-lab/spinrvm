@@ -17,6 +17,43 @@ except ImportError:
 
 from loguru import logger
 
+# --- File Upload Security ---
+ALLOWED_MIME_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "application/pdf",
+}
+
+# Magic byte signatures for content-type verification
+_MAGIC_BYTES = {
+    b"\xff\xd8\xff": "image/jpeg",
+    b"\x89PNG": "image/png",
+    b"GIF8": "image/gif",
+    b"RIFF": "image/webp",  # WebP starts with RIFF
+    b"%PDF": "application/pdf",
+}
+
+
+def _validate_file_type(content: bytes, declared_type: str) -> None:
+    """Validate file MIME type against allowlist and verify magic bytes."""
+    if declared_type not in ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type '{declared_type}' not allowed. Accepted: {', '.join(sorted(ALLOWED_MIME_TYPES))}",
+        )
+    # Verify magic bytes match the declared content type
+    if content:
+        header = content[:4]
+        for magic, expected_type in _MAGIC_BYTES.items():
+            if header.startswith(magic) and declared_type != expected_type:
+                raise HTTPException(
+                    status_code=400,
+                    detail="File content does not match declared type",
+                )
+
+
 # Routers
 # Routers
 documents_router = APIRouter(prefix="/drivers", tags=["Driver Documents"])
@@ -155,6 +192,7 @@ async def save_upload(file: UploadFile) -> str:
 
     try:
         file_bytes = await file.read()
+        _validate_file_type(file_bytes, file.content_type or "application/octet-stream")
         supabase.storage.from_("driver-documents").upload(
             file=file_bytes, path=filename, file_options={"content-type": file.content_type}
         )
@@ -546,6 +584,8 @@ async def upload_file(
         size = len(content)
         filename = file.filename or "upload"
         content_type = file.content_type or "application/octet-stream"
+
+        _validate_file_type(content, content_type)
 
         # Only insert columns that actually exist on the Supabase
         # `document_files` table. Historically this table was created with

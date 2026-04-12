@@ -7,11 +7,13 @@ import api, { setInMemoryToken } from '../api/client';
 import { appCache, CACHE_KEYS, CACHE_CONFIG } from '../cache';
 
 // Platform-safe secure storage
+// Web uses sessionStorage (clears on tab close) instead of localStorage
+// to reduce token exposure in browser storage.
 const storage = {
   async getItem(key: string): Promise<string | null> {
     try {
       if (Platform.OS === 'web') {
-        return localStorage.getItem(key);
+        return sessionStorage.getItem(key);
       }
       return await SecureStore.getItemAsync(key);
     } catch (e) {
@@ -22,7 +24,7 @@ const storage = {
   async setItem(key: string, value: string): Promise<void> {
     try {
       if (Platform.OS === 'web') {
-        localStorage.setItem(key, value);
+        sessionStorage.setItem(key, value);
         return;
       }
       return await SecureStore.setItemAsync(key, value);
@@ -33,7 +35,7 @@ const storage = {
   async deleteItem(key: string): Promise<void> {
     try {
       if (Platform.OS === 'web') {
-        localStorage.removeItem(key);
+        sessionStorage.removeItem(key);
         return;
       }
       return await SecureStore.deleteItemAsync(key);

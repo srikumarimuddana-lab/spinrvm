@@ -3,14 +3,16 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 try:
     from ...db import db
+    from ...dependencies import get_admin_user
     from ...utils.password import hash_password
 except ImportError:
     from db import db
+    from dependencies import get_admin_user
     from utils.password import hash_password
 
 logger = logging.getLogger(__name__)
@@ -76,7 +78,7 @@ class StaffUpdateRequest(BaseModel):
 
 
 @router.get("/staff")
-async def list_staff(authorization: Optional[str] = Header(None)):
+async def list_staff(admin: dict = Depends(get_admin_user)):
     """List all staff members."""
     staff = await db.get_rows("admin_staff", limit=100)
     # Remove passwords from response
@@ -87,8 +89,13 @@ async def list_staff(authorization: Optional[str] = Header(None)):
 
 
 @router.post("/staff")
-async def create_staff(req: StaffCreateRequest, authorization: Optional[str] = Header(None)):
-    """Create a new staff member with role-based module access."""
+async def create_staff(req: StaffCreateRequest, admin: dict = Depends(get_admin_user)):
+    """Create a new staff member with role-based module access.
+
+    Only super_admin can create new staff members.
+    """
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Only super admins can create staff")
     # Basic password policy: short passwords defeat bcrypt's cost factor
     # because the keyspace is too small. 12 chars is the floor; operators
     # should pick much longer in practice.
@@ -152,8 +159,10 @@ async def get_staff(staff_id: str):
 
 
 @router.put("/staff/{staff_id}")
-async def update_staff(staff_id: str, req: StaffUpdateRequest):
-    """Update staff member role/modules/status."""
+async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Depends(get_admin_user)):
+    """Update staff member role/modules/status. Only super_admin can update staff."""
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Only super admins can update staff")
     s = await db.admin_staff.find_one({"id": staff_id})
     if not s:
         raise HTTPException(status_code=404, detail="Staff member not found")
@@ -180,7 +189,9 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest):
 
 
 @router.delete("/staff/{staff_id}")
-async def delete_staff(staff_id: str):
-    """Delete a staff member."""
+async def delete_staff(staff_id: str, admin: dict = Depends(get_admin_user)):
+    """Delete a staff member. Only super_admin can delete staff."""
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Only super admins can delete staff")
     await db.admin_staff.delete_many({"id": staff_id})
     return {"success": True}

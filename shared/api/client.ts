@@ -6,7 +6,7 @@ const isFirebaseConfigured = typeof auth.onAuthStateChanged === 'function';
 
 const API_URL = SpinrConfig.backendUrl;
 
-console.log('API Client configured with URL:', API_URL);
+if (__DEV__) console.log('API Client configured with URL:', API_URL);
 
 // Request timeout in milliseconds
 const REQUEST_TIMEOUT = 15000;
@@ -48,14 +48,14 @@ let _inMemoryToken: string | null = null;
 
 export function setInMemoryToken(token: string | null) {
   _inMemoryToken = token;
-  console.log('[API] In-memory token:', token ? 'SET' : 'CLEARED');
+  if (__DEV__) console.log('[API] In-memory token:', token ? 'SET' : 'CLEARED');
 }
 
 // Helper to get stored token
 const getStoredToken = async (): Promise<string | null> => {
   try {
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      return localStorage.getItem('auth_token');
+      return sessionStorage.getItem('auth_token');
     } else {
       const SecureStore = require('expo-secure-store');
       const token = await SecureStore.getItemAsync('auth_token');
@@ -197,9 +197,6 @@ const client = {
     };
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
-      console.log('DEBUG: Adding auth header for GET', url, 'Token starts with:', token.substring(0, 20));
-    } else {
-      console.log('DEBUG: NO TOKEN for GET', url);
     }
 
     const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {

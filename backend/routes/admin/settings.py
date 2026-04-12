@@ -1,8 +1,9 @@
 import logging
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter
+from pydantic import BaseModel, ConfigDict
 
 try:
     from ...db import db
@@ -15,7 +16,31 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
 # ---------- Settings (single row id='app_settings', flat keys) ----------
+
+
+class SettingsUpdateRequest(BaseModel):
+    """Strict schema for admin settings updates. Rejects unknown fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    google_maps_api_key: Optional[str] = None
+    stripe_publishable_key: Optional[str] = None
+    stripe_secret_key: Optional[str] = None
+    stripe_webhook_secret: Optional[str] = None
+    twilio_account_sid: Optional[str] = None
+    twilio_auth_token: Optional[str] = None
+    twilio_from_number: Optional[str] = None
+    driver_matching_algorithm: Optional[str] = None
+    min_driver_rating: Optional[float] = None
+    search_radius_km: Optional[float] = None
+    cancellation_fee_admin: Optional[float] = None
+    cancellation_fee_driver: Optional[float] = None
+    platform_fee_percent: Optional[float] = None
+    require_driver_subscription: Optional[bool] = None
+    terms_of_service_text: Optional[str] = None
+    privacy_policy_text: Optional[str] = None
 
 
 @router.get("/settings")
@@ -25,23 +50,25 @@ async def admin_get_settings():
 
 
 @router.put("/settings")
-async def admin_update_settings(settings: Dict[str, Any]):
+async def admin_update_settings(settings: SettingsUpdateRequest):
     """Update settings (upsert single app_settings row)."""
-    # First check if settings row exists
+    # Only include fields that were explicitly set (not None)
+    update_fields = settings.model_dump(exclude_none=True)
+    if not update_fields:
+        return {"message": "No settings to update"}
+
     existing = await db.settings.find_one({"id": "app_settings"})
 
     payload = {
         "id": "app_settings",
-        **settings,
+        **update_fields,
         "updated_at": datetime.utcnow().isoformat(),
     }
 
     if existing:
-        # Update existing row - build update dict without 'id'
         update_payload = {k: v for k, v in payload.items() if k != "id"}
         await db.settings.update_one({"id": "app_settings"}, {"$set": update_payload})
     else:
-        # Insert new row
         await db.settings.insert_one(payload)
 
     return {"message": "Settings updated"}

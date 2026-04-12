@@ -31,7 +31,16 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
         if (!res.ok) {
             const body = await res.json().catch(() => ({}));
             console.error(`API Error: ${path}`, body);
-            throw new Error(body.detail || body.message || res.statusText);
+            // Backend uses two error shapes:
+            //   • FastAPI HTTPException  → { detail: "..." }
+            //   • Custom error handler  → { error: { detail: "...", message: "..." } }
+            const msg =
+                body.detail ||
+                body.error?.detail ||
+                body.error?.message ||
+                body.message ||
+                res.statusText;
+            throw new Error(msg);
         }
 
         return res.json();

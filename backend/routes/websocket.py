@@ -254,7 +254,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                     nearby = []
                     for driver in drivers:
                         # Calculate distance
-                        from ..utils import calculate_distance
+                        from ..geo_utils import calculate_distance
 
                         dist = calculate_distance(lat, lng, driver["lat"], driver["lng"])
                         if dist <= radius:

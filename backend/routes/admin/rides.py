@@ -66,30 +66,55 @@ async def admin_get_rides(
 @router.get("/stats")
 async def admin_get_stats():
     """Get admin dashboard statistics."""
+    # Counts
     total_drivers = await db.drivers.count_documents({})
-    active_drivers = await db.drivers.count_documents({"is_online": True})
+    online_drivers = await db.drivers.count_documents({"is_online": True})
     total_rides = await db.rides.count_documents({})
+    completed_rides = await db.rides.count_documents({"status": "completed"})
+    cancelled_rides = await db.rides.count_documents({"status": "cancelled"})
+    active_rides = await db.rides.count_documents(
+        {"status": {"$in": ["searching", "accepted", "en_route", "arrived", "in_progress"]}}
+    )
+    total_users = await db.users.count_documents({"role": "rider"})
+    pending_applications = await db.drivers.count_documents({"is_verified": False})
+
+    # Earnings aggregates — fetch all completed rides once
+    all_completed = await db.rides.find({"status": "completed"}).to_list(100000)
+    total_driver_earnings = sum(float(r.get("driver_earnings") or 0) for r in all_completed)
+    total_admin_earnings = sum(float(r.get("admin_earnings") or 0) for r in all_completed)
+    total_tips = sum(float(r.get("tip_amount") or 0) for r in all_completed)
+
+    # Today / month revenue (kept for backward-compat with any other consumers)
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    rides_today = await db.rides.count_documents({"created_at": {"$gte": today_start}})
     completed_today = await db.get_rows(
         "rides",
         {"status": "completed", "ride_completed_at": {"$gte": today_start}},
         limit=10000,
     )
-    revenue_today = sum(float(r.get("total_fare") or 0) for r in completed_today)
+    revenue_today = sum(float(r.get("total_fare") or 0) for r in (completed_today or []))
     month_start = (datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)).isoformat()
     completed_month = await db.get_rows(
         "rides",
         {"status": "completed", "ride_completed_at": {"$gte": month_start}},
         limit=10000,
     )
-    revenue_month = sum(float(r.get("total_fare") or 0) for r in completed_month)
-    pending_applications = await db.drivers.count_documents({"is_verified": False})
+    revenue_month = sum(float(r.get("total_fare") or 0) for r in (completed_month or []))
+
     return {
-        "total_drivers": total_drivers,
-        "active_drivers": active_drivers,
+        # Fields the dashboard page expects
         "total_rides": total_rides,
-        "rides_today": rides_today,
+        "completed_rides": completed_rides,
+        "cancelled_rides": cancelled_rides,
+        "active_rides": active_rides,
+        "total_drivers": total_drivers,
+        "online_drivers": online_drivers,
+        "total_users": total_users,
+        "total_driver_earnings": total_driver_earnings,
+        "total_admin_earnings": total_admin_earnings,
+        "total_tips": total_tips,
+        # Legacy fields kept for other consumers
+        "active_drivers": online_drivers,
+        "rides_today": await db.rides.count_documents({"created_at": {"$gte": today_start}}),
         "revenue_today": revenue_today,
         "revenue_month": revenue_month,
         "pending_applications": pending_applications,

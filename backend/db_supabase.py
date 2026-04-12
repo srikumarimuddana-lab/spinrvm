@@ -15,8 +15,20 @@ T = TypeVar("T")
 
 
 async def run_sync(func: Callable[[], T]) -> T:
+    """Run a synchronous Supabase call in a thread and retry once on transient
+    HTTP/2 connection errors (h2.ConnectionTerminated / GOAWAY) that Supabase
+    sends when the stream limit is reached on a long-lived connection."""
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, func)  # type: ignore
+    try:
+        return await loop.run_in_executor(None, func)  # type: ignore
+    except Exception as exc:
+        exc_name = type(exc).__name__
+        exc_str = str(exc)
+        if "ConnectionTerminated" in exc_name or "ConnectionTerminated" in exc_str:
+            logger.warning(f"Supabase HTTP/2 ConnectionTerminated — retrying once: {exc}")
+            await asyncio.sleep(0.25)
+            return await loop.run_in_executor(None, func)  # type: ignore
+        raise
 
 
 def _serialize_for_api(data: Any) -> Any:
@@ -517,8 +529,14 @@ async def count_documents(table: str, filters: Optional[Dict[str, Any]] = None) 
         return 0
 
     def _fn():
-        q = supabase.table(table).select("id", count="exact", head=True)
+        # count="exact" makes PostgREST include the total count in Content-Range.
+        # We limit to 1 row so we don't fetch the full dataset; res.count still
+        # reflects the total rows matching the filter (not the page size).
+        # Note: head=True is NOT a valid parameter for select() in postgrest-py
+        # 2.x — using it would raise TypeError and cause a 500 on every call.
+        q = supabase.table(table).select("id", count="exact")
         q = _apply_filters(q, filters)
+        q = q.limit(1)
         res = q.execute()
         if hasattr(res, "count") and res.count is not None:
             return int(res.count)
@@ -626,7 +644,7 @@ async def get_ride_count_by_date_range(start_iso: str, end_iso: str) -> int:
     def _fn():
         res = (
             supabase.table("rides")
-            .select("id", count="exact", head=True)
+            .select("id", count="exact").limit(1)
             .gte("created_at", start_iso)
             .lt("created_at", end_iso)
             .execute()
@@ -697,7 +715,7 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
         # Rider's total past rides count
         rider_count_res = await run_sync(
             lambda rid=rider_id: (
-                supabase.table("rides").select("id", count="exact", head=True).eq("rider_id", rid).execute()
+                supabase.table("rides").select("id", count="exact").limit(1).eq("rider_id", rid).execute()
             )
         )
         ride["rider_total_rides"] = (
@@ -762,7 +780,7 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
             driver_completed_res = await run_sync(
                 lambda did=driver_id: (
                     supabase.table("rides")
-                    .select("id", count="exact", head=True)
+                    .select("id", count="exact").limit(1)
                     .eq("driver_id", did)
                     .eq("status", "completed")
                     .execute()
@@ -775,7 +793,7 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
             )
             driver_total_assigned_res = await run_sync(
                 lambda did=driver_id: (
-                    supabase.table("rides").select("id", count="exact", head=True).eq("driver_id", did).execute()
+                    supabase.table("rides").select("id", count="exact").limit(1).eq("driver_id", did).execute()
                 )
             )
             total_assigned = (
@@ -864,7 +882,7 @@ async def create_flag(flag_data: Dict[str, Any]) -> Dict[str, Any]:
     count_res = await run_sync(
         lambda: (
             supabase.table("flags")
-            .select("id", count="exact", head=True)
+            .select("id", count="exact").limit(1)
             .eq("target_type", target_type)
             .eq("target_id", target_id)
             .eq("is_active", True)

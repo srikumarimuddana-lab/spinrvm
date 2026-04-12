@@ -136,7 +136,7 @@ class TestFareCalculation:
 
     def test_calculate_distance(self):
         """Test distance calculation between two points."""
-        from backend.utils import calculate_distance
+        from backend.geo_utils import calculate_distance
 
         # Regina, SK coordinates
         lat1, lng1 = 52.1333, -106.6667
@@ -149,7 +149,7 @@ class TestFareCalculation:
 
     def test_calculate_distance_same_point(self):
         """Test distance calculation for same point."""
-        from backend.utils import calculate_distance
+        from backend.geo_utils import calculate_distance
 
         lat, lng = 52.1333, -106.6667
         distance = calculate_distance(lat, lng, lat, lng)

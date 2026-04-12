@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { getRideDetails } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
     Car, User, Phone, Mail, Star, Route, Clock, Percent,
     DollarSign, Receipt, Ticket, AlertTriangle, Flag, Radio,
@@ -104,6 +104,9 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
         <>
             <Dialog open={open} onOpenChange={v => !v && onClose()}>
                 <DialogContent className="sm:max-w-5xl max-h-[90vh] overflow-y-auto p-0" showCloseButton={true}>
+                    <DialogTitle className="sr-only">
+                        {ride ? `Ride ${ride.id}` : "Ride Details"}
+                    </DialogTitle>
                     {loading || !ride ? (
                         <div className="flex flex-col items-center justify-center py-24">
                             <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />

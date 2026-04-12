@@ -117,9 +117,25 @@
     sanitization (only same-origin relative paths accepted; blocks
     protocol-relative `//evil.com` and absolute URLs).
 
-- [ ] **Driver App: Hardcoded 15s timeout** - Should be configurable
-  - File: `driver-app/app/driver/index.tsx`
-  - Action: Make timeout configurable via API
+- [x] **Driver App: Hardcoded 15s timeout** - ✅ Fixed 2026-04-12.
+  - New `GET /drivers/config` (`backend/routes/drivers.py`) returns
+    `{ride_offer_timeout_seconds, pickup_radius_meters}` sourced
+    from `app_settings` with defaults 15s / 100m and clamped to
+    sane ranges (5-60s and 10-1000m respectively) so a bad admin
+    input can't brick the UX.
+  - `driverStore` now has `configuredCountdownSeconds` +
+    `configuredPickupRadiusMeters` fields populated by a new
+    `applyDriverConfig()` action. `setIncomingRide` reads the
+    configured value, and `arriveAtPickup` uses the configured
+    radius for the geofence check.
+  - `useDriverDashboard` fetches `/drivers/config` once per
+    authenticated session on mount. Failure falls back to the
+    module-level defaults (15s / 100m) so a transient backend
+    hiccup doesn't break the ride flow.
+  - `driver/index.tsx`: timer-bar progress now divides by
+    `configuredCountdownSeconds` instead of the hardcoded `/ 15`,
+    so bumping the timeout in settings doesn't leave the bar stuck
+    past 100%. Clamped to [0, 1] for safety.
 
 - [ ] **Driver App: External navigation** - Leaves the app
   - File: `driver-app/app/driver/index.tsx`
@@ -129,32 +145,53 @@
   - File: `driver-app/app/driver/ride-detail.tsx`
   - Action: Add tip selection UI
 
-- [x] **Driver App: Race condition handling** - ✅ Fixed 2026-04-12
-  (UI side). When `POST /drivers/rides/{id}/accept` returns 404 or
-  400 with a detail matching `/not assigned|already|no longer|
-  cancelled|canceled/i`, `driverStore.acceptRide` now:
-  - Clears `incomingRide` and `countdownSeconds`
-  - Transitions `rideState` back to `idle`
-  - Sets `error` to "This ride was already taken by another driver.
-    You'll see the next offer when it comes in."
-  Previously the driver was left stuck on the ride-offered screen
-  with a generic "Failed to accept ride" alert. The backend side
-  still uses a read-modify-write accept (no atomic claim) — that's
-  a separate backend change for the future.
+- [x] **Driver App: Race condition handling** - ✅ Fixed 2026-04-12,
+  both sides.
+  - **UI side:** When `POST /drivers/rides/{id}/accept` returns 404
+    or 400 with a detail matching `/not assigned|already|no longer|
+    cancelled|canceled/i`, `driverStore.acceptRide` clears
+    `incomingRide` + `countdownSeconds`, resets `rideState` to
+    `idle`, and surfaces "This ride was already taken by another
+    driver. You'll see the next offer when it comes in."
+  - **Backend side:** `POST /drivers/rides/{id}/accept` now goes
+    through `db_supabase.claim_ride_atomic`, which issues a single
+    conditional UPDATE: set `status=driver_accepted, driver_id=<me>`
+    WHERE `id=ride_id AND status IN ('searching','driver_assigned')
+    AND (driver_id IS NULL OR driver_id = <me>)`. PostgREST
+    evaluates all three filters atomically, so two drivers racing
+    cannot both succeed — the loser's UPDATE matches zero rows and
+    the route returns 400 "Ride already accepted by another
+    driver". The old read-modify-write + 70 lines of post-update
+    verify shim are gone.
 
 ## Low Priority
 
-- [ ] **Driver App: No earnings export** - Can't export for taxes
-  - File: `driver-app/app/driver/earnings.tsx`
-  - Action: Add CSV/PDF export
+- [x] **Driver App: No earnings export** - ✅ Fixed 2026-04-12.
+  Backend `GET /drivers/earnings/export?year=<y>` already returned
+  `{data, filename}` (`backend/routes/drivers.py:883`). The
+  `tax-documents.tsx` Export button was wired to call the endpoint
+  but threw the CSV string away and just alerted "Export Ready"
+  without handing it to the driver. Now:
+  - Uses React Native's built-in `Share.share({title, message})`
+    to bring up the native share sheet on both platforms. Mail,
+    Drive, Files, Notes all accept the CSV string.
+  - Falls back to `expo-clipboard` (already a dep) with an alert
+    if the share sheet is dismissed or throws.
+  - No new native dependencies. Doesn't require `expo-file-system`
+    / `expo-sharing`, which would need a prebuild.
 
 - [ ] **Driver App: No dark mode** - Light theme only
   - Files: `driver-app/`
   - Action: Implement theme system
 
-- [ ] **API: No versioning** - No v1/v2 prefix
-  - Files: `backend/server.py`
-  - Action: Add API versioning
+- [x] **API: No versioning** - ✅ Already done; claim was stale.
+  `backend/server.py:46-72` mounts `v1_api_router` at `/api/v1`
+  covering rides, drivers, documents, admin, users, addresses,
+  payments, notifications, fares, promotions, disputes, webhooks,
+  uploads, support, and pricing. A handful of routes are also
+  double-mounted at `/api/<route>` (without the version prefix)
+  for backwards compat with existing mobile clients — intentional
+  and should stay until all clients are migrated.
 
 - [ ] **Error handling** - Could be more robust
   - Files: `driver-app/`, `frontend/`

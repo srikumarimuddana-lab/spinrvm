@@ -2,9 +2,13 @@ import { create } from 'zustand';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 
-// Get configurable countdown from config
-const DEFAULT_COUNTDOWN = SpinrConfig.rideOffer?.countdownSeconds || 15;
-const PICKUP_RADIUS_METERS = 100; // 100 meters radius for pickup verification
+// These are fallbacks used ONLY until the driver-app pulls
+// `GET /drivers/config` from the backend on mount (see
+// useDriverDashboard.ts). The authoritative values then live in the
+// store's `configuredCountdownSeconds` / `configuredPickupRadiusMeters`
+// fields and can be tuned by admins without shipping a new app build.
+const FALLBACK_COUNTDOWN = SpinrConfig.rideOffer?.countdownSeconds || 15;
+const FALLBACK_PICKUP_RADIUS_METERS = 100;
 
 // Helper function to calculate distance between two coordinates (Haversine formula)
 const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
@@ -137,6 +141,11 @@ interface DriverState {
     completedRide: any | null;
     countdownSeconds: number;
 
+    // Server-driven operational config (populated by applyDriverConfig on mount).
+    // These override the module-level fallbacks without requiring a rebuild.
+    configuredCountdownSeconds: number;
+    configuredPickupRadiusMeters: number;
+
     // Earnings
     earnings: EarningsSummary | null;
     dailyEarnings: DailyEarning[];
@@ -164,6 +173,7 @@ interface DriverState {
     // Actions - Ride lifecycle
     setIncomingRide: (ride: IncomingRide | null) => void;
     setCountdown: (seconds: number) => void;
+    applyDriverConfig: (config: { ride_offer_timeout_seconds?: number; pickup_radius_meters?: number }) => void;
     acceptRide: (rideId: string) => Promise<void>;
     declineRide: (rideId: string) => Promise<void>;
     arriveAtPickup: (rideId: string, driverLat?: number, driverLng?: number) => Promise<{ success: boolean; distance?: number; error?: string }>;
@@ -206,6 +216,10 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     activeRide: null,
     completedRide: null,
     countdownSeconds: 0,
+    // Server-config fallbacks — overwritten by applyDriverConfig() after
+    // the first /drivers/config fetch.
+    configuredCountdownSeconds: FALLBACK_COUNTDOWN,
+    configuredPickupRadiusMeters: FALLBACK_PICKUP_RADIUS_METERS,
     earnings: null,
     dailyEarnings: [],
     tripEarnings: [],
@@ -225,7 +239,25 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     error: null,
 
     setIncomingRide: (ride) => {
-        set({ incomingRide: ride, rideState: ride ? 'ride_offered' : 'idle', countdownSeconds: ride ? DEFAULT_COUNTDOWN : 0 });
+        const countdown = get().configuredCountdownSeconds || FALLBACK_COUNTDOWN;
+        set({
+            incomingRide: ride,
+            rideState: ride ? 'ride_offered' : 'idle',
+            countdownSeconds: ride ? countdown : 0,
+        });
+    },
+
+    applyDriverConfig: (config) => {
+        const patch: Partial<DriverState> = {};
+        if (typeof config.ride_offer_timeout_seconds === 'number' && config.ride_offer_timeout_seconds > 0) {
+            patch.configuredCountdownSeconds = config.ride_offer_timeout_seconds;
+        }
+        if (typeof config.pickup_radius_meters === 'number' && config.pickup_radius_meters > 0) {
+            patch.configuredPickupRadiusMeters = config.pickup_radius_meters;
+        }
+        if (Object.keys(patch).length > 0) {
+            set(patch as DriverState);
+        }
     },
 
     setCountdown: (seconds) => {
@@ -297,6 +329,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     arriveAtPickup: async (rideId: string, driverLat?: number, driverLng?: number) => {
         // If driver location is provided, verify they're at the pickup
         const activeRide = get().activeRide;
+        const radiusMeters = get().configuredPickupRadiusMeters || FALLBACK_PICKUP_RADIUS_METERS;
         if (driverLat !== undefined && driverLng !== undefined && activeRide?.ride) {
             const pickupLat = activeRide.ride.pickup_lat;
             const pickupLng = activeRide.ride.pickup_lng;
@@ -304,9 +337,9 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             if (pickupLat && pickupLng) {
                 const distance = calculateDistance(driverLat, driverLng, pickupLat, pickupLng);
 
-                if (distance > PICKUP_RADIUS_METERS) {
+                if (distance > radiusMeters) {
                     set({
-                        error: `You must be within ${PICKUP_RADIUS_METERS}m of the pickup location. Current distance: ${Math.round(distance)}m`,
+                        error: `You must be within ${radiusMeters}m of the pickup location. Current distance: ${Math.round(distance)}m`,
                         isLoading: false
                     });
                     return { success: false, distance, error: 'Not at pickup location' };

@@ -307,6 +307,57 @@ async def claim_driver_atomic(driver_id: str) -> bool:
     return await run_sync(_claim)
 
 
+async def claim_ride_atomic(ride_id: str, driver_id: str) -> bool:
+    """Atomically claim a ride offer for `driver_id`.
+
+    Issues a single conditional UPDATE that sets
+    ``status='driver_accepted'`` and ``driver_id=<driver>`` only if the
+    ride is (1) identified by `ride_id`, (2) in an open, claimable state
+    (`searching` or `driver_assigned`), and (3) either unassigned or
+    already pre-assigned to THIS driver. Supabase's PostgREST layer
+    evaluates all three filters atomically in one SQL statement, so two
+    drivers racing to accept the same offer cannot both succeed — the
+    loser's UPDATE matches zero rows and this function returns False.
+
+    Returns:
+        True  — we successfully claimed the ride and the driver-app can
+                proceed with the ride flow.
+        False — the ride was gone or already accepted by another driver;
+                the caller should surface a "ride already taken" UX.
+    """
+    if not supabase:
+        return False
+
+    now_iso = datetime.utcnow().isoformat()
+
+    def _claim():
+        res = (
+            supabase.table("rides")
+            .update(
+                {
+                    "status": "driver_accepted",
+                    "driver_id": driver_id,
+                    "driver_accepted_at": now_iso,
+                    "updated_at": now_iso,
+                }
+            )
+            .eq("id", ride_id)
+            # Status must be open/claimable. Any status past `driver_accepted`
+            # (arrived / in_progress / completed / cancelled) is terminal for
+            # the accept flow.
+            .in_("status", ["searching", "driver_assigned"])
+            # Ride must be either unassigned or already pre-assigned to this
+            # driver. PostgREST's `.or_()` accepts a comma-separated filter
+            # list; `is.null` maps to `IS NULL` in SQL.
+            .or_(f"driver_id.is.null,driver_id.eq.{driver_id}")
+            .execute()
+        )
+        data = _rows_from_res(res)
+        return len(data) > 0
+
+    return await run_sync(_claim)
+
+
 # ============ Ride Helpers ============
 
 

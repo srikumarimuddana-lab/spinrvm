@@ -42,6 +42,7 @@ export default function DriverDashboard() {
     activeRide,
     completedRide,
     countdownSeconds,
+    configuredCountdownSeconds,
     setCountdown,
     acceptRide,
     declineRide,
@@ -186,7 +187,12 @@ export default function DriverDashboard() {
   // Ride Offer Panel
   const renderRideOfferPanel = () => {
     if (!incomingRide) return null;
-    const progress = countdown / 15;
+    // Timer-bar progress tracks remaining countdown as a fraction of the
+    // configured max. Previously this was `/ 15` hardcoded, so bumping
+    // ride_offer_timeout_seconds in backend settings would have left
+    // the visual bar stuck past 100%.
+    const maxCountdown = configuredCountdownSeconds || 15;
+    const progress = Math.max(0, Math.min(1, countdown / maxCountdown));
     const fare = (incomingRide.fare || 0).toFixed(2);
 
     return (

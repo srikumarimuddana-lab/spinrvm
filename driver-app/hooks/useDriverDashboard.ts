@@ -55,6 +55,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     resetRideState,
     fetchActiveRide,
     fetchEarnings,
+    applyDriverConfig,
     earnings,
   } = useDriverStore();
 
@@ -127,6 +128,27 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     });
     return () => sub.remove();
   }, [refreshProfile]);
+
+  // ─── Fetch driver operational config from backend ────────────────
+  // `GET /drivers/config` returns server-tuned values for the
+  // ride-offer countdown and the pickup-geofence radius. Fetched once
+  // per authenticated session — if it fails the store keeps its
+  // module-level fallbacks (15s countdown, 100m pickup radius) so the
+  // driver flow never breaks on a transient backend hiccup.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await api.get('/drivers/config');
+        if (cancelled) return;
+        applyDriverConfig(res.data || {});
+      } catch (e) {
+        console.log('[driver-config] fetch failed, using fallbacks:', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user, applyDriverConfig]);
 
   // ─── Location Tracking ───────────────────────────────────────────
   useEffect(() => {

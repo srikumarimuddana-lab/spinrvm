@@ -105,6 +105,34 @@ async def stripe_webhook(request: Request):
                 {"type": "payment_failed", "ride_id": ride_id or ""},
             )
 
+    elif event_type == "checkout.session.completed":
+        # ── Spinr Pass subscription payment confirmed ──────────
+        # The /drivers/subscription/subscribe endpoint creates a pending
+        # subscription row and a Stripe Checkout Session with the
+        # subscription_id in the metadata. This webhook fires after the
+        # driver completes payment — we activate the subscription here.
+        metadata = data_object.get("metadata", {})
+        subscription_id = metadata.get("subscription_id")
+        plan_id = metadata.get("plan_id")
+        driver_id = metadata.get("driver_id")
+
+        if subscription_id and data_object.get("payment_status") == "paid":
+            try:
+                from ..routes.drivers import _activate_subscription  # type: ignore
+            except ImportError:
+                from routes.drivers import _activate_subscription  # type: ignore
+
+            await _activate_subscription(subscription_id, plan_id)
+            logger.info(
+                f"[WEBHOOK] Spinr Pass activated via checkout.session.completed: "
+                f"subscription={subscription_id} driver={driver_id} plan={plan_id}"
+            )
+        else:
+            logger.info(
+                f"[WEBHOOK] checkout.session.completed but payment not yet paid: "
+                f"status={data_object.get('payment_status')} subscription={subscription_id}"
+            )
+
     else:
         logger.info(f"Unhandled Stripe event type: {event_type}")
 

@@ -21,7 +21,7 @@
     "ajv": "^8.18.0",
     "axios": "^1.13.4",
     "expo": "~55.0.15",
-    "expo-blur": "~15.0.8",
+    "expo-blur": "~55.0.14",
     "expo-clipboard": "~8.0.8",
     "expo-constants": "~18.0.13",
     "expo-dev-client": "~6.0.20",

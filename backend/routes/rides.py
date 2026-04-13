@@ -1368,6 +1368,86 @@ async def cancel_ride_rider(ride_id: str, current_user: dict = Depends(get_curre
     return {"success": True, "cancellation_fee": charged_admin + charged_driver}
 
 
+# ── Mid-Trip Stop Editing ─────────────────────────────────────────────
+
+
+class AddStopMidTripRequest(BaseModel):
+    address: str
+    lat: float
+    lng: float
+    position: Optional[int] = None  # Insert at this index; None = append
+
+
+@api_router.post("/{ride_id}/stops")
+async def add_stop_mid_trip(ride_id: str, req: AddStopMidTripRequest, current_user: dict = Depends(get_current_user)):
+    """Add a stop to an active ride mid-trip."""
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if ride.get("status") not in ("driver_accepted", "driver_arrived", "in_progress"):
+        raise HTTPException(status_code=400, detail="Can only edit stops on an active ride")
+
+    stops = ride.get("stops") or []
+    new_stop = {"address": req.address, "lat": req.lat, "lng": req.lng}
+
+    if req.position is not None and 0 <= req.position <= len(stops):
+        stops.insert(req.position, new_stop)
+    else:
+        stops.append(new_stop)
+
+    await db.rides.update_one(
+        {"id": ride_id},
+        {"$set": {"stops": stops, "updated_at": datetime.utcnow().isoformat()}},
+    )
+
+    # Notify driver via WebSocket
+    if ride.get("driver_id"):
+        driver = await db.drivers.find_one({"id": ride["driver_id"]})
+        if driver and driver.get("user_id"):
+            await manager.send_personal_message(
+                {"type": "stops_updated", "ride_id": ride_id, "stops": stops},
+                f"driver_{driver['user_id']}",
+            )
+
+    return {"success": True, "stops": stops}
+
+
+@api_router.delete("/{ride_id}/stops/{stop_index}")
+async def remove_stop_mid_trip(ride_id: str, stop_index: int, current_user: dict = Depends(get_current_user)):
+    """Remove a stop from an active ride by index."""
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if ride.get("status") not in ("driver_accepted", "driver_arrived", "in_progress"):
+        raise HTTPException(status_code=400, detail="Can only edit stops on an active ride")
+
+    stops = ride.get("stops") or []
+    if stop_index < 0 or stop_index >= len(stops):
+        raise HTTPException(status_code=400, detail="Invalid stop index")
+
+    stops.pop(stop_index)
+
+    await db.rides.update_one(
+        {"id": ride_id},
+        {"$set": {"stops": stops, "updated_at": datetime.utcnow().isoformat()}},
+    )
+
+    # Notify driver
+    if ride.get("driver_id"):
+        driver = await db.drivers.find_one({"id": ride["driver_id"]})
+        if driver and driver.get("user_id"):
+            await manager.send_personal_message(
+                {"type": "stops_updated", "ride_id": ride_id, "stops": stops},
+                f"driver_{driver['user_id']}",
+            )
+
+    return {"success": True, "stops": stops}
+
+
 class EmergencyRequest(BaseModel):
     message: str = "Emergency assistance requested"
     latitude: Optional[float] = None

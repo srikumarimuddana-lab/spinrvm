@@ -131,6 +131,12 @@ export default function RideCompletedScreen() {
         } catch { /* backend handles idempotency */ }
       }
 
+      // 3. Trigger app store rating prompt after good rides
+      try {
+        const { onRideRated } = require('@shared/utils/appRating');
+        await onRideRated(rating);
+      } catch { /* non-critical */ }
+
       clearRide();
       router.replace('/(tabs)');
     } catch {

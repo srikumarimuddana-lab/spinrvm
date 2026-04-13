@@ -35,7 +35,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         googleServicesFile: './GoogleService-Info.plist',
         config: {
             googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
-        }
+        },
+        associatedDomains: [
+            'applinks:spinr.app',
+        ],
     },
     android: {
         adaptiveIcon: {
@@ -49,7 +52,18 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             googleMaps: {
                 apiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
             }
-        }
+        },
+        intentFilters: [
+            {
+                action: 'VIEW',
+                autoVerify: true,
+                data: [
+                    { scheme: 'https', host: 'spinr.app', pathPrefix: '/driver' },
+                    { scheme: 'https', host: 'spinr.app', pathPrefix: '/join' },
+                ],
+                category: ['BROWSABLE', 'DEFAULT'],
+            },
+        ],
     },
     web: {
         bundler: 'metro',

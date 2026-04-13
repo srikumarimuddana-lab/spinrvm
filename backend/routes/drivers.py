@@ -374,6 +374,75 @@ async def update_driver_status_self(
     return {"success": True, "is_online": is_online}
 
 
+# ── Destination Mode ─────────────────────────────────────────────────
+
+
+class SetDestinationRequest(BaseModel):
+    address: str
+    lat: float
+    lng: float
+
+
+@api_router.post("/destination")
+async def set_destination_mode(req: SetDestinationRequest, current_user: dict = Depends(get_current_user)):
+    """Set driver's preferred destination. Ride matching will prioritize
+    rides heading toward this destination to reduce empty miles."""
+    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    await db.drivers.update_one(
+        {"id": driver["id"]},
+        {"$set": {
+            "destination_mode": True,
+            "destination_address": req.address,
+            "destination_lat": req.lat,
+            "destination_lng": req.lng,
+            "updated_at": datetime.utcnow().isoformat(),
+        }},
+    )
+    return {
+        "success": True,
+        "destination_mode": True,
+        "destination_address": req.address,
+    }
+
+
+@api_router.delete("/destination")
+async def clear_destination_mode(current_user: dict = Depends(get_current_user)):
+    """Clear driver's destination mode."""
+    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    await db.drivers.update_one(
+        {"id": driver["id"]},
+        {"$set": {
+            "destination_mode": False,
+            "destination_address": None,
+            "destination_lat": None,
+            "destination_lng": None,
+            "updated_at": datetime.utcnow().isoformat(),
+        }},
+    )
+    return {"success": True, "destination_mode": False}
+
+
+@api_router.get("/destination")
+async def get_destination_mode(current_user: dict = Depends(get_current_user)):
+    """Get driver's current destination mode status."""
+    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    return {
+        "destination_mode": driver.get("destination_mode", False),
+        "destination_address": driver.get("destination_address"),
+        "destination_lat": driver.get("destination_lat"),
+        "destination_lng": driver.get("destination_lng"),
+    }
+
+
 @api_router.get("/balance")
 async def get_driver_balance(current_user: dict = Depends(get_current_user)):
     """Get driver's current balance/earnings summary."""

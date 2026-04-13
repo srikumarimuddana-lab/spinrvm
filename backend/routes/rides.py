@@ -1469,6 +1469,60 @@ async def get_chat_status(ride_id: str, current_user: dict = Depends(get_current
     return {"available": True, "post_trip": False}
 
 
+@api_router.get("/{ride_id}/call")
+async def get_call_info(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """Get masked phone number for calling the other party during an active ride.
+
+    Returns a proxy number or the real number depending on Twilio config.
+    In production, this would create a Twilio Proxy session to mask both
+    parties' real numbers. For now, it returns the other party's phone
+    directly so the call button works immediately.
+    """
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    if ride.get("status") in ("completed", "cancelled"):
+        raise HTTPException(status_code=400, detail="Cannot call on a completed or cancelled ride")
+
+    is_rider = ride.get("rider_id") == current_user["id"]
+    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    is_driver = driver and ride.get("driver_id") == driver["id"]
+
+    if not (is_rider or is_driver):
+        raise HTTPException(status_code=403, detail="Not part of this ride")
+
+    if is_rider:
+        # Rider wants to call the driver
+        if not ride.get("driver_id"):
+            raise HTTPException(status_code=400, detail="No driver assigned yet")
+        target_driver = await db.drivers.find_one({"id": ride["driver_id"]})
+        if not target_driver:
+            raise HTTPException(status_code=404, detail="Driver not found")
+        target_user = await db.users.find_one({"id": target_driver.get("user_id")})
+        phone = target_user.get("phone") if target_user else None
+        name = f"{target_user.get('first_name', '')} {target_user.get('last_name', '')}".strip() if target_user else "Driver"
+    else:
+        # Driver wants to call the rider
+        target_user = await db.users.find_one({"id": ride["rider_id"]})
+        phone = target_user.get("phone") if target_user else None
+        name = f"{target_user.get('first_name', '')} {target_user.get('last_name', '')}".strip() if target_user else "Rider"
+
+    if not phone:
+        raise HTTPException(status_code=404, detail="Phone number not available")
+
+    # In production: create Twilio Proxy session here and return proxy number
+    # For now, return the real number with a masked display
+    masked = f"({'*' * (len(phone) - 4)}{phone[-4:]})" if len(phone) > 4 else phone
+
+    return {
+        "phone": phone,
+        "masked": masked,
+        "name": name,
+        "proxy": False,  # Set to True when Twilio Proxy is configured
+    }
+
+
 @api_router.get("/{ride_id}/messages")
 async def get_ride_messages(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Fetch persistent chat messages for a ride (active or post-trip within 24h)."""

@@ -291,6 +291,8 @@ class DB:
         self.push_tokens = BaseCollection("push_tokens")
         self.admin_staff = BaseCollection("admin_staff")
         self.support_messages = BaseCollection("support_messages")
+        # Favorite routes
+        self.favorite_routes = BaseCollection("favorite_routes")
         # P1-07: In-app wallet
         self.wallets = BaseCollection("wallets")
         self.wallet_transactions = BaseCollection("wallet_transactions")

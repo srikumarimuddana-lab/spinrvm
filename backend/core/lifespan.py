@@ -81,6 +81,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start scheduled ride dispatcher: {e}")
 
+    # Payment retry — retries failed Stripe payments every 5 minutes
+    try:
+        from utils.payment_retry import payment_retry_loop
+        asyncio.create_task(payment_retry_loop())
+        logger.info("Started payment retry service (every 5min)")
+    except Exception as e:
+        logger.warning(f"Failed to start payment retry service: {e}")
+
     # Perform startup checks
     logger.info("Spinr API startup complete")
 

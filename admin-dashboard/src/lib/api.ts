@@ -471,12 +471,6 @@ export const updateDispute = (id: string, data: any) =>
         body: JSON.stringify(data),
     });
 
-export const resolveDispute = (id: string, resolution: any) =>
-    request<any>(`/api/admin/disputes/${id}/resolve`, {
-        method: "PUT",
-        body: JSON.stringify(resolution),
-    });
-
 /* ── Support Tickets ────────────────────────── */
 export const getTickets = () =>
     request<any[]>("/api/admin/tickets");

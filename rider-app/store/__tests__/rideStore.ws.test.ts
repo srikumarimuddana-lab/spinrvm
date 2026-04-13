@@ -1,4 +1,18 @@
-import { useRideStore } from '../../rideStore';
+// Mock dependencies before importing store
+jest.mock('@shared/api/client', () => ({
+  __esModule: true,
+  default: { post: jest.fn(), get: jest.fn(), put: jest.fn(), patch: jest.fn(), delete: jest.fn() },
+}));
+jest.mock('@shared/store/authStore', () => ({
+  useAuthStore: { getState: jest.fn(() => ({ user: { id: 'user-abc' } })) },
+}));
+jest.mock('@react-native-async-storage/async-storage', () => ({
+  setItem: jest.fn(() => Promise.resolve()),
+  getItem: jest.fn(() => Promise.resolve(null)),
+  removeItem: jest.fn(() => Promise.resolve()),
+}));
+
+import { useRideStore } from '../rideStore';
 
 describe('rideStore — WebSocket-driven updates', () => {
   beforeEach(() => {

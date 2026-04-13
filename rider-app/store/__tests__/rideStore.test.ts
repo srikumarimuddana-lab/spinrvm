@@ -13,14 +13,16 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 // Mock the shared API client
-jest.mock('@shared/api/client', () => ({
-  default: {
+jest.mock('@shared/api/client', () => {
+  const mockClient = {
     post: jest.fn(),
     get: jest.fn(),
+    put: jest.fn(),
     patch: jest.fn(),
     delete: jest.fn(),
-  },
-}));
+  };
+  return { __esModule: true, default: mockClient };
+});
 
 // Mock the auth store (imported transitively via @shared/store/authStore)
 jest.mock('@shared/store/authStore', () => ({

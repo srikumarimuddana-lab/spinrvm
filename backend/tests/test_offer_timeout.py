@@ -25,7 +25,7 @@ class TestOfferTimeoutHandler:
         with (
             patch("backend.routes.rides.asyncio.sleep", new_callable=AsyncMock),
             patch("backend.routes.rides.db") as mock_db,
-            patch("backend.routes.rides.manager") as mock_manager,
+            patch("backend.routes.rides.manager") as mock_manager,  # noqa: F841
             patch("backend.routes.rides.match_driver_to_ride", new_callable=AsyncMock) as mock_redispatch,
         ):
             mock_db.rides.find_one = AsyncMock(return_value=ride_still_assigned)
@@ -65,7 +65,7 @@ class TestOfferTimeoutHandler:
         with (
             patch("backend.routes.rides.asyncio.sleep", new_callable=AsyncMock),
             patch("backend.routes.rides.db") as mock_db,
-            patch("backend.routes.rides.manager") as mock_manager,
+            patch("backend.routes.rides.manager") as mock_manager,  # noqa: F841
             patch("backend.routes.rides.match_driver_to_ride", new_callable=AsyncMock) as mock_redispatch,
         ):
             mock_db.rides.find_one = AsyncMock(return_value=progressed_ride)

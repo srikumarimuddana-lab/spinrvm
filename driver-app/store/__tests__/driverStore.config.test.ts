@@ -1,4 +1,29 @@
-import { useDriverStore } from '../../driverStore';
+// Mock SpinrConfig before importing the store
+jest.mock('@shared/config/spinr.config', () => ({
+  __esModule: true,
+  default: {
+    rideOffer: { countdownSeconds: 15 },
+  },
+}));
+
+// Mock the API client before importing the store
+jest.mock('@shared/api/client', () => {
+  const mockClient = {
+    post: jest.fn(),
+    get: jest.fn(),
+    patch: jest.fn(),
+    delete: jest.fn(),
+    put: jest.fn(),
+  };
+  return { __esModule: true, default: mockClient };
+});
+
+// Mock expo-router
+jest.mock('expo-router', () => ({
+  router: { push: jest.fn(), replace: jest.fn() },
+}));
+
+import { useDriverStore } from '../driverStore';
 
 const api = jest.requireMock('@shared/api/client').default;
 

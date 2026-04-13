@@ -177,6 +177,11 @@ export default function AccountScreen() {
             onPress={() => router.push('/manage-cards' as any)}
           />
           <MenuItem
+            icon="calendar-outline" iconColor="#3B82F6" iconBg="#DBEAFE"
+            title="Scheduled Rides" subtitle="Upcoming rides booked in advance"
+            onPress={() => router.push('/scheduled-rides' as any)}
+          />
+          <MenuItem
             icon="location-outline" iconColor="#F59E0B" iconBg="#FEF3C7"
             title="Saved Places" subtitle="Home, work, favourites"
             onPress={() => router.push('/saved-places' as any)}

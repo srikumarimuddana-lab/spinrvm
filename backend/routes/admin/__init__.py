@@ -42,6 +42,7 @@ from .staff import router as staff_router
 from .subscriptions import router as subscriptions_router
 from .support import router as support_router
 from .users import router as users_router
+from .analytics import api_router as analytics_router
 from .vehicle_fleet import router as vehicle_fleet_router
 
 # Router-level dependency: every request that lands on an admin_router
@@ -73,5 +74,6 @@ admin_router.include_router(staff_router)
 admin_router.include_router(subscriptions_router)
 admin_router.include_router(messaging_router)
 admin_router.include_router(maintenance_router)
+admin_router.include_router(analytics_router)
 
 __all__ = ["admin_router", "admin_auth_router"]

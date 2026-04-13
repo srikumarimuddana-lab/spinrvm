@@ -72,6 +72,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start surge pricing engine: {e}")
 
+    # Scheduled ride dispatcher — checks every 60s for rides due for dispatch
+    # and sends 10-minute reminder notifications.
+    try:
+        from utils.scheduled_rides import scheduled_ride_dispatcher_loop
+        asyncio.create_task(scheduled_ride_dispatcher_loop())
+        logger.info("Started scheduled ride dispatcher (every 60s)")
+    except Exception as e:
+        logger.warning(f"Failed to start scheduled ride dispatcher: {e}")
+
     # Perform startup checks
     logger.info("Spinr API startup complete")
 

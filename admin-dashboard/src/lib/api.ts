@@ -695,3 +695,13 @@ export const updateQuest = (id: string, data: any) =>
 
 export const getQuestParticipants = (questId: string) =>
     request<any[]>(`/api/v1/quests/admin/${questId}/participants`);
+
+/* ── Analytics ──────────────────────────── */
+export const getAnalyticsOverview = (dateRange = "30d") =>
+    request<any>(`/api/admin/analytics/overview?date_range=${dateRange}`);
+
+export const getCancellationBreakdown = (dateRange = "30d", serviceAreaId?: string) =>
+    request<any>(`/api/admin/analytics/cancellation-reasons?date_range=${dateRange}${serviceAreaId ? `&service_area_id=${serviceAreaId}` : ''}`);
+
+export const getDriverAcceptanceRates = (dateRange = "30d", serviceAreaId?: string) =>
+    request<any>(`/api/admin/analytics/driver-acceptance?date_range=${dateRange}${serviceAreaId ? `&service_area_id=${serviceAreaId}` : ''}`);

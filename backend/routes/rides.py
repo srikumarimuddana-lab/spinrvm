@@ -1050,6 +1050,85 @@ async def get_share_trip_link(ride_id: str, current_user: dict = Depends(get_cur
     return {"success": True, "share_token": share_token, "share_url": share_url, "ride_id": ride_id}
 
 
+class ShareTripWithContactRequest(BaseModel):
+    contact_name: str
+    contact_phone: str
+
+
+@api_router.post("/{ride_id}/share")
+async def share_trip_with_contact(
+    ride_id: str, body: ShareTripWithContactRequest, current_user: dict = Depends(get_current_user)
+):
+    """Share trip with a specific contact and send them a notification."""
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if ride.get("status") in ["completed", "cancelled"]:
+        raise HTTPException(status_code=400, detail="Cannot share a completed or cancelled ride")
+
+    # Get or create share token
+    share_token = ride.get("shared_trip_token")
+    if not share_token:
+        share_token = secrets.token_urlsafe(32)
+        await db.rides.update_one(
+            {"id": ride_id},
+            {"$set": {
+                "shared_trip_token": share_token,
+                "shared_trip_token_created_at": datetime.utcnow().isoformat(),
+            }},
+        )
+
+    # Record the contact in shared_with list
+    shared_with = ride.get("shared_with") or []
+    contact_entry = {
+        "name": body.contact_name,
+        "phone": body.contact_phone,
+        "shared_at": datetime.utcnow().isoformat(),
+    }
+    # Avoid duplicates by phone
+    if not any(c.get("phone") == body.contact_phone for c in shared_with):
+        shared_with.append(contact_entry)
+        await db.rides.update_one(
+            {"id": ride_id},
+            {"$set": {"shared_with": shared_with}},
+        )
+
+    share_url = f"/track/{share_token}"
+
+    # Send push notification to contact if they're a registered user
+    contact_user = await db.users.find_one({"phone": body.contact_phone})
+    if contact_user:
+        rider = await db.users.find_one({"id": current_user["id"]})
+        rider_name = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() if rider else "Someone"
+        await send_push_notification(
+            contact_user["id"],
+            f"{rider_name} is sharing their ride with you",
+            f"Track their live location: {ride.get('pickup_address', '')} → {ride.get('dropoff_address', '')}",
+            data={"type": "trip_shared", "share_token": share_token, "ride_id": ride_id},
+        )
+
+    return {
+        "success": True,
+        "share_token": share_token,
+        "share_url": share_url,
+        "contact_notified": contact_user is not None,
+        "shared_with": shared_with,
+    }
+
+
+@api_router.get("/{ride_id}/shared-contacts")
+async def get_shared_contacts(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """Get list of contacts this ride has been shared with."""
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return {"contacts": ride.get("shared_with") or []}
+
+
 @api_router.get("/track/{share_token}")
 async def track_shared_ride(share_token: str):
     """Public endpoint - Get ride status via share token (no auth required)."""

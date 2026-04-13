@@ -9,7 +9,7 @@ service_areas.surge_multiplier for areas where surge_source == 'auto'.
 import asyncio
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from loguru import logger
 
@@ -26,11 +26,11 @@ except ImportError:
 # in a future phase.
 
 SURGE_TIERS = [
-    (0.5, 1.0),   # ratio < 0.5  → normal
+    (0.5, 1.0),  # ratio < 0.5  → normal
     (0.8, 1.25),  # 0.5 ≤ ratio < 0.8
-    (1.2, 1.5),   # 0.8 ≤ ratio < 1.2
+    (1.2, 1.5),  # 0.8 ≤ ratio < 1.2
     (2.0, 1.75),  # 1.2 ≤ ratio < 2.0
-    (3.0, 2.0),   # 2.0 ≤ ratio < 3.0
+    (3.0, 2.0),  # 2.0 ≤ ratio < 3.0
 ]
 SURGE_CAP = 2.5  # ratio ≥ 3.0 → capped at 2.5x
 
@@ -76,9 +76,7 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
         return 0
 
     try:
-        drivers = await db.drivers.find(
-            {"is_online": True, "is_available": True}
-        ).to_list(500)
+        drivers = await db.drivers.find({"is_online": True, "is_available": True}).to_list(500)
 
         count = 0
         for d in drivers:

@@ -16,7 +16,13 @@ class TestGetRideMessages:
         ride = {"id": "ride_1", "rider_id": "user_1", "driver_id": "driver_1"}
         messages_data = [
             {"id": "m1", "ride_id": "ride_1", "text": "Hello", "sender": "rider", "timestamp": "2026-04-12T10:00:00"},
-            {"id": "m2", "ride_id": "ride_1", "text": "On my way", "sender": "driver", "timestamp": "2026-04-12T10:01:00"},
+            {
+                "id": "m2",
+                "ride_id": "ride_1",
+                "text": "On my way",
+                "sender": "driver",
+                "timestamp": "2026-04-12T10:01:00",
+            },
         ]
 
         with patch("backend.routes.rides.db") as mock_db:
@@ -76,7 +82,7 @@ class TestSendRideMessage:
             mock_db.ride_messages.insert_one = AsyncMock()
             mock_manager.send_personal_message = AsyncMock()
 
-            from backend.routes.rides import send_ride_message, SendMessageRequest
+            from backend.routes.rides import SendMessageRequest, send_ride_message
 
             body = SendMessageRequest(text="I'm at the corner")
             result = await send_ride_message("ride_1", body, current_user={"id": "user_1"})
@@ -98,7 +104,7 @@ class TestSendRideMessage:
             mock_db.rides.find_one = AsyncMock(return_value=ride)
             mock_db.drivers.find_one = AsyncMock(return_value=None)
 
-            from backend.routes.rides import send_ride_message, SendMessageRequest
+            from backend.routes.rides import SendMessageRequest, send_ride_message
 
             body = SendMessageRequest(text="Hello")
             with pytest.raises(HTTPException) as exc_info:
@@ -110,7 +116,7 @@ class TestSendRideMessage:
         with patch("backend.routes.rides.db") as mock_db:
             mock_db.rides.find_one = AsyncMock(return_value=None)
 
-            from backend.routes.rides import send_ride_message, SendMessageRequest
+            from backend.routes.rides import SendMessageRequest, send_ride_message
 
             body = SendMessageRequest(text="Hello")
             with pytest.raises(HTTPException) as exc_info:

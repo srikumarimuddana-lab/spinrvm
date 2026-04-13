@@ -86,8 +86,8 @@ async def check_expiring_documents():
                         expiring_docs.append({"label": doc_name, "days_left": days_left})
                 except (ValueError, TypeError):
                     continue
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to check driver_documents: {e}")
 
         if not expiring_docs:
             continue

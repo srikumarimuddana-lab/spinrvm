@@ -22,10 +22,30 @@ logger = logging.getLogger(__name__)
 # Default demand patterns when no historical data is available.
 # Represents typical urban rideshare demand shape (normalised 0-1).
 DEFAULT_HOURLY_PATTERN = {
-    0: 0.15, 1: 0.08, 2: 0.05, 3: 0.03, 4: 0.03, 5: 0.05,
-    6: 0.15, 7: 0.45, 8: 0.70, 9: 0.55, 10: 0.40, 11: 0.45,
-    12: 0.55, 13: 0.50, 14: 0.45, 15: 0.50, 16: 0.65, 17: 0.85,
-    18: 0.90, 19: 0.80, 20: 0.65, 21: 0.55, 22: 0.45, 23: 0.30,
+    0: 0.15,
+    1: 0.08,
+    2: 0.05,
+    3: 0.03,
+    4: 0.03,
+    5: 0.05,
+    6: 0.15,
+    7: 0.45,
+    8: 0.70,
+    9: 0.55,
+    10: 0.40,
+    11: 0.45,
+    12: 0.55,
+    13: 0.50,
+    14: 0.45,
+    15: 0.50,
+    16: 0.65,
+    17: 0.85,
+    18: 0.90,
+    19: 0.80,
+    20: 0.65,
+    21: 0.55,
+    22: 0.45,
+    23: 0.30,
 }
 
 # Weekend multipliers (Fri/Sat evenings spike, Sun/Mon mornings dip)
@@ -103,10 +123,7 @@ async def forecast_demand(
     Returns list of {hour, day_name, predicted_rides, confidence, is_peak}.
     """
     historical = await _get_historical_hourly_demand(area_id, lookback_days)
-    has_data = any(
-        historical.get(d, {}).get(h, 0) > 0
-        for d in range(7) for h in range(24)
-    )
+    has_data = any(historical.get(d, {}).get(h, 0) > 0 for d in range(7) for h in range(24))
 
     now = datetime.utcnow()
     forecasts = []
@@ -141,14 +158,16 @@ async def forecast_demand(
 
         is_peak = predicted >= peak_threshold and predicted > 0
 
-        forecasts.append({
-            "timestamp": t.isoformat(),
-            "hour": hour,
-            "day_name": day_name,
-            "predicted_rides": round(predicted, 1),
-            "confidence": confidence,
-            "is_peak": is_peak,
-        })
+        forecasts.append(
+            {
+                "timestamp": t.isoformat(),
+                "hour": hour,
+                "day_name": day_name,
+                "predicted_rides": round(predicted, 1),
+                "confidence": confidence,
+                "is_peak": is_peak,
+            }
+        )
 
     return forecasts
 

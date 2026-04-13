@@ -61,11 +61,13 @@ async def save_favorite_route(req: SaveFavoriteRequest, current_user: dict = Dep
             limit=20,
         )
         for fav in existing:
-            if (abs(fav.get("pickup_lat", 0) - req.pickup_lat) < 0.001 and
-                abs(fav.get("dropoff_lat", 0) - req.dropoff_lat) < 0.001):
+            if (
+                abs(fav.get("pickup_lat", 0) - req.pickup_lat) < 0.001
+                and abs(fav.get("dropoff_lat", 0) - req.dropoff_lat) < 0.001
+            ):
                 return fav  # Already saved
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Duplicate check failed: {e}")
 
     fav_data = {
         "id": str(uuid.uuid4()),
@@ -111,7 +113,9 @@ async def delete_favorite_route(favorite_id: str, current_user: dict = Depends(g
 
 
 @api_router.post("/from-ride/{ride_id}")
-async def save_favorite_from_ride(ride_id: str, name: str = Query("My Route"), current_user: dict = Depends(get_current_user)):
+async def save_favorite_from_ride(
+    ride_id: str, name: str = Query("My Route"), current_user: dict = Depends(get_current_user)
+):
     """Save a completed ride's route as a favorite."""
     ride = await db.rides.find_one({"id": ride_id})
     if not ride:

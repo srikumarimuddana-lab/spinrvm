@@ -12,7 +12,6 @@ Tiers give bonus multipliers and can be redeemed for wallet credits.
 import logging
 import uuid
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -145,24 +144,28 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
 
     await db.loyalty_accounts.update_one(
         {"id": account["id"]},
-        {"$set": {
-            "points": new_balance,
-            "lifetime_points": new_lifetime,
-            "tier": new_tier,
-            "updated_at": datetime.utcnow().isoformat(),
-        }},
+        {
+            "$set": {
+                "points": new_balance,
+                "lifetime_points": new_lifetime,
+                "tier": new_tier,
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+        },
     )
 
     # Record transaction
-    await db.loyalty_transactions.insert_one({
-        "id": str(uuid.uuid4()),
-        "user_id": current_user["id"],
-        "points": total_points,
-        "type": "ride_earned",
-        "reference_id": ride_id,
-        "description": f"Earned {base_points} pts + {bonus_points} bonus ({tier} {multiplier}x)",
-        "created_at": datetime.utcnow().isoformat(),
-    })
+    await db.loyalty_transactions.insert_one(
+        {
+            "id": str(uuid.uuid4()),
+            "user_id": current_user["id"],
+            "points": total_points,
+            "type": "ride_earned",
+            "reference_id": ride_id,
+            "description": f"Earned {base_points} pts + {bonus_points} bonus ({tier} {multiplier}x)",
+            "created_at": datetime.utcnow().isoformat(),
+        }
+    )
 
     tier_upgraded = new_tier != tier
 
@@ -200,7 +203,8 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
 
     # Credit to wallet
     try:
-        from .wallet import get_or_create_wallet, _record_transaction, _d
+        from .wallet import _d, _record_transaction, get_or_create_wallet
+
         wallet = await get_or_create_wallet(current_user["id"])
         old_wb = _d(wallet.get("balance", 0))
         new_wb = old_wb + _d(credit_amount)
@@ -209,21 +213,26 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
             {"$set": {"balance": float(new_wb), "updated_at": datetime.utcnow().isoformat()}},
         )
         await _record_transaction(
-            wallet_id=wallet["id"], user_id=current_user["id"],
-            txn_type="bonus", amount=credit_amount, balance_after=float(new_wb),
+            wallet_id=wallet["id"],
+            user_id=current_user["id"],
+            txn_type="bonus",
+            amount=credit_amount,
+            balance_after=float(new_wb),
             description=f"Loyalty redemption: {req.points} pts → ${credit_amount:.2f}",
         )
     except Exception as e:
         logger.error(f"Loyalty redeem wallet credit failed: {e}")
 
-    await db.loyalty_transactions.insert_one({
-        "id": str(uuid.uuid4()),
-        "user_id": current_user["id"],
-        "points": -req.points,
-        "type": "redeemed",
-        "description": f"Redeemed {req.points} pts for ${credit_amount:.2f} wallet credit",
-        "created_at": datetime.utcnow().isoformat(),
-    })
+    await db.loyalty_transactions.insert_one(
+        {
+            "id": str(uuid.uuid4()),
+            "user_id": current_user["id"],
+            "points": -req.points,
+            "type": "redeemed",
+            "description": f"Redeemed {req.points} pts for ${credit_amount:.2f} wallet credit",
+            "created_at": datetime.utcnow().isoformat(),
+        }
+    )
 
     return {
         "redeemed_points": req.points,

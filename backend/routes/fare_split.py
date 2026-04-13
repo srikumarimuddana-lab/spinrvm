@@ -13,7 +13,7 @@ from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 try:
@@ -275,7 +275,7 @@ async def pay_split_share(
 
     if req.payment_method == "wallet":
         # Import wallet helper
-        from .wallet import get_or_create_wallet, _record_transaction
+        from .wallet import _record_transaction, get_or_create_wallet
 
         wallet = await get_or_create_wallet(current_user["id"])
         balance = _d(wallet.get("balance", 0))

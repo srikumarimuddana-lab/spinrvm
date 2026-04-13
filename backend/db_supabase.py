@@ -647,7 +647,8 @@ async def get_ride_count_by_date_range(start_iso: str, end_iso: str) -> int:
     def _fn():
         res = (
             supabase.table("rides")
-            .select("id", count="exact").limit(1)
+            .select("id", count="exact")
+            .limit(1)
             .gte("created_at", start_iso)
             .lt("created_at", end_iso)
             .execute()
@@ -783,7 +784,8 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
             driver_completed_res = await run_sync(
                 lambda did=driver_id: (
                     supabase.table("rides")
-                    .select("id", count="exact").limit(1)
+                    .select("id", count="exact")
+                    .limit(1)
                     .eq("driver_id", did)
                     .eq("status", "completed")
                     .execute()
@@ -885,7 +887,8 @@ async def create_flag(flag_data: Dict[str, Any]) -> Dict[str, Any]:
     count_res = await run_sync(
         lambda: (
             supabase.table("flags")
-            .select("id", count="exact").limit(1)
+            .select("id", count="exact")
+            .limit(1)
             .eq("target_type", target_type)
             .eq("target_id", target_id)
             .eq("is_active", True)

@@ -278,7 +278,9 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
         user = await db.users.find_one({"id": current_user["id"]})
         if not user.get("default_payment_method"):
             await db.users.update_one({"id": current_user["id"]}, {"$set": {"default_payment_method": pm.id}})
-            stripe.Customer.modify(customer_id, invoice_settings={"default_payment_method": pm.id}, api_key=stripe_secret)
+            stripe.Customer.modify(
+                customer_id, invoice_settings={"default_payment_method": pm.id}, api_key=stripe_secret
+            )
 
         logger.info(f"Card added: {pm.card.brand} ****{pm.card.last4} | SetupIntent: {si.id} ({si.status})")
 

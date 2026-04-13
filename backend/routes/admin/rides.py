@@ -89,23 +89,27 @@ async def admin_get_active_rides():
         driver = drivers_map.get(r.get("driver_id"))
         driver_user = users_map.get(driver.get("user_id")) if driver else None
 
-        result.append({
-            "id": r["id"],
-            "status": r.get("status"),
-            "pickup_address": r.get("pickup_address"),
-            "dropoff_address": r.get("dropoff_address"),
-            "pickup_lat": r.get("pickup_lat"),
-            "pickup_lng": r.get("pickup_lng"),
-            "dropoff_lat": r.get("dropoff_lat"),
-            "dropoff_lng": r.get("dropoff_lng"),
-            "total_fare": r.get("total_fare"),
-            "rider_name": _user_display_name(rider),
-            "driver_name": _user_display_name(driver_user) if driver_user else (driver.get("name") if driver else None),
-            "driver_lat": driver.get("lat") if driver else None,
-            "driver_lng": driver.get("lng") if driver else None,
-            "vehicle_type_id": r.get("vehicle_type_id"),
-            "created_at": r.get("created_at"),
-        })
+        result.append(
+            {
+                "id": r["id"],
+                "status": r.get("status"),
+                "pickup_address": r.get("pickup_address"),
+                "dropoff_address": r.get("dropoff_address"),
+                "pickup_lat": r.get("pickup_lat"),
+                "pickup_lng": r.get("pickup_lng"),
+                "dropoff_lat": r.get("dropoff_lat"),
+                "dropoff_lng": r.get("dropoff_lng"),
+                "total_fare": r.get("total_fare"),
+                "rider_name": _user_display_name(rider),
+                "driver_name": _user_display_name(driver_user)
+                if driver_user
+                else (driver.get("name") if driver else None),
+                "driver_lat": driver.get("lat") if driver else None,
+                "driver_lng": driver.get("lng") if driver else None,
+                "vehicle_type_id": r.get("vehicle_type_id"),
+                "created_at": r.get("created_at"),
+            }
+        )
 
     return {"rides": result, "count": len(result)}
 

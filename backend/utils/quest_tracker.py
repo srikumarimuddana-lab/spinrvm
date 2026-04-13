@@ -60,7 +60,9 @@ async def update_quest_progress_on_ride_complete(driver_id: str, ride: dict):
                 if completed_at:
                     if isinstance(completed_at, str):
                         try:
-                            completed_at = datetime.fromisoformat(completed_at.replace("Z", "+00:00").replace("+00:00", ""))
+                            completed_at = datetime.fromisoformat(
+                                completed_at.replace("Z", "+00:00").replace("+00:00", "")
+                            )
                         except ValueError:
                             completed_at = datetime.utcnow()
                     hour = completed_at.hour

@@ -58,6 +58,7 @@ async def lifespan(app: FastAPI):
     # expiring within 24h and sends push notifications.
     try:
         from routes.drivers import check_expiring_subscriptions
+
         asyncio.create_task(check_expiring_subscriptions())
         logger.info("Started subscription expiry checker (every 6h)")
     except Exception as e:
@@ -67,6 +68,7 @@ async def lifespan(app: FastAPI):
     # and updates service_areas.surge_multiplier for auto-managed areas.
     try:
         from utils.surge_engine import surge_recalculation_loop
+
         asyncio.create_task(surge_recalculation_loop())
         logger.info("Started surge pricing engine (every 2min)")
     except Exception as e:
@@ -76,6 +78,7 @@ async def lifespan(app: FastAPI):
     # and sends 10-minute reminder notifications.
     try:
         from utils.scheduled_rides import scheduled_ride_dispatcher_loop
+
         asyncio.create_task(scheduled_ride_dispatcher_loop())
         logger.info("Started scheduled ride dispatcher (every 60s)")
     except Exception as e:
@@ -84,6 +87,7 @@ async def lifespan(app: FastAPI):
     # Payment retry — retries failed Stripe payments every 5 minutes
     try:
         from utils.payment_retry import payment_retry_loop
+
         asyncio.create_task(payment_retry_loop())
         logger.info("Started payment retry service (every 5min)")
     except Exception as e:
@@ -92,6 +96,7 @@ async def lifespan(app: FastAPI):
     # Document expiry alerts — notifies drivers about expiring docs every 12h
     try:
         from utils.document_expiry import document_expiry_loop
+
         asyncio.create_task(document_expiry_loop())
         logger.info("Started document expiry checker (every 12h)")
     except Exception as e:

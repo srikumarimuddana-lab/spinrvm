@@ -321,6 +321,7 @@ class DB:
         """Paginated row fetch for admin and other callers."""
         return await db_supabase.get_rows(table, filters, order, desc, limit, offset)
 
+
 class BaseCollection(Collection):
     def __init__(self, name: str):
         super().__init__(name)

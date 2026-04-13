@@ -6,16 +6,16 @@ Runs as a background task every 5 minutes. Finds rides with payment_status
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 try:
     from ..db import db
-    from ..settings_loader import get_app_settings
     from ..features import send_push_notification
+    from ..settings_loader import get_app_settings
 except ImportError:
     from db import db
-    from settings_loader import get_app_settings
     from features import send_push_notification
+    from settings_loader import get_app_settings
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,7 @@ async def retry_failed_payments():
 
         try:
             import stripe
+
             # Attempt to confirm the payment intent
             intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
 
@@ -71,11 +72,13 @@ async def retry_failed_payments():
                 # Already succeeded (webhook may have missed it)
                 await db.rides.update_one(
                     {"id": ride_id},
-                    {"$set": {
-                        "payment_status": "paid",
-                        "payment_retry_count": retry_count + 1,
-                        "updated_at": datetime.utcnow().isoformat(),
-                    }},
+                    {
+                        "$set": {
+                            "payment_status": "paid",
+                            "payment_retry_count": retry_count + 1,
+                            "updated_at": datetime.utcnow().isoformat(),
+                        }
+                    },
                 )
                 logger.info(f"Payment retry: ride {ride_id} already paid (intent succeeded)")
 
@@ -84,11 +87,13 @@ async def retry_failed_payments():
                 stripe.PaymentIntent.confirm(payment_intent_id, api_key=stripe_secret)
                 await db.rides.update_one(
                     {"id": ride_id},
-                    {"$set": {
-                        "payment_status": "processing",
-                        "payment_retry_count": retry_count + 1,
-                        "updated_at": datetime.utcnow().isoformat(),
-                    }},
+                    {
+                        "$set": {
+                            "payment_status": "processing",
+                            "payment_retry_count": retry_count + 1,
+                            "updated_at": datetime.utcnow().isoformat(),
+                        }
+                    },
                 )
                 logger.info(f"Payment retry: ride {ride_id} retry #{retry_count + 1} submitted")
 
@@ -103,10 +108,12 @@ async def retry_failed_payments():
             logger.warning(f"Payment retry failed for ride {ride_id}: {e}")
             await db.rides.update_one(
                 {"id": ride_id},
-                {"$set": {
-                    "payment_retry_count": retry_count + 1,
-                    "updated_at": datetime.utcnow().isoformat(),
-                }},
+                {
+                    "$set": {
+                        "payment_retry_count": retry_count + 1,
+                        "updated_at": datetime.utcnow().isoformat(),
+                    }
+                },
             )
 
         # Notify rider on final failure
@@ -117,11 +124,11 @@ async def retry_failed_payments():
                     await send_push_notification(
                         rider_id,
                         "Payment failed",
-                        f"We couldn't process payment for your ride. Please update your payment method.",
+                        "We couldn't process payment for your ride. Please update your payment method.",
                         data={"type": "payment_failed", "ride_id": ride_id},
                     )
-                except Exception:
-                    pass
+                except Exception as push_err:
+                    logger.debug(f"Payment failure push notification failed: {push_err}")
 
 
 async def payment_retry_loop():

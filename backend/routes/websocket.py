@@ -129,6 +129,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 continue
 
             import json as _json
+
             try:
                 data = _json.loads(raw)
             except (ValueError, TypeError):

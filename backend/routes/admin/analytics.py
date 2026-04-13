@@ -114,10 +114,7 @@ async def get_cancellation_breakdown(
         for party, count in cancelled_by_counter.most_common()
     ]
 
-    hourly = [
-        {"hour": h, "count": hourly_cancellations.get(h, 0)}
-        for h in range(24)
-    ]
+    hourly = [{"hour": h, "count": hourly_cancellations.get(h, 0)} for h in range(24)]
 
     return {
         "total_cancellations": total,
@@ -166,14 +163,16 @@ async def get_driver_acceptance_rates(
 
         # Filter by date range
         period_rides = [
-            r for r in all_rides
+            r
+            for r in all_rides
             if isinstance(r.get("created_at", ""), str) and r.get("created_at", "") >= start_date.isoformat()
         ]
 
         total_assigned = len(period_rides)
         completed = sum(1 for r in period_rides if r.get("status") == "completed")
         cancelled_by_driver = sum(
-            1 for r in period_rides
+            1
+            for r in period_rides
             if r.get("status") == "cancelled" and "driver" in (r.get("cancellation_reason") or "").lower()
         )
 
@@ -184,19 +183,21 @@ async def get_driver_acceptance_rates(
         user = await db.users.find_one({"id": driver.get("user_id")})
         name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Unknown"
 
-        result.append({
-            "driver_id": driver_id,
-            "name": name,
-            "total_rides": total_assigned,
-            "completed": completed,
-            "cancelled_by_driver": cancelled_by_driver,
-            "acceptance_rate": acceptance_rate,
-            "cancellation_rate": cancellation_rate,
-            "rating": driver.get("rating", 0),
-            "lat": driver.get("lat"),
-            "lng": driver.get("lng"),
-            "is_online": driver.get("is_online", False),
-        })
+        result.append(
+            {
+                "driver_id": driver_id,
+                "name": name,
+                "total_rides": total_assigned,
+                "completed": completed,
+                "cancelled_by_driver": cancelled_by_driver,
+                "acceptance_rate": acceptance_rate,
+                "cancellation_rate": cancellation_rate,
+                "rating": driver.get("rating", 0),
+                "lat": driver.get("lat"),
+                "lng": driver.get("lng"),
+                "is_online": driver.get("is_online", False),
+            }
+        )
 
     # Sort by acceptance rate descending
     result.sort(key=lambda x: x["acceptance_rate"], reverse=True)
@@ -232,14 +233,17 @@ async def get_analytics_overview(
         all_rides = []
 
     period_rides = [
-        r for r in all_rides
+        r
+        for r in all_rides
         if isinstance(r.get("created_at", ""), str) and r.get("created_at", "") >= start_date.isoformat()
     ]
 
     total = len(period_rides)
     completed = sum(1 for r in period_rides if r.get("status") == "completed")
     cancelled = sum(1 for r in period_rides if r.get("status") == "cancelled")
-    in_progress = sum(1 for r in period_rides if r.get("status") in ("in_progress", "driver_arrived", "driver_accepted"))
+    in_progress = sum(
+        1 for r in period_rides if r.get("status") in ("in_progress", "driver_arrived", "driver_accepted")
+    )
     searching = sum(1 for r in period_rides if r.get("status") == "searching")
     scheduled = sum(1 for r in period_rides if r.get("is_scheduled"))
 
@@ -261,10 +265,7 @@ async def get_analytics_overview(
             elif r.get("status") == "cancelled":
                 daily[date_str]["cancelled"] += 1
 
-    daily_chart = [
-        {"date": date, **counts}
-        for date, counts in sorted(daily.items())
-    ]
+    daily_chart = [{"date": date, **counts} for date, counts in sorted(daily.items())]
 
     # Peak hours
     hourly = defaultdict(int)

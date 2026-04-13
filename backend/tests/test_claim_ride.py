@@ -2,7 +2,7 @@
 Tests for claim_ride_atomic and the accept_ride endpoint.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 

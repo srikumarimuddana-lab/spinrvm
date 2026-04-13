@@ -7,11 +7,10 @@ try:
     from ..db import db
     from ..dependencies import generate_otp, get_current_user
     from ..features import calculate_airport_fee, calculate_all_fees, send_push_notification
-    from ..geo_utils import get_service_area_polygon, point_in_polygon
+    from ..geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
     from ..schemas import CreateRideRequest, Ride, RideRatingRequest
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
-    from ..geo_utils import calculate_distance
     from ..validators import validate_ride_location
 except ImportError:
     import db_supabase
@@ -311,9 +310,7 @@ async def match_driver_to_ride(ride_id: str):
     # 15 s grace period (for network latency and FCM delivery). If
     # the ride is STILL `driver_assigned` to THIS specific driver,
     # it unassigns and re-dispatches.
-    offer_timeout = int(
-        app_settings.get("ride_offer_timeout_seconds", 15)
-    )
+    offer_timeout = int(app_settings.get("ride_offer_timeout_seconds", 15))
     asyncio.create_task(
         _offer_timeout_handler(
             ride_id,
@@ -500,7 +497,9 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
 
 @api_router.post("")
 @ride_request_limit
-async def create_ride(http_request: Request, request: CreateRideRequest, current_user: dict = Depends(get_current_user)):
+async def create_ride(
+    http_request: Request, request: CreateRideRequest, current_user: dict = Depends(get_current_user)
+):
     validate_ride_location(request.pickup_lat, request.pickup_lng, request.dropoff_lat, request.dropoff_lng)
 
     # Pre-ride payment method validation: ensure rider has a card on file
@@ -949,7 +948,9 @@ async def process_payment(ride_id: str, request: Request, current_user: dict = D
     payment_status = "paid"
     try:
         import stripe as _stripe
+
         from ..settings_loader import get_app_settings as _get_settings
+
         _app_settings = await _get_settings()
         _stripe_secret = _app_settings.get("stripe_secret_key", "")
         if _stripe_secret and total_charge > 0:
@@ -1037,10 +1038,12 @@ async def get_share_trip_link(ride_id: str, current_user: dict = Depends(get_cur
         share_token = secrets.token_urlsafe(32)
         await db.rides.update_one(
             {"id": ride_id},
-            {"$set": {
-                "shared_trip_token": share_token,
-                "shared_trip_token_created_at": datetime.utcnow().isoformat(),
-            }},
+            {
+                "$set": {
+                    "shared_trip_token": share_token,
+                    "shared_trip_token_created_at": datetime.utcnow().isoformat(),
+                }
+            },
         )
 
     # The frontend would use this token to show a read-only tracking page
@@ -1074,10 +1077,12 @@ async def share_trip_with_contact(
         share_token = secrets.token_urlsafe(32)
         await db.rides.update_one(
             {"id": ride_id},
-            {"$set": {
-                "shared_trip_token": share_token,
-                "shared_trip_token_created_at": datetime.utcnow().isoformat(),
-            }},
+            {
+                "$set": {
+                    "shared_trip_token": share_token,
+                    "shared_trip_token_created_at": datetime.utcnow().isoformat(),
+                }
+            },
         )
 
     # Record the contact in shared_with list
@@ -1140,6 +1145,7 @@ async def track_shared_ride(share_token: str):
     token_created = ride.get("shared_trip_token_created_at")
     if token_created:
         from datetime import timedelta
+
         try:
             created_dt = datetime.fromisoformat(token_created) if isinstance(token_created, str) else token_created
             if datetime.utcnow() - created_dt > timedelta(hours=24):
@@ -1581,12 +1587,20 @@ async def get_call_info(ride_id: str, current_user: dict = Depends(get_current_u
             raise HTTPException(status_code=404, detail="Driver not found")
         target_user = await db.users.find_one({"id": target_driver.get("user_id")})
         phone = target_user.get("phone") if target_user else None
-        name = f"{target_user.get('first_name', '')} {target_user.get('last_name', '')}".strip() if target_user else "Driver"
+        name = (
+            f"{target_user.get('first_name', '')} {target_user.get('last_name', '')}".strip()
+            if target_user
+            else "Driver"
+        )
     else:
         # Driver wants to call the rider
         target_user = await db.users.find_one({"id": ride["rider_id"]})
         phone = target_user.get("phone") if target_user else None
-        name = f"{target_user.get('first_name', '')} {target_user.get('last_name', '')}".strip() if target_user else "Rider"
+        name = (
+            f"{target_user.get('first_name', '')} {target_user.get('last_name', '')}".strip()
+            if target_user
+            else "Rider"
+        )
 
     if not phone:
         raise HTTPException(status_code=404, detail="Phone number not available")

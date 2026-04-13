@@ -38,10 +38,12 @@ async def _dispatch_scheduled_ride(ride: dict):
         # Mark as dispatched so we don't process it again
         await db.rides.update_one(
             {"id": ride_id},
-            {"$set": {
-                "scheduled_dispatched": True,
-                "updated_at": datetime.utcnow().isoformat(),
-            }},
+            {
+                "$set": {
+                    "scheduled_dispatched": True,
+                    "updated_at": datetime.utcnow().isoformat(),
+                }
+            },
         )
 
         # Import and run driver matching
@@ -76,7 +78,6 @@ async def _send_reminder(ride: dict):
             return
 
         rider_id = ride.get("rider_id")
-        scheduled_time = ride.get("scheduled_time", "")
 
         if rider_id:
             await send_push_notification(

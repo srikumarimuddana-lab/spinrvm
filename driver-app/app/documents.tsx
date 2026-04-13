@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Image, Platform, StatusBar } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Image, Modal, Platform, StatusBar } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -51,6 +51,7 @@ export default function DocumentsScreen() {
     const [requirements, setRequirements] = useState<Requirement[]>([]);
     const [documents, setDocuments] = useState<DriverDocument[]>([]);
     const [uploading, setUploading] = useState<string | null>(null);
+    const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
     const loadData = async () => {
         try {
@@ -448,9 +449,11 @@ export default function DocumentsScreen() {
                                                 {doc.document_url && (
                                                     <TouchableOpacity
                                                         style={styles.previewContainer}
-                                                        onPress={() => {
-                                                            // TODO: Full screen preview
-                                                        }}
+                                                        onPress={() => setPreviewUrl(
+                                                            doc.document_url.startsWith('http')
+                                                                ? doc.document_url
+                                                                : `${SpinrConfig.backendUrl}${doc.document_url}`
+                                                        )}
                                                     >
                                                         <Image
                                                             source={{ uri: doc.document_url.startsWith('http') ? doc.document_url : `${SpinrConfig.backendUrl}${doc.document_url}` }}
@@ -491,7 +494,14 @@ export default function DocumentsScreen() {
                                                 <View>
                                                     {renderStatusBadge(doc.status, doc.rejection_reason)}
                                                     {doc.document_url && (
-                                                        <TouchableOpacity style={styles.previewContainer}>
+                                                        <TouchableOpacity
+                                                            style={styles.previewContainer}
+                                                            onPress={() => setPreviewUrl(
+                                                                doc.document_url.startsWith('http')
+                                                                    ? doc.document_url
+                                                                    : `${SpinrConfig.backendUrl}${doc.document_url}`
+                                                            )}
+                                                        >
                                                             <Image
                                                                 source={{ uri: doc.document_url.startsWith('http') ? doc.document_url : `${SpinrConfig.backendUrl}${doc.document_url}` }}
                                                                 style={styles.docPreview}
@@ -523,6 +533,32 @@ export default function DocumentsScreen() {
                     );
                 })}
             </ScrollView>
+
+            {/* Full-screen document preview modal */}
+            <Modal
+                visible={!!previewUrl}
+                transparent
+                animationType="fade"
+                statusBarTranslucent
+                onRequestClose={() => setPreviewUrl(null)}
+            >
+                <View style={styles.previewModal}>
+                    <TouchableOpacity
+                        style={styles.previewModalClose}
+                        onPress={() => setPreviewUrl(null)}
+                        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                    >
+                        <Ionicons name="close-circle" size={36} color="#fff" />
+                    </TouchableOpacity>
+                    {previewUrl && (
+                        <Image
+                            source={{ uri: previewUrl }}
+                            style={styles.previewModalImage}
+                            resizeMode="contain"
+                        />
+                    )}
+                </View>
+            </Modal>
         </View>
     );
 }
@@ -647,5 +683,21 @@ const styles = StyleSheet.create({
     docPreview: {
         width: '100%',
         height: '100%',
-    }
+    },
+    previewModal: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.92)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    previewModalClose: {
+        position: 'absolute',
+        top: 52,
+        right: 20,
+        zIndex: 10,
+    },
+    previewModalImage: {
+        width: '100%',
+        height: '80%',
+    },
 });

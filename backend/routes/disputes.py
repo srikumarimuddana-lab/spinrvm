@@ -14,9 +14,11 @@ from pydantic import BaseModel
 try:
     from ..db import db
     from ..dependencies import get_current_user
+    from ..settings_loader import get_app_settings
 except ImportError:
     from db import db
     from dependencies import get_current_user
+    from settings_loader import get_app_settings
 
 logger = logging.getLogger(__name__)
 
@@ -153,9 +155,59 @@ async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
 
     await db.disputes.update_one({"id": dispute_id}, {"$set": update_data})
 
-    # If approved, initiate refund via Stripe (stub for now)
+    # If approved/partial, initiate Stripe refund against the ride's PaymentIntent
+    refund_result: Dict[str, Any] = {}
     if req.resolution in ("approved", "partial_refund") and req.refund_amount:
-        logger.info(f"Refund of ${req.refund_amount} initiated for dispute {dispute_id}")
-        # In production: stripe.Refund.create(payment_intent=..., amount=...)
+        refund_amount_cents = int(float(req.refund_amount) * 100)
+        ride = await db.rides.find_one({"id": dispute.get("ride_id")})
+        payment_intent_id = (ride or {}).get("stripe_charge_id") or (ride or {}).get("payment_intent_id")
 
-    return {"success": True, "dispute_id": dispute_id, "resolution": req.resolution}
+        if not payment_intent_id:
+            logger.warning(
+                f"[REFUND] No PaymentIntent for dispute {dispute_id} / ride {dispute.get('ride_id')} — "
+                "marking refunded in DB only (cash or unprocessed ride)"
+            )
+            refund_result = {"status": "manual_required", "reason": "no_payment_intent"}
+        else:
+            try:
+                import stripe as _stripe  # noqa: PLC0415
+
+                settings = await get_app_settings()
+                stripe_secret = settings.get("stripe_secret_key", "")
+                if not stripe_secret:
+                    raise ValueError("Stripe secret key not configured")
+
+                refund = _stripe.Refund.create(
+                    payment_intent=payment_intent_id,
+                    amount=refund_amount_cents,
+                    reason="requested_by_customer",
+                    metadata={
+                        "dispute_id": dispute_id,
+                        "ride_id": str(dispute.get("ride_id")),
+                        "admin_note": req.admin_note or "",
+                    },
+                    api_key=stripe_secret,
+                )
+                refund_result = {"status": refund.status, "refund_id": refund.id}
+                logger.info(
+                    f"[REFUND] Stripe refund {refund.id} ({refund.status}) "
+                    f"${req.refund_amount} for dispute {dispute_id}"
+                )
+            except Exception as refund_err:  # noqa: BLE001
+                # Don't roll back the resolved status — log and surface the error so
+                # the admin knows they may need to issue the refund manually.
+                logger.error(f"[REFUND] Stripe refund failed for dispute {dispute_id}: {refund_err}")
+                refund_result = {"status": "failed", "error": str(refund_err)}
+
+        # Persist refund outcome on the dispute record
+        await db.disputes.update_one(
+            {"id": dispute_id},
+            {"$set": {"refund_result": refund_result, "updated_at": datetime.utcnow().isoformat()}},
+        )
+
+    return {
+        "success": True,
+        "dispute_id": dispute_id,
+        "resolution": req.resolution,
+        "refund": refund_result or None,
+    }

@@ -22,6 +22,28 @@ import SpinrConfig from '@shared/config/spinr.config';
 import { useLanguageStore } from '../../store/languageStore';
 
 const THEME = SpinrConfig.theme.colors;
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
+
+/** Geocode a free-text address into {lat, lng}.
+ *  Falls back to null if the API is unavailable or returns no results. */
+async function geocodeAddress(address: string): Promise<{ lat: number; lng: number } | null> {
+    if (!GOOGLE_MAPS_API_KEY) return null;
+    try {
+        const encoded = encodeURIComponent(address);
+        const res = await fetch(
+            `https://maps.googleapis.com/maps/api/geocode/json?address=${encoded}&key=${GOOGLE_MAPS_API_KEY}`
+        );
+        const data = await res.json();
+        if (data.status === 'OK' && data.results?.length > 0) {
+            const { lat, lng } = data.results[0].geometry.location;
+            return { lat, lng };
+        }
+    } catch {
+        // Network or parse error — caller handles null
+    }
+    return null;
+}
+
 const COLORS = {
     primary: THEME.background,
     accent: THEME.primary,
@@ -99,13 +121,21 @@ export default function AddressesScreen() {
         }
 
         try {
-            // For now, create with placeholder coordinates
-            // In a full implementation, you would geocode the address
+            // Geocode the address to get real coordinates
+            const coords = await geocodeAddress(newAddress.address.trim());
+            if (!coords) {
+                Alert.alert(
+                    'Address not found',
+                    'We could not locate that address on the map. Please enter a more specific address (include city/province).'
+                );
+                return;
+            }
+
             await api.post('/addresses', {
                 name: newAddress.name.trim(),
                 address: newAddress.address.trim(),
-                lat: 52.1332, // Default Saskatoon coordinates
-                lng: -106.6700,
+                lat: coords.lat,
+                lng: coords.lng,
                 icon: 'home',
             });
             setShowAddModal(false);

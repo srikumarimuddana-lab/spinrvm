@@ -394,12 +394,28 @@ async def admin_update_surge(area_id: str, req: UpdateSurgeRequest):
         update_data["surge_multiplier"] = req.surge_multiplier
 
     if update_data:
+        # Mark as manual override so the auto surge engine skips this area
+        update_data["surge_source"] = "manual"
         await db.service_areas.update_one({"id": area_id}, {"$set": update_data})
 
     area = await db.service_areas.find_one({"id": area_id})
     if not area:
         raise HTTPException(status_code=404, detail="Service area not found")
     return area
+
+
+@admin_support_router.put("/service-areas/{area_id}/surge/auto")
+async def admin_reset_surge_to_auto(area_id: str):
+    """Reset surge pricing to automatic mode for a service area."""
+    area = await db.service_areas.find_one({"id": area_id})
+    if not area:
+        raise HTTPException(status_code=404, detail="Service area not found")
+    await db.service_areas.update_one(
+        {"id": area_id},
+        {"$set": {"surge_source": "auto", "surge_active": True}},
+    )
+    updated = await db.service_areas.find_one({"id": area_id})
+    return updated
 
 
 # ============ Admin: Area Fees (Pricing) ============

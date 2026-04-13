@@ -16,6 +16,8 @@ import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-ico
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useDriverStore } from '../../store/driverStore';
+import EarningsBarChart from '../../components/charts/EarningsBarChart';
+import EarningsLineChart from '../../components/charts/EarningsLineChart';
 
 const { width } = Dimensions.get('window');
 
@@ -40,6 +42,7 @@ const COLORS = {
 };
 
 type Period = 'today' | 'week' | 'month' | 'all';
+type ChartMode = 'daily' | 'weekly' | 'monthly';
 
 export default function EarningsScreen() {
   const router = useRouter();
@@ -48,14 +51,21 @@ export default function EarningsScreen() {
   const {
     earnings,
     dailyEarnings,
+    weeklyEarnings,
+    monthlyEarnings,
+    earningsComparison,
     tripEarnings,
     fetchEarnings,
     fetchDailyEarnings,
+    fetchWeeklyEarnings,
+    fetchMonthlyEarnings,
+    fetchEarningsComparison,
     fetchTripEarnings,
     fetchDriverBalance,
   } = useDriverStore();
 
   const [period, setPeriod] = useState<Period>('today');
+  const [chartMode, setChartMode] = useState<ChartMode>('daily');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -64,6 +74,9 @@ export default function EarningsScreen() {
     await Promise.all([
       fetchEarnings(period),
       fetchDailyEarnings(period === 'today' ? 1 : period === 'week' ? 7 : period === 'month' ? 30 : 30),
+      fetchWeeklyEarnings(4),
+      fetchMonthlyEarnings(6),
+      fetchEarningsComparison(period === 'month' ? 'month' : 'week'),
       fetchTripEarnings(),
       fetchDriverBalance(),
     ]);
@@ -80,7 +93,25 @@ export default function EarningsScreen() {
     setRefreshing(false);
   };
 
-  const maxDailyEarning = Math.max(...(dailyEarnings.map((d) => d.earnings) || [1]), 1);
+  // Prepare chart data based on current mode
+  const barChartData = dailyEarnings.map((d) => ({
+    label: new Date(d.date + 'T00:00:00').toLocaleDateString('en', { weekday: 'narrow' }),
+    value: d.earnings,
+    secondary: d.tips,
+  }));
+
+  const weeklyChartData = weeklyEarnings.map((w) => ({
+    label: new Date(w.week_start + 'T00:00:00').toLocaleDateString('en', { month: 'short', day: 'numeric' }),
+    value: w.earnings,
+  }));
+
+  const monthlyChartData = monthlyEarnings.map((m) => ({
+    label: new Date(m.month + '-01T00:00:00').toLocaleDateString('en', { month: 'short' }),
+    value: m.earnings,
+  }));
+
+  const compPct = earningsComparison?.change_pct?.earnings ?? 0;
+  const compLabel = earningsComparison?.period === 'month' ? 'last month' : 'last week';
 
   const renderFilterTabs = () => (
     <View style={styles.filterWrapper}>
@@ -195,34 +226,64 @@ export default function EarningsScreen() {
           </View>
         </View>
 
-        {/* Bar Chart Section */}
-        {(!loading && dailyEarnings.length > 1) && (
+        {/* Comparison Banner */}
+        {!loading && earningsComparison && compPct !== 0 && (
+          <View style={styles.comparisonBanner}>
+            <Ionicons
+              name={compPct > 0 ? 'trending-up' : 'trending-down'}
+              size={18}
+              color={compPct > 0 ? COLORS.success : COLORS.danger}
+            />
+            <Text style={[styles.comparisonText, { color: compPct > 0 ? COLORS.success : COLORS.danger }]}>
+              {compPct > 0 ? '+' : ''}{compPct.toFixed(1)}% from {compLabel}
+            </Text>
+          </View>
+        )}
+
+        {/* Chart Section with Mode Toggle */}
+        {!loading && (
           <View style={styles.chartSection}>
-            <Text style={styles.sectionTitle}>Daily Breakdown</Text>
-            <View style={styles.chartCard}>
-              <View style={styles.chartInnerContainer}>
-                {dailyEarnings.map((day, i) => {
-                  const safeEarnings = Math.max(day.earnings, 1); // Avoid 0 division issues completely
-                  const barHeightRatio = (safeEarnings / maxDailyEarning);
-                  const barHeight = Math.max(barHeightRatio * 140, 6); // Minimum height logic
-                  const dayLabel = new Date(day.date + 'T00:00:00').toLocaleDateString('en', { weekday: 'narrow' });
-                  
-                  return (
-                    <View key={i} style={styles.barColumn}>
-                      <Text style={styles.barValue}>
-                        {day.earnings > 0 ? `$${day.earnings.toFixed(0)}` : ''}
-                      </Text>
-                      <View style={styles.barTrack}>
-                        <LinearGradient
-                          colors={[COLORS.accent, COLORS.accentDark]}
-                          style={[styles.bar, { height: barHeight }]}
-                        />
-                      </View>
-                      <Text style={styles.barLabel}>{dayLabel}</Text>
-                    </View>
-                  );
-                })}
+            <View style={styles.chartHeader}>
+              <Text style={styles.sectionTitle}>Earnings Breakdown</Text>
+              <View style={styles.chartModeToggle}>
+                {(['daily', 'weekly', 'monthly'] as ChartMode[]).map((mode) => (
+                  <TouchableOpacity
+                    key={mode}
+                    style={[styles.chartModeBtn, chartMode === mode && styles.chartModeBtnActive]}
+                    onPress={() => setChartMode(mode)}
+                  >
+                    <Text style={[styles.chartModeBtnText, chartMode === mode && styles.chartModeBtnTextActive]}>
+                      {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
               </View>
+            </View>
+            <View style={styles.chartCard}>
+              {chartMode === 'daily' && (
+                <EarningsBarChart
+                  data={barChartData}
+                  height={200}
+                  primaryColor={COLORS.accent}
+                  secondaryColor={COLORS.gold}
+                />
+              )}
+              {chartMode === 'weekly' && (
+                <EarningsLineChart
+                  data={weeklyChartData}
+                  height={200}
+                  color={COLORS.accent}
+                  showArea
+                />
+              )}
+              {chartMode === 'monthly' && (
+                <EarningsLineChart
+                  data={monthlyChartData}
+                  height={200}
+                  color={COLORS.success}
+                  showArea
+                />
+              )}
             </View>
           </View>
         )}
@@ -497,23 +558,79 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
     marginTop: 1,
   },
+  // Comparison Banner
+  comparisonBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 16,
+    backgroundColor: '#fff',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.02)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
+    shadowRadius: 6,
+    elevation: 1,
+  },
+  comparisonText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
   // Chart Section
   chartSection: {
     paddingHorizontal: 16,
     marginBottom: 24,
   },
+  chartHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
   sectionTitle: {
     color: COLORS.text,
     fontSize: 18,
     fontWeight: '800',
-    marginBottom: 16,
     letterSpacing: 0.2,
+  },
+  chartModeToggle: {
+    flexDirection: 'row',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 10,
+    padding: 2,
+  },
+  chartModeBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  chartModeBtnActive: {
+    backgroundColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  chartModeBtnText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: COLORS.textDim,
+  },
+  chartModeBtnTextActive: {
+    color: COLORS.text,
+    fontWeight: '700',
   },
   chartCard: {
     backgroundColor: '#fff',
     borderRadius: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 20,
+    paddingHorizontal: 8,
+    paddingVertical: 16,
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.02)',
     shadowColor: '#000',
@@ -521,39 +638,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.04,
     shadowRadius: 16,
     elevation: 3,
-  },
-  chartInnerContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-around',
-    height: 180,
-  },
-  barColumn: {
-    alignItems: 'center',
-    gap: 8,
-  },
-  barValue: {
-    color: COLORS.textDim,
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  barTrack: {
-    width: 14,
-    height: 140,
-    backgroundColor: '#F3F4F6',
-    borderRadius: 8,
-    justifyContent: 'flex-end',
-    overflow: 'hidden',
-  },
-  bar: {
-    width: '100%',
-    borderRadius: 8,
-  },
-  barLabel: {
-    color: COLORS.textDim,
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 4,
   },
   // Empty state
   emptyStateContainer: {

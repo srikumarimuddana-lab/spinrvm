@@ -157,6 +157,33 @@ export interface T4ADocument {
     status: string;
 }
 
+export interface WeeklyEarning {
+    week_start: string;
+    week_end: string;
+    earnings: number;
+    tips: number;
+    rides: number;
+    online_hours: number;
+    distance_km: number;
+}
+
+export interface MonthlyEarning {
+    month: string;
+    year: number;
+    earnings: number;
+    tips: number;
+    rides: number;
+    online_hours: number;
+    distance_km: number;
+}
+
+export interface EarningsComparison {
+    period: string;
+    current: { earnings: number; rides: number; tips: number };
+    previous: { earnings: number; rides: number; tips: number };
+    change_pct: { earnings: number; rides: number; tips: number };
+}
+
 interface IncomingRide {
     ride_id: string;
     pickup_address: string;
@@ -188,6 +215,9 @@ interface DriverState {
     // Earnings
     earnings: EarningsSummary | null;
     dailyEarnings: DailyEarning[];
+    weeklyEarnings: WeeklyEarning[];
+    monthlyEarnings: MonthlyEarning[];
+    earningsComparison: EarningsComparison | null;
     tripEarnings: TripEarning[];
 
     // Payout/Bank Account
@@ -226,6 +256,9 @@ interface DriverState {
     fetchRideHistory: (limit?: number, offset?: number) => Promise<void>;
     fetchEarnings: (period?: string) => Promise<void>;
     fetchDailyEarnings: (days?: number) => Promise<void>;
+    fetchWeeklyEarnings: (weeks?: number) => Promise<void>;
+    fetchMonthlyEarnings: (months?: number) => Promise<void>;
+    fetchEarningsComparison: (period?: string) => Promise<void>;
     fetchTripEarnings: (limit?: number, offset?: number) => Promise<void>;
 
     // Payout actions
@@ -261,6 +294,9 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     configuredPickupRadiusMeters: FALLBACK_PICKUP_RADIUS_METERS,
     earnings: null,
     dailyEarnings: [],
+    weeklyEarnings: [],
+    monthlyEarnings: [],
+    earningsComparison: null,
     tripEarnings: [],
     // Payout state
     bankAccount: null,
@@ -508,6 +544,33 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             set({ dailyEarnings: res.data || [] });
         } catch (err) {
             console.log('Fetch daily earnings error:', err);
+        }
+    },
+
+    fetchWeeklyEarnings: async (weeks = 4) => {
+        try {
+            const res = await api.get(`/drivers/earnings/weekly?weeks=${weeks}`);
+            set({ weeklyEarnings: res.data || [] });
+        } catch (err) {
+            console.log('Fetch weekly earnings error:', err);
+        }
+    },
+
+    fetchMonthlyEarnings: async (months = 6) => {
+        try {
+            const res = await api.get(`/drivers/earnings/monthly?months=${months}`);
+            set({ monthlyEarnings: res.data || [] });
+        } catch (err) {
+            console.log('Fetch monthly earnings error:', err);
+        }
+    },
+
+    fetchEarningsComparison: async (period = 'week') => {
+        try {
+            const res = await api.get(`/drivers/earnings/comparison?period=${period}`);
+            set({ earningsComparison: res.data || null });
+        } catch (err) {
+            console.log('Fetch earnings comparison error:', err);
         }
     },
 

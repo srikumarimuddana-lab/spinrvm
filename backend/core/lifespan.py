@@ -63,6 +63,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start subscription expiry checker: {e}")
 
+    # Automated surge pricing — recalculates demand/supply ratio every 2 min
+    # and updates service_areas.surge_multiplier for auto-managed areas.
+    try:
+        from utils.surge_engine import surge_recalculation_loop
+        asyncio.create_task(surge_recalculation_loop())
+        logger.info("Started surge pricing engine (every 2min)")
+    except Exception as e:
+        logger.warning(f"Failed to start surge pricing engine: {e}")
+
     # Perform startup checks
     logger.info("Spinr API startup complete")
 

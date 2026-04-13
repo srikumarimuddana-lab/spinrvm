@@ -131,19 +131,45 @@ async def admin_delete_service_area(area_id: str):
 async def admin_update_surge_pricing(area_id: str, surge: Dict[str, Any]):
     """Update surge pricing for a service area."""
     surge_doc = {
+        "id": str(uuid.uuid4()),
         "service_area_id": area_id,
         "multiplier": surge.get("multiplier", 1.0),
+        "demand_count": 0,
+        "supply_count": 0,
+        "ratio": 0,
+        "source": "manual",
         "is_active": surge.get("is_active", False),
+        "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }
 
-    existing = await db.surge_pricing.find_one({"service_area_id": area_id})
-    if existing:
-        await db.surge_pricing.update_one({"service_area_id": area_id}, {"$set": surge_doc})
-    else:
-        await db.surge_pricing.insert_one(surge_doc)
+    # Log to surge_pricing history
+    await db.surge_pricing.insert_one(surge_doc)
+
+    # Mark area as manually overridden so auto surge engine skips it
+    await db.service_areas.update_one(
+        {"id": area_id},
+        {
+            "$set": {
+                "surge_multiplier": surge.get("multiplier", 1.0),
+                "surge_active": surge.get("is_active", False),
+                "surge_source": "manual",
+            }
+        },
+    )
 
     return {"message": "Surge pricing updated"}
+
+
+@router.get("/surge/status")
+async def admin_get_surge_status():
+    """Get current surge status for all active service areas."""
+    try:
+        from utils.surge_engine import get_surge_status
+        return await get_surge_status()
+    except ImportError:
+        from ...utils.surge_engine import get_surge_status
+        return await get_surge_status()
 
 
 # ---------- Area Management (Pricing, Tax, Vehicle Pricing) ----------

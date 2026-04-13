@@ -454,6 +454,14 @@ export default function ProfileScreen() {
                     <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
+                <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/quests' as any)}>
+                    <View style={[styles.iconBox, { backgroundColor: 'rgba(139, 92, 246, 0.1)' }]}>
+                        <Ionicons name="trophy" size={18} color="#8B5CF6" />
+                    </View>
+                    <Text style={styles.actionText}>Quests & Bonuses</Text>
+                    <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                </TouchableOpacity>
+                <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/referral' as any)}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.1)' }]}>
                         <Ionicons name="gift" size={18} color={COLORS.warning} />

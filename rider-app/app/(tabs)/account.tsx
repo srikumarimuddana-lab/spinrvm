@@ -167,6 +167,11 @@ export default function AccountScreen() {
             onPress={() => router.push('/profile-setup' as any)}
           />
           <MenuItem
+            icon="wallet-outline" iconColor="#8B5CF6" iconBg="#EDE9FE"
+            title="Wallet" subtitle="Balance, top-up, transactions"
+            onPress={() => router.push('/wallet' as any)}
+          />
+          <MenuItem
             icon="card-outline" iconColor="#7C3AED" iconBg="#EDE9FE"
             title="Payment Methods" subtitle="Add or manage your cards"
             onPress={() => router.push('/manage-cards' as any)}

@@ -77,10 +77,7 @@ async def admin_send_cloud_message(payload: Dict[str, Any]):
                 else:
                     failed_count += 1
 
-        logger.info(
-            f"Cloud message sent to {audience}: {title} "
-            f"(success={successful}, failed={failed_count})"
-        )
+        logger.info(f"Cloud message sent to {audience}: {title} (success={successful}, failed={failed_count})")
 
     doc = {
         "id": str(uuid.uuid4()),

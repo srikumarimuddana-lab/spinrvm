@@ -186,7 +186,18 @@ export default function ChatScreen() {
                             {rideId ? 'Active Ride' : 'No active ride'}
                         </Text>
                     </View>
-                    <TouchableOpacity style={styles.callBtn}>
+                    <TouchableOpacity style={styles.callBtn} onPress={async () => {
+                        if (!rideId) return;
+                        try {
+                            const res = await api.get(`/rides/${rideId}/call`);
+                            if (res.data?.phone) {
+                                const { Linking } = require('react-native');
+                                Linking.openURL(`tel:${res.data.phone}`);
+                            }
+                        } catch (e: any) {
+                            console.log('[Chat] Call failed:', e?.response?.data?.detail || e.message);
+                        }
+                    }}>
                         <Ionicons name="call" size={20} color={COLORS.accent} />
                     </TouchableOpacity>
                 </View>

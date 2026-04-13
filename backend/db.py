@@ -291,6 +291,11 @@ class DB:
         self.push_tokens = BaseCollection("push_tokens")
         self.admin_staff = BaseCollection("admin_staff")
         self.support_messages = BaseCollection("support_messages")
+        # Favorite routes
+        self.favorite_routes = BaseCollection("favorite_routes")
+        # Loyalty program
+        self.loyalty_accounts = BaseCollection("loyalty_accounts")
+        self.loyalty_transactions = BaseCollection("loyalty_transactions")
         # P1-07: In-app wallet
         self.wallets = BaseCollection("wallets")
         self.wallet_transactions = BaseCollection("wallet_transactions")
@@ -315,6 +320,7 @@ class DB:
     ):
         """Paginated row fetch for admin and other callers."""
         return await db_supabase.get_rows(table, filters, order, desc, limit, offset)
+
 
 class BaseCollection(Collection):
     def __init__(self, name: str):

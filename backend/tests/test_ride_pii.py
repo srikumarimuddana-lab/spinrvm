@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-
 # Full driver row as it would come from the database — includes every
 # sensitive field that the PII filter must strip.
 FULL_DRIVER_ROW = {
@@ -46,18 +45,37 @@ FULL_DRIVER_ROW = {
 
 # Fields the rider IS allowed to see.
 ALLOWED_FIELDS = {
-    "id", "name", "rating", "total_rides", "profile_image_url",
-    "vehicle_make", "vehicle_model", "vehicle_color", "license_plate",
-    "vehicle_year", "lat", "lng",
+    "id",
+    "name",
+    "rating",
+    "total_rides",
+    "profile_image_url",
+    "vehicle_make",
+    "vehicle_model",
+    "vehicle_color",
+    "license_plate",
+    "vehicle_year",
+    "lat",
+    "lng",
 }
 
 # Fields that must NEVER appear in the response.
 FORBIDDEN_FIELDS = {
-    "license_number", "vehicle_vin", "insurance_expiry_date",
-    "background_check_expiry_date", "work_eligibility_expiry_date",
-    "stripe_account_id", "fcm_token", "phone", "user_id",
-    "bank_account", "is_available", "is_online", "is_verified",
-    "needs_review", "status",
+    "license_number",
+    "vehicle_vin",
+    "insurance_expiry_date",
+    "background_check_expiry_date",
+    "work_eligibility_expiry_date",
+    "stripe_account_id",
+    "fcm_token",
+    "phone",
+    "user_id",
+    "bank_account",
+    "is_available",
+    "is_online",
+    "is_verified",
+    "needs_review",
+    "status",
 }
 
 
@@ -119,9 +137,7 @@ class TestRidePIIFiltering:
 
             driver_in_response = response.get("driver", {})
             for field in ALLOWED_FIELDS:
-                assert field in driver_in_response, (
-                    f"Allowed field '{field}' missing from rider's driver view"
-                )
+                assert field in driver_in_response, f"Allowed field '{field}' missing from rider's driver view"
 
     @pytest.mark.asyncio
     async def test_no_driver_key_when_unassigned(self):

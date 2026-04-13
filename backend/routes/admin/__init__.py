@@ -27,6 +27,7 @@ try:
 except ImportError:
     from dependencies import get_admin_user
 
+from .analytics import api_router as analytics_router
 from .auth import admin_auth_router
 from .auth import router as auth_router
 from .documents import router as documents_router
@@ -73,5 +74,6 @@ admin_router.include_router(staff_router)
 admin_router.include_router(subscriptions_router)
 admin_router.include_router(messaging_router)
 admin_router.include_router(maintenance_router)
+admin_router.include_router(analytics_router)
 
 __all__ = ["admin_router", "admin_auth_router"]

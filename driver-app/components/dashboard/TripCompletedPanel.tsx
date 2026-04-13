@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, Share, Alert } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useLanguageStore } from '../../store/languageStore';
 
@@ -45,6 +46,7 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
   onRateRider,
 }) => {
   const { t } = useLanguageStore();
+  const router = useRouter();
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
   const [submitted, setSubmitted] = useState(false);
@@ -199,6 +201,18 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
           </View>
         )}
 
+        {/* Post-trip chat */}
+        {completedRide.id && (
+          <TouchableOpacity
+            style={styles.messageRiderBtn}
+            onPress={() => router.push(`/driver/chat?rideId=${completedRide.id}` as any)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="chatbubble-ellipses-outline" size={16} color="#3B82F6" />
+            <Text style={styles.messageRiderText}>Message Rider</Text>
+          </TouchableOpacity>
+        )}
+
         <TouchableOpacity
           style={[styles.doneBtn, submitting && { opacity: 0.6 }]}
           onPress={handleSubmit}
@@ -340,6 +354,24 @@ const styles = StyleSheet.create({
   },
   shareReceiptText: {
     color: COLORS.accent,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  messageRiderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    marginBottom: 12,
+    backgroundColor: '#EFF6FF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    width: '100%',
+  },
+  messageRiderText: {
+    color: '#3B82F6',
     fontSize: 14,
     fontWeight: '600',
   },

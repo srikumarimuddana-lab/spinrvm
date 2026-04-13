@@ -9,7 +9,6 @@ import logging
 import uuid
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field

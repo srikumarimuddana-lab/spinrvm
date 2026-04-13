@@ -166,9 +166,11 @@ async def admin_get_surge_status():
     """Get current surge status for all active service areas."""
     try:
         from utils.surge_engine import get_surge_status
+
         return await get_surge_status()
     except ImportError:
         from ...utils.surge_engine import get_surge_status
+
         return await get_surge_status()
 
 

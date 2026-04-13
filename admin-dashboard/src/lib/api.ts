@@ -471,12 +471,6 @@ export const updateDispute = (id: string, data: any) =>
         body: JSON.stringify(data),
     });
 
-export const resolveDispute = (id: string, resolution: any) =>
-    request<any>(`/api/admin/disputes/${id}/resolve`, {
-        method: "PUT",
-        body: JSON.stringify(resolution),
-    });
-
 /* ── Support Tickets ────────────────────────── */
 export const getTickets = () =>
     request<any[]>("/api/admin/tickets");
@@ -695,3 +689,37 @@ export const updateQuest = (id: string, data: any) =>
 
 export const getQuestParticipants = (questId: string) =>
     request<any[]>(`/api/v1/quests/admin/${questId}/participants`);
+
+/* ── Analytics ──────────────────────────── */
+export const getAnalyticsOverview = (dateRange = "30d") =>
+    request<any>(`/api/admin/analytics/overview?date_range=${dateRange}`);
+
+export const getCancellationBreakdown = (dateRange = "30d", serviceAreaId?: string) =>
+    request<any>(`/api/admin/analytics/cancellation-reasons?date_range=${dateRange}${serviceAreaId ? `&service_area_id=${serviceAreaId}` : ''}`);
+
+export const getDriverAcceptanceRates = (dateRange = "30d", serviceAreaId?: string) =>
+    request<any>(`/api/admin/analytics/driver-acceptance?date_range=${dateRange}${serviceAreaId ? `&service_area_id=${serviceAreaId}` : ''}`);
+
+export const getDemandForecast = (hoursAhead = 24, areaId?: string) =>
+    request<any>(`/api/admin/analytics/demand-forecast?hours_ahead=${hoursAhead}${areaId ? `&area_id=${areaId}` : ''}`);
+
+export const getDemandForecastSummary = (areaId?: string) =>
+    request<any>(`/api/admin/analytics/demand-forecast/summary${areaId ? `?area_id=${areaId}` : ''}`);
+
+export const getSurgeHistory = (areaId: string, hours = 24) =>
+    request<any>(`/api/admin/analytics/surge-history?area_id=${areaId}&hours=${hours}`);
+
+/* ── Payouts ────────────────────────────── */
+export const getPayouts = (status?: string) =>
+    request<any[]>(`/api/admin/payouts${status ? `?status=${status}` : ''}`);
+
+export const getPayoutStats = () =>
+    request<any>("/api/admin/payouts/stats");
+
+/* ── Disputes (resolve) ─────────────────── */
+export const resolveDispute = (id: string, data: { resolution: string; refund_amount?: number; admin_note?: string }) =>
+    request<any>(`/api/admin/disputes/${id}/resolve`, { method: "PUT", body: JSON.stringify(data) });
+
+/* ── Live Ride Monitoring ───────────────── */
+export const getActiveRides = () =>
+    request<any>("/api/admin/rides/active");

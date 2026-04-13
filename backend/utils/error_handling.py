@@ -454,9 +454,9 @@ _ALWAYS_ALLOWED = {
 def _resolve_cors_origins() -> set[str]:
     try:
         from core.config import settings  # local import to avoid a hard
-                                          # dependency if utils is imported
-                                          # before the settings module is
-                                          # available (e.g. test harness).
+        # dependency if utils is imported
+        # before the settings module is
+        # available (e.g. test harness).
     except Exception:
         return set(_ALWAYS_ALLOWED)
 
@@ -520,6 +520,7 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
     # should not leak internal error types or messages to clients.
     try:
         from core.config import settings as _cfg
+
         _is_dev = _cfg.ENV.lower() in ("development", "local")
     except Exception:
         _is_dev = False

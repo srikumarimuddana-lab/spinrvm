@@ -113,7 +113,18 @@ export default function RideInProgressScreen() {
   };
 
   const handleShareTrip = async () => {
-    const liveTrackingUrl = `https://spinr-track.app/${rideId || 'demo'}`;
+    // Get share token from backend API
+    let shareToken = rideId || 'demo';
+    try {
+      const shareRes = await api.get(`/rides/${rideId}/share`);
+      if (shareRes.data?.share_token) {
+        shareToken = shareRes.data.share_token;
+      }
+    } catch {
+      // Fall back to ride ID
+    }
+
+    const liveTrackingUrl = `https://spinr-track.app/${shareToken}`;
     const tripDetails = `
 🚗 TRACK MY SPINR RIDE - LIVE LOCATION
 
@@ -152,7 +163,16 @@ I've shared my live location with you for safety.
   };
 
   const handleCopyTrackingLink = async () => {
-    const trackingLink = `https://spinr-track.app/${rideId || 'demo'}`;
+    let shareToken = rideId || 'demo';
+    try {
+      const shareRes = await api.get(`/rides/${rideId}/share`);
+      if (shareRes.data?.share_token) {
+        shareToken = shareRes.data.share_token;
+      }
+    } catch {
+      // Fall back to ride ID
+    }
+    const trackingLink = `https://spinr-track.app/${shareToken}`;
     await Clipboard.setStringAsync(trackingLink);
     setAlertState({ visible: true, title: 'Copied!', message: 'Live tracking link copied to clipboard', variant: 'success' });
   };

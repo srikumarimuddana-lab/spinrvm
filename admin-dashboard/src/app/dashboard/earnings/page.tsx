@@ -10,7 +10,8 @@ import { Button } from "@/components/ui/button";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { Download, Car, CreditCard, Users, TrendingUp, DollarSign, UserPlus, XCircle, Clock, MapPin, X, GitCompareArrows } from "lucide-react";
+import { Download, Car, CreditCard, Users, TrendingUp, DollarSign, UserPlus, XCircle, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle } from "lucide-react";
+import { getPayouts, getPayoutStats } from "@/lib/api";
 import { Legend } from "recharts";
 import { Input } from "@/components/ui/input";
 import {
@@ -26,14 +27,14 @@ const tooltipStyle = {
 };
 
 export default function EarningsPage() {
-    const [tab, setTab] = useState<"rides" | "spinr-pass">("rides");
+    const [tab, setTab] = useState<"rides" | "spinr-pass" | "payouts">("rides");
 
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
                 <div>
-                    <h1 className="text-3xl font-bold tracking-tight">Earnings</h1>
-                    <p className="text-muted-foreground mt-1">Platform revenue from rides and Spinr Pass subscriptions</p>
+                    <h1 className="text-3xl font-bold tracking-tight">Earnings & Payouts</h1>
+                    <p className="text-muted-foreground mt-1">Platform revenue, subscriptions, and driver payouts</p>
                 </div>
             </div>
 
@@ -45,12 +46,17 @@ export default function EarningsPage() {
                 </button>
                 <button onClick={() => setTab("spinr-pass")}
                     className={`flex items-center gap-1.5 px-5 py-2 rounded-lg text-sm font-semibold transition ${tab === "spinr-pass" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"}`}>
-                    <CreditCard className="h-4 w-4" /> Spinr Pass Revenue
+                    <CreditCard className="h-4 w-4" /> Spinr Pass
+                </button>
+                <button onClick={() => setTab("payouts")}
+                    className={`flex items-center gap-1.5 px-5 py-2 rounded-lg text-sm font-semibold transition ${tab === "payouts" ? "bg-background text-foreground shadow-sm" : "text-muted-foreground"}`}>
+                    <Wallet className="h-4 w-4" /> Payouts
                 </button>
             </div>
 
             {tab === "rides" && <RideEarningsTab />}
             {tab === "spinr-pass" && <SpinrPassRevenueTab />}
+            {tab === "payouts" && <PayoutsTab />}
         </div>
     );
 }
@@ -507,6 +513,105 @@ function SpinrPassRevenueTab() {
                     </Card>
                 </>
             )}
+        </div>
+    );
+}
+
+
+// ─── Payouts Tab ───
+
+function PayoutsTab() {
+    const [payouts, setPayouts] = useState<any[]>([]);
+    const [stats, setStats] = useState<any>(null);
+    const [loading, setLoading] = useState(true);
+    const [statusFilter, setStatusFilter] = useState("all");
+
+    useEffect(() => {
+        Promise.all([
+            getPayouts().catch(() => []),
+            getPayoutStats().catch(() => null),
+        ]).then(([p, s]) => {
+            setPayouts(Array.isArray(p) ? p : []);
+            setStats(s);
+        }).finally(() => setLoading(false));
+    }, []);
+
+    const filtered = statusFilter === "all" ? payouts : payouts.filter(p => p.status === statusFilter);
+
+    const statusBadge = (s: string) => {
+        if (s === "completed") return "bg-emerald-500/15 text-emerald-600";
+        if (s === "pending") return "bg-amber-500/15 text-amber-600";
+        if (s === "failed") return "bg-red-500/15 text-red-600";
+        return "bg-zinc-500/15 text-zinc-600";
+    };
+
+    if (loading) return <div className="flex justify-center p-12"><div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>;
+
+    return (
+        <div className="space-y-6">
+            {/* Stats */}
+            {stats && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <Card><CardContent className="pt-4">
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><CheckCircle className="h-4 w-4 text-green-500" /> Total Paid</div>
+                        <div className="text-2xl font-bold text-green-600">${stats.total_paid?.toLocaleString()}</div>
+                    </CardContent></Card>
+                    <Card><CardContent className="pt-4">
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><Clock className="h-4 w-4 text-amber-500" /> Pending</div>
+                        <div className="text-2xl font-bold text-amber-600">${stats.total_pending?.toLocaleString()}</div>
+                        <p className="text-xs text-muted-foreground">{stats.pending_count} payouts</p>
+                    </CardContent></Card>
+                    <Card><CardContent className="pt-4">
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><AlertTriangle className="h-4 w-4 text-red-500" /> Failed</div>
+                        <div className="text-2xl font-bold text-red-600">${stats.total_failed?.toLocaleString()}</div>
+                    </CardContent></Card>
+                    <Card><CardContent className="pt-4">
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground"><Wallet className="h-4 w-4" /> Total Payouts</div>
+                        <div className="text-2xl font-bold">{stats.payout_count}</div>
+                    </CardContent></Card>
+                </div>
+            )}
+
+            {/* Filter + Table */}
+            <Card>
+                <CardHeader className="flex flex-row items-center justify-between">
+                    <CardTitle>Payout History</CardTitle>
+                    <div className="flex gap-1 bg-muted rounded-lg p-0.5">
+                        {["all", "pending", "completed", "failed"].map(s => (
+                            <button key={s} onClick={() => setStatusFilter(s)}
+                                className={`px-3 py-1 rounded-md text-xs font-medium transition ${statusFilter === s ? "bg-background shadow-sm" : "text-muted-foreground"}`}>
+                                {s.charAt(0).toUpperCase() + s.slice(1)}
+                            </button>
+                        ))}
+                    </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Driver</TableHead>
+                                <TableHead>Amount</TableHead>
+                                <TableHead>Status</TableHead>
+                                <TableHead>Bank</TableHead>
+                                <TableHead>Requested</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {filtered.length === 0 ? (
+                                <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No payouts found</TableCell></TableRow>
+                            ) : filtered.map((p: any) => (
+                                <TableRow key={p.id}>
+                                    <TableCell className="font-medium">{p.driver_name || "Unknown"}</TableCell>
+                                    <TableCell className="font-mono font-bold">${Number(p.amount || 0).toFixed(2)}</TableCell>
+                                    <TableCell><Badge className={statusBadge(p.status)}>{p.status}</Badge></TableCell>
+                                    <TableCell className="text-sm text-muted-foreground">{p.bank_name || "—"} {p.account_last4 ? `•••${p.account_last4}` : ""}</TableCell>
+                                    <TableCell className="text-xs text-muted-foreground">{formatDate(p.created_at)}</TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </CardContent>
+            </Card>
         </div>
     );
 }

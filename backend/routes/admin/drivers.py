@@ -526,12 +526,24 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
     # approve/reject/suspend — without this, drivers wait days not knowing
     # their application was processed.
     action_push_map = {
-        "approve": ("You're Approved! 🎉", "Your driver application has been approved. You can now go online and start earning!"),
+        "approve": (
+            "You're Approved! 🎉",
+            "Your driver application has been approved. You can now go online and start earning!",
+        ),
         "reject": ("Application Update", "Your driver application needs attention. Please check your documents."),
-        "suspend": ("Account Suspended ⚠️", f"Your account has been suspended. Reason: {req.reason or 'Contact support for details.'}"),
-        "ban": ("Account Deactivated", "Your driver account has been deactivated. Contact support for more information."),
+        "suspend": (
+            "Account Suspended ⚠️",
+            f"Your account has been suspended. Reason: {req.reason or 'Contact support for details.'}",
+        ),
+        "ban": (
+            "Account Deactivated",
+            "Your driver account has been deactivated. Contact support for more information.",
+        ),
         "unban": ("Account Restored! ✅", "Your driver account has been restored. You can now go online again."),
-        "reactivate": ("Account Reactivated! ✅", "Your account has been reactivated. You can now go online and accept rides!"),
+        "reactivate": (
+            "Account Reactivated! ✅",
+            "Your account has been reactivated. You can now go online and accept rides!",
+        ),
     }
     push_info = action_push_map.get(req.action)
     if push_info and driver.get("user_id"):

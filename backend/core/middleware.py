@@ -43,10 +43,7 @@ def _validate_production_config():
             "and set JWT_SECRET in the environment."
         )
     elif len(secret) < _MIN_JWT_SECRET_LENGTH:
-        errors.append(
-            f"JWT_SECRET is shorter than {_MIN_JWT_SECRET_LENGTH} characters. "
-            "Use a longer, random secret."
-        )
+        errors.append(f"JWT_SECRET is shorter than {_MIN_JWT_SECRET_LENGTH} characters. Use a longer, random secret.")
 
     # 2. Supabase credentials — the entire backend is Supabase-backed,
     #    so an unset URL or service role key means the server comes up
@@ -71,9 +68,7 @@ def _validate_production_config():
             "password in the environment before exposing the dashboard."
         )
     elif len(admin_password) < 12:
-        errors.append(
-            "ADMIN_PASSWORD is shorter than 12 characters. Use a stronger password."
-        )
+        errors.append("ADMIN_PASSWORD is shorter than 12 characters. Use a stronger password.")
 
     # 4. Firebase service account — required for Firebase Auth verify
     #    and for FCM push delivery. Missing means get_current_user can't
@@ -91,8 +86,7 @@ def _validate_production_config():
     if errors:
         formatted = "\n  - ".join(errors)
         raise RuntimeError(
-            f"Refusing to start: production configuration has {len(errors)} "
-            f"problem(s).\n  - {formatted}"
+            f"Refusing to start: production configuration has {len(errors)} problem(s).\n  - {formatted}"
         )
 
 
@@ -129,8 +123,7 @@ def init_middleware(app):
     allow_credentials = not wildcard
     if wildcard:
         logger.warning(
-            "CORS: wildcard '*' in ALLOWED_ORIGINS — allow_credentials disabled. "
-            "This is acceptable for local dev only."
+            "CORS: wildcard '*' in ALLOWED_ORIGINS — allow_credentials disabled. This is acceptable for local dev only."
         )
 
     app.add_middleware(

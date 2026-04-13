@@ -27,7 +27,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, ShieldAlert, Download, RefreshCw, ChevronLeft, ChevronRight } from "lucide-react";
+import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, ShieldAlert, Download, RefreshCw, ChevronLeft, ChevronRight, Ban, CheckCircle, AlertTriangle } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { getUsers, getUserDetails, updateUserStatus, getStats } from "@/lib/api";
 
@@ -38,6 +38,7 @@ export default function UsersPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
     const [search, setSearch] = useState("");
+    const [statusUpdating, setStatusUpdating] = useState<string | null>(null);
     const [verifiedFilter, setVerifiedFilter] = useState("all");
     const [selectedUser, setSelectedUser] = useState<any>(null);
     const [page, setPage] = useState(1);
@@ -247,7 +248,7 @@ export default function UsersPage() {
                                         <TableHead>City</TableHead>
                                         <TableHead>Rides</TableHead>
                                         <TableHead>Rating</TableHead>
-                                        <TableHead>Verified</TableHead>
+                                        <TableHead>Status</TableHead>
                                         <TableHead>Joined</TableHead>
                                         <TableHead className="text-right">Actions</TableHead>
                                     </TableRow>
@@ -299,8 +300,14 @@ export default function UsersPage() {
                                                     </div>
                                                 </TableCell>
                                                 <TableCell>
-                                                    <Badge className={user.is_verified ? "bg-emerald-500/15 text-emerald-600" : "bg-zinc-500/15 text-zinc-600"}>
-                                                        {user.is_verified ? "Verified" : "Pending"}
+                                                    <Badge className={
+                                                        user.status === "banned" ? "bg-red-500/15 text-red-600"
+                                                        : user.status === "suspended" ? "bg-amber-500/15 text-amber-600"
+                                                        : "bg-emerald-500/15 text-emerald-600"
+                                                    }>
+                                                        {user.status === "banned" ? "Banned"
+                                                        : user.status === "suspended" ? "Suspended"
+                                                        : "Active"}
                                                     </Badge>
                                                 </TableCell>
                                                 <TableCell className="text-xs text-muted-foreground">
@@ -405,13 +412,73 @@ export default function UsersPage() {
                                 </div>
                             </div>
 
-                            <div className="flex gap-2">
-                                <Button className="flex-1" variant="outline">
-                                    <Mail className="h-4 w-4 mr-2" /> Send Message
-                                </Button>
-                                <Button className="flex-1" variant="outline">
-                                    <Car className="h-4 w-4 mr-2" /> View Ride History
-                                </Button>
+                            {/* Status Management */}
+                            <div className="border-t pt-4">
+                                <Label className="text-xs text-muted-foreground mb-2 block">Account Status</Label>
+                                <div className="flex items-center gap-2 mb-3">
+                                    <Badge className={
+                                        selectedUser.status === "banned" ? "bg-red-500/15 text-red-600"
+                                        : selectedUser.status === "suspended" ? "bg-amber-500/15 text-amber-600"
+                                        : "bg-emerald-500/15 text-emerald-600"
+                                    }>
+                                        {selectedUser.status === "banned" ? "Banned"
+                                        : selectedUser.status === "suspended" ? "Suspended"
+                                        : "Active"}
+                                    </Badge>
+                                </div>
+                                <div className="flex gap-2">
+                                    {selectedUser.status !== "active" && (
+                                        <Button
+                                            className="flex-1"
+                                            variant="outline"
+                                            disabled={statusUpdating === selectedUser.id}
+                                            onClick={async () => {
+                                                setStatusUpdating(selectedUser.id);
+                                                try {
+                                                    await updateUserStatus(selectedUser.id, { status: "active" });
+                                                    setSelectedUser({ ...selectedUser, status: "active" });
+                                                    setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, status: "active" } : u));
+                                                } catch {} finally { setStatusUpdating(null); }
+                                            }}
+                                        >
+                                            <CheckCircle className="h-4 w-4 mr-2 text-green-600" /> Activate
+                                        </Button>
+                                    )}
+                                    {selectedUser.status !== "suspended" && (
+                                        <Button
+                                            className="flex-1"
+                                            variant="outline"
+                                            disabled={statusUpdating === selectedUser.id}
+                                            onClick={async () => {
+                                                setStatusUpdating(selectedUser.id);
+                                                try {
+                                                    await updateUserStatus(selectedUser.id, { status: "suspended" });
+                                                    setSelectedUser({ ...selectedUser, status: "suspended" });
+                                                    setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, status: "suspended" } : u));
+                                                } catch {} finally { setStatusUpdating(null); }
+                                            }}
+                                        >
+                                            <AlertTriangle className="h-4 w-4 mr-2 text-amber-600" /> Suspend
+                                        </Button>
+                                    )}
+                                    {selectedUser.status !== "banned" && (
+                                        <Button
+                                            className="flex-1"
+                                            variant="destructive"
+                                            disabled={statusUpdating === selectedUser.id}
+                                            onClick={async () => {
+                                                setStatusUpdating(selectedUser.id);
+                                                try {
+                                                    await updateUserStatus(selectedUser.id, { status: "banned" });
+                                                    setSelectedUser({ ...selectedUser, status: "banned" });
+                                                    setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, status: "banned" } : u));
+                                                } catch {} finally { setStatusUpdating(null); }
+                                            }}
+                                        >
+                                            <Ban className="h-4 w-4 mr-2" /> Ban
+                                        </Button>
+                                    )}
+                                </div>
                             </div>
                         </div>
                     )}

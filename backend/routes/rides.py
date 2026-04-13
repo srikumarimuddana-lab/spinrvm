@@ -7,11 +7,10 @@ try:
     from ..db import db
     from ..dependencies import generate_otp, get_current_user
     from ..features import calculate_airport_fee, calculate_all_fees, send_push_notification
-    from ..geo_utils import get_service_area_polygon, point_in_polygon
+    from ..geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
     from ..schemas import CreateRideRequest, Ride, RideRatingRequest
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
-    from ..geo_utils import calculate_distance
     from ..validators import validate_ride_location
 except ImportError:
     import db_supabase
@@ -311,9 +310,7 @@ async def match_driver_to_ride(ride_id: str):
     # 15 s grace period (for network latency and FCM delivery). If
     # the ride is STILL `driver_assigned` to THIS specific driver,
     # it unassigns and re-dispatches.
-    offer_timeout = int(
-        app_settings.get("ride_offer_timeout_seconds", 15)
-    )
+    offer_timeout = int(app_settings.get("ride_offer_timeout_seconds", 15))
     asyncio.create_task(
         _offer_timeout_handler(
             ride_id,
@@ -500,7 +497,9 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
 
 @api_router.post("")
 @ride_request_limit
-async def create_ride(http_request: Request, request: CreateRideRequest, current_user: dict = Depends(get_current_user)):
+async def create_ride(
+    http_request: Request, request: CreateRideRequest, current_user: dict = Depends(get_current_user)
+):
     validate_ride_location(request.pickup_lat, request.pickup_lng, request.dropoff_lat, request.dropoff_lng)
 
     # Pre-ride payment method validation: ensure rider has a card on file
@@ -949,7 +948,9 @@ async def process_payment(ride_id: str, request: Request, current_user: dict = D
     payment_status = "paid"
     try:
         import stripe as _stripe
+
         from ..settings_loader import get_app_settings as _get_settings
+
         _app_settings = await _get_settings()
         _stripe_secret = _app_settings.get("stripe_secret_key", "")
         if _stripe_secret and total_charge > 0:
@@ -1037,10 +1038,12 @@ async def get_share_trip_link(ride_id: str, current_user: dict = Depends(get_cur
         share_token = secrets.token_urlsafe(32)
         await db.rides.update_one(
             {"id": ride_id},
-            {"$set": {
-                "shared_trip_token": share_token,
-                "shared_trip_token_created_at": datetime.utcnow().isoformat(),
-            }},
+            {
+                "$set": {
+                    "shared_trip_token": share_token,
+                    "shared_trip_token_created_at": datetime.utcnow().isoformat(),
+                }
+            },
         )
 
     # The frontend would use this token to show a read-only tracking page
@@ -1048,6 +1051,87 @@ async def get_share_trip_link(ride_id: str, current_user: dict = Depends(get_cur
     share_url = f"/track/{share_token}"
 
     return {"success": True, "share_token": share_token, "share_url": share_url, "ride_id": ride_id}
+
+
+class ShareTripWithContactRequest(BaseModel):
+    contact_name: str
+    contact_phone: str
+
+
+@api_router.post("/{ride_id}/share")
+async def share_trip_with_contact(
+    ride_id: str, body: ShareTripWithContactRequest, current_user: dict = Depends(get_current_user)
+):
+    """Share trip with a specific contact and send them a notification."""
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if ride.get("status") in ["completed", "cancelled"]:
+        raise HTTPException(status_code=400, detail="Cannot share a completed or cancelled ride")
+
+    # Get or create share token
+    share_token = ride.get("shared_trip_token")
+    if not share_token:
+        share_token = secrets.token_urlsafe(32)
+        await db.rides.update_one(
+            {"id": ride_id},
+            {
+                "$set": {
+                    "shared_trip_token": share_token,
+                    "shared_trip_token_created_at": datetime.utcnow().isoformat(),
+                }
+            },
+        )
+
+    # Record the contact in shared_with list
+    shared_with = ride.get("shared_with") or []
+    contact_entry = {
+        "name": body.contact_name,
+        "phone": body.contact_phone,
+        "shared_at": datetime.utcnow().isoformat(),
+    }
+    # Avoid duplicates by phone
+    if not any(c.get("phone") == body.contact_phone for c in shared_with):
+        shared_with.append(contact_entry)
+        await db.rides.update_one(
+            {"id": ride_id},
+            {"$set": {"shared_with": shared_with}},
+        )
+
+    share_url = f"/track/{share_token}"
+
+    # Send push notification to contact if they're a registered user
+    contact_user = await db.users.find_one({"phone": body.contact_phone})
+    if contact_user:
+        rider = await db.users.find_one({"id": current_user["id"]})
+        rider_name = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() if rider else "Someone"
+        await send_push_notification(
+            contact_user["id"],
+            f"{rider_name} is sharing their ride with you",
+            f"Track their live location: {ride.get('pickup_address', '')} → {ride.get('dropoff_address', '')}",
+            data={"type": "trip_shared", "share_token": share_token, "ride_id": ride_id},
+        )
+
+    return {
+        "success": True,
+        "share_token": share_token,
+        "share_url": share_url,
+        "contact_notified": contact_user is not None,
+        "shared_with": shared_with,
+    }
+
+
+@api_router.get("/{ride_id}/shared-contacts")
+async def get_shared_contacts(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """Get list of contacts this ride has been shared with."""
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return {"contacts": ride.get("shared_with") or []}
 
 
 @api_router.get("/track/{share_token}")
@@ -1061,6 +1145,7 @@ async def track_shared_ride(share_token: str):
     token_created = ride.get("shared_trip_token_created_at")
     if token_created:
         from datetime import timedelta
+
         try:
             created_dt = datetime.fromisoformat(token_created) if isinstance(token_created, str) else token_created
             if datetime.utcnow() - created_dt > timedelta(hours=24):
@@ -1289,6 +1374,86 @@ async def cancel_ride_rider(ride_id: str, current_user: dict = Depends(get_curre
     return {"success": True, "cancellation_fee": charged_admin + charged_driver}
 
 
+# ── Mid-Trip Stop Editing ─────────────────────────────────────────────
+
+
+class AddStopMidTripRequest(BaseModel):
+    address: str
+    lat: float
+    lng: float
+    position: Optional[int] = None  # Insert at this index; None = append
+
+
+@api_router.post("/{ride_id}/stops")
+async def add_stop_mid_trip(ride_id: str, req: AddStopMidTripRequest, current_user: dict = Depends(get_current_user)):
+    """Add a stop to an active ride mid-trip."""
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if ride.get("status") not in ("driver_accepted", "driver_arrived", "in_progress"):
+        raise HTTPException(status_code=400, detail="Can only edit stops on an active ride")
+
+    stops = ride.get("stops") or []
+    new_stop = {"address": req.address, "lat": req.lat, "lng": req.lng}
+
+    if req.position is not None and 0 <= req.position <= len(stops):
+        stops.insert(req.position, new_stop)
+    else:
+        stops.append(new_stop)
+
+    await db.rides.update_one(
+        {"id": ride_id},
+        {"$set": {"stops": stops, "updated_at": datetime.utcnow().isoformat()}},
+    )
+
+    # Notify driver via WebSocket
+    if ride.get("driver_id"):
+        driver = await db.drivers.find_one({"id": ride["driver_id"]})
+        if driver and driver.get("user_id"):
+            await manager.send_personal_message(
+                {"type": "stops_updated", "ride_id": ride_id, "stops": stops},
+                f"driver_{driver['user_id']}",
+            )
+
+    return {"success": True, "stops": stops}
+
+
+@api_router.delete("/{ride_id}/stops/{stop_index}")
+async def remove_stop_mid_trip(ride_id: str, stop_index: int, current_user: dict = Depends(get_current_user)):
+    """Remove a stop from an active ride by index."""
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if ride.get("status") not in ("driver_accepted", "driver_arrived", "in_progress"):
+        raise HTTPException(status_code=400, detail="Can only edit stops on an active ride")
+
+    stops = ride.get("stops") or []
+    if stop_index < 0 or stop_index >= len(stops):
+        raise HTTPException(status_code=400, detail="Invalid stop index")
+
+    stops.pop(stop_index)
+
+    await db.rides.update_one(
+        {"id": ride_id},
+        {"$set": {"stops": stops, "updated_at": datetime.utcnow().isoformat()}},
+    )
+
+    # Notify driver
+    if ride.get("driver_id"):
+        driver = await db.drivers.find_one({"id": ride["driver_id"]})
+        if driver and driver.get("user_id"):
+            await manager.send_personal_message(
+                {"type": "stops_updated", "ride_id": ride_id, "stops": stops},
+                f"driver_{driver['user_id']}",
+            )
+
+    return {"success": True, "stops": stops}
+
+
 class EmergencyRequest(BaseModel):
     message: str = "Emergency assistance requested"
     latitude: Optional[float] = None
@@ -1358,9 +1523,103 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
     }
 
 
+@api_router.get("/{ride_id}/chat-status")
+async def get_chat_status(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """Check if chat is available for this ride (active rides + 24h post-trip window)."""
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    status = ride.get("status", "")
+    if status == "cancelled":
+        return {"available": False, "reason": "Ride was cancelled"}
+
+    if status == "completed":
+        completed_at = ride.get("ride_completed_at") or ride.get("updated_at")
+        if completed_at:
+            if isinstance(completed_at, str):
+                try:
+                    completed_at = datetime.fromisoformat(completed_at.replace("Z", "+00:00").replace("+00:00", ""))
+                except (ValueError, TypeError):
+                    completed_at = None
+            if completed_at:
+                elapsed = (datetime.utcnow() - completed_at).total_seconds()
+                remaining = max(0, 86400 - elapsed)
+                if remaining <= 0:
+                    return {"available": False, "reason": "Post-trip chat window expired"}
+                hours_left = int(remaining // 3600)
+                return {"available": True, "post_trip": True, "hours_remaining": hours_left}
+        return {"available": True, "post_trip": True, "hours_remaining": 24}
+
+    # Active ride — chat is fully available
+    return {"available": True, "post_trip": False}
+
+
+@api_router.get("/{ride_id}/call")
+async def get_call_info(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """Get masked phone number for calling the other party during an active ride.
+
+    Returns a proxy number or the real number depending on Twilio config.
+    In production, this would create a Twilio Proxy session to mask both
+    parties' real numbers. For now, it returns the other party's phone
+    directly so the call button works immediately.
+    """
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    if ride.get("status") in ("completed", "cancelled"):
+        raise HTTPException(status_code=400, detail="Cannot call on a completed or cancelled ride")
+
+    is_rider = ride.get("rider_id") == current_user["id"]
+    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    is_driver = driver and ride.get("driver_id") == driver["id"]
+
+    if not (is_rider or is_driver):
+        raise HTTPException(status_code=403, detail="Not part of this ride")
+
+    if is_rider:
+        # Rider wants to call the driver
+        if not ride.get("driver_id"):
+            raise HTTPException(status_code=400, detail="No driver assigned yet")
+        target_driver = await db.drivers.find_one({"id": ride["driver_id"]})
+        if not target_driver:
+            raise HTTPException(status_code=404, detail="Driver not found")
+        target_user = await db.users.find_one({"id": target_driver.get("user_id")})
+        phone = target_user.get("phone") if target_user else None
+        name = (
+            f"{target_user.get('first_name', '')} {target_user.get('last_name', '')}".strip()
+            if target_user
+            else "Driver"
+        )
+    else:
+        # Driver wants to call the rider
+        target_user = await db.users.find_one({"id": ride["rider_id"]})
+        phone = target_user.get("phone") if target_user else None
+        name = (
+            f"{target_user.get('first_name', '')} {target_user.get('last_name', '')}".strip()
+            if target_user
+            else "Rider"
+        )
+
+    if not phone:
+        raise HTTPException(status_code=404, detail="Phone number not available")
+
+    # In production: create Twilio Proxy session here and return proxy number
+    # For now, return the real number with a masked display
+    masked = f"({'*' * (len(phone) - 4)}{phone[-4:]})" if len(phone) > 4 else phone
+
+    return {
+        "phone": phone,
+        "masked": masked,
+        "name": name,
+        "proxy": False,  # Set to True when Twilio Proxy is configured
+    }
+
+
 @api_router.get("/{ride_id}/messages")
 async def get_ride_messages(ride_id: str, current_user: dict = Depends(get_current_user)):
-    """Fetch persistent chat messages for a ride"""
+    """Fetch persistent chat messages for a ride (active or post-trip within 24h)."""
     ride = await db.rides.find_one({"id": ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
@@ -1395,18 +1654,36 @@ class SendMessageRequest(BaseModel):
 
 @api_router.post("/{ride_id}/messages")
 async def send_ride_message(ride_id: str, body: SendMessageRequest, current_user: dict = Depends(get_current_user)):
-    """Send a chat message for an active ride.
+    """Send a chat message for an active or recently completed ride.
 
     Persists the message in `ride_messages` and forwards it to the
     other party via WebSocket (if they're connected). Works as a REST
     fallback for screens that don't hold a direct WS reference (e.g.
     the rider-app chat screen).
 
+    Post-trip chat: messages are allowed for 24 hours after ride
+    completion to support lost-item, feedback, and coordination use cases.
     Only the rider or the assigned driver of the ride can send.
     """
     ride = await db.rides.find_one({"id": ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
+
+    # Block chat on cancelled rides
+    if ride.get("status") == "cancelled":
+        raise HTTPException(status_code=400, detail="Cannot send messages on a cancelled ride")
+
+    # Post-trip chat window: allow messages for 24h after completion
+    if ride.get("status") == "completed":
+        completed_at = ride.get("ride_completed_at") or ride.get("updated_at")
+        if completed_at:
+            if isinstance(completed_at, str):
+                try:
+                    completed_at = datetime.fromisoformat(completed_at.replace("Z", "+00:00").replace("+00:00", ""))
+                except (ValueError, TypeError):
+                    completed_at = None
+            if completed_at and (datetime.utcnow() - completed_at).total_seconds() > 86400:
+                raise HTTPException(status_code=400, detail="Post-trip chat window has expired (24 hours)")
 
     is_rider = ride.get("rider_id") == current_user["id"]
     driver = await db.drivers.find_one({"user_id": current_user["id"]})

@@ -37,12 +37,14 @@ def _d(v) -> Decimal:
 class CreateQuestRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     description: str = Field(..., min_length=1, max_length=1000)
-    type: str = Field(..., pattern="^(ride_count|earnings_target|online_hours|peak_rides|consecutive_days|rating_maintained)$")
+    type: str = Field(
+        ..., pattern="^(ride_count|earnings_target|online_hours|peak_rides|consecutive_days|rating_maintained)$"
+    )
     target_value: float = Field(..., gt=0)
     reward_amount: float = Field(..., gt=0, le=500)
     reward_type: str = Field(default="wallet_credit", pattern="^(cash|wallet_credit)$")
     start_date: str  # ISO datetime
-    end_date: str    # ISO datetime
+    end_date: str  # ISO datetime
     max_participants: Optional[int] = None
     service_area_id: Optional[str] = None
     min_driver_rating: Optional[float] = None
@@ -122,21 +124,23 @@ async def get_available_quests(current_user: dict = Depends(get_current_user)):
         target = q["target_value"]
         pct = min(100, round((current_value / target) * 100, 1)) if target > 0 else 0
 
-        result.append({
-            "id": q["id"],
-            "title": q["title"],
-            "description": q["description"],
-            "type": q["type"],
-            "target_value": q["target_value"],
-            "reward_amount": q["reward_amount"],
-            "reward_type": q.get("reward_type", "wallet_credit"),
-            "start_date": q.get("start_date"),
-            "end_date": q.get("end_date"),
-            "current_value": current_value,
-            "progress_pct": pct,
-            "status": progress["status"] if progress else "available",
-            "progress_id": progress["id"] if progress else None,
-        })
+        result.append(
+            {
+                "id": q["id"],
+                "title": q["title"],
+                "description": q["description"],
+                "type": q["type"],
+                "target_value": q["target_value"],
+                "reward_amount": q["reward_amount"],
+                "reward_type": q.get("reward_type", "wallet_credit"),
+                "start_date": q.get("start_date"),
+                "end_date": q.get("end_date"),
+                "current_value": current_value,
+                "progress_pct": pct,
+                "status": progress["status"] if progress else "available",
+                "progress_id": progress["id"] if progress else None,
+            }
+        )
 
     return result
 
@@ -229,26 +233,28 @@ async def get_my_quests(current_user: dict = Depends(get_current_user)):
         current = p["current_value"]
         pct = min(100, round((current / target) * 100, 1)) if target > 0 else 0
 
-        result.append({
-            "progress_id": p["id"],
-            "quest": {
-                "id": quest["id"],
-                "title": quest["title"],
-                "description": quest["description"],
-                "type": quest["type"],
-                "target_value": target,
-                "reward_amount": quest["reward_amount"],
-                "reward_type": quest.get("reward_type", "wallet_credit"),
-                "start_date": quest.get("start_date"),
-                "end_date": quest.get("end_date"),
-            },
-            "current_value": current,
-            "progress_pct": pct,
-            "status": p["status"],
-            "started_at": p.get("started_at"),
-            "completed_at": p.get("completed_at"),
-            "claimed_at": p.get("claimed_at"),
-        })
+        result.append(
+            {
+                "progress_id": p["id"],
+                "quest": {
+                    "id": quest["id"],
+                    "title": quest["title"],
+                    "description": quest["description"],
+                    "type": quest["type"],
+                    "target_value": target,
+                    "reward_amount": quest["reward_amount"],
+                    "reward_type": quest.get("reward_type", "wallet_credit"),
+                    "start_date": quest.get("start_date"),
+                    "end_date": quest.get("end_date"),
+                },
+                "current_value": current,
+                "progress_pct": pct,
+                "status": p["status"],
+                "started_at": p.get("started_at"),
+                "completed_at": p.get("completed_at"),
+                "claimed_at": p.get("claimed_at"),
+            }
+        )
 
     return result
 
@@ -278,7 +284,7 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
 
     # Pay reward to wallet
     if quest.get("reward_type", "wallet_credit") == "wallet_credit":
-        from .wallet import get_or_create_wallet, _record_transaction
+        from .wallet import _record_transaction, get_or_create_wallet
 
         wallet = await get_or_create_wallet(current_user["id"])
         old_balance = _d(wallet.get("balance", 0))
@@ -301,11 +307,13 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
     # Mark as claimed
     await db.quest_progress.update_one(
         {"id": progress_id},
-        {"$set": {
-            "status": "claimed",
-            "claimed_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
-        }},
+        {
+            "$set": {
+                "status": "claimed",
+                "claimed_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+        },
     )
 
     return {
@@ -384,14 +392,16 @@ async def admin_list_quests(
         except Exception:
             total_participants = completed = claimed = 0
 
-        result.append({
-            **q,
-            "stats": {
-                "total_participants": total_participants,
-                "completed": completed,
-                "claimed": claimed,
-            },
-        })
+        result.append(
+            {
+                **q,
+                "stats": {
+                    "total_participants": total_participants,
+                    "completed": completed,
+                    "claimed": claimed,
+                },
+            }
+        )
 
     return result
 
@@ -463,17 +473,19 @@ async def admin_get_quest_participants(
         current = p["current_value"]
         pct = min(100, round((current / target) * 100, 1)) if target > 0 else 0
 
-        result.append({
-            "progress_id": p["id"],
-            "driver_id": p["driver_id"],
-            "driver_name": driver_name,
-            "current_value": current,
-            "target_value": target,
-            "progress_pct": pct,
-            "status": p["status"],
-            "started_at": p.get("started_at"),
-            "completed_at": p.get("completed_at"),
-            "claimed_at": p.get("claimed_at"),
-        })
+        result.append(
+            {
+                "progress_id": p["id"],
+                "driver_id": p["driver_id"],
+                "driver_name": driver_name,
+                "current_value": current,
+                "target_value": target,
+                "progress_pct": pct,
+                "status": p["status"],
+                "started_at": p.get("started_at"),
+                "completed_at": p.get("completed_at"),
+                "claimed_at": p.get("claimed_at"),
+            }
+        )
 
     return result

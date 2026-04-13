@@ -183,9 +183,9 @@ class TestChangePassword:
     @pytest.mark.asyncio
     async def test_wrong_current_password(self, mock_settings):
         """Wrong current password returns 400."""
-        from backend.utils.password import hash_password
-
         import jwt
+
+        from backend.utils.password import hash_password
 
         token = jwt.encode({"user_id": "staff_1"}, mock_settings.JWT_SECRET, algorithm="HS256")
         staff_row = {
@@ -210,9 +210,9 @@ class TestChangePassword:
     @pytest.mark.asyncio
     async def test_new_password_too_short(self, mock_settings):
         """New password < 12 chars returns 400."""
-        from backend.utils.password import hash_password
-
         import jwt
+
+        from backend.utils.password import hash_password
 
         token = jwt.encode({"user_id": "staff_1"}, mock_settings.JWT_SECRET, algorithm="HS256")
         staff_row = {

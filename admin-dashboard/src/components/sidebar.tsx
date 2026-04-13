@@ -7,7 +7,7 @@ import {
     LayoutDashboard, Car, Users, DollarSign, Settings, MapPin, Ticket,
     HelpCircle, Flame, Building2, LifeBuoy,
     LogOut, Menu, FileText, X, CreditCard, ChevronLeft, ChevronRight,
-    Sun, Moon, Shield, Cloud, Trophy,
+    Sun, Moon, Shield, Cloud, Trophy, TrendingUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
@@ -36,10 +36,13 @@ const NAV_GROUPS: NavGroup[] = [
     {
         title: "Operations",
         items: [
+            { href: "/dashboard/monitoring", label: "Live Monitoring", icon: LayoutDashboard, module: "rides" },
             { href: "/dashboard/rides", label: "Rides", icon: Car, module: "rides" },
             { href: "/dashboard/drivers", label: "Drivers", icon: Car, module: "drivers" },
             { href: "/dashboard/users", label: "Users", icon: Users, module: "users" },
             { href: "/dashboard/heatmap", label: "Heat Map", icon: Flame, module: "heatmap" },
+            { href: "/dashboard/analytics", label: "Analytics", icon: LayoutDashboard, module: "dashboard" },
+            { href: "/dashboard/forecast", label: "Demand Forecast", icon: TrendingUp, module: "dashboard" },
         ],
     },
     {
@@ -63,6 +66,7 @@ const NAV_GROUPS: NavGroup[] = [
         title: "Support",
         items: [
             { href: "/dashboard/support", label: "Support & Issues", icon: LifeBuoy, module: "support" },
+            { href: "/dashboard/disputes", label: "Disputes & Refunds", icon: Shield, module: "support" },
             { href: "/dashboard/cloud-messaging", label: "Cloud Messaging", icon: Cloud, module: "notifications" },
         ],
     },

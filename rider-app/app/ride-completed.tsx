@@ -131,6 +131,12 @@ export default function RideCompletedScreen() {
         } catch { /* backend handles idempotency */ }
       }
 
+      // 3. Trigger app store rating prompt after good rides
+      try {
+        const { onRideRated } = require('@shared/utils/appRating');
+        await onRideRated(rating);
+      } catch { /* non-critical */ }
+
       clearRide();
       router.replace('/(tabs)');
     } catch {
@@ -156,12 +162,22 @@ export default function RideCompletedScreen() {
           </Text>
         </View>
 
-        {/* Invoice Button */}
-        <TouchableOpacity style={styles.invoiceBtn} onPress={handleShareInvoice}>
-          <Ionicons name="receipt-outline" size={18} color={COLORS.primary} />
-          <Text style={styles.invoiceBtnText}>Download / Share Invoice</Text>
-          <Ionicons name="share-outline" size={16} color="#999" />
-        </TouchableOpacity>
+        {/* Post-Trip Actions */}
+        <View style={styles.postTripActions}>
+          <TouchableOpacity style={styles.invoiceBtn} onPress={handleShareInvoice}>
+            <Ionicons name="receipt-outline" size={18} color={COLORS.primary} />
+            <Text style={styles.invoiceBtnText}>Share Invoice</Text>
+            <Ionicons name="share-outline" size={16} color="#999" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.chatBtn}
+            onPress={() => router.push(`/chat-driver?rideId=${rideId}` as any)}
+          >
+            <Ionicons name="chatbubble-ellipses-outline" size={18} color="#3B82F6" />
+            <Text style={styles.chatBtnText}>Message Driver</Text>
+            <Ionicons name="chevron-forward" size={16} color="#999" />
+          </TouchableOpacity>
+        </View>
 
         {/* Route Map */}
         {currentRide && Number(currentRide.pickup_lat) && Number(currentRide.dropoff_lat) && (
@@ -427,6 +443,13 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: '#ECECEC',
   },
   invoiceBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#1A1A1A' },
+  postTripActions: { width: '100%', gap: 8, marginBottom: 8 },
+  chatBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',
+    backgroundColor: '#EFF6FF', borderRadius: 14, padding: 14,
+    borderWidth: 1, borderColor: '#DBEAFE',
+  },
+  chatBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#3B82F6' },
 
   // Route Map
   mapCard: {

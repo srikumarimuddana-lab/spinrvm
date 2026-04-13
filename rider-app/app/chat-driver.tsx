@@ -73,8 +73,18 @@ export default function ChatDriverScreen() {
     router.back();
   };
 
-  const handleCall = () => {
-    // TODO: wire Twilio Proxy or direct call
+  const handleCall = async () => {
+    if (!rideId) return;
+    try {
+      const api = (await import('@shared/api/client')).default;
+      const res = await api.get(`/rides/${rideId}/call`);
+      if (res.data?.phone) {
+        const { Linking } = require('react-native');
+        Linking.openURL(`tel:${res.data.phone}`);
+      }
+    } catch (e: any) {
+      console.log('[Chat] Call failed:', e?.response?.data?.detail || e.message);
+    }
   };
 
   const sendMessage = async (text: string) => {

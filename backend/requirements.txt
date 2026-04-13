@@ -264,7 +264,7 @@ pycodestyle==2.14.0
     # via flake8
 pycparser==3.0
     # via cffi
-pydantic==2.12.5
+pydantic==2.13.0
     # via
     #   -r requirements.in
     #   fastapi
@@ -275,7 +275,7 @@ pydantic==2.12.5
     #   realtime
     #   storage3
     #   supabase-auth
-pydantic-core==2.41.5
+pydantic-core==2.46.0
     # via pydantic
 pydantic-settings==2.13.1
     # via -r requirements.in
@@ -352,7 +352,7 @@ rich==14.3.4
     #   typer
 s3transfer==0.16.0
     # via boto3
-sentry-sdk==2.57.0
+sentry-sdk==2.58.0
     # via -r requirements.in
 shellingham==1.5.4
     # via typer

@@ -34,10 +34,49 @@ export type RideState =
     | 'trip_in_progress'
     | 'trip_completed';
 
+export interface RideInfo {
+    id: string;
+    status: string;
+    pickup_address: string;
+    dropoff_address: string;
+    pickup_lat: number;
+    pickup_lng: number;
+    dropoff_lat: number;
+    dropoff_lng: number;
+    estimated_fare: number;
+    distance_km: number;
+    duration_minutes: number;
+    rider_id: string;
+    driver_id?: string;
+    otp?: string;
+    surge_multiplier?: number;
+    payment_method?: string;
+    created_at: string;
+    [key: string]: unknown;
+}
+
+export interface RiderInfo {
+    id: string;
+    first_name?: string;
+    last_name?: string;
+    phone?: string;
+    rating?: number;
+    profile_image?: string;
+    [key: string]: unknown;
+}
+
+export interface VehicleTypeInfo {
+    id: string;
+    name: string;
+    icon?: string;
+    capacity?: number;
+    [key: string]: unknown;
+}
+
 export interface ActiveRide {
-    ride: any;
-    rider: any;
-    vehicle_type: any;
+    ride: RideInfo;
+    rider: RiderInfo;
+    vehicle_type: VehicleTypeInfo;
 }
 
 export interface EarningsSummary {

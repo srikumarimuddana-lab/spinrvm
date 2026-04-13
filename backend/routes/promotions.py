@@ -5,6 +5,7 @@ promotions.py – Promo codes & referral system for Spinr.
 import logging
 import uuid
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -27,14 +28,14 @@ api_router = APIRouter(prefix="/promo", tags=["Promotions"])
 
 class ValidatePromoRequest(BaseModel):
     code: str
-    ride_fare: float = 0.0  # So we can calculate actual discount
+    ride_fare: Decimal = Decimal("0.00")  # Decimal for currency precision
 
 
 class CreatePromoCodeRequest(BaseModel):
     code: str
     discount_type: str = "flat"  # flat | percentage
-    discount_value: float  # e.g. 5.00 for $5 off, or 10.0 for 10%
-    max_discount: Optional[float] = None  # Cap for percentage discounts
+    discount_value: Decimal  # e.g. 5.00 for $5 off, or 10.0 for 10%
+    max_discount: Optional[Decimal] = None  # Cap for percentage discounts
     max_uses: int = 100
     max_uses_per_user: int = 1
     expiry_date: Optional[str] = None  # ISO 8601
@@ -44,8 +45,8 @@ class CreatePromoCodeRequest(BaseModel):
 
 class UpdatePromoCodeRequest(BaseModel):
     discount_type: Optional[str] = None
-    discount_value: Optional[float] = None
-    max_discount: Optional[float] = None
+    discount_value: Optional[Decimal] = None
+    max_discount: Optional[Decimal] = None
     max_uses: Optional[int] = None
     max_uses_per_user: Optional[int] = None
     expiry_date: Optional[str] = None

@@ -17,7 +17,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const url = `${API_BASE}${path}`;
     try {
         const res = await fetch(url, { ...options, headers });
-        console.log(`API Request: ${options.method || 'GET'} ${path} -> ${res.status}`);
+        if (process.env.NODE_ENV === "development") {
+            console.log(`API Request: ${options.method || 'GET'} ${path} -> ${res.status}`);
+        }
 
         if (res.status === 401) {
             // Clear auth state via Zustand
@@ -30,7 +32,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
         if (!res.ok) {
             const body = await res.json().catch(() => ({}));
-            console.error(`API Error: ${path}`, body);
+            if (process.env.NODE_ENV === "development") {
+                console.error(`API Error: ${path}`, body);
+            }
             // Backend uses two error shapes:
             //   • FastAPI HTTPException  → { detail: "..." }
             //   • Custom error handler  → { error: { detail: "...", message: "..." } }
@@ -45,7 +49,9 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
         return res.json();
     } catch (err) {
-        console.error(`API Request Failed: ${url}`, err);
+        if (process.env.NODE_ENV === "development") {
+            console.error(`API Request Failed: ${url}`, err);
+        }
         throw err;
     }
 }
@@ -90,7 +96,7 @@ export const loginAdminSession = (email: string, password: string) =>
     });
 
 export const sendOtp = (phone: string) =>
-    request<{ success: boolean; dev_otp?: string }>("/api/auth/send-otp", {
+    request<{ success: boolean }>("/api/auth/send-otp", {
         method: "POST",
         body: JSON.stringify({ phone }),
     });
@@ -152,7 +158,9 @@ export const getRideRouteMapDataUrl = async (rideId: string): Promise<string | n
             reader.readAsDataURL(blob);
         });
     } catch (e) {
-        console.log("Failed to fetch ride route map:", e);
+        if (process.env.NODE_ENV === "development") {
+            console.log("Failed to fetch ride route map:", e);
+        }
         return null;
     }
 };
@@ -181,17 +189,11 @@ export const resolveLostItem = (itemId: string, data: { status: string; admin_no
         method: "PUT",
         body: JSON.stringify(data),
     });
-export const sendRideInvoice = async (rideId: string) => {
-    const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-    const token = useAuthStore.getState().token;
-    const res = await fetch(`${API_BASE}/api/v1/rides/${rideId}/process-payment`, {
+export const sendRideInvoice = (rideId: string) =>
+    request<any>(`/api/v1/rides/${rideId}/process-payment`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
         body: JSON.stringify({ tip_amount: 0 }),
     });
-    if (!res.ok) throw new Error("Failed to send invoice");
-    return res.json();
-};
 export const getFlags = () => request<any[]>("/api/admin/flags");
 export const deactivateFlag = (flagId: string) =>
     request<any>(`/api/admin/flags/${flagId}/deactivate`, { method: "PUT" });

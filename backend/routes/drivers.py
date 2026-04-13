@@ -88,8 +88,32 @@ async def get_my_driver(current_user: dict = Depends(get_current_user)):
     return serialize_doc(driver)
 
 
+class UpdateDriverProfileRequest(BaseModel):
+    """Strict schema for driver profile updates — only whitelisted fields accepted."""
+    # Safe fields (no re-verification)
+    gst_number: Optional[str] = None
+    preferred_language: Optional[str] = None
+    photo_url: Optional[str] = None
+    # Vehicle/document fields (triggers re-review on verified drivers)
+    vehicle_type_id: Optional[str] = None
+    vehicle_make: Optional[str] = None
+    vehicle_model: Optional[str] = None
+    vehicle_color: Optional[str] = None
+    vehicle_year: Optional[int] = None
+    license_plate: Optional[str] = None
+    vehicle_vin: Optional[str] = None
+    license_number: Optional[str] = None
+    license_expiry_date: Optional[str] = None
+    insurance_expiry_date: Optional[str] = None
+    vehicle_inspection_expiry_date: Optional[str] = None
+    background_check_expiry_date: Optional[str] = None
+    work_eligibility_expiry_date: Optional[str] = None
+    city: Optional[str] = None
+    service_area_id: Optional[str] = None
+
+
 @api_router.put("/me")
-async def update_my_driver(body: dict = Body(...), current_user: dict = Depends(get_current_user)):
+async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict = Depends(get_current_user)):
     """Update the current user's driver profile.
 
     Accepts vehicle info, personal details, and preferences. When a
@@ -120,7 +144,7 @@ async def update_my_driver(body: dict = Body(...), current_user: dict = Depends(
     }
     allowed_fields = safe_fields | vehicle_fields
 
-    updates = {k: v for k, v in body.items() if k in allowed_fields and v is not None}
+    updates = {k: v for k, v in body.model_dump(exclude_none=True).items() if k in allowed_fields}
     if not updates:
         return {"success": True}
 

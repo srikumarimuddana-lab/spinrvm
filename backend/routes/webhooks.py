@@ -31,8 +31,11 @@ async def stripe_webhook(request: Request):
     stripe_secret = settings.get("stripe_secret_key", "")
 
     if not webhook_secret:
-        logger.warning("stripe_webhook_secret not set in admin settings — webhook verification disabled")
-        return {"received": True, "verified": False}
+        logger.error("stripe_webhook_secret not set — rejecting unverified webhook")
+        raise HTTPException(
+            status_code=500,
+            detail="Webhook signature verification not configured",
+        )
 
     if not stripe_secret:
         logger.error("Stripe secret key not configured in app settings")

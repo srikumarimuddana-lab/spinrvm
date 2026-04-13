@@ -247,7 +247,7 @@ const client = {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(`${API_URL}/api/v1${url}`, {
+    const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
       method: 'PUT',
       headers,
       body: body === undefined || body === null ? undefined : (isFormData ? body : JSON.stringify(body)),
@@ -269,7 +269,7 @@ const client = {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(`${API_URL}/api/v1${url}`, {
+    const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
       method: 'PATCH',
       headers,
       body: body ? JSON.stringify(body) : undefined,
@@ -291,7 +291,7 @@ const client = {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(`${API_URL}/api/v1${url}`, {
+    const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
       method: 'DELETE',
       headers,
     });

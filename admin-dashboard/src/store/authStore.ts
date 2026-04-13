@@ -2,12 +2,12 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 
 // ── Cookie helpers ───────────────────────────────────────────────
-// The JWT is dual-written to localStorage (for Zustand/api.ts) AND to
+// The JWT is dual-written to sessionStorage (for Zustand/api.ts) AND to
 // an `admin_token` cookie (for the Next.js middleware at src/middleware.ts,
-// which runs on the edge and cannot read localStorage). Both sides must
+// which runs on the edge and cannot read sessionStorage). Both sides must
 // stay in lockstep — see middleware.ts for the full rationale.
 const COOKIE_NAME = 'admin_token';
-const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30; // 30 days, matches JWT expiry
+const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 8; // 8 hours — standard admin session
 
 function setAuthCookie(token: string) {
     if (typeof document === 'undefined') return;
@@ -128,16 +128,16 @@ export const useAuthStore = create<AuthState>()(
         }),
         {
             name: 'auth-storage',
-            storage: createJSONStorage(() => localStorage),
+            storage: createJSONStorage(() => sessionStorage),
             partialize: (state) => ({
                 token: state.token,
                 user: state.user,
                 isAuthenticated: state.isAuthenticated,
             }),
             onRehydrateStorage: () => (state) => {
-                // Check auth when store is rehydrated from localStorage.
+                // Check auth when store is rehydrated from sessionStorage.
                 // Also re-sync the cookie so middleware sees the session
-                // after a page reload (Zustand rehydrates from localStorage,
+                // after a page reload (Zustand rehydrates from sessionStorage,
                 // but the cookie may have been cleared independently).
                 if (state) {
                     if (state.token) {

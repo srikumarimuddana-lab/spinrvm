@@ -5,6 +5,7 @@ disputes.py – Payment dispute/refund request endpoints for Spinr.
 import logging
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -26,12 +27,12 @@ class CreateDisputeRequest(BaseModel):
     ride_id: str
     reason: str  # overcharged | wrong_route | driver_issue | payment_error | other
     description: str
-    requested_amount: Optional[float] = None  # If blank, full refund
+    requested_amount: Optional[Decimal] = None  # If blank, full refund
 
 
 class ResolveDisputeRequest(BaseModel):
     resolution: str  # approved | partial_refund | rejected
-    refund_amount: Optional[float] = None
+    refund_amount: Optional[Decimal] = None
     admin_note: Optional[str] = None
 
 

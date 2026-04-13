@@ -201,7 +201,7 @@ export default function AnalyticsPage() {
                         nameKey="name"
                         cx="50%" cy="50%"
                         outerRadius={100}
-                        label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                        label={(props: any) => `${props.name || ''} (${((props.percent ?? 0) * 100).toFixed(0)}%)`}
                       >
                         {pieData.map((entry: any, i: number) => (
                           <Cell key={i} fill={entry.color} />

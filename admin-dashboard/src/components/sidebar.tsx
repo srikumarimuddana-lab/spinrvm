@@ -7,7 +7,7 @@ import {
     LayoutDashboard, Car, Users, DollarSign, Settings, MapPin, Ticket,
     HelpCircle, Flame, Building2, LifeBuoy,
     LogOut, Menu, FileText, X, CreditCard, ChevronLeft, ChevronRight,
-    Sun, Moon, Shield, Cloud,
+    Sun, Moon, Shield, Cloud, Trophy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
@@ -49,6 +49,7 @@ const NAV_GROUPS: NavGroup[] = [
             { href: "/dashboard/vehicle-types", label: "Vehicle Types", icon: Car, module: "pricing" },
             { href: "/dashboard/pricing", label: "Pricing & Billing", icon: DollarSign, module: "pricing" },
             { href: "/dashboard/promotions", label: "Promotions", icon: Ticket, module: "promotions" },
+            { href: "/dashboard/quests", label: "Quests & Bonuses", icon: Trophy, module: "promotions" },
         ],
     },
     {

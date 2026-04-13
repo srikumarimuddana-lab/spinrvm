@@ -291,6 +291,15 @@ class DB:
         self.push_tokens = BaseCollection("push_tokens")
         self.admin_staff = BaseCollection("admin_staff")
         self.support_messages = BaseCollection("support_messages")
+        # P1-07: In-app wallet
+        self.wallets = BaseCollection("wallets")
+        self.wallet_transactions = BaseCollection("wallet_transactions")
+        # P1-08: Fare splitting
+        self.fare_splits = BaseCollection("fare_splits")
+        self.fare_split_participants = BaseCollection("fare_split_participants")
+        # P1-09: Quest / bonus challenges
+        self.quests = BaseCollection("quests")
+        self.quest_progress = BaseCollection("quest_progress")
 
     async def rpc(self, func_name: str, params: Dict[str, Any]):
         return await db_supabase.rpc(func_name, params)

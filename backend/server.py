@@ -25,6 +25,9 @@ from routes.payments import api_router as payments_router
 from routes.promotions import api_router as promotions_router
 from routes.rides import api_router as rides_router
 from routes.users import api_router as users_router
+from routes.wallet import api_router as wallet_router
+from routes.fare_split import api_router as fare_split_router
+from routes.quests import api_router as quests_router
 from routes.webhooks import api_router as webhooks_router
 from routes.websocket import router as websocket_router
 from utils.error_handling import register_exception_handlers
@@ -61,6 +64,9 @@ v1_api_router.include_router(notifications_router)
 v1_api_router.include_router(fares_router)
 v1_api_router.include_router(promotions_router)
 v1_api_router.include_router(disputes_router)
+v1_api_router.include_router(wallet_router)
+v1_api_router.include_router(fare_split_router)
+v1_api_router.include_router(quests_router)
 v1_api_router.include_router(webhooks_router)
 v1_api_router.include_router(upload_router)
 v1_api_router.include_router(support_router)

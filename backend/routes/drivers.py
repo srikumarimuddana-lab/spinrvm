@@ -1605,6 +1605,14 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # Update driver stats
     await db.drivers.update_one({"id": driver["id"]}, {"$inc": {"total_rides": 1}, "$set": {"is_available": True}})
 
+    # P1-09: Update quest progress for any active quests this driver has joined
+    try:
+        from utils.quest_tracker import update_quest_progress_on_ride_complete
+        completed_ride_data = await db.rides.find_one({"id": ride_id})
+        await update_quest_progress_on_ride_complete(driver["id"], completed_ride_data or ride)
+    except Exception as quest_err:
+        logger.warning(f"Quest progress update failed for ride {ride_id}: {quest_err}")
+
     completed_ride = await db.rides.find_one({"id": ride_id})
 
     if completed_ride and completed_ride.get("rider_id"):

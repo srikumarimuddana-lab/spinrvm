@@ -682,3 +682,16 @@ export const getDriverSubscriptions = (status?: string) =>
 /* ── Audit Logs ──────────────────────────── */
 export const getAuditLogs = (limit = 50) =>
     request<any[]>(`/api/admin/audit-logs?limit=${limit}`);
+
+/* ── Quests / Bonus Challenges ──────────── */
+export const getQuests = (isActive?: boolean) =>
+    request<any[]>(`/api/v1/quests/admin/list${isActive !== undefined ? `?is_active=${isActive}` : ''}`);
+
+export const createQuest = (data: any) =>
+    request<any>("/api/v1/quests/admin/create", { method: "POST", body: JSON.stringify(data) });
+
+export const updateQuest = (id: string, data: any) =>
+    request<any>(`/api/v1/quests/admin/${id}`, { method: "PATCH", body: JSON.stringify(data) });
+
+export const getQuestParticipants = (questId: string) =>
+    request<any[]>(`/api/v1/quests/admin/${questId}/participants`);

@@ -715,5 +715,17 @@ export const getDemandForecastSummary = (areaId?: string) =>
 export const getSurgeHistory = (areaId: string, hours = 24) =>
     request<any>(`/api/admin/analytics/surge-history?area_id=${areaId}&hours=${hours}`);
 
-export const getSurgeStatus = () =>
-    request<any[]>("/api/admin/surge/status");
+/* ── Payouts ────────────────────────────── */
+export const getPayouts = (status?: string) =>
+    request<any[]>(`/api/admin/payouts${status ? `?status=${status}` : ''}`);
+
+export const getPayoutStats = () =>
+    request<any>("/api/admin/payouts/stats");
+
+/* ── Disputes (resolve) ─────────────────── */
+export const resolveDispute = (id: string, data: { resolution: string; refund_amount?: number; admin_note?: string }) =>
+    request<any>(`/api/admin/disputes/${id}/resolve`, { method: "PUT", body: JSON.stringify(data) });
+
+/* ── Live Ride Monitoring ───────────────── */
+export const getActiveRides = () =>
+    request<any>("/api/admin/rides/active");

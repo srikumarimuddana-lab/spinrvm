@@ -36,6 +36,7 @@ const NAV_GROUPS: NavGroup[] = [
     {
         title: "Operations",
         items: [
+            { href: "/dashboard/monitoring", label: "Live Monitoring", icon: LayoutDashboard, module: "rides" },
             { href: "/dashboard/rides", label: "Rides", icon: Car, module: "rides" },
             { href: "/dashboard/drivers", label: "Drivers", icon: Car, module: "drivers" },
             { href: "/dashboard/users", label: "Users", icon: Users, module: "users" },
@@ -65,6 +66,7 @@ const NAV_GROUPS: NavGroup[] = [
         title: "Support",
         items: [
             { href: "/dashboard/support", label: "Support & Issues", icon: LifeBuoy, module: "support" },
+            { href: "/dashboard/disputes", label: "Disputes & Refunds", icon: Shield, module: "support" },
             { href: "/dashboard/cloud-messaging", label: "Cloud Messaging", icon: Cloud, module: "notifications" },
         ],
     },

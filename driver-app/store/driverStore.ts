@@ -350,25 +350,19 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     },
 
     acceptRide: async (rideId: string) => {
-        console.log('[DRV-DBG] acceptRide called ride_id=', rideId);
         set({ isLoading: true, error: null });
         try {
-            const resp = await api.post(`/drivers/rides/${rideId}/accept`);
-            console.log('[DRV-DBG] acceptRide POST response:', resp.status, JSON.stringify(resp.data));
+            await api.post(`/drivers/rides/${rideId}/accept`);
             set({
                 rideState: 'navigating_to_pickup',
                 incomingRide: null,
                 countdownSeconds: 0,
             });
-            console.log('[DRV-DBG] acceptRide set rideState=navigating_to_pickup, calling fetchActiveRide...');
             // Fetch the full active ride data
             await get().fetchActiveRide();
-            const after = get();
-            console.log('[DRV-DBG] acceptRide after fetchActiveRide: rideState=', after.rideState, 'activeRide.ride?=', !!after.activeRide?.ride, 'ride_id=', after.activeRide?.ride?.id, 'status=', after.activeRide?.ride?.status);
         } catch (err: any) {
             const status = err?.response?.status;
             const detail: string = err?.response?.data?.detail || '';
-            console.log('[DRV-DBG] acceptRide ERROR:', status, err?.response?.data, err?.message);
 
             // Race-condition handling: another driver beat us to the ride, or
             // the rider cancelled between dispatch and accept. Backend returns
@@ -398,8 +392,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     declineRide: async (rideId: string) => {
         try {
             await api.post(`/drivers/rides/${rideId}/decline`);
-        } catch (err) {
-            console.log('Decline error:', err);
+        } catch {
+            // Decline failure is non-critical — reset state regardless
         }
         set({ rideState: 'idle', incomingRide: null, countdownSeconds: 0 });
     },
@@ -497,9 +491,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchActiveRide: async () => {
         try {
-            console.log('[DRV-DBG] fetchActiveRide START');
             const res = await api.get('/drivers/rides/active');
-            console.log('[DRV-DBG] fetchActiveRide response status=', res.status, 'has_data=', !!res.data, 'has_ride=', !!res.data?.ride, 'ride_status=', res.data?.ride?.status, 'ride_id=', res.data?.ride?.id);
             if (res.data && res.data.ride) {
                 const ride = res.data.ride;
                 let rideState: RideState = 'idle';
@@ -508,15 +500,12 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 else if (ride.status === 'driver_arrived') rideState = 'arrived_at_pickup';
                 else if (ride.status === 'in_progress') rideState = 'trip_in_progress';
 
-                console.log('[DRV-DBG] fetchActiveRide SET activeRide + rideState=', rideState);
                 set({ activeRide: res.data, rideState });
             } else {
-                console.log('[DRV-DBG] fetchActiveRide NULL branch — clearing activeRide');
                 set({ activeRide: null });
             }
-        } catch (err: any) {
-            console.log('[DRV-DBG] fetchActiveRide ERROR:', err?.response?.status, err?.response?.data, err?.message);
-            console.log('Fetch active ride error:', err);
+        } catch {
+            // Non-critical — caller state remains unchanged
         }
     },
 

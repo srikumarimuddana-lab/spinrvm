@@ -352,8 +352,8 @@ rich==14.3.4
     #   typer
 s3transfer==0.16.0
     # via boto3
-sentry-sdk==2.58.0
-    # via -r requirements.in
+sentry-sdk==2.8.0
+    # via -r backend/requirements.in
 shellingham==1.5.4
     # via typer
 six==1.17.0

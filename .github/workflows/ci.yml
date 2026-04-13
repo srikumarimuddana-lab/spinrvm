@@ -217,7 +217,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: admin-dashboard
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: Run ESLint
         working-directory: admin-dashboard
@@ -355,7 +355,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: admin-dashboard
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: Build for production
         working-directory: admin-dashboard
@@ -399,6 +399,8 @@ jobs:
   # Security Scan — filesystem (dependency CVEs) + secrets
   security-scan:
     runs-on: ubuntu-latest
+    permissions:
+      security-events: write  # required for Trivy SARIF upload to GitHub Security tab
 
     steps:
       - uses: actions/checkout@v6

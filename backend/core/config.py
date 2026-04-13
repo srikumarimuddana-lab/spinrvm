@@ -1,6 +1,7 @@
 import os
 from typing import Optional
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,8 +25,8 @@ class Settings(BaseSettings):
     # Firebase settings
     FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None
 
-    # Security settings
-    JWT_SECRET: str = "your-strong-secret-key"  # Default for development only
+    # Security settings — no defaults; app refuses to start if unset in production
+    JWT_SECRET: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
@@ -36,9 +37,9 @@ class Settings(BaseSettings):
     # (see core/middleware.init_middleware).
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:8081,http://localhost:19006"
 
-    # Admin credentials
+    # Admin credentials — no defaults; app refuses to start if unset in production
     ADMIN_EMAIL: str = "admin@spinr.ca"
-    ADMIN_PASSWORD: str = "admin123"
+    ADMIN_PASSWORD: str
 
     # Rate limiting
     RATE_LIMIT: str = "10/minute"
@@ -48,6 +49,27 @@ class Settings(BaseSettings):
 
     # Environment
     ENV: str = "development"
+
+    # Observability — optional; Sentry only initialises when this is set
+    sentry_dsn: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _guard_production_secrets(self) -> "Settings":
+        """Refuse to start in production with known-weak placeholder values."""
+        if self.ENV.lower() == "production":
+            weak = {
+                "JWT_SECRET": ("your-strong-secret-key",),
+                "ADMIN_PASSWORD": ("admin123", "password", "changeme"),
+            }
+            for field, bad_values in weak.items():
+                value = getattr(self, field, None)
+                if value in bad_values:
+                    msg = (
+                        f"{field} is set to a known-weak placeholder value. "
+                        "Set a strong secret in your environment before running in production."
+                    )
+                    raise ValueError(msg)
+        return self
 
     @property
     def SECRET_KEY(self) -> str:

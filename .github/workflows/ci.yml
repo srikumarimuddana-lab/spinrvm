@@ -68,7 +68,8 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/spinr_test
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          SECRET_KEY: test-secret-key-for-ci
+          JWT_SECRET: test-secret-key-for-ci-only-32chars!!
+          ADMIN_PASSWORD: TestAdminPass123!
           ENV: test
         run: |
           pytest --cov=. --cov-report=xml --cov-report=term-missing -v

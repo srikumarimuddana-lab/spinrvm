@@ -20,7 +20,7 @@
     "@supabase/supabase-js": "^2.95.3",
     "ajv": "^8.18.0",
     "axios": "^1.13.4",
-    "expo": "~54.0.0",
+    "expo": "~55.0.15",
     "expo-blur": "~15.0.8",
     "expo-clipboard": "~8.0.8",
     "expo-constants": "~18.0.13",

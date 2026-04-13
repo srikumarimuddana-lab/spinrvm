@@ -109,26 +109,28 @@ logger.add(
 # Add file logging for production
 logger.add("logs/app.log", rotation="500 MB", retention="7 days", level="INFO", serialize=True)
 
-# Configure Sentry for error monitoring
-import sentry_sdk  # noqa: E402
-from sentry_sdk.integrations.fastapi import FastApiIntegration  # noqa: E402
-
-try:
-    from sentry_sdk.integrations.starlette import StarletteMiddleware
-except ImportError:
-    StarletteMiddleware = None
-from sentry_sdk.integrations.logging import LoggingIntegration  # noqa: E402
-
+# Configure Sentry for error monitoring — imports are deferred inside the DSN
+# guard so that sentry_sdk's starlette integration is never imported in
+# environments where SENTRY_DSN is unset (avoids DidNotEnable crash in CI).
 sentry_dsn = settings.sentry_dsn if hasattr(settings, "sentry_dsn") and settings.sentry_dsn else None
 
 if sentry_dsn:
+    import sentry_sdk  # noqa: E402
+    from sentry_sdk.integrations.fastapi import FastApiIntegration  # noqa: E402
+    from sentry_sdk.integrations.logging import LoggingIntegration  # noqa: E402
+
+    _StarletteMiddleware = None
+    try:
+        from sentry_sdk.integrations.starlette import StarletteMiddleware as _StarletteMiddleware
+    except Exception:  # noqa: BLE001
+        pass
+
     integrations = [
         FastApiIntegration(transaction_style="url"),
         LoggingIntegration(event_level="ERROR", breadcrumb_level="WARNING"),
     ]
-    # Add StarletteMiddleware if available
-    if StarletteMiddleware is not None:
-        integrations.append(StarletteMiddleware())
+    if _StarletteMiddleware is not None:
+        integrations.append(_StarletteMiddleware())
 
     sentry_sdk.init(
         dsn=sentry_dsn,

@@ -502,7 +502,7 @@ jobs:
   # Notify on failure
   notify-failure:
     runs-on: ubuntu-latest
-    needs: [backend-test, frontend-test, rider-app-test, driver-app-test, admin-test]
+    needs: [backend-test, frontend-test, rider-app-test, driver-app-test, admin-test, e2e-test, security-scan, docker-image-scan]
     if: failure()
 
     steps:
@@ -516,7 +516,7 @@ jobs:
   # Auto-create GitHub Issue on pipeline failure
   notify-issue:
     runs-on: ubuntu-latest
-    needs: [backend-test, frontend-test, rider-app-test, driver-app-test, admin-test]
+    needs: [backend-test, frontend-test, rider-app-test, driver-app-test, admin-test, e2e-test, security-scan, docker-image-scan]
     if: failure()
     permissions:
       issues: write

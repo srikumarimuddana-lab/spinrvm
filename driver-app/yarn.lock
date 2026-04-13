@@ -3214,7 +3214,7 @@
     pretty-format "^30.0.5"
     redent "^3.0.0"
 
-"@tootallnate/once@^3.0.1":
+"@tootallnate/once@2", "@tootallnate/once@^3.0.1":
   version "3.0.1"
   resolved "https://registry.npmjs.org/@tootallnate/once/-/once-3.0.1.tgz"
   integrity sha512-VyMVKRrpHTT8PnotUeV8L/mDaMwD5DaAKCFLP73zAqAtvF0FCqky+Ki7BYbFCYQmqFyTe9316Ed5zS70QUR9eg==
@@ -5440,10 +5440,10 @@ expo-dev-menu@7.0.18:
   dependencies:
     expo-dev-menu-interface "2.0.0"
 
-expo-document-picker@~14.0.8:
-  version "14.0.8"
-  resolved "https://registry.npmjs.org/expo-document-picker/-/expo-document-picker-14.0.8.tgz"
-  integrity sha512-3tyQKpPqWWFlI8p9RiMX1+T1Zge5mEKeBuXWp1h8PEItFMUDSiOJbQ112sfdC6Hxt8wSxreV9bCRl/NgBdt+fA==
+expo-document-picker@~55.0.13:
+  version "55.0.13"
+  resolved "https://registry.yarnpkg.com/expo-document-picker/-/expo-document-picker-55.0.13.tgz#f580ea88252c3608d23be1cd3fb0c5a08c0898e2"
+  integrity sha512-IhswJElhdzs3fKDEKW8KXYRoFkWGEsXRMYAZT46Yo56zqqy8yQXrczo33RSwD2hFzNQBdLT97SJL9N311UyS3g==
 
 expo-eas-client@~1.0.8:
   version "1.0.8"

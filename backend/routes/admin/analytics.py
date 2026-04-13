@@ -295,3 +295,76 @@ async def get_analytics_overview(
         "daily_chart": daily_chart,
         "peak_hours": [{"hour": h, "rides": c} for h, c in peak_hours],
     }
+
+
+# ── Demand Forecasting ──────────────────────────────────────────────
+
+
+@api_router.get("/demand-forecast")
+async def get_demand_forecast(
+    area_id: Optional[str] = None,
+    hours_ahead: int = Query(24, ge=1, le=72),
+    admin: dict = Depends(get_admin_user),
+):
+    """Get hourly demand forecast for the next N hours."""
+    try:
+        from utils.demand_forecast import forecast_demand
+    except ImportError:
+        from ...utils.demand_forecast import forecast_demand
+
+    forecast = await forecast_demand(area_id, hours_ahead)
+    return {"hours_ahead": hours_ahead, "area_id": area_id, "forecast": forecast}
+
+
+@api_router.get("/demand-forecast/summary")
+async def get_demand_forecast_summary(
+    area_id: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """Get high-level demand forecast summary for the dashboard."""
+    try:
+        from utils.demand_forecast import get_forecast_summary
+    except ImportError:
+        from ...utils.demand_forecast import get_forecast_summary
+
+    return await get_forecast_summary(area_id)
+
+
+# ── Surge History ────────────────────────────────────────────────────
+
+
+@api_router.get("/surge-history")
+async def get_surge_history(
+    area_id: str = Query(...),
+    hours: int = Query(24, ge=1, le=168),
+    admin: dict = Depends(get_admin_user),
+):
+    """Get surge pricing history for a specific service area (last N hours)."""
+    cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    try:
+        records = await db.get_rows(
+            "surge_pricing",
+            {"service_area_id": area_id},
+            limit=500,
+            order_by="created_at",
+            order_desc=True,
+        )
+        # Filter by time
+        filtered = [
+            {
+                "multiplier": r.get("multiplier", 1.0),
+                "demand_count": r.get("demand_count", 0),
+                "supply_count": r.get("supply_count", 0),
+                "ratio": r.get("ratio", 0),
+                "source": r.get("source", "auto"),
+                "created_at": r.get("created_at"),
+            }
+            for r in records
+            if isinstance(r.get("created_at", ""), str) and r.get("created_at", "") >= cutoff
+        ]
+        # Reverse to chronological order
+        filtered.reverse()
+        return {"area_id": area_id, "hours": hours, "history": filtered}
+    except Exception as e:
+        logger.error(f"Failed to fetch surge history: {e}")
+        return {"area_id": area_id, "hours": hours, "history": []}

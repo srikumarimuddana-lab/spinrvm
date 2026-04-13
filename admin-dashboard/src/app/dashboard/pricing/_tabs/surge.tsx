@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getServiceAreas, updateServiceArea, resetSurgeToAuto } from "@/lib/api";
+import { getServiceAreas, updateServiceArea, resetSurgeToAuto, getSurgeStatus } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,10 +18,21 @@ export default function SurgeTab() {
 
     const fetchAreas = () => {
         setLoading(true);
-        getServiceAreas()
-            .then(setAreas)
-            .catch(() => { })
-            .finally(() => setLoading(false));
+        Promise.all([
+            getServiceAreas().catch(() => []),
+            getSurgeStatus().catch(() => []),
+        ]).then(([areaList, surgeStatuses]) => {
+            // Merge demand/supply data from surge status into areas
+            const statusMap = new Map((surgeStatuses || []).map((s: any) => [s.area_id, s]));
+            const merged = (areaList || []).map((a: any) => {
+                const status = statusMap.get(a.id);
+                if (status) {
+                    return { ...a, demand_count: status.demand_count, supply_count: status.supply_count, ratio: status.ratio };
+                }
+                return a;
+            });
+            setAreas(merged);
+        }).finally(() => setLoading(false));
     };
 
     useEffect(() => {
@@ -222,6 +233,27 @@ export default function SurgeTab() {
                                             </div>
                                         </div>
                                     </div>
+                                    {/* Live demand/supply counts */}
+                                    {(area.demand_count !== undefined || area.supply_count !== undefined) && (
+                                        <div className="flex items-center justify-between py-2 px-3 bg-muted/50 rounded-lg text-xs">
+                                            <div className="flex items-center gap-3">
+                                                <span className="flex items-center gap-1">
+                                                    <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                                                    Demand: <strong>{area.demand_count ?? 0}</strong> riders
+                                                </span>
+                                                <span className="flex items-center gap-1">
+                                                    <span className="w-2 h-2 rounded-full bg-green-500" />
+                                                    Supply: <strong>{area.supply_count ?? 0}</strong> drivers
+                                                </span>
+                                            </div>
+                                            {area.ratio !== undefined && (
+                                                <span className="text-muted-foreground">
+                                                    Ratio: <strong>{area.ratio}</strong>
+                                                </span>
+                                            )}
+                                        </div>
+                                    )}
+
                                     {/* Reset to Auto button (only shown for manual areas) */}
                                     {isManual && (
                                         <Button

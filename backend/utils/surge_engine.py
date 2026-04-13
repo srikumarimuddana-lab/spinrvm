@@ -201,6 +201,12 @@ async def get_surge_status() -> List[Dict[str, Any]]:
     for area in areas:
         if area.get("parent_service_area_id"):
             continue
+
+        # Calculate live demand/supply for each area
+        demand = await _count_demand_in_area(area["id"])
+        supply = await _count_supply_in_area(area)
+        ratio = round(demand / max(supply, 1), 2)
+
         statuses.append(
             {
                 "area_id": area["id"],
@@ -209,6 +215,9 @@ async def get_surge_status() -> List[Dict[str, Any]]:
                 "multiplier": area.get("surge_multiplier", 1.0),
                 "surge_active": area.get("surge_active", False),
                 "source": area.get("surge_source", "auto"),
+                "demand_count": demand,
+                "supply_count": supply,
+                "ratio": ratio,
                 "last_updated": area.get("updated_at"),
             }
         )

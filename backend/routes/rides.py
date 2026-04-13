@@ -1437,9 +1437,41 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
     }
 
 
+@api_router.get("/{ride_id}/chat-status")
+async def get_chat_status(ride_id: str, current_user: dict = Depends(get_current_user)):
+    """Check if chat is available for this ride (active rides + 24h post-trip window)."""
+    ride = await db.rides.find_one({"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    status = ride.get("status", "")
+    if status == "cancelled":
+        return {"available": False, "reason": "Ride was cancelled"}
+
+    if status == "completed":
+        completed_at = ride.get("ride_completed_at") or ride.get("updated_at")
+        if completed_at:
+            if isinstance(completed_at, str):
+                try:
+                    completed_at = datetime.fromisoformat(completed_at.replace("Z", "+00:00").replace("+00:00", ""))
+                except (ValueError, TypeError):
+                    completed_at = None
+            if completed_at:
+                elapsed = (datetime.utcnow() - completed_at).total_seconds()
+                remaining = max(0, 86400 - elapsed)
+                if remaining <= 0:
+                    return {"available": False, "reason": "Post-trip chat window expired"}
+                hours_left = int(remaining // 3600)
+                return {"available": True, "post_trip": True, "hours_remaining": hours_left}
+        return {"available": True, "post_trip": True, "hours_remaining": 24}
+
+    # Active ride — chat is fully available
+    return {"available": True, "post_trip": False}
+
+
 @api_router.get("/{ride_id}/messages")
 async def get_ride_messages(ride_id: str, current_user: dict = Depends(get_current_user)):
-    """Fetch persistent chat messages for a ride"""
+    """Fetch persistent chat messages for a ride (active or post-trip within 24h)."""
     ride = await db.rides.find_one({"id": ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
@@ -1474,18 +1506,36 @@ class SendMessageRequest(BaseModel):
 
 @api_router.post("/{ride_id}/messages")
 async def send_ride_message(ride_id: str, body: SendMessageRequest, current_user: dict = Depends(get_current_user)):
-    """Send a chat message for an active ride.
+    """Send a chat message for an active or recently completed ride.
 
     Persists the message in `ride_messages` and forwards it to the
     other party via WebSocket (if they're connected). Works as a REST
     fallback for screens that don't hold a direct WS reference (e.g.
     the rider-app chat screen).
 
+    Post-trip chat: messages are allowed for 24 hours after ride
+    completion to support lost-item, feedback, and coordination use cases.
     Only the rider or the assigned driver of the ride can send.
     """
     ride = await db.rides.find_one({"id": ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
+
+    # Block chat on cancelled rides
+    if ride.get("status") == "cancelled":
+        raise HTTPException(status_code=400, detail="Cannot send messages on a cancelled ride")
+
+    # Post-trip chat window: allow messages for 24h after completion
+    if ride.get("status") == "completed":
+        completed_at = ride.get("ride_completed_at") or ride.get("updated_at")
+        if completed_at:
+            if isinstance(completed_at, str):
+                try:
+                    completed_at = datetime.fromisoformat(completed_at.replace("Z", "+00:00").replace("+00:00", ""))
+                except (ValueError, TypeError):
+                    completed_at = None
+            if completed_at and (datetime.utcnow() - completed_at).total_seconds() > 86400:
+                raise HTTPException(status_code=400, detail="Post-trip chat window has expired (24 hours)")
 
     is_rider = ride.get("rider_id") == current_user["id"]
     driver = await db.drivers.find_one({"user_id": current_user["id"]})

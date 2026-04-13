@@ -705,3 +705,15 @@ export const getCancellationBreakdown = (dateRange = "30d", serviceAreaId?: stri
 
 export const getDriverAcceptanceRates = (dateRange = "30d", serviceAreaId?: string) =>
     request<any>(`/api/admin/analytics/driver-acceptance?date_range=${dateRange}${serviceAreaId ? `&service_area_id=${serviceAreaId}` : ''}`);
+
+export const getDemandForecast = (hoursAhead = 24, areaId?: string) =>
+    request<any>(`/api/admin/analytics/demand-forecast?hours_ahead=${hoursAhead}${areaId ? `&area_id=${areaId}` : ''}`);
+
+export const getDemandForecastSummary = (areaId?: string) =>
+    request<any>(`/api/admin/analytics/demand-forecast/summary${areaId ? `?area_id=${areaId}` : ''}`);
+
+export const getSurgeHistory = (areaId: string, hours = 24) =>
+    request<any>(`/api/admin/analytics/surge-history?area_id=${areaId}&hours=${hours}`);
+
+export const getSurgeStatus = () =>
+    request<any[]>("/api/admin/surge/status");

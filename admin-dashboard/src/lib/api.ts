@@ -292,6 +292,12 @@ export const updateServiceArea = (id: string, data: any) =>
 export const deleteServiceArea = (id: string) =>
     request<any>(`/api/admin/service-areas/${id}`, { method: "DELETE" });
 
+/* ── Surge Pricing ────────────────────────── */
+export const getSurgeStatus = () =>
+    request<any[]>("/api/admin/surge/status");
+export const resetSurgeToAuto = (id: string) =>
+    request<any>(`/api/v1/service-areas/${id}/surge/auto`, { method: "PUT" });
+
 /* ── Vehicle Types ────────────────────────── */
 export const getVehicleTypes = () =>
     request<any[]>("/api/admin/vehicle-types");

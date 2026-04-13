@@ -572,6 +572,254 @@ async def get_driver_trip_earnings(
     ]
 
 
+@api_router.get("/earnings/weekly")
+async def get_driver_weekly_earnings(weeks: int = Query(4), current_user: dict = Depends(get_current_user)):
+    """Get driver's weekly earnings breakdown."""
+    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    start_date = datetime.utcnow() - timedelta(weeks=weeks)
+
+    # Try driver_daily_stats first (pre-aggregated)
+    try:
+        stats = await db.get_rows(
+            "driver_daily_stats",
+            {"driver_id": driver["id"], "stat_date": {"$gte": start_date.strftime("%Y-%m-%d")}},
+            order="stat_date",
+            limit=weeks * 7,
+        )
+    except Exception:
+        stats = []
+
+    if stats:
+        # Group by ISO week
+        weekly_data: dict = {}
+        for s in stats:
+            date_str = s.get("stat_date", "")[:10]
+            if not date_str:
+                continue
+            from datetime import date as date_type
+            d = date_type.fromisoformat(date_str)
+            iso_year, iso_week, _ = d.isocalendar()
+            week_key = f"{iso_year}-W{iso_week:02d}"
+            if week_key not in weekly_data:
+                # Monday of that ISO week
+                from datetime import timedelta as td
+                monday = d - td(days=d.weekday())
+                sunday = monday + td(days=6)
+                weekly_data[week_key] = {
+                    "week_start": monday.isoformat(),
+                    "week_end": sunday.isoformat(),
+                    "earnings": 0, "tips": 0, "rides": 0,
+                    "online_hours": 0, "distance_km": 0,
+                }
+            weekly_data[week_key]["earnings"] += s.get("total_earnings", 0) or 0
+            weekly_data[week_key]["tips"] += s.get("total_tips", 0) or 0
+            weekly_data[week_key]["rides"] += s.get("rides_completed", 0) or 0
+            weekly_data[week_key]["online_hours"] += round((s.get("online_minutes", 0) or 0) / 60, 1)
+            weekly_data[week_key]["distance_km"] += s.get("total_km", 0) or 0
+
+        return sorted(weekly_data.values(), key=lambda x: x["week_start"])
+
+    # Fallback: compute from rides table
+    try:
+        rides = await db.get_rows(
+            "rides",
+            {
+                "driver_id": driver["id"],
+                "status": "completed",
+                "ride_completed_at": {"$gte": start_date.isoformat()},
+            },
+            order="ride_completed_at",
+            limit=5000,
+        )
+
+        weekly_data = {}
+        for r in rides:
+            date_str = (r.get("ride_completed_at") or "")[:10]
+            if not date_str:
+                continue
+            from datetime import date as date_type
+            d = date_type.fromisoformat(date_str)
+            iso_year, iso_week, _ = d.isocalendar()
+            week_key = f"{iso_year}-W{iso_week:02d}"
+            if week_key not in weekly_data:
+                from datetime import timedelta as td
+                monday = d - td(days=d.weekday())
+                sunday = monday + td(days=6)
+                weekly_data[week_key] = {
+                    "week_start": monday.isoformat(),
+                    "week_end": sunday.isoformat(),
+                    "earnings": 0, "tips": 0, "rides": 0,
+                    "online_hours": 0, "distance_km": 0,
+                }
+            weekly_data[week_key]["earnings"] += r.get("driver_earnings", 0) or 0
+            weekly_data[week_key]["tips"] += r.get("tip_amount", 0) or 0
+            weekly_data[week_key]["rides"] += 1
+            weekly_data[week_key]["distance_km"] += r.get("distance_km", 0) or 0
+
+        return sorted(weekly_data.values(), key=lambda x: x["week_start"])
+    except Exception as e:
+        logger.error(f"Error fetching weekly earnings: {e}")
+        return []
+
+
+@api_router.get("/earnings/monthly")
+async def get_driver_monthly_earnings(months: int = Query(6), current_user: dict = Depends(get_current_user)):
+    """Get driver's monthly earnings breakdown."""
+    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    start_date = datetime.utcnow() - timedelta(days=months * 30)
+
+    # Try driver_daily_stats first
+    try:
+        stats = await db.get_rows(
+            "driver_daily_stats",
+            {"driver_id": driver["id"], "stat_date": {"$gte": start_date.strftime("%Y-%m-%d")}},
+            order="stat_date",
+            limit=months * 31,
+        )
+    except Exception:
+        stats = []
+
+    if stats:
+        monthly_data: dict = {}
+        for s in stats:
+            date_str = s.get("stat_date", "")[:10]
+            if not date_str:
+                continue
+            month_key = date_str[:7]  # YYYY-MM
+            if month_key not in monthly_data:
+                monthly_data[month_key] = {
+                    "month": month_key,
+                    "year": int(month_key[:4]),
+                    "earnings": 0, "tips": 0, "rides": 0,
+                    "online_hours": 0, "distance_km": 0,
+                }
+            monthly_data[month_key]["earnings"] += s.get("total_earnings", 0) or 0
+            monthly_data[month_key]["tips"] += s.get("total_tips", 0) or 0
+            monthly_data[month_key]["rides"] += s.get("rides_completed", 0) or 0
+            monthly_data[month_key]["online_hours"] += round((s.get("online_minutes", 0) or 0) / 60, 1)
+            monthly_data[month_key]["distance_km"] += s.get("total_km", 0) or 0
+
+        return sorted(monthly_data.values(), key=lambda x: x["month"])
+
+    # Fallback: compute from rides table
+    try:
+        rides = await db.get_rows(
+            "rides",
+            {
+                "driver_id": driver["id"],
+                "status": "completed",
+                "ride_completed_at": {"$gte": start_date.isoformat()},
+            },
+            order="ride_completed_at",
+            limit=10000,
+        )
+
+        monthly_data = {}
+        for r in rides:
+            date_str = (r.get("ride_completed_at") or "")[:10]
+            if not date_str:
+                continue
+            month_key = date_str[:7]
+            if month_key not in monthly_data:
+                monthly_data[month_key] = {
+                    "month": month_key,
+                    "year": int(month_key[:4]),
+                    "earnings": 0, "tips": 0, "rides": 0,
+                    "online_hours": 0, "distance_km": 0,
+                }
+            monthly_data[month_key]["earnings"] += r.get("driver_earnings", 0) or 0
+            monthly_data[month_key]["tips"] += r.get("tip_amount", 0) or 0
+            monthly_data[month_key]["rides"] += 1
+            monthly_data[month_key]["distance_km"] += r.get("distance_km", 0) or 0
+
+        return sorted(monthly_data.values(), key=lambda x: x["month"])
+    except Exception as e:
+        logger.error(f"Error fetching monthly earnings: {e}")
+        return []
+
+
+@api_router.get("/earnings/comparison")
+async def get_driver_earnings_comparison(
+    period: str = Query("week"), current_user: dict = Depends(get_current_user)
+):
+    """Compare current period earnings vs previous period."""
+    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    now = datetime.utcnow()
+    if period == "week":
+        current_start = now - timedelta(days=7)
+        previous_start = now - timedelta(days=14)
+        previous_end = now - timedelta(days=7)
+    else:  # month
+        current_start = now - timedelta(days=30)
+        previous_start = now - timedelta(days=60)
+        previous_end = now - timedelta(days=30)
+
+    try:
+        # Current period
+        current_rides = await db.get_rows(
+            "rides",
+            {
+                "driver_id": driver["id"],
+                "status": "completed",
+                "ride_completed_at": {"$gte": current_start.isoformat()},
+            },
+            limit=5000,
+        )
+        # Previous period
+        all_rides = await db.get_rows(
+            "rides",
+            {
+                "driver_id": driver["id"],
+                "status": "completed",
+                "ride_completed_at": {"$gte": previous_start.isoformat()},
+            },
+            limit=10000,
+        )
+        previous_rides = [
+            r for r in all_rides
+            if r.get("ride_completed_at", "") < previous_end.isoformat()
+        ]
+    except Exception as e:
+        logger.error(f"Error fetching comparison: {e}")
+        current_rides = []
+        previous_rides = []
+
+    def summarize(rides):
+        return {
+            "earnings": sum(r.get("driver_earnings", 0) or 0 for r in rides),
+            "rides": len(rides),
+            "tips": sum(r.get("tip_amount", 0) or 0 for r in rides),
+        }
+
+    current = summarize(current_rides)
+    previous = summarize(previous_rides)
+
+    def pct_change(curr, prev):
+        if prev == 0:
+            return 100.0 if curr > 0 else 0.0
+        return round((curr - prev) / prev * 100, 1)
+
+    return {
+        "period": period,
+        "current": current,
+        "previous": previous,
+        "change_pct": {
+            "earnings": pct_change(current["earnings"], previous["earnings"]),
+            "rides": pct_change(current["rides"], previous["rides"]),
+            "tips": pct_change(current["tips"], previous["tips"]),
+        },
+    }
+
+
 @api_router.get("/nearby")
 async def get_nearby_drivers_public(
     lat: float = Query(...),

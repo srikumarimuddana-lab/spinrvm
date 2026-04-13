@@ -26,6 +26,7 @@ interface RideEstimate {
   distance_fare: number;
   time_fare: number;
   booking_fee: number;
+  surge_multiplier?: number;
   total_fare: number;
   available: boolean;
   eta_minutes: number;

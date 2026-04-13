@@ -442,6 +442,12 @@ export default function RideOptionsScreen() {
                 <View style={[styles.optionInfo, !isAvailable && { opacity: 0.4 }]}>
                   <View style={styles.optionNameRow}>
                     <Text style={styles.optionName}>{estimate.vehicle_type.name}</Text>
+                    {(estimate.surge_multiplier ?? 1) > 1.0 && (
+                      <View style={styles.surgeBadge}>
+                        <Ionicons name="trending-up" size={10} color="#fff" />
+                        <Text style={styles.surgeBadgeText}>{estimate.surge_multiplier}x</Text>
+                      </View>
+                    )}
                     <View style={styles.capacityBadge}>
                       <Ionicons name="person" size={12} color="#666" />
                       <Text style={styles.capacityText}>{estimate.vehicle_type.capacity}</Text>
@@ -455,6 +461,9 @@ export default function RideOptionsScreen() {
                     </Text>
                   ) : (
                     <Text style={styles.unavailableText}>No drivers nearby</Text>
+                  )}
+                  {(estimate.surge_multiplier ?? 1) > 1.0 && (
+                    <Text style={styles.surgeNotice}>Fares are higher due to increased demand</Text>
                   )}
                 </View>
 
@@ -771,6 +780,26 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: '#1A1A1A',
+  },
+  surgeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#EF4444',
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  surgeBadgeText: {
+    fontSize: 10,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: '#fff',
+  },
+  surgeNotice: {
+    fontSize: 11,
+    fontFamily: 'PlusJakartaSans_400Regular',
+    color: '#EF4444',
+    marginTop: 2,
   },
   capacityBadge: {
     flexDirection: 'row',

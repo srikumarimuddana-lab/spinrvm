@@ -164,9 +164,9 @@ export default function PaymentConfirmScreen() {
               </View>
             ))}
 
-            {(selectedEstimate as any).surge_multiplier > 1.0 && (
+            {(selectedEstimate.surge_multiplier ?? 1) > 1.0 && (
               <View style={styles.fareRow}>
-                <Text style={[styles.fareLabel, { color: '#EF4444' }]}>Surge ({(selectedEstimate as any).surge_multiplier}x)</Text>
+                <Text style={[styles.fareLabel, { color: '#EF4444' }]}>Surge ({selectedEstimate.surge_multiplier}x)</Text>
                 <Text style={[styles.fareValue, { color: '#EF4444' }]}>Applied</Text>
               </View>
             )}

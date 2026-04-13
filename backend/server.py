@@ -25,6 +25,7 @@ from routes.payments import api_router as payments_router
 from routes.promotions import api_router as promotions_router
 from routes.rides import api_router as rides_router
 from routes.users import api_router as users_router
+from routes.loyalty import api_router as loyalty_router
 from routes.favorites import api_router as favorites_router
 from routes.wallet import api_router as wallet_router
 from routes.fare_split import api_router as fare_split_router
@@ -66,6 +67,7 @@ v1_api_router.include_router(fares_router)
 v1_api_router.include_router(promotions_router)
 v1_api_router.include_router(disputes_router)
 v1_api_router.include_router(favorites_router)
+v1_api_router.include_router(loyalty_router)
 v1_api_router.include_router(wallet_router)
 v1_api_router.include_router(fare_split_router)
 v1_api_router.include_router(quests_router)

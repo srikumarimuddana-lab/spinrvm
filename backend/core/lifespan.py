@@ -89,6 +89,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to start payment retry service: {e}")
 
+    # Document expiry alerts — notifies drivers about expiring docs every 12h
+    try:
+        from utils.document_expiry import document_expiry_loop
+        asyncio.create_task(document_expiry_loop())
+        logger.info("Started document expiry checker (every 12h)")
+    except Exception as e:
+        logger.warning(f"Failed to start document expiry checker: {e}")
+
     # Perform startup checks
     logger.info("Spinr API startup complete")
 

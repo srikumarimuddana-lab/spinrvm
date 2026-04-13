@@ -1901,6 +1901,85 @@ async def get_referred_drivers(
     return {"referred_drivers": referred_drivers[:limit]}
 
 
+# ── Leaderboard ──────────────────────────────────────────────────────
+
+
+@api_router.get("/leaderboard")
+async def get_driver_leaderboard(
+    period: str = Query("week", pattern="^(week|month|all)$"),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get driver leaderboard rankings by rides, earnings, and rating.
+
+    Returns the top drivers for the specified period with the current
+    driver's rank highlighted.
+    """
+    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    now = datetime.utcnow()
+    if period == "week":
+        start = (now - timedelta(days=7)).isoformat()
+    elif period == "month":
+        start = (now - timedelta(days=30)).isoformat()
+    else:
+        start = "2020-01-01"
+
+    try:
+        all_drivers = await db.drivers.find({}).to_list(500)
+    except Exception:
+        all_drivers = []
+
+    rankings = []
+    for d in all_drivers:
+        d_id = d["id"]
+        try:
+            rides = await db.get_rows(
+                "rides",
+                {"driver_id": d_id, "status": "completed"},
+                limit=1000,
+            )
+            period_rides = [r for r in rides if isinstance(r.get("created_at", ""), str) and r.get("created_at", "") >= start]
+        except Exception:
+            period_rides = []
+
+        total_rides = len(period_rides)
+        total_earnings = sum(float(r.get("driver_earnings", 0) or 0) for r in period_rides)
+        total_tips = sum(float(r.get("tip_amount", 0) or 0) for r in period_rides)
+
+        user = await db.users.find_one({"id": d.get("user_id")})
+        name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Driver"
+
+        rankings.append({
+            "driver_id": d_id,
+            "name": name,
+            "rides": total_rides,
+            "earnings": round(total_earnings, 2),
+            "tips": round(total_tips, 2),
+            "rating": d.get("rating", 0),
+            "is_current_user": d_id == driver["id"],
+        })
+
+    # Sort by rides (primary), then earnings (secondary)
+    rankings.sort(key=lambda x: (x["rides"], x["earnings"]), reverse=True)
+
+    # Assign ranks
+    for i, r in enumerate(rankings):
+        r["rank"] = i + 1
+
+    # Find current driver's rank
+    my_rank = next((r for r in rankings if r["is_current_user"]), None)
+
+    return {
+        "period": period,
+        "leaderboard": rankings[:limit],
+        "my_rank": my_rank,
+        "total_drivers": len(rankings),
+    }
+
+
 # ─── Catch-all driver ID routes MUST be last to avoid shadowing named routes ───
 
 

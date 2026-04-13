@@ -293,6 +293,9 @@ class DB:
         self.support_messages = BaseCollection("support_messages")
         # Favorite routes
         self.favorite_routes = BaseCollection("favorite_routes")
+        # Loyalty program
+        self.loyalty_accounts = BaseCollection("loyalty_accounts")
+        self.loyalty_transactions = BaseCollection("loyalty_transactions")
         # P1-07: In-app wallet
         self.wallets = BaseCollection("wallets")
         self.wallet_transactions = BaseCollection("wallet_transactions")

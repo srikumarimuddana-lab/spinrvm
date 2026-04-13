@@ -72,6 +72,10 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     plugins: [
         'expo-router',
+        ['@stripe/stripe-react-native', {
+            merchantIdentifier: 'merchant.com.spinr.driver',
+            enableGooglePay: true,
+        }],
         [
             'expo-splash-screen',
             {

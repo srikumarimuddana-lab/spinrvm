@@ -1,7 +1,14 @@
-name: Apply Supabase Schema
+name: Apply Supabase Schema + Migrations
 
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run — show pending migrations without applying"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
 
 jobs:
   apply-schema:
@@ -17,8 +24,14 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y postgresql-client
 
-      - name: Apply schema
+      - name: Run all migrations in canonical order
         env:
           PG_CONNECTION_STRING: ${{ secrets.PG_CONNECTION_STRING }}
+        working-directory: backend
         run: |
-          bash scripts/apply_supabase_schema.sh
+          chmod +x scripts/run_migrations.sh
+          if [[ "${{ github.event.inputs.dry_run }}" == "true" ]]; then
+            bash scripts/run_migrations.sh --dry-run
+          else
+            bash scripts/run_migrations.sh
+          fi

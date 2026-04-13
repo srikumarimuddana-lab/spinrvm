@@ -57,8 +57,15 @@ function LoginForm() {
             const next = sanitizeNextPath(searchParams.get("next"));
             router.push(next);
         } catch (e: any) {
-            console.error('Login error:', e);
-            setError(e.message || "Invalid credentials");
+            if (process.env.NODE_ENV === "development") {
+                console.error('Login error:', e);
+            }
+            const status = e?.response?.status;
+            if (status === 429) {
+                setError("Too many login attempts. Please wait a minute and try again.");
+            } else {
+                setError(e.message || "Invalid credentials");
+            }
         } finally {
             setLoading(false);
         }

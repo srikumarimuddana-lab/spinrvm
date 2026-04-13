@@ -11,7 +11,7 @@ const storage = {
   async getItem(key: string): Promise<string | null> {
     try {
       if (Platform.OS === 'web') {
-        return localStorage.getItem(key);
+        return sessionStorage.getItem(key);
       }
       return await SecureStore.getItemAsync(key);
     } catch (e) {
@@ -22,7 +22,7 @@ const storage = {
   async setItem(key: string, value: string): Promise<void> {
     try {
       if (Platform.OS === 'web') {
-        localStorage.setItem(key, value);
+        sessionStorage.setItem(key, value);
         return;
       }
       return await SecureStore.setItemAsync(key, value);
@@ -33,7 +33,7 @@ const storage = {
   async deleteItem(key: string): Promise<void> {
     try {
       if (Platform.OS === 'web') {
-        localStorage.removeItem(key);
+        sessionStorage.removeItem(key);
         return;
       }
       return await SecureStore.deleteItemAsync(key);

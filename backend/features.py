@@ -50,7 +50,8 @@ def point_in_polygon(lat: float, lng: float, polygon: List[Dict[str, float]]) ->
     for i in range(n):
         yi, xi = polygon[i].get("lat", 0), polygon[i].get("lng", 0)
         yj, xj = polygon[j].get("lat", 0), polygon[j].get("lng", 0)
-        if ((yi > lat) != (yj > lat)) and (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi):
+        # Guard: skip horizontal edges where yj == yi to avoid division by zero
+        if yi != yj and ((yi > lat) != (yj > lat)) and (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi):
             inside = not inside
         j = i
     return inside

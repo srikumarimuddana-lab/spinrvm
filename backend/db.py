@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -18,7 +19,9 @@ if not _goonline_logger.handlers:
     _h = logging.StreamHandler(sys.stdout)
     _h.setFormatter(logging.Formatter("[GO-ONLINE] %(message)s"))
     _goonline_logger.addHandler(_h)
-    _goonline_logger.setLevel(logging.INFO)
+    # Only emit diagnostic traces when DEBUG env var is set to avoid PII leak in production
+    _debug_enabled = os.environ.get("DEBUG", "").lower() in ("1", "true", "yes")
+    _goonline_logger.setLevel(logging.DEBUG if _debug_enabled else logging.WARNING)
     _goonline_logger.propagate = False
 
 # Dedicated diagnostic logger for route handlers. Route modules import
@@ -34,7 +37,8 @@ if not diag_logger.handlers:
     _h2 = logging.StreamHandler(sys.stdout)
     _h2.setFormatter(logging.Formatter("%(message)s"))
     diag_logger.addHandler(_h2)
-    diag_logger.setLevel(logging.INFO)
+    # Only emit diagnostic traces when DEBUG env var is set to avoid PII leak in production
+    diag_logger.setLevel(logging.DEBUG if _debug_enabled else logging.WARNING)
     diag_logger.propagate = False
 
 # Provide a db variable for backward compatibility

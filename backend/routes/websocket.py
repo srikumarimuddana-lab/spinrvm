@@ -28,6 +28,10 @@ router = APIRouter()
 HEARTBEAT_INTERVAL = 30  # Send ping every 30 seconds
 HEARTBEAT_TIMEOUT = 10  # Expect pong within 10 seconds
 
+# Rate limiting: max messages per second per connection
+WS_MAX_MESSAGES_PER_SECOND = 30
+WS_MAX_MESSAGE_SIZE = 64 * 1024  # 64 KB max message payload
+
 
 async def heartbeat_task(websocket: WebSocket, connection_key: str):
     """Background task that sends periodic ping messages to keep the connection alive
@@ -112,9 +116,32 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
         # GAP FIX: Start heartbeat background task
         hb_task = asyncio.create_task(heartbeat_task(websocket, connection_key))
 
+        # Rate limiting state
+        _msg_timestamps: list = []
+
         # Main message loop
         while True:
-            data = await websocket.receive_json()
+            raw = await websocket.receive_text()
+
+            # Message size guard
+            if len(raw) > WS_MAX_MESSAGE_SIZE:
+                await websocket.send_json({"type": "error", "message": "message_too_large"})
+                continue
+
+            import json as _json
+            try:
+                data = _json.loads(raw)
+            except (ValueError, TypeError):
+                await websocket.send_json({"type": "error", "message": "invalid_json"})
+                continue
+
+            # Per-connection rate limiting
+            now_ts = asyncio.get_event_loop().time()
+            _msg_timestamps = [t for t in _msg_timestamps if now_ts - t < 1.0]
+            if len(_msg_timestamps) >= WS_MAX_MESSAGES_PER_SECOND:
+                await websocket.send_json({"type": "error", "message": "rate_limited"})
+                continue
+            _msg_timestamps.append(now_ts)
 
             # GAP FIX: Handle pong responses (client acknowledges our ping)
             if data.get("type") == "pong":

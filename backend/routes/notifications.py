@@ -38,8 +38,13 @@ class PreferencesUpdate(BaseModel):
     safety_alerts: Optional[bool] = None
 
 
+class RegisterTokenRequest(BaseModel):
+    token: str
+    platform: str = "unknown"
+
+
 @api_router.post("/register-token")
-async def register_push_token(request: Request, current_user: dict = Depends(get_current_user)):
+async def register_push_token(body: RegisterTokenRequest, current_user: dict = Depends(get_current_user)):
     """Save FCM push token for this user/device.
 
     Writes to two places:
@@ -56,12 +61,8 @@ async def register_push_token(request: Request, current_user: dict = Depends(get
     When the same user registers a new token (e.g. they reinstalled the
     app), the new token replaces the old one on both rows.
     """
-    data = await request.json()
-    token = data.get("token")
-    platform = data.get("platform", "unknown")
-
-    if not token:
-        raise HTTPException(status_code=400, detail="Token is required")
+    token = body.token
+    platform = body.platform
 
     # Upsert: one token per user per platform
     existing = await db.push_tokens.find_one(

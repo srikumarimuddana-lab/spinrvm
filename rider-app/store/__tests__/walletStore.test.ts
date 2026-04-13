@@ -114,7 +114,7 @@ describe('walletStore', () => {
   describe('fetchTransactions', () => {
     it('stores transactions list', async () => {
       const txs = [makeTx(), makeTx({ id: 'tx-2', type: 'ride_payment', amount: -9.5 })];
-      mockApi.get.mockResolvedValueOnce({ data: txs });
+      mockApi.get.mockResolvedValueOnce({ data: { transactions: txs } });
 
       await useWalletStore.getState().fetchTransactions();
 

@@ -455,14 +455,16 @@ export default function DriversPage() {
                                         <div className="space-y-6">
                                             {requiredDocs.map(reqDoc => {
                                                 const matchingDocs = activeDocs.filter(d => {
-                                                    // 1. Best: match by requirement_id stored on the doc (set when driver uploads via /drivers/documents)
+                                                    // 1. Best: match by requirement_key (raw string key stored since fix)
+                                                    if (d.requirement_key) return d.requirement_key === reqDoc.key;
+                                                    // 2. Match by requirement_id (UUID or legacy string key)
                                                     if (d.requirement_id) return d.requirement_id === reqDoc.id || d.requirement_id === reqDoc.key;
-                                                    // 2. Match document_type against the label (set when driver uses become-driver flow)
+                                                    // 3. Match document_type against the label or key
                                                     const dt = (d.document_type || "").toLowerCase();
                                                     const label = reqDoc.label.toLowerCase();
                                                     const key = reqDoc.key.toLowerCase().replace(/_/g, " ");
                                                     if (dt === label || dt === key) return true;
-                                                    // 3. Fuzzy fallback: key slug appears inside document_type
+                                                    // 4. Fuzzy fallback: key slug appears inside document_type
                                                     return dt.replace(/[^a-z0-9]/g, "_").includes(reqDoc.key.replace(/[^a-z0-9]/g, "_"));
                                                 });
                                                 return (
@@ -477,7 +479,31 @@ export default function DriversPage() {
                                                     </div>
                                                 );
                                             })}
-                                            {/* Only show required documents — no "Other Documents" section */}
+                                            {/* Other Documents: any active docs not matched by any required doc */}
+                                            {(() => {
+                                                const matchedIds = new Set(requiredDocs.flatMap(reqDoc =>
+                                                    activeDocs.filter(d => {
+                                                        if (d.requirement_key) return d.requirement_key === reqDoc.key;
+                                                        if (d.requirement_id) return d.requirement_id === reqDoc.id || d.requirement_id === reqDoc.key;
+                                                        const dt = (d.document_type || "").toLowerCase();
+                                                        const label = reqDoc.label.toLowerCase();
+                                                        const key = reqDoc.key.toLowerCase().replace(/_/g, " ");
+                                                        if (dt === label || dt === key) return true;
+                                                        return dt.replace(/[^a-z0-9]/g, "_").includes(reqDoc.key.replace(/[^a-z0-9]/g, "_"));
+                                                    }).map(d => d.id)
+                                                ));
+                                                const unmatched = activeDocs.filter(d => !matchedIds.has(d.id));
+                                                if (unmatched.length === 0) return null;
+                                                return (
+                                                    <div>
+                                                        <div className="flex items-center gap-2 mb-3">
+                                                            <FileText className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">Other Documents</h4>
+                                                            <Badge variant="outline" className="text-[10px]">{unmatched.length} uploaded</Badge>
+                                                        </div>
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{unmatched.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
+                                                    </div>
+                                                );
+                                            })()}
                                         </div>
                                     ) : activeDocs.length > 0 ? (
                                         <div className="space-y-3">

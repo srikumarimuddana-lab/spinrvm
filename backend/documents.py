@@ -395,10 +395,15 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
     # (e.g. "vehicle_registration") are plain strings — store None to avoid a
     # `invalid input syntax for type uuid` error from PostgREST.
     req_id_for_db = doc_data.requirement_id if _is_valid_uuid(doc_data.requirement_id) else None
+    # Always persist the raw requirement key (e.g. "vehicle_registration") so the
+    # admin panel can match documents to service-area requirements even when the
+    # requirement_id column holds NULL (non-UUID service-area keys).
+    requirement_key = doc_data.requirement_id if not _is_valid_uuid(doc_data.requirement_id) else None
     doc_record = {
         "id": str(uuid.uuid4()),
         "driver_id": driver["id"],
         "requirement_id": req_id_for_db,
+        "requirement_key": requirement_key,
         "document_type": doc_data.document_type,
         "document_url": doc_data.document_url,
         "side": doc_data.side,

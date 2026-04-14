@@ -172,10 +172,7 @@ export default function LoginScreen() {
             )}
           </TouchableOpacity>
 
-          <View style={styles.devHintContainer}>
-            <Ionicons name="information-circle" size={14} color={THEME.primary} />
-            <Text style={styles.devHint}>Dev mode — OTP is 1234</Text>
-          </View>
+
         </View>
 
         {/* Continue Button */}
@@ -280,11 +277,7 @@ const styles = StyleSheet.create({
     fontWeight: '600', color: THEME.text, height: '100%', letterSpacing: 0.5,
   },
   checkIcon: { paddingRight: 14 },
-  devHintContainer: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    marginTop: 10, paddingHorizontal: 4,
-  },
-  devHint: { fontSize: 13, color: THEME.primary, fontWeight: '500' },
+
   button: {
     backgroundColor: THEME.primary, borderRadius: 16, height: 58,
     justifyContent: 'center', alignItems: 'center',

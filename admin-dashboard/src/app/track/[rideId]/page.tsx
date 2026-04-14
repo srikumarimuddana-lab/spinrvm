@@ -25,7 +25,7 @@ export default function TrackRide() {
     const fetchRideStatus = async () => {
       try {
         // Assume API endpoint is available on the same host or from env var
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+        const apiUrl = (process.env.NEXT_PUBLIC_API_URL ?? "") + '/api';
         const res = await fetch(`${apiUrl}/rides/${rideId}`);
         if (!res.ok) {
           throw new Error('Ride not found');

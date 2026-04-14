@@ -120,6 +120,9 @@ async def admin_login(request: Request, body: LoginRequest):
     ]
 
     # 1. Super admin from env
+    logger.info(
+        f"Login attempt: email={body.email}, expected_email={settings.ADMIN_EMAIL}, password_len={len(body.password)}, expected_len={len(settings.ADMIN_PASSWORD)}"
+    )
     if body.email == settings.ADMIN_EMAIL and body.password == settings.ADMIN_PASSWORD:
         token = jwt.encode(
             {

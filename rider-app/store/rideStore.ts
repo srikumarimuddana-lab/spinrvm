@@ -137,6 +137,7 @@ interface RideState {
   triggerEmergency: (rideId: string, latitude?: number, longitude?: number) => Promise<void>;
   addRecentSearch: (location: Location) => void;
   loadRecentSearches: () => Promise<void>;
+  syncOfflineRequests: () => Promise<void>;
   clearRecentSearches: () => void;
   setScheduledTime: (time: Date | null) => void;
   fetchScheduledRides: () => Promise<void>;
@@ -250,6 +251,46 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   applyPromo: (promo) => set({ appliedPromo: promo }),
 
+  // Sync offline queued requests when back online
+  syncOfflineRequests: async () => {
+    try {
+      const queueStr = await AsyncStorage.getItem('offline_queue');
+      if (!queueStr) return;
+
+      const queue = JSON.parse(queueStr);
+      if (queue.length === 0) return;
+
+      const successfulSyncs: string[] = [];
+
+      for (const request of queue) {
+        try {
+          if (request.type === 'create_ride') {
+            await api.post('/rides', request.data);
+            successfulSyncs.push(request.id);
+          }
+          // Add other request types here as needed
+        } catch (error) {
+          // Increment retry count, remove after max retries
+          request.retryCount = (request.retryCount || 0) + 1;
+          if (request.retryCount >= 3) {
+            successfulSyncs.push(request.id); // Remove failed requests
+          }
+        }
+      }
+
+      // Remove successfully synced requests
+      const updatedQueue = queue.filter(req => !successfulSyncs.includes(req.id));
+      await AsyncStorage.setItem('offline_queue', JSON.stringify(updatedQueue));
+
+      if (successfulSyncs.length > 0) {
+        // Could emit an event or show notification that offline requests were synced
+        console.log(`Synced ${successfulSyncs.length} offline requests`);
+      }
+    } catch (error) {
+      console.error('Failed to sync offline requests:', error);
+    }
+  },
+
   createRide: async (paymentMethod) => {
     const { pickup, dropoff, selectedVehicle, stops, scheduledTime } = get();
     if (!pickup || !dropoff || !selectedVehicle) {
@@ -268,6 +309,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         dropoff_lng: dropoff.lng,
         stops: stops,
         payment_method: paymentMethod,
+        created_at: new Date().toISOString(),
       };
 
       if (scheduledTime) {
@@ -275,8 +317,40 @@ export const useRideStore = create<RideState>((set, get) => ({
         rideData.scheduled_time = scheduledTime.toISOString();
       }
 
-      const response = await api.post('/rides', rideData);
-      set({ currentRide: response.data, isLoading: false, scheduledTime: null });
+      try {
+        const response = await api.post('/rides', rideData);
+        set({ currentRide: response.data, isLoading: false, scheduledTime: null });
+      } catch (networkError) {
+        // If network error, queue for offline sync
+        if (!navigator.onLine || networkError.message?.includes('Network')) {
+          const queuedRequest = {
+            id: `ride_${Date.now()}`,
+            type: 'create_ride',
+            data: rideData,
+            timestamp: new Date().toISOString(),
+            retryCount: 0,
+          };
+
+          // Store in AsyncStorage for offline sync
+          const existingQueue = await AsyncStorage.getItem('offline_queue');
+          const queue = existingQueue ? JSON.parse(existingQueue) : [];
+          queue.push(queuedRequest);
+          await AsyncStorage.setItem('offline_queue', JSON.stringify(queue));
+
+          set({
+            isLoading: false,
+            error: 'Ride request saved offline. Will sync when connection is restored.',
+            scheduledTime: null
+          });
+
+          // Clear ride details since it's queued
+          set({ pickup: null, dropoff: null, selectedVehicle: null, stops: [] });
+
+          throw new Error('Ride request queued for offline sync');
+        } else {
+          throw networkError;
+        }
+      }
       return response.data;
     } catch (error: any) {
       set({ isLoading: false, error: error.message });

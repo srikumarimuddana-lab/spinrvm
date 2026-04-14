@@ -64,7 +64,7 @@ class CorporateAccountResponse(CorporateAccountBase):
         from_attributes = True
 
 
-@router.get("/", response_model=List[CorporateAccountResponse])
+@router.get("", response_model=List[CorporateAccountResponse])
 async def get_corporate_accounts(
     request: Request,
     skip: int = 0,
@@ -92,7 +92,7 @@ async def get_corporate_accounts(
         ) from e
 
 
-@router.post("/", response_model=CorporateAccountResponse, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=CorporateAccountResponse, status_code=status.HTTP_201_CREATED)
 async def create_corporate_account(
     request: Request, account: CorporateAccountCreate, current_admin: dict = Depends(get_current_admin)
 ):

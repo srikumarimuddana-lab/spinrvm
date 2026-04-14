@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 try:
+    from ..core.config import settings
     from ..db import db
     from ..dependencies import (
         OTP_EXPIRY_MINUTES,
@@ -9,8 +10,10 @@ try:
         get_current_user,
     )
     from ..schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
+    from ..settings_loader import get_app_settings
     from ..sms_service import send_otp_sms
 except ImportError:
+    from core.config import settings
     from db import db
     from dependencies import (
         OTP_EXPIRY_MINUTES,
@@ -78,7 +81,7 @@ async def send_otp(request: Request, body: SendOTPRequest):
         twilio_from=settings.get("twilio_from_number", "") if settings else "",
     )
     if not sms_result.get("success"):
-        logger.error(f"Failed to send OTP SMS to {phone}: {sms_result.get('error')}")
+        logger.error(f"Failed to send OTP SMS: {sms_result.get('error')}")
         raise HTTPException(status_code=500, detail="Failed to send verification code")
 
     response = {"success": True, "message": f"OTP sent to {phone}"}
@@ -102,8 +105,9 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
         logger.warning(f"Could not query OTP from DB: {e}")
 
     # Dev fallback: accept code 123456 when no OTP record found (Twilio not configured)
-    if not otp_record and code == "123456":
-        logger.info(f"Dev mode: accepting code 123456 for {phone}")
+    # DISABLED IN PRODUCTION: only allow in development environment
+    if not otp_record and code == "123456" and settings.ENV.lower() == "development":
+        logger.info("Dev mode: accepting code 123456")
         otp_record = {"id": "dev", "phone": phone, "code": code, "expires_at": datetime.utcnow() + timedelta(minutes=5)}
 
     if not otp_record:
@@ -144,7 +148,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
         # Find or create user
         existing_user = None
         try:
-            logger.info(f"Searching for user with phone: {phone}")
+            logger.info("Searching for user")
             existing_user = await db.users.find_one({"phone": phone})
             logger.info(f"User search result found: {bool(existing_user)}")
         except Exception as e:
@@ -163,9 +167,9 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             logger.info("Token created. Validating UserProfile...")
             try:
                 user_obj = UserProfile(**existing_user)
-                logger.info(f"UserProfile valid for user: {existing_user.get('id')}")
+                logger.info("UserProfile valid")
             except Exception as e:
-                logger.error(f"UserProfile validation failed: {e}")
+                logger.error("UserProfile validation failed")
                 # Fallback constructs if validation fails to inspect why
                 raise e
 
@@ -226,7 +230,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
                 {"$set": {"profile_complete": True}},
             )
         except Exception as e:
-            logger.warning(f"Could not self-heal profile_complete for {current_user.get('id')}: {e}")
+            logger.warning("Could not self-heal profile_complete")
         current_user["profile_complete"] = True
 
     # Derive driver onboarding status (None for non-drivers).
@@ -240,6 +244,6 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         current_user["driver_onboarding_detail"] = detail
         current_user["driver_onboarding_next_screen"] = next_screen
     except Exception as e:
-        logger.warning(f"Could not derive onboarding status for {current_user.get('id')}: {e}")
+        logger.warning("Could not derive onboarding status")
 
     return UserProfile(**current_user)

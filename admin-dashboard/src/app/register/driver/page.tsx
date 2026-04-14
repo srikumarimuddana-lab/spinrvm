@@ -130,9 +130,13 @@ export default function DriverRegistrationPage() {
     const uploadFile = async (file: File): Promise<string> => {
         const data = new FormData();
         data.append("file", file);
+        const token = useAuthStore.getState().token;
         const res = await fetch("/api/upload", {
             method: "POST",
             body: data,
+            headers: token ? {
+                'Authorization': `Bearer ${token}`,
+            } : {},
             // Note: Content-Type header is auto-set by browser with boundary for FormData
         });
         if (!res.ok) throw new Error("Upload failed");

@@ -315,9 +315,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                 </TouchableOpacity>
               ))}
             </View>
-            <TouchableOpacity style={styles.skipBtn} onPress={onStartRide} disabled={isLoading}>
-              <Text style={styles.skipText}>Start Without PIN</Text>
-            </TouchableOpacity>
+
           </View>
         ) : null}
 

@@ -37,8 +37,8 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:8081,http://localhost:19006"
 
     # Admin credentials
-    ADMIN_EMAIL: str = "admin@spinr.ca"
-    ADMIN_PASSWORD: str = "admin123"
+    ADMIN_EMAIL: str = "admin@example.com"
+    ADMIN_PASSWORD: str = "Admin12345"
 
     # Rate limiting
     RATE_LIMIT: str = "10/minute"

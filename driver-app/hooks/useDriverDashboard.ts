@@ -317,7 +317,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       return;
     }
 
-    const wsUrl = `${API_URL.replace('http', 'ws')}/ws/driver/${user.id}`;
+    // Enforce secure WebSocket connection (wss://) in production
+    const isProduction = !__DEV__ && !API_URL.includes('localhost');
+    const wsUrl = `${API_URL.replace(/^https?/, isProduction ? 'wss' : 'ws')}/ws/driver/${user.id}`;
     console.log('Connecting to WebSocket:', wsUrl);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;

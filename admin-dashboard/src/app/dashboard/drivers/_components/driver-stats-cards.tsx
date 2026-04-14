@@ -23,13 +23,13 @@ function StatCard({ icon: I, color, bg, label, value }: {
     icon: any; color: string; bg: string; label: string; value: string | number;
 }) {
     return (
-        <div className="bg-card border rounded-xl p-4 flex items-center gap-3 hover:shadow-sm transition-shadow">
+        <div className="bg-card border rounded-xl p-4 flex items-center gap-3 hover:shadow-sm transition-shadow overflow-hidden">
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${bg}`}>
                 <I className={`h-5 w-5 ${color}`} />
             </div>
-            <div className="min-w-0">
-                <p className="text-xl font-extrabold leading-tight">{typeof value === "number" ? value.toLocaleString() : value}</p>
-                <p className="text-[11px] text-muted-foreground font-medium mt-0.5">{label}</p>
+            <div className="min-w-0 flex-1">
+                <p className="text-lg font-extrabold leading-tight truncate">{typeof value === "number" ? value.toLocaleString() : value}</p>
+                <p className="text-[11px] text-muted-foreground font-medium mt-0.5 truncate">{label}</p>
             </div>
         </div>
     );
@@ -38,7 +38,7 @@ function StatCard({ icon: I, color, bg, label, value }: {
 export default function DriverStatsCards({ stats, loading }: { stats: DriverStatsData | null; loading: boolean }) {
     if (loading || !stats) {
         return (
-            <div className="grid grid-cols-2 lg:grid-cols-5 xl:grid-cols-10 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
                 {Array.from({ length: 10 }).map((_, i) => (
                     <div key={i} className="bg-card border rounded-xl p-4 h-[72px] animate-pulse">
                         <div className="flex items-center gap-3">
@@ -55,7 +55,7 @@ export default function DriverStatsCards({ stats, loading }: { stats: DriverStat
     }
 
     return (
-        <div className="grid grid-cols-2 lg:grid-cols-5 xl:grid-cols-10 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             <StatCard icon={Users}
                 color="text-blue-600 dark:text-blue-400"
                 bg="bg-blue-100 dark:bg-blue-900/30"

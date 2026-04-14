@@ -1,8 +1,11 @@
+from urllib.parse import urlparse
+
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
 from slowapi.errors import RateLimitExceeded
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from core.config import settings
 from utils.rate_limiter import default_limiter, rate_limit_exceeded_handler
@@ -18,7 +21,7 @@ _MIN_JWT_SECRET_LENGTH = 32
 # in as the super-admin. These are the defaults shipped in
 # core/config.py; production deploys must set real values via env vars.
 _INSECURE_ADMIN_EMAILS = {"admin@spinr.ca", "admin@example.com"}
-_INSECURE_ADMIN_PASSWORDS = {"admin123", "replace-me", "changeme", "password"}
+_INSECURE_ADMIN_PASSWORDS = {"admin123", "replace-me", "changeme", "password", "Admin12345", "TempPass123!"}
 
 
 def _validate_production_config():
@@ -43,10 +46,7 @@ def _validate_production_config():
             "and set JWT_SECRET in the environment."
         )
     elif len(secret) < _MIN_JWT_SECRET_LENGTH:
-        errors.append(
-            f"JWT_SECRET is shorter than {_MIN_JWT_SECRET_LENGTH} characters. "
-            "Use a longer, random secret."
-        )
+        errors.append(f"JWT_SECRET is shorter than {_MIN_JWT_SECRET_LENGTH} characters. Use a longer, random secret.")
 
     # 2. Supabase credentials — the entire backend is Supabase-backed,
     #    so an unset URL or service role key means the server comes up
@@ -71,9 +71,7 @@ def _validate_production_config():
             "password in the environment before exposing the dashboard."
         )
     elif len(admin_password) < 12:
-        errors.append(
-            "ADMIN_PASSWORD is shorter than 12 characters. Use a stronger password."
-        )
+        errors.append("ADMIN_PASSWORD is shorter than 12 characters. Use a stronger password.")
 
     # 4. Firebase service account — required for Firebase Auth verify
     #    and for FCM push delivery. Missing means get_current_user can't
@@ -91,8 +89,7 @@ def _validate_production_config():
     if errors:
         formatted = "\n  - ".join(errors)
         raise RuntimeError(
-            f"Refusing to start: production configuration has {len(errors)} "
-            f"problem(s).\n  - {formatted}"
+            f"Refusing to start: production configuration has {len(errors)} problem(s).\n  - {formatted}"
         )
 
 
@@ -129,8 +126,7 @@ def init_middleware(app):
     allow_credentials = not wildcard
     if wildcard:
         logger.warning(
-            "CORS: wildcard '*' in ALLOWED_ORIGINS — allow_credentials disabled. "
-            "This is acceptable for local dev only."
+            "CORS: wildcard '*' in ALLOWED_ORIGINS — allow_credentials disabled. This is acceptable for local dev only."
         )
 
     app.add_middleware(
@@ -172,8 +168,30 @@ def init_middleware(app):
 
         return response
 
+    # Relative-redirect middleware — when FastAPI issues a 307 trailing-slash
+    # redirect the Location header contains an absolute backend URL
+    # (e.g. http://127.0.0.1:8400/api/admin/foo/). If the Next.js rewrite proxy
+    # forwards that to the browser, the browser follows it directly to the
+    # backend, bypassing the proxy and triggering CORS + auth-header loss.
+    # Stripping the scheme+host makes Location relative so the browser's
+    # follow-up request still goes through Next.js.
+    class RelativeRedirectMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            response = await call_next(request)
+            if response.status_code in (301, 302, 307, 308):
+                location = response.headers.get("location", "")
+                if location.startswith("http"):
+                    parsed = urlparse(location)
+                    relative = parsed.path
+                    if parsed.query:
+                        relative += f"?{parsed.query}"
+                    response.headers["location"] = relative
+            return response
+
+    app.add_middleware(RelativeRedirectMiddleware)
+
     # Rate Limiting Middleware
     app.state.limiter = default_limiter
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
-    logger.info("Middleware initialized: CORS and Rate Limiting")
+    logger.info("Middleware initialized: CORS, Relative-Redirect, and Rate Limiting")

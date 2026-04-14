@@ -290,7 +290,31 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
     """Link an uploaded document to the current driver."""
     driver = await db.drivers.find_one({"user_id": current_user["id"]})
     if not driver:
-        raise HTTPException(status_code=404, detail="Driver profile not found")
+        # Auto-create a minimal driver row so documents can be uploaded
+        # before the driver has completed the vehicle-info step.
+        first = current_user.get("first_name", "")
+        last = current_user.get("last_name", "")
+        driver = {
+            "id": str(uuid.uuid4()),
+            "user_id": current_user["id"],
+            "name": f"{first} {last}".strip() or current_user.get("phone", ""),
+            "phone": current_user.get("phone", ""),
+            "status": "pending",
+            "is_verified": False,
+            "is_online": False,
+            "is_available": False,
+            "rating": 5.0,
+            "total_rides": 0,
+            "lat": 0,
+            "lng": 0,
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        await db.drivers.insert_one(driver)
+        await db.users.update_one(
+            {"id": current_user["id"]},
+            {"$set": {"role": "driver", "is_driver": True}},
+        )
+        logger.info(f"Auto-created driver row for user_id={current_user['id']} during document upload")
 
     # Validate requirement exists — check global table first (if UUID), then
     # fall back to the driver's service area required_documents list

@@ -22,12 +22,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
         console.log(`API Request: ${options.method || 'GET'} ${path} -> ${res.status}`);
 
         if (res.status === 401) {
-            // Clear auth state via Zustand
-            useAuthStore.getState().logout();
-            if (typeof window !== "undefined") {
-                window.location.href = "/login";
+            // For the login endpoint, fall through to the !res.ok handler so
+            // "Invalid credentials" is shown to the user rather than "Unauthorized".
+            if (path !== "/api/admin/auth/login") {
+                useAuthStore.getState().logout();
+                if (typeof window !== "undefined") {
+                    window.location.href = "/login";
+                }
+                throw new Error("Unauthorized");
             }
-            throw new Error("Unauthorized");
         }
 
         if (!res.ok) {

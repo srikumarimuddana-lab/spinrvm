@@ -44,7 +44,7 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
 
         ws.onmessage = (event) => {
             try {
-                const data = JSON.parse(event.data) as MonitoringWsEvent & { type: string };
+                const data = JSON.parse(event.data) as { type: string } & Record<string, unknown>;
                 if (data.type === "ping") {
                     ws.send(JSON.stringify({ type: "pong" }));
                     return;
@@ -59,7 +59,7 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
                     "ride_cancelled",
                 ];
                 if (knownTypes.includes(data.type)) {
-                    onEventRef.current(data as MonitoringWsEvent);
+                    onEventRef.current(data as unknown as MonitoringWsEvent);
                 }
             } catch {
                 // ignore malformed messages

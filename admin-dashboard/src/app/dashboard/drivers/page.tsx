@@ -94,7 +94,7 @@ export default function DriversPage() {
 
     const handleVerify = async (driverId: string, verified: boolean) => {
         setVerifying(true);
-        try { const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"; const token = (await import("@/store/authStore")).useAuthStore.getState().token; await fetch(`${API_BASE}/api/admin/drivers/${driverId}/verify`, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` }, body: JSON.stringify({ verified }) }); loadData(); if (selected?.id === driverId) setSelected({ ...selected, is_verified: verified }); } catch {}
+        try { const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? ""; const token = (await import("@/store/authStore")).useAuthStore.getState().token; await fetch(`${API_BASE}/api/admin/drivers/${driverId}/verify`, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` }, body: JSON.stringify({ verified }) }); loadData(); if (selected?.id === driverId) setSelected({ ...selected, is_verified: verified }); } catch {}
         setVerifying(false);
     };
 
@@ -478,6 +478,13 @@ export default function DriversPage() {
                                                 );
                                             })}
                                             {/* Only show required documents — no "Other Documents" section */}
+                                        </div>
+                                    ) : activeDocs.length > 0 ? (
+                                        <div className="space-y-3">
+                                            <p className="text-xs text-muted-foreground">No service area configured — showing all uploaded documents</p>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                                                {activeDocs.map(d => <DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}
+                                            </div>
                                         </div>
                                     ) : (
                                         <div className="text-center py-12 text-muted-foreground bg-muted/20 rounded-xl border border-dashed"><Image className="h-10 w-10 mx-auto mb-3 opacity-30" /><p className="text-sm font-medium">No document requirements configured for this service area</p></div>

@@ -141,7 +141,24 @@ def _validate_production_config():
     elif len(admin_password) < 12:
         errors.append("ADMIN_PASSWORD is shorter than 12 characters. Use a stronger password.")
 
-    # 4. Firebase service account — required for Firebase Auth verify
+    # 4. Rate limiter storage — a multi-machine Fly deploy with
+    #    "memory://" slowapi storage means each machine keeps its own
+    #    counters, so 5/minute OTP limits become (5 × N_machines)/minute
+    #    as LB stickiness shifts. Require a redis:// URL in production.
+    redis_url = (settings.RATE_LIMIT_REDIS_URL or "").strip()
+    if not redis_url:
+        errors.append(
+            "RATE_LIMIT_REDIS_URL is not set. Production rate limiting "
+            "requires a shared Redis backend (e.g. Upstash / Fly Redis). "
+            "Set RATE_LIMIT_REDIS_URL=redis://… or rediss://… before booting."
+        )
+    elif not (redis_url.startswith("redis://") or redis_url.startswith("rediss://")):
+        errors.append(
+            "RATE_LIMIT_REDIS_URL must start with redis:// or rediss:// "
+            f"(got scheme from: {redis_url.split('://', 1)[0]}://…)."
+        )
+
+    # 5. Firebase service account — required for Firebase Auth verify
     #    and for FCM push delivery. Missing means get_current_user can't
     #    verify Firebase-issued tokens and send_push_notification no-ops.
     #    Warn rather than fail because a deploy MIGHT be intentionally

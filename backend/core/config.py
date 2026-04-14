@@ -42,6 +42,15 @@ class Settings(BaseSettings):
 
     # Rate limiting
     RATE_LIMIT: str = "10/minute"
+    # Storage backend for the distributed rate limiter. When empty the
+    # limiter uses slowapi's in-process "memory://" backend, which is fine
+    # for local dev but wrong in production: each Fly machine / worker
+    # keeps its own counters, so a 5/minute limit effectively becomes
+    # (5 × N_machines)/minute and an attacker can sidestep OTP / login
+    # limits by riding LB stickiness. Production deploys must set this
+    # to a redis:// (or rediss://) URL backed by Upstash / Fly Redis;
+    # _validate_production_config() enforces this at boot.
+    RATE_LIMIT_REDIS_URL: str = ""
 
     # File storage
     STORAGE_BUCKET: str = "driver-documents"

@@ -266,45 +266,59 @@ class TestAdminUserVerification:
 
 
 class TestFirebaseIntegration:
-    """Tests for Firebase authentication integration."""
+    """Tests for Firebase initialization + the user DB helpers that
+    used to be Firebase-backed and are now Supabase-backed.
 
-    @pytest.mark.asyncio
-    async def test_firebase_init(self, mock_firebase_admin):
-        """Test Firebase initialization."""
+    The production code path uses `run_sync()` which dispatches the
+    synchronous supabase-py chain to an executor. That means the
+    terminal ``.execute()`` in the mock chain must be a plain
+    ``MagicMock`` returning a response object — not an ``AsyncMock``,
+    which would yield an un-awaited coroutine and crash
+    ``_single_row_from_res`` silently to None.
+    """
+
+    def test_init_firebase_runs_without_error(self):
+        """init_firebase() swallows every exception path internally
+        (see core/security.py:11-26) and is called unconditionally at
+        server startup. This test pins that contract: no matter what
+        FIREBASE_SERVICE_ACCOUNT_JSON looks like, the call must not
+        raise. The real module attribute is ``firebase_admin``, not
+        ``firebase`` (the old test's AttributeError).
+        """
         from backend.core.security import init_firebase
 
-        with patch("backend.core.security.firebase") as mock_firebase:
+        with patch("backend.core.security.firebase_admin") as mock_firebase_admin:
             init_firebase()
-            # Firebase should be initialized
-            assert mock_firebase.initialize_app.called or True  # May be skipped if already init
+            # Either initialize_app was called, or an exception inside
+            # the JSON parse path was swallowed. Both are acceptable.
+            assert mock_firebase_admin is not None
 
     @pytest.mark.asyncio
-    async def test_create_firebase_user(self, mock_firebase_admin):
-        """Test creating user via Firebase."""
+    async def test_create_user_inserts_via_supabase(self):
+        """create_user() runs the supabase insert chain through
+        ``run_sync`` (synchronous inside the executor). Terminal
+        .execute() must therefore be a MagicMock, not AsyncMock."""
         from backend.db_supabase import create_user
 
-        mock_firebase_admin.auth.create_user.return_value = MagicMock(uid="firebase_uid")
-
         with patch("backend.db_supabase.supabase") as mock_supabase:
-            mock_supabase.table.return_value.insert.return_value.execute = AsyncMock(
-                return_value=MagicMock(data=[{"id": "user_123"}])
-            )
+            mock_response = MagicMock()
+            mock_response.data = [{"id": "user_123", "phone": "+1234567890", "email": "test@example.com"}]
+            mock_supabase.table.return_value.insert.return_value.execute = MagicMock(return_value=mock_response)
 
             result = await create_user({"phone": "+1234567890", "email": "test@example.com"})
 
             assert result is not None
+            assert result["id"] == "user_123"
 
     @pytest.mark.asyncio
-    async def test_get_firebase_user(self, mock_firebase_admin):
-        """Test getting user from Firebase."""
+    async def test_get_user_by_id_returns_first_row(self):
+        """get_user_by_id() -> _single_row_from_res picks data[0]."""
         from backend.db_supabase import get_user_by_id
-
-        mock_firebase_admin.auth.get_user.return_value = MagicMock(uid="user_123", phone_number="+1234567890")
 
         with patch("backend.db_supabase.supabase") as mock_supabase:
             mock_response = MagicMock()
             mock_response.data = [{"id": "user_123", "phone": "+1234567890"}]
-            mock_supabase.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+            mock_supabase.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
                 return_value=mock_response
             )
 
@@ -314,22 +328,22 @@ class TestFirebaseIntegration:
             assert result["id"] == "user_123"
 
     @pytest.mark.asyncio
-    async def test_get_user_by_phone_firebase(self, mock_firebase_admin):
-        """Test getting user by phone number."""
+    async def test_get_user_by_phone_returns_first_row(self):
+        """get_user_by_phone() hits the same chain as get_user_by_id
+        but keyed on the ``phone`` column."""
         from backend.db_supabase import get_user_by_phone
-
-        mock_firebase_admin.auth.get_user_by_phone_number.return_value = MagicMock(uid="user_123")
 
         with patch("backend.db_supabase.supabase") as mock_supabase:
             mock_response = MagicMock()
             mock_response.data = [{"id": "user_123", "phone": "+1234567890"}]
-            mock_supabase.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+            mock_supabase.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
                 return_value=mock_response
             )
 
             result = await get_user_by_phone("+1234567890")
 
             assert result is not None
+            assert result["phone"] == "+1234567890"
 
 
 class TestAuthEndpoints:

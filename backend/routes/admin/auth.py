@@ -287,10 +287,24 @@ async def admin_refresh(request: Request, body: RefreshRequest):
         email = settings.ADMIN_EMAIL
         role = "super_admin"
         modules = [
-            "dashboard", "users", "drivers", "rides", "earnings", "promotions",
-            "surge", "service_areas", "vehicle_types", "pricing", "support",
-            "disputes", "notifications", "settings", "corporate_accounts",
-            "documents", "heatmap", "staff",
+            "dashboard",
+            "users",
+            "drivers",
+            "rides",
+            "earnings",
+            "promotions",
+            "surge",
+            "service_areas",
+            "vehicle_types",
+            "pricing",
+            "support",
+            "disputes",
+            "notifications",
+            "settings",
+            "corporate_accounts",
+            "documents",
+            "heatmap",
+            "staff",
         ]
         token_version = 0
     else:

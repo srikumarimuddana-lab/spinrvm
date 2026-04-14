@@ -1078,11 +1078,7 @@ async def claim_stripe_event(event_id: str, event_type: str, payload: Dict[str, 
             return True
         except Exception as e:  # noqa: BLE001
             msg = str(e).lower()
-            if (
-                _PG_UNIQUE_VIOLATION in msg
-                or "duplicate key" in msg
-                or "already exists" in msg
-            ):
+            if _PG_UNIQUE_VIOLATION in msg or "duplicate key" in msg or "already exists" in msg:
                 logger.info(f"Stripe event {event_id} already claimed — treating as duplicate")
                 return False
             raise
@@ -1103,9 +1099,9 @@ async def mark_stripe_event_processed(event_id: str) -> None:
         return
 
     def _fn():
-        supabase.table("stripe_events").update(
-            {"processed_at": datetime.now(timezone.utc).isoformat()}
-        ).eq("event_id", event_id).execute()
+        supabase.table("stripe_events").update({"processed_at": datetime.now(timezone.utc).isoformat()}).eq(
+            "event_id", event_id
+        ).execute()
 
     try:
         await run_sync(_fn)

@@ -107,8 +107,7 @@ def _ensure_tracking_table(conn) -> None:
     """
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT 1 FROM information_schema.tables "
-            "WHERE table_schema = 'public' AND table_name = 'schema_migrations'"
+            "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'schema_migrations'"
         )
         exists = cur.fetchone() is not None
 
@@ -117,17 +116,14 @@ def _ensure_tracking_table(conn) -> None:
 
     tracking_path = MIGRATIONS_DIR / TRACKING_TABLE_MIGRATION
     if not tracking_path.exists():
-        raise RuntimeError(
-            f"Tracking table migration {TRACKING_TABLE_MIGRATION} not found in {MIGRATIONS_DIR}"
-        )
+        raise RuntimeError(f"Tracking table migration {TRACKING_TABLE_MIGRATION} not found in {MIGRATIONS_DIR}")
 
     print(f"[bootstrap] applying {TRACKING_TABLE_MIGRATION} to create schema_migrations table")
     sql = tracking_path.read_text()
     with conn.cursor() as cur:
         cur.execute(sql)
         cur.execute(
-            "INSERT INTO schema_migrations (filename, checksum) VALUES (%s, %s) "
-            "ON CONFLICT (filename) DO NOTHING",
+            "INSERT INTO schema_migrations (filename, checksum) VALUES (%s, %s) ON CONFLICT (filename) DO NOTHING",
             (TRACKING_TABLE_MIGRATION, _checksum(tracking_path)),
         )
     conn.commit()
@@ -140,9 +136,7 @@ def _fetch_applied(conn) -> dict[str, str]:
         return {row[0]: row[1] for row in cur.fetchall()}
 
 
-def _classify(
-    files: List[Path], applied: dict[str, str]
-) -> Tuple[List[Path], List[Path], List[Tuple[Path, str, str]]]:
+def _classify(files: List[Path], applied: dict[str, str]) -> Tuple[List[Path], List[Path], List[Tuple[Path, str, str]]]:
     """Split migrations into (pending, already_applied, drifted)."""
     pending: List[Path] = []
     already: List[Path] = []

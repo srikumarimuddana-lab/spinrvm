@@ -122,8 +122,8 @@ if sentry_dsn:
     _StarletteMiddleware = None
     try:
         from sentry_sdk.integrations.starlette import StarletteMiddleware as _StarletteMiddleware
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"Sentry Starlette integration unavailable: {exc}")
 
     integrations = [
         FastApiIntegration(transaction_style="url"),

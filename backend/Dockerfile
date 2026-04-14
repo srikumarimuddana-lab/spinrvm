@@ -5,6 +5,8 @@ RUN groupadd --gid 1001 spinr \
 
 WORKDIR /app
 
+RUN mkdir -p /app/logs && chmod 777 /app/logs
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

@@ -28,25 +28,58 @@ const CITY_CENTERS: Record<string, { lat: number; lng: number }> = {
 };
 
 // Robust polygon reader. Backend may store polygons as:
-//   { type: "Polygon", coordinates: [[[lng,lat], ...]] }   (GeoJSON)
-//   [{lat, lng}, ...]                                       (array)
+//   { type: "Polygon", coordinates: [[[lng,lat], ...]] }   (GeoJSON, nested)
+//   { type: "Polygon", coordinates: [[lng,lat], ...] }     (GeoJSON, flat — seen in some seeded data)
+//   [{lat, lng}, ...]                                       (plain object array)
+//   [[lat, lng], ...]                                       (plain tuple array)
 //   null / absent                                           (no polygon yet)
-function toGeoJSONPolygon(raw: unknown): GeoJSON.Polygon | null {
-    if (!raw) return null;
-    if (
-        typeof raw === "object" && raw !== null &&
-        (raw as { type?: string }).type === "Polygon" &&
-        Array.isArray((raw as { coordinates?: unknown }).coordinates)
-    ) {
-        return raw as GeoJSON.Polygon;
+function toLatLngArray(raw: unknown): { lat: number; lng: number }[] {
+    if (!raw) return [];
+
+    // GeoJSON Polygon (nested or flat coordinates)
+    if (typeof raw === "object" && raw !== null) {
+        const obj = raw as { type?: string; coordinates?: unknown };
+        if (obj.type === "Polygon" && Array.isArray(obj.coordinates)) {
+            const coords = obj.coordinates;
+            // Nested: [[[lng,lat], ...]]
+            if (
+                coords.length > 0 &&
+                Array.isArray(coords[0]) &&
+                Array.isArray((coords[0] as unknown[])[0])
+            ) {
+                return (coords[0] as number[][]).map(([lng, lat]) => ({ lat, lng }));
+            }
+            // Flat: [[lng,lat], [lng,lat], ...]
+            if (
+                coords.length > 0 &&
+                Array.isArray(coords[0]) &&
+                typeof (coords[0] as unknown[])[0] === "number"
+            ) {
+                return (coords as number[][]).map(([lng, lat]) => ({ lat, lng }));
+            }
+        }
     }
-    if (Array.isArray(raw) && raw.length >= 3 &&
-        typeof raw[0] === "object" && raw[0] !== null &&
-        "lat" in raw[0] && "lng" in raw[0]
-    ) {
-        return polygonPointsToGeoJSON(raw as { lat: number; lng: number }[]);
+
+    // Plain array forms
+    if (Array.isArray(raw) && raw.length > 0) {
+        const first = raw[0];
+        if (typeof first === "object" && first !== null && "lat" in first && "lng" in first) {
+            return raw as { lat: number; lng: number }[];
+        }
+        if (Array.isArray(first) && typeof first[0] === "number") {
+            return (raw as number[][]).map(([lat, lng]) => ({ lat, lng }));
+        }
     }
-    return null;
+
+    return [];
+}
+
+function centerOfPoints(points: { lat: number; lng: number }[]): { lat: number; lng: number } | null {
+    if (points.length === 0) return null;
+    return {
+        lat: points.reduce((s, p) => s + p.lat, 0) / points.length,
+        lng: points.reduce((s, p) => s + p.lng, 0) / points.length,
+    };
 }
 import { AlertFeed } from "./alert-feed";
 import { DriverPanel } from "./driver-panel";
@@ -137,15 +170,18 @@ export default function MonitoringPage() {
                         geojson?: unknown;
                         polygon?: unknown;
                     }) => {
-                        // Try geojson first, then polygon — both shapes supported by toGeoJSONPolygon.
-                        const geojson = toGeoJSONPolygon(a.geojson) ?? toGeoJSONPolygon(a.polygon);
-                        // If no polygon drawn, fall back to the city centre
-                        // so clicking the area on the toolbar still pans the
-                        // map to something sensible.
+                        // Extract polygon points in any of the formats the backend might return.
+                        const points = toLatLngArray(a.polygon) .length
+                            ? toLatLngArray(a.polygon)
+                            : toLatLngArray(a.geojson);
+                        const geojson = points.length >= 3 ? polygonPointsToGeoJSON(points) : null;
+                        // Fallback centre priority:
+                        //   1. Centre of the polygon points (any count >= 1)
+                        //   2. City preset, matched case-insensitively
                         const cityKey = (a.city ?? "").trim().toLowerCase();
-                        const fallbackCenter = !geojson && cityKey && CITY_CENTERS[cityKey]
-                            ? CITY_CENTERS[cityKey]
-                            : null;
+                        const fallbackCenter =
+                            centerOfPoints(points) ??
+                            (cityKey && CITY_CENTERS[cityKey] ? CITY_CENTERS[cityKey] : null);
                         return {
                             id: a.id,
                             name: a.name,

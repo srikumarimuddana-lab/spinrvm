@@ -89,6 +89,18 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             try:
                 payload = verify_jwt_token(token)
                 user = await db.users.find_one({"id": payload["user_id"]})
+                # Super-admin tokens issued by /admin/auth/login carry
+                # user_id='admin-001' which is NOT a row in the users
+                # table — synthesise a minimal user object from the JWT
+                # claims so the admin dashboard can open the live monitor
+                # WebSocket without a backing DB row.
+                if not user and payload.get("role") in ("admin", "super_admin"):
+                    user = {
+                        "id": payload.get("user_id"),
+                        "role": payload.get("role"),
+                        "email": payload.get("email"),
+                        "phone": payload.get("phone"),
+                    }
             except Exception:
                 user = None
 

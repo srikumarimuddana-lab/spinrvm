@@ -1,91 +1,163 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
+import maplibregl from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
+import {
+    MAP_STYLE_URL,
+    addStandardControls,
+    fitBoundsToPoints,
+    makeCircleMarkerEl,
+    polygonPointsToGeoJSON,
+} from "@/lib/map/maplibre-base";
+
+interface ServiceArea {
+    id: string;
+    name?: string;
+    is_airport?: boolean;
+    polygon?: { lat: number; lng: number }[];
+}
+
+interface Driver {
+    id?: string;
+    name?: string;
+    phone?: string;
+    vehicle_color?: string;
+    vehicle_make?: string;
+    vehicle_model?: string;
+    license_plate?: string;
+    rating?: number;
+    total_rides?: number;
+    is_online?: boolean;
+    current_lat?: number;
+    current_lng?: number;
+}
 
 interface DriverMapProps {
-    drivers: any[];
-    serviceAreas?: any[];
+    drivers: Driver[];
+    serviceAreas?: ServiceArea[];
     selectedArea?: string;
 }
 
-// Custom colored circle marker
-function createCircleIcon(color: string) {
-    return L.divIcon({
-        className: "",
-        html: `<div style="
-            width:14px;height:14px;border-radius:50%;
-            background:${color};border:2px solid #fff;
-            box-shadow:0 1px 4px rgba(0,0,0,0.3);
-        "></div>`,
-        iconSize: [14, 14],
-        iconAnchor: [7, 7],
-    });
-}
-
-const onlineIcon = createCircleIcon("#10b981");
-const offlineIcon = createCircleIcon("#71717a");
+const AREAS_SOURCE_ID = "driver-map-areas";
+const AREAS_FILL_LAYER_ID = "driver-map-areas-fill";
+const AREAS_LINE_LAYER_ID = "driver-map-areas-line";
 
 export default function DriverMap({ drivers, serviceAreas = [], selectedArea = "all" }: DriverMapProps) {
-    const mapRef = useRef<L.Map | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const mapRef = useRef<maplibregl.Map | null>(null);
+    const markersRef = useRef<maplibregl.Marker[]>([]);
+    const popupsRef = useRef<maplibregl.Popup[]>([]);
+    const isLoadedRef = useRef(false);
 
+    // Initialise map once
     useEffect(() => {
-        if (!containerRef.current) return;
+        if (!containerRef.current || mapRef.current) return;
 
-        if (mapRef.current) {
-            mapRef.current.remove();
-            mapRef.current = null;
-        }
-
-        const map = L.map(containerRef.current, {
-            center: [43.7, -79.4],
+        const map = new maplibregl.Map({
+            container: containerRef.current,
+            style: MAP_STYLE_URL,
+            center: [-79.4, 43.7], // Toronto
             zoom: 11,
-            zoomControl: true,
         });
-
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-            attribution: "&copy; OpenStreetMap",
-        }).addTo(map);
-
+        addStandardControls(map);
         mapRef.current = map;
 
-        // Draw service area polygons
-        serviceAreas.forEach((area) => {
-            const polygon = area.polygon;
-            if (!polygon || polygon.length < 3) return;
-            const latlngs = polygon.map((p: any) => [p.lat, p.lng] as [number, number]);
-            const poly = L.polygon(latlngs, {
-                color: area.is_airport ? "#0ea5e9" : "#8b5cf6",
-                weight: 2,
-                fillOpacity: 0.08,
-                dashArray: area.is_airport ? "6 4" : undefined,
-            }).addTo(map);
-            poly.bindTooltip(area.name || "Service Area", {
-                permanent: false,
-                direction: "center",
-                className: "font-medium",
+        map.on("load", () => {
+            isLoadedRef.current = true;
+            // Empty feature collection for service-area polygons; filled
+            // on subsequent effect runs
+            map.addSource(AREAS_SOURCE_ID, {
+                type: "geojson",
+                data: { type: "FeatureCollection", features: [] },
+            });
+            map.addLayer({
+                id: AREAS_FILL_LAYER_ID,
+                type: "fill",
+                source: AREAS_SOURCE_ID,
+                paint: {
+                    "fill-color": ["case",
+                        ["boolean", ["get", "is_airport"], false], "#0ea5e9",
+                        "#8b5cf6",
+                    ],
+                    "fill-opacity": 0.08,
+                },
+            });
+            map.addLayer({
+                id: AREAS_LINE_LAYER_ID,
+                type: "line",
+                source: AREAS_SOURCE_ID,
+                paint: {
+                    "line-color": ["case",
+                        ["boolean", ["get", "is_airport"], false], "#0ea5e9",
+                        "#8b5cf6",
+                    ],
+                    "line-width": 2,
+                    "line-dasharray": ["case",
+                        ["boolean", ["get", "is_airport"], false], ["literal", [3, 2]],
+                        ["literal", [1]],
+                    ],
+                },
             });
         });
 
-        // Add driver markers
-        const markers: L.Marker[] = [];
-        const driversWithLocation = drivers.filter(
-            (d) => d.current_lat && d.current_lng
-        );
+        return () => {
+            markersRef.current.forEach((m) => m.remove());
+            markersRef.current = [];
+            popupsRef.current.forEach((p) => p.remove());
+            popupsRef.current = [];
+            map.remove();
+            mapRef.current = null;
+            isLoadedRef.current = false;
+        };
+    }, []);
 
-        driversWithLocation.forEach((driver) => {
-            const icon = driver.is_online ? onlineIcon : offlineIcon;
-            const marker = L.marker([driver.current_lat, driver.current_lng], { icon }).addTo(map);
+    // Update driver markers + service-area polygons when data changes
+    useEffect(() => {
+        const map = mapRef.current;
+        if (!map) return;
 
-            const rating = driver.rating?.toFixed(1) || "5.0";
-            const status = driver.is_online
-                ? '<span style="color:#10b981;font-weight:600">● Online</span>'
-                : '<span style="color:#71717a;font-weight:600">● Offline</span>';
+        const apply = () => {
+            // ── Service-area polygons ────────────────────────────────
+            const features: GeoJSON.Feature[] = [];
+            serviceAreas.forEach((area) => {
+                const geo = polygonPointsToGeoJSON(area.polygon ?? []);
+                if (!geo) return;
+                features.push({
+                    type: "Feature",
+                    properties: {
+                        id: area.id,
+                        name: area.name || "Service Area",
+                        is_airport: !!area.is_airport,
+                    },
+                    geometry: geo,
+                });
+            });
+            const src = map.getSource(AREAS_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+            if (src) {
+                src.setData({ type: "FeatureCollection", features });
+            }
 
-            marker.bindPopup(
-                `<div style="min-width:180px;font-family:system-ui;font-size:13px;line-height:1.5">
+            // ── Driver markers ───────────────────────────────────────
+            markersRef.current.forEach((m) => m.remove());
+            markersRef.current = [];
+            popupsRef.current.forEach((p) => p.remove());
+            popupsRef.current = [];
+
+            const withLocation = drivers.filter((d) => d.current_lat && d.current_lng);
+            withLocation.forEach((driver) => {
+                const color = driver.is_online ? "#10b981" : "#71717a";
+                const el = makeCircleMarkerEl({
+                    color,
+                    title: driver.name ?? "",
+                    size: 14,
+                });
+
+                const rating = driver.rating?.toFixed(1) || "5.0";
+                const status = driver.is_online
+                    ? '<span style="color:#10b981;font-weight:600">● Online</span>'
+                    : '<span style="color:#71717a;font-weight:600">● Offline</span>';
+                const popupHtml = `<div style="min-width:180px;font-family:system-ui;font-size:13px;line-height:1.5">
                     <strong style="font-size:14px">${driver.name || "Unknown"}</strong><br/>
                     ${status}<br/>
                     <span style="color:#888">📱</span> ${driver.phone || "—"}<br/>
@@ -93,47 +165,58 @@ export default function DriverMap({ drivers, serviceAreas = [], selectedArea = "
                     <span style="color:#888">🔢</span> ${driver.license_plate || "—"}<br/>
                     <span style="color:#f59e0b">★</span> ${rating}
                     <span style="margin-left:8px;color:#888">${driver.total_rides || 0} rides</span>
-                </div>`,
-                { closeButton: false, offset: [0, -4] }
-            );
+                </div>`;
 
-            marker.on("mouseover", () => marker.openPopup());
-            marker.on("mouseout", () => marker.closePopup());
+                const popup = new maplibregl.Popup({ closeButton: false, offset: 8 }).setHTML(popupHtml);
 
-            markers.push(marker);
-        });
+                const marker = new maplibregl.Marker({ element: el })
+                    .setLngLat([driver.current_lng!, driver.current_lat!])
+                    .setPopup(popup)
+                    .addTo(map);
 
-        // Auto-fit bounds
-        if (markers.length > 0) {
-            const group = L.featureGroup(markers);
-            map.fitBounds(group.getBounds().pad(0.15));
-        }
+                el.addEventListener("mouseenter", () => marker.togglePopup());
+                el.addEventListener("mouseleave", () => {
+                    if (popup.isOpen()) popup.remove();
+                });
 
-        return () => {
-            map.remove();
-            mapRef.current = null;
+                markersRef.current.push(marker);
+                popupsRef.current.push(popup);
+            });
+
+            // Auto-fit to drivers when we have markers
+            if (withLocation.length > 0) {
+                fitBoundsToPoints(
+                    map,
+                    withLocation.map((d) => ({ lat: d.current_lat!, lng: d.current_lng! })),
+                    60,
+                );
+            }
         };
+
+        if (isLoadedRef.current) apply();
+        else map.once("load", apply);
     }, [drivers, serviceAreas]);
 
-    // Pan to selected area when it changes
+    // Pan to selected area
     useEffect(() => {
-        if (!mapRef.current) return;
+        const map = mapRef.current;
+        if (!map) return;
         if (selectedArea === "all") {
-            const driversWithLocation = drivers.filter((d) => d.current_lat && d.current_lng);
-            if (driversWithLocation.length > 0) {
-                const bounds = L.latLngBounds(
-                    driversWithLocation.map((d) => [d.current_lat, d.current_lng] as [number, number])
+            const withLocation = drivers.filter((d) => d.current_lat && d.current_lng);
+            if (withLocation.length > 0) {
+                fitBoundsToPoints(
+                    map,
+                    withLocation.map((d) => ({ lat: d.current_lat!, lng: d.current_lng! })),
+                    60,
                 );
-                mapRef.current.fitBounds(bounds.pad(0.15));
             }
             return;
         }
         const area = serviceAreas.find((a) => a.id === selectedArea);
-        if (!area?.polygon || area.polygon.length < 3) return;
-        const bounds = L.latLngBounds(
-            area.polygon.map((p: any) => [p.lat, p.lng] as [number, number])
-        );
-        mapRef.current.fitBounds(bounds.pad(0.1));
+        const geo = polygonPointsToGeoJSON(area?.polygon ?? []);
+        if (!geo) return;
+        const ring = geo.coordinates[0];
+        fitBoundsToPoints(map, ring.map((p) => [p[0], p[1]] as [number, number]), 60);
     }, [selectedArea, drivers, serviceAreas]);
 
     // Count stats

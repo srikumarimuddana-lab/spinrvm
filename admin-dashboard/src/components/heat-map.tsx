@@ -1,30 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useCallback } from "react";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
-
-// Import leaflet.heat dynamically – the plugin extends L with L.heatLayer()
-let heatLoaded = false;
-if (typeof window !== "undefined") {
-    try {
-        require("leaflet.heat");
-        heatLoaded = true;
-    } catch (e) {
-        console.warn("leaflet.heat not available");
-    }
-}
-
-// Fix Leaflet default icon paths for webpack/next
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-    iconRetinaUrl:
-        "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
-    iconUrl:
-        "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
-    shadowUrl:
-        "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-});
+import { useEffect, useRef } from "react";
+import maplibregl, { type ExpressionSpecification } from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
+import {
+    MAP_STYLE_POSITRON,
+    addStandardControls,
+    fitBoundsToPoints,
+} from "@/lib/map/maplibre-base";
 
 export interface HeatMapPoint {
     lat: number;
@@ -51,6 +34,44 @@ interface HeatMapProps {
     showDropoffs?: boolean;
 }
 
+const PICKUP_SOURCE = "heat-pickup-src";
+const DROPOFF_SOURCE = "heat-dropoff-src";
+const PICKUP_LAYER = "heat-pickup-lyr";
+const DROPOFF_LAYER = "heat-dropoff-lyr";
+
+// Colour stops for heatmap-color expression. We mirror the previous
+// Leaflet.heat gradients: blue-scale for pickups, green→red for dropoffs.
+const PICKUP_GRADIENT_EXPR: ExpressionSpecification = [
+    "interpolate", ["linear"], ["heatmap-density"],
+    0.0, "rgba(0,0,0,0)",
+    0.2, "#00ffff",
+    0.4, "#00aaff",
+    0.6, "#0066ff",
+    0.8, "#0000ff",
+    1.0, "#0000aa",
+];
+
+const DROPOFF_GRADIENT_EXPR: ExpressionSpecification = [
+    "interpolate", ["linear"], ["heatmap-density"],
+    0.0, "rgba(0,0,0,0)",
+    0.2, "#00ff00",
+    0.4, "#88ff00",
+    0.6, "#ffff00",
+    0.8, "#ff8800",
+    1.0, "#ff0000",
+];
+
+function pointsToFeatureCollection(points: HeatMapPoint[]): GeoJSON.FeatureCollection {
+    return {
+        type: "FeatureCollection",
+        features: points.map((p) => ({
+            type: "Feature",
+            properties: { intensity: p.intensity ?? 0.5 },
+            geometry: { type: "Point", coordinates: [p.lng, p.lat] },
+        })),
+    };
+}
+
 export default function HeatMap({
     pickupPoints = [],
     dropoffPoints = [],
@@ -61,117 +82,109 @@ export default function HeatMap({
     showPickups = true,
     showDropoffs = true,
 }: HeatMapProps) {
-    const mapRef = useRef<L.Map | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
-    const heatLayerRef = useRef<any>(null);
-    const pickupLayerRef = useRef<any>(null);
-    const dropoffLayerRef = useRef<any>(null);
+    const mapRef = useRef<maplibregl.Map | null>(null);
+    const isLoadedRef = useRef(false);
 
-    // Default gradient for heat map
-    const defaultGradient = {
-        0.0: "#00ff00", // Green - low intensity
-        0.3: "#88ff00",
-        0.5: "#ffff00", // Yellow - medium intensity
-        0.7: "#ff8800",
-        1.0: "#ff0000", // Red - high intensity
-    };
-
-    const gradient = settings.gradient || defaultGradient;
-
-    // Convert points to leaflet.heat format [lat, lng, intensity]
-    const toHeatPoints = (points: HeatMapPoint[]) => {
-        return points.map((p) => [p.lat, p.lng, p.intensity || 0.5] as [number, number, number]);
-    };
-
+    // Init map once
     useEffect(() => {
-        if (!containerRef.current || mapRef.current || !heatLoaded) return;
+        if (!containerRef.current || mapRef.current) return;
 
-        const map = L.map(containerRef.current, {
-            center: [center.lat, center.lng],
+        const map = new maplibregl.Map({
+            container: containerRef.current,
+            style: MAP_STYLE_POSITRON, // grayscale so heat layers pop
+            center: [center.lng, center.lat],
             zoom,
         });
-
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-            attribution: "&copy; OpenStreetMap contributors",
-            maxZoom: 19,
-        }).addTo(map);
-
+        addStandardControls(map);
         mapRef.current = map;
 
-        // Resize fix for dialog mount timing — must be cancelled on
-        // unmount to avoid calling invalidateSize() on a destroyed map
-        // (triggers "Cannot read properties of undefined ('_leaflet_pos')").
+        map.on("load", () => {
+            isLoadedRef.current = true;
+
+            map.addSource(PICKUP_SOURCE, { type: "geojson", data: pointsToFeatureCollection([]) });
+            map.addSource(DROPOFF_SOURCE, { type: "geojson", data: pointsToFeatureCollection([]) });
+
+            const radius = settings.radius ?? 25;
+            const maxVal = settings.max ?? 1;
+
+            map.addLayer({
+                id: PICKUP_LAYER,
+                type: "heatmap",
+                source: PICKUP_SOURCE,
+                paint: {
+                    "heatmap-weight": [
+                        "interpolate", ["linear"], ["get", "intensity"],
+                        0, 0,
+                        maxVal, 1,
+                    ],
+                    "heatmap-intensity": 1,
+                    "heatmap-radius": radius,
+                    "heatmap-color": PICKUP_GRADIENT_EXPR,
+                    "heatmap-opacity": 0.8,
+                },
+            });
+            map.addLayer({
+                id: DROPOFF_LAYER,
+                type: "heatmap",
+                source: DROPOFF_SOURCE,
+                paint: {
+                    "heatmap-weight": [
+                        "interpolate", ["linear"], ["get", "intensity"],
+                        0, 0,
+                        maxVal, 1,
+                    ],
+                    "heatmap-intensity": 1,
+                    "heatmap-radius": radius,
+                    "heatmap-color": DROPOFF_GRADIENT_EXPR,
+                    "heatmap-opacity": 0.8,
+                },
+            });
+        });
+
+        // Resize fix for dialog / tab mount timing
         const resizeTimer = setTimeout(() => {
-            if (mapRef.current) {
-                mapRef.current.invalidateSize();
-            }
+            mapRef.current?.resize();
         }, 200);
 
         return () => {
             clearTimeout(resizeTimer);
             map.remove();
             mapRef.current = null;
+            isLoadedRef.current = false;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Update heat layers when points or visibility changes
+    // Update data + visibility + radius when inputs change
     useEffect(() => {
-        if (!mapRef.current || !heatLoaded) return;
-
         const map = mapRef.current;
+        if (!map) return;
 
-        // Remove existing heat layers
-        if (pickupLayerRef.current) {
-            map.removeLayer(pickupLayerRef.current);
-            pickupLayerRef.current = null;
-        }
-        if (dropoffLayerRef.current) {
-            map.removeLayer(dropoffLayerRef.current);
-            dropoffLayerRef.current = null;
-        }
+        const apply = () => {
+            const pickupSrc = map.getSource(PICKUP_SOURCE) as maplibregl.GeoJSONSource | undefined;
+            const dropoffSrc = map.getSource(DROPOFF_SOURCE) as maplibregl.GeoJSONSource | undefined;
+            pickupSrc?.setData(pointsToFeatureCollection(showPickups ? pickupPoints : []));
+            dropoffSrc?.setData(pointsToFeatureCollection(showDropoffs ? dropoffPoints : []));
 
-        const heatOptions = {
-            radius: settings.radius || 25,
-            blur: settings.blur || 15,
-            maxZoom: settings.maxZoom || 17,
-            max: settings.max || 1,
-            gradient,
+            map.setLayoutProperty(PICKUP_LAYER, "visibility", showPickups ? "visible" : "none");
+            map.setLayoutProperty(DROPOFF_LAYER, "visibility", showDropoffs ? "visible" : "none");
+
+            const radius = settings.radius ?? 25;
+            map.setPaintProperty(PICKUP_LAYER, "heatmap-radius", radius);
+            map.setPaintProperty(DROPOFF_LAYER, "heatmap-radius", radius);
+
+            const allPoints = [
+                ...(showPickups ? pickupPoints : []),
+                ...(showDropoffs ? dropoffPoints : []),
+            ];
+            if (allPoints.length > 0) {
+                fitBoundsToPoints(map, allPoints, 50);
+            }
         };
-
-        // Add pickup heat layer
-        if (showPickups && pickupPoints.length > 0) {
-            const pickupHeat = (L as any).heatLayer(toHeatPoints(pickupPoints), {
-                ...heatOptions,
-                // Use blue/cyan gradient for pickups
-                gradient: {
-                    0.0: "#00ffff",
-                    0.3: "#00aaff",
-                    0.5: "#0066ff",
-                    0.7: "#0000ff",
-                    1.0: "#0000aa",
-                },
-            });
-            pickupHeat.addTo(map);
-            pickupLayerRef.current = pickupHeat;
-        }
-
-        // Add dropoff heat layer
-        if (showDropoffs && dropoffPoints.length > 0) {
-            const dropoffHeat = (L as any).heatLayer(toHeatPoints(dropoffPoints), heatOptions);
-            dropoffHeat.addTo(map);
-            dropoffLayerRef.current = dropoffHeat;
-        }
-
-        // Fit bounds if we have points
-        const allPoints = [...(showPickups ? pickupPoints : []), ...(showDropoffs ? dropoffPoints : [])];
-        if (allPoints.length > 0) {
-            const bounds = L.latLngBounds(
-                allPoints.map((p) => [p.lat, p.lng] as [number, number])
-            );
-            map.fitBounds(bounds.pad(0.1));
-        }
-    }, [pickupPoints, dropoffPoints, showPickups, showDropoffs, settings, gradient]);
+        if (isLoadedRef.current) apply();
+        else map.once("load", apply);
+    }, [pickupPoints, dropoffPoints, showPickups, showDropoffs, settings]);
 
     return (
         <div

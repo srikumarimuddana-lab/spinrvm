@@ -27,9 +27,18 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
         if (!token) return;
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
+        // Prefer NEXT_PUBLIC_WS_URL. Otherwise derive the scheme from
+        // window.location so HTTPS pages never attempt ws:// (browsers
+        // block that as mixed content).
+        const fallbackScheme =
+            typeof window !== "undefined" && window.location.protocol === "https:"
+                ? "wss"
+                : "ws";
+        const fallbackHost =
+            typeof window !== "undefined" ? window.location.host : "";
         const wsBase =
             process.env.NEXT_PUBLIC_WS_URL ||
-            (typeof window !== "undefined" ? `ws://${window.location.host}` : "");
+            (fallbackHost ? `${fallbackScheme}://${fallbackHost}` : "");
         const url = `${wsBase}/ws/admin/${clientId.current}`;
 
         setStatus("connecting");
@@ -44,7 +53,7 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
 
         ws.onmessage = (event) => {
             try {
-                const data = JSON.parse(event.data) as MonitoringWsEvent & { type: string };
+                const data = JSON.parse(event.data) as { type: string } & Record<string, unknown>;
                 if (data.type === "ping") {
                     ws.send(JSON.stringify({ type: "pong" }));
                     return;
@@ -59,7 +68,7 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
                     "ride_cancelled",
                 ];
                 if (knownTypes.includes(data.type)) {
-                    onEventRef.current(data as MonitoringWsEvent);
+                    onEventRef.current(data as unknown as MonitoringWsEvent);
                 }
             } catch {
                 // ignore malformed messages

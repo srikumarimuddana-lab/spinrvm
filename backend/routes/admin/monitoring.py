@@ -37,7 +37,7 @@ async def get_monitoring_drivers(current_admin: dict = Depends(get_admin_user)) 
     user_ids = [d["user_id"] for d in drivers if d.get("user_id")]
     users_res = await run_sync(
         lambda: supabase.table("users")
-        .select("id, first_name, last_name, phone, photo_url")
+        .select("id, first_name, last_name, phone, profile_image")
         .in_("id", user_ids)
         .execute()
     )
@@ -63,7 +63,7 @@ async def get_monitoring_drivers(current_admin: dict = Depends(get_admin_user)) 
                 "id": d["id"],
                 "name": f"{first} {last}".strip() or "Unknown Driver",
                 "phone": user.get("phone", ""),
-                "photo_url": user.get("photo_url"),
+                "photo_url": user.get("profile_image"),
                 "lat": d.get("lat"),
                 "lng": d.get("lng"),
                 "is_online": bool(d.get("is_online")),
@@ -91,7 +91,6 @@ async def get_monitoring_rides(current_admin: dict = Depends(get_admin_user)) ->
             "id, status, rider_id, driver_id, "
             "pickup_lat, pickup_lng, pickup_address, "
             "dropoff_lat, dropoff_lng, dropoff_address, "
-            "driver_current_lat, driver_current_lng, "
             "total_fare, distance_km, created_at, corporate_account_id"
         )
         .in_("status", ACTIVE_RIDE_STATUSES)
@@ -106,7 +105,7 @@ async def get_monitoring_rides(current_admin: dict = Depends(get_admin_user)) ->
 
     riders_res = await run_sync(
         lambda: supabase.table("users")
-        .select("id, first_name, last_name, phone, photo_url")
+        .select("id, first_name, last_name, phone, profile_image")
         .in_("id", rider_ids)
         .execute()
     )
@@ -143,7 +142,7 @@ async def get_monitoring_rides(current_admin: dict = Depends(get_admin_user)) ->
                 "rider_id": r.get("rider_id"),
                 "rider_name": f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or "Unknown",
                 "rider_phone": rider.get("phone"),
-                "rider_photo": rider.get("photo_url"),
+                "rider_photo": rider.get("profile_image"),
                 "driver_id": r.get("driver_id"),
                 "driver_name": f"{drv_user.get('first_name', '')} {drv_user.get('last_name', '')}".strip() or None,
                 "driver_phone": drv_user.get("phone"),

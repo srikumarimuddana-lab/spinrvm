@@ -130,7 +130,7 @@ export default function DriverRegistrationPage() {
     const uploadFile = async (file: File): Promise<string> => {
         const data = new FormData();
         data.append("file", file);
-        const token = useAuthStore.getState().token;
+        const token = formData.token;
         const res = await fetch("/api/upload", {
             method: "POST",
             body: data,

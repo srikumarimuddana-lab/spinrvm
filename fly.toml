@@ -12,6 +12,6 @@ primary_region = "sjc"
   min_machines_running = 0
   processes = ["app"]
 
-[env]
+[env] 
   PORT = "8000"
   # Set other env vars via 'fly secrets set' or environment specific files

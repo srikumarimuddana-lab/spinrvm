@@ -310,6 +310,5 @@ def init_middleware(app):
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
     logger.info(
-        "Middleware initialized: CORS, Security Headers "
-        f"(HSTS={'on' if is_production else 'off'}), Rate Limiting"
+        f"Middleware initialized: CORS, Security Headers (HSTS={'on' if is_production else 'off'}), Rate Limiting"
     )

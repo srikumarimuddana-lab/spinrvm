@@ -363,8 +363,6 @@ _STALE_TEST_CLASSES: frozenset[str] = frozenset(
         "test_rides.py::TestRideRatings",
         "test_rides.py::TestRideStatusUpdates",
         "test_rides.py::TestScheduledRides",
-        # test_sms.py — 4/12 stale
-        "test_sms.py::TestSMSService",
     }
 )
 

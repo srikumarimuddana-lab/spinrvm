@@ -438,8 +438,6 @@ class TestDocumentRegressions:
         Previously the endpoint raised HTTPException(404) during onboarding,
         which crashed the Documents screen in the driver app.
         """
-        from unittest.mock import AsyncMock, MagicMock
-
         mock_db = MagicMock()
         mock_db.drivers.find_one = AsyncMock(return_value=None)  # no driver profile
 

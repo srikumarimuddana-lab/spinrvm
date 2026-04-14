@@ -319,39 +319,10 @@ _STALE_TEST_CLASSES: frozenset[str] = frozenset(
         "test_auth.py::TestSessionManagement",
         "test_auth.py::TestTokenRefresh",
         # test_db.py — 0/31 stale (all repaired)
-        # test_documents.py — 17/25 stale
-        "test_documents.py::TestDocumentEndpoints",
-        "test_documents.py::TestDocumentExpiry",
-        "test_documents.py::TestDocumentFileStorage",
-        "test_documents.py::TestDocumentRegressions",
-        "test_documents.py::TestDocumentRequirements",
-        "test_documents.py::TestDriverDocuments",
-        # test_drivers.py — 17/19 stale
-        "test_drivers.py::TestDriverAvailability",
-        "test_drivers.py::TestDriverDocuments",
-        "test_drivers.py::TestDriverEndpoints",
-        "test_drivers.py::TestDriverLocation",
-        "test_drivers.py::TestDriverRegistration",
-        "test_drivers.py::TestDriverStats",
-        "test_drivers.py::TestDriverVehicle",
-        # test_features.py — 21/24 stale
-        "test_features.py::TestCorporateAccounts",
-        "test_features.py::TestEmergencyContacts",
-        "test_features.py::TestFAQs",
-        "test_features.py::TestNotifications",
-        "test_features.py::TestSavedAddresses",
-        "test_features.py::TestServiceAreas",
-        "test_features.py::TestSupportTickets",
-        "test_features.py::TestSurgePricing",
-        # test_rides.py — 20/28 stale
-        "test_rides.py::TestRideCreation",
-        "test_rides.py::TestRideDisputes",
-        "test_rides.py::TestRideEndpoints",
-        "test_rides.py::TestRideHistory",
-        "test_rides.py::TestRideMatching",
-        "test_rides.py::TestRideRatings",
-        "test_rides.py::TestRideStatusUpdates",
-        "test_rides.py::TestScheduledRides",
+        # test_documents.py — 0/25 stale (all repaired)
+        # test_drivers.py — 0/19 stale (all repaired)
+        # test_features.py — 0/24 stale (all repaired)
+        # test_rides.py — 0/28 stale (all repaired)
     }
 )
 

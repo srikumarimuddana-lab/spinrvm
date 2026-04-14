@@ -5,7 +5,7 @@ Tests cover support tickets, FAQs, surge pricing, notifications, and other featu
 
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -30,7 +30,7 @@ class TestSupportTickets:
 
         mock_response = MagicMock()
         mock_response.data = [{"id": "ticket_123"}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
+        mock_supabase_client.table.return_value.insert.return_value.execute = MagicMock(return_value=mock_response)
 
         result = await insert_one("support_tickets", ticket_data)
 
@@ -48,7 +48,7 @@ class TestSupportTickets:
 
         mock_response = MagicMock()
         mock_response.data = mock_tickets
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
             return_value=mock_response
         )
 
@@ -67,7 +67,7 @@ class TestSupportTickets:
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
         mock_query.eq.return_value = mock_query
-        mock_query.execute = AsyncMock(return_value=mock_response)
+        mock_query.execute = MagicMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
         result = await update_one("support_tickets", {"id": "ticket_123"}, {"status": "closed"})
@@ -88,7 +88,7 @@ class TestSupportTickets:
 
         mock_response = MagicMock()
         mock_response.data = [{"id": "reply_123"}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
+        mock_supabase_client.table.return_value.insert.return_value.execute = MagicMock(return_value=mock_response)
 
         result = await insert_one("ticket_replies", reply_data)
 
@@ -112,7 +112,7 @@ class TestFAQs:
 
         mock_response = MagicMock()
         mock_response.data = [{"id": "faq_123"}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
+        mock_supabase_client.table.return_value.insert.return_value.execute = MagicMock(return_value=mock_response)
 
         result = await insert_one("faqs", faq_data)
 
@@ -131,7 +131,7 @@ class TestFAQs:
         mock_response = MagicMock()
         mock_response.data = mock_faqs
         mock_supabase_client.table.return_value.select.return_value.eq.return_value.order.return_value.execute = (
-            AsyncMock(return_value=mock_response)
+            MagicMock(return_value=mock_response)
         )
 
         result = await get_rows("faqs", {"category": "rides"})
@@ -149,7 +149,7 @@ class TestFAQs:
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
         mock_query.eq.return_value = mock_query
-        mock_query.execute = AsyncMock(return_value=mock_response)
+        mock_query.execute = MagicMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
         result = await update_one("faqs", {"id": "faq_123"}, {"answer": "Updated answer..."})
@@ -171,7 +171,7 @@ class TestSurgePricing:
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
         mock_query.eq.return_value = mock_query
-        mock_query.execute = AsyncMock(return_value=mock_response)
+        mock_query.execute = MagicMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
         result = await update_one("surge_pricing", {"id": "surge_123"}, {"multiplier": 1.5})
@@ -187,7 +187,7 @@ class TestSurgePricing:
 
         mock_response = MagicMock()
         mock_response.data = mock_surge
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
             return_value=mock_response
         )
 
@@ -224,7 +224,7 @@ class TestNotifications:
 
         mock_response = MagicMock()
         mock_response.data = [{"id": "notif_123"}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
+        mock_supabase_client.table.return_value.insert.return_value.execute = MagicMock(return_value=mock_response)
 
         result = await insert_one("notifications", notification_data)
 
@@ -242,7 +242,7 @@ class TestNotifications:
 
         mock_response = MagicMock()
         mock_response.data = mock_notifications
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute = AsyncMock(
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute = MagicMock(
             return_value=mock_response
         )
 
@@ -261,7 +261,7 @@ class TestNotifications:
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
         mock_query.eq.return_value = mock_query
-        mock_query.execute = AsyncMock(return_value=mock_response)
+        mock_query.execute = MagicMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
         result = await update_one("notifications", {"id": "notif_123"}, {"read": True})
@@ -279,7 +279,7 @@ class TestNotifications:
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
         mock_query.eq.return_value = mock_query
-        mock_query.execute = AsyncMock(return_value=mock_response)
+        mock_query.execute = MagicMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
         result = await update_one("users", {"id": "user_123"}, {"fcm_token": "token_abc"})
@@ -302,7 +302,7 @@ class TestServiceAreas:
 
         mock_response = MagicMock()
         mock_response.data = mock_areas
-        mock_supabase_client.table.return_value.select.return_value.execute = AsyncMock(return_value=mock_response)
+        mock_supabase_client.table.return_value.select.return_value.execute = MagicMock(return_value=mock_response)
 
         result = await get_rows("service_areas")
 
@@ -317,7 +317,7 @@ class TestServiceAreas:
 
         mock_response = MagicMock()
         mock_response.data = [{"id": "assignment_123"}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
+        mock_supabase_client.table.return_value.insert.return_value.execute = MagicMock(return_value=mock_response)
 
         result = await insert_one("driver_areas", assignment_data)
 
@@ -360,7 +360,7 @@ class TestSavedAddresses:
 
         mock_response = MagicMock()
         mock_response.data = [{"id": "addr_123"}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
+        mock_supabase_client.table.return_value.insert.return_value.execute = MagicMock(return_value=mock_response)
 
         result = await insert_one("saved_addresses", address_data)
 
@@ -378,7 +378,7 @@ class TestSavedAddresses:
 
         mock_response = MagicMock()
         mock_response.data = mock_addresses
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
             return_value=mock_response
         )
 
@@ -397,7 +397,7 @@ class TestSavedAddresses:
         mock_query = MagicMock()
         mock_query.delete.return_value = mock_query
         mock_query.eq.return_value = mock_query
-        mock_query.execute = AsyncMock(return_value=mock_response)
+        mock_query.execute = MagicMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
         result = await delete_one("saved_addresses", {"id": "addr_123"})
@@ -417,7 +417,7 @@ class TestEmergencyContacts:
 
         mock_response = MagicMock()
         mock_response.data = [{"id": "contact_123"}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
+        mock_supabase_client.table.return_value.insert.return_value.execute = MagicMock(return_value=mock_response)
 
         result = await insert_one("emergency_contacts", contact_data)
 
@@ -435,7 +435,7 @@ class TestEmergencyContacts:
 
         mock_response = MagicMock()
         mock_response.data = mock_contacts
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
             return_value=mock_response
         )
 
@@ -461,7 +461,7 @@ class TestCorporateAccounts:
 
         mock_response = MagicMock()
         mock_response.data = [{"id": "corp_123"}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
+        mock_supabase_client.table.return_value.insert.return_value.execute = MagicMock(return_value=mock_response)
 
         result = await insert_one("corporate_accounts", corporate_data)
 
@@ -476,7 +476,7 @@ class TestCorporateAccounts:
 
         mock_response = MagicMock()
         mock_response.data = [{"id": "emp_123"}]
-        mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(return_value=mock_response)
+        mock_supabase_client.table.return_value.insert.return_value.execute = MagicMock(return_value=mock_response)
 
         result = await insert_one("corporate_employees", employee_data)
 

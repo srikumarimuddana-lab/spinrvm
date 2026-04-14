@@ -1,4 +1,17 @@
-# Deployment Guide: Vercel + Fly.io (or Render)
+# Deployment Guide (superseded)
+
+> **This file is superseded by [`docs/deploy/`](./docs/deploy/).**
+>
+> The newer runbook is more detailed, step-ordered, and covers every
+> third-party service secret + DNS + mobile-build step needed to go
+> from code-complete to serving real users. Start at
+> [`docs/deploy/README.md`](./docs/deploy/README.md).
+>
+> The content below is kept for historical reference only.
+
+---
+
+## Original quick-start (historical)
 
 This guide explains how to deploy the Spinr application using a hybrid approach:
 - **Backend (Python/FastAPI)**: Fly.io (Recommended) or Render

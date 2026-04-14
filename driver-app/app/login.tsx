@@ -17,25 +17,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { firebaseConfig } from '@shared/config/firebaseConfig';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
 
 const THEME = SpinrConfig.theme.colors;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-
-// Use @react-native-firebase/auth for native phone auth — handles reCAPTCHA
-// via SafetyNet (Android) and APNs (iOS) without a web RecaptchaVerifier.
-const isFirebaseConfigured = !!firebaseConfig.apiKey && !!firebaseConfig.projectId;
-let rnFirebaseAuth: any = null;
-if (isFirebaseConfigured) {
-  try {
-    rnFirebaseAuth = require('@react-native-firebase/auth').default;
-  } catch (e) {
-    console.warn('[Firebase] @react-native-firebase/auth not available:', e);
-  }
-}
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -114,28 +101,21 @@ export default function LoginScreen() {
     const formattedNumber = `+1${phoneNumber.replace(/\D/g, '')}`;
 
     try {
-      if (isFirebaseConfigured && rnFirebaseAuth) {
-        // @react-native-firebase/auth handles reCAPTCHA natively — no verifier needed
-        const confirmation = await rnFirebaseAuth().signInWithPhoneNumber(formattedNumber);
+      // Always use backend OTP — Twilio sends real SMS in production,
+      // falls back to code 123456 in dev when Twilio is not configured.
+      const response = await api.post('/auth/send-otp', { phone: formattedNumber });
+      if (response.data.success) {
         router.push({
           pathname: '/otp',
-          params: { verificationId: confirmation.verificationId, phoneNumber: formattedNumber, mode: 'firebase' }
+          params: { phoneNumber: formattedNumber, mode: 'backend' }
         });
       } else {
-        const response = await api.post('/auth/send-otp', { phone: formattedNumber });
-        if (response.data.success) {
-          router.push({
-            pathname: '/otp',
-            params: { phoneNumber: formattedNumber, mode: 'backend' }
-          });
-        } else {
-          setAlertState({
-            visible: true,
-            title: 'Failed',
-            message: 'Could not send verification code. Please try again.',
-            variant: 'danger',
-          });
-        }
+        setAlertState({
+          visible: true,
+          title: 'Failed',
+          message: 'Could not send verification code. Please try again.',
+          variant: 'danger',
+        });
       }
     } catch (error: any) {
       setAlertState({

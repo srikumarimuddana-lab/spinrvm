@@ -34,7 +34,7 @@ const getBackendUrl = () => {
     if (Platform.OS === 'android' && (host === '127.0.0.1' || host === 'localhost')) {
       host = '10.0.2.2';
     }
-    const generatedUrl = `http://${host}:8400`;
+    const generatedUrl = `http://${host}:8000`;
     console.log('Backend URL auto-detected from Expo hostUri:', generatedUrl);
     return generatedUrl;
   }
@@ -49,7 +49,7 @@ const getBackendUrl = () => {
   // 5. Last resort for Android emulator when no hostUri is available.
   if (Platform.OS === 'android') {
     console.warn('Backend URL: falling back to Android emulator alias 10.0.2.2');
-    return 'http://10.0.2.2:8400';
+    return 'http://10.0.2.2:8000';
   }
 
   // 6. Nothing worked — log a clear error so it's obvious something is misconfigured.
@@ -57,7 +57,7 @@ const getBackendUrl = () => {
     '[SpinrConfig] Could not determine backend URL! ' +
     'Set EXPO_PUBLIC_BACKEND_URL in your .env file (e.g. http://192.168.x.x:8000).'
   );
-  return 'http://localhost:8400'; // web-only fallback, fails on real devices — fix your .env!
+  return 'http://localhost:8000'; // web-only fallback, fails on real devices — fix your .env!
 };
 
 export const SpinrConfig = {

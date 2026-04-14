@@ -1,6 +1,6 @@
 import asyncio
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 try:
@@ -1036,3 +1036,78 @@ async def get_flags_for_target(target_type: str, target_id: str) -> List[Dict[st
             .execute()
         )
     )
+
+
+# ── Stripe webhook idempotency ────────────────────────────────────────
+# See migration 22_stripe_events.sql. These helpers back
+# routes/webhooks.py's dedup path: Stripe retries every event until we
+# return 2xx within 20s, so we MUST treat a replay of the same event.id
+# as a no-op — otherwise we double-mark rides paid, double-credit
+# wallets, and double-activate subscriptions.
+
+# PostgreSQL unique_violation SQLSTATE — raised as part of the error
+# string by postgrest-py when an INSERT conflicts with the PK.
+_PG_UNIQUE_VIOLATION = "23505"
+
+
+async def claim_stripe_event(event_id: str, event_type: str, payload: Dict[str, Any]) -> bool:
+    """Atomically claim a Stripe webhook event for processing.
+
+    Returns True if this call inserted the event row (caller should
+    proceed to process it). Returns False if the event_id is already
+    present (a retry — caller should return 200 without doing work).
+
+    Raises if Supabase is unreachable or the error is not a unique
+    violation — in that case the caller should return 5xx so Stripe
+    retries later.
+    """
+    if not supabase:
+        raise RuntimeError("Supabase client not configured — cannot persist stripe event")
+
+    serialized_payload = _serialize_for_api(payload)
+
+    def _fn() -> bool:
+        try:
+            supabase.table("stripe_events").insert(
+                {
+                    "event_id": event_id,
+                    "event_type": event_type,
+                    "payload": serialized_payload,
+                }
+            ).execute()
+            return True
+        except Exception as e:  # noqa: BLE001
+            msg = str(e).lower()
+            if (
+                _PG_UNIQUE_VIOLATION in msg
+                or "duplicate key" in msg
+                or "already exists" in msg
+            ):
+                logger.info(f"Stripe event {event_id} already claimed — treating as duplicate")
+                return False
+            raise
+
+    return await run_sync(_fn)
+
+
+async def mark_stripe_event_processed(event_id: str) -> None:
+    """Stamp processed_at=now() on a previously claimed stripe event row.
+
+    Called after the handler has finished the business-logic work for
+    an event. Failure here is non-fatal — the reconciliation job can
+    still distinguish processed vs. stuck events by the presence of
+    the updated_at stamp, and Stripe will not retry since we returned
+    2xx. Log and swallow.
+    """
+    if not supabase:
+        return
+
+    def _fn():
+        supabase.table("stripe_events").update(
+            {"processed_at": datetime.now(timezone.utc).isoformat()}
+        ).eq("event_id", event_id).execute()
+
+    try:
+        await run_sync(_fn)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Failed to stamp processed_at on stripe event {event_id}: {e}")

@@ -29,6 +29,23 @@ class Settings(BaseSettings):
     JWT_SECRET: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    # Rider/driver access-token TTL in days. Default is 30 days to match
+    # the pre-refresh-token behaviour so mobile clients that haven't
+    # shipped refresh-flow support yet keep working; operators should
+    # drop this to 1-7 days once the mobile rollout lands. The audit
+    # finding P0-S3 is addressed by the token_version + refresh_tokens
+    # revocation primitives, not by shortening TTL — so the default
+    # here is about deployment compatibility, not security posture.
+    ACCESS_TOKEN_TTL_DAYS: int = 30
+    # Admin-console access-token TTL in hours. Previously ∞ (no exp
+    # claim), which is unacceptable — anyone who captured an admin
+    # token had permanent access. Cap at 12h so at worst the attacker
+    # has until the next business-day login.
+    ADMIN_ACCESS_TOKEN_TTL_HOURS: int = 12
+    # Refresh-token TTL in days. 30 lines up with a reasonable "remember
+    # this device" window; anything longer turns refresh tokens into
+    # de-facto permanent credentials.
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
     # CORS settings
     # Comma-separated list of origins. Defaults to localhost dev ports so a
@@ -43,6 +60,30 @@ class Settings(BaseSettings):
 
     # Rate limiting
     RATE_LIMIT: str = "10/minute"
+    # Storage backend for the distributed rate limiter. When empty the
+    # limiter uses slowapi's in-process "memory://" backend, which is fine
+    # for local dev but wrong in production: each Fly machine / worker
+    # keeps its own counters, so a 5/minute limit effectively becomes
+    # (5 × N_machines)/minute and an attacker can sidestep OTP / login
+    # limits by riding LB stickiness. Production deploys must set this
+    # to a redis:// (or rediss://) URL backed by Upstash / Fly Redis;
+    # _validate_production_config() enforces this at boot.
+    RATE_LIMIT_REDIS_URL: str = ""
+
+    # WebSocket pub/sub backend (audit P0-B3). The ConnectionManager keeps
+    # sockets in an in-process dict, so "send to rider_X" only reaches X
+    # if X is connected to the SAME Fly machine that's doing the sending.
+    # With >1 machine, ride-dispatch events, driver-arrival pings and
+    # chat messages silently disappear whenever the LB puts the sender
+    # and receiver on different VMs. Setting WS_REDIS_URL makes every
+    # machine publish outbound socket sends to a shared Redis channel
+    # and have every machine's subscriber deliver to its own locals —
+    # a leaked message costs one Redis round-trip; a lost dispatch costs
+    # a rider. If empty we fall back to RATE_LIMIT_REDIS_URL (the prod
+    # validator already ensures that's set) so operators don't have to
+    # configure two URLs; set to something else only if you want to
+    # isolate WS traffic onto a separate Redis.
+    WS_REDIS_URL: str = ""
 
     # File storage
     STORAGE_BUCKET: str = "driver-documents"

@@ -11,23 +11,45 @@ This module provides configurable rate limiting with support for:
 import hashlib
 import time
 from functools import wraps
-from typing import Any, Callable, Dict
+from typing import Callable, Dict
 
 from fastapi import HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from loguru import logger
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
+try:
+    from core.config import settings
+except ImportError:  # pragma: no cover — package-relative fallback for tests
+    from ..core.config import settings  # type: ignore[no-redef]
+
 # ============================================================================
 # Rate Limiter Configuration
 # ============================================================================
+
+# Storage backend: redis:// when RATE_LIMIT_REDIS_URL is set, otherwise
+# "memory://" (process-local; dev only). In production the empty default
+# is blocked by _validate_production_config() so we never silently fall
+# back to memory across a multi-machine deploy.
+_rate_limit_storage_uri = settings.RATE_LIMIT_REDIS_URL or "memory://"
+if _rate_limit_storage_uri == "memory://":
+    logger.warning(
+        "Rate limiter using in-process 'memory://' storage — counters are "
+        "per-worker and will NOT rate-limit correctly across multiple Fly "
+        "machines. Set RATE_LIMIT_REDIS_URL for production deployments."
+    )
+else:
+    # Don't log the full URL; it contains the Redis password.
+    scheme = _rate_limit_storage_uri.split("://", 1)[0]
+    logger.info(f"Rate limiter using distributed storage backend: {scheme}://…")
 
 # Default limiter using IP address
 default_limiter = Limiter(
     key_func=get_remote_address,
     default_limits=["100/minute", "1000/hour"],
-    storage_uri="memory://",  # Use Redis in production: "redis://localhost:6379"
+    storage_uri=_rate_limit_storage_uri,
 )
 
 
@@ -152,11 +174,15 @@ admin_rate_limit = default_limiter.limit("100/minute")
 # ============================================================================
 
 
-async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> Dict[str, Any]:
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
     """
     Custom handler for rate limit exceeded errors.
 
-    Returns a structured JSON response with retry information.
+    Returns a 429 JSON response with retry information. Previously this
+    returned a plain dict, which Starlette serialised with a 200 status —
+    clients that check `response.status != 429` treated throttled
+    requests as successful. Always return a JSONResponse here so the
+    HTTP status and Retry-After header are set correctly.
     """
     # Calculate retry time from the exception
     retry_after = getattr(exc, "retry_after", 60)
@@ -169,12 +195,16 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
         f"Retry-After: {retry_after}s"
     )
 
-    return {
-        "error": "rate_limit_exceeded",
-        "message": "Too many requests. Please slow down and try again later.",
-        "retry_after": retry_after,
-        "documentation_url": "https://spinr.app/docs/rate-limits",
-    }
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={
+            "error": "rate_limit_exceeded",
+            "message": "Too many requests. Please slow down and try again later.",
+            "retry_after": retry_after,
+            "documentation_url": "https://spinr.app/docs/rate-limits",
+        },
+        headers={"Retry-After": str(retry_after)},
+    )
 
 
 # ============================================================================

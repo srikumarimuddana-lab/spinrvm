@@ -143,9 +143,18 @@ deprecated and ignore it when standing up a fresh project.
    `flags`, `complaints`, `lost_and_found`, and `driver_location_history`,
    which are referenced by code (`db_supabase.py`) but are NOT in
    `supabase_schema.sql`. Skipping this will produce table-not-found errors.
-6. Run `backend/migrations/*.sql` in numeric order (001, 02, 03, 04, 05, 06,
-   07, 08, 09, 10_disputes_table, 10_service_area_driver_matching, 11, 12,
-   13, 14, 15, 16, 17, plus `add_profile_image_url.sql`). Migration 17
+6. Apply `backend/migrations/*.sql` via the runner (preferred):
+   ```bash
+   export DATABASE_URL='postgres://…pooler.supabase.com:6543/postgres'
+   python -m backend.scripts.run_migrations --status   # inspect state
+   python -m backend.scripts.run_migrations            # apply pending
+   ```
+   The runner uses the `schema_migrations` tracking table (migration 24)
+   so re-runs are safe. See `backend/migrations/README.md` for the
+   naming convention. Historical note: `10_disputes_table.sql` runs
+   before `10b_service_area_driver_matching.sql` (renamed from
+   `10_service_area_driver_matching.sql`), and `23_profile_image_url.sql`
+   was formerly `add_profile_image_url.sql`. Migration 17
    (`17_corporate_accounts_fk.sql`) adds the FK constraints that link
    `users.corporate_account_id` / `rides.corporate_account_id` to
    `corporate_accounts.id` and enables RLS on the corporate_accounts table.

@@ -336,6 +336,10 @@ realtime==2.28.3
     # via
     #   -r requirements.in
     #   supabase
+redis==5.2.1
+    # via
+    #   -r requirements.in
+    #   limits
 requests==2.33.1
     # via
     #   -r requirements.in

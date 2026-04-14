@@ -2,6 +2,9 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 slowapi>=0.1.9
+# Shared storage backend for slowapi (via `limits`). Required in
+# production so rate-limit counters are coherent across Fly machines.
+redis>=5.0.0
 
 # Configuration
 python-dotenv>=1.0.0

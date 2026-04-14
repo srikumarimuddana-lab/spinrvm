@@ -2,14 +2,16 @@ from fastapi import APIRouter, HTTPException, Request
 
 try:
     from ..db import db
+    from ..db_supabase import claim_stripe_event, mark_stripe_event_processed
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
 except ImportError:
     from db import db
+    from db_supabase import claim_stripe_event, mark_stripe_event_processed
     from features import send_push_notification
     from settings_loader import get_app_settings
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 # IMPORTANT: This router does NOT have a /api/ prefix in the original server.py
@@ -52,9 +54,43 @@ async def stripe_webhook(request: Request):
         logger.error(f"Stripe webhook signature verification failed: {e}")
         raise HTTPException(status_code=400, detail="Invalid signature") from e
 
+    event_id = event.get("id", "")
     event_type = event.get("type", "")
     data_object = event.get("data", {}).get("object", {})
 
+    if not event_id:
+        # Should never happen for real Stripe events, but guard anyway —
+        # we cannot dedup without a stable key.
+        logger.error("Stripe webhook event missing id — cannot dedup")
+        raise HTTPException(status_code=400, detail="Missing event id")
+
+    # ── Idempotency gate ─────────────────────────────────────────────
+    # Stripe retries every event (network blip, >20s handler, any non-2xx)
+    # so we MUST treat a replay of the same event.id as a no-op. The
+    # stripe_events table (migration 22) has event_id as PRIMARY KEY;
+    # claim_stripe_event returns False on a unique-violation replay.
+    # Stripe objects are dict subclasses but nested values (e.g. data.object)
+    # remain as StripeObject instances. to_dict_recursive() flattens the whole
+    # tree into plain dicts so it can be stored in jsonb without surprises.
+    try:
+        event_payload = event.to_dict_recursive()  # type: ignore[attr-defined]
+    except AttributeError:
+        event_payload = dict(event)
+
+    try:
+        is_new = await claim_stripe_event(event_id, event_type, event_payload)
+    except Exception as e:
+        logger.error(f"Failed to persist stripe event {event_id}: {e}")
+        # Let Stripe retry — 5xx keeps the event in their queue.
+        raise HTTPException(status_code=500, detail="Event persistence failed") from e
+
+    if not is_new:
+        return {"received": True, "duplicate": True, "event_id": event_id}
+
+    # ── Dispatch ─────────────────────────────────────────────────────
+    # Any exception raised below propagates as 5xx, leaving processed_at
+    # NULL so either (a) Stripe retries, or (b) the nightly reconciliation
+    # job replays the event from the persisted payload.
     if event_type == "payment_intent.succeeded":
         ride_id = data_object.get("metadata", {}).get("ride_id")
         user_id = data_object.get("metadata", {}).get("user_id")
@@ -67,7 +103,7 @@ async def stripe_webhook(request: Request):
                     "$set": {
                         "payment_status": "paid",
                         "payment_intent_id": payment_intent_id,
-                        "paid_at": datetime.utcnow(),
+                        "paid_at": datetime.now(timezone.utc),
                     }
                 },
             )
@@ -139,4 +175,8 @@ async def stripe_webhook(request: Request):
     else:
         logger.info(f"Unhandled Stripe event type: {event_type}")
 
-    return {"received": True}
+    # Success — stamp processed_at. Non-fatal if this fails (we've
+    # already finished the side effects, and Stripe won't retry a 2xx).
+    await mark_stripe_event_processed(event_id)
+
+    return {"received": True, "event_id": event_id}

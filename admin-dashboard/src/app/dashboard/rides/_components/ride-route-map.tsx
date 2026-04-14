@@ -78,7 +78,7 @@ export default function RideRouteMap({ pickupLat, pickupLng, dropoffLat, dropoff
                     "line-color": "#9ca3af",
                     "line-width": 2,
                     "line-opacity": 0.6,
-                    "line-dasharray": [2, 2],
+                    "line-dasharray": ["literal", [2, 2]],
                 },
             });
 

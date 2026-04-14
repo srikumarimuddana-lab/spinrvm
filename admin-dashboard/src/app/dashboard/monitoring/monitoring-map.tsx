@@ -230,7 +230,7 @@ export function MonitoringMap({
                     "line-color": "#3b82f6",
                     "line-width": 2,
                     "line-opacity": 0.5,
-                    "line-dasharray": [2, 2],
+                    "line-dasharray": ["literal", [2, 2]],
                 },
             });
 
@@ -335,7 +335,7 @@ export function MonitoringMap({
                     paint: {
                         "line-color": "#8b5cf6",
                         "line-width": 2,
-                        "line-dasharray": [3, 2],
+                        "line-dasharray": ["literal", [3, 2]],
                     },
                 });
 

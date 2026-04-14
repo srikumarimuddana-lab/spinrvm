@@ -81,6 +81,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 _INSECURE_JWT_DEFAULTS = {
     "your-strong-secret-key",  # core/config.py default
     "spinr-dev-secret-key-NOT-FOR-PRODUCTION",  # previous dependencies.py fallback
+    "replace-with-strong-random-secret",  # backend/.env.example placeholder
 }
 _MIN_JWT_SECRET_LENGTH = 32
 
@@ -90,6 +91,20 @@ _MIN_JWT_SECRET_LENGTH = 32
 # core/config.py; production deploys must set real values via env vars.
 _INSECURE_ADMIN_EMAILS = {"admin@spinr.ca", "admin@example.com"}
 _INSECURE_ADMIN_PASSWORDS = {"admin123", "replace-me", "changeme", "password"}
+
+# Supabase service-role keys are signed JWTs (ES256/HS256), ~220 chars,
+# always starting with "eyJ" (base64-encoded JSON header). The .env.example
+# ships a "replace-with-service-role-key" placeholder; shipping that to
+# production would produce silent 401s from every DB call. Reject it and
+# anything that clearly isn't a real key. We intentionally do NOT do a
+# full JWT parse — that would require trusting Supabase's rotating JWKS
+# — we just gate on obvious structural markers.
+_SUPABASE_KEY_MIN_LENGTH = 40
+_SUPABASE_KEY_PREFIX = "eyJ"
+
+# Placeholder markers in SUPABASE_URL from backend/.env.example. A deploy
+# pointing at the example project ref will 404 every query.
+_SUPABASE_URL_PLACEHOLDERS = ("your-project-ref", "your-project", "example.supabase.co")
 
 
 def _validate_production_config():
@@ -118,11 +133,37 @@ def _validate_production_config():
 
     # 2. Supabase credentials — the entire backend is Supabase-backed,
     #    so an unset URL or service role key means the server comes up
-    #    but every DB call hits a NoneType client.
-    if not settings.SUPABASE_URL:
+    #    but every DB call hits a NoneType client. We also reject the
+    #    .env.example placeholders so a half-configured deploy can't
+    #    reach production (audit P0-S5).
+    supabase_url = (settings.SUPABASE_URL or "").strip()
+    if not supabase_url:
         errors.append("SUPABASE_URL is not set.")
-    if not settings.SUPABASE_SERVICE_ROLE_KEY:
+    elif any(marker in supabase_url for marker in _SUPABASE_URL_PLACEHOLDERS):
+        errors.append(
+            "SUPABASE_URL looks like the .env.example placeholder "
+            f"({supabase_url}). Set it to your real Supabase project URL "
+            "(https://<project-ref>.supabase.co)."
+        )
+
+    service_key = (settings.SUPABASE_SERVICE_ROLE_KEY or "").strip()
+    if not service_key:
         errors.append("SUPABASE_SERVICE_ROLE_KEY is not set.")
+    elif not service_key.startswith(_SUPABASE_KEY_PREFIX):
+        # Real Supabase service-role keys are JWTs; they always start
+        # with "eyJ". A value that doesn't is a placeholder, a typo, or
+        # someone pasted the anon key and dropped the header.
+        errors.append(
+            "SUPABASE_SERVICE_ROLE_KEY does not look like a real Supabase "
+            "service-role JWT (expected to start with 'eyJ'). Copy the key "
+            "from Supabase → Settings → API and paste it verbatim. NEVER "
+            "commit this value — it bypasses RLS."
+        )
+    elif len(service_key) < _SUPABASE_KEY_MIN_LENGTH:
+        errors.append(
+            f"SUPABASE_SERVICE_ROLE_KEY is only {len(service_key)} chars; real keys are ~220. "
+            "Check that the value was copied in full (a truncated key silently 401s every DB call)."
+        )
 
     # 3. Admin bootstrap credentials — the super-admin login path in
     #    routes/admin/auth.py compares directly against these strings.

@@ -16,6 +16,18 @@ from fastapi.testclient import TestClient
 # Add backend to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# pytest.ini has an `env = …` block but that's pytest-env syntax and we don't
+# install pytest-env. CI sets these via the job-level env: block; to make
+# `pytest` work locally without any ceremony, default the same values here if
+# the ambient env hasn't already provided them. Must run before any backend
+# module is imported so core/config.py's Settings model sees them.
+os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test_key")
+os.environ.setdefault("JWT_SECRET", "test-secret-key-for-ci-only-32chars!!")
+os.environ.setdefault("ADMIN_PASSWORD", "TestAdminPass123!")
+os.environ.setdefault("ADMIN_EMAIL", "admin@spinr.ca")
+os.environ.setdefault("ENV", "test")
+
 
 @pytest.fixture(scope="session")
 def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
@@ -300,9 +312,6 @@ def async_http_client() -> httpx.AsyncClient:
 # continue to run normally.
 _STALE_TEST_CLASSES: frozenset[str] = frozenset(
     {
-        # test_admin_auth.py — 10/10 stale
-        "test_admin_auth.py::TestAdminLogin",
-        "test_admin_auth.py::TestChangePassword",
         # test_admin_routes_auth.py — 6/6 stale (all fixture-setup errors)
         "test_admin_routes_auth.py::TestAdminRoutesRequireAuth",
         # test_auth.py — 19/27 stale
@@ -367,7 +376,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     `tests/test_rides.py::TestRideCreation::test_foo`) so that renaming a
     test method still keeps the skip applied until the class is removed
     from `_STALE_TEST_CLASSES`.
+
+    Set ``SPINR_RUN_STALE=1`` in the environment to disable the skip for
+    local triage runs while repairing classes — never used in CI.
     """
+    if os.environ.get("SPINR_RUN_STALE") == "1":
+        return
     skip_marker = pytest.mark.skip(reason="Stale — pre-Supabase API shape. Rewrite tracked in P1 test-suite repair.")
     for item in items:
         if any(stale in item.nodeid for stale in _STALE_TEST_CLASSES):

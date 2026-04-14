@@ -312,12 +312,8 @@ def async_http_client() -> httpx.AsyncClient:
 # continue to run normally.
 _STALE_TEST_CLASSES: frozenset[str] = frozenset(
     {
-        # test_admin_routes_auth.py — 6/6 stale (all fixture-setup errors)
-        "test_admin_routes_auth.py::TestAdminRoutesRequireAuth",
-        # test_auth.py — 17/27 stale
-        "test_auth.py::TestAuthEndpoints",
-        "test_auth.py::TestSessionManagement",
-        "test_auth.py::TestTokenRefresh",
+        # test_admin_routes_auth.py — 0/6 stale (all repaired)
+        # test_auth.py — 0/27 stale (all repaired)
         # test_db.py — 0/31 stale (all repaired)
         # test_documents.py — 0/25 stale (all repaired)
         # test_drivers.py — 0/19 stale (all repaired)

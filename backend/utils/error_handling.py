@@ -388,7 +388,17 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             }
         )
 
-    logger.warning(f"Validation error: {errors}", extra={"path": request.url.path, "method": request.method})
+    # Loguru treats the first positional arg as a format template, so embedding
+    # `errors` directly (which contains dict reprs with '{' characters) raises
+    # KeyError/ValueError during the format pass. opt(raw=True) disables
+    # template parsing, matching the defensive pattern in
+    # general_exception_handler below. Previously every 422 bubbled up as a
+    # 500 because this handler crashed while handling the validation error.
+    try:
+        logger.opt(raw=True).warning(f"Validation error at {request.method} {request.url.path}: {errors}\n")
+    except Exception:  # noqa: S110
+        # Never let logging take down the error handler itself.
+        pass
 
     return JSONResponse(
         status_code=422,

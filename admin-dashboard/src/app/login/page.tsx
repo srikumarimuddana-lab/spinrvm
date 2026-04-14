@@ -55,7 +55,12 @@ function LoginForm() {
             router.push(next);
         } catch (e: any) {
             console.error('Login error:', e);
-            setError(e.message || "Invalid credentials");
+            const msg = e.message || "";
+            if (msg.toLowerCase().includes("invalid credentials") || msg.toLowerCase().includes("unauthorized")) {
+                setError("Wrong email or password. Please try again.");
+            } else {
+                setError(msg || "Something went wrong. Please try again.");
+            }
         } finally {
             setLoading(false);
         }

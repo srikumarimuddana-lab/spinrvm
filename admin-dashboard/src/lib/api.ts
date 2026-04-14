@@ -19,7 +19,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const url = `${API_BASE}${path}`;
     try {
         const res = await fetch(url, { ...options, headers });
-        console.log(`API Request: ${options.method || 'GET'} ${path} -> ${res.status}`);
+        console.log(`API Request: ${options.method || 'GET'} ${url} -> ${res.status} (${res.statusText})`);
 
         if (res.status === 401) {
             // For the login endpoint, fall through to the !res.ok handler so

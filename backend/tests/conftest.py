@@ -318,14 +318,7 @@ _STALE_TEST_CLASSES: frozenset[str] = frozenset(
         "test_auth.py::TestAuthEndpoints",
         "test_auth.py::TestSessionManagement",
         "test_auth.py::TestTokenRefresh",
-        # test_db.py — 15/31 stale
-        "test_db.py::TestCollection",
-        "test_db.py::TestDBWrapper",
-        "test_db.py::TestDatabaseSupabaseFunctions",
-        "test_db.py::TestMockCursor",
-        "test_db.py::TestOTPRecordOperations",
-        "test_db.py::TestRideCollection",
-        "test_db.py::TestUserCollection",
+        # test_db.py — 0/31 stale (all repaired)
         # test_documents.py — 17/25 stale
         "test_documents.py::TestDocumentEndpoints",
         "test_documents.py::TestDocumentExpiry",

@@ -5,7 +5,7 @@ Tests cover CRUD operations, queries, and database utilities.
 
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -22,9 +22,14 @@ class TestMockCursor:
         return MockCursor("test_collection", {"status": "active"})
 
     def test_cursor_initialization(self, mock_cursor):
-        """Test cursor is initialized with correct filter."""
+        """Test cursor is initialized with correct filter.
+
+        The field is ``.filter`` — not ``._filter``. The old test was
+        written against a prior revision where the attribute was
+        private; the rename happened with the Supabase cutover.
+        """
         assert mock_cursor.collection_name == "test_collection"
-        assert mock_cursor._filter == {"status": "active"}
+        assert mock_cursor.filter == {"status": "active"}
 
     @pytest.mark.asyncio
     async def test_cursor_to_list(self, mock_cursor):
@@ -58,13 +63,13 @@ class TestCollection:
         """Test collection find returns a cursor."""
         cursor = collection.find({"status": "active"})
         assert cursor is not None
-        assert cursor._filter == {"status": "active"}
+        assert cursor.filter == {"status": "active"}
 
     def test_collection_find_empty_filter(self, collection):
         """Test collection find with empty filter."""
         cursor = collection.find()
         assert cursor is not None
-        assert cursor._filter is None
+        assert cursor.filter is None
 
 
 class TestDBWrapper:
@@ -82,7 +87,10 @@ class TestDBWrapper:
             "users",
             "drivers",
             "rides",
-            "otps",
+            # Historical: there was once a separate ``otps`` collection
+            # alongside ``otp_records``. The cutover consolidated them
+            # into ``otp_records`` — no attribute named ``otps`` is
+            # bound on DB today (see db.py:250).
             "otp_records",
             "vehicle_types",
             "fare_configs",
@@ -106,7 +114,7 @@ class TestDBWrapper:
             "corporate_accounts",
             "ride_messages",
             "emergency_contacts",
-            "emergency",
+            "emergencies",
             "notification_preferences",
         ]
         for collection_name in expected_collections:
@@ -130,7 +138,7 @@ class TestUserCollection:
         # Setup mock response
         mock_response = MagicMock()
         mock_response.data = [mock_data]
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
             return_value=mock_response
         )
 
@@ -145,7 +153,7 @@ class TestUserCollection:
         """Test finding a user that doesn't exist."""
         mock_response = MagicMock()
         mock_response.data = []
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
             return_value=mock_response
         )
 
@@ -160,7 +168,7 @@ class TestUserCollection:
 
         mock_response = MagicMock()
         mock_response.data = [mock_data]
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
             return_value=mock_response
         )
 
@@ -189,7 +197,7 @@ class TestDriverCollection:
 
         mock_response = MagicMock()
         mock_response.data = mock_data
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
             return_value=mock_response
         )
 
@@ -203,7 +211,7 @@ class TestDriverCollection:
         """Test updating driver location."""
         mock_response = MagicMock()
         mock_response.data = [{"lat": 52.2, "lng": -106.7}]
-        mock_supabase_client.rpc.return_value.execute = AsyncMock(return_value=mock_response)
+        mock_supabase_client.rpc.return_value.execute = MagicMock(return_value=mock_response)
 
         # This uses the RPC function for location update
         await driver_collection.update_one({"id": "driver_123"}, {"$set": {"lat": 52.2, "lng": -106.7}})
@@ -217,7 +225,7 @@ class TestDriverCollection:
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
         mock_query.eq.return_value = mock_query
-        mock_query.execute = AsyncMock(return_value=mock_response)
+        mock_query.execute = MagicMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
         await driver_collection.update_one({"id": "driver_123"}, {"$set": {"is_available": True}})
@@ -239,7 +247,7 @@ class TestRideCollection:
 
         mock_response = MagicMock()
         mock_response.data = [mock_data]
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
             return_value=mock_response
         )
 
@@ -255,7 +263,7 @@ class TestRideCollection:
 
         mock_response = MagicMock()
         mock_response.data = mock_data
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
             return_value=mock_response
         )
 
@@ -269,7 +277,7 @@ class TestRideCollection:
         mock_response.count = 100
 
         # Supabase returns count via a different mechanism
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
             return_value=mock_response
         )
 
@@ -298,7 +306,7 @@ class TestOTPRecordOperations:
         mock_response = MagicMock()
         mock_response.data = [{"id": "otp_123"}]
         mock_supabase_client.table.return_value.insert.return_value = MagicMock(
-            execute=AsyncMock(return_value=mock_response)
+            execute=MagicMock(return_value=mock_response)
         )
 
         otp_data = {"phone": "+1234567890", "code": "123456", "expires_at": "2024-01-01T00:10:00Z"}
@@ -317,7 +325,7 @@ class TestOTPRecordOperations:
         mock_query = MagicMock()
         mock_query.select.return_value = mock_query
         mock_query.eq.return_value = mock_query
-        mock_query.execute = AsyncMock(return_value=mock_response)
+        mock_query.execute = MagicMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
         result = await otp_records_collection.find_one({"phone": "+1234567890", "code": "123456"})
@@ -334,7 +342,7 @@ class TestOTPRecordOperations:
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
         mock_query.eq.return_value = mock_query
-        mock_query.execute = AsyncMock(return_value=mock_response)
+        mock_query.execute = MagicMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
         await otp_records_collection.update_one({"id": "otp_123"}, {"$set": {"verified": True}})
@@ -348,7 +356,7 @@ class TestOTPRecordOperations:
         mock_query = MagicMock()
         mock_query.delete.return_value = mock_query
         mock_query.lt.return_value = mock_query
-        mock_query.execute = AsyncMock(return_value=mock_response)
+        mock_query.execute = MagicMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
         await otp_records_collection.delete_one({"id": "otp_123"})
@@ -359,7 +367,15 @@ class TestDatabaseSupabaseFunctions:
 
     @pytest.mark.asyncio
     async def test_find_nearby_drivers(self, mock_supabase_client):
-        """Test finding nearby drivers using RPC."""
+        """Test finding nearby drivers using RPC.
+
+        conftest.py's autouse fixture wires ``client.rpc`` as an
+        AsyncMock so route tests don't crash on an awaited call. But
+        db_supabase.find_nearby_drivers calls supabase.rpc(...)
+        synchronously inside run_sync, so the AsyncMock returns an
+        un-awaited coroutine and the chained .execute() dies. Override
+        ``.rpc`` here with a plain MagicMock chain.
+        """
         from backend.db_supabase import find_nearby_drivers
 
         mock_data = [
@@ -369,29 +385,47 @@ class TestDatabaseSupabaseFunctions:
 
         mock_response = MagicMock()
         mock_response.data = mock_data
-        mock_supabase_client.rpc.return_value.execute = AsyncMock(return_value=mock_response)
+        mock_rpc = MagicMock()
+        mock_rpc.return_value.execute = MagicMock(return_value=mock_response)
+        mock_supabase_client.rpc = mock_rpc
 
         result = await find_nearby_drivers(52.1333, -106.6667, 5000)
 
         assert len(result) == 2
-        mock_supabase_client.rpc.assert_called_once_with(
+        mock_rpc.assert_called_once_with(
             "find_nearby_drivers", {"lat": 52.1333, "lng": -106.6667, "radius_meters": 5000}
         )
 
     @pytest.mark.asyncio
     async def test_update_driver_location_rpc(self, mock_supabase_client):
-        """Test updating driver location via RPC."""
+        """Test updating driver location.
+
+        Historical note: this function USED to call an
+        ``update_driver_location`` RPC, but the Supabase RPC had a
+        text/uuid type mismatch so it was bypassed in favour of a
+        direct ``table("drivers").update(...).eq("id", ...)`` write
+        (see db_supabase.py:260-270). The test name still says "rpc"
+        for continuity; the assertion reflects the real code path.
+        """
         from backend.db_supabase import update_driver_location
 
         mock_response = MagicMock()
-        mock_response.data = None
-        mock_supabase_client.rpc.return_value.execute = AsyncMock(return_value=mock_response)
+        mock_response.data = [{"id": "driver_123"}]
 
-        await update_driver_location("driver_123", 52.2, -106.7)
+        mock_query = MagicMock()
+        mock_query.update.return_value = mock_query
+        mock_query.eq.return_value = mock_query
+        mock_query.execute = MagicMock(return_value=mock_response)
+        mock_supabase_client.table.return_value = mock_query
 
-        mock_supabase_client.rpc.assert_called_once_with(
-            "update_driver_location", {"driver_id": "driver_123", "lat": 52.2, "lng": -106.7}
-        )
+        result = await update_driver_location("driver_123", 52.2, -106.7)
+
+        assert result is True
+        mock_supabase_client.table.assert_called_with("drivers")
+        # Verify update payload includes the new coordinates.
+        update_call_args = mock_query.update.call_args[0][0]
+        assert update_call_args["lat"] == 52.2
+        assert update_call_args["lng"] == -106.7
 
     @pytest.mark.asyncio
     async def test_claim_driver_atomic(self, mock_supabase_client):
@@ -405,7 +439,7 @@ class TestDatabaseSupabaseFunctions:
         mock_query = MagicMock()
         mock_query.update.return_value = mock_query
         mock_query.eq.return_value = mock_query
-        mock_query.execute = AsyncMock(return_value=mock_response)
+        mock_query.execute = MagicMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 
         result = await claim_driver_atomic("driver_123")
@@ -420,7 +454,7 @@ class TestDatabaseSupabaseFunctions:
 
         mock_response = MagicMock()
         mock_response.data = [mock_data]
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
             return_value=mock_response
         )
 
@@ -438,7 +472,7 @@ class TestDatabaseSupabaseFunctions:
 
         mock_response = MagicMock()
         mock_response.data = mock_data
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute = AsyncMock(
+        mock_supabase_client.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute = MagicMock(
             return_value=mock_response
         )
 
@@ -448,7 +482,12 @@ class TestDatabaseSupabaseFunctions:
 
     @pytest.mark.asyncio
     async def test_get_rides_for_driver(self, mock_supabase_client):
-        """Test getting rides for a specific driver."""
+        """Test getting rides for a specific driver.
+
+        Production builds an ``.eq("driver_id", ...).or_(...)`` chain
+        for the status filter (NOT ``.in_()`` — see
+        db_supabase.py:422-430). Mock the exact chain.
+        """
         from backend.db_supabase import get_rides_for_driver
 
         mock_data = [
@@ -458,9 +497,16 @@ class TestDatabaseSupabaseFunctions:
 
         mock_response = MagicMock()
         mock_response.data = mock_data
-        mock_supabase_client.table.return_value.select.return_value.in_.return_value.order.return_value.limit.return_value.execute = AsyncMock(
-            return_value=mock_response
-        )
+
+        # .eq("driver_id", x).or_(filter).order(...).limit(n).execute()
+        mock_query = MagicMock()
+        mock_query.select.return_value = mock_query
+        mock_query.eq.return_value = mock_query
+        mock_query.or_.return_value = mock_query
+        mock_query.order.return_value = mock_query
+        mock_query.limit.return_value = mock_query
+        mock_query.execute = MagicMock(return_value=mock_response)
+        mock_supabase_client.table.return_value = mock_query
 
         result = await get_rides_for_driver("driver_123", statuses=["completed", "in_progress"])
 

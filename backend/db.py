@@ -305,6 +305,8 @@ class DB:
         # P1-09: Quest / bonus challenges
         self.quests = BaseCollection("quests")
         self.quest_progress = BaseCollection("quest_progress")
+        # Stripe webhook dedup (migration 22; audit P0-B2)
+        self.stripe_events = BaseCollection("stripe_events")
 
     async def rpc(self, func_name: str, params: Dict[str, Any]):
         return await db_supabase.rpc(func_name, params)

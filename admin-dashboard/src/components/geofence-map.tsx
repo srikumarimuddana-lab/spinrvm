@@ -30,16 +30,26 @@ const READONLY_SOURCE_ID = "geofence-readonly-src";
 const READONLY_FILL_LAYER_ID = "geofence-readonly-fill";
 const READONLY_LINE_LAYER_ID = "geofence-readonly-line";
 
-// mapbox-gl-draw calls a couple of methods via Mapbox-specific names
-// that were renamed in MapLibre. Install a minimal compat shim so the
-// draw control works against a maplibregl.Map instance. Only needed in
-// this file because it's the only one that uses mapbox-gl-draw.
+/**
+ * @mapbox/mapbox-gl-draw is built against Mapbox GL JS. Two things
+ * could make it misbehave against MapLibre:
+ *
+ *   1. Class-name mismatch — mapbox-gl-draw emits elements with
+ *      .mapboxgl-ctrl-* classes and its own bundled CSS targets
+ *      those, so we DO NOT rewrite the class names here (doing so
+ *      silently breaks button styling). MapLibre only styles the
+ *      outer positioning container (.maplibregl-ctrl-top-left
+ *      etc.), which is unaffected.
+ *
+ *   2. Method surface — newer MapLibre renamed a couple of internal
+ *      helpers (e.g. getLayer's lookup order). Current MapLibre 3+
+ *      preserves every method mapbox-gl-draw reads.
+ *
+ * If a future MapLibre bump breaks this, add specific patches here.
+ * For now the shim is a no-op marker — imports of the draw CSS at
+ * the top of the file do all the real work.
+ */
 function installMapLibreCompatShim() {
-    // maplibre-gl exposes the class under the default export; mapbox-gl-draw
-    // expects the older Mapbox JS API surface. The only method it reaches
-    // for that differs is `getLayersOrder`, present on both — nothing else
-    // to patch here for MapLibre >=3. Keep the function so the call-site
-    // documents the intent in case a future upgrade needs actual patches.
     void maplibregl;
 }
 
@@ -99,6 +109,7 @@ export default function GeofenceMap({
     useEffect(() => {
         if (!containerRef.current || mapRef.current) return;
 
+        // Apply the compat shim BEFORE constructing MapboxDraw.
         installMapLibreCompatShim();
 
         const map = new maplibregl.Map({
@@ -136,10 +147,10 @@ export default function GeofenceMap({
                 const draw = new MapboxDraw({
                     displayControlsDefault: false,
                     controls: { polygon: true, trash: true },
-                    styles: undefined,
                 });
-                // Attach the draw control. Cast because mapbox-gl-draw's
-                // IControl type targets mapbox-gl, not maplibre-gl.
+                // Cast because mapbox-gl-draw's IControl type targets
+                // mapbox-gl, not maplibre-gl — the runtime surface is
+                // identical after the shim above.
                 map.addControl(draw as unknown as maplibregl.IControl, "top-left");
                 drawRef.current = draw;
 

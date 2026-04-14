@@ -46,143 +46,168 @@ class TestOTPCreation:
 
 
 class TestJWTTokenHandling:
-    """Tests for JWT token creation and verification."""
+    """Tests for JWT token creation and verification.
 
-    @pytest.fixture
-    def mock_settings(self):
-        """Mock settings with test values."""
-        with patch("backend.dependencies.settings") as mock_settings:
-            mock_settings.SECRET_KEY = "test-secret-key-for-testing-only"
-            mock_settings.ALGORITHM = "HS256"
-            mock_settings.ACCESS_TOKEN_EXPIRE_MINUTES = 30
-            yield mock_settings
+    These were written against the pre-audit JWT shape (``sub`` claim,
+    raw ``jwt.*Error`` propagation, ``SECRET_KEY`` on settings). The
+    current dependencies module uses ``user_id``/``phone`` claims, maps
+    all JWT errors to ``HTTPException(401)``, and reads ``JWT_SECRET``
+    from the real settings object. Rewrite is in-place; no production
+    code changes.
+    """
 
-    def test_create_jwt_token(self, mock_settings):
-        """Test JWT token creation."""
+    def test_create_jwt_token(self):
+        """create_jwt_token returns a non-empty JWT string."""
         from backend.dependencies import create_jwt_token
 
         token = create_jwt_token(user_id="user_123", phone="+1234567890")
 
-        assert token is not None
         assert isinstance(token, str)
-        assert len(token) > 0
+        assert token.count(".") == 2  # header.payload.signature
 
-    def test_create_jwt_token_with_session(self, mock_settings):
-        """Test JWT token creation with session ID."""
-        from backend.dependencies import create_jwt_token
-
-        token = create_jwt_token(user_id="user_123", phone="+1234567890", session_id="session_abc")
-
-        assert token is not None
-        # Verify token can be decoded
-        decoded = create_jwt_token.verify_jwt_token(token, mock_settings)
-        assert decoded["session_id"] == "session_abc"
-
-    def test_verify_jwt_token_valid(self, mock_settings):
-        """Test verifying a valid JWT token."""
+    def test_create_jwt_token_with_session(self):
+        """session_id, when provided, is embedded in the payload and survives a round-trip."""
         from backend.dependencies import create_jwt_token, verify_jwt_token
 
-        # Create token
-        token = create_jwt_token(user_id="user_123", phone="+1234567890")
-
-        # Verify token
+        token = create_jwt_token(user_id="user_123", phone="+1234567890", session_id="session_abc")
         decoded = verify_jwt_token(token)
 
-        assert decoded is not None
-        assert decoded["sub"] == "user_123"
+        assert decoded["session_id"] == "session_abc"
+        assert decoded["user_id"] == "user_123"
         assert decoded["phone"] == "+1234567890"
 
-    def test_verify_jwt_token_invalid(self, mock_settings):
-        """Test verifying an invalid JWT token."""
+    def test_verify_jwt_token_valid(self):
+        """A freshly-minted token decodes back to its input claims."""
+        from backend.dependencies import create_jwt_token, verify_jwt_token
+
+        token = create_jwt_token(user_id="user_123", phone="+1234567890")
+        decoded = verify_jwt_token(token)
+
+        # The production payload uses ``user_id`` — the old ``sub`` claim
+        # was removed in the audit P0-S3 refactor.
+        assert decoded["user_id"] == "user_123"
+        assert decoded["phone"] == "+1234567890"
+        assert "exp" in decoded and "iat" in decoded
+
+    def test_verify_jwt_token_invalid(self):
+        """A malformed token raises HTTPException(401)."""
+        from fastapi import HTTPException
+
         from backend.dependencies import verify_jwt_token
 
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException) as exc_info:
             verify_jwt_token("invalid.token.here")
+        assert exc_info.value.status_code == 401
 
-    def test_verify_jwt_token_expired(self, mock_settings):
-        """Test verifying an expired JWT token."""
+    def test_verify_jwt_token_expired(self):
+        """An expired token raises HTTPException(401) — not a raw jwt error."""
         import jwt
+        from fastapi import HTTPException
 
-        from backend.dependencies import verify_jwt_token
+        from backend.core.config import settings
+        from backend.dependencies import JWT_ALGORITHM, verify_jwt_token
 
-        # Create expired token
         payload = {
-            "sub": "user_123",
+            "user_id": "user_123",
             "phone": "+1234567890",
-            "exp": datetime.utcnow() - timedelta(minutes=5),  # Expired 5 minutes ago
+            "exp": datetime.utcnow() - timedelta(minutes=5),
         }
+        expired_token = jwt.encode(payload, settings.JWT_SECRET, algorithm=JWT_ALGORITHM)
 
-        expired_token = jwt.encode(payload, mock_settings.SECRET_KEY, algorithm=mock_settings.ALGORITHM)
-
-        with pytest.raises(jwt.ExpiredSignatureError):
+        with pytest.raises(HTTPException) as exc_info:
             verify_jwt_token(expired_token)
+        assert exc_info.value.status_code == 401
+        assert "expired" in exc_info.value.detail.lower()
 
-    def test_verify_jwt_token_wrong_algorithm(self, mock_settings):
-        """Test verifying token with wrong algorithm."""
+    def test_verify_jwt_token_wrong_secret(self):
+        """A token signed with a different secret raises HTTPException(401)."""
         import jwt
+        from fastapi import HTTPException
 
-        from backend.dependencies import verify_jwt_token
+        from backend.dependencies import JWT_ALGORITHM, verify_jwt_token
 
-        # Create token with different algorithm
-        payload = {"sub": "user_123", "phone": "+1234567890", "exp": datetime.utcnow() + timedelta(minutes=30)}
+        payload = {
+            "user_id": "user_123",
+            "phone": "+1234567890",
+            "exp": datetime.utcnow() + timedelta(minutes=30),
+        }
+        wrong_token = jwt.encode(payload, "wrong-secret-key-for-this-test-only", algorithm=JWT_ALGORITHM)
 
-        wrong_token = jwt.encode(payload, "wrong-secret-key", algorithm=mock_settings.ALGORITHM)
-
-        with pytest.raises(jwt.InvalidTokenError):
+        with pytest.raises(HTTPException) as exc_info:
             verify_jwt_token(wrong_token)
+        assert exc_info.value.status_code == 401
 
 
 class TestGetCurrentUser:
-    """Tests for get_current_user dependency."""
+    """Tests for get_current_user dependency.
+
+    The production function tries Firebase first, then falls back to the
+    legacy JWT. Tests force the Firebase path to reject so the JWT path
+    runs predictably. The original suite asserted ``user["user_id"]``
+    against a payload whose key was ``"sub"`` — the current code reads
+    ``payload["user_id"]`` and populates ``user["id"]``, which is what
+    the DB row uses.
+    """
 
     @pytest.fixture
     def mock_credentials(self):
-        """Mock HTTP authorization credentials."""
         from fastapi.security import HTTPAuthorizationCredentials
 
-        return HTTPAuthorizationCredentials(
-            scheme="Bearer",
-            credentials="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyXzEyMyIsInBob25lIjoiKzEyMzQ1Njc4OTAifQ.test_sig",
-        )
+        return HTTPAuthorizationCredentials(scheme="Bearer", credentials="not.a.real.jwt")
 
     @pytest.mark.asyncio
     async def test_get_current_user_valid_token(self, mock_credentials):
-        """Test get_current_user with valid token."""
+        """Firebase rejects → JWT path → DB miss → auto-created rider returned."""
+        from firebase_admin.auth import InvalidIdTokenError
+
         from backend.dependencies import get_current_user
 
-        with patch("backend.dependencies.verify_jwt_token") as mock_verify:
-            mock_verify.return_value = {"sub": "user_123", "phone": "+1234567890"}
+        with (
+            patch(
+                "backend.dependencies.firebase_auth.verify_id_token", side_effect=InvalidIdTokenError("not firebase")
+            ),
+            patch("backend.dependencies.verify_jwt_token") as mock_verify,
+            patch("backend.dependencies.db") as mock_db,
+        ):
+            mock_verify.return_value = {"user_id": "user_123", "phone": "+1234567890"}
+            mock_db.users.find_one = AsyncMock(return_value=None)
+            mock_db.users.insert_one = AsyncMock()
 
             user = await get_current_user(mock_credentials)
 
-            assert user["user_id"] == "user_123"
+            # Auto-created user row keeps id/phone from the JWT payload.
+            assert user["id"] == "user_123"
             assert user["phone"] == "+1234567890"
+            assert user["role"] == "rider"  # always default, never trust JWT claim
+            assert user["is_driver"] is False
 
     @pytest.mark.asyncio
     async def test_get_current_user_invalid_token(self, mock_credentials):
-        """Test get_current_user with invalid token."""
+        """Firebase rejects AND JWT rejects → HTTPException(401)."""
         from fastapi import HTTPException
+        from firebase_admin.auth import InvalidIdTokenError
 
         from backend.dependencies import get_current_user
 
-        with patch("backend.dependencies.verify_jwt_token") as mock_verify:
-            mock_verify.side_effect = Exception("Invalid token")
-
+        with (
+            patch(
+                "backend.dependencies.firebase_auth.verify_id_token", side_effect=InvalidIdTokenError("not firebase")
+            ),
+            patch("backend.dependencies.verify_jwt_token", side_effect=Exception("Invalid token")),
+        ):
             with pytest.raises(HTTPException) as exc_info:
                 await get_current_user(mock_credentials)
-
             assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
     async def test_get_current_user_missing_credentials(self):
-        """Test get_current_user with missing credentials."""
+        """No credentials → HTTPException(401)."""
         from fastapi import HTTPException
 
         from backend.dependencies import get_current_user
 
         with pytest.raises(HTTPException) as exc_info:
             await get_current_user(None)
-
         assert exc_info.value.status_code == 401
 
 

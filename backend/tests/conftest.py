@@ -318,8 +318,6 @@ _STALE_TEST_CLASSES: frozenset[str] = frozenset(
         "test_auth.py::TestAdminUserVerification",
         "test_auth.py::TestAuthEndpoints",
         "test_auth.py::TestFirebaseIntegration",
-        "test_auth.py::TestGetCurrentUser",
-        "test_auth.py::TestJWTTokenHandling",
         "test_auth.py::TestSessionManagement",
         "test_auth.py::TestTokenRefresh",
         # test_db.py — 15/31 stale

@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Image, Platform, StatusBar } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -75,6 +76,13 @@ export default function DocumentsScreen() {
     useEffect(() => {
         loadData();
     }, []);
+
+    // Re-fetch whenever the screen comes into focus (e.g. returning from admin review)
+    useFocusEffect(
+        useCallback(() => {
+            loadData();
+        }, [])
+    );
 
     const processUpload = async (uri: string, name: string, mimeType: string, reqId: string, side: 'front' | 'back') => {
         try {

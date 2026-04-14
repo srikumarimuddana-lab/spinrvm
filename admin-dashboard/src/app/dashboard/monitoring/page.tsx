@@ -10,6 +10,44 @@ import { useMonitoringSocket } from "@/hooks/use-monitoring-socket";
 import { MonitoringMap, MapHandles, MonitoringServiceArea } from "./monitoring-map";
 import { MonitoringToolbar } from "./toolbar";
 import { polygonPointsToGeoJSON } from "@/lib/map/maplibre-base";
+
+// Canadian city centre fallbacks — used when a service area has no
+// polygon drawn (just a city name) so the map still pans somewhere
+// sensible when the operator picks that area.
+const CITY_CENTERS: Record<string, { lat: number; lng: number }> = {
+    saskatoon: { lat: 52.13, lng: -106.67 },
+    regina: { lat: 50.45, lng: -104.62 },
+    calgary: { lat: 51.04, lng: -114.07 },
+    edmonton: { lat: 53.55, lng: -113.49 },
+    winnipeg: { lat: 49.90, lng: -97.14 },
+    toronto: { lat: 43.65, lng: -79.38 },
+    vancouver: { lat: 49.28, lng: -123.12 },
+    montreal: { lat: 45.50, lng: -73.57 },
+    ottawa: { lat: 45.42, lng: -75.70 },
+    halifax: { lat: 44.65, lng: -63.58 },
+};
+
+// Robust polygon reader. Backend may store polygons as:
+//   { type: "Polygon", coordinates: [[[lng,lat], ...]] }   (GeoJSON)
+//   [{lat, lng}, ...]                                       (array)
+//   null / absent                                           (no polygon yet)
+function toGeoJSONPolygon(raw: unknown): GeoJSON.Polygon | null {
+    if (!raw) return null;
+    if (
+        typeof raw === "object" && raw !== null &&
+        (raw as { type?: string }).type === "Polygon" &&
+        Array.isArray((raw as { coordinates?: unknown }).coordinates)
+    ) {
+        return raw as GeoJSON.Polygon;
+    }
+    if (Array.isArray(raw) && raw.length >= 3 &&
+        typeof raw[0] === "object" && raw[0] !== null &&
+        "lat" in raw[0] && "lng" in raw[0]
+    ) {
+        return polygonPointsToGeoJSON(raw as { lat: number; lng: number }[]);
+    }
+    return null;
+}
 import { AlertFeed } from "./alert-feed";
 import { DriverPanel } from "./driver-panel";
 import { RidePanel } from "./ride-panel";
@@ -95,16 +133,26 @@ export default function MonitoringPage() {
                     areas.value.map((a: {
                         id: string;
                         name: string;
-                        geojson?: GeoJSON.Polygon | GeoJSON.MultiPolygon | null;
-                        polygon?: { lat: number; lng: number }[];
-                    }) => ({
-                        id: a.id,
-                        name: a.name,
-                        // Backend stores as polygon:[{lat,lng}]; convert to
-                        // GeoJSON here so the map can render + fit bounds.
-                        // Prefer an explicit geojson field if one is present.
-                        geojson: a.geojson ?? polygonPointsToGeoJSON(a.polygon ?? []),
-                    })),
+                        city?: string;
+                        geojson?: unknown;
+                        polygon?: unknown;
+                    }) => {
+                        // Try geojson first, then polygon — both shapes supported by toGeoJSONPolygon.
+                        const geojson = toGeoJSONPolygon(a.geojson) ?? toGeoJSONPolygon(a.polygon);
+                        // If no polygon drawn, fall back to the city centre
+                        // so clicking the area on the toolbar still pans the
+                        // map to something sensible.
+                        const cityKey = (a.city ?? "").trim().toLowerCase();
+                        const fallbackCenter = !geojson && cityKey && CITY_CENTERS[cityKey]
+                            ? CITY_CENTERS[cityKey]
+                            : null;
+                        return {
+                            id: a.id,
+                            name: a.name,
+                            geojson,
+                            fallbackCenter,
+                        };
+                    }),
                 );
             }
             if (vtypes.status === "fulfilled") {

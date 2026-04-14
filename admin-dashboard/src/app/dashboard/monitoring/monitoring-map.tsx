@@ -37,6 +37,8 @@ export interface MonitoringServiceArea {
     id: string;
     name: string;
     geojson?: GeoJSON.Polygon | GeoJSON.MultiPolygon | null;
+    /** Fallback point to centre the map on when no polygon exists (e.g. city preset). */
+    fallbackCenter?: { lat: number; lng: number } | null;
 }
 
 interface MonitoringMapProps {
@@ -278,8 +280,20 @@ export function MonitoringMap({
         const map = mapRef.current;
         if (!map) return;
         const area = serviceAreasRef.current.find((a) => a.id === areaId);
-        if (!area?.geojson) return;
-        fitBoundsToGeoJSON(map, area.geojson, 60);
+        if (!area) return;
+        if (area.geojson) {
+            fitBoundsToGeoJSON(map, area.geojson, 60);
+            return;
+        }
+        // No polygon drawn yet — fall back to the city preset centre if
+        // we were given one, so the operator still sees the right city.
+        if (area.fallbackCenter) {
+            map.flyTo({
+                center: [area.fallbackCenter.lng, area.fallbackCenter.lat],
+                zoom: 11,
+                duration: 600,
+            });
+        }
     }, []);
 
     // ── Map lifecycle ────────────────────────────────────────────────

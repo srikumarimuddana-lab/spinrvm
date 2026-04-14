@@ -126,6 +126,35 @@ async def lifespan(app: FastAPI):
 
     app.state.background_tasks = background_tasks
 
+    # WebSocket pub/sub (audit P0-B3): before this, socket sends were
+    # in-process only, so on >1 Fly machine the driver and the rider
+    # regularly ended up on different VMs and dispatch events silently
+    # disappeared. Starting the pub/sub attaches a Redis subscriber to
+    # the shared ConnectionManager; every outbound send now fans out
+    # across machines. In dev (no Redis URL configured) this is a
+    # no-op and the manager stays in local-only mode.
+    try:
+        from socket_manager import manager as ws_manager
+        from utils.ws_pubsub import pubsub as ws_pubsub
+        from utils.ws_pubsub import resolve_ws_redis_url
+
+        ws_redis_url = resolve_ws_redis_url(settings.WS_REDIS_URL, settings.RATE_LIMIT_REDIS_URL)
+        ws_started = await ws_pubsub.start(ws_manager, ws_redis_url)
+        app.state.ws_pubsub = ws_pubsub
+        if not ws_started and settings.ENV.lower() == "production":
+            # Production without distributed WS is a correctness
+            # hazard, but not a boot-blocker — a single-machine prod
+            # deploy is still coherent. Log at WARNING so the operator
+            # sees it in the boot logs.
+            logger.warning(
+                "WS pub/sub did NOT start — WebSocket fan-out will be "
+                "limited to the current machine. Set WS_REDIS_URL (or "
+                "RATE_LIMIT_REDIS_URL, which will be reused) to enable "
+                "cross-machine delivery."
+            )
+    except Exception as e:
+        logger.warning(f"Failed to start WS pub/sub: {e}")
+
     # Perform startup checks
     logger.info(f"Spinr API startup complete ({len(background_tasks)} background tasks running)")
 
@@ -133,6 +162,17 @@ async def lifespan(app: FastAPI):
 
     # Cleanup on shutdown — cancel background tasks and await them.
     logger.info("Shutting down Spinr API...")
+    # Stop WS pub/sub FIRST so in-flight publishes don't race against
+    # a half-torn-down Redis client during the last ~millisecond of
+    # shutdown (and so its consumer task isn't left as an orphan when
+    # the event loop stops).
+    try:
+        ws_pubsub_ref = getattr(app.state, "ws_pubsub", None)
+        if ws_pubsub_ref is not None:
+            await ws_pubsub_ref.stop()
+    except Exception as e:
+        logger.warning(f"Error stopping WS pub/sub: {e}")
+
     for task in background_tasks:
         task.cancel()
     if background_tasks:

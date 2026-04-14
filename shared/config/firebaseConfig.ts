@@ -34,18 +34,21 @@ let app;
 let auth: Auth;
 
 if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
-  console.warn(
-    '[Firebase] Web config missing — set EXPO_PUBLIC_FIREBASE_* env vars ' +
-    'to enable Firebase Auth on web/Expo Go. Native builds use ' +
-    'google-services.json / GoogleService-Info.plist and are unaffected.'
-  );
+  // No credentials configured — skip Firebase entirely. The app falls back
+  // to backend OTP auth. Native builds use google-services.json /
+  // GoogleService-Info.plist which are read by @react-native-firebase
+  // independently of this module.
   auth = {} as Auth;
 } else {
   try {
-    app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+    // Only initialize if not already done (hot reload safety)
+    const existingApps = getApps();
+    app = existingApps.length === 0
+      ? initializeApp(firebaseConfig)
+      : existingApps.find(a => a.name === '[DEFAULT]') || existingApps[0];
     auth = getAuth(app);
   } catch (error: any) {
-    console.warn('Firebase init error:', error.message);
+    console.warn('[Firebase] init error:', error.message);
     auth = {} as Auth;
   }
 }

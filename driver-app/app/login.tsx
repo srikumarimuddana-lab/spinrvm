@@ -25,8 +25,15 @@ import CustomAlert from '@shared/components/CustomAlert';
 const THEME = SpinrConfig.theme.colors;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-// Only import Firebase phone auth when Firebase is actually configured
-const isFirebaseConfigured = typeof auth.onAuthStateChanged === 'function';
+// Firebase phone auth is only available when the app is configured with
+// real credentials. Checking for onAuthStateChanged alone is insufficient —
+// getAuth() can return a real Auth object even when the API key is empty,
+// which causes cryptic "argument" errors downstream.
+import { firebaseConfig } from '@shared/config/firebaseConfig';
+const isFirebaseConfigured =
+  !!firebaseConfig.apiKey &&
+  !!firebaseConfig.projectId &&
+  typeof auth.onAuthStateChanged === 'function';
 let PhoneAuthProvider: any = null;
 if (isFirebaseConfigured) {
   try {

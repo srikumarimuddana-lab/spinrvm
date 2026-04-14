@@ -104,10 +104,28 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 await websocket.send_json({"type": "error", "message": "user_is_not_a_driver"})
                 await websocket.close()
                 return
+        elif client_type == "admin":
+            # Admin clients must have admin or super_admin role
+            if user.get("role") not in ("admin", "super_admin"):
+                await websocket.send_json({"type": "error", "message": "admin_access_required"})
+                await websocket.close()
+                return
 
         # Register the connection with a server-controlled key to prevent impersonation
         connection_key = f"{client_type}_{user['id']}"
         await manager.connect(websocket, connection_key)
+
+        # Notify admins that a driver came online
+        if client_type == "driver":
+            driver_profile_for_status = await db.drivers.find_one({"user_id": user["id"]})
+            if driver_profile_for_status:
+                await manager.broadcast_to_admins(
+                    {
+                        "type": "driver_status_changed",
+                        "driver_id": driver_profile_for_status["id"],
+                        "is_online": True,
+                    }
+                )
 
         # GAP FIX: Start heartbeat background task
         hb_task = asyncio.create_task(heartbeat_task(websocket, connection_key))
@@ -199,6 +217,18 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                             f"rider_{ride['rider_id']}",
                         )
 
+                    # Broadcast live location to all connected admin monitoring clients
+                    await manager.broadcast_to_admins(
+                        {
+                            "type": "driver_location_update",
+                            "driver_id": driver_id,
+                            "lat": lat,
+                            "lng": lng,
+                            "speed": data.get("speed"),
+                            "heading": data.get("heading"),
+                        }
+                    )
+
             elif data.get("type") == "location_batch":
                 # Batch upload of buffered GPS points (offline recovery)
                 points = data.get("points", [])
@@ -242,6 +272,14 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                         await manager.send_personal_message(
                             {"type": "ride_status_changed", "ride_id": ride_id, "status": status},
                             f"rider_{ride['rider_id']}",
+                        )
+                        # Broadcast to admin monitoring clients
+                        await manager.broadcast_to_admins(
+                            {
+                                "type": "ride_status_changed",
+                                "ride_id": ride_id,
+                                "status": status,
+                            }
                         )
 
             elif data.get("type") == "get_nearby_drivers":
@@ -303,6 +341,17 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                             await manager.send_personal_message(msg_data, target)
 
     except WebSocketDisconnect:
+        if connection_key and connection_key.startswith("driver_"):
+            # Notify admins the driver went offline
+            driver_profile_off = await db.drivers.find_one({"user_id": user["id"]}) if user else None
+            if driver_profile_off:
+                await manager.broadcast_to_admins(
+                    {
+                        "type": "driver_status_changed",
+                        "driver_id": driver_profile_off["id"],
+                        "is_online": False,
+                    }
+                )
         if connection_key:
             manager.disconnect(connection_key)
     except Exception as e:

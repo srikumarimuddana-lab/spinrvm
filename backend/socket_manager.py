@@ -54,6 +54,15 @@ class ConnectionManager:
         for connection in self.active_connections.values():
             await connection.send_json(message)
 
+    async def broadcast_to_admins(self, message: dict):
+        """Broadcast a message to all connected admin WebSocket clients."""
+        admin_keys = [k for k in self.active_connections if k.startswith("admin_")]
+        for key in admin_keys:
+            try:
+                await self.active_connections[key].send_json(message)
+            except Exception as e:
+                logger.warning(f"Failed to send to admin {key}: {e}")
+
     def update_driver_location(self, driver_id: str, lat: float, lng: float):
         self.driver_locations[driver_id] = {"lat": lat, "lng": lng, "updated_at": datetime.utcnow().isoformat()}
 

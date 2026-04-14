@@ -68,7 +68,8 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/spinr_test
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          SECRET_KEY: test-secret-key-for-ci
+          JWT_SECRET: test-secret-key-for-ci-only-32chars!!
+          ADMIN_PASSWORD: TestAdminPass123!
           ENV: test
         run: |
           pytest --cov=. --cov-report=xml --cov-report=term-missing -v
@@ -217,7 +218,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: admin-dashboard
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: Run ESLint
         working-directory: admin-dashboard
@@ -355,7 +356,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: admin-dashboard
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: Build for production
         working-directory: admin-dashboard
@@ -399,6 +400,8 @@ jobs:
   # Security Scan — filesystem (dependency CVEs) + secrets
   security-scan:
     runs-on: ubuntu-latest
+    permissions:
+      security-events: write  # required for Trivy SARIF upload to GitHub Security tab
 
     steps:
       - uses: actions/checkout@v6

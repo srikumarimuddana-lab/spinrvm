@@ -314,8 +314,7 @@ _STALE_TEST_CLASSES: frozenset[str] = frozenset(
     {
         # test_admin_routes_auth.py — 6/6 stale (all fixture-setup errors)
         "test_admin_routes_auth.py::TestAdminRoutesRequireAuth",
-        # test_auth.py — 19/27 stale
-        "test_auth.py::TestAdminUserVerification",
+        # test_auth.py — 18/27 stale
         "test_auth.py::TestAuthEndpoints",
         "test_auth.py::TestFirebaseIntegration",
         "test_auth.py::TestSessionManagement",

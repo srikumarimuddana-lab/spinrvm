@@ -216,29 +216,53 @@ class TestAdminUserVerification:
 
     @pytest.mark.asyncio
     async def test_get_admin_user_is_admin(self):
-        """Test get_admin_user with admin user."""
+        """An authenticated user whose role is in the admin set is passed through."""
         from backend.dependencies import get_admin_user
 
-        admin_user = {"user_id": "admin_123", "phone": "+1234567890", "is_admin": True}
+        admin_user = {"id": "admin_123", "phone": "+1234567890", "role": "admin"}
 
         result = await get_admin_user(admin_user)
-
         assert result == admin_user
 
     @pytest.mark.asyncio
+    async def test_get_admin_user_super_admin(self):
+        """``super_admin`` (env creds) is also accepted."""
+        from backend.dependencies import get_admin_user
+
+        super_admin = {"id": "admin-001", "phone": "", "role": "super_admin"}
+
+        result = await get_admin_user(super_admin)
+        assert result == super_admin
+
+    @pytest.mark.asyncio
     async def test_get_admin_user_not_admin(self):
-        """Test get_admin_user with non-admin user."""
+        """A rider role raises 403 with the current error message."""
         from fastapi import HTTPException
 
         from backend.dependencies import get_admin_user
 
-        regular_user = {"user_id": "user_123", "phone": "+1234567890", "is_admin": False}
+        regular_user = {"id": "user_123", "phone": "+1234567890", "role": "rider"}
 
         with pytest.raises(HTTPException) as exc_info:
             await get_admin_user(regular_user)
-
         assert exc_info.value.status_code == 403
-        assert exc_info.value.detail == "User is not an admin"
+        # The audit-era error message is "Admin access required", not the
+        # older "User is not an admin". Keep the assertion tight against
+        # the current phrasing so a silent change is caught.
+        assert exc_info.value.detail == "Admin access required"
+
+    @pytest.mark.asyncio
+    async def test_get_admin_user_missing_role(self):
+        """A user row with no role key at all is rejected (default '' is not admin)."""
+        from fastapi import HTTPException
+
+        from backend.dependencies import get_admin_user
+
+        no_role_user = {"id": "user_123", "phone": "+1234567890"}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_admin_user(no_role_user)
+        assert exc_info.value.status_code == 403
 
 
 class TestFirebaseIntegration:

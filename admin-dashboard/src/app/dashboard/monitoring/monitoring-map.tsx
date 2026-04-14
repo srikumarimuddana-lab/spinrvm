@@ -4,13 +4,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import {
+    DEFAULT_CENTER,
+    MAP_STYLE_URL,
+    addStandardControls,
+    fitBoundsToGeoJSON,
+    makeCircleMarkerEl,
+} from "@/lib/map/maplibre-base";
 import { MonitoringDriver, MonitoringFilters, MonitoringRide, SelectedItem } from "./types";
 
-// OpenFreeMap — free, no API key, no attribution fees. Switch the style
-// URL if you want a different look (liberty / positron / bright / dark).
-const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
-// MapLibre uses [lng, lat] ordering everywhere, unlike Google Maps.
-const DEFAULT_CENTER: [number, number] = [-79.3832, 43.6532]; // Toronto — update to your service area
 const DEFAULT_ZOOM = 12;
 
 // Colour tokens for driver markers
@@ -26,50 +28,16 @@ function driverColor(driver: MonitoringDriver): string {
     return DRIVER_COLOURS.online_free;
 }
 
-function makeDriverMarkerEl(driver: MonitoringDriver): HTMLDivElement {
-    const el = document.createElement("div");
-    el.className = "spinr-driver-marker";
-    el.style.width = "22px";
-    el.style.height = "22px";
-    el.style.borderRadius = "50%";
-    el.style.backgroundColor = driverColor(driver);
-    el.style.border = "2px solid #ffffff";
-    el.style.boxShadow = "0 0 3px rgba(0,0,0,0.3)";
-    el.style.display = "flex";
-    el.style.alignItems = "center";
-    el.style.justifyContent = "center";
-    el.style.color = "#ffffff";
-    el.style.fontSize = "11px";
-    el.style.fontWeight = "bold";
-    el.style.cursor = "pointer";
-    el.textContent = driver.name.slice(0, 1).toUpperCase();
-    el.title = driver.name;
-    return el;
-}
+// Service-area rendering: one GeoJSON source feeding a fill + line layer
+const AREAS_SOURCE_ID = "monitoring-areas-src";
+const AREAS_FILL_LAYER_ID = "monitoring-areas-fill";
+const AREAS_LINE_LAYER_ID = "monitoring-areas-line";
 
-function makeRidePointMarkerEl(kind: "P" | "D", title: string): HTMLDivElement {
-    const el = document.createElement("div");
-    el.className = "spinr-ride-marker";
-    const bg = kind === "P" ? "#3b82f6" : "#ef4444";
-    el.style.width = "20px";
-    el.style.height = "20px";
-    el.style.borderRadius = "50%";
-    el.style.backgroundColor = bg;
-    el.style.border = "2px solid #ffffff";
-    el.style.boxShadow = "0 0 3px rgba(0,0,0,0.3)";
-    el.style.display = "flex";
-    el.style.alignItems = "center";
-    el.style.justifyContent = "center";
-    el.style.color = "#ffffff";
-    el.style.fontSize = "10px";
-    el.style.fontWeight = "bold";
-    el.style.cursor = "pointer";
-    el.textContent = kind;
-    el.title = title;
-    return el;
+export interface MonitoringServiceArea {
+    id: string;
+    name: string;
+    geojson?: GeoJSON.Polygon | GeoJSON.MultiPolygon | null;
 }
-
-const MAP_CONTAINER_STYLE: React.CSSProperties = { width: "100%", height: "100%" };
 
 interface MonitoringMapProps {
     driversMap: React.MutableRefObject<Map<string, MonitoringDriver>>;
@@ -78,6 +46,7 @@ interface MonitoringMapProps {
     searchQuery: string;
     selected: SelectedItem;
     followMode: boolean;
+    serviceAreas?: MonitoringServiceArea[];
     onSelectDriver: (id: string) => void;
     onSelectRide: (id: string) => void;
     /** Exposes imperative update handles to parent */
@@ -90,6 +59,7 @@ export interface MapHandles {
     updateRideMarkers: (ride: MonitoringRide) => void;
     removeRideMarkers: (rideId: string) => void;
     panTo: (lat: number, lng: number) => void;
+    fitArea: (areaId: string) => void;
 }
 
 function rideLineSourceId(rideId: string): string {
@@ -99,6 +69,8 @@ function rideLineLayerId(rideId: string): string {
     return `ride-line-lyr-${rideId}`;
 }
 
+const MAP_CONTAINER_STYLE: React.CSSProperties = { width: "100%", height: "100%" };
+
 export function MonitoringMap({
     driversMap,
     ridesMap,
@@ -106,6 +78,7 @@ export function MonitoringMap({
     searchQuery,
     selected,
     followMode,
+    serviceAreas,
     onSelectDriver,
     onSelectRide,
     onReady,
@@ -115,13 +88,9 @@ export function MonitoringMap({
     const [isLoaded, setIsLoaded] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
 
-    // Driver markers — key: driver.id. MapLibre Markers are DOM-backed.
     const driverMarkersRef = useRef<Map<string, maplibregl.Marker>>(new Map());
-    // Visibility tracked separately because MapLibre markers don't have a
-    // setVisible() — we add/remove them from the map instead.
     const driverVisibleRef = useRef<Map<string, boolean>>(new Map());
 
-    // Ride markers + line source/layer ids
     const rideMarkersRef = useRef<
         Map<string, { pickup: maplibregl.Marker; dropoff: maplibregl.Marker; sourceId: string; layerId: string }>
     >(new Map());
@@ -131,6 +100,9 @@ export function MonitoringMap({
     onSelectDriverRef.current = onSelectDriver;
     const onSelectRideRef = useRef(onSelectRide);
     onSelectRideRef.current = onSelectRide;
+
+    const serviceAreasRef = useRef<MonitoringServiceArea[]>(serviceAreas ?? []);
+    serviceAreasRef.current = serviceAreas ?? [];
 
     // ── Imperative driver marker management ──────────────────────────
     const updateDriverMarker = useCallback((driver: MonitoringDriver) => {
@@ -147,7 +119,12 @@ export function MonitoringMap({
         const lngLat: [number, number] = [driver.lng, driver.lat];
 
         if (!marker) {
-            const el = makeDriverMarkerEl(driver);
+            const el = makeCircleMarkerEl({
+                color: driverColor(driver),
+                label: driver.name.slice(0, 1).toUpperCase(),
+                title: driver.name,
+                size: 22,
+            });
             el.addEventListener("click", () => onSelectDriverRef.current(driver.id));
             marker = new maplibregl.Marker({ element: el }).setLngLat(lngLat);
             if (visible) marker.addTo(mapRef.current);
@@ -155,7 +132,6 @@ export function MonitoringMap({
             driverVisibleRef.current.set(driver.id, visible);
         } else {
             marker.setLngLat(lngLat);
-            // Refresh colour + initial letter in case status changed
             const el = marker.getElement();
             el.style.backgroundColor = driverColor(driver);
             el.title = driver.name;
@@ -201,7 +177,6 @@ export function MonitoringMap({
     const updateRideMarkers = useCallback((ride: MonitoringRide) => {
         if (!mapRef.current) return;
 
-        // Ensure coords are present
         if (
             ride.pickup_lat == null || ride.pickup_lng == null ||
             ride.dropoff_lat == null || ride.dropoff_lng == null
@@ -212,11 +187,21 @@ export function MonitoringMap({
         const dropoffLngLat: [number, number] = [ride.dropoff_lng, ride.dropoff_lat];
 
         if (!entry) {
-            const pickupEl = makeRidePointMarkerEl("P", `Pickup: ${ride.pickup_address ?? ""}`);
+            const pickupEl = makeCircleMarkerEl({
+                color: "#3b82f6",
+                label: "P",
+                title: `Pickup: ${ride.pickup_address ?? ""}`,
+                size: 20,
+            });
             pickupEl.addEventListener("click", () => onSelectRideRef.current(ride.id));
             const pickup = new maplibregl.Marker({ element: pickupEl }).setLngLat(pickupLngLat);
 
-            const dropoffEl = makeRidePointMarkerEl("D", `Dropoff: ${ride.dropoff_address ?? ""}`);
+            const dropoffEl = makeCircleMarkerEl({
+                color: "#ef4444",
+                label: "D",
+                title: `Dropoff: ${ride.dropoff_address ?? ""}`,
+                size: 20,
+            });
             dropoffEl.addEventListener("click", () => onSelectRideRef.current(ride.id));
             const dropoff = new maplibregl.Marker({ element: dropoffEl }).setLngLat(dropoffLngLat);
 
@@ -254,11 +239,9 @@ export function MonitoringMap({
             if (filters.showRides) {
                 setRideVisible(ride.id, true);
             } else {
-                // Still hide the layer explicitly
                 mapRef.current.setLayoutProperty(layerId, "visibility", "none");
             }
         } else {
-            // Update positions
             entry.pickup.setLngLat(pickupLngLat);
             entry.dropoff.setLngLat(dropoffLngLat);
             const src = mapRef.current.getSource(entry.sourceId);
@@ -291,6 +274,14 @@ export function MonitoringMap({
         mapRef.current?.panTo([lng, lat]);
     }, []);
 
+    const fitArea = useCallback((areaId: string) => {
+        const map = mapRef.current;
+        if (!map) return;
+        const area = serviceAreasRef.current.find((a) => a.id === areaId);
+        if (!area?.geojson) return;
+        fitBoundsToGeoJSON(map, area.geojson, 60);
+    }, []);
+
     // ── Map lifecycle ────────────────────────────────────────────────
     useEffect(() => {
         if (!containerRef.current || mapRef.current) return;
@@ -306,11 +297,34 @@ export function MonitoringMap({
             });
             mapRef.current = map;
 
-            map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+            addStandardControls(map);
             map.addControl(new maplibregl.FullscreenControl(), "top-right");
 
             map.on("load", () => {
                 if (cancelled) return;
+
+                // Service-area polygons layer (rendered under markers)
+                map.addSource(AREAS_SOURCE_ID, {
+                    type: "geojson",
+                    data: { type: "FeatureCollection", features: [] },
+                });
+                map.addLayer({
+                    id: AREAS_FILL_LAYER_ID,
+                    type: "fill",
+                    source: AREAS_SOURCE_ID,
+                    paint: { "fill-color": "#8b5cf6", "fill-opacity": 0.08 },
+                });
+                map.addLayer({
+                    id: AREAS_LINE_LAYER_ID,
+                    type: "line",
+                    source: AREAS_SOURCE_ID,
+                    paint: {
+                        "line-color": "#8b5cf6",
+                        "line-width": 2,
+                        "line-dasharray": [3, 2],
+                    },
+                });
+
                 setIsLoaded(true);
                 driversMap.current.forEach(updateDriverMarker);
                 ridesMap.current.forEach(updateRideMarkers);
@@ -320,12 +334,11 @@ export function MonitoringMap({
                     updateRideMarkers,
                     removeRideMarkers,
                     panTo,
+                    fitArea,
                 });
             });
             map.on("error", (e) => {
                 if (cancelled) return;
-                // Tile failures surface here; only surface a hard error for
-                // style load failures (missing internet, bad style URL).
                 const err = e?.error as Error | undefined;
                 if (err && /style/i.test(err.message ?? "")) {
                     setLoadError(err.message);
@@ -349,10 +362,25 @@ export function MonitoringMap({
             mapRef.current?.remove();
             mapRef.current = null;
         };
-        // onReady and the imperative callbacks are stable enough via refs;
-        // we explicitly do NOT want this effect to re-run when they change.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // Keep the areas source in sync with the prop
+    useEffect(() => {
+        const map = mapRef.current;
+        if (!map || !isLoaded) return;
+        const features: GeoJSON.Feature[] = [];
+        (serviceAreas ?? []).forEach((area) => {
+            if (!area.geojson) return;
+            features.push({
+                type: "Feature",
+                properties: { id: area.id, name: area.name ?? "Service Area" },
+                geometry: area.geojson,
+            });
+        });
+        const src = map.getSource(AREAS_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+        src?.setData({ type: "FeatureCollection", features });
+    }, [serviceAreas, isLoaded]);
 
     // Re-apply filter visibility when filters change
     useEffect(() => {

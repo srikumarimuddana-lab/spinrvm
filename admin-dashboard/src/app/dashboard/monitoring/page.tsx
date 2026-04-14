@@ -2,11 +2,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { v4 as uuidv4 } from "uuid";
 import { useAuthStore } from "@/store/authStore";
 import { getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTypes } from "@/lib/api";
 import { useMonitoringSocket } from "@/hooks/use-monitoring-socket";
-import { MonitoringMap, MapHandles } from "./monitoring-map";
+import { MonitoringMap, MapHandles, MonitoringServiceArea } from "./monitoring-map";
 import { MonitoringToolbar } from "./toolbar";
 import { AlertFeed } from "./alert-feed";
 import { DriverPanel } from "./driver-panel";
@@ -23,11 +24,14 @@ import {
 
 export default function MonitoringPage() {
     const token = useAuthStore((s) => s.token);
+    const searchParams = useSearchParams();
+    const deepLinkAreaId = searchParams.get("areaId");
 
     // ── Ref-based data stores (never cause re-renders) ────────────────
     const driversRef = useRef<Map<string, MonitoringDriver>>(new Map());
     const ridesRef = useRef<Map<string, MonitoringRide>>(new Map());
     const mapHandlesRef = useRef<MapHandles | null>(null);
+    const pendingAreaFitRef = useRef<string | null>(deepLinkAreaId);
 
     // ── React state (causes re-renders) ──────────────────────────────
     const [counts, setCounts] = useState<MonitoringCounts>({ online: 0, onRide: 0, offline: 0, activeRides: 0 });
@@ -42,7 +46,7 @@ export default function MonitoringPage() {
     const [followMode, setFollowMode] = useState(false);
     const [selected, setSelected] = useState<SelectedItem>(null);
     const [alerts, setAlerts] = useState<AlertEvent[]>([]);
-    const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
+    const [serviceAreas, setServiceAreas] = useState<MonitoringServiceArea[]>([]);
     const [vehicleTypes, setVehicleTypes] = useState<{ id: string; name: string }[]>([]);
 
     // ── Derived selections ────────────────────────────────────────────
@@ -86,15 +90,37 @@ export default function MonitoringPage() {
                 rides.value.forEach((r) => ridesRef.current.set(r.id, r));
             }
             if (areas.status === "fulfilled") {
-                setServiceAreas(areas.value.map((a: any) => ({ id: a.id, name: a.name })));
+                setServiceAreas(
+                    areas.value.map((a: { id: string; name: string; geojson?: GeoJSON.Polygon | GeoJSON.MultiPolygon | null }) => ({
+                        id: a.id,
+                        name: a.name,
+                        geojson: a.geojson ?? null,
+                    })),
+                );
             }
             if (vtypes.status === "fulfilled") {
-                setVehicleTypes(vtypes.value.map((v: any) => ({ id: v.id, name: v.name })));
+                setVehicleTypes(vtypes.value.map((v: { id: string; name: string }) => ({ id: v.id, name: v.name })));
             }
             recalcCounts();
         }
         load();
     }, [recalcCounts]);
+
+    // ── Deep link: ?areaId=... applies the filter + fits the map ──────
+    // Set the filter once the area exists in the loaded list, and also
+    // try to fit the map — if the map wasn't ready yet, `onReady` will
+    // pick up `pendingAreaFitRef` instead.
+    useEffect(() => {
+        if (!deepLinkAreaId) return;
+        if (serviceAreas.length === 0) return;
+        const exists = serviceAreas.some((a) => a.id === deepLinkAreaId);
+        if (!exists) return;
+        setFilters((prev) => ({ ...prev, serviceAreaId: deepLinkAreaId }));
+        if (mapHandlesRef.current) {
+            mapHandlesRef.current.fitArea(deepLinkAreaId);
+            pendingAreaFitRef.current = null;
+        }
+    }, [deepLinkAreaId, serviceAreas]);
 
     // ── WebSocket event handler ───────────────────────────────────────
     const handleWsEvent = useCallback(
@@ -199,7 +225,14 @@ export default function MonitoringPage() {
             <MonitoringToolbar
                 counts={counts}
                 filters={filters}
-                onFilterChange={(f) => setFilters((prev) => ({ ...prev, ...f }))}
+                onFilterChange={(f) => {
+                    setFilters((prev) => ({ ...prev, ...f }));
+                    // When the user picks an area from the dropdown, also pan
+                    // and fit the map to its bounds.
+                    if (f.serviceAreaId) {
+                        mapHandlesRef.current?.fitArea(f.serviceAreaId);
+                    }
+                }}
                 searchQuery={searchQuery}
                 onSearchChange={setSearchQuery}
                 followMode={followMode}
@@ -219,9 +252,20 @@ export default function MonitoringPage() {
                         searchQuery={searchQuery}
                         selected={selected}
                         followMode={followMode}
+                        serviceAreas={serviceAreas}
                         onSelectDriver={selectDriver}
                         onSelectRide={selectRide}
-                        onReady={(handles) => { mapHandlesRef.current = handles; }}
+                        onReady={(handles) => {
+                            mapHandlesRef.current = handles;
+                            // Deep-link arrival: if ?areaId= was provided
+                            // and the areas list has been loaded, fit to it
+                            // as soon as the map is ready.
+                            const pending = pendingAreaFitRef.current;
+                            if (pending) {
+                                handles.fitArea(pending);
+                                pendingAreaFitRef.current = null;
+                            }
+                        }}
                     />
                 </div>
 

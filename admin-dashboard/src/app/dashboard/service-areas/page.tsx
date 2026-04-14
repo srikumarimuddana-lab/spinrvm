@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState, lazy, Suspense } from "react";
+import { useRouter } from "next/navigation";
 import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans, createSubscriptionPlan, updateSubscriptionPlan, deleteSubscriptionPlan, getDriverSubscriptions, getAreaFees, createAreaFee, updateAreaFee, deleteAreaFee } from "@/lib/api";
 import { Infinity as InfinityIcon } from "lucide-react";
-import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, X, FileText, GripVertical, Clock, ShieldCheck, ShieldAlert, CheckCircle, AlertTriangle, Image, Plane } from "lucide-react";
+import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, X, FileText, GripVertical, Clock, ShieldCheck, ShieldAlert, CheckCircle, AlertTriangle, Image, Plane, Radar } from "lucide-react";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
@@ -47,6 +48,7 @@ function getAreaCenter(area: any): { lat: number; lng: number } {
 }
 
 export default function ServiceAreasPage() {
+  const router = useRouter();
   const [areas, setAreas] = useState<any[]>([]);
   const [plans, setPlans] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -271,6 +273,18 @@ export default function ServiceAreasPage() {
                     <p className="text-sm text-gray-500">{area.city || ''}{area.province ? `, ${area.province}` : ''} · GST {area.gst_rate || 5}% · PST {area.pst_rate || 0}%</p>
                   </div>
                   <div className="text-sm text-gray-400">{area.vehicle_pricing?.length || 0} vehicles · {area.subscription_plan_ids?.length || 0} plans</div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      router.push(`/dashboard/monitoring?areaId=${encodeURIComponent(area.id)}`);
+                    }}
+                    className="flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-700 transition-colors hover:bg-violet-100"
+                    title="Open this area on the live monitor"
+                  >
+                    <Radar className="h-3.5 w-3.5" />
+                    View on live monitor
+                  </button>
                   {isExpanded ? <ChevronUp className="h-5 w-5 text-gray-400" /> : <ChevronDown className="h-5 w-5 text-gray-400" />}
                 </div>
 

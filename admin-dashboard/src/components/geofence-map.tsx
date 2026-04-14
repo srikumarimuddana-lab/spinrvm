@@ -1,21 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useCallback } from "react";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
-import "leaflet-draw";
-import "leaflet-draw/dist/leaflet.draw.css";
-
-// Fix Leaflet default icon paths for webpack/next
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-    iconRetinaUrl:
-        "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
-    iconUrl:
-        "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
-    shadowUrl:
-        "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
-});
+import maplibregl from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
+import MapboxDraw from "@mapbox/mapbox-gl-draw";
+import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
+import {
+    MAP_STYLE_URL,
+    addStandardControls,
+    fitBoundsToPoints,
+    polygonPointsToGeoJSON,
+} from "@/lib/map/maplibre-base";
 
 interface PolygonPoint {
     lat: number;
@@ -31,6 +26,47 @@ interface GeofenceMapProps {
     height?: string;
 }
 
+const READONLY_SOURCE_ID = "geofence-readonly-src";
+const READONLY_FILL_LAYER_ID = "geofence-readonly-fill";
+const READONLY_LINE_LAYER_ID = "geofence-readonly-line";
+
+// mapbox-gl-draw calls a couple of methods via Mapbox-specific names
+// that were renamed in MapLibre. Install a minimal compat shim so the
+// draw control works against a maplibregl.Map instance. Only needed in
+// this file because it's the only one that uses mapbox-gl-draw.
+function installMapLibreCompatShim() {
+    // maplibre-gl exposes the class under the default export; mapbox-gl-draw
+    // expects the older Mapbox JS API surface. The only method it reaches
+    // for that differs is `getLayersOrder`, present on both — nothing else
+    // to patch here for MapLibre >=3. Keep the function so the call-site
+    // documents the intent in case a future upgrade needs actual patches.
+    void maplibregl;
+}
+
+function featureCollectionOfPolygon(points: PolygonPoint[]): GeoJSON.FeatureCollection {
+    const geo = polygonPointsToGeoJSON(points);
+    if (!geo) return { type: "FeatureCollection", features: [] };
+    return {
+        type: "FeatureCollection",
+        features: [{ type: "Feature", properties: {}, geometry: geo }],
+    };
+}
+
+function polygonFromDrawFeature(feature: GeoJSON.Feature): PolygonPoint[] {
+    if (!feature || feature.geometry.type !== "Polygon") return [];
+    const ring = feature.geometry.coordinates[0] ?? [];
+    // Drop the closing point that GeoJSON Polygons include
+    const open = ring.length > 0 &&
+        ring[0][0] === ring[ring.length - 1][0] &&
+        ring[0][1] === ring[ring.length - 1][1]
+        ? ring.slice(0, -1)
+        : ring;
+    return open.map(([lng, lat]) => ({
+        lat: parseFloat(lat.toFixed(6)),
+        lng: parseFloat(lng.toFixed(6)),
+    }));
+}
+
 export default function GeofenceMap({
     polygon,
     center,
@@ -39,17 +75,18 @@ export default function GeofenceMap({
     readonly = false,
     height = "400px",
 }: GeofenceMapProps) {
-    const mapRef = useRef<L.Map | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
-    const drawnItemsRef = useRef<L.FeatureGroup | null>(null);
-    const drawControlRef = useRef<any>(null);
+    const mapRef = useRef<maplibregl.Map | null>(null);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const drawRef = useRef<any>(null);
+    const isLoadedRef = useRef(false);
 
     const onPolygonChangeRef = useRef(onPolygonChange);
     useEffect(() => {
         onPolygonChangeRef.current = onPolygonChange;
     }, [onPolygonChange]);
 
-    // Compute effective center
+    // Effective centre
     const effectiveCenter = center
         ? center
         : polygon && polygon.length > 0
@@ -62,136 +99,120 @@ export default function GeofenceMap({
     useEffect(() => {
         if (!containerRef.current || mapRef.current) return;
 
-        const map = L.map(containerRef.current, {
-            center: [effectiveCenter.lat, effectiveCenter.lng],
+        installMapLibreCompatShim();
+
+        const map = new maplibregl.Map({
+            container: containerRef.current,
+            style: MAP_STYLE_URL,
+            center: [effectiveCenter.lng, effectiveCenter.lat],
             zoom,
         });
-
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-            attribution: "&copy; OpenStreetMap contributors",
-            maxZoom: 19,
-        }).addTo(map);
-
-        const drawnItems = new L.FeatureGroup();
-        map.addLayer(drawnItems);
-        drawnItemsRef.current = drawnItems;
-
-        // If we have an initial polygon, draw it
-        if (polygon && polygon.length >= 3) {
-            const latlngs = polygon.map((p) => [p.lat, p.lng] as L.LatLngTuple);
-            const poly = L.polygon(latlngs, {
-                color: "#7c3aed",
-                fillColor: "#7c3aed",
-                fillOpacity: 0.2,
-                weight: 2,
-            });
-            drawnItems.addLayer(poly);
-            map.fitBounds(poly.getBounds().pad(0.2));
-        }
-
-        if (!readonly) {
-            const drawControl = new (L.Control as any).Draw({
-                position: "topright",
-                draw: {
-                    polygon: {
-                        allowIntersection: false,
-                        shapeOptions: {
-                            color: "#7c3aed",
-                            fillColor: "#7c3aed",
-                            fillOpacity: 0.2,
-                            weight: 2,
-                        },
-                    },
-                    rectangle: {
-                        shapeOptions: {
-                            color: "#7c3aed",
-                            fillColor: "#7c3aed",
-                            fillOpacity: 0.2,
-                            weight: 2,
-                        },
-                    },
-                    polyline: false,
-                    circle: false,
-                    circlemarker: false,
-                    marker: false,
-                },
-                edit: {
-                    featureGroup: drawnItems,
-                    remove: true,
-                },
-            });
-            map.addControl(drawControl);
-            drawControlRef.current = drawControl;
-
-            // Handle new polygon drawn
-            map.on(L.Draw.Event.CREATED, (e: any) => {
-                // Clear previous polygons (one polygon per service area)
-                drawnItems.clearLayers();
-                drawnItems.addLayer(e.layer);
-
-                const latlngs = e.layer.getLatLngs()[0];
-                const points: PolygonPoint[] = latlngs.map((ll: L.LatLng) => ({
-                    lat: parseFloat(ll.lat.toFixed(6)),
-                    lng: parseFloat(ll.lng.toFixed(6)),
-                }));
-                onPolygonChangeRef.current?.(points);
-            });
-
-            // Handle polygon edited
-            map.on(L.Draw.Event.EDITED, (e: any) => {
-                const layers = e.layers;
-                layers.eachLayer((layer: any) => {
-                    const latlngs = layer.getLatLngs()[0];
-                    const points: PolygonPoint[] = latlngs.map((ll: L.LatLng) => ({
-                        lat: parseFloat(ll.lat.toFixed(6)),
-                        lng: parseFloat(ll.lng.toFixed(6)),
-                    }));
-                    onPolygonChangeRef.current?.(points);
-                });
-            });
-
-            // Handle polygon deleted
-            map.on(L.Draw.Event.DELETED, () => {
-                onPolygonChangeRef.current?.([]);
-            });
-        }
-
+        addStandardControls(map);
         mapRef.current = map;
 
+        map.on("load", () => {
+            isLoadedRef.current = true;
+
+            if (readonly) {
+                // Readonly mode: render the polygon via a standard
+                // GeoJSON source + fill/line layers, no draw control.
+                map.addSource(READONLY_SOURCE_ID, {
+                    type: "geojson",
+                    data: featureCollectionOfPolygon(polygon ?? []),
+                });
+                map.addLayer({
+                    id: READONLY_FILL_LAYER_ID,
+                    type: "fill",
+                    source: READONLY_SOURCE_ID,
+                    paint: { "fill-color": "#7c3aed", "fill-opacity": 0.2 },
+                });
+                map.addLayer({
+                    id: READONLY_LINE_LAYER_ID,
+                    type: "line",
+                    source: READONLY_SOURCE_ID,
+                    paint: { "line-color": "#7c3aed", "line-width": 2 },
+                });
+            } else {
+                const draw = new MapboxDraw({
+                    displayControlsDefault: false,
+                    controls: { polygon: true, trash: true },
+                    styles: undefined,
+                });
+                // Attach the draw control. Cast because mapbox-gl-draw's
+                // IControl type targets mapbox-gl, not maplibre-gl.
+                map.addControl(draw as unknown as maplibregl.IControl, "top-left");
+                drawRef.current = draw;
+
+                // Seed with existing polygon (if any)
+                if (polygon && polygon.length >= 3) {
+                    draw.set(featureCollectionOfPolygon(polygon));
+                }
+
+                // Events
+                const onCreate = (e: { features: GeoJSON.Feature[] }) => {
+                    // One polygon per geofence — drop any previously drawn
+                    const featureToKeep = e.features[e.features.length - 1];
+                    const allIds = (draw.getAll() as GeoJSON.FeatureCollection).features
+                        .map((f) => f.id as string)
+                        .filter((id) => id !== featureToKeep.id);
+                    if (allIds.length > 0) draw.delete(allIds);
+                    onPolygonChangeRef.current?.(polygonFromDrawFeature(featureToKeep));
+                };
+                const onUpdate = (e: { features: GeoJSON.Feature[] }) => {
+                    if (e.features[0]) {
+                        onPolygonChangeRef.current?.(polygonFromDrawFeature(e.features[0]));
+                    }
+                };
+                const onDelete = () => {
+                    onPolygonChangeRef.current?.([]);
+                };
+                map.on("draw.create", onCreate);
+                map.on("draw.update", onUpdate);
+                map.on("draw.delete", onDelete);
+            }
+
+            // Fit to initial polygon
+            if (polygon && polygon.length >= 3) {
+                fitBoundsToPoints(map, polygon, 40);
+            }
+        });
+
         // Resize fix for dialog mount timing
-        setTimeout(() => map.invalidateSize(), 200);
+        const resizeTimer = setTimeout(() => mapRef.current?.resize(), 200);
 
         return () => {
+            clearTimeout(resizeTimer);
+            drawRef.current = null;
             map.remove();
             mapRef.current = null;
+            isLoadedRef.current = false;
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // Update polygon externally (e.g. preset selection)
     const updatePolygon = useCallback((newPolygon: PolygonPoint[]) => {
-        if (!drawnItemsRef.current || !mapRef.current) return;
-        drawnItemsRef.current.clearLayers();
-        if (newPolygon.length >= 3) {
-            const latlngs = newPolygon.map(
-                (p) => [p.lat, p.lng] as L.LatLngTuple
-            );
-            const poly = L.polygon(latlngs, {
-                color: "#7c3aed",
-                fillColor: "#7c3aed",
-                fillOpacity: 0.2,
-                weight: 2,
-            });
-            drawnItemsRef.current.addLayer(poly);
-            mapRef.current.fitBounds(poly.getBounds().pad(0.2));
-        }
-    }, []);
+        const map = mapRef.current;
+        if (!map || !isLoadedRef.current) return;
 
-    // Expose updatePolygon via ref-like pattern
-    useEffect(() => {
-        if (polygon && mapRef.current && drawnItemsRef.current) {
-            updatePolygon(polygon);
+        if (readonly) {
+            const src = map.getSource(READONLY_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+            src?.setData(featureCollectionOfPolygon(newPolygon));
+        } else {
+            const draw = drawRef.current;
+            if (!draw) return;
+            draw.deleteAll();
+            if (newPolygon.length >= 3) {
+                draw.set(featureCollectionOfPolygon(newPolygon));
+            }
         }
+        if (newPolygon.length >= 3) {
+            fitBoundsToPoints(map, newPolygon, 40);
+        }
+    }, [readonly]);
+
+    useEffect(() => {
+        if (polygon) updatePolygon(polygon);
     }, [polygon, updatePolygon]);
 
     return (

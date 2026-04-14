@@ -1,8 +1,13 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import L from "leaflet";
-import "leaflet/dist/leaflet.css";
+import maplibregl from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
+import {
+    MAP_STYLE_URL,
+    fitBoundsToPoints,
+    makeCircleMarkerEl,
+} from "@/lib/map/maplibre-base";
 
 interface Props {
     pickupLat: number;
@@ -12,61 +17,111 @@ interface Props {
     locationTrail?: { lat: number; lng: number; timestamp?: string }[];
 }
 
+const PLANNED_SOURCE_ID = "ride-planned-src";
+const PLANNED_LAYER_ID = "ride-planned-lyr";
+const ACTUAL_SOURCE_ID = "ride-actual-src";
+const ACTUAL_LAYER_ID = "ride-actual-lyr";
+
 export default function RideRouteMap({ pickupLat, pickupLng, dropoffLat, dropoffLng, locationTrail }: Props) {
-    const mapRef = useRef<HTMLDivElement>(null);
-    const mapInstance = useRef<L.Map | null>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const mapRef = useRef<maplibregl.Map | null>(null);
 
     useEffect(() => {
-        if (!mapRef.current || mapInstance.current) return;
+        if (!containerRef.current || mapRef.current) return;
 
-        const map = L.map(mapRef.current, { zoomControl: false }).setView(
-            [(pickupLat + dropoffLat) / 2, (pickupLng + dropoffLng) / 2],
-            13
-        );
-        mapInstance.current = map;
+        const map = new maplibregl.Map({
+            container: containerRef.current,
+            style: MAP_STYLE_URL,
+            center: [(pickupLng + dropoffLng) / 2, (pickupLat + dropoffLat) / 2],
+            zoom: 13,
+            // Mirror the original Leaflet map which disabled zoom controls
+            // for this static-summary view.
+            attributionControl: { compact: true },
+        });
+        mapRef.current = map;
 
-        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-            attribution: "",
-        }).addTo(map);
+        map.on("load", () => {
+            // Pickup marker (green)
+            new maplibregl.Marker({
+                element: makeCircleMarkerEl({ color: "#10b981", size: 16 }),
+            })
+                .setLngLat([pickupLng, pickupLat])
+                .setPopup(new maplibregl.Popup({ closeButton: false, offset: 6 }).setText("Pickup"))
+                .addTo(map);
 
-        // Pickup marker (green)
-        L.circleMarker([pickupLat, pickupLng], {
-            radius: 8, fillColor: "#10b981", color: "#fff", weight: 2, fillOpacity: 1,
-        }).addTo(map).bindPopup("Pickup");
+            // Dropoff marker (blue)
+            new maplibregl.Marker({
+                element: makeCircleMarkerEl({ color: "#3b82f6", size: 16 }),
+            })
+                .setLngLat([dropoffLng, dropoffLat])
+                .setPopup(new maplibregl.Popup({ closeButton: false, offset: 6 }).setText("Dropoff"))
+                .addTo(map);
 
-        // Dropoff marker (red/blue)
-        L.circleMarker([dropoffLat, dropoffLng], {
-            radius: 8, fillColor: "#3b82f6", color: "#fff", weight: 2, fillOpacity: 1,
-        }).addTo(map).bindPopup("Dropoff");
+            // Planned route (dashed)
+            map.addSource(PLANNED_SOURCE_ID, {
+                type: "geojson",
+                data: {
+                    type: "Feature",
+                    properties: {},
+                    geometry: {
+                        type: "LineString",
+                        coordinates: [[pickupLng, pickupLat], [dropoffLng, dropoffLat]],
+                    },
+                },
+            });
+            map.addLayer({
+                id: PLANNED_LAYER_ID,
+                type: "line",
+                source: PLANNED_SOURCE_ID,
+                layout: { "line-cap": "round", "line-join": "round" },
+                paint: {
+                    "line-color": "#9ca3af",
+                    "line-width": 2,
+                    "line-opacity": 0.6,
+                    "line-dasharray": [2, 2],
+                },
+            });
 
-        // Planned route (dashed line)
-        L.polyline([[pickupLat, pickupLng], [dropoffLat, dropoffLng]], {
-            color: "#9ca3af", weight: 2, dashArray: "8 6", opacity: 0.6,
-        }).addTo(map);
+            // Actual route (solid blue) — only if trail is provided
+            if (locationTrail && locationTrail.length > 1) {
+                map.addSource(ACTUAL_SOURCE_ID, {
+                    type: "geojson",
+                    data: {
+                        type: "Feature",
+                        properties: {},
+                        geometry: {
+                            type: "LineString",
+                            coordinates: locationTrail.map((p) => [p.lng, p.lat]),
+                        },
+                    },
+                });
+                map.addLayer({
+                    id: ACTUAL_LAYER_ID,
+                    type: "line",
+                    source: ACTUAL_SOURCE_ID,
+                    layout: { "line-cap": "round", "line-join": "round" },
+                    paint: {
+                        "line-color": "#3b82f6",
+                        "line-width": 3,
+                        "line-opacity": 0.8,
+                    },
+                });
+            }
 
-        // Actual route (solid blue polyline from GPS trail)
-        if (locationTrail && locationTrail.length > 1) {
-            const trailPoints: [number, number][] = locationTrail.map(p => [p.lat, p.lng]);
-            L.polyline(trailPoints, {
-                color: "#3b82f6", weight: 3, opacity: 0.8,
-            }).addTo(map);
-        }
-
-        // Fit bounds
-        const allPoints: [number, number][] = [
-            [pickupLat, pickupLng],
-            [dropoffLat, dropoffLng],
-            ...(locationTrail || []).map(p => [p.lat, p.lng] as [number, number]),
-        ];
-        if (allPoints.length >= 2) {
-            map.fitBounds(L.latLngBounds(allPoints), { padding: [30, 30] });
-        }
+            // Fit bounds
+            const allPoints: { lat: number; lng: number }[] = [
+                { lat: pickupLat, lng: pickupLng },
+                { lat: dropoffLat, lng: dropoffLng },
+                ...(locationTrail ?? []).map((p) => ({ lat: p.lat, lng: p.lng })),
+            ];
+            fitBoundsToPoints(map, allPoints, 40);
+        });
 
         return () => {
             map.remove();
-            mapInstance.current = null;
+            mapRef.current = null;
         };
     }, [pickupLat, pickupLng, dropoffLat, dropoffLng, locationTrail]);
 
-    return <div ref={mapRef} className="w-full h-[280px] rounded-xl overflow-hidden" />;
+    return <div ref={containerRef} className="w-full h-[280px] rounded-xl overflow-hidden" />;
 }

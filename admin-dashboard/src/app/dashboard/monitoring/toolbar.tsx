@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Navigation, Search, Wifi, WifiOff } from "lucide-react";
 
-interface ServiceArea { id: string; name: string; }
+interface ServiceArea { id: string; name: string; geojson?: GeoJSON.Polygon | GeoJSON.MultiPolygon | null }
 interface VehicleType { id: string; name: string; }
 
 interface ToolbarProps {

@@ -1,6 +1,7 @@
 import secrets
 import string
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import jwt
 from fastapi import Depends, HTTPException
@@ -49,8 +50,30 @@ def generate_otp() -> str:
     return "".join(secrets.choice(string.digits) for _ in range(OTP_LENGTH))
 
 
-def create_jwt_token(user_id: str, phone: str, session_id: str = None) -> str:
-    payload = {"user_id": user_id, "phone": phone, "exp": datetime.utcnow() + timedelta(days=30)}
+def create_jwt_token(
+    user_id: str,
+    phone: str,
+    session_id: Optional[str] = None,
+    *,
+    token_version: int = 0,
+) -> str:
+    """Mint a rider/driver access token.
+
+    ``token_version`` is written into the payload so the middleware can
+    compare it against ``users.token_version`` and reject tokens issued
+    before a force-logout-all. TTL comes from
+    ``settings.ACCESS_TOKEN_TTL_DAYS``; admin tokens are minted in
+    ``routes/admin/auth.py`` directly because they carry a different
+    claim set (role, modules, email).
+    """
+    now = datetime.now(timezone.utc)
+    payload: dict = {
+        "user_id": user_id,
+        "phone": phone,
+        "iat": now,
+        "exp": now + timedelta(days=settings.ACCESS_TOKEN_TTL_DAYS),
+        "token_version": int(token_version or 0),
+    }
     if session_id:
         payload["session_id"] = session_id
 
@@ -65,6 +88,19 @@ def verify_jwt_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="Token has expired") from None
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token") from None
+
+
+def _token_version_mismatch(payload: dict, user_row: dict) -> bool:
+    """Return True if the access-token's token_version is stale.
+
+    Tokens minted before this migration land do not carry a
+    token_version claim; we treat a missing claim as 0. ``user_row`` is
+    whatever came back from the users / admin_staff table — the check
+    is symmetric: default 0 on both sides.
+    """
+    claim = int(payload.get("token_version") or 0)
+    stored = int(user_row.get("token_version") or 0)
+    return claim < stored
 
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
@@ -134,6 +170,17 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         db_session = user.get("current_session_id")
         if db_session and token_session != db_session:
             raise HTTPException(status_code=401, detail="Session expired. Logged in from another device.")
+        # Revocation gate — if the user's token_version has been bumped
+        # (admin force-logout-all, password reset, suspected compromise)
+        # every access token issued before the bump must be rejected.
+        # Tokens pre-dating migration 25 carry no claim → treated as 0,
+        # which matches the default DB value, so the upgrade is
+        # backwards-compatible until someone calls /auth/logout-all.
+        if _token_version_mismatch(payload, user):
+            raise HTTPException(
+                status_code=401,
+                detail="Session revoked — please log in again.",
+            )
         # Role is always determined by the DB — never trust JWT role claims.
         # A forged JWT with "role": "super_admin" must not grant escalated access.
 

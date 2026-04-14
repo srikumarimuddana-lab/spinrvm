@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import jwt
@@ -12,10 +12,22 @@ try:
     from ...core.config import settings
     from ...db import db
     from ...utils.password import hash_password, verify_password
+    from ...utils.refresh_tokens import (
+        issue_refresh_token,
+        lookup_refresh_token,
+        revoke_all_for_user,
+        revoke_refresh_token,
+    )
 except ImportError:
     from core.config import settings
     from db import db
     from utils.password import hash_password, verify_password
+    from utils.refresh_tokens import (
+        issue_refresh_token,
+        lookup_refresh_token,
+        revoke_all_for_user,
+        revoke_refresh_token,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +54,47 @@ class LoginRequest(BaseModel):
 class SessionResponse(BaseModel):
     user: Optional[Dict[str, Any]] = None
     authenticated: bool = False
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class LogoutRequest(BaseModel):
+    refresh_token: Optional[str] = None
+
+
+def _mint_admin_access_token(
+    user_id: str,
+    email: str,
+    role: str,
+    modules: list,
+    phone: str,
+    token_version: int,
+) -> tuple[str, datetime]:
+    """Mint an admin access token with a bounded TTL and a token_version
+    claim so the revocation gate in dependencies.py can reject stale
+    tokens after an admin force-logout-all. Historically admin tokens
+    were minted WITHOUT an ``exp`` claim, so a single captured token
+    granted permanent access — the primary P0-S3 fix is this function.
+    """
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(hours=settings.ADMIN_ACCESS_TOKEN_TTL_HOURS)
+    token = jwt.encode(
+        {
+            "user_id": user_id,
+            "email": email,
+            "role": role,
+            "modules": modules,
+            "phone": phone,
+            "token_version": int(token_version or 0),
+            "iat": now,
+            "exp": expires_at,
+        },
+        settings.JWT_SECRET,
+        algorithm=settings.ALGORITHM,
+    )
+    return token, expires_at
 
 
 @admin_auth_router.get("/session", response_model=SessionResponse)
@@ -119,18 +172,24 @@ async def admin_login(request: Request, body: LoginRequest):
         "staff",
     ]
 
+    user_agent = request.headers.get("user-agent", "")
+    client_ip = get_remote_address(request)
+
     # 1. Super admin from env
     if body.email == settings.ADMIN_EMAIL and body.password == settings.ADMIN_PASSWORD:
-        token = jwt.encode(
-            {
-                "user_id": "admin-001",
-                "email": body.email,
-                "role": "super_admin",
-                "modules": ALL_MODULES,
-                "phone": body.email,
-            },
-            settings.JWT_SECRET,
-            algorithm=settings.ALGORITHM,
+        # admin-001 has no DB row, so token_version stays at 0. We still
+        # emit the claim + an exp so a captured super-admin token dies
+        # after ADMIN_ACCESS_TOKEN_TTL_HOURS and can't live forever.
+        token, access_expires_at = _mint_admin_access_token(
+            user_id="admin-001",
+            email=body.email,
+            role="super_admin",
+            modules=ALL_MODULES,
+            phone=body.email,
+            token_version=0,
+        )
+        refresh_raw, _, refresh_expires_at = await issue_refresh_token(
+            "admin-001", audience="admin", user_agent=user_agent, ip=client_ip
         )
         return {
             "user": {
@@ -142,6 +201,9 @@ async def admin_login(request: Request, body: LoginRequest):
                 "modules": ALL_MODULES,
             },
             "token": token,
+            "refresh_token": refresh_raw,
+            "access_expires_at": access_expires_at.isoformat(),
+            "refresh_expires_at": refresh_expires_at.isoformat(),
         }
 
     # 2. Staff member
@@ -174,16 +236,16 @@ async def admin_login(request: Request, body: LoginRequest):
                 {"$set": update_payload},
             )
             modules = staff.get("modules", ["dashboard"])
-            token = jwt.encode(
-                {
-                    "user_id": staff["id"],
-                    "email": staff["email"],
-                    "role": staff.get("role", "custom"),
-                    "modules": modules,
-                    "phone": staff["email"],
-                },
-                settings.JWT_SECRET,
-                algorithm=settings.ALGORITHM,
+            token, access_expires_at = _mint_admin_access_token(
+                user_id=staff["id"],
+                email=staff["email"],
+                role=staff.get("role", "custom"),
+                modules=modules,
+                phone=staff["email"],
+                token_version=int(staff.get("token_version") or 0),
+            )
+            refresh_raw, _, refresh_expires_at = await issue_refresh_token(
+                staff["id"], audience="admin", user_agent=user_agent, ip=client_ip
             )
             return {
                 "user": {
@@ -195,15 +257,130 @@ async def admin_login(request: Request, body: LoginRequest):
                     "modules": modules,
                 },
                 "token": token,
+                "refresh_token": refresh_raw,
+                "access_expires_at": access_expires_at.isoformat(),
+                "refresh_expires_at": refresh_expires_at.isoformat(),
             }
 
     raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
+@admin_auth_router.post("/refresh")
+@limiter.limit("20/minute")
+async def admin_refresh(request: Request, body: RefreshRequest):
+    """Exchange an admin refresh token for a new admin access token.
+
+    Scoped to ``audience='admin'`` — a rider refresh token cannot be
+    exchanged here even if it's structurally valid. This is the
+    privilege-escalation guard.
+    """
+    row = await lookup_refresh_token(body.refresh_token)
+    if not row or row.get("audience") != "admin":
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    user_id = row.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+
+    # admin-001 has no DB row. Staff rows must still be active.
+    if user_id == "admin-001":
+        email = settings.ADMIN_EMAIL
+        role = "super_admin"
+        modules = [
+            "dashboard", "users", "drivers", "rides", "earnings", "promotions",
+            "surge", "service_areas", "vehicle_types", "pricing", "support",
+            "disputes", "notifications", "settings", "corporate_accounts",
+            "documents", "heatmap", "staff",
+        ]
+        token_version = 0
+    else:
+        staff = await db.admin_staff.find_one({"id": user_id})
+        if not staff or not staff.get("is_active", True):
+            raise HTTPException(status_code=401, detail="Invalid refresh token")
+        email = staff["email"]
+        role = staff.get("role", "custom")
+        modules = staff.get("modules", ["dashboard"])
+        token_version = int(staff.get("token_version") or 0)
+
+    user_agent = request.headers.get("user-agent", "")
+    client_ip = get_remote_address(request)
+
+    new_raw, _, refresh_expires_at = await issue_refresh_token(
+        user_id,
+        audience="admin",
+        user_agent=user_agent,
+        ip=client_ip,
+        replaces=row.get("id"),
+    )
+
+    token, access_expires_at = _mint_admin_access_token(
+        user_id=user_id,
+        email=email,
+        role=role,
+        modules=modules,
+        phone=email,
+        token_version=token_version,
+    )
+    return {
+        "token": token,
+        "refresh_token": new_raw,
+        "access_expires_at": access_expires_at.isoformat(),
+        "refresh_expires_at": refresh_expires_at.isoformat(),
+    }
+
+
 @admin_auth_router.post("/logout")
-async def admin_logout():
-    """Admin logout endpoint"""
-    return {"message": "Logged out successfully"}
+@limiter.limit("10/minute")
+async def admin_logout(body: LogoutRequest):
+    """Admin logout — revokes the presented refresh token.
+
+    Previously returned a canned success message with zero DB side
+    effects. Now actually stamps revoked_at so the refresh token can
+    never be exchanged again. The current access token keeps working
+    until exp; use /admin/auth/logout-all for immediate kill.
+    """
+    if body.refresh_token:
+        await revoke_refresh_token(body.refresh_token)
+    return {"success": True}
+
+
+@admin_auth_router.post("/logout-all")
+@limiter.limit("5/minute")
+async def admin_logout_all(authorization: Optional[str] = Header(None)):
+    """Force-invalidate every admin session for the caller.
+
+    Only valid for staff (admin-001 uses env-var creds and has no
+    persisted token_version; rotate ADMIN_PASSWORD to kill the super-
+    admin globally). Bumps admin_staff.token_version and revokes every
+    active refresh token for that staff row.
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    try:
+        scheme, token = authorization.split()
+        if scheme.lower() != "bearer":
+            raise HTTPException(status_code=401, detail="Invalid auth scheme")
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+    except (ValueError, jwt.InvalidTokenError) as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {e}") from e
+
+    user_id = payload.get("user_id")
+    if not user_id or user_id == "admin-001":
+        raise HTTPException(
+            status_code=400,
+            detail="Super admin cannot force-logout here. Rotate ADMIN_PASSWORD in the environment to kill all super-admin sessions.",
+        )
+
+    staff = await db.admin_staff.find_one({"id": user_id})
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+
+    new_version = int(staff.get("token_version") or 0) + 1
+    await db.admin_staff.update_one({"id": user_id}, {"$set": {"token_version": new_version}})
+    revoked = await revoke_all_for_user(user_id)
+    logger.info(f"admin logout-all: user={user_id} token_version→{new_version} revoked_refresh={revoked}")
+    return {"success": True, "revoked_refresh_tokens": revoked}
 
 
 class ChangePasswordRequest(BaseModel):

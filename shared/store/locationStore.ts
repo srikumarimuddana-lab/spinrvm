@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface LocationState {
   currentLocation: {
@@ -127,7 +128,7 @@ export const useLocationStore = create<LocationState>()(
     }),
     {
       name: 'location-storage',
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => Platform.OS === 'web' ? localStorage : AsyncStorage),
     }
   )
 );

@@ -121,7 +121,11 @@ export default function LoginScreen() {
     const formattedNumber = `+1${phoneNumber.replace(/\D/g, '')}`;
 
     try {
-      if (isFirebaseConfigured && PhoneAuthProvider) {
+      // Firebase JS SDK phone auth requires a RecaptchaVerifier which is
+      // web-only. On React Native, @react-native-firebase/auth is needed
+      // for native Firebase phone auth. Fall through to backend OTP until
+      // that package is installed and a native build is produced.
+      if (false && isFirebaseConfigured && PhoneAuthProvider && recaptchaVerifier.current) {
         const phoneProvider = new PhoneAuthProvider(auth);
         const verificationId = await phoneProvider.verifyPhoneNumber(
           formattedNumber,

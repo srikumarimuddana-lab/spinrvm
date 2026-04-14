@@ -9,6 +9,7 @@ import { getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTy
 import { useMonitoringSocket } from "@/hooks/use-monitoring-socket";
 import { MonitoringMap, MapHandles, MonitoringServiceArea } from "./monitoring-map";
 import { MonitoringToolbar } from "./toolbar";
+import { polygonPointsToGeoJSON } from "@/lib/map/maplibre-base";
 import { AlertFeed } from "./alert-feed";
 import { DriverPanel } from "./driver-panel";
 import { RidePanel } from "./ride-panel";
@@ -91,10 +92,18 @@ export default function MonitoringPage() {
             }
             if (areas.status === "fulfilled") {
                 setServiceAreas(
-                    areas.value.map((a: { id: string; name: string; geojson?: GeoJSON.Polygon | GeoJSON.MultiPolygon | null }) => ({
+                    areas.value.map((a: {
+                        id: string;
+                        name: string;
+                        geojson?: GeoJSON.Polygon | GeoJSON.MultiPolygon | null;
+                        polygon?: { lat: number; lng: number }[];
+                    }) => ({
                         id: a.id,
                         name: a.name,
-                        geojson: a.geojson ?? null,
+                        // Backend stores as polygon:[{lat,lng}]; convert to
+                        // GeoJSON here so the map can render + fit bounds.
+                        // Prefer an explicit geojson field if one is present.
+                        geojson: a.geojson ?? polygonPointsToGeoJSON(a.polygon ?? []),
                     })),
                 );
             }

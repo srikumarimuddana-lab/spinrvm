@@ -1,6 +1,8 @@
 // Use relative URL to go through Next.js proxy (avoids CORS and IPv6 issues)
-// For production, set NEXT_PUBLIC_API_URL to your backend URL
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// For production, set NEXT_PUBLIC_API_URL to your backend URL.
+// Default is "" (empty) so /api/* requests route through next.config.ts rewrites
+// → http://127.0.0.1:8001. Never talk directly to the backend from the browser.
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 // Import Zustand store for token management
 import { useAuthStore } from "@/store/authStore";
@@ -137,7 +139,7 @@ export const getRideInvoice = (rideId: string) =>
 export const getRideRouteMapDataUrl = async (rideId: string): Promise<string | null> => {
     const token = useAuthStore.getState().token;
     try {
-        const res = await fetch(`${API_BASE}/api/admin/rides/${rideId}/route-map.png`, {
+        const res = await fetch(`/api/admin/rides/${rideId}/route-map.png`, {
             headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         if (!res.ok) return null;
@@ -179,9 +181,8 @@ export const resolveLostItem = (itemId: string, data: { status: string; admin_no
         body: JSON.stringify(data),
     });
 export const sendRideInvoice = async (rideId: string) => {
-    const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
     const token = useAuthStore.getState().token;
-    const res = await fetch(`${API_BASE}/api/v1/rides/${rideId}/process-payment`, {
+    const res = await fetch(`/api/v1/rides/${rideId}/process-payment`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
         body: JSON.stringify({ tip_amount: 0 }),
@@ -671,3 +672,14 @@ export const getDriverSubscriptions = (status?: string) =>
 /* ── Audit Logs ──────────────────────────── */
 export const getAuditLogs = (limit = 50) =>
     request<any[]>(`/api/admin/audit-logs?limit=${limit}`);
+
+/* ── Live Monitoring ────────────────────────────── */
+export const getMonitoringDrivers = () =>
+    request<import("@/app/dashboard/monitoring/types").MonitoringDriver[]>(
+        "/api/admin/monitoring/drivers"
+    );
+
+export const getMonitoringRides = () =>
+    request<import("@/app/dashboard/monitoring/types").MonitoringRide[]>(
+        "/api/admin/monitoring/rides"
+    );

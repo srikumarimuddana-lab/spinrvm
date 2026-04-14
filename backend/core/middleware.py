@@ -1,11 +1,82 @@
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from loguru import logger
 from slowapi.errors import RateLimitExceeded
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from core.config import settings
 from utils.rate_limiter import default_limiter, rate_limit_exceeded_handler
+
+# ── Security response headers ─────────────────────────────────────────
+# Baseline for an API backend. Critical protections: X-Frame-Options
+# (clickjacking), X-Content-Type-Options (MIME sniffing), HSTS (TLS
+# enforcement), CSP frame-ancestors (clickjacking, modern equivalent).
+# CSP default-src='none' is strict-but-safe because the backend serves
+# JSON almost exclusively; Swagger UI / ReDoc / openapi.json need a
+# relaxed CSP to load external assets from cdn.jsdelivr.net, so those
+# paths are exempted.
+
+_BASE_SECURITY_HEADERS: dict[str, str] = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "geolocation=(), microphone=(), camera=(), payment=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-site",
+}
+
+_STRICT_CSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+
+# Relaxed CSP for FastAPI's built-in docs. Swagger UI + ReDoc pull
+# scripts and styles from jsdelivr; they also use inline styles.
+_DOCS_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' https://cdn.jsdelivr.net; "
+    "style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+    "img-src 'self' data: https://fastapi.tiangolo.com; "
+    "font-src 'self' https://cdn.jsdelivr.net; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; base-uri 'self'"
+)
+
+_DOCS_PATHS = ("/docs", "/redoc", "/openapi.json")
+
+
+def _apply_security_headers(response: Response, path: str, enable_hsts: bool) -> None:
+    """Attach the baseline security headers to a response.
+
+    Uses dict-style assignment (rather than setdefault) so that upstream
+    handlers that set weaker values get overridden by our stricter ones.
+    """
+    for k, v in _BASE_SECURITY_HEADERS.items():
+        response.headers[k] = v
+
+    if enable_hsts:
+        # 1 year, include subdomains, eligible for preload.
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"
+
+    if any(path.startswith(p) for p in _DOCS_PATHS):
+        response.headers["Content-Security-Policy"] = _DOCS_CSP
+    else:
+        response.headers["Content-Security-Policy"] = _STRICT_CSP
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Attach a conservative set of security response headers to every
+    response. HSTS only when ENV=production so local dev over HTTP still
+    works in browsers that cache HSTS aggressively.
+    """
+
+    def __init__(self, app, enable_hsts: bool):
+        super().__init__(app)
+        self._enable_hsts = enable_hsts
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        _apply_security_headers(response, request.url.path, self._enable_hsts)
+        return response
+
 
 _INSECURE_JWT_DEFAULTS = {
     "your-strong-secret-key",  # core/config.py default
@@ -134,6 +205,12 @@ def init_middleware(app):
         allow_headers=["*"],
     )
 
+    # Security headers — applied after CORS so that every response
+    # (including CORS preflight 204s) carries the hardening headers.
+    # HSTS is only enabled in production because emitting it over
+    # plain-HTTP dev would cause browsers to pin the dev host to HTTPS.
+    app.add_middleware(SecurityHeadersMiddleware, enable_hsts=is_production)
+
     # FIX: Add CORS headers to exception responses (FastAPI bug fix)
     @app.exception_handler(Exception)
     async def cors_exception_handler(request: Request, exc: Exception):
@@ -163,10 +240,18 @@ def init_middleware(app):
                 response.headers["Access-Control-Allow-Methods"] = "*"
                 response.headers["Access-Control-Allow-Headers"] = "*"
 
+        # Error responses must also carry security headers — FastAPI's
+        # exception handling can short-circuit before SecurityHeadersMiddleware
+        # sees the final response in some edge cases.
+        _apply_security_headers(response, request.url.path, enable_hsts=is_production)
+
         return response
 
     # Rate Limiting Middleware
     app.state.limiter = default_limiter
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
-    logger.info("Middleware initialized: CORS and Rate Limiting")
+    logger.info(
+        "Middleware initialized: CORS, Security Headers "
+        f"(HSTS={'on' if is_production else 'off'}), Rate Limiting"
+    )

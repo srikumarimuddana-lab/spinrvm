@@ -288,9 +288,6 @@ async def get_driver_documents(current_user: dict = Depends(get_current_user)):
 @documents_router.post("/documents")
 async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict = Depends(get_current_user)):
     """Link an uploaded document to the current driver."""
-    if not current_user.get("is_driver"):
-        raise HTTPException(status_code=403, detail="User is not a driver")
-
     driver = await db.drivers.find_one({"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
@@ -640,60 +637,45 @@ async def upload_file(
     """
     Generic file upload endpoint.
 
-    Stores the file as base64 in the `document_files` collection and returns a URL
-    that can be served by GET /api/documents/{file_id}. Works on Railway's
-    ephemeral filesystem because nothing is written to disk.
+    Uploads directly to Supabase Storage (driver-documents bucket) and
+    returns the public URL. The previous base64-in-DB approach caused
+    2+ minute timeouts for large images.
     """
     try:
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="Empty file")
 
-        # 10 MB hard cap — documents are usually photos/PDFs
+        # 10 MB hard cap -- documents are usually photos/PDFs
         if len(content) > 10 * 1024 * 1024:
             raise HTTPException(status_code=413, detail="File too large (max 10MB)")
 
-        file_id = str(uuid.uuid4())
         size = len(content)
-        filename = file.filename or "upload"
+        original_filename = file.filename or "upload"
         content_type = file.content_type or "application/octet-stream"
 
-        # Only insert columns that actually exist on the Supabase
-        # `document_files` table. Historically this table was created with
-        # just { id, data, content_type, created_at } — adding columns like
-        # `size`, `filename`, `uploaded_by` to the insert raises PGRST204
-        # ("Could not find the X column of document_files in the schema
-        # cache"). We still return size/filename in the response so the
-        # client gets full metadata without us having to touch the schema.
-        record = {
-            "id": file_id,
-            "content_type": content_type,
-            "data": base64.b64encode(content).decode("utf-8"),
-            "created_at": datetime.utcnow().isoformat(),
-        }
+        # Build a unique storage path preserving the file extension
+        ext = os.path.splitext(original_filename)[1] or ""
+        file_id = str(uuid.uuid4())
+        storage_path = f"{file_id}{ext}"
 
+        # Upload to Supabase Storage
         try:
-            await db.document_files.insert_one(record)
+            supabase.storage.from_("driver-documents").upload(
+                file=content,
+                path=storage_path,
+                file_options={"content-type": content_type},
+            )
+            public_url = supabase.storage.from_("driver-documents").get_public_url(storage_path)
         except Exception as e:
-            # If a newer schema has the extra columns, retry with them
-            # included so we don't silently lose metadata on upgraded DBs.
-            err_msg = str(e)
-            if "PGRST204" in err_msg or "schema cache" in err_msg:
-                # Already using minimal columns — re-raise with context.
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Upload insert rejected by DB schema: {err_msg}",
-                ) from e
-            # Not a schema error — bubble up as-is.
-            raise
+            logger.error(f"Supabase Storage upload failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Storage upload failed: {e}") from e
 
-        # Relative URL served by files_router (GET /api/documents/{file_id})
-        url = f"/api/documents/{file_id}"
         return {
             "success": True,
-            "url": url,
+            "url": public_url,
             "file_id": file_id,
-            "filename": filename,
+            "filename": original_filename,
             "content_type": content_type,
             "size": size,
         }
@@ -707,33 +689,21 @@ async def upload_file(
 @files_router.get("/{file_id}")
 async def get_document_file(file_id: str):
     """Serve a document file by ID."""
-    # check if it's in document_files (DB storage)
-    video_file = await db.document_files.find_one({"id": file_id})
-    if video_file:
+    # Check legacy DB storage (base64 blobs uploaded before this fix)
+    legacy_file = await db.document_files.find_one({"id": file_id})
+    if legacy_file:
         try:
-            content = base64.b64decode(video_file.get("data", ""))
-            media_type = video_file.get("content_type", "application/octet-stream")
+            content = base64.b64decode(legacy_file.get("data", ""))
+            media_type = legacy_file.get("content_type", "application/octet-stream")
             return Response(content=content, media_type=media_type)
         except Exception as e:
-            logger.error(f"Error serving file {file_id}: {e}")
+            logger.error(f"Error serving legacy file {file_id}: {e}")
             raise HTTPException(status_code=500, detail="Error serving file") from e
 
-    # If not found in DB files, maybe it's a direct reference to a driver document
-    # which might have a URL. But the request is specifically for /ids that are likely file IDs if generated by the legacy upload.
-
-    # If the ID passed is actually a driver_document ID, we might want to redirect to its document_url
+    # Check driver_documents -- redirect to its stored URL (Supabase Storage public URL)
     doc = await db.driver_documents.find_one({"id": file_id})
     if doc and doc.get("document_url"):
-        # If it's a relative URL (local upload), we might need to serve it from disk if we used disk storage
-        # But current implementation uses /uploads/filename for disk
-        if doc["document_url"].startswith("/uploads/"):
-            # This should be handled by StaticFiles in server.py if mounted
-            from fastapi.responses import RedirectResponse
-
-            return RedirectResponse(doc["document_url"])
-        # If it's a full URL (Supabase), redirect
         from fastapi.responses import RedirectResponse
-
         return RedirectResponse(doc["document_url"])
 
     raise HTTPException(status_code=404, detail="File not found")

@@ -16,6 +16,18 @@ from fastapi.testclient import TestClient
 # Add backend to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# pytest.ini has an `env = …` block but that's pytest-env syntax and we don't
+# install pytest-env. CI sets these via the job-level env: block; to make
+# `pytest` work locally without any ceremony, default the same values here if
+# the ambient env hasn't already provided them. Must run before any backend
+# module is imported so core/config.py's Settings model sees them.
+os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
+os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test_key")
+os.environ.setdefault("JWT_SECRET", "test-secret-key-for-ci-only-32chars!!")
+os.environ.setdefault("ADMIN_PASSWORD", "TestAdminPass123!")
+os.environ.setdefault("ADMIN_EMAIL", "admin@spinr.ca")
+os.environ.setdefault("ENV", "test")
+
 
 @pytest.fixture(scope="session")
 def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
@@ -300,62 +312,13 @@ def async_http_client() -> httpx.AsyncClient:
 # continue to run normally.
 _STALE_TEST_CLASSES: frozenset[str] = frozenset(
     {
-        # test_admin_auth.py — 10/10 stale
-        "test_admin_auth.py::TestAdminLogin",
-        "test_admin_auth.py::TestChangePassword",
-        # test_admin_routes_auth.py — 6/6 stale (all fixture-setup errors)
-        "test_admin_routes_auth.py::TestAdminRoutesRequireAuth",
-        # test_auth.py — 19/27 stale
-        "test_auth.py::TestAdminUserVerification",
-        "test_auth.py::TestAuthEndpoints",
-        "test_auth.py::TestFirebaseIntegration",
-        "test_auth.py::TestGetCurrentUser",
-        "test_auth.py::TestJWTTokenHandling",
-        "test_auth.py::TestSessionManagement",
-        "test_auth.py::TestTokenRefresh",
-        # test_db.py — 15/31 stale
-        "test_db.py::TestCollection",
-        "test_db.py::TestDBWrapper",
-        "test_db.py::TestDatabaseSupabaseFunctions",
-        "test_db.py::TestMockCursor",
-        "test_db.py::TestOTPRecordOperations",
-        "test_db.py::TestRideCollection",
-        "test_db.py::TestUserCollection",
-        # test_documents.py — 17/25 stale
-        "test_documents.py::TestDocumentEndpoints",
-        "test_documents.py::TestDocumentExpiry",
-        "test_documents.py::TestDocumentFileStorage",
-        "test_documents.py::TestDocumentRegressions",
-        "test_documents.py::TestDocumentRequirements",
-        "test_documents.py::TestDriverDocuments",
-        # test_drivers.py — 17/19 stale
-        "test_drivers.py::TestDriverAvailability",
-        "test_drivers.py::TestDriverDocuments",
-        "test_drivers.py::TestDriverEndpoints",
-        "test_drivers.py::TestDriverLocation",
-        "test_drivers.py::TestDriverRegistration",
-        "test_drivers.py::TestDriverStats",
-        "test_drivers.py::TestDriverVehicle",
-        # test_features.py — 21/24 stale
-        "test_features.py::TestCorporateAccounts",
-        "test_features.py::TestEmergencyContacts",
-        "test_features.py::TestFAQs",
-        "test_features.py::TestNotifications",
-        "test_features.py::TestSavedAddresses",
-        "test_features.py::TestServiceAreas",
-        "test_features.py::TestSupportTickets",
-        "test_features.py::TestSurgePricing",
-        # test_rides.py — 20/28 stale
-        "test_rides.py::TestRideCreation",
-        "test_rides.py::TestRideDisputes",
-        "test_rides.py::TestRideEndpoints",
-        "test_rides.py::TestRideHistory",
-        "test_rides.py::TestRideMatching",
-        "test_rides.py::TestRideRatings",
-        "test_rides.py::TestRideStatusUpdates",
-        "test_rides.py::TestScheduledRides",
-        # test_sms.py — 4/12 stale
-        "test_sms.py::TestSMSService",
+        # test_admin_routes_auth.py — 0/6 stale (all repaired)
+        # test_auth.py — 0/27 stale (all repaired)
+        # test_db.py — 0/31 stale (all repaired)
+        # test_documents.py — 0/25 stale (all repaired)
+        # test_drivers.py — 0/19 stale (all repaired)
+        # test_features.py — 0/24 stale (all repaired)
+        # test_rides.py — 0/28 stale (all repaired)
     }
 )
 
@@ -367,7 +330,12 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     `tests/test_rides.py::TestRideCreation::test_foo`) so that renaming a
     test method still keeps the skip applied until the class is removed
     from `_STALE_TEST_CLASSES`.
+
+    Set ``SPINR_RUN_STALE=1`` in the environment to disable the skip for
+    local triage runs while repairing classes — never used in CI.
     """
+    if os.environ.get("SPINR_RUN_STALE") == "1":
+        return
     skip_marker = pytest.mark.skip(reason="Stale — pre-Supabase API shape. Rewrite tracked in P1 test-suite repair.")
     for item in items:
         if any(stale in item.nodeid for stale in _STALE_TEST_CLASSES):

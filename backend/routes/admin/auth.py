@@ -345,13 +345,18 @@ async def admin_refresh(request: Request, body: RefreshRequest):
 
 @admin_auth_router.post("/logout")
 @limiter.limit("10/minute")
-async def admin_logout(body: LogoutRequest):
+async def admin_logout(request: Request, body: LogoutRequest):
     """Admin logout — revokes the presented refresh token.
 
     Previously returned a canned success message with zero DB side
     effects. Now actually stamps revoked_at so the refresh token can
     never be exchanged again. The current access token keeps working
     until exp; use /admin/auth/logout-all for immediate kill.
+
+    The ``request`` parameter is required by slowapi's rate limiter
+    (>=0.1.9 validates the signature at decoration time) even though we
+    don't reference it in the body — removing it raises at import and
+    takes the whole admin router (and therefore server boot) down.
     """
     if body.refresh_token:
         await revoke_refresh_token(body.refresh_token)
@@ -360,7 +365,7 @@ async def admin_logout(body: LogoutRequest):
 
 @admin_auth_router.post("/logout-all")
 @limiter.limit("5/minute")
-async def admin_logout_all(authorization: Optional[str] = Header(None)):
+async def admin_logout_all(request: Request, authorization: Optional[str] = Header(None)):
     """Force-invalidate every admin session for the caller.
 
     Only valid for staff (admin-001 uses env-var creds and has no

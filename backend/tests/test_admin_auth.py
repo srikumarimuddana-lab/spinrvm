@@ -7,6 +7,41 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
+
+
+def _fake_request() -> Request:
+    """Build a minimal real Request so slowapi's isinstance guard passes.
+
+    slowapi >=0.1.9 enforces ``isinstance(request, starlette.requests.Request)``
+    at call time, so a bare MagicMock no longer works. The ASGI scope below is
+    the smallest dict that satisfies Request's constructor plus
+    slowapi.util.get_remote_address (which reads ``scope['client']``).
+    """
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/",
+        "headers": [],
+        "query_string": b"",
+        "client": ("127.0.0.1", 0),
+    }
+    return Request(scope)
+
+
+@pytest.fixture(autouse=True)
+def _reset_admin_rate_limiter():
+    """Reset slowapi's in-memory counters between tests.
+
+    admin_login is capped at 5/minute and change_password at 3/minute per IP;
+    without this reset each test class run exhausts the budget partway through
+    and the remaining tests 429 instead of exercising the real handler.
+    """
+    from backend.routes.admin.auth import limiter
+
+    limiter.reset()
+    yield
+    limiter.reset()
 
 
 class TestAdminLogin:
@@ -19,6 +54,9 @@ class TestAdminLogin:
         mock.ADMIN_PASSWORD = "TestAdminPass123!"
         mock.JWT_SECRET = "test-secret-key-for-testing-only-32chars!!"
         mock.ALGORITHM = "HS256"
+        # _mint_admin_access_token reads this — MagicMock defaults raise
+        # TypeError inside timedelta().
+        mock.ADMIN_ACCESS_TOKEN_TTL_HOURS = 12
         return mock
 
     @pytest.mark.asyncio
@@ -27,9 +65,8 @@ class TestAdminLogin:
         with patch("backend.routes.admin.auth.settings", mock_settings):
             from backend.routes.admin.auth import LoginRequest, admin_login
 
-            mock_request = MagicMock()  # FastAPI Request for rate limiter
             body = LoginRequest(email="admin@spinr.ca", password="TestAdminPass123!")
-            result = await admin_login(mock_request, body)
+            result = await admin_login(_fake_request(), body)
 
             assert "token" in result
             assert result["user"]["role"] == "super_admin"
@@ -62,7 +99,7 @@ class TestAdminLogin:
             from backend.routes.admin.auth import LoginRequest, admin_login
 
             body = LoginRequest(email="staff@spinr.ca", password="StaffPass12345!")
-            result = await admin_login(MagicMock(), body)
+            result = await admin_login(_fake_request(), body)
 
             assert "token" in result
             assert result["user"]["role"] == "operations"
@@ -90,7 +127,7 @@ class TestAdminLogin:
             from backend.routes.admin.auth import LoginRequest, admin_login
 
             body = LoginRequest(email="legacy@spinr.ca", password="LegacyPass12345!")
-            result = await admin_login(MagicMock(), body)
+            result = await admin_login(_fake_request(), body)
 
             assert "token" in result
             # Verify the update included a new bcrypt hash
@@ -112,7 +149,7 @@ class TestAdminLogin:
 
             body = LoginRequest(email="wrong@example.com", password="wrong")
             with pytest.raises(HTTPException) as exc_info:
-                await admin_login(MagicMock(), body)
+                await admin_login(_fake_request(), body)
             assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
@@ -137,7 +174,7 @@ class TestAdminLogin:
 
             body = LoginRequest(email="deactivated@spinr.ca", password="ValidPass12345!")
             with pytest.raises(HTTPException) as exc_info:
-                await admin_login(MagicMock(), body)
+                await admin_login(_fake_request(), body)
             assert exc_info.value.status_code == 403
 
 
@@ -175,7 +212,7 @@ class TestChangePassword:
             from backend.routes.admin.auth import ChangePasswordRequest, change_password
 
             body = ChangePasswordRequest(current_password="OldPassword123!", new_password="NewPassword456!")
-            result = await change_password(MagicMock(), body, authorization=f"Bearer {token}")
+            result = await change_password(_fake_request(), body, authorization=f"Bearer {token}")
 
             assert result["success"] is True
             mock_db.admin_staff.update_one.assert_called_once()
@@ -203,7 +240,7 @@ class TestChangePassword:
 
             body = ChangePasswordRequest(current_password="WrongPassword!", new_password="NewPassword456!")
             with pytest.raises(HTTPException) as exc_info:
-                await change_password(MagicMock(), body, authorization=f"Bearer {token}")
+                await change_password(_fake_request(), body, authorization=f"Bearer {token}")
             assert exc_info.value.status_code == 400
             assert "incorrect" in exc_info.value.detail.lower()
 
@@ -230,7 +267,7 @@ class TestChangePassword:
 
             body = ChangePasswordRequest(current_password="OldPassword123!", new_password="short")
             with pytest.raises(HTTPException) as exc_info:
-                await change_password(MagicMock(), body, authorization=f"Bearer {token}")
+                await change_password(_fake_request(), body, authorization=f"Bearer {token}")
             assert exc_info.value.status_code == 400
             assert "12 characters" in exc_info.value.detail
 
@@ -246,7 +283,7 @@ class TestChangePassword:
 
             body = ChangePasswordRequest(current_password="any", new_password="NewPassword456!")
             with pytest.raises(HTTPException) as exc_info:
-                await change_password(MagicMock(), body, authorization=f"Bearer {token}")
+                await change_password(_fake_request(), body, authorization=f"Bearer {token}")
             assert exc_info.value.status_code == 400
             assert "Super admin" in exc_info.value.detail
 
@@ -258,5 +295,5 @@ class TestChangePassword:
 
             body = ChangePasswordRequest(current_password="any", new_password="NewPassword456!")
             with pytest.raises(HTTPException) as exc_info:
-                await change_password(MagicMock(), body, authorization=None)
+                await change_password(_fake_request(), body, authorization=None)
             assert exc_info.value.status_code == 401

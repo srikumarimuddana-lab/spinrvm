@@ -237,7 +237,14 @@ export default function DocumentsScreen() {
     };
 
     const getDocStatus = (reqId: string, side: 'front' | 'back' = 'front') => {
-        const doc = documents.find(d => d.requirement_id === reqId && (d.side === side || !d.side));
+        const req = requirements.find(r => r.id === reqId);
+        // Primary match: by requirement_id (UUID-based requirements)
+        // Fallback: by document_type name (service-area requirements stored with null requirement_id)
+        const doc = documents.find(d =>
+            (d.requirement_id === reqId ||
+             (!d.requirement_id && req && d.document_type === req.name)) &&
+            (d.side === side || !d.side)
+        );
         if (!doc) return 'missing';
         return doc;
     };

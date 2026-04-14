@@ -3,6 +3,16 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+
+def _is_valid_uuid(value: str) -> bool:
+    """Return True if *value* is a well-formed UUID string."""
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, AttributeError):
+        return False
+
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
@@ -102,6 +112,7 @@ async def _supersede_and_flag_pending_review(
     driver_id: str,
     requirement_id: str,
     side: Optional[str],
+    document_type: Optional[str] = None,
 ) -> None:
     """
     When a driver (re-)uploads a document, mark any prior docs for the same
@@ -113,9 +124,19 @@ async def _supersede_and_flag_pending_review(
     try:
         query: Dict[str, Any] = {
             "driver_id": driver_id,
-            "requirement_id": requirement_id,
             "status": {"$in": ["approved", "pending"]},
         }
+        # requirement_id is a UUID column in Supabase — only filter by it when
+        # the value is actually a UUID. Service-area document keys like
+        # "vehicle_registration" are plain strings and would cause a
+        # `invalid input syntax for type uuid` error from PostgREST.
+        # For non-UUID keys, fall back to matching by document_type (the
+        # requirement name) so we only supersede docs for this specific
+        # requirement rather than all of the driver's docs.
+        if requirement_id and _is_valid_uuid(requirement_id):
+            query["requirement_id"] = requirement_id
+        elif document_type:
+            query["document_type"] = document_type
         if side is not None:
             query["side"] = side
         await db.driver_documents.update_many(
@@ -165,6 +186,40 @@ async def save_upload(file: UploadFile) -> str:
     except Exception as e:
         logger.error(f"Failed to upload to Supabase Storage: {e}")
         raise HTTPException(status_code=500, detail=f"Could not save file: {e}") from e
+
+
+# --- Helpers ---
+
+
+async def _insert_driver_document(record: dict) -> dict:
+    """
+    Insert a row into driver_documents, falling back to a minimal set of
+    columns if ``requirement_id`` or ``side`` don't exist yet in the live
+    Supabase table (i.e. the ALTER TABLE migration hasn't been run yet).
+    """
+    try:
+        result = await db.driver_documents.insert_one(record)
+        return result if result else record
+    except Exception as e:
+        err = str(e)
+        # PGRST204 = column not found in schema cache; 42703 = undefined column
+        if "PGRST204" in err or "42703" in err or "schema cache" in err:
+            logger.warning(
+                "driver_documents missing requirement_id/side columns — "
+                "falling back to minimal insert. Run the ALTER TABLE migration!"
+            )
+            minimal = {
+                "id": record["id"],
+                "driver_id": record["driver_id"],
+                "document_type": record.get("document_type"),
+                "document_url": record["document_url"],
+                "status": record.get("status", "pending"),
+                "uploaded_at": record.get("uploaded_at"),
+                "updated_at": record.get("updated_at"),
+            }
+            result = await db.driver_documents.insert_one(minimal)
+            return result if result else minimal
+        raise
 
 
 # --- Public/Driver Endpoints ---
@@ -240,21 +295,63 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
-    # Validate requirement exists — check global table first, then
+    # Validate requirement exists — check global table first (if UUID), then
     # fall back to the driver's service area required_documents list
     # (since we moved to per-area docs, requirement_id is now the area doc key).
-    req = await db.document_requirements.find_one({"id": doc_data.requirement_id})
+    req = None
+    logger.info(
+        f"Validating requirement: {doc_data.requirement_id}, is_uuid: {_is_valid_uuid(doc_data.requirement_id)}"
+    )
+
+    if _is_valid_uuid(doc_data.requirement_id):
+        req = await db.document_requirements.find_one({"id": doc_data.requirement_id})
+        logger.info(f"Global lookup result: {req is not None}")
+
     if not req:
         # Try looking it up from the driver's service area
         area_req = None
-        if driver.get("service_area_id"):
-            area = await db.service_areas.find_one({"id": driver["service_area_id"]})
+        service_area_id = driver.get("service_area_id")
+        logger.info(f"Driver service_area_id: {service_area_id}")
+
+        if service_area_id:
+            area = await db.service_areas.find_one({"id": service_area_id})
+            logger.info(f"Service area found: {area is not None}")
+
             if area:
-                area_req = next(
-                    (d for d in (area.get("required_documents") or []) if d.get("key") == doc_data.requirement_id), None
-                )
+                required_docs = area.get("required_documents") or []
+                logger.info(f"Required documents: {required_docs}")
+                area_req = next((d for d in required_docs if d.get("key") == doc_data.requirement_id), None)
+                logger.info(f"Area requirement found: {area_req is not None}")
+
         if not area_req:
-            raise HTTPException(status_code=404, detail="Requirement not found")
+            # Fallback: allow common document types even if not configured in service area
+            # This handles cases where service areas haven't been set up yet
+            common_requirements = {
+                "drivers_license": {"name": "Driver's License", "requires_back_side": False},
+                "vehicle_insurance": {"name": "Vehicle Insurance", "requires_back_side": False},
+                "vehicle_registration": {"name": "Vehicle Registration", "requires_back_side": False},
+                "background_check": {"name": "Background Check", "requires_back_side": False},
+                "vehicle_inspection": {"name": "Vehicle Inspection", "requires_back_side": False},
+            }
+
+            if doc_data.requirement_id in common_requirements:
+                logger.warning(f"Using fallback for common requirement: {doc_data.requirement_id}")
+                req = {
+                    "id": doc_data.requirement_id,
+                    "name": common_requirements[doc_data.requirement_id]["name"],
+                    "requires_back_side": common_requirements[doc_data.requirement_id]["requires_back_side"],
+                }
+            else:
+                logger.error(
+                    f"Requirement '{doc_data.requirement_id}' not found in global table, service area, or common types"
+                )
+                raise HTTPException(status_code=404, detail=f"Requirement '{doc_data.requirement_id}' not found")
+        # Synthesise a req-like dict so downstream code works uniformly
+        req = {
+            "id": area_req.get("key"),
+            "name": area_req.get("label", doc_data.requirement_id),
+            "requires_back_side": area_req.get("requires_back_side", False),
+        }
         # Synthesise a req-like dict so downstream code works uniformly
         req = {
             "id": area_req.get("key"),
@@ -264,16 +361,23 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
 
     # Supersede any prior docs for this requirement+side and flip the
     # driver back to unverified so admin re-reviews this upload.
-    await _supersede_and_flag_pending_review(driver["id"], doc_data.requirement_id, doc_data.side)
+    await _supersede_and_flag_pending_review(
+        driver["id"], doc_data.requirement_id, doc_data.side,
+        document_type=doc_data.document_type,
+    )
 
     # Create document record.
     # NOTE: Only columns that exist on the Supabase driver_documents table —
     # writing `expiry_date` here raises PGRST204. Expiry is stored on the
     # drivers row via admin approval in the legacy *_expiry_date columns.
+    # NOTE: requirement_id is a UUID column in Supabase. Service-area doc keys
+    # (e.g. "vehicle_registration") are plain strings — store None to avoid a
+    # `invalid input syntax for type uuid` error from PostgREST.
+    req_id_for_db = doc_data.requirement_id if _is_valid_uuid(doc_data.requirement_id) else None
     doc_record = {
         "id": str(uuid.uuid4()),
         "driver_id": driver["id"],
-        "requirement_id": doc_data.requirement_id,
+        "requirement_id": req_id_for_db,
         "document_type": doc_data.document_type,
         "document_url": doc_data.document_url,
         "side": doc_data.side,
@@ -282,7 +386,7 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
         "updated_at": datetime.utcnow(),
     }
 
-    await db.driver_documents.insert_one(doc_record)
+    await _insert_driver_document(doc_record)
     # Stash the admin-facing expiry on the response so the caller can
     # display it back, without persisting a non-existent column.
     if doc_data.expiry_date:
@@ -332,17 +436,24 @@ async def upload_driver_document(
 
     # Supersede prior docs for same requirement+side and flip driver to unverified
     # so admin panel resurfaces this driver for re-review.
-    await _supersede_and_flag_pending_review(driver_id, requirement_id, side)
+    await _supersede_and_flag_pending_review(
+        driver_id, requirement_id, side,
+        document_type=req.get("name"),
+    )
 
     # Create document record.
     # NOTE: Only columns that exist on the Supabase driver_documents table —
     # `expiry_date` is intentionally NOT written to this row (column doesn't
     # exist, would cause PGRST204). Expiry lives in the drivers row legacy
     # columns, refreshed on admin approval.
+    # NOTE: requirement_id is a UUID column in Supabase. Service-area doc keys
+    # (e.g. "vehicle_registration") are plain strings — store None to avoid a
+    # `invalid input syntax for type uuid` error from PostgREST.
+    req_id_for_db = requirement_id if _is_valid_uuid(requirement_id) else None
     doc_record = {
         "id": str(uuid.uuid4()),
         "driver_id": driver_id,
-        "requirement_id": requirement_id,
+        "requirement_id": req_id_for_db,
         "document_type": req.get("name"),  # Denormalize name for easy display
         "document_url": url,
         "side": side,
@@ -351,7 +462,7 @@ async def upload_driver_document(
         "updated_at": datetime.utcnow(),
     }
 
-    await db.driver_documents.insert_one(doc_record)
+    await _insert_driver_document(doc_record)
 
     # Return the admin-facing expiry as part of the response without
     # persisting it to a non-existent column.

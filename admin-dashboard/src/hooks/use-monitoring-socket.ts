@@ -27,9 +27,18 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
         if (!token) return;
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
+        // Prefer NEXT_PUBLIC_WS_URL. Otherwise derive the scheme from
+        // window.location so HTTPS pages never attempt ws:// (browsers
+        // block that as mixed content).
+        const fallbackScheme =
+            typeof window !== "undefined" && window.location.protocol === "https:"
+                ? "wss"
+                : "ws";
+        const fallbackHost =
+            typeof window !== "undefined" ? window.location.host : "";
         const wsBase =
             process.env.NEXT_PUBLIC_WS_URL ||
-            (typeof window !== "undefined" ? `ws://${window.location.host}` : "");
+            (fallbackHost ? `${fallbackScheme}://${fallbackHost}` : "");
         const url = `${wsBase}/ws/admin/${clientId.current}`;
 
         setStatus("connecting");

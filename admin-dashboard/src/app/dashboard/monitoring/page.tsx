@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { useAuthStore } from "@/store/authStore";
-import { getMonitoringDrivers, getMonitoringRides } from "@/lib/api";
+import { getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTypes } from "@/lib/api";
 import { useMonitoringSocket } from "@/hooks/use-monitoring-socket";
 import { MonitoringMap, MapHandles } from "./monitoring-map";
 import { MonitoringToolbar } from "./toolbar";
@@ -42,8 +42,8 @@ export default function MonitoringPage() {
     const [followMode, setFollowMode] = useState(false);
     const [selected, setSelected] = useState<SelectedItem>(null);
     const [alerts, setAlerts] = useState<AlertEvent[]>([]);
-    const [serviceAreas] = useState<{ id: string; name: string }[]>([]);
-    const [vehicleTypes] = useState<{ id: string; name: string }[]>([]);
+    const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
+    const [vehicleTypes, setVehicleTypes] = useState<{ id: string; name: string }[]>([]);
 
     // ── Derived selections ────────────────────────────────────────────
     const selectedDriver =
@@ -72,9 +72,11 @@ export default function MonitoringPage() {
     // ── Initial data load ─────────────────────────────────────────────
     useEffect(() => {
         async function load() {
-            const [drivers, rides] = await Promise.allSettled([
+            const [drivers, rides, areas, vtypes] = await Promise.allSettled([
                 getMonitoringDrivers(),
                 getMonitoringRides(),
+                getServiceAreas(),
+                getVehicleTypes(),
             ]);
 
             if (drivers.status === "fulfilled") {
@@ -82,6 +84,12 @@ export default function MonitoringPage() {
             }
             if (rides.status === "fulfilled") {
                 rides.value.forEach((r) => ridesRef.current.set(r.id, r));
+            }
+            if (areas.status === "fulfilled") {
+                setServiceAreas(areas.value.map((a: any) => ({ id: a.id, name: a.name })));
+            }
+            if (vtypes.status === "fulfilled") {
+                setVehicleTypes(vtypes.value.map((v: any) => ({ id: v.id, name: v.name })));
             }
             recalcCounts();
         }

@@ -25,6 +25,10 @@ COPY --from=builder /install /usr/local
 # Copy backend source into /app so `uvicorn server:app` works
 COPY --chown=spinr:spinr backend/ .
 
+# Make sure server.py is importable regardless of cwd the runtime uses
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
 USER spinr
 
 EXPOSE 8000
@@ -32,4 +36,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-8000}/health')" || exit 1
 
-CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]
+CMD ["sh", "-c", "cd /app && python -m uvicorn server:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]

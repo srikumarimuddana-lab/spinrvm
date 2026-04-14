@@ -7,7 +7,7 @@ import {
     LayoutDashboard, Car, Users, DollarSign, Settings, MapPin, Ticket,
     HelpCircle, Flame, Building2, LifeBuoy,
     LogOut, Menu, FileText, X, CreditCard, ChevronLeft, ChevronRight,
-    Sun, Moon, Shield, Cloud,
+    Sun, Moon, Shield, Cloud, Radar,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
@@ -40,6 +40,7 @@ const NAV_GROUPS: NavGroup[] = [
             { href: "/dashboard/drivers", label: "Drivers", icon: Car, module: "drivers" },
             { href: "/dashboard/users", label: "Users", icon: Users, module: "users" },
             { href: "/dashboard/heatmap", label: "Heat Map", icon: Flame, module: "heatmap" },
+            { href: "/dashboard/monitoring", label: "Live Monitor", icon: Radar, module: "dashboard" },
         ],
     },
     {

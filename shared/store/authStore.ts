@@ -1,8 +1,14 @@
 import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
-import { auth } from '../config/firebaseConfig';
-import { PhoneAuthProvider, signInWithCredential, signOut, User as FirebaseUser } from 'firebase/auth';
+import { auth, firebaseConfig } from '../config/firebaseConfig';
+import { signOut, User as FirebaseUser } from 'firebase/auth';
+
+// Use @react-native-firebase/auth for native phone credential verification
+let rnFirebaseAuth: any = null;
+try {
+  rnFirebaseAuth = require('@react-native-firebase/auth').default;
+} catch { /* not available on web */ }
 import api, { setInMemoryToken } from '../api/client';
 import { appCache, CACHE_KEYS, CACHE_CONFIG } from '../cache';
 
@@ -205,7 +211,8 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
     // ── No valid stored token ──
     // Check Firebase as a secondary auth source (only useful when firebase
     // phone-auth is actively configured and the user signed in via it).
-    if (typeof auth.onAuthStateChanged === 'function') {
+    const firebaseAuthInstance = rnFirebaseAuth ? rnFirebaseAuth() : (typeof auth.onAuthStateChanged === 'function' ? auth : null);
+    if (firebaseAuthInstance) {
       // Safety timeout: if Firebase doesn't respond within 4s, force init
       setTimeout(() => {
         const state = get();
@@ -215,7 +222,7 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
         }
       }, 4000);
 
-      auth.onAuthStateChanged(async (firebaseUser: any) => {
+      firebaseAuthInstance.onAuthStateChanged(async (firebaseUser: any) => {
         if (get().isInitialized) return; // Already resolved by timeout or previous call
 
         if (firebaseUser) {
@@ -273,10 +280,17 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
     try {
       set({ isLoading: true, error: null });
 
-      const credential = PhoneAuthProvider.credential(verificationId, code);
-      await signInWithCredential(auth, credential);
-
-      // onAuthStateChanged will handle the rest
+      if (rnFirebaseAuth) {
+        // Native path: @react-native-firebase/auth credential confirmation
+        const credential = rnFirebaseAuth.PhoneAuthProvider.credential(verificationId, code);
+        await rnFirebaseAuth().signInWithCredential(credential);
+        // onAuthStateChanged (below) will handle the rest
+      } else {
+        // Web fallback: use firebase/auth JS SDK
+        const { PhoneAuthProvider, signInWithCredential: signIn } = await import('firebase/auth');
+        const credential = PhoneAuthProvider.credential(verificationId, code);
+        await signIn(auth, credential);
+      }
     } catch (error: any) {
       console.log('Verify OTP Error:', error);
       const message = error.message || 'Invalid verification code';

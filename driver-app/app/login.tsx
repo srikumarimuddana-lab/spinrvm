@@ -17,7 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { auth } from '@shared/config/firebaseConfig';
+import { firebaseConfig } from '@shared/config/firebaseConfig';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
@@ -25,21 +25,15 @@ import CustomAlert from '@shared/components/CustomAlert';
 const THEME = SpinrConfig.theme.colors;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-// Firebase phone auth is only available when the app is configured with
-// real credentials. Checking for onAuthStateChanged alone is insufficient —
-// getAuth() can return a real Auth object even when the API key is empty,
-// which causes cryptic "argument" errors downstream.
-import { firebaseConfig } from '@shared/config/firebaseConfig';
-const isFirebaseConfigured =
-  !!firebaseConfig.apiKey &&
-  !!firebaseConfig.projectId &&
-  typeof auth.onAuthStateChanged === 'function';
-let PhoneAuthProvider: any = null;
+// Use @react-native-firebase/auth for native phone auth — handles reCAPTCHA
+// via SafetyNet (Android) and APNs (iOS) without a web RecaptchaVerifier.
+const isFirebaseConfigured = !!firebaseConfig.apiKey && !!firebaseConfig.projectId;
+let rnFirebaseAuth: any = null;
 if (isFirebaseConfigured) {
   try {
-    PhoneAuthProvider = require('firebase/auth').PhoneAuthProvider;
+    rnFirebaseAuth = require('@react-native-firebase/auth').default;
   } catch (e) {
-    console.warn('Firebase auth not available');
+    console.warn('[Firebase] @react-native-firebase/auth not available:', e);
   }
 }
 
@@ -49,7 +43,6 @@ export default function LoginScreen() {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
   const [focused, setFocused] = useState(false);
-  const recaptchaVerifier = useRef(null);
   const inputRef = useRef<TextInput>(null);
 
   // Alert state
@@ -121,19 +114,12 @@ export default function LoginScreen() {
     const formattedNumber = `+1${phoneNumber.replace(/\D/g, '')}`;
 
     try {
-      // Firebase JS SDK phone auth requires a RecaptchaVerifier which is
-      // web-only. On React Native, @react-native-firebase/auth is needed
-      // for native Firebase phone auth. Fall through to backend OTP until
-      // that package is installed and a native build is produced.
-      if (false && isFirebaseConfigured && PhoneAuthProvider && recaptchaVerifier.current) {
-        const phoneProvider = new PhoneAuthProvider(auth);
-        const verificationId = await phoneProvider.verifyPhoneNumber(
-          formattedNumber,
-          recaptchaVerifier.current!
-        );
+      if (isFirebaseConfigured && rnFirebaseAuth) {
+        // @react-native-firebase/auth handles reCAPTCHA natively — no verifier needed
+        const confirmation = await rnFirebaseAuth().signInWithPhoneNumber(formattedNumber);
         router.push({
           pathname: '/otp',
-          params: { verificationId, phoneNumber: formattedNumber, mode: 'firebase' }
+          params: { verificationId: confirmation.verificationId, phoneNumber: formattedNumber, mode: 'firebase' }
         });
       } else {
         const response = await api.post('/auth/send-otp', { phone: formattedNumber });

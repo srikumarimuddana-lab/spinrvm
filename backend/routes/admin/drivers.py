@@ -7,11 +7,9 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 try:
-    from ...db import db
-    from ...features import send_push_notification
+    from ... import db_supabase
 except ImportError:
-    from db import db
-    from features import send_push_notification
+    import db_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +30,7 @@ def _user_display_name(user: Optional[Dict]) -> str:
 async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[str]) -> tuple:
     """Batch-fetch drivers and users in 2-3 queries instead of N+1 loops."""
     drivers_list = (
-        await db.get_rows("drivers", {"id": {"$in": driver_ids}}, limit=max(len(driver_ids), 1)) if driver_ids else []
+        await db_supabase.get_rows("drivers", {"id": {"$in": driver_ids}}, limit=max(len(driver_ids), 1)) if driver_ids else []
     )
     drivers_map = {d["id"]: d for d in drivers_list if d.get("id")}
 
@@ -43,7 +41,7 @@ async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[
         }
     )
     users_list = (
-        await db.get_rows("users", {"id": {"$in": all_user_ids}}, limit=max(len(all_user_ids), 1))
+        await db_supabase.get_rows("users", {"id": {"$in": all_user_ids}}, limit=max(len(all_user_ids), 1))
         if all_user_ids
         else []
     )
@@ -65,7 +63,7 @@ async def _log_driver_activity(
 ):
     """Helper to record a driver lifecycle event."""
     try:
-        await db.driver_activity_log.insert_one(
+        await db_supabase.insert_one("driver_activity_log", 
             {
                 "id": str(uuid.uuid4()),
                 "driver_id": driver_id,
@@ -120,9 +118,9 @@ async def admin_get_drivers(
         filters["is_verified"] = is_verified
     if is_online is not None:
         filters["is_online"] = is_online
-    drivers = await db.get_rows("drivers", filters, order="created_at", desc=True, limit=limit, offset=offset)
+    drivers = await db_supabase.get_rows("drivers", filters, order="created_at", desc=True, limit=limit, offset=offset)
     user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
-    users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    users_list = await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
     users_map = {u["id"]: u for u in users_list if u.get("id")}
     out = []
     for d in drivers:
@@ -166,22 +164,22 @@ async def admin_get_driver_stats(
         range_end = now
 
     # Fetch all service areas for lookups
-    service_areas = await db.get_rows("service_areas", order="name", limit=200)
+    service_areas = await db_supabase.get_rows("service_areas", order="name", limit=200)
     area_map = {a["id"]: a.get("name", "Unknown") for a in service_areas}
 
     # ── Fetch drivers ──
     driver_filters: Dict[str, Any] = {}
     if service_area_id:
         driver_filters["service_area_id"] = service_area_id
-    all_drivers = await db.get_rows("drivers", driver_filters, order="created_at", desc=True, limit=5000)
+    all_drivers = await db_supabase.get_rows("drivers", driver_filters, order="created_at", desc=True, limit=5000)
 
     # Enrich with user info (batch)
     user_ids = list({d.get("user_id") for d in all_drivers if d.get("user_id")})
-    users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    users_list = await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
     users_map: Dict[str, Any] = {u["id"]: u for u in users_list if u.get("id")}
 
     # Auto-detect needs_review: active drivers with expired docs or pending re-uploads
-    all_docs = await db.get_rows("driver_documents", {"status": "pending"}, limit=10000)
+    all_docs = await db_supabase.get_rows("driver_documents", {"status": "pending"}, limit=10000)
     pending_doc_driver_ids = {d.get("driver_id") for d in all_docs if d.get("driver_id")}
 
     now_iso = datetime.utcnow().isoformat()
@@ -281,7 +279,7 @@ async def admin_get_driver_stats(
     # Rides + earnings per day (for drivers matching the service_area filter)
     driver_ids_set = {d["id"] for d in enriched_drivers}
     ride_filters: Dict[str, Any] = {"created_at": {"$gte": range_start.isoformat()}}
-    all_rides = await db.get_rows("rides", ride_filters, order="created_at", desc=True, limit=50000)
+    all_rides = await db_supabase.get_rows("rides", ride_filters, order="created_at", desc=True, limit=50000)
 
     # Filter rides to only those belonging to our driver set
     relevant_rides = [r for r in all_rides if r.get("driver_id") in driver_ids_set] if service_area_id else all_rides
@@ -369,12 +367,12 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any]):
     if not filtered:
         raise HTTPException(status_code=400, detail="No valid fields to update")
 
-    existing = await db.drivers.find_one({"id": driver_id})
+    existing = await db_supabase.get_driver_by_id(driver_id)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
 
     try:
-        await db.drivers.update_one({"id": driver_id}, {"$set": filtered})
+        await db_supabase.update_one("drivers", {"id": driver_id}, filtered)
     except Exception as e:
         logger.error(f"Failed to update driver {driver_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}") from e
@@ -393,7 +391,7 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest):
     """
     try:
         # First check if driver exists
-        existing_driver = await db.drivers.find_one({"id": driver_id})
+        existing_driver = await db_supabase.get_driver_by_id(driver_id)
         if not existing_driver:
             raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
 
@@ -401,10 +399,7 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest):
         # Clear needs_review when admin verifies (re-approves)
         if req.verified:
             update_fields["needs_review"] = False
-        await db.drivers.update_one(
-            {"id": driver_id},
-            {"$set": update_fields},
-        )
+        await db_supabase.update_one("drivers", {"id": driver_id}, update_fields)
     except HTTPException:
         raise
     except Exception as e:
@@ -442,7 +437,7 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
     Each action transitions the driver to the appropriate state and
     records the reason + timestamp for audit trail.
     """
-    driver = await db.drivers.find_one({"id": driver_id})
+    driver = await db_supabase.get_driver_by_id(driver_id)
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -498,7 +493,7 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
         raise HTTPException(status_code=400, detail=f"Unknown action: {req.action}")
 
     try:
-        await db.drivers.update_one({"id": driver_id}, {"$set": updates})
+        await db_supabase.update_one("drivers", {"id": driver_id}, updates)
     except Exception as e:
         logger.error(f"Failed driver action {req.action} on {driver_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -570,7 +565,7 @@ async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride
     if req.status not in valid:
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {', '.join(valid)}")
 
-    driver = await db.drivers.find_one({"id": driver_id})
+    driver = await db_supabase.get_driver_by_id(driver_id)
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -591,7 +586,7 @@ async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride
         elif req.status == "banned":
             updates["ban_reason"] = req.reason
 
-    await db.drivers.update_one({"id": driver_id}, {"$set": updates})
+    await db_supabase.update_one("drivers", {"id": driver_id}, updates)
     logger.info(f"[ADMIN] Driver {driver_id} status overridden to {req.status} reason={req.reason}")
     await _log_driver_activity(
         driver_id,
@@ -609,7 +604,7 @@ async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride
 @router.get("/drivers/{driver_id}/notes")
 async def admin_get_driver_notes(driver_id: str):
     """Get all notes for a driver, newest first."""
-    notes = await db.get_rows("driver_notes", {"driver_id": driver_id}, order="created_at", desc=True, limit=200)
+    notes = await db_supabase.get_rows("driver_notes", {"driver_id": driver_id}, order="created_at", desc=True, limit=200)
     return notes or []
 
 
@@ -625,7 +620,7 @@ async def admin_add_driver_note(driver_id: str, req: DriverNoteCreate):
         "category": req.category,
         "created_at": datetime.utcnow().isoformat(),
     }
-    await db.driver_notes.insert_one(doc)
+    await db_supabase.insert_one("driver_notes", doc)
     await _log_driver_activity(
         driver_id,
         "note_added",
@@ -639,7 +634,7 @@ async def admin_add_driver_note(driver_id: str, req: DriverNoteCreate):
 @router.delete("/drivers/notes/{note_id}")
 async def admin_delete_driver_note(note_id: str):
     """Delete a note."""
-    await db.driver_notes.delete_many({"id": note_id})
+    await db_supabase.delete_many("driver_notes", {"id": note_id})
     return {"message": "Note deleted"}
 
 
@@ -649,7 +644,7 @@ async def admin_delete_driver_note(note_id: str):
 @router.get("/drivers/{driver_id}/activity")
 async def admin_get_driver_activity(driver_id: str, limit: int = 100):
     """Get full activity timeline for a driver, newest first."""
-    activities = await db.get_rows(
+    activities = await db_supabase.get_rows(
         "driver_activity_log",
         {"driver_id": driver_id},
         order="created_at",
@@ -662,7 +657,7 @@ async def admin_get_driver_activity(driver_id: str, limit: int = 100):
 @router.get("/drivers/{driver_id}/rides")
 async def admin_get_driver_rides(driver_id: str):
     """Get all rides for a specific driver."""
-    rides = await db.get_rows("rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=500)
+    rides = await db_supabase.get_rows("rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=500)
     return rides
 
 
@@ -678,7 +673,7 @@ async def admin_get_driver_daily_stats(
     if not start_date:
         start_date = (datetime.utcnow().date() - timedelta(days=30)).isoformat()
 
-    stats = await db.get_rows(
+    stats = await db_supabase.get_rows(
         "driver_daily_stats",
         {
             "driver_id": driver_id,
@@ -697,15 +692,7 @@ async def admin_get_driver_daily_stats(
 @router.put("/drivers/{driver_id}/area")
 async def admin_assign_driver_area(driver_id: str, service_area_id: str):
     """Assign a driver to a specific service area."""
-    await db.drivers.update_one(
-        {"id": driver_id},
-        {
-            "$set": {
-                "service_area_id": service_area_id,
-                "updated_at": datetime.utcnow().isoformat(),
-            }
-        },
-    )
+    await db_supabase.update_one("drivers", {"id": driver_id}, { "service_area_id": service_area_id, "updated_at": datetime.utcnow().isoformat(), })
     return {"message": f"Driver assigned to area {service_area_id}"}
 
 
@@ -716,7 +703,7 @@ async def admin_get_driver_location_trail(
 ):
     """Get driver's location history (table: driver_location_history)."""
     cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
-    locations = await db.get_rows(
+    locations = await db_supabase.get_rows(
         "driver_location_history",
         {"driver_id": driver_id, "timestamp": {"$gte": cutoff}},
         order="timestamp",

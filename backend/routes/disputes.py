@@ -12,11 +12,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 try:
-    from ..db import db
+    from .. import db_supabase
     from ..dependencies import get_current_user
     from ..settings_loader import get_app_settings
 except ImportError:
-    from db import db
+    import db_supabase
     from dependencies import get_current_user
     from settings_loader import get_app_settings
 
@@ -44,7 +44,7 @@ async def create_dispute(
     current_user: dict = Depends(get_current_user),
 ):
     """Create a payment dispute / refund request for a ride."""
-    ride = await db.rides.find_one({"id": req.ride_id})
+    ride = await db_supabase.get_ride(req.ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
@@ -55,7 +55,7 @@ async def create_dispute(
         raise HTTPException(status_code=400, detail="Can only dispute completed or cancelled rides")
 
     # Check for existing open dispute on same ride
-    existing = await db.disputes.find_one({"ride_id": req.ride_id, "status": {"$in": ["open", "under_review"]}})
+    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("disputes", {"ride_id": req.ride_id, "status": {"$in": ["open", "under_review"]}}, limit=1))
     if existing:
         raise HTTPException(status_code=400, detail="A dispute is already open for this ride")
 
@@ -72,14 +72,14 @@ async def create_dispute(
         "updated_at": datetime.utcnow().isoformat(),
     }
 
-    await db.disputes.insert_one(dispute)
+    await db_supabase.insert_one("disputes", dispute)
     return {"success": True, "dispute": dispute}
 
 
 @api_router.get("")
 async def get_user_disputes(current_user: dict = Depends(get_current_user)):
     """Get all disputes filed by the current user."""
-    disputes = await db.get_rows(
+    disputes = await db_supabase.get_rows(
         "disputes",
         {"user_id": current_user["id"]},
         order="created_at",
@@ -92,7 +92,7 @@ async def get_user_disputes(current_user: dict = Depends(get_current_user)):
 @api_router.get("/{dispute_id}")
 async def get_dispute(dispute_id: str, current_user: dict = Depends(get_current_user)):
     """Get a specific dispute by ID."""
-    dispute = await db.disputes.find_one({"id": dispute_id})
+    dispute = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("disputes", {"id": dispute_id}, limit=1))
     if not dispute:
         raise HTTPException(status_code=404, detail="Dispute not found")
     if dispute.get("user_id") != current_user["id"]:
@@ -115,13 +115,13 @@ async def admin_get_disputes(
     filters: Dict[str, Any] = {}
     if status:
         filters["status"] = status
-    disputes = await db.get_rows("disputes", filters, order="created_at", desc=True, limit=limit, offset=offset)
+    disputes = await db_supabase.get_rows("disputes", filters, order="created_at", desc=True, limit=limit, offset=offset)
 
     # Enrich with user + ride info
     enriched = []
     for d in disputes:
-        user = await db.users.find_one({"id": d.get("user_id")}) if d.get("user_id") else None
-        ride = await db.rides.find_one({"id": d.get("ride_id")}) if d.get("ride_id") else None
+        user = await db_supabase.get_user_by_id(d.get("user_id")) if d.get("user_id") else None
+        ride = await db_supabase.get_ride(d.get("ride_id")) if d.get("ride_id") else None
         enriched.append(
             {
                 **d,
@@ -137,7 +137,7 @@ async def admin_get_disputes(
 @admin_router.put("/{dispute_id}/resolve")
 async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
     """Resolve a dispute (approve/reject refund)."""
-    dispute = await db.disputes.find_one({"id": dispute_id})
+    dispute = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("disputes", {"id": dispute_id}, limit=1))
     if not dispute:
         raise HTTPException(status_code=404, detail="Dispute not found")
 
@@ -153,7 +153,7 @@ async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
         "updated_at": datetime.utcnow().isoformat(),
     }
 
-    await db.disputes.update_one({"id": dispute_id}, {"$set": update_data})
+    await db_supabase.update_one("disputes", {"id": dispute_id}, update_data)
 
     # If approved/partial, initiate Stripe refund against the ride's PaymentIntent
     refund_result: Dict[str, Any] = {}

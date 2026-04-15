@@ -1,11 +1,11 @@
 import asyncio
 
-from db import db
+import db_supabase
 
 
 async def list_users():
     print("Listing all users...")
-    users = await db.users.find({}).to_list(100)
+    users = await db_supabase.get_rows("users", {}, limit=100)
     for user in users:
         print(f"ID: {user['id']}, Phone: {user.get('phone')}, Role: {user.get('role')}")
 

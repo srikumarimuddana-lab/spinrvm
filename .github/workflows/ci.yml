@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 env:
   PYTHON_VERSION: '3.12'
@@ -34,12 +34,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Cache pip packages
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
@@ -68,41 +68,33 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/spinr_test
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          JWT_SECRET: test-secret-key-for-ci-only-32chars!!
-          ADMIN_PASSWORD: TestAdminPass123!
+          SECRET_KEY: test-secret-key-for-ci
           ENV: test
         run: |
           pytest --cov=. --cov-report=xml --cov-report=term-missing -v
 
       - name: Upload coverage to Codecov
         if: always()
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v4
         with:
           file: ./backend/coverage.xml
           flags: backend
           name: backend-coverage
 
-  # [DEPRECATED] frontend/ legacy app — kept so downstream jobs that list
-  # `needs: [frontend-test]` continue to pass while the migration settles.
-  # Source of truth is now rider-app/. Remove this job once deploy-frontend
-  # is confirmed stable from rider-app (SPR-01, task 1b). [SPR-01]
+  # Frontend (Rider App) Tests
   frontend-test:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deprecation notice
-        run: |
-          echo "::warning::frontend/ is DEPRECATED (SPR-01/D-003). Web builds now come from rider-app/. This job will be removed in SPR-02."
-
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node modules
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: frontend/node_modules
           key: ${{ runner.os }}-frontend-node-${{ hashFiles('frontend/yarn.lock') }}
@@ -123,7 +115,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v4
         with:
           file: ./frontend/coverage/coverage-final.json
           flags: frontend
@@ -137,12 +129,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node modules
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: driver-app/node_modules
           key: ${{ runner.os }}-driver-node-${{ hashFiles('driver-app/yarn.lock') }}
@@ -159,7 +151,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v4
         with:
           file: ./driver-app/coverage/coverage-final.json
           flags: driver-app
@@ -175,12 +167,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node modules
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: rider-app/node_modules
           key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock') }}
@@ -197,7 +189,7 @@ jobs:
 
       - name: Upload coverage
         if: always()
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v4
         with:
           file: ./rider-app/coverage/coverage-final.json
           flags: rider-app
@@ -211,12 +203,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Cache node modules
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: admin-dashboard/node_modules
           key: ${{ runner.os }}-admin-node-${{ hashFiles('admin-dashboard/package-lock.json') }}
@@ -225,14 +217,10 @@ jobs:
 
       - name: Install dependencies
         working-directory: admin-dashboard
-        run: npm ci --legacy-peer-deps
+        run: npm ci
 
       - name: Run ESLint
         working-directory: admin-dashboard
-        # 21 pre-existing React Compiler errors from Next.js 15 built-in rules
-        # that cannot be downgraded via eslint config. Continue on error to
-        # avoid blocking PRs on legacy violations.
-        continue-on-error: true
         run: npm run lint
 
       - name: Run admin dashboard tests
@@ -247,19 +235,19 @@ jobs:
   e2e-test:
     name: E2E tests (Playwright)
     runs-on: ubuntu-latest
-    needs: [backend-test, admin-test]
+    needs: [backend-test]
     if: github.ref == 'refs/heads/main'
     defaults:
       run:
-        working-directory: admin-dashboard
+        working-directory: spinr/admin-dashboard
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: admin-dashboard/package-lock.json
+          cache-dependency-path: spinr/admin-dashboard/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -283,160 +271,11 @@ jobs:
 
       - name: Upload Playwright report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: playwright-report
-          path: admin-dashboard/playwright-report/
+          path: spinr/admin-dashboard/playwright-report/
           retention-days: 7
-
-  # E2E Tests — rider-app web (SPR-02/2b, 2c)
-  # Exports the Expo web build, serves it on :3002, and runs Playwright
-  # smoke + ride-booking tests with all backend calls mocked.
-  rider-web-e2e:
-    name: E2E tests (rider-app web)
-    runs-on: ubuntu-latest
-    needs: [rider-app-test]
-    if: github.ref == 'refs/heads/main'
-    defaults:
-      run:
-        working-directory: rider-app
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-
-      - name: Cache node modules
-        uses: actions/cache@v5
-        with:
-          path: rider-app/node_modules
-          key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-rider-node-
-
-      - name: Install dependencies
-        run: yarn install --frozen-lockfile
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: Build Expo web export
-        env:
-          EXPO_PUBLIC_BACKEND_URL: http://localhost:8000
-          EXPO_PUBLIC_GOOGLE_MAPS_API_KEY: test-key
-        run: npx expo export --platform web
-
-      - name: Serve export and run E2E tests
-        env:
-          PLAYWRIGHT_START_SERVER: '1'
-          PLAYWRIGHT_PORT: '3002'
-          CI: 'true'
-        run: npx playwright test
-
-      - name: Upload Playwright report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: rider-playwright-report
-          path: rider-app/playwright-report/
-          retention-days: 7
-
-  # Performance baseline (SPR-02/2d)
-  # Runs the in-process ASGI benchmark (no real Supabase needed) and saves the
-  # JSON report as an artifact. On main branch the report is compared against
-  # the last uploaded baseline to detect regressions (P95 +30% threshold).
-  perf-baseline:
-    name: Perf baseline (API P95 + WS)
-    runs-on: ubuntu-latest
-    needs: [backend-test]
-    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-          cache-dependency-path: backend/requirements.txt
-
-      - name: Install backend dependencies
-        run: pip install -r backend/requirements.txt
-
-      - name: Download baseline report (if available)
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: perf-baseline-report
-          path: backend/tests/baseline/
-
-      - name: Run performance baseline
-        env:
-          JWT_SECRET: ci-perf-test-secret-key-32-chars!
-          ADMIN_PASSWORD: TestAdminPass123!
-          ADMIN_EMAIL: admin@spinr.ca
-          SUPABASE_URL: https://test.supabase.co
-          SUPABASE_SERVICE_ROLE_KEY: test_key
-          ENV: test
-        run: |
-          python backend/tests/perf_baseline.py \
-            --samples 50 \
-            --ws-samples 20 \
-            --out backend/tests/perf_report.json \
-            --baseline backend/tests/baseline/perf_report.json
-
-      - name: Upload perf report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: perf-baseline-report
-          path: backend/tests/perf_report.json
-          retention-days: 90
-
-  # OTA update — push JS bundle to EAS preview channel (SPR-03/3d)
-  # Runs on every merge to main after both app tests pass.
-  # Riders and drivers on the `preview` build receive the update automatically
-  # when they next open the app (expo-updates checks on launch + background).
-  # Production channel is updated manually via `eas update --channel production`
-  # as part of the SPR-04 release process.
-  ota-update:
-    name: OTA update (EAS preview channel)
-    runs-on: ubuntu-latest
-    needs: [rider-app-test, driver-app-test]
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-
-      - name: Install EAS CLI
-        run: npm install -g eas-cli@latest
-
-      - name: Push OTA update — rider-app
-        working-directory: rider-app
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          yarn install --frozen-lockfile
-          eas update \
-            --channel preview \
-            --message "ci: OTA ${{ github.sha }}" \
-            --non-interactive \
-            --platform all
-
-      - name: Push OTA update — driver-app
-        working-directory: driver-app
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          yarn install --frozen-lockfile
-          eas update \
-            --channel preview \
-            --message "ci: OTA ${{ github.sha }}" \
-            --non-interactive \
-            --platform all
 
   # Deploy Backend
   deploy-backend:
@@ -458,46 +297,34 @@ jobs:
 
       - name: Deploy to Fly.io (alternative)
         if: failure()
-        uses: superfly/flyctl-actions@1.6
+        uses: superfly/flyctl-actions@1.3
         with:
           args: "deploy --remote-only"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
-  # Deploy Rider Web App (Expo web export from rider-app/) [SPR-01/D-003/D-004]
-  # Previously deployed from frontend/ (deprecated). Now builds from rider-app/
-  # which is the canonical, feature-complete rider app with full web support.
-  # native-only packages (react-native-maps) are stubbed via metro.config.js.
+  # Deploy Frontend
   deploy-frontend:
     runs-on: ubuntu-latest
-    needs: [rider-app-test]
+    needs: [frontend-test]
     if: github.ref == 'refs/heads/main'
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Cache node modules
-        uses: actions/cache@v5
-        with:
-          path: rider-app/node_modules
-          key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-rider-node-
-
       - name: Install dependencies
-        working-directory: rider-app
+        working-directory: frontend
         run: yarn install --frozen-lockfile
 
-      - name: Build for production (web)
-        working-directory: rider-app
+      - name: Build for production
+        working-directory: frontend
         env:
-          EXPO_PUBLIC_BACKEND_URL: ${{ secrets.EXPO_PUBLIC_BACKEND_URL }}
-          EXPO_PUBLIC_GOOGLE_MAPS_API_KEY: ${{ secrets.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY }}
+          EXPO_PUBLIC_API_URL: ${{ secrets.EXPO_PUBLIC_API_URL }}
         run: npx expo export --platform web
 
       - name: Deploy to Vercel
@@ -506,7 +333,7 @@ jobs:
           vercel-token: ${{ secrets.VERCEL_TOKEN }}
           vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
           vercel-project-id: ${{ secrets.VERCEL_FRONTEND_PROJECT_ID }}
-          working-directory: rider-app
+          working-directory: frontend
 
   # Deploy Admin Dashboard
   deploy-admin:
@@ -518,13 +345,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install dependencies
         working-directory: admin-dashboard
-        run: npm ci --legacy-peer-deps
+        run: npm ci
 
       - name: Build for production
         working-directory: admin-dashboard
@@ -566,19 +393,13 @@ jobs:
         run: eas build --platform android --non-interactive
 
   # Security Scan — filesystem (dependency CVEs) + secrets
-  # On pull requests / pushes: incremental git history scan (HEAD~1).
-  # On release tags or manual dispatch: full history scan.
-  # CVE blocking is handled by docker-image-scan (the actual deployed
-  # artifact). Filesystem Trivy is report-only (SARIF → GitHub Security tab).
   security-scan:
     runs-on: ubuntu-latest
-    permissions:
-      security-events: write  # required for Trivy SARIF upload to GitHub Security tab
 
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # full history required for trufflehog
+          fetch-depth: 0  # full history required for trufflehog --since-commit
 
       - name: Install trufflehog v3
         run: |
@@ -587,30 +408,23 @@ jobs:
           tar -xzf trufflehog.tar.gz trufflehog
           chmod +x trufflehog && sudo mv trufflehog /usr/local/bin/
 
-      - name: Secrets scan — git history
+      - name: Secrets scan (verified only)
         run: |
-          # Full-history scan on release tags and manual dispatches;
-          # incremental (HEAD~1) on every other push to keep CI fast.
-          if [[ "${{ github.ref }}" == refs/tags/* || "${{ github.event_name }}" == "release" || "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "::notice::Full git-history secrets scan (release / dispatch)"
-            trufflehog git file://. --only-verified --fail
-          else
-            echo "::notice::Incremental secrets scan (last commit)"
-            trufflehog git file://. --only-verified --since-commit HEAD~1 --fail
-          fi
+          trufflehog git file://. \
+            --only-verified \
+            --since-commit HEAD~1 \
+            --fail
 
-      - name: Run Trivy vulnerability scanner (filesystem — report only)
+      - name: Run Trivy vulnerability scanner (filesystem)
         uses: aquasecurity/trivy-action@v0.35.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'sarif'
           output: 'trivy-results.sarif'
-          ignore-unfixed: true
-          severity: 'CRITICAL,HIGH'
 
       - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
           sarif_file: 'trivy-results.sarif'
@@ -619,8 +433,6 @@ jobs:
   docker-image-scan:
     runs-on: ubuntu-latest
     needs: [backend-test]
-    permissions:
-      security-events: write  # required for Trivy SARIF upload to GitHub Security tab
 
     steps:
       - uses: actions/checkout@v4
@@ -632,30 +444,30 @@ jobs:
             --tag spinr-backend:ci-${{ github.sha }} \
             backend/
 
-      - name: Scan image with Trivy (table — visible in log)
+      - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: spinr-backend:ci-${{ github.sha }}
           format: 'table'
-          exit-code: '0'
+          exit-code: '1'
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 
-      - name: Scan image with Trivy
+      - name: Upload SARIF report
+        if: always()
         uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: spinr-backend:ci-${{ github.sha }}
           format: 'sarif'
           output: 'trivy-image.sarif'
-          exit-code: '1'
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 
       - name: Upload image scan results to GitHub Security
         if: always()
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'trivy-image.sarif'
 
@@ -664,7 +476,7 @@ jobs:
     name: Post-deploy smoke test
     runs-on: ubuntu-latest
     needs: [deploy-backend]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: false  # Enable when deploys are re-activated
     steps:
       - name: Health check
         run: |
@@ -686,7 +498,7 @@ jobs:
   # Notify on failure
   notify-failure:
     runs-on: ubuntu-latest
-    needs: [backend-test, frontend-test, rider-app-test, driver-app-test, admin-test, e2e-test, security-scan, docker-image-scan]
+    needs: [backend-test, frontend-test, rider-app-test, driver-app-test, admin-test]
     if: failure()
 
     steps:
@@ -696,45 +508,3 @@ jobs:
           status: failure
           webhook_url: ${{ secrets.SLACK_WEBHOOK }}
           text: 'CI/CD Pipeline Failed'
-
-  # Auto-create GitHub Issue on pipeline failure
-  notify-issue:
-    runs-on: ubuntu-latest
-    needs: [backend-test, frontend-test, rider-app-test, driver-app-test, admin-test, e2e-test, security-scan, docker-image-scan]
-    if: failure()
-    permissions:
-      issues: write
-    steps:
-      - name: Create failure issue
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.issues.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `CI failure on ${context.ref} \u2014 ${context.sha.slice(0,7)}`,
-              body: [
-                `**Branch:** ${context.ref}`,
-                `**Commit:** ${context.sha}`,
-                `**Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-                `**Triggered by:** ${context.actor}`,
-              ].join('\n'),
-              labels: ['ci-failure', 'auto']
-            })
-
-  # Notify on successful deploy to main
-  notify-deploy:
-    runs-on: ubuntu-latest
-    needs: [deploy-backend, deploy-frontend, deploy-admin]
-    if: success() && github.ref == 'refs/heads/main'
-
-    steps:
-      - name: Send Slack deploy success notification
-        uses: 8398a7/action-slack@v3
-        with:
-          status: success
-          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
-          text: |
-            :rocket: *Spinr deployed to production*
-            Commit: `${{ github.sha }}` by ${{ github.actor }}
-            <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>

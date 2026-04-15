@@ -17,11 +17,9 @@ from firebase_admin.auth import (
 from loguru import logger
 
 try:
-    from .core.config import settings
-    from .db import db
+    from . import db_supabase
 except ImportError:
-    from core.config import settings
-    from db import db
+    import db_supabase
 
 # Security Configuration
 # JWT signing secret is the single `settings.JWT_SECRET` defined in
@@ -125,12 +123,12 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         if payload:
             uid = payload.get("uid") or payload.get("user_id")
             # Try to find user by Firebase UID
-            user = await db.users.find_one({"id": uid})
+            user = await db_supabase.get_user_by_id(uid)
             if not user:
                 # Fallback: try to match by phone number
                 phone = payload.get("phone_number")
                 if phone:
-                    user = await db.users.find_one({"phone": phone})
+                    user = await db_supabase.get_user_by_phone(phone)
                 # If still not found, create a new user record tied to Firebase UID
                 if not user:
                     new_user = {
@@ -140,11 +138,11 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                         "created_at": datetime.utcnow(),
                         "profile_complete": False,
                     }
-                    await db.users.insert_one(new_user)
+                    await db_supabase.create_user(new_user)
                     user = new_user
 
             if user:
-                driver = await db.drivers.find_one({"user_id": user["id"]})
+                driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1))
                 user["is_driver"] = True if driver else False
             return user
     except HTTPException:
@@ -160,7 +158,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
     user = None
     try:
-        user = await db.users.find_one({"id": payload["user_id"]})
+        user = await db_supabase.get_user_by_id(payload["user_id"])
     except Exception as e:
         logger.warning(f"Could not look up user from DB: {e}")
 
@@ -195,7 +193,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             "profile_complete": False,
         }
         try:
-            await db.users.insert_one(user)
+            await db_supabase.create_user(user)
             logger.info(f"Created new user {user['id']} from JWT")
         except Exception as e:
             logger.warning(f"Could not insert user into DB: {e}")
@@ -203,7 +201,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         return user
 
     try:
-        driver = await db.drivers.find_one({"user_id": user["id"]})
+        driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1))
         user["is_driver"] = True if driver else False
     except Exception:
         user["is_driver"] = False

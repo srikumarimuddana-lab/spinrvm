@@ -10,7 +10,7 @@ load_dotenv(env_path)
 import uuid  # noqa: E402
 from datetime import datetime  # noqa: E402
 
-from db import db  # noqa: E402
+import db_supabase  # noqa: E402
 
 
 async def seed_vehicle_types():
@@ -56,12 +56,12 @@ async def seed_vehicle_types():
     ]
 
     # Check for existing types to avoid duplicates
-    existing_count = await db.vehicle_types.count_documents({})
+    existing_count = await db_supabase.count_documents("vehicle_types", {})
     if existing_count > 0:
         print(f"Database already has {existing_count} vehicle types. Skipping seed.")
         return
 
-    result = await db.vehicle_types.insert_many(vehicle_types)
+    result = await db_supabase.insert_many("vehicle_types", vehicle_types)
     print(f"Successfully inserted {len(result.inserted_ids)} vehicle types.")
 
 

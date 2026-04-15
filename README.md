@@ -30,7 +30,11 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed step-by-step instructions.
 ### Backend
 
 1.  **Prerequisites**: Python 3.8+, Supabase project.
-2.  **Environment Variables**: Copy `backend/.env.example` to `backend/.env` and fill in the placeholders — `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `JWT_SECRET`, `FIREBASE_SERVICE_ACCOUNT_JSON`, and in production the Redis URL + admin creds. The production startup validator (see `backend/core/middleware.py`) refuses to boot if any of these are left at their placeholder values. For rotation procedures see [`docs/ops/SECRETS_ROTATION.md`](docs/ops/SECRETS_ROTATION.md).
+2.  **Environment Variables**: Create a `.env` file in `backend/` based on `.env.example` (if provided) or configure:
+    *   `SUPABASE_URL`: Your Supabase URL.
+    *   `SUPABASE_SERVICE_ROLE_KEY`: Your Supabase Service Role Key (for backend access).
+    *   `JWT_SECRET`: Secret for JWT tokens.
+    *   `FIREBASE_SERVICE_ACCOUNT_JSON`: Firebase Admin SDK credentials.
 3.  **Install Dependencies**:
     ```bash
     cd backend
@@ -80,4 +84,4 @@ See [DEPLOYMENT.md](./DEPLOYMENT.md) for detailed step-by-step instructions.
 
 ## Notes
 
-*   Ensure Supabase RPC functions (`find_nearby_drivers`, `update_driver_location`, etc.) are created in your database. See `READINESS_REPORT.md` § A for the canonical migration order (`supabase_schema.sql` → `sql/01..04` → `migrations/001..17` → `supabase_rls.sql`).
+*   Ensure Supabase RPC functions (`find_nearby_drivers`, `update_driver_location`, etc.) are created in your database. See `backend/FINAL_SCHEMA.sql` (if available) or migration files.

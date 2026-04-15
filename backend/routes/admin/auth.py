@@ -10,24 +10,10 @@ from slowapi.util import get_remote_address
 
 try:
     from ...core.config import settings
-    from ...db import db
-    from ...utils.password import hash_password, verify_password
-    from ...utils.refresh_tokens import (
-        issue_refresh_token,
-        lookup_refresh_token,
-        revoke_all_for_user,
-        revoke_refresh_token,
-    )
+    from ... import db_supabase
 except ImportError:
     from core.config import settings
-    from db import db
-    from utils.password import hash_password, verify_password
-    from utils.refresh_tokens import (
-        issue_refresh_token,
-        lookup_refresh_token,
-        revoke_all_for_user,
-        revoke_refresh_token,
-    )
+    import db_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -208,34 +194,14 @@ async def admin_login(request: Request, body: LoginRequest):
         }
 
     # 2. Staff member
-    staff = await db.admin_staff.find_one({"email": body.email.lower()})
+    staff = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"email": request.email.lower()}, limit=1))
     if staff:
         stored_hash = staff.get("password_hash", "") or ""
         ok, needs_upgrade = verify_password(body.password, stored_hash)
         if ok:
             if not staff.get("is_active", True):
                 raise HTTPException(status_code=403, detail="Account is deactivated")
-
-            update_payload: Dict[str, Any] = {"last_login": datetime.utcnow().isoformat()}
-            # Transparent upgrade: legacy SHA256 rows (and any bcrypt
-            # hashes at a lower cost factor than the current target)
-            # get re-hashed to the current bcrypt cost on successful
-            # login. The next login will find a modern hash and skip
-            # the upgrade. No operator action required.
-            if needs_upgrade:
-                try:
-                    update_payload["password_hash"] = hash_password(body.password)
-                    logger.info(f"Upgraded password hash for admin_staff id={staff.get('id')}")
-                except Exception as e:
-                    # Never fail a login because the upgrade path hit
-                    # a bcrypt hiccup; just leave the legacy hash in
-                    # place and try again next time.
-                    logger.warning(f"Password upgrade failed for staff id={staff.get('id')}: {e}")
-
-            await db.admin_staff.update_one(
-                {"id": staff["id"]},
-                {"$set": update_payload},
-            )
+            await db_supabase.update_one("admin_staff", {"id": staff["id"]}, {"last_login": datetime.utcnow().isoformat()})
             modules = staff.get("modules", ["dashboard"])
             token, access_expires_at = _mint_admin_access_token(
                 user_id=staff["id"],

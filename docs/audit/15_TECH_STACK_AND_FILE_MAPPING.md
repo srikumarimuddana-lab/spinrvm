@@ -402,7 +402,10 @@ spinr/
 
 | File | Hook | Purpose |
 |------|------|---------|
-| `driver-app/hooks/useDriverDashboard.ts` | `useDriverDashboard()` | All dashboard logic — WebSocket ride offers, location batch flush (30s), online/offline toggle, ride state machine, FCM foreground message bridge |
+| `driver-app/hooks/useDriverDashboard.ts` | `useDriverDashboard()` | All dashboard logic — WebSocket ride offers, location batch flush (30s), online/offline toggle, ride state machine |
+| `driver-app/hooks/useLocation.ts` | `useLocation()` | `expo-location` foreground/background, permission request, coords updates |
+| `driver-app/hooks/useWebSocket.ts` | `useWebSocket()` | WS connection with exponential backoff + jitter, AppState reconnect trigger, connection status |
+| `driver-app/hooks/index.ts` | Barrel export | Re-exports all hooks |
 
 ### Driver Stores
 

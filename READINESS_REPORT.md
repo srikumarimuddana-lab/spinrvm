@@ -18,24 +18,6 @@ Based on my thorough analysis of the entire Spinr project, **the code is NOT yet
 
 ---
 
-## 🚨 Top-Priority Action: Rotate Leaked Credentials
-
-The following real-looking credentials were found committed to this repository
-on 2026-04-11. **Rotate them in the respective provider consoles before any
-further deployment**, and consider using `git filter-repo` (or BFG) if the
-history needs to be scrubbed on a rewritten branch.
-
-| Credential | Found In | Action |
-|---|---|---|
-| Supabase **service-role** JWT (project `dbbadhihiwztmnqnbdke`) | `backend/.env.example` (now sanitized) | Revoke & regenerate in Supabase → Settings → API |
-| Google Maps API key `AIzaSy…M5m9M` | `rider-app/eas.json`, `driver-app/eas.json` | Delete key in Google Cloud Console → APIs & Services → Credentials, create a new restricted key |
-
-The repo now ships sanitized `.env.example` files in `backend/`, `rider-app/`,
-`driver-app/`, and `admin-dashboard/`. Copy each to `.env` (or `.env.local`
-for admin) and fill in values locally.
-
----
-
 ## Critical Issues (Must Fix Before Release)
 
 ### 1. Missing Environment Variables
@@ -81,111 +63,33 @@ twilio: {
 
 This affects SMS OTP functionality.
 
-### 4. Admin Dashboard Has No Authentication — ✅ RESOLVED
+### 4. Admin Dashboard Has No Authentication
 
-Previously, `/dashboard` had no login protection. Resolution (2026-04-12):
+The admin dashboard at `spinr/admin-dashboard/` has **NO login protection**. Anyone can access the dashboard at `/dashboard`.
 
-- **Edge middleware** at `admin-dashboard/src/middleware.ts` redirects
-  any non-public request without an `admin_token` cookie to
-  `/login?next=<original>`. Public paths: `/login`, `/register/*`,
-  `/track/*`, Next internals, static assets.
-- **Cookie bridge**: `authStore.setToken` dual-writes the JWT to
-  localStorage (for React + `api.ts`) and to the `admin_token`
-  cookie (for the edge middleware). `logout` clears both.
-- **Backend endpoints already existed** (`POST /api/admin/auth/login`,
-  `GET /api/admin/auth/session`, `POST /api/admin/auth/logout` in
-  `backend/routes/admin/auth.py`) — the gap was purely the Next.js
-  middleware.
+From [`spinr/admin-dashboard/src/app/dashboard/page.tsx`](spinr/admin-dashboard/src/app/dashboard/page.tsx) - there's no authentication check.
 
-### 5. CORS Allows All Origins — ✅ RESOLVED
+### 5. CORS Allows All Origins
 
-Previously `core/config.py` defaulted `ALLOWED_ORIGINS` to `"*"`, making a
-fresh deploy wide-open. As of 2026-04-11:
-
-- The default in `core/config.py` is now
-  `"http://localhost:3000,http://localhost:8081,http://localhost:19006"`
-  (Expo dev + admin dashboard).
-- `core/middleware.py` **fail-fast-refuses to start** if `ENV=production`
-  and `ALLOWED_ORIGINS` still contains `"*"` (raises `RuntimeError`).
-- When `"*"` is present in dev, `allow_credentials` is forced to `False`
-  (the CORS spec forbids wildcard + credentials anyway), and a warning
-  is logged.
-
-Override in each environment's `.env` with a comma-separated list of
-allowed origins, e.g. `ALLOWED_ORIGINS=https://spinr.ca,https://admin.spinr.ca`.
+In [`spinr/backend/server.py:121`](spinr/backend/server.py:121):
+```python
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # SECURITY RISK IN PRODUCTION
+    ...
+)
+```
 
 ---
 
 ## Missing Features & Broken Links
 
-### A. Database Schema Setup — Bootstrap Sequence
+### A. Missing Database Schema Setup
 
-A schema-drift audit on 2026-04-11 produced the following findings:
-
-**Do NOT use `backend/FINAL_SCHEMA.sql`** — it's abandoned/incomplete. It uses
-`UUID` primary keys while the application code expects `TEXT` ids, omits
-`document_requirements`, `driver_documents`, `corporate_accounts`,
-`emergency_contacts`, `area_fees`, `payouts`, `bank_accounts`, and defines
-`find_nearby_drivers` twice (lines 159–188 and 249–278). Treat this file as
-deprecated and ignore it when standing up a fresh project.
-
-**Canonical apply order for a fresh Supabase project:**
-
-1. Run `backend/supabase_schema.sql` (core tables, `uuid-ossp`,
-   `find_nearby_drivers`, `update_driver_location`)
-2. Run `backend/sql/01_postgis_schema.sql` _(optional — only needed if you
-   plan to use PostGIS queries; current code uses haversine math, so you can
-   skip this)_
-3. Run `backend/sql/02_add_updated_at.sql`
-4. Run `backend/sql/03_features.sql` (tax/surge/airport fee columns,
-   subscription/dispute tables)
-5. Run `backend/sql/04_rides_admin_overhaul.sql` — **REQUIRED**. Creates
-   `flags`, `complaints`, `lost_and_found`, and `driver_location_history`,
-   which are referenced by code (`db_supabase.py`) but are NOT in
-   `supabase_schema.sql`. Skipping this will produce table-not-found errors.
-6. Apply `backend/migrations/*.sql` via the runner (preferred):
-   ```bash
-   export DATABASE_URL='postgres://…pooler.supabase.com:6543/postgres'
-   python -m backend.scripts.run_migrations --status   # inspect state
-   python -m backend.scripts.run_migrations            # apply pending
-   ```
-   The runner uses the `schema_migrations` tracking table (migration 24)
-   so re-runs are safe. See `backend/migrations/README.md` for the
-   naming convention. Historical note: `10_disputes_table.sql` runs
-   before `10b_service_area_driver_matching.sql` (renamed from
-   `10_service_area_driver_matching.sql`), and `23_profile_image_url.sql`
-   was formerly `add_profile_image_url.sql`. Migration 17
-   (`17_corporate_accounts_fk.sql`) adds the FK constraints that link
-   `users.corporate_account_id` / `rides.corporate_account_id` to
-   `corporate_accounts.id` and enables RLS on the corporate_accounts table.
-7. Run `backend/supabase_rls.sql` last to enable RLS policies.
-
-**Resolved drift (2026-04-11):**
-
-- ✅ **`corporate_accounts` triple-definition** — Previously defined in three
-  places with conflicting shapes. Resolution:
-  `migrations/05_corporate_accounts.sql` is now the single source of truth
-  (UUID id, `name`, `credit_limit` — matches `routes/corporate_accounts.py`
-  Pydantic models); `migrations/03_corporate_accounts_heatmap.sql` has been
-  gutted of its conflicting CREATE TABLE / seed / RLS (it now only adds
-  heat-map settings columns and the UUID FK-link columns on users/rides,
-  without the REFERENCES clauses); `backend/corporate_accounts_schema.sql`
-  has been deleted; and `migrations/17_corporate_accounts_fk.sql` adds the
-  FK constraints and RLS policy after 05 creates the table.
-- ✅ **Dead `exec_sql` plumbing** — `execute_query`/`execute_write` in
-  `db_supabase.py` and their callers in `db.py` (`fetchall`, `fetchone`,
-  `execute`) have been deleted. They had zero callers in the codebase and
-  referenced an undefined Supabase RPC (`exec_sql`).
-
-**Remaining drift / gotchas:**
-
-- **PostGIS is not required by current code**. `find_nearby_drivers` in
-  `supabase_schema.sql:323` uses haversine math, not `ST_Distance`. PostGIS
-  only becomes mandatory if future work adopts geography columns.
-- **Duplicate `status` column on `users`/`drivers`**: added by both
-  `sql/04_rides_admin_overhaul.sql` and `migrations/12_driver_lifecycle_status.sql`.
-  No runtime conflict thanks to `IF NOT EXISTS`, but clean this up before
-  it bites someone.
+The Supabase database needs the following to be created:
+- All tables from [`spinr/backend/supabase_schema.sql`](spinr/backend/supabase_schema.sql)
+- PostGIS extension for geospatial queries
+- RPC functions for `find_nearby_drivers`
 
 ### B. Missing Legal Content
 
@@ -195,13 +99,13 @@ The Terms of Service and Privacy Policy are **empty strings** by default:
 
 These need to be set in the database settings.
 
-### C. Legal Pages Not Linked Properly — ✅ RESOLVED
+### C. Legal Pages Not Linked Properly
 
-Previously flagged: legal pages referenced `SpinrConfig.api.baseUrl`, which
-does not exist. Verified on 2026-04-11 — both
-[`rider-app/app/legal.tsx:33`](rider-app/app/legal.tsx:33) and
-[`driver-app/app/legal.tsx:33`](driver-app/app/legal.tsx:33) now use
-`SpinrConfig.backendUrl`. No code change needed.
+The legal pages in both apps reference a non-existent API:
+- [`spinr/driver-app/app/legal.tsx:33`](spinr/driver-app/app/legal.tsx:33): `fetch(${SpinrConfig.api.baseUrl}/settings/legal)`
+- Note: `SpinrConfig.api` doesn't exist in [`spinr/shared/config/spinr.config.ts`](spinr/shared/config/spinr.config.ts)
+
+This will cause the legal pages to fail.
 
 ### D. Missing Google Maps API Key
 
@@ -212,8 +116,14 @@ script.src = `https://maps.googleapis.com/maps/api/js?key=${process.env.EXPO_PUB
 
 This will fail without proper API key configuration.
 
-### E. Missing API Base URL Configuration — ✅ RESOLVED
-See §C above. Both legal screens now call `${SpinrConfig.backendUrl}/settings/legal`.
+### E. Missing API Base URL Configuration
+
+In [`spinr/driver-app/app/legal.tsx:33`](spinr/driver-app/app/legal.tsx:33) and [`spinr/rider-app/app/legal.tsx:33`](spinr/rider-app/app/legal.tsx:33):
+```typescript
+fetch(`${SpinrConfig.api.baseUrl}/settings/legal`)
+```
+
+But `SpinrConfig` does NOT have an `api` property - only `backendUrl`. This is a **broken link**.
 
 ---
 
@@ -295,8 +205,8 @@ This will fail if not configured properly.
   - [ ] Backend: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, JWT_SECRET
   - [ ] Apps: EXPO_PUBLIC_BACKEND_URL, EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
 
-- [x] **Fix Broken Links**
-  - [x] Fix legal page API URL (verified 2026-04-11 — both apps already use `SpinrConfig.backendUrl`)
+- [ ] **Fix Broken Links**
+  - [ ] Fix legal page API URL (use `SpinrConfig.backendUrl` instead of `SpinrConfig.api.baseUrl`)
 
 - [ ] **Add Admin Authentication**
   - [ ] Implement login page for admin dashboard
@@ -307,7 +217,7 @@ This will fail if not configured properly.
   - [ ] Add Privacy Policy text to database settings
 
 - [ ] **Security Hardening**
-  - [x] Configure CORS for specific origins (production now fails fast on wildcard; default is localhost-only)
+  - [ ] Configure CORS for specific origins
   - [ ] Set strong JWT_SECRET
   - [ ] Enable Firebase properly
 

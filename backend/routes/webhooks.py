@@ -1,13 +1,11 @@
 from fastapi import APIRouter, HTTPException, Request
 
 try:
-    from ..db import db
-    from ..db_supabase import claim_stripe_event, mark_stripe_event_processed
+    from .. import db_supabase
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
 except ImportError:
-    from db import db
-    from db_supabase import claim_stripe_event, mark_stripe_event_processed
+    import db_supabase
     from features import send_push_notification
     from settings_loader import get_app_settings
 import logging
@@ -97,16 +95,7 @@ async def stripe_webhook(request: Request):
         payment_intent_id = data_object.get("id")
 
         if ride_id:
-            await db.rides.update_one(
-                {"id": ride_id},
-                {
-                    "$set": {
-                        "payment_status": "paid",
-                        "payment_intent_id": payment_intent_id,
-                        "paid_at": datetime.now(timezone.utc),
-                    }
-                },
-            )
+            await db_supabase.update_ride(ride_id, { "payment_status": "paid", "payment_intent_id": payment_intent_id, "paid_at": datetime.utcnow(), })
             logger.info(f"Payment confirmed via webhook for ride {ride_id}")
 
         if user_id:
@@ -124,16 +113,7 @@ async def stripe_webhook(request: Request):
         failure_message = data_object.get("last_payment_error", {}).get("message", "Payment failed")
 
         if ride_id:
-            await db.rides.update_one(
-                {"id": ride_id},
-                {
-                    "$set": {
-                        "payment_status": "failed",
-                        "payment_intent_id": payment_intent_id,
-                        "payment_failure_reason": failure_message,
-                    }
-                },
-            )
+            await db_supabase.update_ride(ride_id, { "payment_status": "failed", "payment_intent_id": payment_intent_id, "payment_failure_reason": failure_message, })
             logger.warning(f"Payment failed for ride {ride_id}: {failure_message}")
 
         if user_id:

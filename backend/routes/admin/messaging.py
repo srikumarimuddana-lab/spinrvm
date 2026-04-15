@@ -6,9 +6,9 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Query
 
 try:
-    from ...db import db
+    from ... import db_supabase
 except ImportError:
-    from db import db
+    import db_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +48,10 @@ async def admin_send_cloud_message(payload: Dict[str, Any]):
     if audience in ("particular_customer", "particular_driver"):
         total_recipients = len(particular_ids) if particular_ids else 1
     elif audience == "customers":
-        count = await db.users.count_documents({"role": "rider"})
+        count = await db_supabase.count_documents("users", {"role": "rider"})
         total_recipients = count if count > 0 else 0
     elif audience == "drivers":
-        count = await db.users.count_documents({"role": "driver"})
+        count = await db_supabase.count_documents("users", {"role": "driver"})
         total_recipients = count if count > 0 else 0
 
     if not is_scheduled:
@@ -99,7 +99,7 @@ async def admin_send_cloud_message(payload: Dict[str, Any]):
     }
 
     try:
-        await db.cloud_messages.insert_one(doc)
+        await db_supabase.insert_one("cloud_messages", doc)
     except Exception as e:
         logger.error(f"Failed to insert cloud message: {e}")
         raise HTTPException(
@@ -124,7 +124,7 @@ async def admin_get_cloud_messages(
         filters["audience"] = audience
 
     try:
-        messages = await db.get_rows(
+        messages = await db_supabase.get_rows(
             "cloud_messages",
             filters,
             order="created_at",
@@ -142,7 +142,7 @@ async def admin_get_cloud_messages(
 async def admin_get_cloud_message_stats():
     """Get cloud messaging statistics."""
     try:
-        all_messages = await db.get_rows("cloud_messages", {}, limit=10000)
+        all_messages = await db_supabase.get_rows("cloud_messages", {}, limit=10000)
     except Exception:
         logger.warning("cloud_messages table may not exist yet")
         all_messages = []
@@ -168,15 +168,12 @@ async def admin_get_cloud_message_stats():
 @router.delete("/cloud-messaging/{message_id}")
 async def admin_delete_cloud_message(message_id: str):
     """Cancel/delete a scheduled cloud message."""
-    existing = await db.cloud_messages.find_one({"id": message_id})
+    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("cloud_messages", {"id": message_id}, limit=1))
     if not existing:
         raise HTTPException(status_code=404, detail="Message not found")
 
     if existing.get("status") == "sent":
         raise HTTPException(status_code=400, detail="Cannot delete a sent message")
 
-    await db.cloud_messages.update_one(
-        {"id": message_id},
-        {"$set": {"status": "cancelled"}},
-    )
+    await db_supabase.update_one("cloud_messages", {"id": message_id}, {"status": "cancelled"})
     return {"message": "Message cancelled"}

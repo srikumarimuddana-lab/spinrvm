@@ -4,11 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 try:
-    from ..db import db
+    from .. import db_supabase
     from ..dependencies import get_current_user
     from ..settings_loader import get_app_settings
 except ImportError:
-    from db import db
+    import db_supabase
     from dependencies import get_current_user
     from settings_loader import get_app_settings
 import logging
@@ -19,27 +19,8 @@ logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/payments", tags=["Payments"])
 
 
-class PaymentIntentRequest(BaseModel):
-    """Create-intent request body.
-
-    Validates that `amount` is a positive number within a sane upper bound
-    so an attacker can't submit a negative (refund-to-self) or absurdly
-    large charge. The previous endpoint accepted `Dict[str, Any]` and
-    trusted whatever the client sent — this schema closes that gap.
-    """
-
-    amount: float = Field(..., gt=0, le=100000, description="Amount in CAD dollars")
-    ride_id: Optional[str] = Field(None, max_length=64)
-    payment_method_id: Optional[str] = Field(None, max_length=128)
-
-
-async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
-    """Get or create a Stripe customer for the given user.
-
-    Accepts stripe_secret explicitly to avoid setting the global stripe.api_key
-    (which is not thread-safe under async FastAPI).
-    """
-    user = await db.users.find_one({"id": user_id})
+async def get_or_create_stripe_customer(user_id: str):
+    user = await db_supabase.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -54,7 +35,7 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
             api_key=stripe_secret,
         )
         stripe_customer_id = customer.id
-        await db.users.update_one({"id": user_id}, {"$set": {"stripe_customer_id": stripe_customer_id}})
+        await db_supabase.update_one("users", {"id": user_id}, {"stripe_customer_id": stripe_customer_id})
 
     return stripe_customer_id
 
@@ -112,9 +93,7 @@ async def confirm_payment(request: Dict[str, Any], current_user: dict = Depends(
     if payment_intent_id and payment_intent_id.startswith("pi_mock_"):
         # Mock payment
         if ride_id:
-            await db.rides.update_one(
-                {"id": ride_id}, {"$set": {"payment_status": "paid", "payment_intent_id": payment_intent_id}}
-            )
+            await db_supabase.update_ride(ride_id, {"payment_status": "paid", "payment_intent_id": payment_intent_id})
         return {"status": "succeeded", "mock": True}
 
     settings = await get_app_settings()
@@ -125,9 +104,7 @@ async def confirm_payment(request: Dict[str, Any], current_user: dict = Depends(
             intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
 
             if ride_id:
-                await db.rides.update_one(
-                    {"id": ride_id}, {"$set": {"payment_status": intent.status, "payment_intent_id": payment_intent_id}}
-                )
+                await db_supabase.update_ride(ride_id, {"payment_status": intent.status, "payment_intent_id": payment_intent_id})
 
             return {"status": intent.status, "mock": False}
         except Exception as e:
@@ -179,7 +156,8 @@ async def get_payment_methods(current_user: dict = Depends(get_current_user)):
         return {"methods": [], "mock": True}
 
     try:
-        user = await db.users.find_one({"id": current_user["id"]})
+        stripe.api_key = stripe_secret
+        user = await db_supabase.get_user_by_id(current_user["id"])
         stripe_customer_id = user.get("stripe_customer_id") if user else None
 
         if not stripe_customer_id:
@@ -223,9 +201,10 @@ async def get_cards(current_user: dict = Depends(get_current_user)):
         return []
 
     try:
-        customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
-        methods = stripe.PaymentMethod.list(customer=customer_id, type="card", api_key=stripe_secret)
-        user = await db.users.find_one({"id": current_user["id"]})
+        stripe.api_key = stripe_secret
+        customer_id = await get_or_create_stripe_customer(current_user["id"])
+        methods = stripe.PaymentMethod.list(customer=customer_id, type="card")
+        user = await db_supabase.get_user_by_id(current_user["id"])
         default_pm = user.get("default_payment_method") if user else None
         return [
             {
@@ -357,12 +336,10 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
         )
 
         # Set as default if first card
-        user = await db.users.find_one({"id": current_user["id"]})
+        user = await db_supabase.get_user_by_id(current_user["id"])
         if not user.get("default_payment_method"):
-            await db.users.update_one({"id": current_user["id"]}, {"$set": {"default_payment_method": pm.id}})
-            stripe.Customer.modify(
-                customer_id, invoice_settings={"default_payment_method": pm.id}, api_key=stripe_secret
-            )
+            await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": pm.id})
+            stripe.Customer.modify(customer_id, invoice_settings={"default_payment_method": pm.id})
 
         logger.info(f"Card added: {pm.card.brand} ****{pm.card.last4} | SetupIntent: {si.id} ({si.status})")
 
@@ -386,13 +363,14 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
 @api_router.post("/cards/{card_id}/default")
 async def set_default_card(card_id: str, current_user: dict = Depends(get_current_user)):
     """Set card as default. Updates both our DB and Stripe customer."""
-    await db.users.update_one({"id": current_user["id"]}, {"$set": {"default_payment_method": card_id}})
+    await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": card_id})
 
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
     if stripe_secret:
         try:
-            user = await db.users.find_one({"id": current_user["id"]})
+            stripe.api_key = stripe_secret
+            user = await db_supabase.get_user_by_id(current_user["id"])
             cid = user.get("stripe_customer_id")
             if cid:
                 stripe.Customer.modify(cid, invoice_settings={"default_payment_method": card_id}, api_key=stripe_secret)
@@ -413,8 +391,8 @@ async def delete_card(card_id: str, current_user: dict = Depends(get_current_use
         except Exception as e:
             logger.warning(f"Stripe detach: {e}")
 
-    user = await db.users.find_one({"id": current_user["id"]})
+    user = await db_supabase.get_user_by_id(current_user["id"])
     if user and user.get("default_payment_method") == card_id:
-        await db.users.update_one({"id": current_user["id"]}, {"$set": {"default_payment_method": None}})
+        await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": None})
 
     return {"success": True}

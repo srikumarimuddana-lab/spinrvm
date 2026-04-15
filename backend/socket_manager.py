@@ -5,9 +5,9 @@ from fastapi import WebSocket
 from loguru import logger
 
 try:
-    from .db import diag_logger  # type: ignore
+    from .logging_utils import diag_logger  # type: ignore
 except ImportError:
-    from db import diag_logger  # type: ignore
+    from logging_utils import diag_logger  # type: ignore
 
 
 class ConnectionManager:

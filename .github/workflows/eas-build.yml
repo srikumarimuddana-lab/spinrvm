@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "rider-app/**"
+      - "frontend/**"
+      - "!frontend/web/**"
   workflow_dispatch:
     inputs:
       platform:
@@ -31,17 +32,17 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: rider-app
+        working-directory: frontend
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: rider-app/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Setup EAS CLI
         uses: expo/expo-github-action@v8

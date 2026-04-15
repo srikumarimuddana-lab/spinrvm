@@ -25,9 +25,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 try:
-    from .db import db  # type: ignore
+    from . import db_supabase  # type: ignore
 except ImportError:
-    from db import db  # type: ignore
+    import db_supabase  # type: ignore
 
 
 # Ordered list of states for logging / validation.
@@ -127,7 +127,7 @@ async def derive_driver_onboarding_status(
     # Step 2: driver row + vehicle fields
     driver = None
     try:
-        driver = await db.drivers.find_one({"user_id": user_id})
+        driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1))
     except Exception:
         driver = None
 
@@ -146,11 +146,11 @@ async def derive_driver_onboarding_status(
     # Step 4: documents
     # Fetch requirements + driver's submitted docs.
     try:
-        requirements = await db.driver_requirements.find({}).to_list(100)
+        requirements = await db_supabase.get_rows("driver_requirements", {}, limit=100)
     except Exception:
         requirements = []
     try:
-        documents = await db.driver_documents.find({"driver_id": driver["id"]}).to_list(200)
+        documents = await db_supabase.get_rows("driver_documents", {"driver_id": driver["id"]}, limit=200)
     except Exception:
         documents = []
 

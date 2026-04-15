@@ -6,10 +6,10 @@ from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict
 
 try:
-    from ...db import db
+    from ... import db_supabase
     from ...settings_loader import get_app_settings
 except ImportError:
-    from db import db
+    import db_supabase
     from settings_loader import get_app_settings
 
 logger = logging.getLogger(__name__)
@@ -52,12 +52,8 @@ async def admin_get_settings():
 @router.put("/settings")
 async def admin_update_settings(settings: SettingsUpdateRequest):
     """Update settings (upsert single app_settings row)."""
-    # Only include fields that were explicitly set (not None)
-    update_fields = settings.model_dump(exclude_none=True)
-    if not update_fields:
-        return {"message": "No settings to update"}
-
-    existing = await db.settings.find_one({"id": "app_settings"})
+    # First check if settings row exists
+    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("settings", {"id": "app_settings"}, limit=1))
 
     payload = {
         "id": "app_settings",
@@ -67,9 +63,10 @@ async def admin_update_settings(settings: SettingsUpdateRequest):
 
     if existing:
         update_payload = {k: v for k, v in payload.items() if k != "id"}
-        await db.settings.update_one({"id": "app_settings"}, {"$set": update_payload})
+        await db_supabase.update_one("settings", {"id": "app_settings"}, update_payload)
     else:
-        await db.settings.insert_one(payload)
+        # Insert new row
+        await db_supabase.insert_one("settings", payload)
 
     return {"message": "Settings updated"}
 
@@ -97,7 +94,7 @@ _DEFAULT_HEATMAP_SETTINGS = {
 @router.get("/settings/heatmap")
 async def admin_get_heatmap_settings():
     """Return heat-map display settings (single settings row)."""
-    row = await db.settings.find_one({"id": _HEATMAP_SETTINGS_ID})
+    row = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("settings", {"id": _HEATMAP_SETTINGS_ID}, limit=1))
     if row:
         # Merge defaults with stored values so new keys always appear
         merged = {**_DEFAULT_HEATMAP_SETTINGS, **row}
@@ -115,11 +112,11 @@ async def admin_update_heatmap_settings(data: Dict[str, Any]):
         "updated_at": datetime.utcnow().isoformat(),
     }
 
-    existing = await db.settings.find_one({"id": _HEATMAP_SETTINGS_ID})
+    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("settings", {"id": _HEATMAP_SETTINGS_ID}, limit=1))
     if existing:
         update_fields = {k: v for k, v in payload.items() if k != "id"}
-        await db.settings.update_one({"id": _HEATMAP_SETTINGS_ID}, {"$set": update_fields})
+        await db_supabase.update_one("settings", {"id": _HEATMAP_SETTINGS_ID}, update_fields)
     else:
-        await db.settings.insert_one(payload)
+        await db_supabase.insert_one("settings", payload)
 
     return {"message": "Heat map settings updated"}

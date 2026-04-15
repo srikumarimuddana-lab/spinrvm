@@ -33,7 +33,10 @@
       "Bash(pip-audit -r requirements.txt)",
       "Bash(python3 -m py_compile routes/rides.py)",
       "Bash(python3 -c ':*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(git reset:*)",
+      "Bash(git push:*)",
+      "Bash(git config:*)"
     ]
   }
 }

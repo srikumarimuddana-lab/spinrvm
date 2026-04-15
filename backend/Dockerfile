@@ -6,7 +6,7 @@ WORKDIR /build
 # Apply OS security patches before installing anything else.
 # This ensures the builder layer starts from a patched base, reducing
 # the surface area reported by Trivy / Grype image scans.
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get install -y --no-install-recommends \
         gcc \
         libpq-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -21,7 +21,8 @@ FROM python:3.12.9-slim AS runtime
 # Apply OS security patches to the runtime image as well.
 # The builder's patched packages don't transfer to the runtime stage
 # (only /install is copied), so the runtime layer must be patched independently.
-RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 
 # ── Security: run as non-root ──────────────────────────────────────────────────
 RUN groupadd --gid 1001 spinr \

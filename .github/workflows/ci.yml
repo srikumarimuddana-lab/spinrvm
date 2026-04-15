@@ -31,7 +31,7 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -87,10 +87,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -127,10 +127,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -165,10 +165,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -201,10 +201,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -240,15 +240,15 @@ jobs:
   e2e-test:
     name: E2E tests (Playwright)
     runs-on: ubuntu-latest
-    needs: [backend-test]
+    needs: [backend-test, admin-test]
     if: github.ref == 'refs/heads/main'
     defaults:
       run:
         working-directory: admin-dashboard
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
@@ -289,7 +289,7 @@ jobs:
     if: github.ref == 'refs/heads/main'
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Deploy to Render
         env:
@@ -315,10 +315,10 @@ jobs:
     if: github.ref == 'refs/heads/main'
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -347,10 +347,10 @@ jobs:
     if: github.ref == 'refs/heads/main'
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -377,7 +377,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[build]')
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Setup EAS
         uses: expo/expo-github-action@v8
@@ -404,7 +404,7 @@ jobs:
       security-events: write  # required for Trivy SARIF upload to GitHub Security tab
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0  # full history required for trufflehog --since-commit
 
@@ -442,7 +442,7 @@ jobs:
     needs: [backend-test]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Build backend Docker image
         run: |
@@ -455,19 +455,9 @@ jobs:
         uses: aquasecurity/trivy-action@v0.35.0
         with:
           image-ref: spinr-backend:ci-${{ github.sha }}
-          format: 'table'
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
-
-      - name: Upload SARIF report
-        if: always()
-        uses: aquasecurity/trivy-action@v0.35.0
-        with:
-          image-ref: spinr-backend:ci-${{ github.sha }}
           format: 'sarif'
           output: 'trivy-image.sarif'
+          exit-code: '1'
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
@@ -525,7 +515,7 @@ jobs:
       issues: write
     steps:
       - name: Create failure issue
-        uses: actions/github-script@v9
+        uses: actions/github-script@v7
         with:
           script: |
             await github.rest.issues.create({

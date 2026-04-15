@@ -31,7 +31,7 @@
         <category android:name="android.intent.category.DEFAULT"/>
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="spinr-driver"/>
-        <data android:scheme="exp+spinr-driver"/>
+        <data android:scheme="exp+spinrdriver"/>
       </intent-filter>
     </activity>
     <uses-library android:name="org.apache.http.legacy" android:required="false"/>

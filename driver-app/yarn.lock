@@ -2662,6 +2662,13 @@
   dependencies:
     firebase "12.10.0"
 
+"@react-native-firebase/auth@^24.0.0":
+  version "24.0.0"
+  resolved "https://registry.npmjs.org/@react-native-firebase/auth/-/auth-24.0.0.tgz"
+  integrity sha512-LvjVouoTLx2yCkCSy5ZxfDrbZgxMIE5QIFfm2uqWXeP1L1+NVV3MkBMdKruhwIrF0nuLOuzvGdf545rUqRgN6Q==
+  dependencies:
+    plist "^3.1.0"
+
 "@react-native-firebase/crashlytics@^24.0.0":
   version "24.0.0"
   resolved "https://registry.npmjs.org/@react-native-firebase/crashlytics/-/crashlytics-24.0.0.tgz"
@@ -8038,7 +8045,7 @@ pkg-up@^3.1.0:
   dependencies:
     find-up "^3.0.0"
 
-plist@^3.0.5:
+plist@^3.0.5, plist@^3.1.0:
   version "3.1.0"
   resolved "https://registry.npmjs.org/plist/-/plist-3.1.0.tgz"
   integrity sha512-uysumyrvkUX0rX/dEVqt8gC3sTBzd4zoWfLeS29nb53imdaXVvLINYXTI2GNqzaMuvacNx4uJQ8+b3zXR0pkgQ==

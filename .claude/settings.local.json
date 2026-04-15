@@ -44,7 +44,10 @@
       "Bash(netstat -ano)",
       "Bash(C:/Users/swarn/.unsloth/studio/unsloth_studio/Scripts/pip.exe install:*)",
       "Bash(curl:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(node:*)",
+      "Read(//c/Program Files/**)",
+      "Read(//c/Program Files/Eclipse Adoptium/**)"
     ]
   }
 }

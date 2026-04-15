@@ -1,0 +1,32 @@
+# CODEOWNERS — auto-assigns reviewers based on changed paths.
+# Rules: last matching pattern wins (same as .gitignore specificity).
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# ── Default owner for everything not matched below ──────────────────────────
+*                               @ittalenthireca-sketch
+
+# ── Backend (Python / FastAPI) ───────────────────────────────────────────────
+/backend/                       @ittalenthireca-sketch
+
+# ── Mobile apps ──────────────────────────────────────────────────────────────
+/rider-app/                     @ittalenthireca-sketch
+/driver-app/                    @ittalenthireca-sketch
+
+# ── Web surfaces ─────────────────────────────────────────────────────────────
+/frontend/                      @ittalenthireca-sketch
+/admin-dashboard/               @ittalenthireca-sketch
+
+# ── Shared / cross-platform ──────────────────────────────────────────────────
+/shared/                        @ittalenthireca-sketch
+
+# ── Infrastructure & CI — require explicit review for any pipeline change ───
+/.github/                       @ittalenthireca-sketch
+/backend/Dockerfile             @ittalenthireca-sketch
+/render.yaml                    @ittalenthireca-sketch
+/fly.toml                       @ittalenthireca-sketch
+
+# ── Dependency manifests ─────────────────────────────────────────────────────
+/backend/requirements*.txt      @ittalenthireca-sketch
+**/package.json                 @ittalenthireca-sketch
+**/yarn.lock                    @ittalenthireca-sketch
+**/package-lock.json            @ittalenthireca-sketch

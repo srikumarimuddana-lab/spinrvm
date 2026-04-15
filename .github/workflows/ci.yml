@@ -540,3 +540,20 @@ jobs:
               ].join('\n'),
               labels: ['ci-failure', 'auto']
             })
+
+  # Notify on successful deploy to main
+  notify-deploy:
+    runs-on: ubuntu-latest
+    needs: [deploy-backend, deploy-frontend, deploy-admin]
+    if: success() && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Send Slack deploy success notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: success
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          text: |
+            :rocket: *Spinr deployed to production*
+            Commit: `${{ github.sha }}` by ${{ github.actor }}
+            <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>

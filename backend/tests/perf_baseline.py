@@ -28,7 +28,7 @@ import os
 import sys
 import time
 from datetime import datetime
-from statistics import mean, median, stdev
+from statistics import mean
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -54,10 +54,12 @@ os.environ.setdefault("ENV", "test")
 
 # Suppress loguru JSON output that would pollute the perf table.
 # Must run before server.py and its dependencies are imported.
-import logging
+import logging  # noqa: E402  (must precede server imports to suppress log noise)
+
 logging.disable(logging.WARNING)
 try:
     from loguru import logger as _loguru_logger
+
     _loguru_logger.disable("routes")
     _loguru_logger.disable("core")
     _loguru_logger.disable("utils")
@@ -67,7 +69,7 @@ try:
 except Exception:
     pass
 
-import httpx
+import httpx  # noqa: E402  (must follow logging-suppression block above)
 
 # ---------------------------------------------------------------------------
 # Shared mock fixtures
@@ -171,15 +173,6 @@ async def bench_http(app, samples: int) -> list[dict]:
     mock_db = make_mock_db()
     results = []
 
-    # Patch all route-module db bindings at once
-    db_patches = {
-        "routes.wallet.db": mock_db,
-        "routes.loyalty.db": mock_db,
-        "routes.fare_split.db": mock_db,
-        "routes.quests.db": mock_db,
-        "routes.rides.db": mock_db,
-    }
-
     with (
         patch("routes.wallet.db", mock_db),
         patch("routes.loyalty.db", mock_db),
@@ -199,9 +192,9 @@ async def bench_http(app, samples: int) -> list[dict]:
                     t0 = time.perf_counter()
                     try:
                         if method == "GET":
-                            resp = await client.get(path)
+                            await client.get(path)
                         else:
-                            resp = await client.post(path, json=body)
+                            await client.post(path, json=body)
                         # 400-level responses are expected in some cases (e.g. redeem
                         # with insufficient points) — still a valid latency sample.
                         elapsed_ms = (time.perf_counter() - t0) * 1000
@@ -246,8 +239,6 @@ async def bench_ws(app, samples: int) -> dict:
     verify_jwt_token. That call is patched to succeed.
     """
     from fastapi.testclient import TestClient
-
-    import dependencies
 
     mock_db = make_mock_db()
     mock_db.users.find_one = AsyncMock(return_value=MOCK_USER)
@@ -324,8 +315,7 @@ def check_regression(current: list[dict], baseline_path: str) -> list[str]:
         pct_change = ((current_p95 - baseline_p95) / baseline_p95) * 100
         if pct_change > P95_REGRESSION_THRESHOLD_PCT:
             failures.append(
-                f"{result['label']}: P95 regressed {pct_change:.1f}% "
-                f"({baseline_p95:.1f}ms → {current_p95:.1f}ms)"
+                f"{result['label']}: P95 regressed {pct_change:.1f}% ({baseline_p95:.1f}ms → {current_p95:.1f}ms)"
             )
     return failures
 
@@ -346,10 +336,10 @@ def print_table(http_results: list[dict], ws_result: dict):
     print(divider)
     for r in http_results:
         if r.get("samples", 0) == 0:
-            print(f"  {r['label']:<{COL_W-2}} {'ERR':>7}")
+            print(f"  {r['label']:<{COL_W - 2}} {'ERR':>7}")
             continue
         print(
-            f"  {r['label']:<{COL_W-2}}"
+            f"  {r['label']:<{COL_W - 2}}"
             f" {r['p50_ms']:>6.1f}ms"
             f" {r['p95_ms']:>6.1f}ms"
             f" {r['p99_ms']:>6.1f}ms"
@@ -360,7 +350,7 @@ def print_table(http_results: list[dict], ws_result: dict):
     print(divider)
     if ws_result.get("samples", 0) > 0:
         print(
-            f"  {'WS connect+auth':<{COL_W-2}}"
+            f"  {'WS connect+auth':<{COL_W - 2}}"
             f" {ws_result['p50_ms']:>6.1f}ms"
             f" {ws_result['p95_ms']:>6.1f}ms"
             f" {ws_result['p99_ms']:>6.1f}ms"
@@ -369,7 +359,7 @@ def print_table(http_results: list[dict], ws_result: dict):
             f" {ws_result.get('errors', 0):>4}"
         )
     else:
-        print(f"  {'WS connect+auth':<{COL_W-2}}  [skipped or all failed]")
+        print(f"  {'WS connect+auth':<{COL_W - 2}}  [skipped or all failed]")
     print(divider + "\n")
 
 

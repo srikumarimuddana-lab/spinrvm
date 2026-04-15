@@ -78,8 +78,8 @@ def make_mock_db():
 
 @pytest.fixture
 def client():
-    from backend.server import app  # ensures server.py sys.path setup runs first
     import dependencies  # same module the routes use (routes use relative '..dependencies')
+    from backend.server import app  # ensures server.py sys.path setup runs first
 
     app.dependency_overrides[dependencies.get_current_user] = lambda: SAMPLE_USER
     app.dependency_overrides[dependencies.get_admin_user] = lambda: SAMPLE_ADMIN
@@ -130,6 +130,7 @@ class TestGetAvailableQuests:
 
     def test_unauthenticated_request_rejected(self):
         from fastapi.testclient import TestClient
+
         from backend.server import app
 
         with TestClient(app) as c:
@@ -390,9 +391,7 @@ class TestAdminGetParticipants:
         mock_db.quests.find_one = AsyncMock(return_value=SAMPLE_QUEST)
         mock_db.get_rows = AsyncMock(return_value=[SAMPLE_PROGRESS])
         mock_db.drivers.find_one = AsyncMock(return_value=SAMPLE_DRIVER)
-        mock_db.users.find_one = AsyncMock(
-            return_value={"id": "user_123", "first_name": "Test", "last_name": "Driver"}
-        )
+        mock_db.users.find_one = AsyncMock(return_value={"id": "user_123", "first_name": "Test", "last_name": "Driver"})
 
         with patch("routes.quests.db", mock_db):
             resp = client.get("/api/v1/quests/admin/quest_1/participants")

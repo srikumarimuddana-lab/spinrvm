@@ -451,6 +451,16 @@ jobs:
             --tag spinr-backend:ci-${{ github.sha }} \
             backend/
 
+      - name: Scan image with Trivy (table — visible in log)
+        uses: aquasecurity/trivy-action@v0.35.0
+        with:
+          image-ref: spinr-backend:ci-${{ github.sha }}
+          format: 'table'
+          exit-code: '0'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
       - name: Scan image with Trivy
         uses: aquasecurity/trivy-action@v0.35.0
         with:

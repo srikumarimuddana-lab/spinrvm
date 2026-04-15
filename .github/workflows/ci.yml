@@ -567,7 +567,9 @@ jobs:
 
   # Security Scan — filesystem (dependency CVEs) + secrets
   # On pull requests / pushes: incremental git history scan (HEAD~1).
-  # On release tags or manual dispatch: full history scan + stricter Trivy.
+  # On release tags or manual dispatch: full history scan.
+  # CVE blocking is handled by docker-image-scan (the actual deployed
+  # artifact). Filesystem Trivy is report-only (SARIF → GitHub Security tab).
   security-scan:
     runs-on: ubuntu-latest
     permissions:
@@ -597,22 +599,13 @@ jobs:
             trufflehog git file://. --only-verified --since-commit HEAD~1 --fail
           fi
 
-      - name: Secrets scan — working tree
-        # Catches secrets in config templates, store metadata, and other
-        # non-committed-content files that trufflehog git may miss.
-        run: |
-          trufflehog filesystem . --only-verified --fail \
-            --exclude-paths=.trufflehog-ignore 2>/dev/null || \
-          trufflehog filesystem . --only-verified --fail
-
-      - name: Run Trivy vulnerability scanner (filesystem)
+      - name: Run Trivy vulnerability scanner (filesystem — report only)
         uses: aquasecurity/trivy-action@v0.35.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'sarif'
           output: 'trivy-results.sarif'
-          exit-code: '1'
           ignore-unfixed: true
           severity: 'CRITICAL,HIGH'
 

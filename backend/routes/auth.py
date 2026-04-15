@@ -11,6 +11,7 @@ try:
         get_current_user,
     )
     from ..schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
+    from ..settings_loader import get_app_settings
     from ..sms_service import send_otp_sms
     from ..utils.refresh_tokens import (
         issue_refresh_token,
@@ -72,9 +73,14 @@ async def send_otp(request: Request, body: SendOTPRequest):
         and settings.get("twilio_from_number")
     )
 
-    # Use fixed 123456 OTP when Twilio is not configured (dev mode).
-    # Dev OTP must be the same length as the real generated one (6 digits)
-    # so the driver/rider OTP screens validate it correctly.
+    is_dev = _core_settings.ENV.lower() in ("development", "test")
+
+    if not twilio_configured and not is_dev:
+        # In production, refuse to silently fall back to a known OTP.
+        raise HTTPException(status_code=503, detail="SMS service not configured")
+
+    # Dev fallback: fixed OTP so local testing doesn't need Twilio.
+    # The 6-digit length matches the real generated OTP so OTP screens accept it.
     otp_code = generate_otp() if twilio_configured else "123456"
 
     otp_record = OTPRecord(

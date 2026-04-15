@@ -1,10 +1,12 @@
 {
-    "extends": "../driver-app/tsconfig.json",
+    "extends": "expo/tsconfig.base",
     "compilerOptions": {
+        "strict": true,
         "baseUrl": ".",
         "paths": {
             "*": [
-                "../driver-app/node_modules/*"
+                "../driver-app/node_modules/*",
+                "../rider-app/node_modules/*"
             ]
         }
     },

@@ -175,8 +175,9 @@ async def admin_login(request: Request, body: LoginRequest):
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_remote_address(request)
 
-    # 1. Super admin from env
-    if body.email == settings.ADMIN_EMAIL and body.password == settings.ADMIN_PASSWORD:
+    # 1. Super admin from env. Extra truthy-check on ADMIN_PASSWORD so an
+    # empty/whitespace value in .env cannot match an empty body.password.
+    if settings.ADMIN_PASSWORD and body.email == settings.ADMIN_EMAIL and body.password == settings.ADMIN_PASSWORD:
         # admin-001 has no DB row, so token_version stays at 0. We still
         # emit the claim + an exp so a captured super-admin token dies
         # after ADMIN_ACCESS_TOKEN_TTL_HOURS and can't live forever.

@@ -1,6 +1,7 @@
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 
 try:
     from ..db import db
@@ -17,6 +18,20 @@ import stripe
 
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/payments", tags=["Payments"])
+
+
+class PaymentIntentRequest(BaseModel):
+    """Create-intent request body.
+
+    Validates that `amount` is a positive number within a sane upper bound
+    so an attacker can't submit a negative (refund-to-self) or absurdly
+    large charge. The previous endpoint accepted `Dict[str, Any]` and
+    trusted whatever the client sent — this schema closes that gap.
+    """
+
+    amount: float = Field(..., gt=0, le=100000, description="Amount in CAD dollars")
+    ride_id: Optional[str] = Field(None, max_length=64)
+    payment_method_id: Optional[str] = Field(None, max_length=128)
 
 
 async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
@@ -46,8 +61,13 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
 
 
 @api_router.post("/create-intent")
-async def create_payment_intent(request: Dict[str, Any], current_user: dict = Depends(get_current_user)):
-    """Create a Stripe payment intent"""
+async def create_payment_intent(body: PaymentIntentRequest, current_user: dict = Depends(get_current_user)):
+    """Create a Stripe payment intent.
+
+    `amount` is validated by Pydantic (positive, ≤ 100000 CAD) before we
+    reach Stripe. Rejecting at the boundary gives a 422 response on bad
+    input instead of a 500 after Stripe refuses it.
+    """
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
 
@@ -58,7 +78,7 @@ async def create_payment_intent(request: Dict[str, Any], current_user: dict = De
         )
 
     try:
-        amount = int(request.get("amount", 0) * 100)  # Convert to cents
+        amount = int(body.amount * 100)  # Convert dollars → cents
 
         # Get or create customer for saved payments
         stripe_customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
@@ -67,15 +87,14 @@ async def create_payment_intent(request: Dict[str, Any], current_user: dict = De
             "amount": amount,
             "currency": "cad",
             "automatic_payment_methods": {"enabled": True},
-            "metadata": {"user_id": current_user["id"], "ride_id": request.get("ride_id", "")},
+            "metadata": {"user_id": current_user["id"], "ride_id": body.ride_id or ""},
         }
 
         if stripe_customer_id:
             intent_params["customer"] = stripe_customer_id
 
-        payment_method_id = request.get("payment_method_id")
-        if payment_method_id:
-            intent_params["payment_method"] = payment_method_id
+        if body.payment_method_id:
+            intent_params["payment_method"] = body.payment_method_id
 
         intent = stripe.PaymentIntent.create(**intent_params, api_key=stripe_secret)
 

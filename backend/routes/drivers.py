@@ -33,6 +33,51 @@ class RideOTPRequest(BaseModel):
 api_router = APIRouter(prefix="/drivers", tags=["Drivers"])
 
 
+# ── Ride state-machine guards ─────────────────────────────────────────────────
+# Explicit source-state allowlists for each driver-initiated transition.
+# A ride can only be moved forward from one of the allowed states; attempts
+# to transition out of a terminal state (completed/cancelled) or out of order
+# are rejected with 409 Conflict. This prevents:
+#   • completing a ride that was never started → phantom charge
+#   • restarting a cancelled ride
+#   • marking "arrived" on a completed ride
+# Idempotent destination states are included to make retries safe.
+ARRIVE_FROM_STATES = ("driver_assigned", "driver_accepted", "driver_arrived")
+# verify-otp and start both move driver_arrived → in_progress.
+# in_progress is idempotent for both (retry after network blip).
+START_FROM_STATES = ("driver_arrived", "in_progress")
+COMPLETE_FROM_STATES = ("in_progress",)
+
+
+async def _require_ride_in_state(ride_id: str, driver_id: str, allowed_states: tuple) -> Dict[str, Any]:
+    """Load a driver's ride only if it is in one of ``allowed_states``.
+
+    Raises 409 Conflict if the ride exists but is in a terminal or
+    wrong state; raises 404 if the ride doesn't exist or isn't owned
+    by this driver.
+    """
+    ride = await db.rides.find_one(
+        {
+            "id": ride_id,
+            "driver_id": driver_id,
+            "status": {"$in": list(allowed_states)},
+        }
+    )
+    if ride:
+        return ride
+    existing = await db.rides.find_one({"id": ride_id, "driver_id": driver_id})
+    if existing:
+        current = existing.get("status", "unknown")
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Ride is in status '{current}'; cannot perform this action "
+                f"from that state (allowed: {list(allowed_states)})."
+            ),
+        )
+    raise HTTPException(status_code=404, detail="Ride not found")
+
+
 @api_router.get("/config")
 async def get_driver_config(current_user: dict = Depends(get_current_user)):
     """Return operational settings the driver-app should honor at runtime.
@@ -1465,9 +1510,9 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    ride = await db.rides.find_one({"id": ride_id, "driver_id": driver["id"]})
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+    # State-machine guard: only rides still pre-arrival (or idempotent retry)
+    # can be transitioned to driver_arrived. Blocks completing/cancelled rides.
+    ride = await _require_ride_in_state(ride_id, driver["id"], ARRIVE_FROM_STATES)
 
     # Geofence check - verify driver is within 200m of pickup location
     ARRIVAL_RADIUS_KM = 0.2  # 200 meters
@@ -1486,8 +1531,14 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
                 f"Please move within 200m of the pickup location to mark arrival.",
             )
 
+    # Conditional update: repeat the status guard in the write filter so
+    # a concurrent cancel between our read and write can't be clobbered.
     await db.rides.update_one(
-        {"id": ride_id, "driver_id": driver["id"]},
+        {
+            "id": ride_id,
+            "driver_id": driver["id"],
+            "status": {"$in": list(ARRIVE_FROM_STATES)},
+        },
         {"$set": {"status": "driver_arrived", "driver_arrived_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
     )
 
@@ -1509,16 +1560,20 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    ride = await db.rides.find_one({"id": ride_id, "driver_id": driver["id"]})
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+    # State-machine guard: ride must be driver_arrived (or in_progress for
+    # idempotent retry). Blocks starting a cancelled/completed ride.
+    ride = await _require_ride_in_state(ride_id, driver["id"], START_FROM_STATES)
 
     if ride.get("pickup_otp") != request.otp:
         raise HTTPException(status_code=400, detail="Invalid OTP")
 
     # OTP correct, start ride
     await db.rides.update_one(
-        {"id": ride_id},
+        {
+            "id": ride_id,
+            "driver_id": driver["id"],
+            "status": {"$in": list(START_FROM_STATES)},
+        },
         {"$set": {"status": "in_progress", "ride_started_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
     )
 
@@ -1537,13 +1592,20 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
 @api_router.post("/rides/{ride_id}/start")
 async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Start ride without OTP (if configured) or fallback."""
-    # Logic similar to verify_otp but without check
     driver = await db.drivers.find_one({"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
+    # State-machine guard: ride must be driver_arrived (or in_progress for
+    # idempotent retry). Blocks starting a cancelled/completed ride.
+    await _require_ride_in_state(ride_id, driver["id"], START_FROM_STATES)
+
     await db.rides.update_one(
-        {"id": ride_id, "driver_id": driver["id"]},
+        {
+            "id": ride_id,
+            "driver_id": driver["id"],
+            "status": {"$in": list(START_FROM_STATES)},
+        },
         {"$set": {"status": "in_progress", "ride_started_at": datetime.utcnow(), "updated_at": datetime.utcnow()}},
     )
 
@@ -1565,9 +1627,11 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    ride = await db.rides.find_one({"id": ride_id, "driver_id": driver["id"]})
-    if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+    # State-machine guard: ride MUST be in_progress to be completed.
+    # Without this check, an attacker/buggy client could complete a ride
+    # that was never started (or was cancelled), triggering payment and
+    # rider notification for a trip that never happened.
+    ride = await _require_ride_in_state(ride_id, driver["id"], COMPLETE_FROM_STATES)
 
     # ── Aggregate all GPS breadcrumbs for this ride ──
     # On completion we compute everything once and store it on the ride row.
@@ -1672,7 +1736,16 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         update_fields["distance_km"] = actual_distance_km
 
     try:
-        await db.rides.update_one({"id": ride_id, "driver_id": driver["id"]}, {"$set": update_fields})
+        # Conditional update: re-check status in the write filter so a
+        # concurrent cancel between our read and write can't be overwritten.
+        await db.rides.update_one(
+            {
+                "id": ride_id,
+                "driver_id": driver["id"],
+                "status": {"$in": list(COMPLETE_FROM_STATES)},
+            },
+            {"$set": update_fields},
+        )
     except Exception as e:
         # Some columns may not exist yet in older deployments. Retry with only
         # the essential fields so ride completion never fails.
@@ -1681,7 +1754,14 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             logger.warning(f"Retrying ride update with minimal fields: {e}")
             safe_keys = {"status", "ride_completed_at", "payment_status", "updated_at", "distance_km"}
             safe_updates = {k: v for k, v in update_fields.items() if k in safe_keys}
-            await db.rides.update_one({"id": ride_id, "driver_id": driver["id"]}, {"$set": safe_updates})
+            await db.rides.update_one(
+                {
+                    "id": ride_id,
+                    "driver_id": driver["id"],
+                    "status": {"$in": list(COMPLETE_FROM_STATES)},
+                },
+                {"$set": safe_updates},
+            )
         else:
             raise
 

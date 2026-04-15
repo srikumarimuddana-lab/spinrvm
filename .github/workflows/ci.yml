@@ -302,7 +302,7 @@ jobs:
 
       - name: Deploy to Fly.io (alternative)
         if: failure()
-        uses: superfly/flyctl-actions@1.3
+        uses: superfly/flyctl-actions@1.6
         with:
           args: "deploy --remote-only"
         env:

@@ -6,6 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { CardField, CardFieldInput, useStripe } from '@stripe/stripe-react-native';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
@@ -23,15 +24,17 @@ interface Card {
 
 export default function ManageCardsScreen() {
   const router = useRouter();
+  const { createPaymentMethod } = useStripe();
   const [cards, setCards] = useState<Card[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Card form
-  const [cardNumber, setCardNumber] = useState('');
-  const [expiry, setExpiry] = useState('');
-  const [cvc, setCvc] = useState('');
+  // Card form — PCI-DSS: we no longer hold PAN/CVC/expiry in JS state.
+  // Stripe's <CardField> keeps raw card data inside its own native view;
+  // we only see the tokenized result when the user taps "Add Card".
+  // cardholder_name remains a plain input because it's not sensitive.
+  const [cardDetailsComplete, setCardDetailsComplete] = useState(false);
   const [cardName, setCardName] = useState('');
   const [alertState, setAlertState] = useState<{
     visible: boolean;
@@ -58,26 +61,6 @@ export default function ManageCardsScreen() {
     }
   };
 
-  const formatCardNumber = (text: string) => {
-    const cleaned = text.replace(/\D/g, '').slice(0, 16);
-    return cleaned.replace(/(\d{4})(?=\d)/g, '$1 ');
-  };
-
-  const formatExpiry = (text: string) => {
-    const cleaned = text.replace(/\D/g, '').slice(0, 4);
-    if (cleaned.length >= 3) return `${cleaned.slice(0, 2)}/${cleaned.slice(2)}`;
-    return cleaned;
-  };
-
-  const getCardBrand = (num: string) => {
-    const n = num.replace(/\s/g, '');
-    if (/^4/.test(n)) return 'Visa';
-    if (/^5[1-5]/.test(n)) return 'Mastercard';
-    if (/^3[47]/.test(n)) return 'Amex';
-    if (/^6/.test(n)) return 'Discover';
-    return 'Card';
-  };
-
   const getCardIcon = (brand: string) => {
     switch (brand.toLowerCase()) {
       case 'visa': return 'card';
@@ -92,21 +75,31 @@ export default function ManageCardsScreen() {
   };
 
   const handleAddCard = async () => {
-    const num = cardNumber.replace(/\s/g, '');
-    if (num.length < 15) { showAlert('Error', 'Enter a valid card number'); return; }
-    if (expiry.length < 5) { showAlert('Error', 'Enter expiry as MM/YY'); return; }
-    if (cvc.length < 3) { showAlert('Error', 'Enter a valid CVC'); return; }
+    if (!cardDetailsComplete) { showAlert('Error', 'Enter complete card details'); return; }
     if (!cardName.trim()) { showAlert('Error', 'Enter cardholder name'); return; }
+    if (!createPaymentMethod) {
+      showAlert('Payments unavailable', 'Payment processing is still starting up. Try again in a moment.', 'warning');
+      return;
+    }
 
     setSaving(true);
     try {
-      await api.post('/payments/cards', {
-        card_number: num,
-        exp_month: parseInt(expiry.split('/')[0]),
-        exp_year: parseInt('20' + expiry.split('/')[1]),
-        cvc,
-        cardholder_name: cardName.trim(),
+      // Tokenize on-device. Raw PAN/CVC/expiry never leave the Stripe
+      // native view and NEVER touch our backend — the server only sees
+      // the resulting payment_method_id (pm_xxx).
+      const { paymentMethod, error } = await createPaymentMethod({
+        paymentMethodType: 'Card',
+        paymentMethodData: {
+          billingDetails: { name: cardName.trim() },
+        },
       });
+
+      if (error || !paymentMethod) {
+        showAlert('Error', error?.message || 'Could not process card', 'danger');
+        return;
+      }
+
+      await api.post('/payments/cards', { payment_method_id: paymentMethod.id });
       setShowAdd(false);
       resetForm();
       fetchCards();
@@ -151,7 +144,12 @@ export default function ManageCardsScreen() {
   };
 
   const resetForm = () => {
-    setCardNumber(''); setExpiry(''); setCvc(''); setCardName('');
+    // CardField has no imperative reset API — remounting it on next open
+    // gives us a clean field. We just clear the cardholder name and the
+    // "complete" flag; the CardField instance is keyed on `showAdd` so
+    // closing + re-opening the form re-mounts it blank.
+    setCardDetailsComplete(false);
+    setCardName('');
   };
 
   const renderCard = ({ item }: { item: Card }) => (
@@ -218,47 +216,27 @@ export default function ManageCardsScreen() {
                 <View style={styles.addForm}>
                   <Text style={styles.addFormTitle}>Add New Card</Text>
 
-                  <Text style={styles.inputLabel}>Card Number</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="1234 5678 9012 3456"
-                    placeholderTextColor="#BBB"
-                    value={cardNumber}
-                    onChangeText={(t) => setCardNumber(formatCardNumber(t))}
-                    keyboardType="number-pad"
-                    maxLength={19}
+                  {/* CardField renders a single Stripe-managed native
+                      view that handles PAN + expiry + CVC inline.
+                      Values never enter JS — we only receive a
+                      "complete" flag via onCardChange. */}
+                  <Text style={styles.inputLabel}>Card Details</Text>
+                  <CardField
+                    postalCodeEnabled={false}
+                    placeholders={{ number: '4242 4242 4242 4242' }}
+                    cardStyle={{
+                      backgroundColor: '#FFFFFF',
+                      textColor: '#1A1A1A',
+                      placeholderColor: '#BBBBBB',
+                      borderColor: '#ECECEC',
+                      borderRadius: 12,
+                      borderWidth: 1,
+                    }}
+                    style={styles.cardField}
+                    onCardChange={(d: CardFieldInput.Details) => {
+                      setCardDetailsComplete(Boolean(d.complete));
+                    }}
                   />
-                  {cardNumber.length > 4 && (
-                    <Text style={styles.brandHint}>{getCardBrand(cardNumber)}</Text>
-                  )}
-
-                  <View style={styles.inputRow}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.inputLabel}>Expiry</Text>
-                      <TextInput
-                        style={styles.input}
-                        placeholder="MM/YY"
-                        placeholderTextColor="#BBB"
-                        value={expiry}
-                        onChangeText={(t) => setExpiry(formatExpiry(t))}
-                        keyboardType="number-pad"
-                        maxLength={5}
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.inputLabel}>CVC</Text>
-                      <TextInput
-                        style={styles.input}
-                        placeholder="123"
-                        placeholderTextColor="#BBB"
-                        value={cvc}
-                        onChangeText={setCvc}
-                        keyboardType="number-pad"
-                        maxLength={4}
-                        secureTextEntry
-                      />
-                    </View>
-                  </View>
 
                   <Text style={styles.inputLabel}>Cardholder Name</Text>
                   <TextInput
@@ -373,6 +351,12 @@ const styles = StyleSheet.create({
   },
   inputRow: { flexDirection: 'row', gap: 12 },
   brandHint: { fontSize: 12, color: COLORS.primary, fontWeight: '600', marginTop: 4 },
+  cardField: {
+    // CardField height must be explicit on both platforms; Stripe's
+    // default (44) crops the Android stroke.
+    height: 52,
+    marginBottom: 4,
+  },
   formButtons: { flexDirection: 'row', gap: 12, marginTop: 20 },
   cancelFormBtn: {
     flex: 1, alignItems: 'center', paddingVertical: 14, borderRadius: 12,

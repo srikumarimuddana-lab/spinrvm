@@ -3,6 +3,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
@@ -80,6 +81,11 @@ export default function RootLayout() {
   const { initialize: initializeAuth, isInitialized: isAuthInitialized, token: authToken } = useAuthStore();
   const { initialize: initializeLocation, isInitialized: isLocationInitialized } = useLocationStore();
   const [isOffline, setIsOffline] = useState(false);
+  // Stripe publishable key is fetched from the backend at boot so operators
+  // can rotate it without an app release. Until it loads, we render children
+  // without StripeProvider — payment screens that call useStripe() will
+  // early-return a friendly "Payments unavailable" state in that window.
+  const [stripePublishableKey, setStripePublishableKey] = useState<string | null>(null);
   // Guard so we only register the FCM token once per auth session.
   const fcmRegisteredRef = useRef(false);
 
@@ -90,6 +96,23 @@ export default function RootLayout() {
   // previously polled every 3s now poll every 15s as a fallback — the
   // WebSocket delivers the same updates in <100ms.
   const { connectionState: wsState } = useRiderSocket();
+
+  // ── Fetch Stripe publishable key from backend /settings ──
+  // Public endpoint — no auth required. Key comes from the admin
+  // settings row so ops can rotate without a new app build. Tokenization
+  // (manage-cards.tsx, payment-confirm.tsx) depends on this being set.
+  useEffect(() => {
+    (async () => {
+      try {
+        const api = (await import('@shared/api/client')).default;
+        const res = await api.get<{ stripe_publishable_key?: string }>('/settings');
+        const key = res.data?.stripe_publishable_key;
+        if (key) setStripePublishableKey(key);
+      } catch (e) {
+        console.log('[Stripe] Failed to fetch publishable key:', e);
+      }
+    })();
+  }, []);
 
   // ── Cold-start init: auth, location, Firebase, Android channel ──
   useEffect(() => {
@@ -244,6 +267,16 @@ export default function RootLayout() {
         <View style={{ flex: 1 }}>
           <SafeAreaProvider>
             <StatusBar style={isOffline ? "light" : "dark"} />
+            {/* StripeProvider always wraps the Stack so useStripe() /
+                <CardField> work on any screen. When the publishable key
+                isn't loaded yet (or the fetch failed) we pass an empty
+                string; createPaymentMethod will reject with a clear
+                error and the manage-cards screen surfaces it as
+                "Payments unavailable — try again shortly". */}
+            <StripeProvider
+              publishableKey={stripePublishableKey || ''}
+              merchantIdentifier="merchant.com.spinr.user"
+            >
             <Stack
               screenOptions={{
                 headerShown: false,
@@ -285,6 +318,7 @@ export default function RootLayout() {
               <Stack.Screen name="ride-details" />
               <Stack.Screen name="settings" />
             </Stack>
+            </StripeProvider>
           </SafeAreaProvider>
         </View>
       </GestureHandlerRootView>

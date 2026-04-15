@@ -37,8 +37,17 @@ const WEB_STUBS = {
 };
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {
-  if (platform === 'web' && WEB_STUBS[moduleName]) {
-    return { filePath: WEB_STUBS[moduleName], type: 'sourceFile' };
+  if (platform === 'web') {
+    // Stub file-based native-only packages (react-native-maps, etc.)
+    if (WEB_STUBS[moduleName]) {
+      return { filePath: WEB_STUBS[moduleName], type: 'sourceFile' };
+    }
+    // Return an empty module for react-native internal native-only helpers
+    // (e.g. codegenNativeCommands) imported transitively by packages like
+    // @stripe/stripe-react-native that don't web-guard their native specs.
+    if (moduleName === 'react-native/Libraries/Utilities/codegenNativeCommands') {
+      return { type: 'empty' };
+    }
   }
   // Fall through to the default resolver for everything else
   return context.resolveRequest(context, moduleName, platform);

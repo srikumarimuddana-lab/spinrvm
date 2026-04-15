@@ -24,6 +24,9 @@ driver-app/.metro-cache/
 status_full.txt
 code_diff.txt
 
+# Generated performance reports (committed manually when establishing a new baseline)
+backend/tests/perf_report.json
+
 # Temporary check files
 git_status.txt
 status.txt

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,9 +13,10 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
 import api from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 export default function RideStatusScreen() {
   const router = useRouter();
@@ -31,6 +32,9 @@ export default function RideStatusScreen() {
     variant: 'info' | 'warning' | 'danger' | 'success';
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', message: '', variant: 'info' });
+
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   useEffect(() => {
     if (rideId) {
@@ -148,7 +152,7 @@ export default function RideStatusScreen() {
       <View style={styles.driverCard}>
         <View style={styles.driverHeader}>
           <View style={styles.driverAvatar}>
-            <Ionicons name="person" size={32} color="#666" />
+            <Ionicons name="person" size={32} color={colors.textDim} />
           </View>
           <View style={styles.driverInfo}>
             <Text style={styles.driverName}>{currentDriver?.name}</Text>
@@ -159,7 +163,7 @@ export default function RideStatusScreen() {
             </View>
           </View>
           <TouchableOpacity style={styles.callButton}>
-            <Ionicons name="call" size={22} color={SpinrConfig.theme.colors.primary} />
+            <Ionicons name="call" size={22} color={colors.primary} />
           </TouchableOpacity>
         </View>
 
@@ -170,14 +174,14 @@ export default function RideStatusScreen() {
             </Text>
             <Text style={styles.licensePlate}>{currentDriver?.license_plate}</Text>
           </View>
-          <Ionicons name="car" size={32} color={SpinrConfig.theme.colors.primary} />
+          <Ionicons name="car" size={32} color={colors.primary} />
         </View>
       </View>
 
       {/* Status Info */}
       <View style={styles.statusInfo}>
         <View style={styles.statusIcon}>
-          <Ionicons name="navigate" size={24} color={SpinrConfig.theme.colors.primary} />
+          <Ionicons name="navigate" size={24} color={colors.primary} />
         </View>
         <View style={styles.statusTextContainer}>
           <Text style={styles.statusLabel}>Driver is on the way</Text>
@@ -216,7 +220,7 @@ export default function RideStatusScreen() {
       <View style={styles.driverCard}>
         <View style={styles.driverHeader}>
           <View style={styles.driverAvatar}>
-            <Ionicons name="person" size={32} color="#666" />
+            <Ionicons name="person" size={32} color={colors.textDim} />
           </View>
           <View style={styles.driverInfo}>
             <Text style={styles.driverName}>{currentDriver?.name}</Text>
@@ -225,7 +229,7 @@ export default function RideStatusScreen() {
             </Text>
           </View>
           <TouchableOpacity style={styles.callButton}>
-            <Ionicons name="call" size={22} color={SpinrConfig.theme.colors.primary} />
+            <Ionicons name="call" size={22} color={colors.primary} />
           </TouchableOpacity>
         </View>
 
@@ -236,7 +240,7 @@ export default function RideStatusScreen() {
             </Text>
             <Text style={styles.licensePlate}>{currentDriver?.license_plate}</Text>
           </View>
-          <Ionicons name="car" size={32} color={SpinrConfig.theme.colors.primary} />
+          <Ionicons name="car" size={32} color={colors.primary} />
         </View>
       </View>
 
@@ -248,7 +252,7 @@ export default function RideStatusScreen() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={handleBackPress}>
-          <Ionicons name="close" size={24} color="#1A1A1A" />
+          <Ionicons name="close" size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>
           {!currentRide && 'Loading...'}
@@ -269,7 +273,7 @@ export default function RideStatusScreen() {
       <View style={styles.bottomSheet}>
         {!currentRide ? (
           <View style={styles.statusContainer}>
-            <ActivityIndicator size="large" color={SpinrConfig.theme.colors.primary} />
+            <ActivityIndicator size="large" color={colors.primary} />
             <Text style={styles.statusTitle}>Loading ride details...</Text>
           </View>
         ) : (
@@ -329,292 +333,294 @@ export default function RideStatusScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#E8E8E8',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
-  },
-  backButton: {
-    width: 44,
-    height: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
-  },
-  mapPlaceholder: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#E0E7E0',
-  },
-  mapText: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#999',
-    marginTop: 8,
-  },
-  bottomSheet: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    padding: 24,
-    minHeight: 280,
-  },
-  statusContainer: {
-    alignItems: 'center',
-    paddingVertical: 20,
-  },
-  searchingCircle: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  statusTitle: {
-    fontSize: 22,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
-    marginBottom: 8,
-  },
-  statusSubtitle: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666',
-  },
-  demoButton: {
-    marginTop: 20,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    backgroundColor: '#F0F0F0',
-    borderRadius: 20,
-  },
-  demoButtonText: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#666',
-  },
-  driverContainer: {
-    paddingTop: 8,
-  },
-  driverCard: {
-    backgroundColor: '#F9F9F9',
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 16,
-  },
-  driverHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  driverAvatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#E0E0E0',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  driverInfo: {
-    flex: 1,
-  },
-  driverName: {
-    fontSize: 18,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
-    marginBottom: 4,
-  },
-  ratingContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  ratingText: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
-    marginLeft: 4,
-  },
-  tripsText: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666',
-    marginLeft: 8,
-  },
-  callButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#FFF0F0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  vehicleCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 12,
-  },
-  vehicleInfo: {},
-  vehicleMake: {
-    fontSize: 15,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
-  },
-  licensePlate: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#666',
-    marginTop: 2,
-  },
-  statusInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFF5F5',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-  },
-  statusIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: '#FFE8E8',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  statusTextContainer: {},
-  statusLabel: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
-  },
-  statusEta: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666',
-  },
-  simulateButton: {
-    backgroundColor: '#E8E8E8',
-    borderRadius: 12,
-    padding: 14,
-    alignItems: 'center',
-  },
-  simulateButtonText: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#666',
-  },
-  arrivedContainer: {},
-  otpCard: {
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    borderRadius: 16,
-    padding: 24,
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  otpLabel: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: 'rgba(255,255,255,0.8)',
-    marginBottom: 16,
-  },
-  otpBox: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 12,
-  },
-  otpDigit: {
-    width: 52,
-    height: 60,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  otpDigitText: {
-    fontSize: 28,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#FFFFFF',
-  },
-  otpHint: {
-    fontSize: 12,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: 'rgba(255,255,255,0.7)',
-  },
-  arrivedText: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#10B981',
-  },
-  completeButton: {
-    backgroundColor: '#10B981',
-    borderRadius: 28,
-    padding: 18,
-    alignItems: 'center',
-  },
-  completeButtonText: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#FFFFFF',
-  },
-  cancelButton: {
-    marginTop: 16,
-    padding: 14,
-    alignItems: 'center',
-  },
-  cancelButtonText: {
-    fontSize: 15,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: SpinrConfig.theme.colors.primary,
-  },
-  devBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 16,
-    padding: 12,
-    backgroundColor: '#FEF3C7',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#F59E0B',
-  },
-  devLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#92400E',
-    marginRight: 4,
-  },
-  devBtn: {
-    backgroundColor: '#F59E0B',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-  },
-  devBtnText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#FFF',
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.border,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      backgroundColor: colors.surface,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    backButton: {
+      width: 44,
+      height: 44,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    headerTitle: {
+      fontSize: 18,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.text,
+    },
+    mapPlaceholder: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: '#E0E7E0',
+    },
+    mapText: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+      marginTop: 8,
+    },
+    bottomSheet: {
+      backgroundColor: colors.surface,
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      padding: 24,
+      minHeight: 280,
+    },
+    statusContainer: {
+      alignItems: 'center',
+      paddingVertical: 20,
+    },
+    searchingCircle: {
+      width: 100,
+      height: 100,
+      borderRadius: 50,
+      backgroundColor: colors.primary,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginBottom: 20,
+    },
+    statusTitle: {
+      fontSize: 22,
+      fontFamily: 'PlusJakartaSans_700Bold',
+      color: colors.text,
+      marginBottom: 8,
+    },
+    statusSubtitle: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+    },
+    demoButton: {
+      marginTop: 20,
+      paddingHorizontal: 20,
+      paddingVertical: 10,
+      backgroundColor: colors.border,
+      borderRadius: 20,
+    },
+    demoButtonText: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.textDim,
+    },
+    driverContainer: {
+      paddingTop: 8,
+    },
+    driverCard: {
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 16,
+      padding: 16,
+      marginBottom: 16,
+    },
+    driverHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 16,
+    },
+    driverAvatar: {
+      width: 56,
+      height: 56,
+      borderRadius: 28,
+      backgroundColor: colors.border,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginRight: 12,
+    },
+    driverInfo: {
+      flex: 1,
+    },
+    driverName: {
+      fontSize: 18,
+      fontFamily: 'PlusJakartaSans_700Bold',
+      color: colors.text,
+      marginBottom: 4,
+    },
+    ratingContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    ratingText: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.text,
+      marginLeft: 4,
+    },
+    tripsText: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+      marginLeft: 8,
+    },
+    callButton: {
+      width: 48,
+      height: 48,
+      borderRadius: 24,
+      backgroundColor: '#FFF0F0',
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    vehicleCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      backgroundColor: colors.surface,
+      borderRadius: 12,
+      padding: 12,
+    },
+    vehicleInfo: {},
+    vehicleMake: {
+      fontSize: 15,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.text,
+    },
+    licensePlate: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.textDim,
+      marginTop: 2,
+    },
+    statusInfo: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: '#FFF5F5',
+      borderRadius: 12,
+      padding: 16,
+      marginBottom: 16,
+    },
+    statusIcon: {
+      width: 48,
+      height: 48,
+      borderRadius: 24,
+      backgroundColor: '#FFE8E8',
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginRight: 12,
+    },
+    statusTextContainer: {},
+    statusLabel: {
+      fontSize: 16,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.text,
+    },
+    statusEta: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+    },
+    simulateButton: {
+      backgroundColor: colors.border,
+      borderRadius: 12,
+      padding: 14,
+      alignItems: 'center',
+    },
+    simulateButtonText: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.textDim,
+    },
+    arrivedContainer: {},
+    otpCard: {
+      backgroundColor: colors.primary,
+      borderRadius: 16,
+      padding: 24,
+      alignItems: 'center',
+      marginBottom: 20,
+    },
+    otpLabel: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: 'rgba(255,255,255,0.8)',
+      marginBottom: 16,
+    },
+    otpBox: {
+      flexDirection: 'row',
+      gap: 12,
+      marginBottom: 12,
+    },
+    otpDigit: {
+      width: 52,
+      height: 60,
+      backgroundColor: 'rgba(255,255,255,0.2)',
+      borderRadius: 12,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    otpDigitText: {
+      fontSize: 28,
+      fontFamily: 'PlusJakartaSans_700Bold',
+      color: '#FFFFFF',
+    },
+    otpHint: {
+      fontSize: 12,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: 'rgba(255,255,255,0.7)',
+    },
+    arrivedText: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: '#10B981',
+    },
+    completeButton: {
+      backgroundColor: '#10B981',
+      borderRadius: 28,
+      padding: 18,
+      alignItems: 'center',
+    },
+    completeButtonText: {
+      fontSize: 16,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: '#FFFFFF',
+    },
+    cancelButton: {
+      marginTop: 16,
+      padding: 14,
+      alignItems: 'center',
+    },
+    cancelButtonText: {
+      fontSize: 15,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.primary,
+    },
+    devBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginTop: 16,
+      padding: 12,
+      backgroundColor: '#FEF3C7',
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: '#F59E0B',
+    },
+    devLabel: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: '#92400E',
+      marginRight: 4,
+    },
+    devBtn: {
+      backgroundColor: '#F59E0B',
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 8,
+    },
+    devBtnText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: '#FFF',
+    },
+  });
+}

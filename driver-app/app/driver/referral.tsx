@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
     View,
     Text,
@@ -18,22 +18,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import api from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
 import { useLanguageStore } from '../../store/languageStore';
-
-const THEME = SpinrConfig.theme.colors;
-const COLORS = {
-    primary: THEME.background,
-    accent: THEME.primary,
-    accentDim: THEME.primaryDark,
-    surface: THEME.surface,
-    surfaceLight: THEME.surfaceLight,
-    text: THEME.text,
-    textDim: THEME.textDim,
-    success: THEME.success,
-    gold: '#FFD700',
-    border: THEME.border,
-};
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 interface ReferralInfo {
     referral_code: string;
@@ -55,6 +42,8 @@ export default function ReferralScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const { t } = useLanguageStore();
+    const { colors } = useTheme();
+    const styles = useMemo(() => createStyles(colors), [colors]);
     const [referralInfo, setReferralInfo] = useState<ReferralInfo | null>(null);
     const [referredDrivers, setReferredDrivers] = useState<ReferredDriver[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -120,7 +109,7 @@ export default function ReferralScreen() {
             {/* Header */}
             <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-                    <Ionicons name="arrow-back" size={24} color={COLORS.text} />
+                    <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
                 <Text style={styles.headerTitle}>{t('profile.referral') || 'Referral Program'}</Text>
                 <View style={{ width: 40 }} />
@@ -176,7 +165,7 @@ export default function ReferralScreen() {
                         style={styles.applyBtn}
                         onPress={() => setShowApplyModal(true)}
                     >
-                        <Ionicons name="add-circle-outline" size={20} color={COLORS.accent} />
+                        <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
                         <Text style={styles.applyBtnText}>Apply Referral Code</Text>
                     </TouchableOpacity>
                 </View>
@@ -215,7 +204,7 @@ export default function ReferralScreen() {
                         </View>
                     ) : (
                         <View style={styles.emptyState}>
-                            <Ionicons name="people-outline" size={48} color={COLORS.surfaceLight} />
+                            <Ionicons name="people-outline" size={48} color={colors.surfaceLight} />
                             <Text style={styles.emptyText}>No referrals yet</Text>
                             <Text style={styles.emptySubtext}>
                                 Share your code to start earning!
@@ -250,14 +239,14 @@ export default function ReferralScreen() {
                         <View style={styles.modalHeader}>
                             <Text style={styles.modalTitle}>Apply Referral Code</Text>
                             <TouchableOpacity onPress={() => setShowApplyModal(false)}>
-                                <Ionicons name="close" size={24} color={COLORS.text} />
+                                <Ionicons name="close" size={24} color={colors.text} />
                             </TouchableOpacity>
                         </View>
                         <View style={styles.modalBody}>
                             <TextInput
                                 style={styles.input}
                                 placeholder="Enter referral code"
-                                placeholderTextColor={COLORS.textDim}
+                                placeholderTextColor={colors.textDim}
                                 value={referralCodeInput}
                                 onChangeText={setReferralCodeInput}
                                 autoCapitalize="characters"
@@ -274,10 +263,11 @@ export default function ReferralScreen() {
     );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors) {
+    return StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: COLORS.primary,
+        backgroundColor: colors.background,
     },
     header: {
         flexDirection: 'row',
@@ -286,20 +276,20 @@ const styles = StyleSheet.create({
         paddingBottom: 15,
         paddingHorizontal: 16,
         borderBottomWidth: 1,
-        borderBottomColor: COLORS.border,
+        borderBottomColor: colors.border,
     },
     backBtn: {
         width: 40,
         height: 40,
         borderRadius: 20,
-        backgroundColor: COLORS.surfaceLight,
+        backgroundColor: colors.surfaceLight,
         justifyContent: 'center',
         alignItems: 'center',
     },
     headerTitle: {
         fontSize: 18,
         fontWeight: '600',
-        color: COLORS.text,
+        color: colors.text,
     },
     content: {
         flex: 1,
@@ -378,7 +368,7 @@ const styles = StyleSheet.create({
     },
     statCard: {
         flex: 1,
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
         borderRadius: 12,
         padding: 16,
         alignItems: 'center',
@@ -386,11 +376,11 @@ const styles = StyleSheet.create({
     statValue: {
         fontSize: 24,
         fontWeight: '700',
-        color: COLORS.accent,
+        color: colors.primary,
     },
     statLabel: {
         fontSize: 13,
-        color: COLORS.textDim,
+        color: colors.textDim,
         marginTop: 4,
     },
     section: {
@@ -399,28 +389,28 @@ const styles = StyleSheet.create({
     sectionTitle: {
         fontSize: 16,
         fontWeight: '600',
-        color: COLORS.text,
+        color: colors.text,
         marginBottom: 12,
     },
     applyBtn: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
         padding: 16,
         borderRadius: 12,
         borderWidth: 1,
-        borderColor: COLORS.accent,
+        borderColor: colors.primary,
         borderStyle: 'dashed',
     },
     applyBtnText: {
-        color: COLORS.accent,
+        color: colors.primary,
         fontSize: 15,
         fontWeight: '600',
         marginLeft: 8,
     },
     referralsList: {
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
         borderRadius: 12,
         overflow: 'hidden',
     },
@@ -429,20 +419,20 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         padding: 12,
         borderBottomWidth: 1,
-        borderBottomColor: COLORS.border,
+        borderBottomColor: colors.border,
     },
     referralAvatar: {
         width: 40,
         height: 40,
         borderRadius: 20,
-        backgroundColor: COLORS.surfaceLight,
+        backgroundColor: colors.surfaceLight,
         justifyContent: 'center',
         alignItems: 'center',
     },
     referralInitial: {
         fontSize: 18,
         fontWeight: '600',
-        color: COLORS.text,
+        color: colors.text,
     },
     referralInfo: {
         flex: 1,
@@ -451,11 +441,11 @@ const styles = StyleSheet.create({
     referralName: {
         fontSize: 15,
         fontWeight: '500',
-        color: COLORS.text,
+        color: colors.text,
     },
     referralTrips: {
         fontSize: 12,
-        color: COLORS.textDim,
+        color: colors.textDim,
         marginTop: 2,
     },
     referralBadge: {
@@ -474,13 +464,13 @@ const styles = StyleSheet.create({
         fontWeight: '600',
     },
     badgeTextActive: {
-        color: COLORS.success,
+        color: colors.success,
     },
     badgeTextPending: {
         color: '#FF9800',
     },
     emptyState: {
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
         borderRadius: 12,
         padding: 32,
         alignItems: 'center',
@@ -488,30 +478,30 @@ const styles = StyleSheet.create({
     emptyText: {
         fontSize: 16,
         fontWeight: '600',
-        color: COLORS.text,
+        color: colors.text,
         marginTop: 12,
     },
     emptySubtext: {
         fontSize: 14,
-        color: COLORS.textDim,
+        color: colors.textDim,
         marginTop: 4,
     },
     termsSection: {
         marginTop: 24,
         marginBottom: 32,
         padding: 16,
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
         borderRadius: 12,
     },
     termsTitle: {
         fontSize: 14,
         fontWeight: '600',
-        color: COLORS.text,
+        color: colors.text,
         marginBottom: 8,
     },
     termsText: {
         fontSize: 13,
-        color: COLORS.textDim,
+        color: colors.textDim,
         lineHeight: 18,
     },
     // Modal styles
@@ -521,7 +511,7 @@ const styles = StyleSheet.create({
         justifyContent: 'flex-end',
     },
     modalContent: {
-        backgroundColor: COLORS.primary,
+        backgroundColor: colors.background,
         borderTopLeftRadius: 20,
         borderTopRightRadius: 20,
     },
@@ -531,26 +521,26 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         padding: 20,
         borderBottomWidth: 1,
-        borderBottomColor: COLORS.border,
+        borderBottomColor: colors.border,
     },
     modalTitle: {
         fontSize: 18,
         fontWeight: '600',
-        color: COLORS.text,
+        color: colors.text,
     },
     modalBody: {
         padding: 20,
     },
     input: {
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
         borderRadius: 12,
         padding: 16,
         fontSize: 16,
-        color: COLORS.text,
+        color: colors.text,
         marginBottom: 16,
     },
     submitBtn: {
-        backgroundColor: COLORS.accent,
+        backgroundColor: colors.primary,
         padding: 16,
         borderRadius: 12,
         alignItems: 'center',
@@ -560,4 +550,5 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: '600',
     },
-});
+    });
+}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -16,10 +16,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import api, { setInMemoryToken } from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
-
-const THEME = SpinrConfig.theme.colors;
+import Analytics from '@shared/analytics';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 // Platform-safe token storage
 const storage = {
@@ -55,6 +55,8 @@ export default function OtpScreen() {
   const { verifyOTP, user, initialize, clearError } = useAuthStore();
   const inputRef = useRef<TextInput>(null);
   const resendInFlight = useRef(false);
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   const shakeAnim = useRef(new Animated.Value(0)).current;
   // Size to max possible length (6); only `codeLength` entries are rendered.
@@ -144,6 +146,7 @@ export default function OtpScreen() {
         if (token) {
           setInMemoryToken(token);
           await storage.setItem('auth_token', token);
+          Analytics.otpVerified();
           if (userData) {
             useAuthStore.setState({
               user: userData,
@@ -151,6 +154,7 @@ export default function OtpScreen() {
               isInitialized: true,
               isLoading: false,
             });
+            Analytics.login();
           } else {
             await initialize();
           }
@@ -213,13 +217,13 @@ export default function OtpScreen() {
         showsVerticalScrollIndicator={false}
       >
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={22} color={THEME.text} />
+          <Ionicons name="arrow-back" size={22} color={colors.text} />
         </TouchableOpacity>
 
         <View style={styles.illustrationContainer}>
           <View style={styles.illustrationCircle}>
             <View style={styles.illustrationInner}>
-              <Ionicons name="shield-checkmark" size={40} color={THEME.primary} />
+              <Ionicons name="shield-checkmark" size={40} color={colors.primary} />
             </View>
           </View>
         </View>
@@ -303,7 +307,7 @@ export default function OtpScreen() {
               <Ionicons
                 name="checkmark-circle"
                 size={20}
-                color={code.length === codeLength ? '#fff' : '#999'}
+                color={code.length === codeLength ? '#fff' : colors.textDim}
               />
             </View>
           )}
@@ -312,12 +316,12 @@ export default function OtpScreen() {
         <View style={styles.resendSection}>
           {canResend ? (
             <TouchableOpacity onPress={handleResend} style={styles.resendBtn}>
-              <Ionicons name="refresh" size={16} color={THEME.primary} />
+              <Ionicons name="refresh" size={16} color={colors.primary} />
               <Text style={styles.resendText}>Resend Code</Text>
             </TouchableOpacity>
           ) : (
             <View style={styles.resendCountdown}>
-              <Ionicons name="time-outline" size={16} color={THEME.textDim} />
+              <Ionicons name="time-outline" size={16} color={colors.textDim} />
               <Text style={styles.countdownText}>
                 Resend code in <Text style={styles.countdownNumber}>{countdown}s</Text>
               </Text>
@@ -325,7 +329,7 @@ export default function OtpScreen() {
           )}
 
           <TouchableOpacity onPress={() => router.back()} style={styles.changeNumberBtn}>
-            <Ionicons name="call-outline" size={14} color={THEME.textDim} />
+            <Ionicons name="call-outline" size={14} color={colors.textDim} />
             <Text style={styles.changeNumberText}>Change phone number</Text>
           </TouchableOpacity>
         </View>
@@ -343,74 +347,76 @@ export default function OtpScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  scrollContent: { flexGrow: 1, paddingHorizontal: 24 },
-  backBtn: {
-    width: 44, height: 44, borderRadius: 14,
-    backgroundColor: '#F5F5F5',
-    justifyContent: 'center', alignItems: 'center', marginBottom: 24,
-  },
-  illustrationContainer: { alignItems: 'center', marginBottom: 28 },
-  illustrationCircle: {
-    width: 96, height: 96, borderRadius: 48,
-    backgroundColor: `${THEME.primary}0A`,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  illustrationInner: {
-    width: 72, height: 72, borderRadius: 36,
-    backgroundColor: `${THEME.primary}14`,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  titleSection: { alignItems: 'center', marginBottom: 36 },
-  title: {
-    fontSize: 26, fontWeight: '800', color: THEME.text,
-    letterSpacing: -0.5, marginBottom: 10,
-  },
-  subtitle: { fontSize: 15, color: THEME.textDim, lineHeight: 22 },
-  phoneDisplay: { fontSize: 17, fontWeight: '700', color: THEME.text, marginTop: 4 },
-  codeContainer: { marginBottom: 28 },
-  hiddenInput: { position: 'absolute', opacity: 0, width: 1, height: 1 },
-  codeBoxes: { flexDirection: 'row', justifyContent: 'center', gap: 12 },
-  codeBox: {
-    width: 56, height: 64, borderRadius: 16,
-    backgroundColor: '#F8F9FA',
-    borderWidth: 1.5, borderColor: '#F0F0F0',
-    justifyContent: 'center', alignItems: 'center',
-  },
-  codeBoxActive: {
-    borderColor: THEME.primary, backgroundColor: '#fff',
-    shadowColor: THEME.primary, shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.12, shadowRadius: 8, elevation: 3,
-  },
-  codeBoxFilled: {
-    borderColor: THEME.primary,
-    backgroundColor: `${THEME.primary}08`,
-  },
-  codeDigit: { fontSize: 28, fontWeight: '800', color: THEME.textDim },
-  codeDigitFilled: { color: THEME.text },
-  cursor: {
-    position: 'absolute', bottom: 14,
-    width: 20, height: 2,
-    backgroundColor: THEME.primary, borderRadius: 1,
-  },
-  verifyBtn: {
-    backgroundColor: THEME.primary, borderRadius: 16, height: 58,
-    justifyContent: 'center', alignItems: 'center',
-    shadowColor: THEME.primary, shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25, shadowRadius: 12, elevation: 6, marginBottom: 24,
-  },
-  verifyBtnInactive: { backgroundColor: '#F0F0F0', shadowOpacity: 0, elevation: 0 },
-  verifyBtnLoading: { backgroundColor: THEME.primaryDark },
-  verifyBtnContent: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  verifyBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  verifyBtnTextInactive: { color: '#999' },
-  resendSection: { alignItems: 'center', gap: 16 },
-  resendBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8 },
-  resendText: { fontSize: 15, fontWeight: '600', color: THEME.primary },
-  resendCountdown: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  countdownText: { fontSize: 14, color: THEME.textDim },
-  countdownNumber: { fontWeight: '700', color: THEME.text },
-  changeNumberBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8 },
-  changeNumberText: { fontSize: 14, color: THEME.textDim, fontWeight: '500' },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    scrollContent: { flexGrow: 1, paddingHorizontal: 24 },
+    backBtn: {
+      width: 44, height: 44, borderRadius: 14,
+      backgroundColor: colors.surfaceLight,
+      justifyContent: 'center', alignItems: 'center', marginBottom: 24,
+    },
+    illustrationContainer: { alignItems: 'center', marginBottom: 28 },
+    illustrationCircle: {
+      width: 96, height: 96, borderRadius: 48,
+      backgroundColor: `${colors.primary}0A`,
+      justifyContent: 'center', alignItems: 'center',
+    },
+    illustrationInner: {
+      width: 72, height: 72, borderRadius: 36,
+      backgroundColor: `${colors.primary}14`,
+      justifyContent: 'center', alignItems: 'center',
+    },
+    titleSection: { alignItems: 'center', marginBottom: 36 },
+    title: {
+      fontSize: 26, fontWeight: '800', color: colors.text,
+      letterSpacing: -0.5, marginBottom: 10,
+    },
+    subtitle: { fontSize: 15, color: colors.textDim, lineHeight: 22 },
+    phoneDisplay: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: 4 },
+    codeContainer: { marginBottom: 28 },
+    hiddenInput: { position: 'absolute', opacity: 0, width: 1, height: 1 },
+    codeBoxes: { flexDirection: 'row', justifyContent: 'center', gap: 12 },
+    codeBox: {
+      width: 56, height: 64, borderRadius: 16,
+      backgroundColor: colors.surfaceLight,
+      borderWidth: 1.5, borderColor: colors.border,
+      justifyContent: 'center', alignItems: 'center',
+    },
+    codeBoxActive: {
+      borderColor: colors.primary, backgroundColor: colors.surface,
+      shadowColor: colors.primary, shadowOffset: { width: 0, height: 0 },
+      shadowOpacity: 0.12, shadowRadius: 8, elevation: 3,
+    },
+    codeBoxFilled: {
+      borderColor: colors.primary,
+      backgroundColor: `${colors.primary}08`,
+    },
+    codeDigit: { fontSize: 28, fontWeight: '800', color: colors.textDim },
+    codeDigitFilled: { color: colors.text },
+    cursor: {
+      position: 'absolute', bottom: 14,
+      width: 20, height: 2,
+      backgroundColor: colors.primary, borderRadius: 1,
+    },
+    verifyBtn: {
+      backgroundColor: colors.primary, borderRadius: 16, height: 58,
+      justifyContent: 'center', alignItems: 'center',
+      shadowColor: colors.primary, shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.25, shadowRadius: 12, elevation: 6, marginBottom: 24,
+    },
+    verifyBtnInactive: { backgroundColor: colors.border, shadowOpacity: 0, elevation: 0 },
+    verifyBtnLoading: { backgroundColor: colors.primaryDark },
+    verifyBtnContent: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    verifyBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+    verifyBtnTextInactive: { color: colors.textDim },
+    resendSection: { alignItems: 'center', gap: 16 },
+    resendBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8 },
+    resendText: { fontSize: 15, fontWeight: '600', color: colors.primary },
+    resendCountdown: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    countdownText: { fontSize: 14, color: colors.textDim },
+    countdownNumber: { fontWeight: '700', color: colors.text },
+    changeNumberBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8 },
+    changeNumberText: { fontSize: 14, color: colors.textDim, fontWeight: '500' },
+  });
+}

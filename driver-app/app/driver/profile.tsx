@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -24,27 +24,16 @@ import { useAuthStore } from '@shared/store/authStore';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
-
-const THEME = SpinrConfig.theme.colors;
-const COLORS = {
-  primary: THEME.background,
-  accent: THEME.primary,
-  accentDark: THEME.primaryDark,
-  surface: THEME.surface,
-  surfaceLight: THEME.surfaceLight,
-  text: THEME.text,
-  textDim: THEME.textDim,
-  success: '#10B981',
-  gold: '#FFD700',
-  warning: '#F59E0B',
-  danger: '#EF4444',
-  border: THEME.border,
-};
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user, driver: driverData, logout, fetchDriverProfile, updateProfileImage } = useAuthStore();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  const modalStyles = useMemo(() => createModalStyles(colors), [colors]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [docRequirements, setDocRequirements] = useState<Array<{id: string; name: string; description?: string}>>([]);
@@ -185,7 +174,7 @@ export default function ProfileScreen() {
               key={i}
               name={i <= Math.round(rating) ? 'star' : 'star-outline'}
               size={14}
-              color={i <= Math.round(rating) ? COLORS.gold : 'rgba(255,255,255,0.3)'}
+              color={i <= Math.round(rating) ? '#FFD700' : 'rgba(255,255,255,0.3)'}
             />
         );
     }
@@ -199,7 +188,7 @@ export default function ProfileScreen() {
         
         {/* Premium Header */}
         <LinearGradient
-            colors={[COLORS.accent, COLORS.accentDark]}
+            colors={[colors.primary, colors.primaryDark]}
             style={[styles.headerHero, { paddingTop: insets.top + 20 }]}
         >
           {isRefreshing && (
@@ -224,13 +213,13 @@ export default function ProfileScreen() {
               </View>
             )}
             <View style={styles.cameraButton}>
-              <Ionicons name="camera" size={14} color={COLORS.accent} />
+              <Ionicons name="camera" size={14} color={colors.primary} />
             </View>
             <View style={styles.verifiedBadge}>
               <Ionicons
                 name={driverData?.is_verified ? 'checkmark-circle' : 'time-outline'}
                 size={20}
-                color={driverData?.is_verified ? COLORS.success : COLORS.warning}
+                color={driverData?.is_verified ? '#10B981' : '#F59E0B'}
               />
             </View>
           </TouchableOpacity>
@@ -281,7 +270,7 @@ export default function ProfileScreen() {
             <View style={styles.card}>
                 <View style={styles.cardRow}>
                 <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}>
-                    <Ionicons name="call" size={16} color={COLORS.accent} />
+                    <Ionicons name="call" size={16} color={colors.primary} />
                 </View>
                 <View style={styles.cardInfo}>
                     <Text style={styles.cardLabel}>Phone</Text>
@@ -303,7 +292,7 @@ export default function ProfileScreen() {
                     <View style={styles.cardDivider} />
                     <View style={styles.cardRow}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.1)' }]}>
-                        <Ionicons name="person" size={16} color={COLORS.warning} />
+                        <Ionicons name="person" size={16} color={'#F59E0B'} />
                     </View>
                     <View style={styles.cardInfo}>
                         <Text style={styles.cardLabel}>Gender</Text>
@@ -317,7 +306,7 @@ export default function ProfileScreen() {
 
             {driverData?.rejection_reason && !driverData.is_verified && (
             <View style={styles.rejectionBox}>
-                <Ionicons name="alert-circle" size={24} color={COLORS.danger} />
+                <Ionicons name="alert-circle" size={24} color={'#EF4444'} />
                 <View style={{flex: 1}}>
                     <Text style={styles.rejectionTitle}>Application Rejected</Text>
                     <Text style={styles.rejectionText}>{driverData.rejection_reason}</Text>
@@ -336,7 +325,7 @@ export default function ProfileScreen() {
             <TouchableOpacity style={styles.card} activeOpacity={0.8} onPress={() => router.push('/vehicle-info' as any)}>
                 <View style={styles.cardRow}>
                 <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.1)' }]}>
-                    <FontAwesome5 name="car" size={16} color={COLORS.success} />
+                    <FontAwesome5 name="car" size={16} color={'#10B981'} />
                 </View>
                 <View style={styles.cardInfo}>
                     <Text style={styles.cardLabel}>Vehicle</Text>
@@ -383,7 +372,7 @@ export default function ProfileScreen() {
             <TouchableOpacity style={styles.card} activeOpacity={0.8} onPress={() => router.push('/documents' as any)}>
                 {docRequirements.length === 0 ? (
                 <View style={styles.cardRow}>
-                    <Ionicons name="document-text-outline" size={16} color={COLORS.textDim} />
+                    <Ionicons name="document-text-outline" size={16} color={colors.textDim} />
                     <Text style={[styles.cardValueDim, { marginLeft: 8 }]}>No document requirements found</Text>
                 </View>
                 ) : docRequirements.map((req, i) => {
@@ -417,14 +406,14 @@ export default function ProfileScreen() {
                             isValid ? { backgroundColor: 'rgba(16, 185, 129, 0.1)' } :
                             { backgroundColor: '#F9FAFB' },
                         ]}>
-                        <Ionicons name={icon} size={16} color={isExpired ? COLORS.danger : isValid ? COLORS.success : COLORS.textDim} />
+                        <Ionicons name={icon} size={16} color={isExpired ? '#EF4444' : isValid ? '#10B981' : colors.textDim} />
                         </View>
                         <View style={styles.cardInfo}>
                         <Text style={styles.cardLabel}>{req.name}</Text>
                         {expiry ? (
                             <View style={{flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2}}>
                                 <Text style={styles.cardValue}>{new Date(expiry).toLocaleDateString()}</Text>
-                                <View style={[styles.docStatusBadge, isExpired ? {backgroundColor: COLORS.danger} : isExpiringSoon ? {backgroundColor: COLORS.warning} : {backgroundColor: COLORS.success}]}>
+                                <View style={[styles.docStatusBadge, isExpired ? {backgroundColor: '#EF4444'} : isExpiringSoon ? {backgroundColor: '#F59E0B'} : {backgroundColor: '#10B981'}]}>
                                     <Text style={styles.docStatusText}>
                                         {isExpired ? 'EXPIRED' : isExpiringSoon ? `Exp in ${expiresIn}d` : 'VALID'}
                                     </Text>
@@ -447,8 +436,8 @@ export default function ProfileScreen() {
             <Text style={styles.sectionTitle}>Settings</Text>
             <View style={styles.card}>
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/notifications' as any)}>
-                    <View style={[styles.iconBox, { backgroundColor: '#F3F4F6' }]}>
-                        <Ionicons name="help-circle" size={18} color={COLORS.textDim} />
+                    <View style={[styles.iconBox, { backgroundColor: colors.surfaceLight }]}>
+                        <Ionicons name="help-circle" size={18} color={colors.textDim} />
                     </View>
                     <Text style={styles.actionText}>Help Center</Text>
                     <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
@@ -464,15 +453,15 @@ export default function ProfileScreen() {
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/referral' as any)}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.1)' }]}>
-                        <Ionicons name="gift" size={18} color={COLORS.warning} />
+                        <Ionicons name="gift" size={18} color={'#F59E0B'} />
                     </View>
                     <Text style={styles.actionText}>Referral Program</Text>
                     <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/settings' as any)}>
-                    <View style={[styles.iconBox, { backgroundColor: '#F3F4F6' }]}>
-                        <Ionicons name="settings" size={18} color={COLORS.textDim} />
+                    <View style={[styles.iconBox, { backgroundColor: colors.surfaceLight }]}>
+                        <Ionicons name="settings" size={18} color={colors.textDim} />
                     </View>
                     <Text style={styles.actionText}>App Settings</Text>
                     <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
@@ -480,9 +469,9 @@ export default function ProfileScreen() {
                 <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={handleLogout}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.05)' }]}>
-                        <Ionicons name="log-out" size={18} color={COLORS.danger} />
+                        <Ionicons name="log-out" size={18} color={'#EF4444'} />
                     </View>
-                    <Text style={[styles.actionText, { color: COLORS.danger }]}>Sign Out</Text>
+                    <Text style={[styles.actionText, { color: '#EF4444' }]}>Sign Out</Text>
                 </TouchableOpacity>
             </View>
             </View>
@@ -499,12 +488,12 @@ export default function ProfileScreen() {
         onRequestClose={() => setShowEditModal(false)}
       >
         <View style={modalStyles.container}>
-          <LinearGradient colors={[COLORS.primary, '#F8F9FA']} style={StyleSheet.absoluteFill} />
+          <LinearGradient colors={[colors.surface, '#F8F9FA']} style={StyleSheet.absoluteFill} />
 
           {/* Header */}
           <View style={modalStyles.header}>
             <TouchableOpacity onPress={() => setShowEditModal(false)} style={modalStyles.backBtn}>
-              <Ionicons name="arrow-back" size={24} color={COLORS.text} />
+              <Ionicons name="arrow-back" size={24} color={colors.text} />
             </TouchableOpacity>
             <Text style={modalStyles.headerTitle}>Personal Information</Text>
             <View style={{ width: 32 }} />
@@ -522,7 +511,7 @@ export default function ProfileScreen() {
               {/* Hero card — mirrors vehicle-info hero */}
               <View style={modalStyles.heroCard}>
                 <View style={modalStyles.heroIconWrap}>
-                  <Ionicons name="person" size={28} color={COLORS.accent} />
+                  <Ionicons name="person" size={28} color={colors.primary} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={modalStyles.heroTitle}>Your Profile</Text>
@@ -539,7 +528,7 @@ export default function ProfileScreen() {
 
               {/* Info banner */}
               <View style={modalStyles.infoBox}>
-                <Ionicons name="information-circle" size={18} color={COLORS.accent} />
+                <Ionicons name="information-circle" size={18} color={colors.primary} />
                 <Text style={modalStyles.infoText}>
                   Your riders will see this info when you accept their rides.
                   Changes save instantly and apply to all future rides.
@@ -611,7 +600,7 @@ export default function ProfileScreen() {
                           : 'person-outline'
                       }
                       size={22}
-                      color={COLORS.accent}
+                      color={colors.primary}
                     />
                   </View>
                   <View style={{ flex: 1 }}>
@@ -625,7 +614,7 @@ export default function ProfileScreen() {
                       {editGender || 'Tap to select'}
                     </Text>
                   </View>
-                  <Ionicons name="chevron-forward" size={20} color={COLORS.textDim} />
+                  <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
                 </TouchableOpacity>
               </View>
 
@@ -687,7 +676,7 @@ export default function ProfileScreen() {
                     onPress={() => setShowGenderPicker(false)}
                     style={modalStyles.sheetCloseBtn}
                   >
-                    <Ionicons name="close" size={22} color={COLORS.text} />
+                    <Ionicons name="close" size={22} color={colors.text} />
                   </TouchableOpacity>
                 </View>
                 {genderOptions.map((g) => {
@@ -715,12 +704,12 @@ export default function ProfileScreen() {
                               : 'person-outline'
                           }
                           size={22}
-                          color={COLORS.accent}
+                          color={colors.primary}
                         />
                       </View>
                       <Text style={modalStyles.sheetOptionName}>{g.label}</Text>
                       {selected && (
-                        <Ionicons name="checkmark-circle" size={24} color={COLORS.accent} />
+                        <Ionicons name="checkmark-circle" size={24} color={colors.primary} />
                       )}
                     </TouchableOpacity>
                   );
@@ -762,10 +751,10 @@ export default function ProfileScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors) { return StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F3F4F6',
+    backgroundColor: colors.surfaceLight,
   },
   headerHero: {
     paddingHorizontal: 20,
@@ -773,7 +762,7 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 32,
     borderBottomRightRadius: 32,
     alignItems: 'center',
-    shadowColor: COLORS.accentDark,
+    shadowColor: colors.primaryDark,
     shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.2,
     shadowRadius: 20,
@@ -809,7 +798,7 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
@@ -825,7 +814,7 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
@@ -914,26 +903,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   sectionTitle: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 18,
     fontWeight: '800',
     letterSpacing: 0.2,
   },
   editBtn: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: colors.border,
   },
   editBtnText: {
-    color: COLORS.textDim,
+    color: colors.textDim,
     fontSize: 12,
     fontWeight: '700',
   },
   card: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderRadius: 24,
     paddingHorizontal: 16,
     paddingVertical: 8,
@@ -953,7 +942,7 @@ const styles = StyleSheet.create({
   },
   cardDivider: {
     height: 1,
-    backgroundColor: '#F3F4F6',
+    backgroundColor: colors.surfaceLight,
     marginLeft: 50,
   },
   iconBox: {
@@ -967,20 +956,20 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   cardLabel: {
-    color: COLORS.textDim,
+    color: colors.textDim,
     fontSize: 11,
     fontWeight: '600',
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
   cardValue: {
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 15,
     fontWeight: '700',
     marginTop: 2,
   },
   cardValueDim: {
-    color: '#9CA3AF',
+    color: colors.textSecondary,
     fontSize: 14,
     fontWeight: '500',
     marginTop: 2,
@@ -1003,7 +992,7 @@ const styles = StyleSheet.create({
   },
   actionText: {
     flex: 1,
-    color: COLORS.text,
+    color: colors.text,
     fontSize: 15,
     fontWeight: '600',
   },
@@ -1020,7 +1009,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(239, 68, 68, 0.2)',
   },
   rejectionTitle: {
-    color: COLORS.danger,
+    color: '#EF4444',
     fontSize: 15,
     fontWeight: '800',
     marginBottom: 4,
@@ -1030,13 +1019,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
   },
-});
+}); }
 
 // Mirrors vehicle-info.tsx visual language so personal-info editing and
 // vehicle-info editing feel like the same screen family. If you update one,
 // update the other — or extract a shared style module.
-const modalStyles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.primary },
+function createModalStyles(colors: ThemeColors) { return StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.surface },
 
   header: {
     flexDirection: 'row',
@@ -1045,18 +1034,18 @@ const modalStyles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 16,
     paddingHorizontal: 20,
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderBottomWidth: 1,
     borderBottomColor: '#F3F4F6',
   },
   backBtn: { padding: 4, width: 32 },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text, flex: 1, textAlign: 'center' },
+  headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text, flex: 1, textAlign: 'center' },
 
   content: { padding: 20 },
 
   heroCard: {
     flexDirection: 'row',
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     padding: 18,
     borderRadius: 18,
     marginBottom: 16,
@@ -1079,12 +1068,12 @@ const modalStyles = StyleSheet.create({
   heroTitle: {
     fontSize: 12,
     fontWeight: '700',
-    color: COLORS.textDim,
+    color: colors.textDim,
     letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
-  heroSub: { fontSize: 16, fontWeight: '600', color: COLORS.text, marginTop: 2 },
-  heroEmail: { fontSize: 13, color: COLORS.textDim, marginTop: 2 },
+  heroSub: { fontSize: 16, fontWeight: '600', color: colors.text, marginTop: 2 },
+  heroEmail: { fontSize: 13, color: colors.textDim, marginTop: 2 },
 
   infoBox: {
     flexDirection: 'row',
@@ -1097,12 +1086,12 @@ const modalStyles = StyleSheet.create({
     borderColor: 'rgba(255,59,48,0.15)',
     gap: 8,
   },
-  infoText: { color: COLORS.accent, flex: 1, fontSize: 12, lineHeight: 16, fontWeight: '500' },
+  infoText: { color: colors.primary, flex: 1, fontSize: 12, lineHeight: 16, fontWeight: '500' },
 
   sectionTitle: {
     fontSize: 12,
     fontWeight: '700',
-    color: COLORS.textDim,
+    color: colors.textDim,
     letterSpacing: 0.8,
     textTransform: 'uppercase',
     marginBottom: 8,
@@ -1110,7 +1099,7 @@ const modalStyles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   card: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderRadius: 16,
     marginBottom: 20,
     shadowColor: '#000',
@@ -1120,19 +1109,19 @@ const modalStyles = StyleSheet.create({
     elevation: 1,
     overflow: 'hidden',
   },
-  divider: { height: 1, backgroundColor: '#F3F4F6', marginHorizontal: 16 },
+  divider: { height: 1, backgroundColor: colors.surfaceLight, marginHorizontal: 16 },
 
   field: { paddingHorizontal: 16, paddingVertical: 12 },
   fieldLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: COLORS.textDim,
+    color: colors.textDim,
     letterSpacing: 0.6,
     textTransform: 'uppercase',
     marginBottom: 4,
   },
-  fieldInput: { fontSize: 16, color: COLORS.text, padding: 0, fontWeight: '500' },
-  fieldHelper: { fontSize: 11, color: COLORS.textDim, marginTop: 4 },
+  fieldInput: { fontSize: 16, color: colors.text, padding: 0, fontWeight: '500' },
+  fieldHelper: { fontSize: 11, color: colors.textDim, marginTop: 4 },
 
   pickerBox: {
     flexDirection: 'row',
@@ -1152,15 +1141,15 @@ const modalStyles = StyleSheet.create({
   pickerLabel: {
     fontSize: 11,
     fontWeight: '700',
-    color: COLORS.textDim,
+    color: colors.textDim,
     letterSpacing: 0.6,
     textTransform: 'uppercase',
   },
-  pickerValue: { fontSize: 16, fontWeight: '600', color: COLORS.text, marginTop: 2 },
+  pickerValue: { fontSize: 16, fontWeight: '600', color: colors.text, marginTop: 2 },
 
   // Sticky footer
   footer: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     paddingHorizontal: 20,
     paddingTop: 12,
     borderTopWidth: 1,
@@ -1170,11 +1159,11 @@ const modalStyles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: COLORS.accent,
+    backgroundColor: colors.primary,
     borderRadius: 14,
     paddingVertical: 16,
     gap: 8,
-    shadowColor: COLORS.accent,
+    shadowColor: colors.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
@@ -1190,7 +1179,7 @@ const modalStyles = StyleSheet.create({
   // Gender picker bottom sheet — mirrors vehicle-info vehicleTypePicker modal
   sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   sheetContent: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     maxHeight: '75%',
@@ -1210,12 +1199,12 @@ const modalStyles = StyleSheet.create({
     padding: 20,
     paddingBottom: 12,
   },
-  sheetTitle: { fontSize: 20, fontWeight: '700', color: COLORS.text },
+  sheetTitle: { fontSize: 20, fontWeight: '700', color: colors.text },
   sheetCloseBtn: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: COLORS.surfaceLight,
+    backgroundColor: colors.surfaceLight,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1237,5 +1226,5 @@ const modalStyles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  sheetOptionName: { flex: 1, fontSize: 16, fontWeight: '700', color: COLORS.text },
-});
+  sheetOptionName: { flex: 1, fontSize: 16, fontWeight: '700', color: colors.text },
+}); }

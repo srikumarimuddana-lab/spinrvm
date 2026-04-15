@@ -32,13 +32,25 @@ set -euo pipefail
 # ── Configuration ──────────────────────────────────────────────
 # Replace this value after rotation. For now it's the existing
 # dev/test key so EAS builds keep working without interruption.
-GOOGLE_MAPS_API_KEY="AIzaSyC5i7lhtfXDoyYOB3KdyJtZ-CtKDzM5m9M"
+GOOGLE_MAPS_API_KEY="${EXPO_PUBLIC_GOOGLE_MAPS_API_KEY:-AIzaSyC5i7lhtfXDoyYOB3KdyJtZ-CtKDzM5m9M}"
+
+# Production backend URL (set via env var; falls back to the Fly.io domain)
+BACKEND_URL="${EXPO_PUBLIC_BACKEND_URL:-https://spinr-api.fly.dev}"
+
+# Sentry auth token for source-map uploads during EAS builds.
+# Generate at https://sentry.io → Settings → Auth Tokens (project:releases scope).
+SENTRY_AUTH_TOKEN_VAL="${SENTRY_AUTH_TOKEN:-}"
 
 # ── Helper ─────────────────────────────────────────────────────
 create_secret() {
     local project_dir="$1"
     local name="$2"
     local value="$3"
+
+    if [[ -z "${value}" ]]; then
+        echo "  ⚠ Skipping ${name} for ${project_dir} (value is empty)"
+        return 0
+    fi
 
     echo "→ Setting secret ${name} for ${project_dir}..."
     (
@@ -64,26 +76,35 @@ echo "=== Spinr EAS Secrets Setup ==="
 echo ""
 echo "This will create/update the following EAS Secrets:"
 echo "  • EXPO_PUBLIC_GOOGLE_MAPS_API_KEY  (rider-app + driver-app)"
+echo "  • EXPO_PUBLIC_BACKEND_URL          (rider-app + driver-app)"
+if [[ -n "${SENTRY_AUTH_TOKEN_VAL}" ]]; then
+echo "  • SENTRY_AUTH_TOKEN                (rider-app + driver-app)"
+fi
 echo ""
-echo "⚠️  The key used here is the existing dev/test key."
+echo "⚠️  The Google Maps key used here is the existing dev/test key."
 echo "   Rotate it in Google Cloud Console before going to production."
+echo "   Run: EXPO_PUBLIC_GOOGLE_MAPS_API_KEY='AIzaSy...' ./scripts/setup-eas-secrets.sh"
 echo ""
 
-# Rider app
-create_secret "${REPO_ROOT}/rider-app" "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY" "${GOOGLE_MAPS_API_KEY}"
-
-# Driver app
-create_secret "${REPO_ROOT}/driver-app" "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY" "${GOOGLE_MAPS_API_KEY}"
+for APP_DIR in "${REPO_ROOT}/rider-app" "${REPO_ROOT}/driver-app"; do
+    create_secret "${APP_DIR}" "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY" "${GOOGLE_MAPS_API_KEY}"
+    create_secret "${APP_DIR}" "EXPO_PUBLIC_BACKEND_URL"          "${BACKEND_URL}"
+    create_secret "${APP_DIR}" "SENTRY_AUTH_TOKEN"                "${SENTRY_AUTH_TOKEN_VAL}"
+done
 
 echo ""
 echo "=== Done ==="
 echo ""
 echo "Next steps:"
 echo "  1. Run 'eas build --profile test' in rider-app/ or driver-app/"
-echo "     to verify the key is injected."
-echo "  2. Before production: rotate the key in Google Cloud Console,"
-echo "     update this script, and re-run."
-echo "  3. Consider adding more secrets here as needed:"
-echo "     • EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY"
-echo "     • EXPO_PUBLIC_FIREBASE_API_KEY (if using Expo web build)"
-echo "     • SENTRY_AUTH_TOKEN (for source map uploads)"
+echo "     to verify the secrets are injected."
+echo "  2. Before production:"
+echo "     a) Rotate EXPO_PUBLIC_GOOGLE_MAPS_API_KEY in Google Cloud Console"
+echo "        (restrict to your bundle IDs + package names)."
+echo "     b) Set EXPO_PUBLIC_BACKEND_URL to https://api.<yourdomain> once DNS is live."
+echo "     c) Add SENTRY_AUTH_TOKEN if Sentry source-map upload is needed."
+echo "     d) Re-run this script with the new values."
+echo "  3. Apple submission secrets (not EAS secrets — set as GitHub Actions secrets):"
+echo "     APPLE_ID, ASC_APP_ID, ASC_DRIVER_APP_ID, APPLE_TEAM_ID"
+echo "  4. Google Play submission: place play-service-account.json in each app dir."
+echo "     (File is gitignored — do NOT commit it.)"

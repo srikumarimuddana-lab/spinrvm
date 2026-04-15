@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
     View,
     Text,
@@ -17,26 +17,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import api from '@shared/api/client';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 const { width } = Dimensions.get('window');
-
-import SpinrConfig from '@shared/config/spinr.config';
-
-const THEME = SpinrConfig.theme.colors;
-const COLORS = {
-    primary: THEME.background, // Background (white)
-    accent: THEME.primary, // Action/brand color (red)
-    accentDim: THEME.primaryDark,
-    surface: THEME.surface,
-    surfaceLight: THEME.surfaceLight,
-    text: THEME.text,
-    textDim: THEME.textDim,
-    success: THEME.success,
-    gold: '#FFD700',
-    orange: '#FF9500',
-    danger: THEME.error,
-    border: THEME.border,
-};
 
 // Use standard map style instead of dark style for consistency with white theme
 const mapStyle: any[] = [];
@@ -46,6 +30,8 @@ export default function RideDetailScreen() {
     const router = useRouter();
     const [ride, setRide] = useState<any>(null);
     const [loading, setLoading] = useState(true);
+    const { colors } = useTheme();
+    const styles = useMemo(() => createStyles(colors), [colors]);
 
     useEffect(() => {
         if (id) loadRide();
@@ -65,7 +51,7 @@ export default function RideDetailScreen() {
     if (loading) {
         return (
             <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-                <ActivityIndicator color={COLORS.accent} size="large" />
+                <ActivityIndicator color={colors.primary} size="large" />
             </View>
         );
     }
@@ -73,7 +59,7 @@ export default function RideDetailScreen() {
     if (!ride) {
         return (
             <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-                <Ionicons name="alert-circle" size={48} color={COLORS.danger} />
+                <Ionicons name="alert-circle" size={48} color={colors.primary} />
                 <Text style={styles.errorText}>Ride not found</Text>
                 <TouchableOpacity onPress={() => router.back()} style={styles.backLink}>
                     <Text style={styles.backLinkText}>Go Back</Text>
@@ -83,7 +69,7 @@ export default function RideDetailScreen() {
     }
 
     const isCompleted = ride.status === 'completed';
-    const statusColor = isCompleted ? COLORS.accent : COLORS.danger;
+    const statusColor = isCompleted ? colors.primary : colors.primary;
     const statusLabel = ride.status?.charAt(0).toUpperCase() + ride.status?.slice(1);
 
     const mapRegion = {
@@ -132,7 +118,7 @@ export default function RideDetailScreen() {
                                 coordinate={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }}
                                 title="Pickup"
                             >
-                                <View style={[styles.markerDot, { backgroundColor: COLORS.accent }]}>
+                                <View style={[styles.markerDot, { backgroundColor: colors.primary }]}>
                                     <Ionicons name="location" size={14} color="#fff" />
                                 </View>
                             </Marker>
@@ -142,7 +128,7 @@ export default function RideDetailScreen() {
                                 coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
                                 title="Dropoff"
                             >
-                                <View style={[styles.markerDot, { backgroundColor: COLORS.danger }]}>
+                                <View style={[styles.markerDot, { backgroundColor: colors.primary }]}>
                                     <Ionicons name="flag" size={14} color="#fff" />
                                 </View>
                             </Marker>
@@ -150,7 +136,7 @@ export default function RideDetailScreen() {
                         {routeCoords.length === 2 && (
                             <Polyline
                                 coordinates={routeCoords}
-                                strokeColor={COLORS.accent}
+                                strokeColor={colors.primary}
                                 strokeWidth={3}
                                 lineDashPattern={[6, 4]}
                             />
@@ -158,7 +144,7 @@ export default function RideDetailScreen() {
                     </MapView>
 
                     <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-                        <Ionicons name="arrow-back" size={22} color={COLORS.text} />
+                        <Ionicons name="arrow-back" size={22} color={colors.text} />
                     </TouchableOpacity>
                 </View>
 
@@ -176,9 +162,9 @@ export default function RideDetailScreen() {
                     <View style={styles.card}>
                         <View style={styles.routeRow}>
                             <View style={styles.routeDots}>
-                                <View style={[styles.dot, { backgroundColor: COLORS.accent }]} />
+                                <View style={[styles.dot, { backgroundColor: colors.primary }]} />
                                 <View style={styles.dotLine} />
-                                <View style={[styles.dot, { backgroundColor: COLORS.danger }]} />
+                                <View style={[styles.dot, { backgroundColor: colors.primary }]} />
                             </View>
                             <View style={styles.routeTexts}>
                                 <View>
@@ -196,19 +182,19 @@ export default function RideDetailScreen() {
                     {/* Trip Stats */}
                     <View style={styles.statsRow}>
                         <View style={styles.stat}>
-                            <Ionicons name="speedometer" size={20} color={COLORS.accent} />
+                            <Ionicons name="speedometer" size={20} color={colors.primary} />
                             <Text style={styles.statValue}>{(ride.distance_km || 0).toFixed(1)} km</Text>
                             <Text style={styles.statLabel}>Distance</Text>
                         </View>
                         <View style={styles.statDivider} />
                         <View style={styles.stat}>
-                            <Ionicons name="time" size={20} color={COLORS.orange} />
+                            <Ionicons name="time" size={20} color="#FF9500" />
                             <Text style={styles.statValue}>{ride.duration_minutes || 0} min</Text>
                             <Text style={styles.statLabel}>Duration</Text>
                         </View>
                         <View style={styles.statDivider} />
                         <View style={styles.stat}>
-                            <Ionicons name="star" size={20} color={COLORS.gold} />
+                            <Ionicons name="star" size={20} color="#FFD700" />
                             <Text style={styles.statValue}>
                                 {ride.rider_rating !== null && ride.rider_rating !== undefined
                                     ? ride.rider_rating
@@ -237,7 +223,7 @@ export default function RideDetailScreen() {
                             {ride.surge_multiplier > 1 && (
                                 <View style={styles.fareRow}>
                                     <Text style={styles.fareLabel}>Surge ({ride.surge_multiplier}x)</Text>
-                                    <Text style={[styles.fareValue, { color: COLORS.orange }]}>
+                                    <Text style={[styles.fareValue, { color: '#FF9500' }]}>
                                         ${(ride.surge_fee || 0).toFixed(2)}
                                     </Text>
                                 </View>
@@ -277,14 +263,14 @@ export default function RideDetailScreen() {
                             </View>
                             <View style={styles.fareRow}>
                                 <Text style={styles.fareLabel}>Platform Fee</Text>
-                                <Text style={[styles.fareValue, { color: COLORS.danger }]}>
+                                <Text style={[styles.fareValue, { color: colors.primary }]}>
                                     -${(ride.platform_fee || 0).toFixed(2)}
                                 </Text>
                             </View>
                             {(ride.tip_amount || 0) > 0 && (
                                 <View style={styles.fareRow}>
-                                    <Text style={[styles.fareLabel, { color: COLORS.gold }]}>Tip</Text>
-                                    <Text style={[styles.fareValue, { color: COLORS.gold }]}>
+                                    <Text style={[styles.fareLabel, { color: '#FFD700' }]}>Tip</Text>
+                                    <Text style={[styles.fareValue, { color: '#FFD700' }]}>
                                         +${ride.tip_amount.toFixed(2)}
                                     </Text>
                                 </View>
@@ -313,7 +299,7 @@ export default function RideDetailScreen() {
                             .filter((e) => e.time)
                             .map((event, i) => (
                                 <View key={i} style={styles.timelineRow}>
-                                    <Ionicons name={event.icon as any} size={20} color={COLORS.accent} />
+                                    <Ionicons name={event.icon as any} size={20} color={colors.primary} />
                                     <View style={{ flex: 1 }}>
                                         <Text style={styles.timelineLabel}>{event.label}</Text>
                                         <Text style={styles.timelineTime}>
@@ -333,116 +319,118 @@ export default function RideDetailScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: COLORS.primary },
-    mapContainer: { height: 250, position: 'relative' },
-    map: { ...StyleSheet.absoluteFillObject },
-    backBtn: {
-        position: 'absolute',
-        top: Platform.OS === 'ios' ? 50 : 35,
-        left: 16,
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: 'rgba(10, 14, 33, 0.85)',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    markerDot: {
-        width: 28,
-        height: 28,
-        borderRadius: 14,
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderWidth: 2,
-        borderColor: '#fff',
-    },
-    content: { padding: 16 },
-    statusRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 16,
-    },
-    statusBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 14,
-    },
-    statusDot: { width: 7, height: 7, borderRadius: 4 },
-    statusText: { fontSize: 13, fontWeight: '700' },
-    dateText: { color: COLORS.textDim, fontSize: 12 },
-    card: {
-        backgroundColor: COLORS.surface,
-        borderRadius: 18,
-        padding: 16,
-        marginBottom: 14,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.04)',
-    },
-    cardTitle: {
-        color: COLORS.text,
-        fontSize: 16,
-        fontWeight: '700',
-        marginBottom: 14,
-    },
-    routeRow: { flexDirection: 'row', gap: 12 },
-    routeDots: { alignItems: 'center', width: 12, paddingTop: 6 },
-    dot: { width: 10, height: 10, borderRadius: 5 },
-    dotLine: {
-        width: 2,
-        height: 30,
-        backgroundColor: COLORS.surfaceLight,
-        marginVertical: 4,
-    },
-    routeTexts: { flex: 1, gap: 18 },
-    routeLabel: {
-        color: COLORS.textDim,
-        fontSize: 10,
-        letterSpacing: 1,
-        fontWeight: '600',
-        marginBottom: 2,
-    },
-    routeAddress: { color: COLORS.text, fontSize: 14, fontWeight: '500' },
-    statsRow: {
-        flexDirection: 'row',
-        backgroundColor: COLORS.surface,
-        borderRadius: 18,
-        padding: 16,
-        marginBottom: 14,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.04)',
-    },
-    stat: { flex: 1, alignItems: 'center', gap: 6 },
-    statDivider: { width: 1, backgroundColor: COLORS.surfaceLight },
-    statValue: { color: COLORS.text, fontSize: 18, fontWeight: '800' },
-    statLabel: { color: COLORS.textDim, fontSize: 11 },
-    fareRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 8,
-    },
-    fareLabel: { color: COLORS.textDim, fontSize: 14 },
-    fareValue: { color: COLORS.text, fontSize: 14, fontWeight: '600' },
-    fareDivider: {
-        height: 1,
-        backgroundColor: COLORS.surfaceLight,
-        marginVertical: 8,
-    },
-    earningsLabel: { color: COLORS.accent, fontSize: 16, fontWeight: '700' },
-    earningsValue: { color: COLORS.accent, fontSize: 20, fontWeight: '800' },
-    timelineRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-        marginBottom: 12,
-    },
-    timelineLabel: { color: COLORS.text, fontSize: 14, fontWeight: '500' },
-    timelineTime: { color: COLORS.textDim, fontSize: 12, marginTop: 2 },
-    errorText: { color: COLORS.textDim, fontSize: 16, marginTop: 12 },
-    backLink: { marginTop: 16, padding: 10 },
-    backLinkText: { color: COLORS.accent, fontSize: 15, fontWeight: '600' },
-});
+function createStyles(colors: ThemeColors) {
+    return StyleSheet.create({
+        container: { flex: 1, backgroundColor: colors.background },
+        mapContainer: { height: 250, position: 'relative' },
+        map: { ...StyleSheet.absoluteFillObject },
+        backBtn: {
+            position: 'absolute',
+            top: Platform.OS === 'ios' ? 50 : 35,
+            left: 16,
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            backgroundColor: 'rgba(10, 14, 33, 0.85)',
+            justifyContent: 'center',
+            alignItems: 'center',
+        },
+        markerDot: {
+            width: 28,
+            height: 28,
+            borderRadius: 14,
+            justifyContent: 'center',
+            alignItems: 'center',
+            borderWidth: 2,
+            borderColor: '#fff',
+        },
+        content: { padding: 16 },
+        statusRow: {
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: 16,
+        },
+        statusBadge: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 6,
+            paddingHorizontal: 12,
+            paddingVertical: 6,
+            borderRadius: 14,
+        },
+        statusDot: { width: 7, height: 7, borderRadius: 4 },
+        statusText: { fontSize: 13, fontWeight: '700' },
+        dateText: { color: colors.textDim, fontSize: 12 },
+        card: {
+            backgroundColor: colors.surface,
+            borderRadius: 18,
+            padding: 16,
+            marginBottom: 14,
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
+        cardTitle: {
+            color: colors.text,
+            fontSize: 16,
+            fontWeight: '700',
+            marginBottom: 14,
+        },
+        routeRow: { flexDirection: 'row', gap: 12 },
+        routeDots: { alignItems: 'center', width: 12, paddingTop: 6 },
+        dot: { width: 10, height: 10, borderRadius: 5 },
+        dotLine: {
+            width: 2,
+            height: 30,
+            backgroundColor: colors.surfaceLight,
+            marginVertical: 4,
+        },
+        routeTexts: { flex: 1, gap: 18 },
+        routeLabel: {
+            color: colors.textDim,
+            fontSize: 10,
+            letterSpacing: 1,
+            fontWeight: '600',
+            marginBottom: 2,
+        },
+        routeAddress: { color: colors.text, fontSize: 14, fontWeight: '500' },
+        statsRow: {
+            flexDirection: 'row',
+            backgroundColor: colors.surface,
+            borderRadius: 18,
+            padding: 16,
+            marginBottom: 14,
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
+        stat: { flex: 1, alignItems: 'center', gap: 6 },
+        statDivider: { width: 1, backgroundColor: colors.surfaceLight },
+        statValue: { color: colors.text, fontSize: 18, fontWeight: '800' },
+        statLabel: { color: colors.textDim, fontSize: 11 },
+        fareRow: {
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            marginBottom: 8,
+        },
+        fareLabel: { color: colors.textDim, fontSize: 14 },
+        fareValue: { color: colors.text, fontSize: 14, fontWeight: '600' },
+        fareDivider: {
+            height: 1,
+            backgroundColor: colors.surfaceLight,
+            marginVertical: 8,
+        },
+        earningsLabel: { color: colors.primary, fontSize: 16, fontWeight: '700' },
+        earningsValue: { color: colors.primary, fontSize: 20, fontWeight: '800' },
+        timelineRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 12,
+            marginBottom: 12,
+        },
+        timelineLabel: { color: colors.text, fontSize: 14, fontWeight: '500' },
+        timelineTime: { color: colors.textDim, fontSize: 12, marginTop: 2 },
+        errorText: { color: colors.textDim, fontSize: 16, marginTop: 12 },
+        backLink: { marginTop: 16, padding: 10 },
+        backLinkText: { color: colors.primary, fontSize: 15, fontWeight: '600' },
+    });
+}

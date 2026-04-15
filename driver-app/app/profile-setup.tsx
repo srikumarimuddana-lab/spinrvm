@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -19,15 +19,16 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useAuthStore } from '@shared/store/authStore';
 import api from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
-
-const THEME = SpinrConfig.theme.colors;
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 
 export default function ProfileSetupScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [isCheckingExisting, setIsCheckingExisting] = useState(true);
 
   const { user, token, createProfile, logout, isLoading: authLoading } = useAuthStore();
@@ -216,7 +217,7 @@ export default function ProfileSetupScreen() {
   if (isCheckingExisting) {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color={THEME.primary} />
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
@@ -235,7 +236,7 @@ export default function ProfileSetupScreen() {
         {/* Top pill for logged in status */}
         <View style={styles.signedInRow}>
           <View style={styles.signedInAvatar}>
-            <Ionicons name="call" size={12} color={THEME.primary} />
+            <Ionicons name="call" size={12} color={colors.primary} />
           </View>
           <View style={styles.signedInInfo}>
             <Text style={styles.signedInLabel}>Signed in with</Text>
@@ -268,7 +269,7 @@ export default function ProfileSetupScreen() {
                     <Ionicons
                       name="person-outline"
                       size={20}
-                      color={firstName ? THEME.text : '#A0A0A0'}
+                      color={firstName ? colors.text : '#A0A0A0'}
                     />
                   </View>
                   <TextInput
@@ -282,7 +283,7 @@ export default function ProfileSetupScreen() {
                   />
                   <View style={styles.checkIconWrapper}>
                     {firstName.length > 0 && isFirstNameValid ? (
-                      <Ionicons name="checkmark-circle" size={20} color={THEME.success} />
+                      <Ionicons name="checkmark-circle" size={20} color={colors.success} />
                     ) : null}
                   </View>
                 </View>
@@ -299,7 +300,7 @@ export default function ProfileSetupScreen() {
                     <Ionicons
                       name="person-outline"
                       size={20}
-                      color={lastName ? THEME.text : '#A0A0A0'}
+                      color={lastName ? colors.text : '#A0A0A0'}
                     />
                   </View>
                   <TextInput
@@ -313,7 +314,7 @@ export default function ProfileSetupScreen() {
                   />
                   <View style={styles.checkIconWrapper}>
                     {lastName.length > 0 && isLastNameValid ? (
-                      <Ionicons name="checkmark-circle" size={20} color={THEME.success} />
+                      <Ionicons name="checkmark-circle" size={20} color={colors.success} />
                     ) : null}
                   </View>
                 </View>
@@ -331,7 +332,7 @@ export default function ProfileSetupScreen() {
                 <Ionicons
                   name="mail-outline"
                   size={20}
-                  color={email ? THEME.text : '#A0A0A0'}
+                  color={email ? colors.text : '#A0A0A0'}
                 />
               </View>
               <TextInput
@@ -346,7 +347,7 @@ export default function ProfileSetupScreen() {
               />
               <View style={styles.checkIconWrapper}>
                 {email.length > 0 && isEmailValid ? (
-                  <Ionicons name="checkmark-circle" size={20} color={THEME.success} />
+                  <Ionicons name="checkmark-circle" size={20} color={colors.success} />
                 ) : null}
               </View>
             </View>
@@ -364,7 +365,7 @@ export default function ProfileSetupScreen() {
                 activeOpacity={0.8}
               >
                 {gender === 'Male' && (
-                  <Ionicons name="checkmark" size={16} color={THEME.primary} style={{ marginRight: 4 }} />
+                  <Ionicons name="checkmark" size={16} color={colors.primary} style={{ marginRight: 4 }} />
                 )}
                 <Text style={[
                   styles.genderOptionText,
@@ -382,7 +383,7 @@ export default function ProfileSetupScreen() {
                 activeOpacity={0.8}
               >
                 {gender === 'Female' && (
-                  <Ionicons name="checkmark" size={16} color={THEME.primary} style={{ marginRight: 4 }} />
+                  <Ionicons name="checkmark" size={16} color={colors.primary} style={{ marginRight: 4 }} />
                 )}
                 <Text style={[
                   styles.genderOptionText,
@@ -400,7 +401,7 @@ export default function ProfileSetupScreen() {
                 activeOpacity={0.8}
               >
                 {gender === 'Other' && (
-                  <Ionicons name="checkmark" size={16} color={THEME.primary} style={{ marginRight: 4 }} />
+                  <Ionicons name="checkmark" size={16} color={colors.primary} style={{ marginRight: 4 }} />
                 )}
                 <Text style={[
                   styles.genderOptionText,
@@ -444,7 +445,7 @@ export default function ProfileSetupScreen() {
               ))}
             </View>
             {serviceAreas.length === 0 && (
-              <ActivityIndicator size="small" color={THEME.primary} style={{ marginTop: 8 }} />
+              <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: 8 }} />
             )}
             <Text style={styles.serviceAreaHint}>
               {serviceAreaId ? 'You can only operate in your selected area' : 'Select your service area to continue'}
@@ -494,10 +495,11 @@ export default function ProfileSetupScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
   },
   scrollView: {
     flex: 1,
@@ -509,18 +511,18 @@ const styles = StyleSheet.create({
   signedInRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8F9FA',
+    backgroundColor: colors.surfaceLight,
     padding: 12,
     borderRadius: 16,
     marginBottom: 32,
     borderWidth: 1,
-    borderColor: '#F0F0F0',
+    borderColor: colors.border,
   },
   signedInAvatar: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: `${THEME.primary}1A`,
+    backgroundColor: `${colors.primary}1A`,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
@@ -530,19 +532,19 @@ const styles = StyleSheet.create({
   },
   signedInLabel: {
     fontSize: 11,
-    color: THEME.textDim,
+    color: colors.textDim,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
     fontWeight: '700',
   },
   signedInPhone: {
     fontSize: 14,
-    color: THEME.text,
+    color: colors.text,
     fontWeight: '700',
     marginTop: 2,
   },
   changeBtn: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 20,
@@ -554,7 +556,7 @@ const styles = StyleSheet.create({
   },
   changeBtnText: {
     fontSize: 13,
-    color: THEME.text,
+    color: colors.text,
     fontWeight: '600',
   },
   // Header
@@ -564,13 +566,13 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 32,
     fontWeight: '800',
-    color: THEME.text,
+    color: colors.text,
     letterSpacing: -0.5,
     marginBottom: 10,
   },
   subtitle: {
     fontSize: 15,
-    color: THEME.textDim,
+    color: colors.textDim,
     lineHeight: 22,
   },
   // Form elements
@@ -587,23 +589,23 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 13,
     fontWeight: '700',
-    color: THEME.text,
+    color: colors.text,
     marginBottom: 8,
     paddingLeft: 4,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8F9FA',
+    backgroundColor: colors.surfaceLight,
     borderWidth: 1.5,
-    borderColor: '#F0F0F0',
+    borderColor: colors.border,
     borderRadius: 16,
     height: 56,
   },
   inputContainerFocused: {
-    borderColor: THEME.primary,
-    backgroundColor: '#fff',
-    shadowColor: THEME.primary,
+    borderColor: colors.primary,
+    backgroundColor: colors.surface,
+    shadowColor: colors.primary,
     shadowOffset: { width: 0, height: 0 },
     shadowOpacity: 0.1,
     shadowRadius: 8,
@@ -623,7 +625,7 @@ const styles = StyleSheet.create({
     height: '100%',
     fontSize: 16,
     fontWeight: '600',
-    color: THEME.text,
+    color: colors.text,
   },
   checkIconWrapper: {
     width: 36,
@@ -641,32 +643,32 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     height: 50,
-    backgroundColor: '#F8F9FA',
+    backgroundColor: colors.surfaceLight,
     borderWidth: 1.5,
-    borderColor: '#F0F0F0',
+    borderColor: colors.border,
     borderRadius: 16,
   },
   genderOptionSelected: {
-    backgroundColor: `${THEME.primary}0D`,
-    borderColor: THEME.primary,
+    backgroundColor: `${colors.primary}0D`,
+    borderColor: colors.primary,
   },
   genderOptionText: {
     fontSize: 14,
     fontWeight: '600',
-    color: THEME.textDim,
+    color: colors.textDim,
   },
   genderOptionTextSelected: {
-    color: THEME.primary,
+    color: colors.primary,
     fontWeight: '700',
   },
   // Submit
   submitButton: {
-    backgroundColor: THEME.primary,
+    backgroundColor: colors.primary,
     borderRadius: 16,
     height: 58,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: THEME.primary,
+    shadowColor: colors.primary,
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.25,
     shadowRadius: 12,
@@ -674,12 +676,12 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   submitButtonDisabled: {
-    backgroundColor: '#F0F0F0',
+    backgroundColor: colors.border,
     shadowOpacity: 0,
     elevation: 0,
   },
   submitButtonLoading: {
-    backgroundColor: THEME.primaryDark,
+    backgroundColor: colors.primaryDark,
   },
   submitBtnContent: {
     flexDirection: 'row',
@@ -692,7 +694,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
   submitButtonTextDisabled: {
-    color: '#999',
+    color: colors.textDim,
   },
   footer: {
     flexDirection: 'row',
@@ -718,18 +720,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderRadius: 16,
-    backgroundColor: '#F8F9FA',
+    backgroundColor: colors.surfaceLight,
     borderWidth: 1.5,
-    borderColor: '#F0F0F0',
+    borderColor: colors.border,
   },
   serviceAreaChipActive: {
-    backgroundColor: THEME.primary,
-    borderColor: THEME.primary,
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
   serviceAreaChipText: {
     fontSize: 14,
     fontWeight: '600',
-    color: THEME.textDim,
+    color: colors.textDim,
   },
   serviceAreaChipTextActive: {
     color: '#FFFFFF',
@@ -741,4 +743,5 @@ const styles = StyleSheet.create({
     paddingLeft: 4,
     fontStyle: 'italic',
   },
-});
+  });
+}

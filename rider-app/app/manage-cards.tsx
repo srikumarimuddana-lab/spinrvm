@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput,
   Platform, ActivityIndicator, KeyboardAvoidingView,
@@ -8,10 +8,9 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { CardField, CardFieldInput, useStripe } from '@stripe/stripe-react-native';
 import api from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
-
-const COLORS = SpinrConfig.theme.colors;
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 interface Card {
   id: string;
@@ -24,7 +23,10 @@ interface Card {
 
 export default function ManageCardsScreen() {
   const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const { createPaymentMethod } = useStripe();
+
   const [cards, setCards] = useState<Card[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -155,7 +157,7 @@ export default function ManageCardsScreen() {
   const renderCard = ({ item }: { item: Card }) => (
     <View style={[styles.cardItem, item.is_default && styles.cardItemDefault]}>
       <View style={styles.cardIcon}>
-        <Ionicons name={getCardIcon(item.brand) as any} size={24} color={item.is_default ? COLORS.primary : '#666'} />
+        <Ionicons name={getCardIcon(item.brand) as any} size={24} color={item.is_default ? colors.primary : colors.textDim} />
       </View>
       <View style={{ flex: 1 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -176,7 +178,7 @@ export default function ManageCardsScreen() {
           </TouchableOpacity>
         )}
         <TouchableOpacity onPress={() => handleDeleteCard(item.id)}>
-          <Ionicons name="trash-outline" size={20} color="#999" />
+          <Ionicons name="trash-outline" size={20} color={colors.textDim} />
         </TouchableOpacity>
       </View>
     </View>
@@ -187,7 +189,7 @@ export default function ManageCardsScreen() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Payment Methods</Text>
         <View style={{ width: 44 }} />
@@ -195,7 +197,7 @@ export default function ManageCardsScreen() {
 
       {loading ? (
         <View style={styles.loadingWrap}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
+          <ActivityIndicator size="large" color={colors.primary} />
         </View>
       ) : (
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -262,13 +264,13 @@ export default function ManageCardsScreen() {
                   </View>
 
                   <View style={styles.securityNote}>
-                    <Ionicons name="lock-closed" size={14} color="#999" />
+                    <Ionicons name="lock-closed" size={14} color={colors.textDim} />
                     <Text style={styles.securityText}>Card details are securely processed via Stripe</Text>
                   </View>
                 </View>
               ) : (
                 <TouchableOpacity style={styles.addCardBtn} onPress={() => setShowAdd(true)}>
-                  <Ionicons name="add-circle" size={22} color={COLORS.primary} />
+                  <Ionicons name="add-circle" size={22} color={colors.primary} />
                   <Text style={styles.addCardText}>Add New Card</Text>
                 </TouchableOpacity>
               )
@@ -288,89 +290,91 @@ export default function ManageCardsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFF' },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 12,
-    borderBottomWidth: 1, borderBottomColor: '#F0F0F0',
-  },
-  backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A' },
-  loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  list: { padding: 20 },
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    header: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: 16, paddingVertical: 12,
+      borderBottomWidth: 1, borderBottomColor: colors.border,
+    },
+    backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
+    headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
+    loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    list: { padding: 20 },
 
-  // Card Item
-  cardItem: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#F9F9F9', borderRadius: 16, padding: 16, marginBottom: 12,
-    borderWidth: 1.5, borderColor: 'transparent',
-  },
-  cardItemDefault: { borderColor: COLORS.primary, backgroundColor: '#FEF2F2' },
-  cardIcon: {
-    width: 48, height: 48, borderRadius: 12, backgroundColor: '#FFF',
-    justifyContent: 'center', alignItems: 'center', marginRight: 14,
-  },
-  cardBrand: { fontSize: 15, fontWeight: '700', color: '#1A1A1A' },
-  cardLast4: { fontSize: 14, color: '#666', marginTop: 2, letterSpacing: 1 },
-  cardExpiry: { fontSize: 12, color: '#999', marginTop: 1 },
-  defaultBadge: {
-    backgroundColor: COLORS.primary, borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2,
-  },
-  defaultBadgeText: { fontSize: 9, fontWeight: '700', color: '#FFF', letterSpacing: 0.5 },
-  cardActions: { alignItems: 'flex-end', gap: 8 },
-  setDefaultBtn: {
-    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
-    backgroundColor: '#F0F0F0',
-  },
-  setDefaultText: { fontSize: 11, fontWeight: '600', color: '#666' },
+    // Card Item
+    cardItem: {
+      flexDirection: 'row', alignItems: 'center',
+      backgroundColor: colors.surfaceLight, borderRadius: 16, padding: 16, marginBottom: 12,
+      borderWidth: 1.5, borderColor: 'transparent',
+    },
+    cardItemDefault: { borderColor: colors.primary, backgroundColor: '#FEF2F2' },
+    cardIcon: {
+      width: 48, height: 48, borderRadius: 12, backgroundColor: colors.surface,
+      justifyContent: 'center', alignItems: 'center', marginRight: 14,
+    },
+    cardBrand: { fontSize: 15, fontWeight: '700', color: colors.text },
+    cardLast4: { fontSize: 14, color: colors.textDim, marginTop: 2, letterSpacing: 1 },
+    cardExpiry: { fontSize: 12, color: colors.textDim, marginTop: 1 },
+    defaultBadge: {
+      backgroundColor: colors.primary, borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2,
+    },
+    defaultBadgeText: { fontSize: 9, fontWeight: '700', color: '#FFF', letterSpacing: 0.5 },
+    cardActions: { alignItems: 'flex-end', gap: 8 },
+    setDefaultBtn: {
+      paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
+      backgroundColor: colors.border,
+    },
+    setDefaultText: { fontSize: 11, fontWeight: '600', color: colors.textDim },
 
-  // Empty
-  emptyState: { alignItems: 'center', paddingVertical: 40 },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A', marginTop: 12 },
-  emptySubtext: { fontSize: 14, color: '#999', marginTop: 4 },
+    // Empty
+    emptyState: { alignItems: 'center', paddingVertical: 40 },
+    emptyTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginTop: 12 },
+    emptySubtext: { fontSize: 14, color: colors.textDim, marginTop: 4 },
 
-  // Add Card Button
-  addCardBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    paddingVertical: 16, borderRadius: 14, borderWidth: 2, borderColor: COLORS.primary,
-    borderStyle: 'dashed', marginTop: 8,
-  },
-  addCardText: { fontSize: 15, fontWeight: '700', color: COLORS.primary },
+    // Add Card Button
+    addCardBtn: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+      paddingVertical: 16, borderRadius: 14, borderWidth: 2, borderColor: colors.primary,
+      borderStyle: 'dashed', marginTop: 8,
+    },
+    addCardText: { fontSize: 15, fontWeight: '700', color: colors.primary },
 
-  // Add Form
-  addForm: {
-    backgroundColor: '#F9F9F9', borderRadius: 18, padding: 20, marginTop: 8,
-  },
-  addFormTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A1A', marginBottom: 16 },
-  inputLabel: { fontSize: 12, fontWeight: '600', color: '#888', marginBottom: 6, marginTop: 12 },
-  input: {
-    backgroundColor: '#FFF', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14,
-    fontSize: 16, fontWeight: '500', color: '#1A1A1A',
-    borderWidth: 1, borderColor: '#ECECEC',
-  },
-  inputRow: { flexDirection: 'row', gap: 12 },
-  brandHint: { fontSize: 12, color: COLORS.primary, fontWeight: '600', marginTop: 4 },
-  cardField: {
-    // CardField height must be explicit on both platforms; Stripe's
-    // default (44) crops the Android stroke.
-    height: 52,
-    marginBottom: 4,
-  },
-  formButtons: { flexDirection: 'row', gap: 12, marginTop: 20 },
-  cancelFormBtn: {
-    flex: 1, alignItems: 'center', paddingVertical: 14, borderRadius: 12,
-    backgroundColor: '#F0F0F0',
-  },
-  cancelFormText: { fontSize: 15, fontWeight: '600', color: '#666' },
-  saveCardBtn: {
-    flex: 2, alignItems: 'center', paddingVertical: 14, borderRadius: 12,
-    backgroundColor: COLORS.primary,
-  },
-  saveCardText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
-  securityNote: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    marginTop: 14,
-  },
-  securityText: { fontSize: 11, color: '#999' },
-});
+    // Add Form
+    addForm: {
+      backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 20, marginTop: 8,
+    },
+    addFormTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginBottom: 16 },
+    inputLabel: { fontSize: 12, fontWeight: '600', color: '#888', marginBottom: 6, marginTop: 12 },
+    input: {
+      backgroundColor: colors.surface, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14,
+      fontSize: 16, fontWeight: '500', color: colors.text,
+      borderWidth: 1, borderColor: colors.border,
+    },
+    inputRow: { flexDirection: 'row', gap: 12 },
+    brandHint: { fontSize: 12, color: colors.primary, fontWeight: '600', marginTop: 4 },
+    cardField: {
+      // CardField height must be explicit on both platforms; Stripe's
+      // default (44) crops the Android stroke.
+      height: 52,
+      marginBottom: 4,
+    },
+    formButtons: { flexDirection: 'row', gap: 12, marginTop: 20 },
+    cancelFormBtn: {
+      flex: 1, alignItems: 'center', paddingVertical: 14, borderRadius: 12,
+      backgroundColor: colors.border,
+    },
+    cancelFormText: { fontSize: 15, fontWeight: '600', color: colors.textDim },
+    saveCardBtn: {
+      flex: 2, alignItems: 'center', paddingVertical: 14, borderRadius: 12,
+      backgroundColor: colors.primary,
+    },
+    saveCardText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+    securityNote: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+      marginTop: 14,
+    },
+    securityText: { fontSize: 11, color: colors.textDim },
+  });
+}

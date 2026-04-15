@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -22,8 +22,9 @@ import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useLanguageStore } from '../store/languageStore';
 import CustomAlert from '@shared/components/CustomAlert';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
-const THEME = SpinrConfig.theme.colors;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 // Only import Firebase phone auth when Firebase is actually configured
@@ -41,6 +42,8 @@ export default function LoginScreen() {
   const router = useRouter();
   const { t } = useLanguageStore();
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -190,18 +193,24 @@ export default function LoginScreen() {
         {/* Phone Input */}
         <View style={styles.inputSection}>
           <Text style={styles.inputLabel}>PHONE NUMBER</Text>
-          <TouchableOpacity 
+          <TouchableOpacity
             activeOpacity={1}
             onPress={() => inputRef.current?.focus()}
             style={[
               styles.inputContainer,
               focused && styles.inputContainerFocused,
             ]}
+            accessible={false}
           >
-            <View style={styles.flagContainer}>
+            <View
+              style={styles.flagContainer}
+              accessible={true}
+              accessibilityLabel="Canada +1"
+              accessibilityRole="text"
+            >
               <Text style={styles.flagEmoji}>🇨🇦</Text>
               <Text style={styles.countryCode}>+1</Text>
-              <Ionicons name="chevron-down" size={14} color={THEME.textDim} />
+              <Ionicons name="chevron-down" size={14} color={colors.textDim} />
             </View>
             <View style={styles.inputDivider} />
             <TextInput
@@ -217,17 +226,20 @@ export default function LoginScreen() {
               onFocus={() => setFocused(true)}
               onBlur={() => setFocused(false)}
               testID="phone-input"
+              accessibilityLabel="Phone number"
+              accessibilityHint="Enter your 10-digit Canadian phone number"
+              accessibilityRole="text"
             />
             {isValid && (
               <View style={styles.checkIcon}>
-                <Ionicons name="checkmark-circle" size={22} color={THEME.success} />
+                <Ionicons name="checkmark-circle" size={22} color={colors.success} />
               </View>
             )}
           </TouchableOpacity>
 
           {!isFirebaseConfigured && (
             <View style={styles.devHintContainer}>
-              <Ionicons name="information-circle" size={14} color={THEME.primary} />
+              <Ionicons name="information-circle" size={14} color={colors.primary} />
               <Text style={styles.devHint}>Dev mode — OTP is 1234</Text>
             </View>
           )}
@@ -244,6 +256,10 @@ export default function LoginScreen() {
           disabled={loading || !isValid}
           activeOpacity={0.85}
           testID="send-otp-btn"
+          accessibilityLabel="Send verification code"
+          accessibilityRole="button"
+          accessibilityState={{ disabled: loading || !isValid }}
+          accessibilityHint="Sends a 6-digit code to your phone number"
         >
           {loading ? (
             <ActivityIndicator color="#fff" size="small" />
@@ -263,7 +279,7 @@ export default function LoginScreen() {
 
         {/* Footer */}
         <View style={styles.footer}>
-          <Ionicons name="lock-closed" size={14} color={THEME.textDim} />
+          <Ionicons name="lock-closed" size={14} color={colors.textDim} />
           <Text style={styles.footerText}>
             Your number is secured and only used for verification
           </Text>
@@ -292,200 +308,202 @@ export default function LoginScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-  },
-  topStrip: {
-    backgroundColor: '#fff',
-    paddingHorizontal: 24,
-    paddingBottom: 8,
-  },
-  brandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingTop: 12,
-    gap: 10,
-  },
-  logoCircle: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
-    backgroundColor: THEME.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  brandName: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: THEME.text,
-    letterSpacing: -0.5,
-  },
-  driverBadge: {
-    backgroundColor: `${THEME.primary}14`,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  driverBadgeText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: THEME.primary,
-  },
-  content: {
-    flex: 1,
-    paddingHorizontal: 24,
-    justifyContent: 'center',
-  },
-  welcomeSection: {
-    marginBottom: 36,
-  },
-  greeting: {
-    fontSize: 16,
-    color: THEME.textDim,
-    marginBottom: 8,
-    fontWeight: '500',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: THEME.text,
-    letterSpacing: -0.5,
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 15,
-    color: THEME.textDim,
-    lineHeight: 22,
-  },
-  inputSection: {
-    marginBottom: 24,
-  },
-  inputLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: THEME.textDim,
-    letterSpacing: 1,
-    marginBottom: 8,
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F8F9FA',
-    borderRadius: 16,
-    height: 60,
-    borderWidth: 1.5,
-    borderColor: '#F0F0F0',
-  },
-  inputContainerFocused: {
-    borderColor: THEME.primary,
-    backgroundColor: '#fff',
-    shadowColor: THEME.primary,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  flagContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    gap: 6,
-  },
-  flagEmoji: {
-    fontSize: 20,
-  },
-  countryCode: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: THEME.text,
-  },
-  inputDivider: {
-    width: 1,
-    height: 28,
-    backgroundColor: '#E0E0E0',
-  },
-  input: {
-    flex: 1,
-    paddingHorizontal: 14,
-    fontSize: 18,
-    fontWeight: '600',
-    color: THEME.text,
-    height: '100%',
-    letterSpacing: 0.5,
-  },
-  checkIcon: {
-    paddingRight: 14,
-  },
-  devHintContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 10,
-    paddingHorizontal: 4,
-  },
-  devHint: {
-    fontSize: 13,
-    color: THEME.primary,
-    fontWeight: '500',
-  },
-  button: {
-    backgroundColor: THEME.primary,
-    borderRadius: 16,
-    height: 58,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: THEME.primary,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 6,
-    marginBottom: 20,
-  },
-  buttonInactive: {
-    backgroundColor: '#F0F0F0',
-    shadowOpacity: 0,
-    elevation: 0,
-  },
-  buttonLoading: {
-    backgroundColor: THEME.primaryDark,
-  },
-  buttonContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  buttonTextInactive: {
-    color: '#999',
-  },
-  footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  footerText: {
-    fontSize: 12,
-    color: THEME.textDim,
-  },
-  terms: {
-    paddingHorizontal: 24,
-    alignItems: 'center',
-  },
-  termsText: {
-    fontSize: 12,
-    color: '#B0B0B0',
-    textAlign: 'center',
-    lineHeight: 18,
-  },
-  termsLink: {
-    color: THEME.primary,
-    fontWeight: '600',
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.surface,
+    },
+    topStrip: {
+      backgroundColor: colors.surface,
+      paddingHorizontal: 24,
+      paddingBottom: 8,
+    },
+    brandRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingTop: 12,
+      gap: 10,
+    },
+    logoCircle: {
+      width: 42,
+      height: 42,
+      borderRadius: 14,
+      backgroundColor: colors.primary,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    brandName: {
+      fontSize: 24,
+      fontWeight: '800',
+      color: colors.text,
+      letterSpacing: -0.5,
+    },
+    driverBadge: {
+      backgroundColor: `${colors.primary}14`,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 8,
+    },
+    driverBadgeText: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.primary,
+    },
+    content: {
+      flex: 1,
+      paddingHorizontal: 24,
+      justifyContent: 'center',
+    },
+    welcomeSection: {
+      marginBottom: 36,
+    },
+    greeting: {
+      fontSize: 16,
+      color: colors.textDim,
+      marginBottom: 8,
+      fontWeight: '500',
+    },
+    title: {
+      fontSize: 28,
+      fontWeight: '800',
+      color: colors.text,
+      letterSpacing: -0.5,
+      marginBottom: 8,
+    },
+    subtitle: {
+      fontSize: 15,
+      color: colors.textDim,
+      lineHeight: 22,
+    },
+    inputSection: {
+      marginBottom: 24,
+    },
+    inputLabel: {
+      fontSize: 11,
+      fontWeight: '700',
+      color: colors.textDim,
+      letterSpacing: 1,
+      marginBottom: 8,
+    },
+    inputContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 16,
+      height: 60,
+      borderWidth: 1.5,
+      borderColor: colors.border,
+    },
+    inputContainerFocused: {
+      borderColor: colors.primary,
+      backgroundColor: colors.surface,
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 0 },
+      shadowOpacity: 0.1,
+      shadowRadius: 8,
+      elevation: 3,
+    },
+    flagContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 14,
+      gap: 6,
+    },
+    flagEmoji: {
+      fontSize: 20,
+    },
+    countryCode: {
+      fontSize: 16,
+      fontWeight: '600',
+      color: colors.text,
+    },
+    inputDivider: {
+      width: 1,
+      height: 28,
+      backgroundColor: colors.border,
+    },
+    input: {
+      flex: 1,
+      paddingHorizontal: 14,
+      fontSize: 18,
+      fontWeight: '600',
+      color: colors.text,
+      height: '100%',
+      letterSpacing: 0.5,
+    },
+    checkIcon: {
+      paddingRight: 14,
+    },
+    devHintContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      marginTop: 10,
+      paddingHorizontal: 4,
+    },
+    devHint: {
+      fontSize: 13,
+      color: colors.primary,
+      fontWeight: '500',
+    },
+    button: {
+      backgroundColor: colors.primary,
+      borderRadius: 16,
+      height: 58,
+      justifyContent: 'center',
+      alignItems: 'center',
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.25,
+      shadowRadius: 12,
+      elevation: 6,
+      marginBottom: 20,
+    },
+    buttonInactive: {
+      backgroundColor: colors.border,
+      shadowOpacity: 0,
+      elevation: 0,
+    },
+    buttonLoading: {
+      backgroundColor: colors.primaryDark,
+    },
+    buttonContent: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    buttonText: {
+      color: '#fff',
+      fontSize: 16,
+      fontWeight: '700',
+    },
+    buttonTextInactive: {
+      color: colors.textDim,
+    },
+    footer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+    },
+    footerText: {
+      fontSize: 12,
+      color: colors.textDim,
+    },
+    terms: {
+      paddingHorizontal: 24,
+      alignItems: 'center',
+    },
+    termsText: {
+      fontSize: 12,
+      color: '#B0B0B0',
+      textAlign: 'center',
+      lineHeight: 18,
+    },
+    termsLink: {
+      color: colors.primary,
+      fontWeight: '600',
+    },
+  });
+}

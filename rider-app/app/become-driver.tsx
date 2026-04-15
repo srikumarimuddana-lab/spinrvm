@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -18,6 +18,8 @@ import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { uploadFile } from '@shared/api/upload';
 import CustomAlert from '@shared/components/CustomAlert';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 // Steps: 0=Intro, 1=Personal, 2=Vehicle, 3=Docs, 4=Review
 const STEPS = ['Intro', 'Personal', 'Vehicle', 'Documents', 'Review'];
@@ -39,6 +41,8 @@ interface DocState {
 export default function BecomeDriverScreen() {
   const router = useRouter();
   const { registerDriver, isLoading, user } = useAuthStore();
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   const [currentStep, setCurrentStep] = useState(0);
 
@@ -265,7 +269,7 @@ export default function BecomeDriverScreen() {
         value={value}
         onChangeText={setter}
         placeholder={placeholder}
-        placeholderTextColor="#999"
+        placeholderTextColor={colors.textDim}
         keyboardType={keyboardType}
         maxLength={maxLength}
       />
@@ -277,7 +281,7 @@ export default function BecomeDriverScreen() {
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => currentStep > 0 ? prevStep() : router.back()} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+            <Ionicons name="arrow-back" size={24} color={colors.text} />
           </TouchableOpacity>
           <View>
             <Text style={styles.title}>Become a Driver</Text>
@@ -364,7 +368,7 @@ export default function BecomeDriverScreen() {
                     disabled={!!uploadingDoc}
                   >
                     {uploadingDoc === `${req.id}_front` ? (
-                      <ActivityIndicator color={SpinrConfig.theme.colors.primary} />
+                      <ActivityIndicator color={colors.primary} />
                     ) : docs[req.id]?.front ? (
                       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                         <Ionicons name="checkmark-circle" size={20} color="green" />
@@ -372,7 +376,7 @@ export default function BecomeDriverScreen() {
                       </View>
                     ) : (
                       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <Ionicons name="cloud-upload-outline" size={20} color="#666" />
+                        <Ionicons name="cloud-upload-outline" size={20} color={colors.textDim} />
                         <Text style={styles.uploadText}>{req.requires_back_side ? 'Upload Front' : 'Upload Document'}</Text>
                       </View>
                     )}
@@ -386,7 +390,7 @@ export default function BecomeDriverScreen() {
                       disabled={!!uploadingDoc}
                     >
                       {uploadingDoc === `${req.id}_back` ? (
-                        <ActivityIndicator color={SpinrConfig.theme.colors.primary} />
+                        <ActivityIndicator color={colors.primary} />
                       ) : docs[req.id]?.back ? (
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                           <Ionicons name="checkmark-circle" size={20} color="green" />
@@ -394,7 +398,7 @@ export default function BecomeDriverScreen() {
                         </View>
                       ) : (
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                          <Ionicons name="cloud-upload-outline" size={20} color="#666" />
+                          <Ionicons name="cloud-upload-outline" size={20} color={colors.textDim} />
                           <Text style={styles.uploadText}>Upload Back</Text>
                         </View>
                       )}
@@ -412,7 +416,7 @@ export default function BecomeDriverScreen() {
                         [req.id]: { ...p[req.id], expiry: t }
                       }))}
                       placeholder="2025-12-31"
-                      placeholderTextColor="#999"
+                      placeholderTextColor={colors.textDim}
                     />
                   </View>
                 </View>
@@ -458,56 +462,58 @@ export default function BecomeDriverScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  header: { padding: 20, flexDirection: 'row', alignItems: 'center' },
-  backButton: { marginRight: 20 },
-  title: { fontSize: 24, fontFamily: 'PlusJakartaSans', fontWeight: 'bold' },
-  stepIndicator: { color: '#666', fontSize: 14 },
-  scrollContent: { padding: 20, paddingBottom: 50 },
-  sectionTitle: { fontSize: 22, fontWeight: 'bold', marginBottom: 15, color: '#1A1A1A' },
-  subtitle: { fontSize: 16, color: '#666', marginBottom: 20, lineHeight: 22 },
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    header: { padding: 20, flexDirection: 'row', alignItems: 'center' },
+    backButton: { marginRight: 20 },
+    title: { fontSize: 24, fontFamily: 'PlusJakartaSans', fontWeight: 'bold' },
+    stepIndicator: { color: colors.textDim, fontSize: 14 },
+    scrollContent: { padding: 20, paddingBottom: 50 },
+    sectionTitle: { fontSize: 22, fontWeight: 'bold', marginBottom: 15, color: colors.text },
+    subtitle: { fontSize: 16, color: colors.textDim, marginBottom: 20, lineHeight: 22 },
 
-  inputGroup: { marginBottom: 15 },
-  label: { fontSize: 14, fontWeight: '600', marginBottom: 5, color: '#333' },
-  subLabel: { fontSize: 12, color: '#666', marginBottom: 5 },
-  input: {
-    borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 12, padding: 12,
-    fontSize: 16, color: '#1A1A1A', fontFamily: 'PlusJakartaSans'
-  },
-  dateInput: {
-    borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, padding: 10,
-    fontSize: 14, color: '#1A1A1A'
-  },
+    inputGroup: { marginBottom: 15 },
+    label: { fontSize: 14, fontWeight: '600', marginBottom: 5, color: colors.textSecondary },
+    subLabel: { fontSize: 12, color: colors.textDim, marginBottom: 5 },
+    input: {
+      borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 12,
+      fontSize: 16, color: colors.text, fontFamily: 'PlusJakartaSans'
+    },
+    dateInput: {
+      borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 10,
+      fontSize: 14, color: colors.text
+    },
 
-  docContainer: {
-    marginBottom: 20, padding: 15, backgroundColor: '#F9FAFB', borderRadius: 12, borderWidth: 1, borderColor: '#F0F0F0'
-  },
-  uploadButton: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#D1D5DB',
-    backgroundColor: '#fff'
-  },
-  uploadSuccess: {
-    borderColor: 'green', backgroundColor: '#F0FDF4'
-  },
-  uploadText: { marginLeft: 10, fontSize: 14, fontWeight: '500' },
+    docContainer: {
+      marginBottom: 20, padding: 15, backgroundColor: colors.surfaceLight, borderRadius: 12, borderWidth: 1, borderColor: colors.border
+    },
+    uploadButton: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+      padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border,
+      backgroundColor: colors.surface
+    },
+    uploadSuccess: {
+      borderColor: 'green', backgroundColor: '#F0FDF4'
+    },
+    uploadText: { marginLeft: 10, fontSize: 14, fontWeight: '500' },
 
-  typeContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
-  typeOption: {
-    paddingHorizontal: 15, paddingVertical: 10, borderRadius: 20, borderWidth: 1, borderColor: '#E0E0E0'
-  },
-  typeSelected: { backgroundColor: SpinrConfig.theme.colors.primary, borderColor: SpinrConfig.theme.colors.primary },
-  typeText: { color: '#333' },
-  typeTextSelected: { color: '#fff', fontWeight: 'bold' },
+    typeContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
+    typeOption: {
+      paddingHorizontal: 15, paddingVertical: 10, borderRadius: 20, borderWidth: 1, borderColor: colors.border
+    },
+    typeSelected: { backgroundColor: colors.primary, borderColor: colors.primary },
+    typeText: { color: colors.textSecondary },
+    typeTextSelected: { color: '#fff', fontWeight: 'bold' },
 
-  primaryButton: {
-    backgroundColor: SpinrConfig.theme.colors.primary, borderRadius: 30, padding: 18,
-    alignItems: 'center', marginTop: 20
-  },
-  disabledButton: { opacity: 0.7 },
-  primaryButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+    primaryButton: {
+      backgroundColor: colors.primary, borderRadius: 30, padding: 18,
+      alignItems: 'center', marginTop: 20
+    },
+    disabledButton: { opacity: 0.7 },
+    primaryButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
 
-  reviewCard: { padding: 20, backgroundColor: '#F3F4F6', borderRadius: 12 },
-  reviewRow: { fontSize: 16, marginBottom: 10 }
-});
+    reviewCard: { padding: 20, backgroundColor: colors.surfaceLight, borderRadius: 12 },
+    reviewRow: { fontSize: 16, marginBottom: 10 }
+  });
+}

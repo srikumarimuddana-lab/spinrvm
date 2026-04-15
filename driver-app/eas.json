@@ -32,13 +32,29 @@
       }
     },
     "production": {
+      "distribution": "store",
+      "autoIncrement": true,
       "channel": "production",
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://spinr-api.fly.dev"
+        "EXPO_PUBLIC_BACKEND_URL": "$EXPO_PUBLIC_BACKEND_URL",
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "$EXPO_PUBLIC_GOOGLE_MAPS_API_KEY"
       }
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleId": "$APPLE_ID",
+        "ascAppId": "$ASC_DRIVER_APP_ID",
+        "appleTeamId": "$APPLE_TEAM_ID",
+        "bundleIdentifier": "com.spinr.driver",
+        "language": "en-CA"
+      },
+      "android": {
+        "serviceAccountKeyPath": "./play-service-account.json",
+        "track": "internal",
+        "releaseStatus": "draft"
+      }
+    }
   }
 }

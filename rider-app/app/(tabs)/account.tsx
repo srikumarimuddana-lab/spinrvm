@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   Image, ActivityIndicator, Linking, Platform,
@@ -8,10 +8,9 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuthStore } from '@shared/store/authStore';
-import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
-
-const COLORS = SpinrConfig.theme.colors;
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 export default function AccountScreen() {
   const router = useRouter();
@@ -24,6 +23,9 @@ export default function AccountScreen() {
     variant: 'info' | 'warning' | 'danger' | 'success';
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', message: '', variant: 'info' });
+
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   const handleLogout = () => {
     setAlertState({
@@ -102,16 +104,16 @@ export default function AccountScreen() {
               {user?.profile_image ? (
                 <Image source={{ uri: user.profile_image }} style={styles.avatarImg} />
               ) : (
-                <Ionicons name="person" size={40} color="#999" />
+                <Ionicons name="person" size={40} color={colors.textDim} />
               )}
               {uploading && (
                 <View style={styles.uploadOverlay}>
-                  <ActivityIndicator size="small" color="#FFF" />
+                  <ActivityIndicator size="small" color={colors.surface} />
                 </View>
               )}
             </View>
             <TouchableOpacity style={styles.cameraBtn} onPress={handlePickImage} disabled={uploading}>
-              <Ionicons name="camera" size={14} color="#FFF" />
+              <Ionicons name="camera" size={14} color={colors.surface} />
             </TouchableOpacity>
           </View>
 
@@ -123,12 +125,12 @@ export default function AccountScreen() {
               <Text style={styles.metaText}>{user?.rating ? user.rating.toFixed(1) : '5.0'}</Text>
             </View>
             <View style={styles.metaChip}>
-              <Ionicons name="call" size={12} color={COLORS.primary} />
+              <Ionicons name="call" size={12} color={colors.primary} />
               <Text style={styles.metaText}>{formatPhone(user?.phone || '')}</Text>
             </View>
             {user?.email && (
               <View style={styles.metaChip}>
-                <Ionicons name="mail" size={12} color={COLORS.primary} />
+                <Ionicons name="mail" size={12} color={colors.primary} />
                 <Text style={styles.metaText} numberOfLines={1}>{user.email}</Text>
               </View>
             )}
@@ -162,7 +164,7 @@ export default function AccountScreen() {
           <Text style={styles.sectionTitle}>Account</Text>
 
           <MenuItem
-            icon="person-outline" iconColor={COLORS.primary} iconBg="#FEF2F2"
+            icon="person-outline" iconColor={colors.primary} iconBg="#FEF2F2"
             title="Edit Profile" subtitle="Name, email, phone"
             onPress={() => router.push('/profile-setup' as any)}
           />
@@ -232,7 +234,7 @@ export default function AccountScreen() {
 
         {/* Logout */}
         <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-          <Ionicons name="log-out-outline" size={20} color={COLORS.primary} />
+          <Ionicons name="log-out-outline" size={20} color={colors.primary} />
           <Text style={styles.logoutText}>Log Out</Text>
         </TouchableOpacity>
 
@@ -257,6 +259,9 @@ function MenuItem({ icon, iconColor, iconBg, title, subtitle, onPress, badge }: 
   icon: string; iconColor: string; iconBg: string;
   title: string; subtitle: string; onPress: () => void; badge?: string;
 }) {
+  const { colors } = useTheme();
+  const miStyles = useMemo(() => createMenuItemStyles(colors), [colors]);
+
   return (
     <TouchableOpacity style={miStyles.row} onPress={onPress} activeOpacity={0.7}>
       <View style={[miStyles.icon, { backgroundColor: iconBg }]}>
@@ -271,82 +276,86 @@ function MenuItem({ icon, iconColor, iconBg, title, subtitle, onPress, badge }: 
           <Text style={miStyles.badgeText}>{badge}</Text>
         </View>
       )}
-      <Ionicons name="chevron-forward" size={18} color="#CCC" />
+      <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
     </TouchableOpacity>
   );
 }
 
-const miStyles = StyleSheet.create({
-  row: {
-    flexDirection: 'row', alignItems: 'center', paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: '#F5F5F5',
-  },
-  icon: {
-    width: 40, height: 40, borderRadius: 12,
-    justifyContent: 'center', alignItems: 'center', marginRight: 14,
-  },
-  content: { flex: 1 },
-  title: { fontSize: 15, fontWeight: '600', color: '#1A1A1A' },
-  subtitle: { fontSize: 12, color: '#999', marginTop: 1 },
-  badge: {
-    backgroundColor: COLORS.primary, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2, marginRight: 8,
-  },
-  badgeText: { fontSize: 10, fontWeight: '700', color: '#FFF' },
-});
+function createMenuItemStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    row: {
+      flexDirection: 'row', alignItems: 'center', paddingVertical: 14,
+      borderBottomWidth: 1, borderBottomColor: colors.border,
+    },
+    icon: {
+      width: 40, height: 40, borderRadius: 12,
+      justifyContent: 'center', alignItems: 'center', marginRight: 14,
+    },
+    content: { flex: 1 },
+    title: { fontSize: 15, fontWeight: '600', color: colors.text },
+    subtitle: { fontSize: 12, color: colors.textDim, marginTop: 1 },
+    badge: {
+      backgroundColor: colors.primary, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2, marginRight: 8,
+    },
+    badgeText: { fontSize: 10, fontWeight: '700', color: colors.surface },
+  });
+}
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFF' },
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
 
-  // Profile
-  profileSection: { alignItems: 'center', paddingTop: 20, paddingBottom: 24 },
-  avatarWrap: { position: 'relative', marginBottom: 14 },
-  avatar: {
-    width: 90, height: 90, borderRadius: 45, backgroundColor: '#F0F0F0',
-    justifyContent: 'center', alignItems: 'center', overflow: 'hidden',
-  },
-  avatarImg: { width: 90, height: 90, borderRadius: 45 },
-  uploadOverlay: {
-    ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)',
-    borderRadius: 45, justifyContent: 'center', alignItems: 'center',
-  },
-  cameraBtn: {
-    position: 'absolute', bottom: 0, right: -2,
-    width: 30, height: 30, borderRadius: 15, backgroundColor: COLORS.primary,
-    justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: '#FFF',
-  },
-  userName: { fontSize: 22, fontWeight: '800', color: '#1A1A1A', marginBottom: 8 },
-  metaRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8 },
-  metaChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: '#F5F5F5', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 16,
-  },
-  metaText: { fontSize: 12, fontWeight: '500', color: '#666' },
+    // Profile
+    profileSection: { alignItems: 'center', paddingTop: 20, paddingBottom: 24 },
+    avatarWrap: { position: 'relative', marginBottom: 14 },
+    avatar: {
+      width: 90, height: 90, borderRadius: 45, backgroundColor: colors.surfaceLight,
+      justifyContent: 'center', alignItems: 'center', overflow: 'hidden',
+    },
+    avatarImg: { width: 90, height: 90, borderRadius: 45 },
+    uploadOverlay: {
+      ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)',
+      borderRadius: 45, justifyContent: 'center', alignItems: 'center',
+    },
+    cameraBtn: {
+      position: 'absolute', bottom: 0, right: -2,
+      width: 30, height: 30, borderRadius: 15, backgroundColor: colors.primary,
+      justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: colors.surface,
+    },
+    userName: { fontSize: 22, fontWeight: '800', color: colors.text, marginBottom: 8 },
+    metaRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8 },
+    metaChip: {
+      flexDirection: 'row', alignItems: 'center', gap: 4,
+      backgroundColor: colors.surfaceLight, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 16,
+    },
+    metaText: { fontSize: 12, fontWeight: '500', color: colors.textDim },
 
-  // Quick Actions
-  quickRow: { flexDirection: 'row', paddingHorizontal: 20, gap: 12, marginBottom: 8 },
-  quickCard: {
-    flex: 1, alignItems: 'center', paddingVertical: 16,
-    backgroundColor: '#F9F9F9', borderRadius: 16,
-  },
-  quickIcon: {
-    width: 48, height: 48, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginBottom: 8,
-  },
-  quickLabel: { fontSize: 12, fontWeight: '600', color: '#1A1A1A' },
+    // Quick Actions
+    quickRow: { flexDirection: 'row', paddingHorizontal: 20, gap: 12, marginBottom: 8 },
+    quickCard: {
+      flex: 1, alignItems: 'center', paddingVertical: 16,
+      backgroundColor: colors.surfaceLight, borderRadius: 16,
+    },
+    quickIcon: {
+      width: 48, height: 48, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginBottom: 8,
+    },
+    quickLabel: { fontSize: 12, fontWeight: '600', color: colors.text },
 
-  // Sections
-  section: { paddingHorizontal: 20, marginTop: 16 },
-  sectionTitle: {
-    fontSize: 13, fontWeight: '700', color: '#999', letterSpacing: 0.5,
-    textTransform: 'uppercase', marginBottom: 8,
-  },
+    // Sections
+    section: { paddingHorizontal: 20, marginTop: 16 },
+    sectionTitle: {
+      fontSize: 13, fontWeight: '700', color: colors.textDim, letterSpacing: 0.5,
+      textTransform: 'uppercase', marginBottom: 8,
+    },
 
-  // Logout
-  logoutBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    marginHorizontal: 20, marginTop: 20, paddingVertical: 14,
-    backgroundColor: '#FEF2F2', borderRadius: 14,
-  },
-  logoutText: { fontSize: 15, fontWeight: '600', color: COLORS.primary },
+    // Logout
+    logoutBtn: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+      marginHorizontal: 20, marginTop: 20, paddingVertical: 14,
+      backgroundColor: '#FEF2F2', borderRadius: 14,
+    },
+    logoutText: { fontSize: 15, fontWeight: '600', color: colors.primary },
 
-  version: { fontSize: 12, color: '#BBB', textAlign: 'center', marginTop: 20 },
-});
+    version: { fontSize: 12, color: colors.textDim, textAlign: 'center', marginTop: 20 },
+  });
+}

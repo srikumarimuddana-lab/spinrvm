@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -20,8 +20,9 @@ import MapViewDirections from 'react-native-maps-directions';
 import BottomSheet, { BottomSheetScrollView, BottomSheetView } from '@gorhom/bottom-sheet';
 import { useRideStore } from '../store/rideStore';
 import api from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 import { SOSButton } from '@shared/components/SOSButton';
 import { CarMarker } from '@shared/components/CarMarker';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
@@ -29,6 +30,8 @@ import { FreeCancelTimer } from '../components/FreeCancelTimer';
 const { width } = Dimensions.get('window');
 
 export default function DriverArrivingScreen() {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const { currentRide, currentDriver, fetchRide, simulateDriverArrival, triggerEmergency, isLoading, error } = useRideStore();
@@ -261,7 +264,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
       <SafeAreaView edges={['top']} style={styles.headerSafeArea}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.backButton} onPress={handleBack}>
-            <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+            <Ionicons name="arrow-back" size={24} color={colors.text} />
           </TouchableOpacity>
 
           <View style={styles.etaPill}>
@@ -277,7 +280,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
       <View style={styles.mapContainer}>
         {isLoading ? (
           <View style={styles.mapPlaceholder}>
-            <ActivityIndicator size="large" color={SpinrConfig.theme.colors.primary} />
+            <ActivityIndicator size="large" color={colors.primary} />
             <Text style={styles.loadingText}>Loading ride details...</Text>
           </View>
         ) : error ? (
@@ -368,7 +371,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
             {/* Dropoff Marker */}
             <Marker coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}>
               <View style={styles.pickupMarker}>
-                <View style={[styles.pickupDot, { backgroundColor: SpinrConfig.theme.colors.primary }]} />
+                <View style={[styles.pickupDot, { backgroundColor: colors.primary }]} />
               </View>
             </Marker>
 
@@ -410,7 +413,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                 <Text style={styles.shareTripTitle}>Share your trip</Text>
                 <Text style={styles.shareTripSubtitle}>Let friends & family track your live location</Text>
               </View>
-              <Ionicons name="chevron-forward" size={20} color={SpinrConfig.theme.colors.primary} />
+              <Ionicons name="chevron-forward" size={20} color={colors.primary} />
             </TouchableOpacity>
 
             {/* Driver card — only shown AFTER the driver has actually
@@ -427,14 +430,14 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                   <View style={styles.driverCardHeader}>
                     <Text style={styles.driverCardTitle}>YOUR DRIVER</Text>
                     <TouchableOpacity style={styles.copyButton} onPress={handleCopyDetails}>
-                      <Ionicons name="copy-outline" size={16} color="#666" />
+                      <Ionicons name="copy-outline" size={16} color={colors.textDim} />
                       <Text style={styles.copyText}>Copy Details</Text>
                     </TouchableOpacity>
                   </View>
 
                   <View style={styles.driverSection}>
                     <View style={styles.driverAvatar}>
-                      <Ionicons name="person" size={28} color="#666" />
+                      <Ionicons name="person" size={28} color={colors.textDim} />
                       <View style={styles.ratingBadge}>
                         <Ionicons name="star" size={10} color="#FFB800" />
                         <Text style={styles.ratingText}>{currentDriver?.rating || 'New'}</Text>
@@ -450,7 +453,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                   {/* Vehicle Details - Clear for Screenshot */}
                   <View style={styles.vehicleSection}>
                     <View style={styles.vehicleRow}>
-                      <Ionicons name="car" size={20} color={SpinrConfig.theme.colors.primary} />
+                      <Ionicons name="car" size={20} color={colors.primary} />
                       <View style={styles.vehicleTextContainer}>
                         <Text style={styles.vehicleLabel}>VEHICLE</Text>
                         <Text style={styles.vehicleValue}>
@@ -495,7 +498,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
               </>
             ) : (
               <View style={styles.waitingDriverCard}>
-                <ActivityIndicator size="small" color={SpinrConfig.theme.colors.primary} />
+                <ActivityIndicator size="small" color={colors.primary} />
                 <View style={styles.waitingDriverTextContainer}>
                   <Text style={styles.waitingDriverTitle}>Finding your driver</Text>
                   <Text style={styles.waitingDriverSubtitle}>
@@ -526,7 +529,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
               </TouchableOpacity>
 
               <TouchableOpacity style={styles.shareButton} onPress={handleShareTrip}>
-                <Ionicons name="share-outline" size={22} color="#1A1A1A" />
+                <Ionicons name="share-outline" size={22} color={colors.text} />
               </TouchableOpacity>
             </View>
 
@@ -622,10 +625,11 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#E8E8E8',
+    backgroundColor: colors.background,
   },
   headerSafeArea: {
     position: 'absolute',
@@ -645,7 +649,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#FFF',
+    backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
@@ -657,7 +661,7 @@ const styles = StyleSheet.create({
   etaPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFF',
+    backgroundColor: colors.surface,
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 24,
@@ -677,13 +681,13 @@ const styles = StyleSheet.create({
   etaText: {
     fontSize: 15,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   emergencyButton: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#FFF',
+    backgroundColor: colors.surface,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
@@ -708,7 +712,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontSize: 16,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#666',
+    color: colors.textDim,
   },
   errorText: {
     marginTop: 12,
@@ -722,7 +726,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
     paddingHorizontal: 24,
     paddingVertical: 12,
-    backgroundColor: SpinrConfig.theme.colors.primary,
+    backgroundColor: colors.primary,
     borderRadius: 24,
   },
   retryButtonText: {
@@ -737,14 +741,14 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: SpinrConfig.theme.colors.primary,
+    backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 3,
     borderColor: '#FFF',
   },
   etaBadge: {
-    backgroundColor: '#FFF',
+    backgroundColor: colors.surface,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 12,
@@ -757,7 +761,7 @@ const styles = StyleSheet.create({
   etaBadgeText: {
     fontSize: 12,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   pickupMarker: {
     position: 'absolute',
@@ -768,12 +772,12 @@ const styles = StyleSheet.create({
     width: 20,
     height: 20,
     borderRadius: 10,
-    backgroundColor: SpinrConfig.theme.colors.primary,
+    backgroundColor: colors.primary,
     borderWidth: 4,
     borderColor: '#FFF',
   },
   bottomSheetBackground: {
-    backgroundColor: '#FFF',
+    backgroundColor: colors.surface,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
   },
@@ -807,7 +811,7 @@ const styles = StyleSheet.create({
     left: -4,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFF',
+    backgroundColor: colors.surface,
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 10,
@@ -819,7 +823,7 @@ const styles = StyleSheet.create({
   ratingText: {
     fontSize: 11,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
+    color: colors.text,
     marginLeft: 2,
   },
   driverInfo: {
@@ -828,16 +832,16 @@ const styles = StyleSheet.create({
   driverName: {
     fontSize: 20,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   vehicleInfo: {
     fontSize: 14,
     fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666',
+    color: colors.textDim,
     marginTop: 2,
   },
   plateContainer: {
-    backgroundColor: '#F5F5F5',
+    backgroundColor: colors.surfaceLight,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 6,
@@ -847,7 +851,7 @@ const styles = StyleSheet.create({
   plateText: {
     fontSize: 13,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
+    color: colors.text,
     letterSpacing: 1,
   },
   actionButtons: {
@@ -860,7 +864,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: SpinrConfig.theme.colors.primary,
+    backgroundColor: colors.primary,
     paddingVertical: 14,
     borderRadius: 28,
     gap: 8,
@@ -875,7 +879,7 @@ const styles = StyleSheet.create({
     height: 52,
     borderRadius: 26,
     borderWidth: 1.5,
-    borderColor: '#E0E0E0',
+    borderColor: colors.border,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -887,7 +891,7 @@ const styles = StyleSheet.create({
   },
   progressBar: {
     height: 4,
-    backgroundColor: SpinrConfig.theme.colors.primary,
+    backgroundColor: colors.primary,
     borderRadius: 2,
   },
   tripDetails: {
@@ -917,7 +921,7 @@ const styles = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 5,
-    backgroundColor: SpinrConfig.theme.colors.primary,
+    backgroundColor: colors.primary,
   },
   tripAddresses: {
     flex: 1,
@@ -926,30 +930,30 @@ const styles = StyleSheet.create({
   addressLabel: {
     fontSize: 11,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#999',
+    color: colors.textDim,
     letterSpacing: 0.5,
   },
   addressText: {
     fontSize: 15,
     fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#999',
+    color: colors.textDim,
     textDecorationLine: 'line-through',
   },
   dropoffLabel: {
     fontSize: 11,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: SpinrConfig.theme.colors.primary,
+    color: colors.primary,
     letterSpacing: 0.5,
   },
   dropoffText: {
     fontSize: 17,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   etaArrival: {
     fontSize: 13,
     fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666',
+    color: colors.textDim,
     marginTop: 2,
   },
   demoButton: {
@@ -961,7 +965,7 @@ const styles = StyleSheet.create({
   demoButtonText: {
     fontSize: 13,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#666',
+    color: colors.textDim,
   },
   shareTripBanner: {
     flexDirection: 'row',
@@ -977,7 +981,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: SpinrConfig.theme.colors.primary,
+    backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
@@ -988,16 +992,16 @@ const styles = StyleSheet.create({
   shareTripTitle: {
     fontSize: 15,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   shareTripSubtitle: {
     fontSize: 12,
     fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666',
+    color: colors.textDim,
     marginTop: 1,
   },
   driverDetailsCard: {
-    backgroundColor: '#F9F9F9',
+    backgroundColor: colors.surfaceLight,
     borderRadius: 16,
     padding: 16,
     marginBottom: 16,
@@ -1011,13 +1015,13 @@ const styles = StyleSheet.create({
   driverCardTitle: {
     fontSize: 11,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: SpinrConfig.theme.colors.primary,
+    color: colors.primary,
     letterSpacing: 0.5,
   },
   copyButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFF',
+    backgroundColor: colors.surface,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 8,
@@ -1026,12 +1030,12 @@ const styles = StyleSheet.create({
   copyText: {
     fontSize: 12,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#666',
+    color: colors.textDim,
   },
   totalTrips: {
     fontSize: 13,
     fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666',
+    color: colors.textDim,
     marginTop: 2,
   },
   vehicleSection: {
@@ -1052,14 +1056,14 @@ const styles = StyleSheet.create({
   vehicleLabel: {
     fontSize: 10,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#999',
+    color: colors.textDim,
     letterSpacing: 0.5,
     marginBottom: 2,
   },
   vehicleValue: {
     fontSize: 15,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   plateRow: {
     flexDirection: 'row',
@@ -1077,7 +1081,7 @@ const styles = StyleSheet.create({
   plateValue: {
     fontSize: 18,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
+    color: colors.text,
     letterSpacing: 2,
   },
   // Waiting-for-driver-to-accept placeholder (shown before status=driver_accepted)
@@ -1085,7 +1089,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 16,
-    backgroundColor: '#FFF',
+    backgroundColor: colors.surface,
     borderRadius: 20,
     padding: 20,
     marginBottom: 16,
@@ -1103,18 +1107,18 @@ const styles = StyleSheet.create({
   waitingDriverTitle: {
     fontSize: 16,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
+    color: colors.text,
     marginBottom: 4,
   },
   waitingDriverSubtitle: {
     fontSize: 13,
-    color: '#666',
+    color: colors.textDim,
     lineHeight: 18,
   },
   // Pickup-PIN display (shown after status=driver_accepted so rider can
   // prepare to share the code when the driver arrives)
   pinCard: {
-    backgroundColor: '#FFF',
+    backgroundColor: colors.surface,
     borderRadius: 20,
     padding: 20,
     marginBottom: 16,
@@ -1130,7 +1134,7 @@ const styles = StyleSheet.create({
   pinLabel: {
     fontSize: 11,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: SpinrConfig.theme.colors.primary,
+    color: colors.primary,
     letterSpacing: 1.2,
     marginBottom: 14,
   },
@@ -1145,14 +1149,14 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: '#F8F9FA',
     borderWidth: 1.5,
-    borderColor: SpinrConfig.theme.colors.primary,
+    borderColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
   pinDigit: {
     fontSize: 28,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   pinHint: {
     fontSize: 12,
@@ -1164,7 +1168,7 @@ const styles = StyleSheet.create({
     height: 52,
     borderRadius: 26,
     borderWidth: 1.5,
-    borderColor: '#E0E0E0',
+    borderColor: colors.border,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1197,4 +1201,5 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FFF',
   },
-});
+  });
+}

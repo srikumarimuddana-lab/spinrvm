@@ -1,13 +1,13 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import SpinrConfig from '@shared/config/spinr.config';
-
-const COLORS = SpinrConfig.theme.colors;
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 export default function DriverLayout() {
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
   // Use the real bottom inset (gesture bar on Android, home indicator on iOS)
   // instead of hardcoded values. Fall back to 8px so the tab bar still has
   // breathing room on devices with no system inset.
@@ -19,8 +19,8 @@ export default function DriverLayout() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: '#fff',
-          borderTopColor: '#f0f0f0',
+          backgroundColor: colors.surface,
+          borderTopColor: colors.border,
           height: tabBarHeight,
           paddingBottom: bottomPadding,
           paddingTop: 8,
@@ -30,8 +30,8 @@ export default function DriverLayout() {
           shadowOpacity: 0.1,
           shadowRadius: 4,
         },
-        tabBarActiveTintColor: COLORS.primary,
-        tabBarInactiveTintColor: COLORS.textDim,
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textDim,
         tabBarLabelStyle: {
           fontSize: 10,
           fontWeight: '600',

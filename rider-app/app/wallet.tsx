@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
   TextInput, ActivityIndicator, Platform, KeyboardAvoidingView,
@@ -6,11 +6,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import SpinrConfig from '@shared/config/spinr.config';
 import { useWalletStore, WalletTransaction } from '../store/walletStore';
 import CustomAlert from '@shared/components/CustomAlert';
-
-const COLORS = SpinrConfig.theme.colors;
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 const TOP_UP_AMOUNTS = [10, 25, 50, 100];
 
@@ -40,6 +39,9 @@ const TXN_COLORS: Record<string, string> = {
 
 export default function WalletScreen() {
   const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const {
     wallet, transactions, isLoading,
     fetchWallet, topUp, fetchTransactions, clearError,
@@ -84,7 +86,7 @@ export default function WalletScreen() {
 
   const renderTransaction = ({ item }: { item: WalletTransaction }) => {
     const icon = TXN_ICONS[item.type] || 'swap-horizontal';
-    const color = TXN_COLORS[item.type] || '#666';
+    const color = TXN_COLORS[item.type] || colors.textDim;
     const isCredit = item.amount > 0;
 
     return (
@@ -107,7 +109,7 @@ export default function WalletScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Wallet</Text>
         <View style={{ width: 44 }} />
@@ -130,8 +132,8 @@ export default function WalletScreen() {
             style={[styles.actionButton, styles.actionSecondary]}
             onPress={() => router.push('/manage-cards' as any)}
           >
-            <Ionicons name="card" size={22} color={COLORS.primary} />
-            <Text style={[styles.actionText, { color: COLORS.primary }]}>Cards</Text>
+            <Ionicons name="card" size={22} color={colors.primary} />
+            <Text style={[styles.actionText, { color: colors.primary }]}>Cards</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -157,7 +159,7 @@ export default function WalletScreen() {
               <TextInput
                 style={styles.customInput}
                 placeholder="Custom amount"
-                placeholderTextColor="#999"
+                placeholderTextColor={colors.textDim}
                 keyboardType="decimal-pad"
                 value={customAmount}
                 onChangeText={setCustomAmount}
@@ -188,7 +190,7 @@ export default function WalletScreen() {
 
       {isLoading && transactions.length === 0 ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
+          <ActivityIndicator size="large" color={colors.primary} />
         </View>
       ) : transactions.length === 0 ? (
         <View style={styles.emptyContainer}>
@@ -218,76 +220,79 @@ export default function WalletScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F9FA' },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#FFF',
-    borderBottomWidth: 1, borderBottomColor: '#F0F0F0',
-  },
-  backButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#F5F5F5', alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A' },
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
+    header: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: 16, paddingVertical: 12, backgroundColor: colors.surface,
+      borderBottomWidth: 1, borderBottomColor: colors.border,
+    },
+    backButton: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surfaceLight, alignItems: 'center', justifyContent: 'center' },
+    headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
 
-  balanceCard: {
-    margin: 16, backgroundColor: COLORS.primary, borderRadius: 20,
-    padding: 24, alignItems: 'center',
-  },
-  balanceLabel: { fontSize: 14, color: 'rgba(255,255,255,0.8)', marginBottom: 4 },
-  balanceAmount: { fontSize: 42, fontWeight: '800', color: '#FFF' },
-  balanceCurrency: { fontSize: 14, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
-  balanceActions: { flexDirection: 'row', marginTop: 20, gap: 12 },
-  actionButton: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 20, paddingVertical: 10,
-    borderRadius: 24,
-  },
-  actionSecondary: { backgroundColor: '#FFF' },
-  actionText: { fontSize: 15, fontWeight: '600', color: '#FFF' },
+    balanceCard: {
+      margin: 16, backgroundColor: colors.primary, borderRadius: 20,
+      padding: 24, alignItems: 'center',
+    },
+    balanceLabel: { fontSize: 14, color: 'rgba(255,255,255,0.8)', marginBottom: 4 },
+    balanceAmount: { fontSize: 42, fontWeight: '800', color: '#FFF' },
+    balanceCurrency: { fontSize: 14, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
+    balanceActions: { flexDirection: 'row', marginTop: 20, gap: 12 },
+    actionButton: {
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 20, paddingVertical: 10,
+      borderRadius: 24,
+    },
+    actionSecondary: { backgroundColor: '#FFF' },
+    actionText: { fontSize: 15, fontWeight: '600', color: '#FFF' },
 
-  topUpSection: {
-    margin: 16, backgroundColor: '#FFF', borderRadius: 16, padding: 20,
-    shadowColor: '#000', shadowOpacity: 0.05, shadowOffset: { width: 0, height: 2 }, shadowRadius: 8,
-    elevation: 3,
-  },
-  topUpTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A1A', marginBottom: 16 },
-  topUpGrid: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
-  topUpChip: {
-    flex: 1, minWidth: 70, alignItems: 'center', paddingVertical: 14,
-    backgroundColor: '#F5F5F5', borderRadius: 12, borderWidth: 1, borderColor: '#E5E5E5',
-  },
-  topUpChipText: { fontSize: 16, fontWeight: '700', color: '#1A1A1A' },
-  customRow: { flexDirection: 'row', marginTop: 12, gap: 10 },
-  customInput: {
-    flex: 1, backgroundColor: '#F5F5F5', borderRadius: 12, paddingHorizontal: 16,
-    paddingVertical: 12, fontSize: 16, borderWidth: 1, borderColor: '#E5E5E5',
-  },
-  customButton: {
-    backgroundColor: COLORS.primary, borderRadius: 12, paddingHorizontal: 24,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  customButtonDisabled: { opacity: 0.5 },
-  customButtonText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
-  cancelText: { textAlign: 'center', color: '#999', marginTop: 12, fontSize: 14 },
+    topUpSection: {
+      margin: 16, backgroundColor: colors.surface, borderRadius: 16, padding: 20,
+      shadowColor: '#000', shadowOpacity: 0.05, shadowOffset: { width: 0, height: 2 }, shadowRadius: 8,
+      elevation: 3,
+    },
+    topUpTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginBottom: 16 },
+    topUpGrid: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
+    topUpChip: {
+      flex: 1, minWidth: 70, alignItems: 'center', paddingVertical: 14,
+      backgroundColor: colors.surfaceLight, borderRadius: 12, borderWidth: 1, borderColor: colors.border,
+    },
+    topUpChipText: { fontSize: 16, fontWeight: '700', color: colors.text },
+    customRow: { flexDirection: 'row', marginTop: 12, gap: 10 },
+    customInput: {
+      flex: 1, backgroundColor: colors.surfaceLight, borderRadius: 12, paddingHorizontal: 16,
+      paddingVertical: 12, fontSize: 16, borderWidth: 1, borderColor: colors.border,
+      color: colors.text,
+    },
+    customButton: {
+      backgroundColor: colors.primary, borderRadius: 12, paddingHorizontal: 24,
+      alignItems: 'center', justifyContent: 'center',
+    },
+    customButtonDisabled: { opacity: 0.5 },
+    customButtonText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+    cancelText: { textAlign: 'center', color: colors.textDim, marginTop: 12, fontSize: 14 },
 
-  txnHeader: { paddingHorizontal: 16, paddingVertical: 8 },
-  txnTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A1A' },
-  txnList: { paddingHorizontal: 16, paddingBottom: 40 },
+    txnHeader: { paddingHorizontal: 16, paddingVertical: 8 },
+    txnTitle: { fontSize: 17, fontWeight: '700', color: colors.text },
+    txnList: { paddingHorizontal: 16, paddingBottom: 40 },
 
-  txnRow: {
-    flexDirection: 'row', alignItems: 'center', paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: '#F0F0F0',
-  },
-  txnIcon: {
-    width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center',
-    marginRight: 12,
-  },
-  txnInfo: { flex: 1 },
-  txnDesc: { fontSize: 15, fontWeight: '500', color: '#1A1A1A', textTransform: 'capitalize' },
-  txnDate: { fontSize: 13, color: '#999', marginTop: 2 },
-  txnAmount: { fontSize: 16, fontWeight: '700' },
+    txnRow: {
+      flexDirection: 'row', alignItems: 'center', paddingVertical: 14,
+      borderBottomWidth: 1, borderBottomColor: colors.border,
+    },
+    txnIcon: {
+      width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center',
+      marginRight: 12,
+    },
+    txnInfo: { flex: 1 },
+    txnDesc: { fontSize: 15, fontWeight: '500', color: colors.text, textTransform: 'capitalize' },
+    txnDate: { fontSize: 13, color: colors.textDim, marginTop: 2 },
+    txnAmount: { fontSize: 16, fontWeight: '700' },
 
-  loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 40 },
-  emptyContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60 },
-  emptyText: { fontSize: 16, fontWeight: '600', color: '#999', marginTop: 12 },
-  emptySubtext: { fontSize: 14, color: '#BBB', marginTop: 4 },
-});
+    loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 40 },
+    emptyContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60 },
+    emptyText: { fontSize: 16, fontWeight: '600', color: colors.textDim, marginTop: 12 },
+    emptySubtext: { fontSize: 14, color: '#BBB', marginTop: 4 },
+  });
+}

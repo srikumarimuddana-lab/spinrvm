@@ -1,0 +1,61 @@
+{
+  "_comment": "App Store Connect + Google Play metadata for Spinr Driver. Fill in the values marked TODO before submitting. See docs/deploy/04-mobile-eas.md for submission steps.",
+
+  "app_store_connect": {
+    "name": "Spinr Driver",
+    "subtitle": "Drive. Earn More. 0% Commission.",
+    "privacy_url": "https://spinr.app/privacy",
+    "support_url": "https://spinr.app/support",
+    "marketing_url": "https://spinr.app/drive",
+    "apple_id": "TODO: numeric App Store Connect app ID for the driver app",
+    "bundle_identifier": "com.spinr.driver",
+    "primary_category": "TRAVEL",
+    "secondary_category": "BUSINESS",
+    "age_rating": "4+",
+    "price_tier": "0",
+    "localizations": {
+      "en-CA": {
+        "description": "Spinr Driver is the partner app for Saskatchewan's 0% commission rideshare platform.\n\nKeep 100% of every fare — Spinr never takes a cut.\n\n• Go online instantly — one tap to start accepting rides\n• Clear turn-by-turn navigation to pickup and dropoff\n• OTP handshake confirms the right rider every time\n• Live earnings dashboard — see today's total in real time\n• Weekly earnings reports and downloadable tax documents (T4A-ready CSV)\n• Quest challenges with bonus payouts for hitting trip targets\n• Loyalty points redeemable for fuel discounts and accessories\n• Driver wallet for instant payouts\n• Push notifications for new ride requests even when backgrounded\n• Dark mode and accessible design",
+        "keywords": "driver,rideshare,earn,gig,Saskatchewan,Regina,Saskatoon,taxi,cab,income,0 commission",
+        "release_notes": "v2026.04 — initial public release.\n• Quest challenges and loyalty rewards\n• Wallet with instant payout\n• Accessibility improvements throughout\n• Dark mode",
+        "promotional_text": "Saskatchewan's first 0% commission rideshare. Sign up now — no weekly fees, ever."
+      }
+    },
+    "review_notes": "This is the driver partner app for a rideshare marketplace. Drivers authenticate via SMS OTP and complete a document-upload onboarding flow before they can go online. Location is used continuously while the driver is online so ride requests and navigation update in real time.\n\nTest account (driver):\n  Phone: +1 306 555 0202\n  OTP: 1234 (test environment)\n  Onboarding: tap 'Skip for review' on the document upload screen to bypass the real upload in the review build.\n\nBackend smoke-test URL: https://spinr-api.fly.dev/healthz\n\nPayments use Stripe test mode. No real charges or payouts are made during review.",
+    "content_rights": {
+      "contains_third_party_content": false
+    }
+  },
+
+  "google_play": {
+    "package_name": "com.spinr.driver",
+    "default_language": "en-CA",
+    "app_category": "TRAVEL_AND_LOCAL",
+    "content_rating": "Everyone",
+    "localizations": {
+      "en-CA": {
+        "title": "Spinr Driver",
+        "short_description": "Drive in Saskatchewan. Keep 100% of every fare.",
+        "full_description": "Spinr Driver is the partner app for Saskatchewan's 0% commission rideshare platform.\n\nKeep 100% of every fare — Spinr never takes a cut.\n\n● Go online instantly — one tap to start accepting rides\n● Clear turn-by-turn navigation to pickup and dropoff\n● OTP handshake confirms the right rider every time\n● Live earnings dashboard — see today's total in real time\n● Weekly earnings reports and downloadable tax documents (T4A-ready CSV)\n● Quest challenges with bonus payouts for hitting trip targets\n● Loyalty points redeemable for fuel discounts and accessories\n● Driver wallet for instant payouts\n● Push notifications for new ride requests even when backgrounded\n● Dark mode and accessible design",
+        "release_notes": "v2026.04 — initial public release.\n• Quest challenges and loyalty rewards\n• Wallet with instant payout\n• Accessibility improvements throughout\n• Dark mode"
+      }
+    },
+    "service_account_key": "TODO: path to play-service-account.json (see docs/deploy/04-mobile-eas.md)"
+  },
+
+  "screenshots": {
+    "_comment": "Place PNG files in driver-app/store-assets/screenshots/. Naming convention: <platform>-<size>-<screen>.png",
+    "required_ios_sizes": ["6.7-inch (iPhone 16 Pro Max)", "5.5-inch (iPhone 8 Plus)", "12.9-inch (iPad Pro)"],
+    "required_android_sizes": ["phone (1080×1920 or 1080×2340)", "7-inch tablet", "10-inch tablet"],
+    "screens_to_capture": [
+      "01-driver-dashboard-online",
+      "02-incoming-ride-request",
+      "03-navigation-to-pickup",
+      "04-otp-verification",
+      "05-ride-in-progress",
+      "06-earnings-dashboard",
+      "07-quest-challenges",
+      "08-tax-documents"
+    ]
+  }
+}

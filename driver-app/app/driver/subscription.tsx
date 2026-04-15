@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   ActivityIndicator, Alert, Platform, Linking,
@@ -7,9 +7,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
-
-const COLORS = SpinrConfig.theme.colors;
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 interface Plan {
   id: string;
@@ -39,6 +38,8 @@ export default function SubscriptionScreen() {
   const [freeMessage, setFreeMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [subscribing, setSubscribing] = useState<string | null>(null);
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   useEffect(() => { loadData(); }, []);
 
@@ -206,7 +207,7 @@ export default function SubscriptionScreen() {
   if (loading) {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
@@ -218,7 +219,7 @@ export default function SubscriptionScreen() {
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+            <Ionicons name="arrow-back" size={24} color={colors.text} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Spinr Pass</Text>
           <View style={{ width: 44 }} />
@@ -291,7 +292,7 @@ export default function SubscriptionScreen() {
 
               <View style={styles.planDetails}>
                 <View style={styles.planDetail}>
-                  <Ionicons name={plan.rides_per_day === -1 ? 'infinite' : 'car'} size={18} color={COLORS.primary} />
+                  <Ionicons name={plan.rides_per_day === -1 ? 'infinite' : 'car'} size={18} color={colors.primary} />
                   <Text style={styles.planDetailText}>
                     {plan.rides_per_day === -1 ? 'Unlimited rides per day' : `${plan.rides_per_day} rides per day`}
                   </Text>
@@ -341,7 +342,7 @@ export default function SubscriptionScreen() {
 
         {plans.length === 0 && !freeMode && (
           <View style={styles.empty}>
-            <Ionicons name="card-outline" size={48} color="#DDD" />
+            <Ionicons name="card-outline" size={48} color={colors.border} />
             <Text style={styles.emptyText}>No plans available in your area yet</Text>
           </View>
         )}
@@ -351,82 +352,84 @@ export default function SubscriptionScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFF' },
-  content: { paddingBottom: 40 },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F0F0F0',
-  },
-  backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A' },
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    content: { paddingBottom: 40 },
+    header: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border,
+    },
+    backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
+    headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
 
-  // Current subscription
-  currentCard: {
-    backgroundColor: COLORS.primary, margin: 16, borderRadius: 20, padding: 20, alignItems: 'center',
-  },
-  currentBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12, marginBottom: 10,
-  },
-  currentBadgeText: { fontSize: 11, fontWeight: '700', color: '#FFF', letterSpacing: 0.5 },
-  currentPlan: { fontSize: 24, fontWeight: '800', color: '#FFF', marginBottom: 4 },
-  currentPrice: { fontSize: 16, color: 'rgba(255,255,255,0.8)' },
-  currentStats: {
-    flexDirection: 'row', marginTop: 16, paddingTop: 16,
-    borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.2)', width: '100%',
-  },
-  currentStat: { flex: 1, alignItems: 'center' },
-  statValue: { fontSize: 18, fontWeight: '800', color: '#FFF' },
-  statLabel: { fontSize: 10, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
-  statDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.2)' },
-  cancelLink: { marginTop: 14 },
-  cancelLinkText: { fontSize: 13, color: 'rgba(255,255,255,0.6)' },
+    // Current subscription
+    currentCard: {
+      backgroundColor: colors.primary, margin: 16, borderRadius: 20, padding: 20, alignItems: 'center',
+    },
+    currentBadge: {
+      flexDirection: 'row', alignItems: 'center', gap: 4,
+      backgroundColor: 'rgba(255,255,255,0.2)', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12, marginBottom: 10,
+    },
+    currentBadgeText: { fontSize: 11, fontWeight: '700', color: '#FFF', letterSpacing: 0.5 },
+    currentPlan: { fontSize: 24, fontWeight: '800', color: '#FFF', marginBottom: 4 },
+    currentPrice: { fontSize: 16, color: 'rgba(255,255,255,0.8)' },
+    currentStats: {
+      flexDirection: 'row', marginTop: 16, paddingTop: 16,
+      borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.2)', width: '100%',
+    },
+    currentStat: { flex: 1, alignItems: 'center' },
+    statValue: { fontSize: 18, fontWeight: '800', color: '#FFF' },
+    statLabel: { fontSize: 10, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
+    statDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.2)' },
+    cancelLink: { marginTop: 14 },
+    cancelLinkText: { fontSize: 13, color: 'rgba(255,255,255,0.6)' },
 
-  // Section
-  sectionTitle: { fontSize: 20, fontWeight: '800', color: '#1A1A1A', paddingHorizontal: 20, marginTop: 20 },
-  sectionSubtitle: { fontSize: 14, color: '#888', paddingHorizontal: 20, marginTop: 4, marginBottom: 16 },
+    // Section
+    sectionTitle: { fontSize: 20, fontWeight: '800', color: colors.text, paddingHorizontal: 20, marginTop: 20 },
+    sectionSubtitle: { fontSize: 14, color: colors.textDim, paddingHorizontal: 20, marginTop: 4, marginBottom: 16 },
 
-  // Plan card
-  planCard: {
-    backgroundColor: '#F9F9F9', marginHorizontal: 16, marginBottom: 12,
-    borderRadius: 18, padding: 20, borderWidth: 1.5, borderColor: 'transparent',
-  },
-  planCardActive: { borderColor: COLORS.primary, backgroundColor: '#FEF2F2' },
-  currentTag: {
-    position: 'absolute', top: 12, right: 12,
-    backgroundColor: COLORS.primary, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6,
-  },
-  currentTagText: { fontSize: 9, fontWeight: '700', color: '#FFF', letterSpacing: 0.5 },
-  planHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 },
-  planName: { fontSize: 18, fontWeight: '700', color: '#1A1A1A' },
-  planDesc: { fontSize: 13, color: '#888', marginTop: 2, maxWidth: 180 },
-  priceWrap: { alignItems: 'flex-end' },
-  planPrice: { fontSize: 24, fontWeight: '800', color: COLORS.primary },
-  planDuration: { fontSize: 12, color: '#999' },
-  planDetails: { gap: 8, marginBottom: 16 },
-  planDetail: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  planDetailText: { fontSize: 14, color: '#444' },
-  subscribeBtn: {
-    backgroundColor: COLORS.primary, borderRadius: 14, paddingVertical: 14, alignItems: 'center',
-  },
-  subscribeBtnText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+    // Plan card
+    planCard: {
+      backgroundColor: colors.surfaceLight, marginHorizontal: 16, marginBottom: 12,
+      borderRadius: 18, padding: 20, borderWidth: 1.5, borderColor: 'transparent',
+    },
+    planCardActive: { borderColor: colors.primary, backgroundColor: colors.surfaceLight },
+    currentTag: {
+      position: 'absolute', top: 12, right: 12,
+      backgroundColor: colors.primary, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6,
+    },
+    currentTagText: { fontSize: 9, fontWeight: '700', color: '#FFF', letterSpacing: 0.5 },
+    planHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 },
+    planName: { fontSize: 18, fontWeight: '700', color: colors.text },
+    planDesc: { fontSize: 13, color: colors.textDim, marginTop: 2, maxWidth: 180 },
+    priceWrap: { alignItems: 'flex-end' },
+    planPrice: { fontSize: 24, fontWeight: '800', color: colors.primary },
+    planDuration: { fontSize: 12, color: colors.textSecondary },
+    planDetails: { gap: 8, marginBottom: 16 },
+    planDetail: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    planDetailText: { fontSize: 14, color: colors.textDim },
+    subscribeBtn: {
+      backgroundColor: colors.primary, borderRadius: 14, paddingVertical: 14, alignItems: 'center',
+    },
+    subscribeBtnText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
 
-  empty: { alignItems: 'center', paddingVertical: 40 },
-  emptyText: { fontSize: 15, color: '#999', marginTop: 12 },
+    empty: { alignItems: 'center', paddingVertical: 40 },
+    emptyText: { fontSize: 15, color: colors.textSecondary, marginTop: 12 },
 
-  // Free mode celebration card
-  freeCard: {
-    backgroundColor: '#ECFDF5', marginHorizontal: 16, marginTop: 8,
-    borderRadius: 20, padding: 28, alignItems: 'center',
-    borderWidth: 1.5, borderColor: '#A7F3D0',
-  },
-  freeEmoji: { fontSize: 48, marginBottom: 12 },
-  freeTitle: { fontSize: 22, fontWeight: '800', color: '#065F46', marginBottom: 8 },
-  freeMessage: { fontSize: 15, color: '#047857', textAlign: 'center', lineHeight: 22, marginBottom: 16 },
-  freeBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: '#D1FAE5', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 12,
-  },
-  freeBadgeText: { fontSize: 13, fontWeight: '700', color: '#065F46' },
-});
+    // Free mode celebration card
+    freeCard: {
+      backgroundColor: '#ECFDF5', marginHorizontal: 16, marginTop: 8,
+      borderRadius: 20, padding: 28, alignItems: 'center',
+      borderWidth: 1.5, borderColor: '#A7F3D0',
+    },
+    freeEmoji: { fontSize: 48, marginBottom: 12 },
+    freeTitle: { fontSize: 22, fontWeight: '800', color: '#065F46', marginBottom: 8 },
+    freeMessage: { fontSize: 15, color: '#047857', textAlign: 'center', lineHeight: 22, marginBottom: 16 },
+    freeBadge: {
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      backgroundColor: '#D1FAE5', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 12,
+    },
+    freeBadgeText: { fontSize: 13, fontWeight: '700', color: '#065F46' },
+  });
+}

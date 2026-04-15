@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
     View,
     Text,
@@ -13,11 +13,14 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SpinrConfig } from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
-
-const THEME = SpinrConfig.theme.colors;
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 export default function SupportScreen() {
     const router = useRouter();
+    const { colors } = useTheme();
+    const styles = useMemo(() => createStyles(colors), [colors]);
+
     const [issue, setIssue] = useState('');
     const [submitting, setSubmitting] = useState(false);
     const [alertState, setAlertState] = useState<{
@@ -64,7 +67,7 @@ export default function SupportScreen() {
                     style={styles.backButton}
                     onPress={() => router.back()}
                 >
-                    <Ionicons name="arrow-back" size={24} color={THEME.text} />
+                    <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
                 <Text style={styles.headerTitle}>Contact Support</Text>
                 <View style={styles.headerRight} />
@@ -102,19 +105,19 @@ export default function SupportScreen() {
                     <View style={styles.companyCard}>
                         <Text style={styles.companyTitle}>SPINR TECHNOLOGIES INC.</Text>
                         <View style={styles.companyRow}>
-                            <Ionicons name="location-outline" size={16} color="#999" />
+                            <Ionicons name="location-outline" size={16} color={colors.textDim} />
                             <Text style={styles.companyText}>Saskatoon, SK, Canada</Text>
                         </View>
                         <View style={styles.companyRow}>
-                            <Ionicons name="mail-outline" size={16} color="#999" />
+                            <Ionicons name="mail-outline" size={16} color={colors.textDim} />
                             <Text style={styles.companyText}>support@spinr.ca</Text>
                         </View>
                         <View style={styles.companyRow}>
-                            <Ionicons name="call-outline" size={16} color="#999" />
+                            <Ionicons name="call-outline" size={16} color={colors.textDim} />
                             <Text style={styles.companyText}>+1 (306) 555-0199</Text>
                         </View>
                         <View style={styles.companyRow}>
-                            <Ionicons name="globe-outline" size={16} color="#999" />
+                            <Ionicons name="globe-outline" size={16} color={colors.textDim} />
                             <Text style={styles.companyText}>www.spinr.ca</Text>
                         </View>
                         <Text style={styles.companyHours}>Mon–Fri 9am–6pm CST</Text>
@@ -133,10 +136,11 @@ export default function SupportScreen() {
     );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
     safeArea: {
         flex: 1,
-        backgroundColor: '#fff',
+        backgroundColor: colors.surface,
     },
     header: {
         flexDirection: 'row',
@@ -145,8 +149,8 @@ const styles = StyleSheet.create({
         paddingHorizontal: 20,
         paddingVertical: 16,
         borderBottomWidth: 1,
-        borderBottomColor: '#F3F4F6',
-        backgroundColor: '#fff',
+        borderBottomColor: colors.border,
+        backgroundColor: colors.surface,
     },
     backButton: {
         padding: 8,
@@ -155,14 +159,14 @@ const styles = StyleSheet.create({
     headerTitle: {
         fontSize: 18,
         fontWeight: '600',
-        color: THEME.text,
+        color: colors.text,
     },
     headerRight: {
         width: 40,
     },
     container: {
         flex: 1,
-        backgroundColor: '#fff',
+        backgroundColor: colors.surface,
     },
     content: {
         padding: 24,
@@ -171,22 +175,22 @@ const styles = StyleSheet.create({
     label: {
         fontSize: 16,
         fontWeight: '500',
-        color: THEME.text,
+        color: colors.text,
         marginBottom: 12,
     },
     input: {
-        backgroundColor: '#F9FAFB',
+        backgroundColor: colors.surfaceLight,
         borderWidth: 1,
-        borderColor: '#E5E7EB',
+        borderColor: colors.border,
         borderRadius: 12,
         padding: 16,
         fontSize: 16,
-        color: THEME.text,
+        color: colors.text,
         minHeight: 160,
         marginBottom: 24,
     },
     submitButton: {
-        backgroundColor: THEME.primary,
+        backgroundColor: colors.primary,
         borderRadius: 12,
         paddingVertical: 16,
         alignItems: 'center',
@@ -202,14 +206,14 @@ const styles = StyleSheet.create({
     },
     companyCard: {
         marginTop: 32,
-        backgroundColor: '#F9F9F9',
+        backgroundColor: colors.surfaceLight,
         borderRadius: 16,
         padding: 20,
     },
     companyTitle: {
         fontSize: 12,
         fontWeight: '700',
-        color: THEME.primary,
+        color: colors.primary,
         letterSpacing: 0.5,
         marginBottom: 14,
     },
@@ -221,12 +225,13 @@ const styles = StyleSheet.create({
     },
     companyText: {
         fontSize: 14,
-        color: '#444',
+        color: colors.textSecondary,
     },
     companyHours: {
         fontSize: 12,
-        color: '#999',
+        color: colors.textDim,
         marginTop: 8,
         fontStyle: 'italic',
     },
-});
+  });
+}

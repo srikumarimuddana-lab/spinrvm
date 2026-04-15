@@ -192,11 +192,12 @@
   - No new native dependencies. Doesn't require `expo-file-system`
     / `expo-sharing`, which would need a prebuild.
 
-- [ ] **Driver App: No dark mode** - Nice-to-have, not shipped.
-  Would require a theme provider, inverting all `SpinrConfig.theme.colors`
-  usages, and auditing every screen for hardcoded `#fff` / `#000`.
-  Significant UX scope that's orthogonal to ship-readiness. Leave
-  open for a dedicated design pass.
+- [x] **Driver App: No dark mode** - ✅ Implemented [SPR-01/1d].
+  `shared/theme/ThemeContext.tsx` + `shared/theme/index.ts` provide a
+  `ThemeProvider` with system-aware dark/light palettes and AsyncStorage
+  persistence. All screens in rider-app and driver-app migrated to the
+  `createStyles(colors)` factory pattern. Dark mode toggle wired in both
+  settings screens.
 
 - [x] **API: No versioning** - ✅ Already done; claim was stale.
   `backend/server.py:46-72` mounts `v1_api_router` at `/api/v1`

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Image, Modal, Platform, StatusBar } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -8,6 +8,8 @@ import * as DocumentPicker from 'expo-document-picker';
 import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 // Resolve the stored auth token the same way the shared api client does.
 // Used for the raw fetch() upload below — we can't reuse axios for multipart
@@ -23,8 +25,6 @@ const getAuthToken = async (): Promise<string | null> => {
         return null;
     }
 };
-
-const THEME = SpinrConfig.theme.colors;
 
 interface Requirement {
     id: string;
@@ -47,6 +47,8 @@ export default function DocumentsScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const { driver, fetchDriverProfile } = useAuthStore();
+    const { colors } = useTheme();
+    const styles = useMemo(() => createStyles(colors), [colors]);
     const [loading, setLoading] = useState(true);
     const [requirements, setRequirements] = useState<Requirement[]>([]);
     const [documents, setDocuments] = useState<DriverDocument[]>([]);
@@ -244,15 +246,15 @@ export default function DocumentsScreen() {
     };
 
     const renderStatusBadge = (status: string, reason?: string) => {
-        if (status === 'approved') return <View style={[styles.badge, { backgroundColor: THEME.success }]}><Text style={styles.badgeText}>Verified</Text></View>;
+        if (status === 'approved') return <View style={[styles.badge, { backgroundColor: colors.success }]}><Text style={styles.badgeText}>Verified</Text></View>;
         if (status === 'rejected') return (
             <View>
-                <View style={[styles.badge, { backgroundColor: THEME.error }]}><Text style={styles.badgeText}>Rejected</Text></View>
+                <View style={[styles.badge, { backgroundColor: colors.error }]}><Text style={styles.badgeText}>Rejected</Text></View>
                 {reason && <Text style={styles.rejectReason}>{reason}</Text>}
             </View>
         );
-        if (status === 'pending') return <View style={[styles.badge, { backgroundColor: THEME.warning }]}><Text style={styles.badgeText}>Pending</Text></View>;
-        return <View style={[styles.badge, { backgroundColor: '#F3F4F6' }]}><Text style={[styles.badgeText, { color: '#666' }]}>Missing</Text></View>;
+        if (status === 'pending') return <View style={[styles.badge, { backgroundColor: colors.warning }]}><Text style={styles.badgeText}>Pending</Text></View>;
+        return <View style={[styles.badge, { backgroundColor: '#F3F4F6' }]}><Text style={[styles.badgeText, { color: colors.textDim }]}>Missing</Text></View>;
     };
 
     // ── Derive document expiry status from driver data ──
@@ -288,7 +290,7 @@ export default function DocumentsScreen() {
     if (loading) {
         return (
             <View style={[styles.container, styles.center]}>
-                <ActivityIndicator size="large" color={THEME.primary} />
+                <ActivityIndicator size="large" color={colors.primary} />
             </View>
         );
     }
@@ -306,7 +308,7 @@ export default function DocumentsScreen() {
 
             <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 40 }]}>
                 <View style={styles.infoBox}>
-                    <Ionicons name="information-circle-outline" size={20} color={THEME.primary} style={{ marginRight: 8 }} />
+                    <Ionicons name="information-circle-outline" size={20} color={colors.primary} style={{ marginRight: 8 }} />
                     <Text style={styles.infoText}>
                         Keep your documents up to date to maintain your driver status.
                     </Text>
@@ -323,14 +325,14 @@ export default function DocumentsScreen() {
 
                     // Determine card border color based on overall state
                     const cardBorderColor = frontStatus === 'approved' && expiryInfo?.status === 'valid'
-                        ? THEME.success
+                        ? colors.success
                         : frontStatus === 'approved' && expiryInfo?.status === 'expired'
-                            ? THEME.error
+                            ? colors.error
                             : frontStatus === 'rejected'
-                                ? THEME.error
+                                ? colors.error
                                 : frontStatus === 'pending'
-                                    ? THEME.warning
-                                    : '#E5E7EB';
+                                    ? colors.warning
+                                    : colors.border;
 
                     return (
                         <View key={req.id} style={[styles.card, { borderColor: cardBorderColor }]}>
@@ -342,22 +344,22 @@ export default function DocumentsScreen() {
                                     {req.is_mandatory && <Text style={styles.mandatory}>Required</Text>}
                                     {/* Overall status icon */}
                                     {frontStatus === 'approved' && expiryInfo?.status === 'valid' && (
-                                        <Ionicons name="checkmark-circle" size={20} color={THEME.success} />
+                                        <Ionicons name="checkmark-circle" size={20} color={colors.success} />
                                     )}
                                     {frontStatus === 'approved' && expiryInfo?.status === 'expiring_soon' && (
-                                        <Ionicons name="alert-circle" size={20} color={THEME.warning} />
+                                        <Ionicons name="alert-circle" size={20} color={colors.warning} />
                                     )}
                                     {frontStatus === 'approved' && expiryInfo?.status === 'expired' && (
-                                        <Ionicons name="warning" size={20} color={THEME.error} />
+                                        <Ionicons name="warning" size={20} color={colors.error} />
                                     )}
                                     {frontStatus === 'pending' && (
-                                        <Ionicons name="time-outline" size={20} color={THEME.warning} />
+                                        <Ionicons name="time-outline" size={20} color={colors.warning} />
                                     )}
                                     {frontStatus === 'rejected' && (
-                                        <Ionicons name="close-circle" size={20} color={THEME.error} />
+                                        <Ionicons name="close-circle" size={20} color={colors.error} />
                                     )}
                                     {frontStatus === 'missing' && (
-                                        <Ionicons name="document-outline" size={20} color={THEME.textDim || '#999'} />
+                                        <Ionicons name="document-outline" size={20} color={colors.textDim} />
                                     )}
                                 </View>
                             </View>
@@ -370,26 +372,26 @@ export default function DocumentsScreen() {
                                 {(() => {
                                     if (frontStatus === 'approved') return (
                                         <View style={[styles.statusBadge, { backgroundColor: '#ECFDF5' }]}>
-                                            <Ionicons name="checkmark-circle" size={12} color={THEME.success} />
-                                            <Text style={[styles.statusBadgeText, { color: THEME.success }]}>Verified</Text>
+                                            <Ionicons name="checkmark-circle" size={12} color={colors.success} />
+                                            <Text style={[styles.statusBadgeText, { color: colors.success }]}>Verified</Text>
                                         </View>
                                     );
                                     if (frontStatus === 'pending') return (
                                         <View style={[styles.statusBadge, { backgroundColor: '#FFFBEB' }]}>
-                                            <Ionicons name="time-outline" size={12} color={THEME.warning} />
-                                            <Text style={[styles.statusBadgeText, { color: THEME.warning }]}>Pending Review</Text>
+                                            <Ionicons name="time-outline" size={12} color={colors.warning} />
+                                            <Text style={[styles.statusBadgeText, { color: colors.warning }]}>Pending Review</Text>
                                         </View>
                                     );
                                     if (frontStatus === 'rejected') return (
                                         <View style={[styles.statusBadge, { backgroundColor: '#FEF2F2' }]}>
-                                            <Ionicons name="close-circle" size={12} color={THEME.error} />
-                                            <Text style={[styles.statusBadgeText, { color: THEME.error }]}>Rejected</Text>
+                                            <Ionicons name="close-circle" size={12} color={colors.error} />
+                                            <Text style={[styles.statusBadgeText, { color: colors.error }]}>Rejected</Text>
                                         </View>
                                     );
                                     return (
                                         <View style={[styles.statusBadge, { backgroundColor: '#F3F4F6' }]}>
-                                            <Ionicons name="document-outline" size={12} color="#666" />
-                                            <Text style={[styles.statusBadgeText, { color: '#666' }]}>Not Submitted</Text>
+                                            <Ionicons name="document-outline" size={12} color={colors.textDim} />
+                                            <Text style={[styles.statusBadgeText, { color: colors.textDim }]}>Not Submitted</Text>
                                         </View>
                                     );
                                 })()}
@@ -402,14 +404,14 @@ export default function DocumentsScreen() {
                                             : '#ECFDF5',
                                     }]}>
                                         <Ionicons name="calendar-outline" size={12} color={
-                                            expiryInfo.status === 'expired' ? THEME.error
-                                                : expiryInfo.status === 'expiring_soon' ? THEME.warning
-                                                : THEME.success
+                                            expiryInfo.status === 'expired' ? colors.error
+                                                : expiryInfo.status === 'expiring_soon' ? colors.warning
+                                                : colors.success
                                         } />
                                         <Text style={[styles.statusBadgeText, {
-                                            color: expiryInfo.status === 'expired' ? THEME.error
-                                                : expiryInfo.status === 'expiring_soon' ? THEME.warning
-                                                : THEME.success,
+                                            color: expiryInfo.status === 'expired' ? colors.error
+                                                : expiryInfo.status === 'expiring_soon' ? colors.warning
+                                                : colors.success,
                                         }]}>
                                             {expiryInfo.label} • {expiryInfo.date}
                                         </Text>
@@ -422,7 +424,7 @@ export default function DocumentsScreen() {
                                 <View style={styles.rejectionBlock}>
                                     {frontDoc.rejection_reason && (
                                         <View style={styles.rejectionRow}>
-                                            <Ionicons name="alert-circle" size={14} color={THEME.error} />
+                                            <Ionicons name="alert-circle" size={14} color={colors.error} />
                                             <Text style={styles.rejectReason}>{frontDoc.rejection_reason}</Text>
                                         </View>
                                     )}
@@ -472,11 +474,11 @@ export default function DocumentsScreen() {
                                     disabled={!!uploading}
                                 >
                                     {uploading === `${req.id}-front` ? (
-                                        <ActivityIndicator color={THEME.primary} />
+                                        <ActivityIndicator color={colors.primary} />
                                     ) : (
                                         <View style={styles.uploadIconContainer}>
-                                            <Ionicons name="cloud-upload-outline" size={20} color={THEME.primary} />
-                                            <Text style={{ fontSize: 10, color: THEME.primary, fontWeight: '600' }}>UPLOAD</Text>
+                                            <Ionicons name="cloud-upload-outline" size={20} color={colors.primary} />
+                                            <Text style={{ fontSize: 10, color: colors.primary, fontWeight: '600' }}>UPLOAD</Text>
                                         </View>
                                     )}
                                 </TouchableOpacity>
@@ -484,7 +486,7 @@ export default function DocumentsScreen() {
 
                             {/* Back Side */}
                             {req.requires_back_side && (
-                                <View style={[styles.uploadRow, { marginTop: 15, borderTopWidth: 1, borderTopColor: '#F3F4F6', paddingTop: 15 }]}>
+                                <View style={[styles.uploadRow, { marginTop: 15, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 15 }]}>
                                     <View style={{ flex: 1, marginRight: 10 }}>
                                         <Text style={styles.sideLabel}>Back Side</Text>
                                         {(() => {
@@ -519,11 +521,11 @@ export default function DocumentsScreen() {
                                         disabled={!!uploading}
                                     >
                                         {uploading === `${req.id}-back` ? (
-                                            <ActivityIndicator color={THEME.primary} />
+                                            <ActivityIndicator color={colors.primary} />
                                         ) : (
                                             <View style={styles.uploadIconContainer}>
-                                                <Ionicons name="cloud-upload-outline" size={20} color={THEME.primary} />
-                                                <Text style={{ fontSize: 10, color: THEME.primary, fontWeight: '600' }}>UPLOAD</Text>
+                                                <Ionicons name="cloud-upload-outline" size={20} color={colors.primary} />
+                                                <Text style={{ fontSize: 10, color: colors.primary, fontWeight: '600' }}>UPLOAD</Text>
                                             </View>
                                         )}
                                     </TouchableOpacity>
@@ -563,141 +565,143 @@ export default function DocumentsScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#F9FAFB' },
-    center: { justifyContent: 'center', alignItems: 'center' },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingBottom: 20,
-        paddingHorizontal: 20,
-        backgroundColor: '#fff',
-        borderBottomWidth: 1,
-        borderBottomColor: '#F3F4F6',
-    },
-    backBtn: { padding: 4 },
-    headerTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A' },
-    content: { padding: 20 },
-    infoBox: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#FFF5F5', // Light red tint
-        padding: 15,
-        borderRadius: 12,
-        marginBottom: 20,
-        borderWidth: 1,
-        borderColor: '#FFE4E6',
-    },
-    infoText: { color: THEME.primaryDark, fontSize: 13, lineHeight: 20, flex: 1 },
-    card: {
-        backgroundColor: '#fff',
-        borderRadius: 12,
-        padding: 16,
-        marginBottom: 16,
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
-        elevation: 2,
-    },
-    cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-    cardTitle: { fontSize: 16, fontWeight: '600', color: '#1A1A1A' },
-    mandatory: { color: THEME.error, fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-    cardDesc: { color: '#6B7280', fontSize: 13, marginBottom: 15 },
-    uploadRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-    sideLabel: { color: '#374151', fontSize: 13, marginBottom: 4, fontWeight: '500' },
-    badge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, alignSelf: 'flex-start' },
-    badgeText: { color: '#fff', fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
-    rejectReason: { color: THEME.error, fontSize: 11, marginTop: 2, flex: 1 },
-    statusRow: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8,
-        marginBottom: 14,
-    },
-    statusBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
-        paddingHorizontal: 10,
-        paddingVertical: 5,
-        borderRadius: 8,
-    },
-    statusBadgeText: {
-        fontSize: 11,
-        fontWeight: '600',
-    },
-    rejectionBlock: {
-        marginBottom: 14,
-    },
-    rejectionRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        backgroundColor: '#FEF2F2',
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 8,
-    },
-    reuploadBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 6,
-        backgroundColor: THEME.primary,
-        paddingVertical: 10,
-        borderRadius: 10,
-        marginTop: 8,
-    },
-    reuploadBtnText: {
-        color: '#fff',
-        fontSize: 13,
-        fontWeight: '600',
-    },
-    uploadBtn: {
-        padding: 8,
-        borderRadius: 8,
-        backgroundColor: '#FFF5F5',
-        borderWidth: 1,
-        borderColor: '#FECACA',
-    },
-    uploadIconContainer: {
-        alignItems: 'center',
-        justifyContent: 'center',
-        width: 44,
-        gap: 2,
-    },
-    previewContainer: {
-        marginTop: 8,
-        borderRadius: 8,
-        overflow: 'hidden',
-        width: 100,
-        height: 60,
-        backgroundColor: '#F3F4F6',
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-    },
-    docPreview: {
-        width: '100%',
-        height: '100%',
-    },
-    previewModal: {
-        flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.92)',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    previewModalClose: {
-        position: 'absolute',
-        top: 52,
-        right: 20,
-        zIndex: 10,
-    },
-    previewModalImage: {
-        width: '100%',
-        height: '80%',
-    },
-});
+function createStyles(colors: ThemeColors) {
+    return StyleSheet.create({
+        container: { flex: 1, backgroundColor: colors.background },
+        center: { justifyContent: 'center', alignItems: 'center' },
+        header: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingBottom: 20,
+            paddingHorizontal: 20,
+            backgroundColor: colors.surface,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+        },
+        backBtn: { padding: 4 },
+        headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
+        content: { padding: 20 },
+        infoBox: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: '#FFF5F5', // Light red tint
+            padding: 15,
+            borderRadius: 12,
+            marginBottom: 20,
+            borderWidth: 1,
+            borderColor: '#FFE4E6',
+        },
+        infoText: { color: colors.primaryDark, fontSize: 13, lineHeight: 20, flex: 1 },
+        card: {
+            backgroundColor: colors.surface,
+            borderRadius: 12,
+            padding: 16,
+            marginBottom: 16,
+            borderWidth: 1,
+            borderColor: colors.border,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 1 },
+            shadowOpacity: 0.05,
+            shadowRadius: 2,
+            elevation: 2,
+        },
+        cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+        cardTitle: { fontSize: 16, fontWeight: '600', color: colors.text },
+        mandatory: { color: colors.error, fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
+        cardDesc: { color: colors.textSecondary, fontSize: 13, marginBottom: 15 },
+        uploadRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+        sideLabel: { color: colors.textSecondary, fontSize: 13, marginBottom: 4, fontWeight: '500' },
+        badge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4, alignSelf: 'flex-start' },
+        badgeText: { color: '#fff', fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
+        rejectReason: { color: colors.error, fontSize: 11, marginTop: 2, flex: 1 },
+        statusRow: {
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            gap: 8,
+            marginBottom: 14,
+        },
+        statusBadge: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 4,
+            paddingHorizontal: 10,
+            paddingVertical: 5,
+            borderRadius: 8,
+        },
+        statusBadgeText: {
+            fontSize: 11,
+            fontWeight: '600',
+        },
+        rejectionBlock: {
+            marginBottom: 14,
+        },
+        rejectionRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 6,
+            backgroundColor: '#FEF2F2',
+            paddingHorizontal: 10,
+            paddingVertical: 6,
+            borderRadius: 8,
+        },
+        reuploadBtn: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            backgroundColor: colors.primary,
+            paddingVertical: 10,
+            borderRadius: 10,
+            marginTop: 8,
+        },
+        reuploadBtnText: {
+            color: '#fff',
+            fontSize: 13,
+            fontWeight: '600',
+        },
+        uploadBtn: {
+            padding: 8,
+            borderRadius: 8,
+            backgroundColor: '#FFF5F5',
+            borderWidth: 1,
+            borderColor: '#FECACA',
+        },
+        uploadIconContainer: {
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 44,
+            gap: 2,
+        },
+        previewContainer: {
+            marginTop: 8,
+            borderRadius: 8,
+            overflow: 'hidden',
+            width: 100,
+            height: 60,
+            backgroundColor: colors.surfaceLight,
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
+        docPreview: {
+            width: '100%',
+            height: '100%',
+        },
+        previewModal: {
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.92)',
+            justifyContent: 'center',
+            alignItems: 'center',
+        },
+        previewModalClose: {
+            position: 'absolute',
+            top: 52,
+            right: 20,
+            zIndex: 10,
+        },
+        previewModalImage: {
+            width: '100%',
+            height: '80%',
+        },
+    });
+}

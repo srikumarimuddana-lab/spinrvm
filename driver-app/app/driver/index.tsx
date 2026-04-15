@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, Alert, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator } from 'react-native';
 import MapView, { Marker, Polyline, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
@@ -18,21 +18,18 @@ import { SOSButton } from '@shared/components/SOSButton';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { useLanguageStore } from '../../store/languageStore';
 import api from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
 
 // Use Google Maps on Android, Apple Maps (native) on iOS
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
-const COLORS = {
-  primary: SpinrConfig.theme.colors.background,
-  accent: SpinrConfig.theme.colors.primary,
-  text: SpinrConfig.theme.colors.text,
-  textDim: SpinrConfig.theme.colors.textDim,
-};
-
 export default function DriverDashboard() {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   // Driver + user live on the shared auth store — useDriverStore does not
   // hold these fields, so reading them from there always returned null and
   // left the GO button permanently disabled.
@@ -179,7 +176,7 @@ export default function DriverDashboard() {
           description={ride.pickup_address}
         >
           <View style={styles.markerContainer}>
-            <View style={[styles.markerDot, { backgroundColor: COLORS.accent }]}>
+            <View style={[styles.markerDot, { backgroundColor: colors.primary }]}>
               <Ionicons name="location" size={16} color="#fff" />
             </View>
           </View>
@@ -234,7 +231,7 @@ export default function DriverDashboard() {
             <View style={{ flex: 1, marginLeft: 14 }}>
               <Text style={styles.rideOfferTitle}>{t('rideOffer.newRideRequest')}</Text>
               <View style={styles.rideTypeBadge}>
-                <Ionicons name="car-sport" size={12} color={COLORS.accent} />
+                <Ionicons name="car-sport" size={12} color={colors.primary} />
                 <Text style={styles.rideTypeText}>{t('rideOffer.standardRide')}</Text>
               </View>
             </View>
@@ -247,7 +244,7 @@ export default function DriverDashboard() {
           {/* Route: Pickup & Dropoff */}
           <View style={styles.routeContainer}>
             <View style={styles.routeIconColumn}>
-              <View style={[styles.routeDot, { backgroundColor: COLORS.accent }]} />
+              <View style={[styles.routeDot, { backgroundColor: colors.primary }]} />
               <View style={styles.routeLine} />
               <View style={[styles.routeDot, { backgroundColor: '#FF4757' }]} />
             </View>
@@ -272,19 +269,19 @@ export default function DriverDashboard() {
           <View style={styles.tripInfoRow}>
             {incomingRide.distance_km && (
               <View style={styles.tripInfoBadge}>
-                <Ionicons name="navigate-outline" size={14} color={COLORS.accent} />
+                <Ionicons name="navigate-outline" size={14} color={colors.primary} />
                 <Text style={styles.tripInfoText}>{incomingRide.distance_km.toFixed(1)} km</Text>
               </View>
             )}
             {incomingRide.duration_minutes && (
               <View style={styles.tripInfoBadge}>
-                <Ionicons name="time-outline" size={14} color={COLORS.accent} />
+                <Ionicons name="time-outline" size={14} color={colors.primary} />
                 <Text style={styles.tripInfoText}>{Math.round(incomingRide.duration_minutes)} min</Text>
               </View>
             )}
             {incomingRide.rider_name && (
               <View style={styles.tripInfoBadge}>
-                <Ionicons name="person-outline" size={14} color={COLORS.accent} />
+                <Ionicons name="person-outline" size={14} color={colors.primary} />
                 <Text style={styles.tripInfoText}>{incomingRide.rider_name}</Text>
                 {incomingRide.rider_rating && (
                   <>
@@ -323,8 +320,8 @@ export default function DriverDashboard() {
   if (!location?.coords) {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color={COLORS.accent} />
-        <Text style={{ color: COLORS.text, marginTop: 12, fontSize: 15 }}>{t('home.gettingLocation')}</Text>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={{ color: colors.text, marginTop: 12, fontSize: 15 }}>{t('home.gettingLocation')}</Text>
       </View>
     );
   }
@@ -339,6 +336,7 @@ export default function DriverDashboard() {
         ref={mapRef}
         style={styles.map}
         provider={MAP_PROVIDER}
+        userInterfaceStyle={isDark ? "dark" : "light"}
         initialRegion={{
           latitude: location.coords.latitude,
           longitude: location.coords.longitude,
@@ -422,7 +420,7 @@ export default function DriverDashboard() {
                   <Polyline
                     coordinates={routeCoords}
                     strokeWidth={4}
-                    strokeColor={rideState === 'trip_in_progress' ? '#10B981' : COLORS.accent}
+                    strokeColor={rideState === 'trip_in_progress' ? '#10B981' : colors.primary}
                     lineCap="round"
                     lineJoin="round"
                   />
@@ -521,223 +519,225 @@ export default function DriverDashboard() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.primary,
-  },
-  map: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  markerContainer: {
-    alignItems: 'center',
-  },
-  markerDot: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#fff',
-  },
-  // ── Rich Ride Offer Panel ──
-  rideOfferOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    justifyContent: 'flex-end',
-  },
-  rideOfferContent: {
-    backgroundColor: COLORS.primary,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingBottom: 34,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 20,
-    elevation: 20,
-  },
-  timerBarContainer: {
-    height: 4,
-    backgroundColor: '#F3F4F6',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    overflow: 'hidden',
-  },
-  timerBar: {
-    height: '100%',
-    backgroundColor: COLORS.accent,
-    borderRadius: 4,
-  },
-  offerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 14,
-  },
-  countdownCircle: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    borderWidth: 3,
-    borderColor: COLORS.accent,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,212,170,0.06)',
-  },
-  countdownText: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: COLORS.accent,
-  },
-  rideOfferTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  rideTypeBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 3,
-  },
-  rideTypeText: {
-    fontSize: 12,
-    color: COLORS.accent,
-    fontWeight: '600',
-  },
-  fareContainer: {
-    alignItems: 'flex-end',
-  },
-  fareLabel: {
-    fontSize: 11,
-    color: COLORS.textDim,
-    fontWeight: '500',
-  },
-  fareAmount: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: COLORS.accent,
-    letterSpacing: -1,
-  },
-  // Route display
-  routeContainer: {
-    flexDirection: 'row',
-    marginHorizontal: 20,
-    backgroundColor: '#F9FAFB',
-    borderRadius: 16,
-    padding: 14,
-    marginBottom: 12,
-  },
-  routeIconColumn: {
-    alignItems: 'center',
-    width: 20,
-    paddingTop: 4,
-  },
-  routeDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  routeLine: {
-    width: 2,
-    flex: 1,
-    backgroundColor: '#D1D5DB',
-    marginVertical: 4,
-  },
-  routeDetails: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  routeRow: {
-    paddingVertical: 2,
-  },
-  routeLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: COLORS.textDim,
-    letterSpacing: 0.5,
-    marginBottom: 2,
-  },
-  routeAddress: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: COLORS.text,
-  },
-  routeDivider: {
-    height: 1,
-    backgroundColor: '#E5E7EB',
-    marginVertical: 8,
-  },
-  // Trip info badges
-  tripInfoRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    paddingHorizontal: 20,
-    marginBottom: 16,
-  },
-  tripInfoBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: '#F0FDF9',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#D1FAE5',
-  },
-  tripInfoText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
-  // Action buttons
-  offerActions: {
-    flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: 20,
-  },
-  declineBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FEF2F2',
-    borderRadius: 16,
-    paddingVertical: 16,
-    gap: 8,
-    borderWidth: 1,
-    borderColor: '#FECACA',
-  },
-  declineText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#FF4757',
-  },
-  acceptBtn: {
-    flex: 2,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.accent,
-    borderRadius: 16,
-    paddingVertical: 16,
-    gap: 8,
-    shadowColor: COLORS.accent,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  acceptText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#fff',
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    map: {
+      ...StyleSheet.absoluteFillObject,
+    },
+    markerContainer: {
+      alignItems: 'center',
+    },
+    markerDot: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      justifyContent: 'center',
+      alignItems: 'center',
+      borderWidth: 2,
+      borderColor: '#fff',
+    },
+    // ── Rich Ride Offer Panel ──
+    rideOfferOverlay: {
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: 0,
+      justifyContent: 'flex-end',
+    },
+    rideOfferContent: {
+      backgroundColor: colors.surface,
+      borderTopLeftRadius: 28,
+      borderTopRightRadius: 28,
+      paddingBottom: 34,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: -8 },
+      shadowOpacity: 0.12,
+      shadowRadius: 20,
+      elevation: 20,
+    },
+    timerBarContainer: {
+      height: 4,
+      backgroundColor: colors.surfaceLight,
+      borderTopLeftRadius: 28,
+      borderTopRightRadius: 28,
+      overflow: 'hidden',
+    },
+    timerBar: {
+      height: '100%',
+      backgroundColor: colors.primary,
+      borderRadius: 4,
+    },
+    offerHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 20,
+      paddingTop: 18,
+      paddingBottom: 14,
+    },
+    countdownCircle: {
+      width: 52,
+      height: 52,
+      borderRadius: 26,
+      borderWidth: 3,
+      borderColor: colors.primary,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: 'rgba(0,212,170,0.06)',
+    },
+    countdownText: {
+      fontSize: 22,
+      fontWeight: '800',
+      color: colors.primary,
+    },
+    rideOfferTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    rideTypeBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      marginTop: 3,
+    },
+    rideTypeText: {
+      fontSize: 12,
+      color: colors.primary,
+      fontWeight: '600',
+    },
+    fareContainer: {
+      alignItems: 'flex-end',
+    },
+    fareLabel: {
+      fontSize: 11,
+      color: colors.textDim,
+      fontWeight: '500',
+    },
+    fareAmount: {
+      fontSize: 28,
+      fontWeight: '800',
+      color: colors.primary,
+      letterSpacing: -1,
+    },
+    // Route display
+    routeContainer: {
+      flexDirection: 'row',
+      marginHorizontal: 20,
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 16,
+      padding: 14,
+      marginBottom: 12,
+    },
+    routeIconColumn: {
+      alignItems: 'center',
+      width: 20,
+      paddingTop: 4,
+    },
+    routeDot: {
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+    },
+    routeLine: {
+      width: 2,
+      flex: 1,
+      backgroundColor: colors.border,
+      marginVertical: 4,
+    },
+    routeDetails: {
+      flex: 1,
+      marginLeft: 12,
+    },
+    routeRow: {
+      paddingVertical: 2,
+    },
+    routeLabel: {
+      fontSize: 10,
+      fontWeight: '700',
+      color: colors.textDim,
+      letterSpacing: 0.5,
+      marginBottom: 2,
+    },
+    routeAddress: {
+      fontSize: 14,
+      fontWeight: '500',
+      color: colors.text,
+    },
+    routeDivider: {
+      height: 1,
+      backgroundColor: colors.border,
+      marginVertical: 8,
+    },
+    // Trip info badges
+    tripInfoRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      paddingHorizontal: 20,
+      marginBottom: 16,
+    },
+    tripInfoBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      backgroundColor: '#F0FDF9',
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: '#D1FAE5',
+    },
+    tripInfoText: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.text,
+    },
+    // Action buttons
+    offerActions: {
+      flexDirection: 'row',
+      gap: 12,
+      paddingHorizontal: 20,
+    },
+    declineBtn: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: '#FEF2F2',
+      borderRadius: 16,
+      paddingVertical: 16,
+      gap: 8,
+      borderWidth: 1,
+      borderColor: '#FECACA',
+    },
+    declineText: {
+      fontSize: 15,
+      fontWeight: '600',
+      color: '#FF4757',
+    },
+    acceptBtn: {
+      flex: 2,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.primary,
+      borderRadius: 16,
+      paddingVertical: 16,
+      gap: 8,
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.3,
+      shadowRadius: 8,
+      elevation: 6,
+    },
+    acceptText: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: '#fff',
+    },
+  });
+}

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch,
 } from 'react-native';
@@ -6,18 +6,19 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@shared/store/authStore';
-import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
-
-const COLORS = SpinrConfig.theme.colors;
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 export default function SettingsScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
+  const { colors, isDark, colorScheme, setTheme } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const [pushEnabled, setPushEnabled] = useState(true);
   const [emailEnabled, setEmailEnabled] = useState(true);
   const [smsEnabled, setSmsEnabled] = useState(true);
-  const [darkMode, setDarkMode] = useState(false);
   const [language, setLanguage] = useState('English');
   const [alertState, setAlertState] = useState<{
     visible: boolean;
@@ -27,11 +28,15 @@ export default function SettingsScreen() {
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
+  const handleDarkModeToggle = (value: boolean) => {
+    setTheme(value ? 'dark' : 'light');
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Settings</Text>
         <View style={{ width: 44 }} />
@@ -57,7 +62,7 @@ export default function SettingsScreen() {
         <View style={styles.card}>
           <SettingToggle icon="moon" iconColor="#6366F1" iconBg="#EEF2FF"
             title="Dark Mode" subtitle="Reduce eye strain at night"
-            value={darkMode} onToggle={setDarkMode} />
+            value={isDark} onToggle={handleDarkModeToggle} />
         </View>
 
         {/* Language */}
@@ -83,18 +88,18 @@ export default function SettingsScreen() {
               <Text style={styles.rowTitle}>Language</Text>
               <Text style={styles.rowSub}>{language}</Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color="#CCC" />
+            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.row} onPress={() => router.push('/privacy-settings' as any)}>
-            <View style={[styles.rowIcon, { backgroundColor: '#F3F4F6' }]}>
-              <Ionicons name="lock-closed" size={20} color="#6B7280" />
+            <View style={[styles.rowIcon, { backgroundColor: colors.surfaceLight }]}>
+              <Ionicons name="lock-closed" size={20} color={colors.textSecondary} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>Privacy & Data</Text>
               <Text style={styles.rowSub}>Permissions, data management</Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color="#CCC" />
+            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
           </TouchableOpacity>
         </View>
 
@@ -109,7 +114,7 @@ export default function SettingsScreen() {
               <Text style={styles.rowTitle}>Payment Methods</Text>
               <Text style={styles.rowSub}>Manage your cards</Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color="#CCC" />
+            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.row} onPress={() => router.push('/saved-places' as any)}>
@@ -120,7 +125,7 @@ export default function SettingsScreen() {
               <Text style={styles.rowTitle}>Saved Places</Text>
               <Text style={styles.rowSub}>Home, work, favourites</Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color="#CCC" />
+            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
           </TouchableOpacity>
         </View>
 
@@ -128,23 +133,23 @@ export default function SettingsScreen() {
         <Text style={styles.sectionTitle}>About</Text>
         <View style={styles.card}>
           <TouchableOpacity style={styles.row} onPress={() => router.push('/legal?type=tos' as any)}>
-            <View style={[styles.rowIcon, { backgroundColor: '#F3F4F6' }]}>
-              <Ionicons name="document-text" size={20} color="#6B7280" />
+            <View style={[styles.rowIcon, { backgroundColor: colors.surfaceLight }]}>
+              <Ionicons name="document-text" size={20} color={colors.textSecondary} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>Terms of Service</Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color="#CCC" />
+            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.row} onPress={() => router.push('/legal?type=privacy' as any)}>
-            <View style={[styles.rowIcon, { backgroundColor: '#F3F4F6' }]}>
-              <Ionicons name="eye" size={20} color="#6B7280" />
+            <View style={[styles.rowIcon, { backgroundColor: colors.surfaceLight }]}>
+              <Ionicons name="eye" size={20} color={colors.textSecondary} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>Privacy Policy</Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color="#CCC" />
+            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
           </TouchableOpacity>
         </View>
 
@@ -166,6 +171,8 @@ function SettingToggle({ icon, iconColor, iconBg, title, subtitle, value, onTogg
   icon: string; iconColor: string; iconBg: string;
   title: string; subtitle: string; value: boolean; onToggle: (v: boolean) => void;
 }) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   return (
     <View style={styles.row}>
       <View style={[styles.rowIcon, { backgroundColor: iconBg }]}>
@@ -178,30 +185,32 @@ function SettingToggle({ icon, iconColor, iconBg, title, subtitle, value, onTogg
       <Switch
         value={value}
         onValueChange={onToggle}
-        trackColor={{ false: '#E5E5E5', true: `${COLORS.primary}60` }}
-        thumbColor={value ? COLORS.primary : '#FFF'}
+        trackColor={{ false: colors.border, true: `${colors.primary}60` }}
+        thumbColor={value ? colors.primary : colors.surface}
       />
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFF' },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F0F0F0',
-  },
-  backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A' },
-  content: { padding: 20, paddingBottom: 40 },
-  sectionTitle: { fontSize: 13, fontWeight: '700', color: '#999', letterSpacing: 0.5, marginBottom: 8, marginTop: 20 },
-  card: { backgroundColor: '#F9F9F9', borderRadius: 16, paddingHorizontal: 14 },
-  row: {
-    flexDirection: 'row', alignItems: 'center', paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: '#F0F0F0',
-  },
-  rowIcon: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 14 },
-  rowTitle: { fontSize: 15, fontWeight: '600', color: '#1A1A1A' },
-  rowSub: { fontSize: 12, color: '#999', marginTop: 1 },
-  version: { fontSize: 12, color: '#CCC', textAlign: 'center', marginTop: 24 },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    header: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border,
+    },
+    backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
+    headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
+    content: { padding: 20, paddingBottom: 40 },
+    sectionTitle: { fontSize: 13, fontWeight: '700', color: colors.textDim, letterSpacing: 0.5, marginBottom: 8, marginTop: 20 },
+    card: { backgroundColor: colors.surfaceLight, borderRadius: 16, paddingHorizontal: 14 },
+    row: {
+      flexDirection: 'row', alignItems: 'center', paddingVertical: 14,
+      borderBottomWidth: 1, borderBottomColor: colors.border,
+    },
+    rowIcon: { width: 40, height: 40, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 14 },
+    rowTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
+    rowSub: { fontSize: 12, color: colors.textDim, marginTop: 1 },
+    version: { fontSize: 12, color: colors.textDim, textAlign: 'center', marginTop: 24 },
+  });
+}

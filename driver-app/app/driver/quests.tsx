@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   ActivityIndicator, RefreshControl,
@@ -6,10 +6,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import SpinrConfig from '@shared/config/spinr.config';
 import { useQuestStore, Quest, MyQuestProgress } from '../../store/questStore';
-
-const COLORS = SpinrConfig.theme.colors;
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 const QUEST_TYPE_ICONS: Record<string, string> = {
   ride_count: 'car',
@@ -35,6 +34,8 @@ export default function QuestsScreen() {
     availableQuests, myQuests, isLoading,
     fetchAvailableQuests, fetchMyQuests, joinQuest, claimReward,
   } = useQuestStore();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   const [tab, setTab] = useState<'available' | 'active'>('available');
   const [refreshing, setRefreshing] = useState(false);
@@ -92,8 +93,8 @@ export default function QuestsScreen() {
     return (
       <View key={quest.id} style={styles.questCard}>
         <View style={styles.questHeader}>
-          <View style={[styles.questIcon, { backgroundColor: COLORS.primary + '15' }]}>
-            <Ionicons name={icon as any} size={24} color={COLORS.primary} />
+          <View style={[styles.questIcon, { backgroundColor: colors.primary + '15' }]}>
+            <Ionicons name={icon as any} size={24} color={colors.primary} />
           </View>
           <View style={styles.questMeta}>
             <Text style={styles.questTitle}>{quest.title}</Text>
@@ -109,7 +110,7 @@ export default function QuestsScreen() {
 
         <View style={styles.questFooter}>
           <View style={styles.questTimeline}>
-            <Ionicons name="time-outline" size={14} color="#999" />
+            <Ionicons name="time-outline" size={14} color={colors.textSecondary} />
             <Text style={styles.timeText}>{getTimeRemaining(quest.end_date)}</Text>
           </View>
           <Text style={styles.targetText}>
@@ -151,12 +152,12 @@ export default function QuestsScreen() {
         <View style={styles.questHeader}>
           <View style={[
             styles.questIcon,
-            { backgroundColor: isCompleted ? '#10B981' + '15' : isClaimed ? '#F59E0B' + '15' : COLORS.primary + '15' },
+            { backgroundColor: isCompleted ? '#10B981' + '15' : isClaimed ? '#F59E0B' + '15' : colors.primary + '15' },
           ]}>
             <Ionicons
               name={(isClaimed ? 'trophy' : icon) as any}
               size={24}
-              color={isCompleted ? '#10B981' : isClaimed ? '#F59E0B' : COLORS.primary}
+              color={isCompleted ? '#10B981' : isClaimed ? '#F59E0B' : colors.primary}
             />
           </View>
           <View style={styles.questMeta}>
@@ -164,10 +165,10 @@ export default function QuestsScreen() {
             <Text style={styles.questType}>{QUEST_TYPE_LABELS[quest.type] || quest.type}</Text>
           </View>
           <View style={[styles.statusBadge, {
-            backgroundColor: isCompleted ? '#10B981' + '15' : isClaimed ? '#F59E0B' + '15' : '#6B7280' + '15',
+            backgroundColor: isCompleted ? '#10B981' + '15' : isClaimed ? '#F59E0B' + '15' : colors.textDim + '15',
           }]}>
             <Text style={[styles.statusText, {
-              color: isCompleted ? '#10B981' : isClaimed ? '#F59E0B' : '#6B7280',
+              color: isCompleted ? '#10B981' : isClaimed ? '#F59E0B' : colors.textDim,
             }]}>
               {isClaimed ? 'Claimed' : isCompleted ? 'Complete!' : 'Active'}
             </Text>
@@ -179,7 +180,7 @@ export default function QuestsScreen() {
           <View style={styles.progressBar}>
             <View style={[styles.progressFill, {
               width: `${Math.min(100, item.progress_pct)}%`,
-              backgroundColor: isCompleted || isClaimed ? '#10B981' : COLORS.primary,
+              backgroundColor: isCompleted || isClaimed ? '#10B981' : colors.primary,
             }]} />
           </View>
           <View style={styles.progressLabels}>
@@ -224,7 +225,7 @@ export default function QuestsScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Quests & Bonuses</Text>
         <View style={{ width: 44 }} />
@@ -252,12 +253,12 @@ export default function QuestsScreen() {
 
       <ScrollView
         style={styles.content}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.primary} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         showsVerticalScrollIndicator={false}
       >
         {isLoading && !refreshing ? (
           <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={COLORS.primary} />
+            <ActivityIndicator size="large" color={colors.primary} />
           </View>
         ) : tab === 'available' ? (
           availableQuests.length === 0 ? (
@@ -299,97 +300,99 @@ export default function QuestsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F9FA' },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#FFF',
-    borderBottomWidth: 1, borderBottomColor: '#F0F0F0',
-  },
-  backButton: {
-    width: 44, height: 44, borderRadius: 22, backgroundColor: '#F5F5F5',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A' },
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surfaceLight },
+    header: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: 16, paddingVertical: 12, backgroundColor: colors.surface,
+      borderBottomWidth: 1, borderBottomColor: colors.border,
+    },
+    backButton: {
+      width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surfaceLight,
+      alignItems: 'center', justifyContent: 'center',
+    },
+    headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
 
-  tabs: {
-    flexDirection: 'row', backgroundColor: '#FFF',
-    paddingHorizontal: 16, paddingBottom: 12, gap: 8,
-  },
-  tab: {
-    flex: 1, paddingVertical: 10, borderRadius: 24,
-    backgroundColor: '#F5F5F5', alignItems: 'center',
-  },
-  tabActive: { backgroundColor: COLORS.primary },
-  tabText: { fontSize: 14, fontWeight: '600', color: '#666' },
-  tabTextActive: { color: '#FFF' },
+    tabs: {
+      flexDirection: 'row', backgroundColor: colors.surface,
+      paddingHorizontal: 16, paddingBottom: 12, gap: 8,
+    },
+    tab: {
+      flex: 1, paddingVertical: 10, borderRadius: 24,
+      backgroundColor: colors.surfaceLight, alignItems: 'center',
+    },
+    tabActive: { backgroundColor: colors.primary },
+    tabText: { fontSize: 14, fontWeight: '600', color: colors.textDim },
+    tabTextActive: { color: '#FFF' },
 
-  content: { flex: 1, padding: 16 },
+    content: { flex: 1, padding: 16 },
 
-  questCard: {
-    backgroundColor: '#FFF', borderRadius: 16, padding: 18, marginBottom: 12,
-    shadowColor: '#000', shadowOpacity: 0.04, shadowOffset: { width: 0, height: 2 }, shadowRadius: 8,
-    elevation: 2,
-  },
-  questHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
-  questIcon: {
-    width: 48, height: 48, borderRadius: 24,
-    alignItems: 'center', justifyContent: 'center', marginRight: 12,
-  },
-  questMeta: { flex: 1 },
-  questTitle: { fontSize: 16, fontWeight: '700', color: '#1A1A1A' },
-  questType: { fontSize: 13, color: '#999', marginTop: 2, textTransform: 'capitalize' },
+    questCard: {
+      backgroundColor: colors.surface, borderRadius: 16, padding: 18, marginBottom: 12,
+      shadowColor: '#000', shadowOpacity: 0.04, shadowOffset: { width: 0, height: 2 }, shadowRadius: 8,
+      elevation: 2,
+    },
+    questHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+    questIcon: {
+      width: 48, height: 48, borderRadius: 24,
+      alignItems: 'center', justifyContent: 'center', marginRight: 12,
+    },
+    questMeta: { flex: 1 },
+    questTitle: { fontSize: 16, fontWeight: '700', color: colors.text },
+    questType: { fontSize: 13, color: colors.textSecondary, marginTop: 2, textTransform: 'capitalize' },
 
-  rewardBadge: {
-    backgroundColor: '#F59E0B' + '15', paddingHorizontal: 12, paddingVertical: 6,
-    borderRadius: 12, alignItems: 'center',
-  },
-  rewardAmount: { fontSize: 16, fontWeight: '800', color: '#F59E0B' },
-  rewardLabel: { fontSize: 11, color: '#F59E0B', marginTop: 1 },
+    rewardBadge: {
+      backgroundColor: '#F59E0B' + '15', paddingHorizontal: 12, paddingVertical: 6,
+      borderRadius: 12, alignItems: 'center',
+    },
+    rewardAmount: { fontSize: 16, fontWeight: '800', color: '#F59E0B' },
+    rewardLabel: { fontSize: 11, color: '#F59E0B', marginTop: 1 },
 
-  questDesc: { fontSize: 14, color: '#666', lineHeight: 20, marginBottom: 12 },
+    questDesc: { fontSize: 14, color: colors.textDim, lineHeight: 20, marginBottom: 12 },
 
-  questFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  questTimeline: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  timeText: { fontSize: 13, color: '#999' },
-  targetText: { fontSize: 13, color: '#666', fontWeight: '500' },
+    questFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+    questTimeline: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    timeText: { fontSize: 13, color: colors.textSecondary },
+    targetText: { fontSize: 13, color: colors.textDim, fontWeight: '500' },
 
-  joinButton: {
-    backgroundColor: COLORS.primary, borderRadius: 12, paddingVertical: 12,
-    alignItems: 'center', justifyContent: 'center', marginTop: 14,
-    flexDirection: 'row',
-  },
-  joinButtonText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+    joinButton: {
+      backgroundColor: colors.primary, borderRadius: 12, paddingVertical: 12,
+      alignItems: 'center', justifyContent: 'center', marginTop: 14,
+      flexDirection: 'row',
+    },
+    joinButtonText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
 
-  joinedBadge: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 6, marginTop: 12, paddingVertical: 8,
-    backgroundColor: '#10B981' + '10', borderRadius: 10,
-  },
-  joinedText: { fontSize: 14, fontWeight: '600', color: '#10B981' },
+    joinedBadge: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+      gap: 6, marginTop: 12, paddingVertical: 8,
+      backgroundColor: '#10B981' + '10', borderRadius: 10,
+    },
+    joinedText: { fontSize: 14, fontWeight: '600', color: '#10B981' },
 
-  statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
-  statusText: { fontSize: 12, fontWeight: '700' },
+    statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
+    statusText: { fontSize: 12, fontWeight: '700' },
 
-  progressSection: { marginBottom: 12 },
-  progressBar: {
-    height: 10, backgroundColor: '#F0F0F0', borderRadius: 5, overflow: 'hidden',
-    marginBottom: 6,
-  },
-  progressFill: { height: '100%', borderRadius: 5 },
-  progressLabels: { flexDirection: 'row', justifyContent: 'space-between' },
-  progressValue: { fontSize: 13, fontWeight: '600', color: '#1A1A1A' },
-  progressPct: { fontSize: 13, fontWeight: '700', color: COLORS.primary },
+    progressSection: { marginBottom: 12 },
+    progressBar: {
+      height: 10, backgroundColor: colors.border, borderRadius: 5, overflow: 'hidden',
+      marginBottom: 6,
+    },
+    progressFill: { height: '100%', borderRadius: 5 },
+    progressLabels: { flexDirection: 'row', justifyContent: 'space-between' },
+    progressValue: { fontSize: 13, fontWeight: '600', color: colors.text },
+    progressPct: { fontSize: 13, fontWeight: '700', color: colors.primary },
 
-  rewardInline: { fontSize: 13, color: '#F59E0B', fontWeight: '600' },
+    rewardInline: { fontSize: 13, color: '#F59E0B', fontWeight: '600' },
 
-  sectionLabel: {
-    fontSize: 14, fontWeight: '700', color: '#999', textTransform: 'uppercase',
-    letterSpacing: 0.5, marginBottom: 10, marginTop: 8,
-  },
+    sectionLabel: {
+      fontSize: 14, fontWeight: '700', color: colors.textSecondary, textTransform: 'uppercase',
+      letterSpacing: 0.5, marginBottom: 10, marginTop: 8,
+    },
 
-  loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60 },
-  emptyContainer: { alignItems: 'center', paddingTop: 60 },
-  emptyText: { fontSize: 16, fontWeight: '600', color: '#999', marginTop: 12 },
-  emptySubtext: { fontSize: 14, color: '#BBB', marginTop: 4 },
-});
+    loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60 },
+    emptyContainer: { alignItems: 'center', paddingTop: 60 },
+    emptyText: { fontSize: 16, fontWeight: '600', color: colors.textSecondary, marginTop: 12 },
+    emptySubtext: { fontSize: 14, color: colors.border, marginTop: 4 },
+  });
+}

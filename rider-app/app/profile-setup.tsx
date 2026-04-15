@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -16,14 +16,15 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@shared/store/authStore';
-import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
-
-const THEME = SpinrConfig.theme.colors;
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 export default function ProfileSetupScreen() {
   const router = useRouter();
   const { user, createProfile, logout, isLoading: authLoading, error: authError } = useAuthStore();
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   // Detect if editing existing profile vs first-time setup
   const isEditing = !!(user?.profile_complete || user?.first_name);
@@ -111,7 +112,7 @@ export default function ProfileSetupScreen() {
             {!isEditing && (
               <View style={styles.signedInRow}>
                 <View style={styles.signedInInfo}>
-                  <Ionicons name="call" size={14} color="#666" />
+                  <Ionicons name="call" size={14} color={colors.textDim} />
                   <Text style={styles.signedInText} numberOfLines={1}>
                     Signed in as{' '}
                     <Text style={styles.signedInPhone}>{user?.phone || 'your number'}</Text>
@@ -148,7 +149,7 @@ export default function ProfileSetupScreen() {
             <View style={styles.header}>
               {isEditing && (
                 <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-                  <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+                  <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
               )}
               <Text style={styles.title}>
@@ -171,7 +172,7 @@ export default function ProfileSetupScreen() {
                     value={firstName}
                     onChangeText={setFirstName}
                     placeholder="Enter your first name"
-                    placeholderTextColor="#999"
+                    placeholderTextColor={colors.textDim}
                     autoCapitalize="words"
                     onFocus={() => setFocusedField('firstName')}
                     onBlur={() => setFocusedField(null)}
@@ -187,7 +188,7 @@ export default function ProfileSetupScreen() {
                     value={lastName}
                     onChangeText={setLastName}
                     placeholder="Enter your last name"
-                    placeholderTextColor="#999"
+                    placeholderTextColor={colors.textDim}
                     autoCapitalize="words"
                     onFocus={() => setFocusedField('lastName')}
                     onBlur={() => setFocusedField(null)}
@@ -203,7 +204,7 @@ export default function ProfileSetupScreen() {
                     value={email}
                     onChangeText={setEmail}
                     placeholder="email@example.com"
-                    placeholderTextColor="#999"
+                    placeholderTextColor={colors.textDim}
                     keyboardType="email-address"
                     autoCapitalize="none"
                     autoCorrect={false}
@@ -226,7 +227,7 @@ export default function ProfileSetupScreen() {
                   <Ionicons
                     name={showGenderPicker ? 'chevron-up' : 'chevron-down'}
                     size={20}
-                    color="#666"
+                    color={colors.textDim}
                   />
                 </TouchableOpacity>
 
@@ -253,7 +254,7 @@ export default function ProfileSetupScreen() {
                           {g.label}
                         </Text>
                         {gender === g.value && (
-                          <Ionicons name="checkmark" size={20} color={SpinrConfig.theme.colors.primary} />
+                          <Ionicons name="checkmark" size={20} color={colors.primary} />
                         )}
                       </TouchableOpacity>
                     ))}
@@ -283,7 +284,7 @@ export default function ProfileSetupScreen() {
                   <Ionicons
                     name="arrow-forward"
                     size={18}
-                    color={!isFormValid ? '#999' : '#fff'}
+                    color={!isFormValid ? colors.textDim : '#fff'}
                   />
                 </View>
               )}
@@ -314,197 +315,199 @@ export default function ProfileSetupScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  keyboardView: {
-    flex: 1,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    paddingHorizontal: 24,
-    paddingTop: 40,
-    paddingBottom: 40,
-  },
-  backBtn: {
-    width: 44, height: 44, borderRadius: 22, backgroundColor: '#F5F5F5',
-    justifyContent: 'center', alignItems: 'center', marginBottom: 12,
-  },
-  signedInRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#F5F5F5',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 12,
-    marginBottom: 24,
-    gap: 8,
-  },
-  signedInInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    flex: 1,
-  },
-  signedInText: { fontSize: 13, color: '#666', flex: 1 },
-  signedInPhone: { color: '#1A1A1A', fontWeight: '700' },
-  changeNumberLink: {
-    fontSize: 13,
-    color: SpinrConfig.theme.colors.primary,
-    fontWeight: '700',
-  },
-  header: {
-    marginBottom: 40,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '800',
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: THEME.text,
-    lineHeight: 36,
-    letterSpacing: -0.5,
-  },
-  subtitle: {
-    fontSize: 15,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666666',
-    marginTop: 12,
-    lineHeight: 22,
-  },
-  form: {
-    marginBottom: 32,
-  },
-  inputGroup: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 11,
-    fontWeight: '700',
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: THEME.textDim,
-    letterSpacing: 1,
-    marginBottom: 8,
-  },
-  inputWrapper: {
-    backgroundColor: '#F8F9FA',
-    borderRadius: 16,
-    height: 60,
-    borderWidth: 1.5,
-    borderColor: '#F0F0F0',
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-  },
-  inputWrapperFocused: {
-    borderColor: THEME.primary,
-    backgroundColor: '#fff',
-    shadowColor: THEME.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  input: {
-    fontSize: 18,
-    fontWeight: '600',
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: THEME.text,
-    padding: 0,
-  },
-  citySelector: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1.5,
-    borderColor: '#E0E0E0',
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  citySelectorText: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#1A1A1A',
-  },
-  placeholder: {
-    color: '#999',
-  },
-  cityDropdown: {
-    marginTop: 8,
-    backgroundColor: '#FFF',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-    overflow: 'hidden',
-  },
-  cityOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
-  },
-  cityOptionSelected: {
-    backgroundColor: '#FFF5F5',
-  },
-  cityOptionText: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#1A1A1A',
-  },
-  cityOptionTextSelected: {
-    color: SpinrConfig.theme.colors.primary,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-  },
-  submitButton: {
-    backgroundColor: THEME.primary,
-    borderRadius: 16,
-    height: 58,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: THEME.primary,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 6,
-  },
-  submitButtonLoading: {
-    backgroundColor: THEME.primaryDark,
-  },
-  submitButtonDisabled: {
-    backgroundColor: '#F0F0F0',
-    shadowOpacity: 0,
-    elevation: 0,
-  },
-  submitButtonContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  submitButtonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#fff',
-  },
-  submitButtonTextDisabled: {
-    color: '#999',
-  },
-  logoutButton: {
-    marginTop: 16,
-    paddingVertical: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  logoutButtonText: {
-    fontSize: 15,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#666666',
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.surface,
+    },
+    keyboardView: {
+      flex: 1,
+    },
+    scrollView: {
+      flex: 1,
+    },
+    scrollContent: {
+      paddingHorizontal: 24,
+      paddingTop: 40,
+      paddingBottom: 40,
+    },
+    backBtn: {
+      width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surfaceLight,
+      justifyContent: 'center', alignItems: 'center', marginBottom: 12,
+    },
+    signedInRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      backgroundColor: colors.surfaceLight,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderRadius: 12,
+      marginBottom: 24,
+      gap: 8,
+    },
+    signedInInfo: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      flex: 1,
+    },
+    signedInText: { fontSize: 13, color: colors.textDim, flex: 1 },
+    signedInPhone: { color: colors.text, fontWeight: '700' },
+    changeNumberLink: {
+      fontSize: 13,
+      color: colors.primary,
+      fontWeight: '700',
+    },
+    header: {
+      marginBottom: 40,
+    },
+    title: {
+      fontSize: 28,
+      fontWeight: '800',
+      fontFamily: 'PlusJakartaSans_700Bold',
+      color: colors.text,
+      lineHeight: 36,
+      letterSpacing: -0.5,
+    },
+    subtitle: {
+      fontSize: 15,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+      marginTop: 12,
+      lineHeight: 22,
+    },
+    form: {
+      marginBottom: 32,
+    },
+    inputGroup: {
+      marginBottom: 20,
+    },
+    label: {
+      fontSize: 11,
+      fontWeight: '700',
+      fontFamily: 'PlusJakartaSans_700Bold',
+      color: colors.textDim,
+      letterSpacing: 1,
+      marginBottom: 8,
+    },
+    inputWrapper: {
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 16,
+      height: 60,
+      borderWidth: 1.5,
+      borderColor: colors.border,
+      justifyContent: 'center',
+      paddingHorizontal: 16,
+    },
+    inputWrapperFocused: {
+      borderColor: colors.primary,
+      backgroundColor: colors.surface,
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.12,
+      shadowRadius: 8,
+      elevation: 3,
+    },
+    input: {
+      fontSize: 18,
+      fontWeight: '600',
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.text,
+      padding: 0,
+    },
+    citySelector: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      borderWidth: 1.5,
+      borderColor: colors.border,
+      borderRadius: 16,
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+    },
+    citySelectorText: {
+      fontSize: 16,
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.text,
+    },
+    placeholder: {
+      color: colors.textDim,
+    },
+    cityDropdown: {
+      marginTop: 8,
+      backgroundColor: colors.surface,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: colors.border,
+      overflow: 'hidden',
+    },
+    cityOption: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    cityOptionSelected: {
+      backgroundColor: `${colors.primary}14`,
+    },
+    cityOptionText: {
+      fontSize: 16,
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.text,
+    },
+    cityOptionTextSelected: {
+      color: colors.primary,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+    },
+    submitButton: {
+      backgroundColor: colors.primary,
+      borderRadius: 16,
+      height: 58,
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.25,
+      shadowRadius: 12,
+      elevation: 6,
+    },
+    submitButtonLoading: {
+      backgroundColor: colors.primaryDark,
+    },
+    submitButtonDisabled: {
+      backgroundColor: colors.border,
+      shadowOpacity: 0,
+      elevation: 0,
+    },
+    submitButtonContent: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    submitButtonText: {
+      fontSize: 16,
+      fontWeight: '700',
+      fontFamily: 'PlusJakartaSans_700Bold',
+      color: '#fff',
+    },
+    submitButtonTextDisabled: {
+      color: colors.textDim,
+    },
+    logoutButton: {
+      marginTop: 16,
+      paddingVertical: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    logoutButtonText: {
+      fontSize: 15,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.textDim,
+    },
+  });
+}

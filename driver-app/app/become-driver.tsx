@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -22,6 +22,8 @@ import { useAuthStore } from '@shared/store/authStore';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import { uploadFile } from '@shared/api/upload';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 // Steps: 0=Intro, 1=Personal, 2=Vehicle, 3=Docs, 4=Review
 const STEPS = ['Intro', 'Personal', 'Vehicle', 'Documents', 'Review'];
@@ -43,6 +45,8 @@ interface DocState {
 export default function BecomeDriverScreen() {
   const router = useRouter();
   const { registerDriver, isLoading, user } = useAuthStore();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   const [currentStep, setCurrentStep] = useState(0);
 
@@ -614,7 +618,7 @@ export default function BecomeDriverScreen() {
                     disabled={!!uploadingDoc}
                   >
                     {uploadingDoc === `${req.id}_front` ? (
-                      <ActivityIndicator color={SpinrConfig.theme.colors.primary} />
+                      <ActivityIndicator color={colors.primary} />
                     ) : docs[req.id]?.front ? (
                       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                         <Ionicons name="checkmark-circle" size={20} color="green" />
@@ -636,7 +640,7 @@ export default function BecomeDriverScreen() {
                       disabled={!!uploadingDoc}
                     >
                       {uploadingDoc === `${req.id}_back` ? (
-                        <ActivityIndicator color={SpinrConfig.theme.colors.primary} />
+                        <ActivityIndicator color={colors.primary} />
                       ) : docs[req.id]?.back ? (
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                           <Ionicons name="checkmark-circle" size={20} color="green" />
@@ -684,7 +688,7 @@ export default function BecomeDriverScreen() {
                               setDatePickerTarget(null);
                             }}
                           >
-                            <Text style={{ color: SpinrConfig.theme.colors.primary, fontWeight: 'bold' }}>Done</Text>
+                            <Text style={{ color: colors.primary, fontWeight: 'bold' }}>Done</Text>
                           </TouchableOpacity>
                         )}
                       </View>
@@ -728,25 +732,25 @@ export default function BecomeDriverScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
+function createStyles(colors: ThemeColors) { return StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.surface },
   header: { padding: 20, flexDirection: 'row', alignItems: 'center' },
   backButton: { marginRight: 20 },
   title: { fontSize: 24, fontFamily: 'PlusJakartaSans', fontWeight: 'bold' },
-  stepIndicator: { color: '#666', fontSize: 14 },
+  stepIndicator: { color: colors.textDim, fontSize: 14 },
   scrollContent: { padding: 20, paddingBottom: 50 },
   sectionTitle: { fontSize: 22, fontWeight: 'bold', marginBottom: 15, color: '#1A1A1A' },
-  subtitle: { fontSize: 16, color: '#666', marginBottom: 20, lineHeight: 22 },
+  subtitle: { fontSize: 16, color: colors.textDim, marginBottom: 20, lineHeight: 22 },
 
   inputGroup: { marginBottom: 15 },
-  label: { fontSize: 14, fontWeight: '600', marginBottom: 5, color: '#333' },
-  subLabel: { fontSize: 12, color: '#666', marginBottom: 5 },
+  label: { fontSize: 14, fontWeight: '600', marginBottom: 5, color: colors.text },
+  subLabel: { fontSize: 12, color: colors.textDim, marginBottom: 5 },
   input: {
-    borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 12, padding: 12,
+    borderWidth: 1, borderColor: colors.border, borderRadius: 12, padding: 12,
     fontSize: 16, color: '#000', fontFamily: 'PlusJakartaSans'
   },
   dateInput: {
-    borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 8, padding: 10,
+    borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 10,
     fontSize: 14, color: '#000'
   },
 
@@ -755,8 +759,8 @@ const styles = StyleSheet.create({
   },
   uploadButton: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#D1D5DB',
-    backgroundColor: '#fff'
+    padding: 12, borderRadius: 8, borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.surface
   },
   uploadSuccess: {
     borderColor: 'green', backgroundColor: '#F0FDF4'
@@ -765,37 +769,37 @@ const styles = StyleSheet.create({
 
   typeContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 },
   typeOption: {
-    paddingHorizontal: 15, paddingVertical: 10, borderRadius: 20, borderWidth: 1, borderColor: '#E0E0E0'
+    paddingHorizontal: 15, paddingVertical: 10, borderRadius: 20, borderWidth: 1, borderColor: colors.border
   },
-  typeSelected: { backgroundColor: SpinrConfig.theme.colors.primary, borderColor: SpinrConfig.theme.colors.primary },
-  typeText: { color: '#333' },
+  typeSelected: { backgroundColor: colors.primary, borderColor: colors.primary },
+  typeText: { color: colors.text },
   typeTextSelected: { color: '#fff', fontWeight: 'bold' },
 
   serviceAreaList: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
   serviceAreaChip: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12,
-    backgroundColor: '#F5F5F5', borderWidth: 1.5, borderColor: '#E5E5E5',
+    backgroundColor: colors.surfaceLight, borderWidth: 1.5, borderColor: colors.border,
   },
   serviceAreaChipActive: {
-    backgroundColor: SpinrConfig.theme.colors.primary, borderColor: SpinrConfig.theme.colors.primary,
+    backgroundColor: colors.primary, borderColor: colors.primary,
   },
-  serviceAreaChipText: { fontSize: 14, fontWeight: '600', color: '#444' },
-  serviceAreaHint: { fontSize: 11, color: '#999', marginTop: 6, fontStyle: 'italic' },
+  serviceAreaChipText: { fontSize: 14, fontWeight: '600', color: colors.text },
+  serviceAreaHint: { fontSize: 11, color: colors.textDim, marginTop: 6, fontStyle: 'italic' },
 
   primaryButton: {
-    backgroundColor: SpinrConfig.theme.colors.primary, borderRadius: 30, padding: 18,
+    backgroundColor: colors.primary, borderRadius: 30, padding: 18,
     alignItems: 'center', marginTop: 20
   },
   disabledButton: { opacity: 0.7 },
   primaryButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
 
-  reviewCard: { padding: 20, backgroundColor: '#F3F4F6', borderRadius: 12 },
+  reviewCard: { padding: 20, backgroundColor: colors.surfaceLight, borderRadius: 12 },
   reviewRow: { fontSize: 16, marginBottom: 10 },
 
   secondaryButton: {
     backgroundColor: 'transparent', borderRadius: 30, padding: 15,
     alignItems: 'center', marginTop: 10
   },
-  secondaryButtonText: { color: '#666', fontSize: 16, fontWeight: '600' }
-});
+  secondaryButtonText: { color: colors.textDim, fontSize: 16, fontWeight: '600' }
+}); }

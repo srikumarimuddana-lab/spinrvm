@@ -3,6 +3,19 @@ import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+const ACTIVE_RIDE_KEY = '@spinr:active_ride';
+const TERMINAL_STATUSES = new Set(['completed', 'cancelled', 'failed']);
+
+// Write currentRide + currentDriver to AsyncStorage. Clears key when ride is
+// terminal so stale data never survives across sessions.
+const _persistRide = (currentRide: any, currentDriver: any) => {
+  if (!currentRide || TERMINAL_STATUSES.has(currentRide.status)) {
+    AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
+  } else {
+    AsyncStorage.setItem(ACTIVE_RIDE_KEY, JSON.stringify({ currentRide, currentDriver })).catch(() => {});
+  }
+};
+
 interface Location {
   address: string;
   lat: number;
@@ -135,6 +148,7 @@ interface RideState {
   clearRide: () => void;
   clearError: () => void;
   rateRide: (rideId: string, rating: number, comment?: string, tipAmount?: number) => Promise<void>;
+  hydrateActiveRide: () => Promise<void>;
   triggerEmergency: (rideId: string, latitude?: number, longitude?: number) => Promise<void>;
   addRecentSearch: (location: Location) => void;
   loadRecentSearches: () => Promise<void>;
@@ -192,10 +206,10 @@ export const useRideStore = create<RideState>((set, get) => ({
     try {
       const response = await api.get('/rides/active');
       if (response.data?.active && response.data.ride) {
-        set({
-          currentRide: response.data.ride,
-          currentDriver: response.data.ride.driver || null,
-        });
+        const ride = response.data.ride;
+        const driver = ride.driver || null;
+        set({ currentRide: ride, currentDriver: driver });
+        _persistRide(ride, driver);
         return response.data;
       }
       return null;
@@ -288,6 +302,7 @@ export const useRideStore = create<RideState>((set, get) => ({
 
       const response = await api.post('/rides', rideData);
       set({ currentRide: response.data, isLoading: false, scheduledTime: null });
+      _persistRide(response.data, null);
       return response.data;
     } catch (error: any) {
       set({ isLoading: false, error: error.message });
@@ -302,11 +317,10 @@ export const useRideStore = create<RideState>((set, get) => ({
         set({ isLoading: true });
       }
       const response = await api.get(`/rides/${rideId}`);
-      set({
-        currentRide: response.data,
-        currentDriver: response.data.driver || null,
-        isLoading: false,
-      });
+      const ride = response.data;
+      const driver = ride.driver || null;
+      set({ currentRide: ride, currentDriver: driver, isLoading: false });
+      _persistRide(ride, driver);
     } catch (error: any) {
       console.log('fetchRide error:', error.message);
       // Don't clear currentRide on poll errors — keep showing last known state
@@ -322,6 +336,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       set({ isLoading: true });
       await api.post(`/rides/${currentRide.id}/cancel`);
       set({ currentRide: null, currentDriver: null, isLoading: false });
+      AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
     } catch (error: any) {
       set({ isLoading: false, error: error.message });
     }
@@ -361,9 +376,8 @@ export const useRideStore = create<RideState>((set, get) => ({
 
     try {
       const response = await api.post(`/rides/${currentRide.id}/complete`);
-      set({
-        currentRide: response.data,
-      });
+      set({ currentRide: response.data });
+      AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
       return response.data;
     } catch (error: any) {
       set({ error: error.message });
@@ -438,12 +452,10 @@ export const useRideStore = create<RideState>((set, get) => ({
   // those represent "what the user wants to do next", not "the in-flight
   // trip". Wiping them caused the post-cancel flow to land on ride-options
   // with no pickup → stuck loading → bounce back to home.
-  clearRide: () => set({
-    currentRide: null,
-    currentDriver: null,
-    chatMessages: [],
-    error: null,
-  }),
+  clearRide: () => {
+    set({ currentRide: null, currentDriver: null, chatMessages: [], error: null });
+    AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
+  },
 
   clearError: () => set({ error: null }),
 
@@ -499,31 +511,51 @@ export const useRideStore = create<RideState>((set, get) => ({
     if (!driver) return;
     // Only update the coordinate fields — leave everything else (name,
     // rating, vehicle info) untouched.
-    set({
-      currentDriver: {
-        ...driver,
-        lat,
-        lng,
-        ...(speed !== null && speed !== undefined ? { speed } : {}),
-        ...(heading !== null && heading !== undefined ? { heading } : {}),
-      },
-    });
+    const updated = {
+      ...driver,
+      lat,
+      lng,
+      ...(speed !== null && speed !== undefined ? { speed } : {}),
+      ...(heading !== null && heading !== undefined ? { heading } : {}),
+    };
+    set({ currentDriver: updated });
+    _persistRide(get().currentRide, updated);
   },
 
   applyRideStatusFromWS: (rideId, status, extra) => {
-    const { currentRide } = get();
+    const { currentRide, currentDriver } = get();
     if (!currentRide || currentRide.id !== rideId) return;
 
     // Apply the status transition and any extra fields (like total_fare
     // on ride_completed). This provides an instant in-app state change
     // while the next poll (reduced to 15 s via the WS fallback) fills
     // in any remaining details the WS message doesn't carry.
-    set({
-      currentRide: {
-        ...currentRide,
-        status,
-        ...(extra || {}),
-      },
-    });
+    const updated = { ...currentRide, status, ...(extra || {}) };
+    set({ currentRide: updated });
+    _persistRide(updated, currentDriver);
+  },
+
+  // ── Offline hydration ────────────────────────────────────────────
+  // Called once on app mount (before fetchActiveRide). Restores the last
+  // known active ride from AsyncStorage so the UI is immediately populated
+  // even before the API responds (or when the device is offline).
+  hydrateActiveRide: async () => {
+    try {
+      const raw = await AsyncStorage.getItem(ACTIVE_RIDE_KEY);
+      if (!raw) return;
+      const { currentRide, currentDriver } = JSON.parse(raw);
+      if (!currentRide || TERMINAL_STATUSES.has(currentRide.status)) {
+        await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
+        return;
+      }
+      // Only restore if there's no ride already in memory (e.g. from a
+      // previous mount in the same session).
+      if (!get().currentRide) {
+        set({ currentRide, currentDriver: currentDriver || null });
+      }
+    } catch {
+      // Corrupt data — clear and let the API fetch handle it
+      AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
+    }
   },
 }));

@@ -28,6 +28,7 @@ from routes.payments import api_router as payments_router
 from routes.promotions import api_router as promotions_router
 from routes.quests import api_router as quests_router
 from routes.rides import api_router as rides_router
+from routes.settings import api_router as settings_router
 from routes.users import api_router as users_router
 from routes.wallet import api_router as wallet_router
 from routes.webhooks import api_router as webhooks_router
@@ -84,6 +85,12 @@ app.include_router(auth_router, prefix="/api")
 
 # WebSocket routes — mounted at root so the path /ws/{client_type}/{client_id} is served directly
 app.include_router(websocket_router)
+
+# Public settings endpoints (GET /settings, GET /settings/legal). Mounted at
+# root so mobile apps can call them without an auth token, and also at /api/v1
+# for parity. The legal screen fetch uses backendUrl/settings/legal directly.
+app.include_router(settings_router)
+app.include_router(settings_router, prefix="/api/v1")
 
 # Mount admin routes under /api so the admin dashboard can reach them at /api/admin/...
 app.include_router(admin_router, prefix="/api")

@@ -54,6 +54,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     setIncomingRide,
     resetRideState,
     fetchActiveRide,
+    hydrateDriverRideState,
     fetchEarnings,
     applyDriverConfig,
     earnings,
@@ -346,16 +347,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         }
         break;
 
-      // G3: Rider-to-driver chat messages. The backend's WebSocket
-      // handler at websocket.py:272-303 forwards chat_message to
-      // `driver_{user_id}`. Previously this case was missing so
-      // driver never saw rider's messages during a ride.
+      // G3: Rider-to-driver chat messages. Backend websocket.py forwards
+      // chat_message to `driver_{user_id}`. Push into driverStore so
+      // chat.tsx updates in real-time without polling. [SPR-01]
       case 'chat_message':
         console.log('[WS] Chat from rider:', data.text?.slice(0, 40));
-        // If the chat screen ever maintains a store (like the rider-app
-        // does via rideStore.addChatMessage), wire it here. For now we
-        // surface a small vibration so the driver knows a message arrived
-        // even if they're not on the chat screen.
+        useDriverStore.getState().addChatMessage(data);
         Vibration.vibrate(100);
         break;
     }
@@ -550,14 +547,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     if (url) Linking.openURL(url);
   };
 
-  // ─── Crash recovery: fetch active ride on mount regardless of online state ─
-  // If the app was killed during an active ride, the backend still has the
-  // ride assigned to this driver. Fetching on mount (not gated on isOnline)
-  // ensures the driver sees the ride and can resume navigating / completing
-  // instead of landing on a blank "idle" dashboard.
+  // ─── Crash recovery: hydrate from AsyncStorage then fetch from API ──
+  // hydrateDriverRideState() restores the last persisted ride state
+  // instantly (no network required) so the driver sees their active ride
+  // immediately on restart. fetchActiveRide() then confirms/updates the
+  // state with the live server response.
   useEffect(() => {
     if (user) {
-      fetchActiveRide();
+      hydrateDriverRideState().then(() => fetchActiveRide());
     }
   }, [user]);
 

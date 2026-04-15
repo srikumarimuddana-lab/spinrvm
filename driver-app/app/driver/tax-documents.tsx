@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
     View,
     Text,
@@ -16,21 +16,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import api from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
-
-const THEME = SpinrConfig.theme.colors;
-const COLORS = {
-    primary: THEME.background,
-    accent: THEME.primary,
-    surface: THEME.surface,
-    surfaceLight: THEME.surfaceLight,
-    text: THEME.text,
-    textDim: THEME.textDim,
-    success: THEME.success,
-    warning: THEME.warning,
-    danger: THEME.error,
-    gold: '#FFD700',
-};
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 interface T4AYear {
     year: number;
@@ -45,6 +32,8 @@ interface T4AYear {
 export default function TaxDocumentsScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
+    const { colors } = useTheme();
+    const styles = useMemo(() => createStyles(colors), [colors]);
     const [years, setYears] = useState<number[]>([]);
     const [selectedYear, setSelectedYear] = useState<number | null>(null);
     const [t4aData, setT4aData] = useState<T4AYear | null>(null);
@@ -104,10 +93,10 @@ export default function TaxDocumentsScreen() {
     return (
         <View style={styles.container}>
             {/* Header */}
-            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
+            <LinearGradient colors={[colors.surface, colors.background]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <View style={styles.headerRow}>
                     <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                        <Ionicons name="arrow-back" size={22} color={COLORS.text} />
+                        <Ionicons name="arrow-back" size={22} color={colors.text} />
                     </TouchableOpacity>
                     <Text style={styles.headerTitle}>Tax Documents</Text>
                     <View style={{ width: 40 }} />
@@ -118,7 +107,7 @@ export default function TaxDocumentsScreen() {
                 {/* T4A Info Card */}
                 <View style={styles.infoCard}>
                     <View style={styles.infoIcon}>
-                        <Ionicons name="document-text" size={24} color={COLORS.accent} />
+                        <Ionicons name="document-text" size={24} color={colors.primary} />
                     </View>
                     <View style={styles.infoContent}>
                         <Text style={styles.infoTitle}>T4A Summary</Text>
@@ -159,14 +148,14 @@ export default function TaxDocumentsScreen() {
 
                 {/* T4A Summary */}
                 {loading ? (
-                    <ActivityIndicator size="large" color={COLORS.accent} style={{ marginTop: 40 }} />
+                    <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 40 }} />
                 ) : t4aData ? (
                     <View style={styles.section}>
                         <View style={styles.t4aCard}>
                             <View style={styles.t4aHeader}>
                                 <Text style={styles.t4aTitle}>T4A - {t4aData.year}</Text>
                                 <View style={styles.t4aBadge}>
-                                    <Ionicons name="checkmark-circle" size={14} color={COLORS.success} />
+                                    <Ionicons name="checkmark-circle" size={14} color={colors.success} />
                                     <Text style={styles.t4aBadgeText}>Available</Text>
                                 </View>
                             </View>
@@ -204,13 +193,13 @@ export default function TaxDocumentsScreen() {
                             </View>
                             <View style={styles.breakdownRow}>
                                 <Text style={styles.breakdownLabel}>Total Tips</Text>
-                                <Text style={[styles.breakdownValue, { color: COLORS.gold }]}>
+                                <Text style={[styles.breakdownValue, { color: colors.gold }]}>
                                     {formatCurrency(t4aData.tips)}
                                 </Text>
                             </View>
                             <View style={styles.breakdownRow}>
                                 <Text style={styles.breakdownLabel}>Platform Fees</Text>
-                                <Text style={[styles.breakdownValue, { color: COLORS.danger }]}>
+                                <Text style={[styles.breakdownValue, { color: colors.danger }]}>
                                     -{formatCurrency(t4aData.fees)}
                                 </Text>
                             </View>
@@ -227,7 +216,7 @@ export default function TaxDocumentsScreen() {
 
                         {/* Important Notice */}
                         <View style={styles.noticeCard}>
-                            <Ionicons name="information-circle" size={20} color={COLORS.warning} />
+                            <Ionicons name="information-circle" size={20} color={colors.warning} />
                             <Text style={styles.noticeText}>
                                 This is for informational purposes only. Please consult a Canadian tax
                                 professional for accurate tax filing. As a self-employed driver, you are
@@ -282,13 +271,13 @@ export default function TaxDocumentsScreen() {
                                 }
                             }}
                         >
-                            <Ionicons name="download-outline" size={20} color={COLORS.accent} />
+                            <Ionicons name="download-outline" size={20} color={colors.primary} />
                             <Text style={styles.exportButtonText}>Export for Tax Filing</Text>
                         </TouchableOpacity>
                     </View>
                 ) : (
                     <View style={styles.emptyState}>
-                        <Ionicons name="document-text-outline" size={64} color={COLORS.surfaceLight} />
+                        <Ionicons name="document-text-outline" size={64} color={colors.surfaceLight} />
                         <Text style={styles.emptyTitle}>No Data Available</Text>
                         <Text style={styles.emptySub}>
                             Select a different year or start driving to generate tax documents
@@ -300,8 +289,9 @@ export default function TaxDocumentsScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: COLORS.primary },
+function createStyles(colors: ThemeColors) {
+    return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.background },
     header: {
         paddingBottom: 12,
         paddingHorizontal: 16,
@@ -315,15 +305,15 @@ const styles = StyleSheet.create({
         width: 40,
         height: 40,
         borderRadius: 20,
-        backgroundColor: COLORS.surfaceLight,
+        backgroundColor: colors.surfaceLight,
         justifyContent: 'center',
         alignItems: 'center',
     },
-    headerTitle: { color: COLORS.text, fontSize: 20, fontWeight: '700' },
+    headerTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
 
     infoCard: {
         flexDirection: 'row',
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
         marginHorizontal: 16,
         marginTop: 16,
         borderRadius: 16,
@@ -340,13 +330,13 @@ const styles = StyleSheet.create({
     },
     infoContent: { flex: 1 },
     infoTitle: {
-        color: COLORS.text,
+        color: colors.text,
         fontSize: 16,
         fontWeight: '700',
         marginBottom: 4,
     },
     infoText: {
-        color: COLORS.textDim,
+        color: colors.textDim,
         fontSize: 13,
         lineHeight: 18,
     },
@@ -356,7 +346,7 @@ const styles = StyleSheet.create({
         marginTop: 24,
     },
     sectionTitle: {
-        color: COLORS.text,
+        color: colors.text,
         fontSize: 17,
         fontWeight: '700',
         marginBottom: 12,
@@ -369,16 +359,16 @@ const styles = StyleSheet.create({
         paddingHorizontal: 20,
         paddingVertical: 10,
         borderRadius: 20,
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
         borderWidth: 1,
-        borderColor: COLORS.surfaceLight,
+        borderColor: colors.surfaceLight,
     },
     yearChipActive: {
-        backgroundColor: COLORS.accent,
-        borderColor: COLORS.accent,
+        backgroundColor: colors.primary,
+        borderColor: colors.primary,
     },
     yearChipText: {
-        color: COLORS.text,
+        color: colors.text,
         fontSize: 14,
         fontWeight: '600',
     },
@@ -387,7 +377,7 @@ const styles = StyleSheet.create({
     },
 
     t4aCard: {
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
         borderRadius: 16,
         padding: 20,
     },
@@ -398,7 +388,7 @@ const styles = StyleSheet.create({
         marginBottom: 20,
     },
     t4aTitle: {
-        color: COLORS.text,
+        color: colors.text,
         fontSize: 20,
         fontWeight: '800',
     },
@@ -412,7 +402,7 @@ const styles = StyleSheet.create({
         gap: 4,
     },
     t4aBadgeText: {
-        color: COLORS.success,
+        color: colors.success,
         fontSize: 12,
         fontWeight: '600',
     },
@@ -421,24 +411,24 @@ const styles = StyleSheet.create({
         marginBottom: 12,
     },
     incomeLabel: {
-        color: COLORS.textDim,
+        color: colors.textDim,
         fontSize: 12,
         marginBottom: 4,
     },
     incomeAmount: {
-        color: COLORS.text,
+        color: colors.text,
         fontSize: 24,
         fontWeight: '800',
     },
 
     divider: {
         height: 1,
-        backgroundColor: COLORS.surfaceLight,
+        backgroundColor: colors.surfaceLight,
         marginVertical: 16,
     },
 
     breakdownTitle: {
-        color: COLORS.text,
+        color: colors.text,
         fontSize: 14,
         fontWeight: '700',
         marginBottom: 12,
@@ -449,11 +439,11 @@ const styles = StyleSheet.create({
         marginBottom: 10,
     },
     breakdownLabel: {
-        color: COLORS.textDim,
+        color: colors.textDim,
         fontSize: 14,
     },
     breakdownValue: {
-        color: COLORS.text,
+        color: colors.text,
         fontSize: 14,
         fontWeight: '600',
     },
@@ -468,7 +458,7 @@ const styles = StyleSheet.create({
     },
     noticeText: {
         flex: 1,
-        color: COLORS.warning,
+        color: colors.warning,
         fontSize: 12,
         lineHeight: 18,
     },
@@ -477,16 +467,16 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
         borderRadius: 12,
         padding: 16,
         marginTop: 16,
         gap: 8,
         borderWidth: 1,
-        borderColor: COLORS.accent,
+        borderColor: colors.primary,
     },
     exportButtonText: {
-        color: COLORS.accent,
+        color: colors.primary,
         fontSize: 16,
         fontWeight: '600',
     },
@@ -496,16 +486,17 @@ const styles = StyleSheet.create({
         paddingVertical: 60,
     },
     emptyTitle: {
-        color: COLORS.text,
+        color: colors.text,
         fontSize: 18,
         fontWeight: '600',
         marginTop: 16,
     },
     emptySub: {
-        color: COLORS.textDim,
+        color: colors.textDim,
         fontSize: 14,
         marginTop: 4,
         textAlign: 'center',
         paddingHorizontal: 40,
     },
-});
+    });
+}

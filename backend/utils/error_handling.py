@@ -388,7 +388,17 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             }
         )
 
-    logger.warning(f"Validation error: {errors}", extra={"path": request.url.path, "method": request.method})
+    # Loguru treats the first positional arg as a format template, so embedding
+    # `errors` directly (which contains dict reprs with '{' characters) raises
+    # KeyError/ValueError during the format pass. opt(raw=True) disables
+    # template parsing, matching the defensive pattern in
+    # general_exception_handler below. Previously every 422 bubbled up as a
+    # 500 because this handler crashed while handling the validation error.
+    try:
+        logger.opt(raw=True).warning(f"Validation error at {request.method} {request.url.path}: {errors}\n")
+    except Exception:  # noqa: S110
+        # Never let logging take down the error handler itself.
+        pass
 
     return JSONResponse(
         status_code=422,
@@ -454,9 +464,9 @@ _ALWAYS_ALLOWED = {
 def _resolve_cors_origins() -> set[str]:
     try:
         from core.config import settings  # local import to avoid a hard
-                                          # dependency if utils is imported
-                                          # before the settings module is
-                                          # available (e.g. test harness).
+        # dependency if utils is imported
+        # before the settings module is
+        # available (e.g. test harness).
     except Exception:
         return set(_ALWAYS_ALLOWED)
 
@@ -516,22 +526,28 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
         # Never let logging take down the error handler itself.
         pass
 
+    # Only expose exception details in development — production responses
+    # should not leak internal error types or messages to clients.
+    try:
+        from core.config import settings as _cfg
+
+        _is_dev = _cfg.ENV.lower() in ("development", "local")
+    except Exception:
+        _is_dev = False
+
+    error_body: Dict[str, Any] = {
+        "code": ErrorCode.INTERNAL_ERROR.value,
+        "message": "An unexpected error occurred",
+        "request_id": request_id,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+    if _is_dev:
+        error_body["exception_type"] = type(exc).__name__
+        error_body["detail"] = str(exc)[:500]
+
     return JSONResponse(
         status_code=500,
-        content={
-            "success": False,
-            "error": {
-                "code": ErrorCode.INTERNAL_ERROR.value,
-                "message": "An unexpected error occurred",
-                "request_id": request_id,
-                "exception_type": type(exc).__name__,
-                # Short exception message so the client can surface the root
-                # cause directly to the user / operator without needing log
-                # access. Full traceback stays server-side.
-                "detail": str(exc)[:500],
-                "timestamp": datetime.utcnow().isoformat(),
-            },
-        },
+        content={"success": False, "error": error_body},
         headers={
             **_cors_headers_for(request),
             "X-Request-ID": request_id,

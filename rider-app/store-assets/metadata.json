@@ -1,0 +1,61 @@
+{
+  "_comment": "App Store Connect + Google Play metadata for Spinr Rider. Fill in the values marked TODO before submitting. See docs/deploy/04-mobile-eas.md for submission steps.",
+
+  "app_store_connect": {
+    "name": "Spinr – Rider",
+    "subtitle": "Rides. Simple. 0% Commission.",
+    "privacy_url": "https://spinr.app/privacy",
+    "support_url": "https://spinr.app/support",
+    "marketing_url": "https://spinr.app",
+    "apple_id": "TODO: numeric App Store Connect app ID (e.g. 1234567890)",
+    "bundle_identifier": "com.spinr.user",
+    "primary_category": "TRAVEL",
+    "secondary_category": "LIFESTYLE",
+    "age_rating": "4+",
+    "price_tier": "0",
+    "localizations": {
+      "en-CA": {
+        "description": "Spinr is the Saskatchewan-first rideshare platform built on a simple principle: drivers keep what they earn.\n\n0% commission on every ride. No surge pricing games. Fares set by the community.\n\n• Book a ride in seconds — just enter your destination and go\n• Real-time driver tracking on a live map\n• OTP-verified driver identity for every trip\n• Split the fare with friends in one tap\n• Scheduled rides up to 7 days in advance\n• Wallet top-ups and promotional credits\n• Emergency SOS with one button\n• Full trip history with receipts and downloadable tax documents\n• Dark mode and accessible design for everyone",
+        "keywords": "rideshare,ride,taxi,cab,Saskatchewan,Regina,Saskatoon,driver,affordable,0 commission",
+        "release_notes": "v2026.04 — initial public release.\n• Fare split, scheduled rides, wallet, and loyalty points\n• Accessibility improvements throughout\n• Dark mode",
+        "promotional_text": "Saskatchewan's first 0% commission rideshare. Launch offer: $5 off your first ride."
+      }
+    },
+    "review_notes": "This is a rideshare marketplace. Drivers and riders both authenticate via SMS OTP. The app uses location services continuously while a ride is in progress so the driver map and ETA update in real time. There is no web login; everything goes through the mobile app.\n\nTest account (rider):\n  Phone: +1 306 555 0101\n  OTP: 1234 (test environment)\n\nBackend smoke-test URL: https://spinr-api.fly.dev/healthz\n\nThe payment flow uses Stripe test mode in the review build. No real charges are made.",
+    "content_rights": {
+      "contains_third_party_content": false
+    }
+  },
+
+  "google_play": {
+    "package_name": "com.spinr.user",
+    "default_language": "en-CA",
+    "app_category": "TRAVEL_AND_LOCAL",
+    "content_rating": "Everyone",
+    "localizations": {
+      "en-CA": {
+        "title": "Spinr – Rider",
+        "short_description": "Saskatchewan rideshare. 0% commission. Real fares.",
+        "full_description": "Spinr is the Saskatchewan-first rideshare platform built on a simple principle: drivers keep what they earn.\n\n0% commission on every ride. No surge pricing games. Fares set by the community.\n\n● Book a ride in seconds — just enter your destination and go\n● Real-time driver tracking on a live map\n● OTP-verified driver identity for every trip\n● Split the fare with friends in one tap\n● Scheduled rides up to 7 days in advance\n● Wallet top-ups and promotional credits\n● Emergency SOS with one button\n● Full trip history with receipts and downloadable tax documents\n● Dark mode and accessible design for everyone",
+        "release_notes": "v2026.04 — initial public release.\n• Fare split, scheduled rides, wallet, and loyalty points\n• Accessibility improvements throughout\n• Dark mode"
+      }
+    },
+    "service_account_key": "TODO: path to play-service-account.json (see docs/deploy/04-mobile-eas.md)"
+  },
+
+  "screenshots": {
+    "_comment": "Place PNG files in rider-app/store-assets/screenshots/. Naming convention: <platform>-<size>-<screen>.png",
+    "required_ios_sizes": ["6.7-inch (iPhone 16 Pro Max)", "5.5-inch (iPhone 8 Plus)", "12.9-inch (iPad Pro)"],
+    "required_android_sizes": ["phone (1080×1920 or 1080×2340)", "7-inch tablet", "10-inch tablet"],
+    "screens_to_capture": [
+      "01-home-map",
+      "02-search-destination",
+      "03-ride-in-progress",
+      "04-trip-completed",
+      "05-fare-split",
+      "06-wallet",
+      "07-trip-history",
+      "08-profile"
+    ]
+  }
+}

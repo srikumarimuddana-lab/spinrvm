@@ -8,10 +8,10 @@ from pydantic import BaseModel
 
 try:
     from ... import db_supabase
-    from ...db import db
+    from ... import db_supabase
 except ImportError:
     import db_supabase
-    from db import db
+    import db_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ router = APIRouter()
 @router.get("/vehicle-types")
 async def admin_get_vehicle_types():
     """Get all vehicle types."""
-    types = await db.get_rows("vehicle_types", order="created_at", limit=100)
+    types = await db_supabase.get_rows("vehicle_types", order="created_at", limit=100)
     return types
 
 
@@ -40,7 +40,7 @@ async def admin_create_vehicle_type(vtype: Dict[str, Any]):
         "is_active": vtype.get("is_active", True),
         "created_at": datetime.utcnow().isoformat(),
     }
-    row = await db.vehicle_types.insert_one(doc)
+    row = await db_supabase.insert_one("vehicle_types", doc)
     return {"type_id": str(row.get("id") if row and isinstance(row, dict) else "")}
 
 
@@ -64,14 +64,14 @@ async def admin_update_vehicle_type(type_id: str, vtype: Dict[str, Any]):
         update_payload["is_active"] = vtype.get("is_active")
 
     if update_payload:
-        await db.vehicle_types.update_one({"id": type_id}, {"$set": update_payload})
+        await db_supabase.update_one("vehicle_types", {"id": type_id}, update_payload)
     return {"message": "Vehicle type updated"}
 
 
 @router.delete("/vehicle-types/{type_id}")
 async def admin_delete_vehicle_type(type_id: str):
     """Delete vehicle type."""
-    await db.vehicle_types.delete_many({"id": type_id})
+    await db_supabase.delete_many("vehicle_types", {"id": type_id})
     return {"message": "Vehicle type deleted"}
 
 
@@ -81,7 +81,7 @@ async def admin_delete_vehicle_type(type_id: str):
 @router.get("/fare-configs")
 async def admin_get_fare_configs():
     """Get all fare configurations."""
-    configs = await db.get_rows("fare_configs", order="created_at", desc=True, limit=200)
+    configs = await db_supabase.get_rows("fare_configs", order="created_at", desc=True, limit=200)
     return configs
 
 
@@ -100,7 +100,7 @@ async def admin_create_fare_config(config: Dict[str, Any]):
         "is_active": config.get("is_active", True),
         "created_at": datetime.utcnow().isoformat(),
     }
-    row = await db.fare_configs.insert_one(doc)
+    row = await db_supabase.insert_one("fare_configs", doc)
     return {"config_id": str(row.get("id") if row and isinstance(row, dict) else "")}
 
 
@@ -117,14 +117,14 @@ async def admin_update_fare_config(config_id: str, config: Dict[str, Any]):
     }
     updates = {k: v for k, v in updates.items() if v is not None}
     if updates:
-        await db.fare_configs.update_one({"id": config_id}, {"$set": updates})
+        await db_supabase.update_one("fare_configs", {"id": config_id}, updates)
     return {"message": "Fare configuration updated"}
 
 
 @router.delete("/fare-configs/{config_id}")
 async def admin_delete_fare_config(config_id: str):
     """Delete fare configuration."""
-    await db.fare_configs.delete_many({"id": config_id})
+    await db_supabase.delete_many("fare_configs", {"id": config_id})
     return {"message": "Fare configuration deleted"}
 
 
@@ -143,7 +143,7 @@ class LostAndFoundResolveRequest(BaseModel):
 @router.post("/rides/{ride_id}/lost-and-found")
 async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
     """Report a lost item from a ride and notify the driver."""
-    ride = await db.rides.find_one({"id": ride_id})
+    ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
@@ -166,9 +166,9 @@ async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
 
     # Send push notification to driver
     try:
-        driver = await db.drivers.find_one({"id": driver_id})
+        driver = await db_supabase.get_driver_by_id(driver_id)
         if driver and driver.get("user_id"):
-            driver_user = await db.users.find_one({"id": driver["user_id"]})
+            driver_user = await db_supabase.get_user_by_id(driver["user_id"])
             if driver_user and driver_user.get("fcm_token"):
                 try:
                     from ...features import send_push_notification

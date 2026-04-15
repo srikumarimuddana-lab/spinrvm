@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
     View,
     Text,
@@ -12,39 +12,19 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter, useLocalSearchParams } from 'expo-router';
-import { useAuthStore } from '@shared/store/authStore';
+import { useRouter } from 'expo-router';
 import { useDriverStore } from '../../store/driverStore';
-import { API_URL } from '@shared/config';
-
-import SpinrConfig from '@shared/config/spinr.config';
-
-const THEME = SpinrConfig.theme.colors;
-const COLORS = {
-    primary: THEME.background, // Background (white)
-    accent: THEME.primary, // Action/brand color (red)
-    accentDim: THEME.primaryDark,
-    surface: THEME.surface,
-    surfaceLight: THEME.surfaceLight,
-    text: THEME.text,
-    textDim: THEME.textDim,
-    myBubble: THEME.primary,
-    theirBubble: THEME.surfaceLight,
-    border: THEME.border,
-};
-
-interface ChatMessage {
-    id: string;
-    text: string;
-    sender: 'driver' | 'rider';
-    timestamp: string;
-}
+import type { ChatMessage } from '../../store/driverStore';
+import api from '@shared/api/client';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 const QUICK_MESSAGES = [
     'On my way!',
     'I have arrived',
     'Running a few minutes late',
-    'I\'m at the pickup location',
+    "I'm at the pickup location",
     'Please confirm your location',
     'Thank you!',
 ];
@@ -52,80 +32,84 @@ const QUICK_MESSAGES = [
 export default function ChatScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
-    const { user, driver } = useAuthStore();
-    const { activeRide } = useDriverStore();
-    const [messages, setMessages] = useState<ChatMessage[]>([]);
+    const { colors } = useTheme();
+    const styles = useMemo(() => createStyles(colors), [colors]);
+    const { activeRide, chatMessages, addChatMessage, setChatMessages } = useDriverStore();
     const [inputText, setInputText] = useState('');
     const [showQuickReplies, setShowQuickReplies] = useState(true);
+    const [sending, setSending] = useState(false);
     const flatListRef = useRef<FlatList>(null);
-    const wsRef = useRef<WebSocket | null>(null);
 
     const riderName = activeRide?.rider?.first_name || activeRide?.rider?.name || 'Rider';
     const rideId = activeRide?.ride?.id;
+    const CHAT_STORAGE_KEY = rideId ? `spinr_chat_${rideId}` : null;
 
+    // Load chat history: AsyncStorage first (instant), then backend (authoritative).
+    // Real-time incoming messages are pushed via WS → useDriverDashboard → driverStore.
     useEffect(() => {
-        // Connect to chat WebSocket
         if (!rideId) return;
 
-        const wsUrl = API_URL.replace('http', 'ws') + `/ws/chat/${rideId}`;
-        const ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-            ws.send(JSON.stringify({
-                type: 'auth',
-                token: useAuthStore.getState().token,
-                role: 'driver',
-            }));
-        };
-
-        ws.onmessage = (event) => {
+        (async () => {
+            // 1. Seed from local cache for instant render
             try {
-                const data = JSON.parse(event.data);
-                if (data.type === 'chat_message') {
-                    setMessages((prev) => [...prev, {
-                        id: Date.now().toString(),
-                        text: data.message,
-                        sender: data.sender === 'driver' ? 'driver' : 'rider',
-                        timestamp: new Date().toISOString(),
-                    }]);
+                if (CHAT_STORAGE_KEY) {
+                    const saved = await AsyncStorage.getItem(CHAT_STORAGE_KEY);
+                    if (saved) setChatMessages(JSON.parse(saved));
                 }
-            } catch { }
-        };
+            } catch {}
 
-        return () => {
-            ws.close();
-            wsRef.current = null;
-        };
+            // 2. Fetch authoritative history from backend
+            try {
+                const res = await api.get(`/rides/${rideId}/messages`);
+                if (res.data?.messages?.length) {
+                    setChatMessages(res.data.messages);
+                    if (CHAT_STORAGE_KEY) {
+                        await AsyncStorage.setItem(
+                            CHAT_STORAGE_KEY,
+                            JSON.stringify(res.data.messages),
+                        );
+                    }
+                }
+            } catch (e) {
+                console.log('[Chat] Failed to load history:', e);
+            }
+        })();
     }, [rideId]);
 
-    const sendMessage = useCallback((text: string) => {
-        if (!text.trim()) return;
+    // Persist to AsyncStorage whenever the store updates (keeps cache fresh
+    // for the next cold-start without an extra fetch).
+    useEffect(() => {
+        if (!CHAT_STORAGE_KEY || chatMessages.length === 0) return;
+        AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatMessages)).catch(() => {});
+    }, [chatMessages, CHAT_STORAGE_KEY]);
 
-        const newMsg: ChatMessage = {
-            id: Date.now().toString(),
-            text: text.trim(),
-            sender: 'driver',
-            timestamp: new Date().toISOString(),
-        };
+    // Scroll to bottom on new messages
+    useEffect(() => {
+        if (chatMessages.length > 0) {
+            setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
+        }
+    }, [chatMessages.length]);
 
-        setMessages((prev) => [...prev, newMsg]);
+    const sendMessage = useCallback(async (text: string) => {
+        if (!text.trim() || !rideId || sending) return;
+        setSending(true);
+        const trimmed = text.trim();
         setInputText('');
         setShowQuickReplies(false);
 
-        // Send via WebSocket
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({
-                type: 'chat_message',
-                message: text.trim(),
-                ride_id: rideId,
-            }));
+        try {
+            const res = await api.post(`/rides/${rideId}/messages`, { text: trimmed });
+            if (res.data?.message) {
+                // Backend's REST handler also broadcasts via WS, so addChatMessage
+                // deduplication ensures no double-render even if we add optimistically.
+                addChatMessage(res.data.message);
+            }
+        } catch (e) {
+            console.log('[Chat] Send failed:', e);
+        } finally {
+            setSending(false);
         }
-
-        setTimeout(() => {
-            flatListRef.current?.scrollToEnd({ animated: true });
-        }, 100);
-    }, [rideId]);
+    }, [rideId, sending, addChatMessage]);
 
     const formatTime = (dateStr: string) => {
         return new Date(dateStr).toLocaleTimeString('en', {
@@ -140,7 +124,7 @@ export default function ChatScreen() {
             <View style={[styles.messageBubbleRow, isMe && styles.myMessageRow]}>
                 {!isMe && (
                     <View style={styles.avatarSmall}>
-                        <Ionicons name="person" size={14} color={COLORS.textDim} />
+                        <Ionicons name="person" size={14} color={colors.textDim} />
                     </View>
                 )}
                 <View style={[styles.bubble, isMe ? styles.myBubble : styles.theirBubble]}>
@@ -160,10 +144,13 @@ export default function ChatScreen() {
             keyboardVerticalOffset={0}
         >
             {/* Header */}
-            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
+            <LinearGradient
+                colors={[colors.surface, colors.background]}
+                style={[styles.header, { paddingTop: insets.top + 12 }]}
+            >
                 <View style={styles.headerRow}>
                     <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                        <Ionicons name="arrow-back" size={22} color={COLORS.text} />
+                        <Ionicons name="arrow-back" size={22} color={colors.text} />
                     </TouchableOpacity>
                     <View style={styles.headerInfo}>
                         <Text style={styles.headerName}>{riderName}</Text>
@@ -171,8 +158,22 @@ export default function ChatScreen() {
                             {rideId ? 'Active Ride' : 'No active ride'}
                         </Text>
                     </View>
-                    <TouchableOpacity style={styles.callBtn}>
-                        <Ionicons name="call" size={20} color={COLORS.accent} />
+                    <TouchableOpacity
+                        style={styles.callBtn}
+                        onPress={async () => {
+                            if (!rideId) return;
+                            try {
+                                const res = await api.get(`/rides/${rideId}/call`);
+                                if (res.data?.phone) {
+                                    const { Linking } = require('react-native');
+                                    Linking.openURL(`tel:${res.data.phone}`);
+                                }
+                            } catch (e: any) {
+                                console.log('[Chat] Call failed:', e?.response?.data?.detail || e.message);
+                            }
+                        }}
+                    >
+                        <Ionicons name="call" size={20} color={colors.primary} />
                     </TouchableOpacity>
                 </View>
             </LinearGradient>
@@ -180,14 +181,14 @@ export default function ChatScreen() {
             {/* Messages */}
             <FlatList
                 ref={flatListRef}
-                data={messages}
+                data={chatMessages}
                 renderItem={renderMessage}
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.messageList}
                 showsVerticalScrollIndicator={false}
                 ListEmptyComponent={
                     <View style={styles.emptyChat}>
-                        <Ionicons name="chatbubbles-outline" size={48} color={COLORS.surfaceLight} />
+                        <Ionicons name="chatbubbles-outline" size={48} color={colors.surfaceLight} />
                         <Text style={styles.emptyChatText}>No messages yet</Text>
                         <Text style={styles.emptyChatSub}>Send a quick message to your rider</Text>
                     </View>
@@ -224,13 +225,13 @@ export default function ChatScreen() {
                     <Ionicons
                         name={showQuickReplies ? 'chevron-down' : 'chevron-up'}
                         size={20}
-                        color={COLORS.textDim}
+                        color={colors.textDim}
                     />
                 </TouchableOpacity>
                 <TextInput
                     style={styles.input}
                     placeholder="Type a message..."
-                    placeholderTextColor={COLORS.textDim}
+                    placeholderTextColor={colors.textDim}
                     value={inputText}
                     onChangeText={setInputText}
                     onFocus={() => setShowQuickReplies(false)}
@@ -240,135 +241,141 @@ export default function ChatScreen() {
                     onPress={() => sendMessage(inputText)}
                     disabled={!inputText.trim()}
                 >
-                    <Ionicons name="send" size={18} color={inputText.trim() ? '#fff' : COLORS.textDim} />
+                    <Ionicons
+                        name="send"
+                        size={18}
+                        color={inputText.trim() ? '#fff' : colors.textDim}
+                    />
                 </TouchableOpacity>
             </View>
         </KeyboardAvoidingView>
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: COLORS.primary },
-    header: {
-        paddingBottom: 12,
-        paddingHorizontal: 16,
-    },
-    headerRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-    },
-    backBtn: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: COLORS.surfaceLight,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    headerInfo: { flex: 1 },
-    headerName: { color: COLORS.text, fontSize: 17, fontWeight: '700' },
-    headerSub: { color: COLORS.textDim, fontSize: 12, marginTop: 1 },
-    callBtn: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: 'rgba(0,212,170,0.1)',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    messageList: {
-        paddingHorizontal: 16,
-        paddingTop: 16,
-        paddingBottom: 8,
-        flexGrow: 1,
-    },
-    messageBubbleRow: {
-        flexDirection: 'row',
-        alignItems: 'flex-end',
-        marginBottom: 10,
-        gap: 8,
-    },
-    myMessageRow: {
-        justifyContent: 'flex-end',
-    },
-    avatarSmall: {
-        width: 28,
-        height: 28,
-        borderRadius: 14,
-        backgroundColor: COLORS.surfaceLight,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    bubble: {
-        maxWidth: '75%',
-        paddingHorizontal: 14,
-        paddingVertical: 10,
-        borderRadius: 18,
-    },
-    myBubble: {
-        backgroundColor: COLORS.myBubble,
-        borderBottomRightRadius: 4,
-    },
-    theirBubble: {
-        backgroundColor: COLORS.theirBubble,
-        borderBottomLeftRadius: 4,
-    },
-    bubbleText: { color: COLORS.text, fontSize: 14, lineHeight: 20 },
-    myBubbleText: { color: COLORS.primary },
-    bubbleTime: { color: COLORS.textDim, fontSize: 10, marginTop: 4, textAlign: 'right' },
-    myBubbleTime: { color: 'rgba(10,14,33,0.5)' },
-    emptyChat: {
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingVertical: 80,
-        gap: 8,
-    },
-    emptyChatText: { color: COLORS.textDim, fontSize: 16, fontWeight: '600' },
-    emptyChatSub: { color: COLORS.surfaceLight, fontSize: 13 },
-    quickReplies: {
-        paddingVertical: 10,
-        borderTopWidth: 1,
-        borderTopColor: 'rgba(255,255,255,0.04)',
-    },
-    quickReplyBtn: {
-        paddingHorizontal: 14,
-        paddingVertical: 8,
-        backgroundColor: COLORS.surface,
-        borderRadius: 20,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.06)',
-    },
-    quickReplyText: { color: COLORS.text, fontSize: 13, fontWeight: '500' },
-    inputContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        backgroundColor: COLORS.surface,
-        borderTopWidth: 1,
-        borderTopColor: 'rgba(255,255,255,0.06)',
-        gap: 8,
-    },
-    quickToggle: { padding: 6 },
-    input: {
-        flex: 1,
-        backgroundColor: COLORS.surfaceLight,
-        borderRadius: 24,
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-        color: COLORS.text,
-        fontSize: 14,
-    },
-    sendBtn: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: COLORS.surfaceLight,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    sendBtnActive: {
-        backgroundColor: COLORS.accent,
-    },
-});
+function createStyles(colors: ThemeColors) {
+    return StyleSheet.create({
+        container: { flex: 1, backgroundColor: colors.background },
+        header: {
+            paddingBottom: 12,
+            paddingHorizontal: 16,
+        },
+        headerRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 12,
+        },
+        backBtn: {
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            backgroundColor: colors.surfaceLight,
+            justifyContent: 'center',
+            alignItems: 'center',
+        },
+        headerInfo: { flex: 1 },
+        headerName: { color: colors.text, fontSize: 17, fontWeight: '700' },
+        headerSub: { color: colors.textDim, fontSize: 12, marginTop: 1 },
+        callBtn: {
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            backgroundColor: `${colors.primary}1A`,
+            justifyContent: 'center',
+            alignItems: 'center',
+        },
+        messageList: {
+            paddingHorizontal: 16,
+            paddingTop: 16,
+            paddingBottom: 8,
+            flexGrow: 1,
+        },
+        messageBubbleRow: {
+            flexDirection: 'row',
+            alignItems: 'flex-end',
+            marginBottom: 10,
+            gap: 8,
+        },
+        myMessageRow: {
+            justifyContent: 'flex-end',
+        },
+        avatarSmall: {
+            width: 28,
+            height: 28,
+            borderRadius: 14,
+            backgroundColor: colors.surfaceLight,
+            justifyContent: 'center',
+            alignItems: 'center',
+        },
+        bubble: {
+            maxWidth: '75%',
+            paddingHorizontal: 14,
+            paddingVertical: 10,
+            borderRadius: 18,
+        },
+        myBubble: {
+            backgroundColor: colors.primary,
+            borderBottomRightRadius: 4,
+        },
+        theirBubble: {
+            backgroundColor: colors.surfaceLight,
+            borderBottomLeftRadius: 4,
+        },
+        bubbleText: { color: colors.text, fontSize: 14, lineHeight: 20 },
+        myBubbleText: { color: '#fff' },
+        bubbleTime: { color: colors.textDim, fontSize: 10, marginTop: 4, textAlign: 'right' },
+        myBubbleTime: { color: 'rgba(255,255,255,0.6)' },
+        emptyChat: {
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingVertical: 80,
+            gap: 8,
+        },
+        emptyChatText: { color: colors.textDim, fontSize: 16, fontWeight: '600' },
+        emptyChatSub: { color: colors.textSecondary, fontSize: 13 },
+        quickReplies: {
+            paddingVertical: 10,
+            borderTopWidth: 1,
+            borderTopColor: colors.border,
+        },
+        quickReplyBtn: {
+            paddingHorizontal: 14,
+            paddingVertical: 8,
+            backgroundColor: colors.surface,
+            borderRadius: 20,
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
+        quickReplyText: { color: colors.text, fontSize: 13, fontWeight: '500' },
+        inputContainer: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingHorizontal: 12,
+            paddingVertical: 10,
+            backgroundColor: colors.surface,
+            borderTopWidth: 1,
+            borderTopColor: colors.border,
+            gap: 8,
+        },
+        quickToggle: { padding: 6 },
+        input: {
+            flex: 1,
+            backgroundColor: colors.surfaceLight,
+            borderRadius: 24,
+            paddingHorizontal: 16,
+            paddingVertical: 10,
+            color: colors.text,
+            fontSize: 14,
+        },
+        sendBtn: {
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            backgroundColor: colors.surfaceLight,
+            justifyContent: 'center',
+            alignItems: 'center',
+        },
+        sendBtnActive: {
+            backgroundColor: colors.primary,
+        },
+    });
+}

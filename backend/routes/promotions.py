@@ -5,16 +5,17 @@ promotions.py – Promo codes & referral system for Spinr.
 import logging
 import uuid
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 try:
-    from ..db import db
+    from .. import db_supabase
     from ..dependencies import get_current_user
 except ImportError:
-    from db import db
+    import db_supabase
     from dependencies import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -27,14 +28,14 @@ api_router = APIRouter(prefix="/promo", tags=["Promotions"])
 
 class ValidatePromoRequest(BaseModel):
     code: str
-    ride_fare: float = 0.0  # So we can calculate actual discount
+    ride_fare: Decimal = Decimal("0.00")  # Decimal for currency precision
 
 
 class CreatePromoCodeRequest(BaseModel):
     code: str
     discount_type: str = "flat"  # flat | percentage
-    discount_value: float  # e.g. 5.00 for $5 off, or 10.0 for 10%
-    max_discount: Optional[float] = None  # Cap for percentage discounts
+    discount_value: Decimal  # e.g. 5.00 for $5 off, or 10.0 for 10%
+    max_discount: Optional[Decimal] = None  # Cap for percentage discounts
     max_uses: int = 100
     max_uses_per_user: int = 1
     expiry_date: Optional[str] = None  # ISO 8601
@@ -44,8 +45,8 @@ class CreatePromoCodeRequest(BaseModel):
 
 class UpdatePromoCodeRequest(BaseModel):
     discount_type: Optional[str] = None
-    discount_value: Optional[float] = None
-    max_discount: Optional[float] = None
+    discount_value: Optional[Decimal] = None
+    max_discount: Optional[Decimal] = None
     max_uses: Optional[int] = None
     max_uses_per_user: Optional[int] = None
     expiry_date: Optional[str] = None
@@ -64,7 +65,7 @@ async def validate_promo(
     """Validate promo code against all rules: usage, expiry, area, user targeting, fare minimum."""
     code = req.code.strip().upper()
     now = datetime.utcnow()
-    promo = await db.promotions.find_one({"code": code})
+    promo = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("promotions", {"code": code}, limit=1))
 
     if not promo:
         raise HTTPException(status_code=404, detail="Invalid promo code")
@@ -93,12 +94,7 @@ async def validate_promo(
     # 3. Per-user usage limit (0 = unlimited)
     max_per_user = promo.get("max_uses_per_user", 1)
     if max_per_user > 0:
-        user_uses = await db.promo_applications.count_documents(
-            {
-                "promo_id": promo["id"],
-                "user_id": current_user["id"],
-            }
-        )
+        user_uses = await db_supabase.count_documents("promo_applications", { "promo_id": promo["id"], "user_id": current_user["id"], })
         if user_uses >= max_per_user:
             raise HTTPException(
                 status_code=400, detail="You have already used this promo code the maximum number of times"
@@ -116,14 +112,14 @@ async def validate_promo(
 
     # 6. First ride only
     if promo.get("first_ride_only"):
-        ride_count = await db.rides.count_documents({"rider_id": current_user["id"], "status": "completed"})
+        ride_count = await db_supabase.count_documents("rides", {"rider_id": current_user["id"], "status": "completed"})
         if ride_count > 0:
             raise HTTPException(status_code=400, detail="This promo is for first-time riders only")
 
     # 7. New user restriction (user account must be less than X days old)
     new_user_days = promo.get("new_user_days", 0)
     if new_user_days > 0:
-        user = await db.users.find_one({"id": current_user["id"]})
+        user = await db_supabase.get_user_by_id(current_user["id"])
         if user and user.get("created_at"):
             try:
                 created = datetime.fromisoformat(str(user["created_at"]).replace("Z", "+00:00").replace("+00:00", ""))
@@ -137,13 +133,7 @@ async def validate_promo(
     inactive_days = promo.get("inactive_days", 0)
     if inactive_days > 0:
         cutoff = (now - timedelta(days=inactive_days)).isoformat()
-        recent_rides = await db.rides.count_documents(
-            {
-                "rider_id": current_user["id"],
-                "status": "completed",
-                "ride_completed_at": {"$gte": cutoff},
-            }
-        )
+        recent_rides = await db_supabase.count_documents("rides", { "rider_id": current_user["id"], "status": "completed", "ride_completed_at": {"$gte": cutoff}, })
         if recent_rides > 0:
             raise HTTPException(
                 status_code=400, detail="This promo is for returning riders who haven't ridden recently"
@@ -153,7 +143,7 @@ async def validate_promo(
     min_rides = promo.get("min_total_rides", 0)
     max_rides = promo.get("max_total_rides", 0)
     if min_rides > 0 or max_rides > 0:
-        total_rides = await db.rides.count_documents({"rider_id": current_user["id"], "status": "completed"})
+        total_rides = await db_supabase.count_documents("rides", {"rider_id": current_user["id"], "status": "completed"})
         if min_rides > 0 and total_rides < min_rides:
             raise HTTPException(
                 status_code=400, detail=f"You need at least {min_rides} completed rides to use this promo"
@@ -208,15 +198,12 @@ async def apply_promo(
         "discount_applied": validation["discount_amount"],
         "created_at": datetime.utcnow().isoformat(),
     }
-    await db.promo_applications.insert_one(application)
+    await db_supabase.insert_one("promo_applications", application)
 
     # Increment usage count
-    promo = await db.promotions.find_one({"id": validation["promo_id"]})
+    promo = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("promotions", {"id": validation["promo_id"]}, limit=1))
     if promo:
-        await db.promotions.update_one(
-            {"id": validation["promo_id"]},
-            {"$set": {"uses": promo.get("uses", 0) + 1}},
-        )
+        await db_supabase.update_one("promotions", {"id": validation["promo_id"]}, {"uses": promo.get("uses", 0) + 1})
 
     return {
         "success": True,
@@ -232,19 +219,13 @@ async def get_available_promos(
 ):
     """Get all promos available to this user, sorted by best discount first."""
     now = datetime.utcnow()
-    promos = await db.promotions.find({"is_active": True}).to_list(100)
+    promos = await db_supabase.get_rows("promotions", {"is_active": True}, limit=100)
 
     # Pre-fetch user data for targeting checks
-    user = await db.users.find_one({"id": current_user["id"]})
-    total_rides = await db.rides.count_documents({"rider_id": current_user["id"], "status": "completed"})
+    user = await db_supabase.get_user_by_id(current_user["id"])
+    total_rides = await db_supabase.count_documents("rides", {"rider_id": current_user["id"], "status": "completed"})
     recent_cutoff_30 = (now - timedelta(days=30)).isoformat()
-    await db.rides.count_documents(
-        {
-            "rider_id": current_user["id"],
-            "status": "completed",
-            "ride_completed_at": {"$gte": recent_cutoff_30},
-        }
-    )
+    await db_supabase.count_documents("rides", { "rider_id": current_user["id"], "status": "completed", "ride_completed_at": {"$gte": recent_cutoff_30}, })
 
     available = []
     for p in promos:
@@ -266,9 +247,7 @@ async def get_available_promos(
             # Per-user usage (0 = unlimited)
             max_per_user = p.get("max_uses_per_user", 1)
             if max_per_user > 0:
-                user_uses = await db.promo_applications.count_documents(
-                    {"promo_id": p["id"], "user_id": current_user["id"]}
-                )
+                user_uses = await db_supabase.count_documents("promo_applications", {"promo_id": p["id"], "user_id": current_user["id"]})
                 if user_uses >= max_per_user:
                     continue  # noqa: E701
 
@@ -296,9 +275,7 @@ async def get_available_promos(
             inactive_days = p.get("inactive_days", 0)
             if inactive_days > 0:
                 cutoff = (now - timedelta(days=inactive_days)).isoformat()
-                recent = await db.rides.count_documents(
-                    {"rider_id": current_user["id"], "status": "completed", "ride_completed_at": {"$gte": cutoff}}
-                )
+                recent = await db_supabase.count_documents("rides", {"rider_id": current_user["id"], "status": "completed", "ride_completed_at": {"$gte": cutoff}})
                 if recent > 0:
                     continue  # noqa: E701
 
@@ -352,7 +329,7 @@ admin_router = APIRouter(prefix="/admin/promo-codes", tags=["Admin Promotions"])
 @admin_router.get("")
 async def admin_get_promo_codes():
     """Get all promo codes."""
-    codes = await db.get_rows("promotions", order="created_at", desc=True, limit=500)
+    codes = await db_supabase.get_rows("promotions", order="created_at", desc=True, limit=500)
     return codes
 
 
@@ -362,7 +339,7 @@ async def admin_create_promo_code(req: CreatePromoCodeRequest):
     code = req.code.strip().upper()
 
     # Check uniqueness
-    existing = await db.promotions.find_one({"code": code})
+    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("promotions", {"code": code}, limit=1))
     if existing:
         raise HTTPException(status_code=400, detail=f"Promo code '{code}' already exists")
 
@@ -385,7 +362,7 @@ async def admin_create_promo_code(req: CreatePromoCodeRequest):
         "updated_at": datetime.utcnow().isoformat(),
     }
 
-    await db.promotions.insert_one(promo)
+    await db_supabase.insert_one("promotions", promo)
     return {"success": True, "promo": promo}
 
 
@@ -407,8 +384,8 @@ async def admin_update_promo_code(promo_id: str, req: UpdatePromoCodeRequest):
         if val is not None:
             update_data[field] = val
 
-    await db.promotions.update_one({"id": promo_id}, {"$set": update_data})
-    updated = await db.promotions.find_one({"id": promo_id})
+    await db_supabase.update_one("promotions", {"id": promo_id}, update_data)
+    updated = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("promotions", {"id": promo_id}, limit=1))
     if not updated:
         raise HTTPException(status_code=404, detail="Promo code not found")
     return updated
@@ -417,5 +394,5 @@ async def admin_update_promo_code(promo_id: str, req: UpdatePromoCodeRequest):
 @admin_router.delete("/{promo_id}")
 async def admin_delete_promo_code(promo_id: str):
     """Delete a promo code."""
-    await db.promotions.delete_one({"id": promo_id})
+    await db_supabase.delete_one("promotions", {"id": promo_id})
     return {"deleted": True}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, Alert, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator } from 'react-native';
 import MapView, { Marker, Polyline, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
@@ -15,22 +15,21 @@ import {
 import { useDriverDashboard } from '../../hooks/useDriverDashboard';
 import { CarMarker } from '../../components/CarMarker';
 import { SOSButton } from '@shared/components/SOSButton';
+import { OfflineBanner } from '@shared/components/OfflineBanner';
+import { useLanguageStore } from '../../store/languageStore';
 import api from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
 
 // Use Google Maps on Android, Apple Maps (native) on iOS
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
-const COLORS = {
-  primary: SpinrConfig.theme.colors.background,
-  accent: SpinrConfig.theme.colors.primary,
-  text: SpinrConfig.theme.colors.text,
-  textDim: SpinrConfig.theme.colors.textDim,
-};
-
 export default function DriverDashboard() {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   // Driver + user live on the shared auth store — useDriverStore does not
   // hold these fields, so reading them from there always returned null and
   // left the GO button permanently disabled.
@@ -54,7 +53,10 @@ export default function DriverDashboard() {
     resetRideState,
     clearError,
     earnings,
+    rateRider,
   } = useDriverStore();
+
+  const { t } = useLanguageStore();
 
   const {
     isOnline,
@@ -73,6 +75,21 @@ export default function DriverDashboard() {
 
   // Route polyline coordinates for active rides
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
+
+  // Live ETA from Google Directions — updated every 30s via the
+  // directionsKey mechanism below.
+  const [routeEtaMinutes, setRouteEtaMinutes] = useState<number | null>(null);
+  const [routeDistanceKm, setRouteDistanceKm] = useState<number | null>(null);
+
+  // Force MapViewDirections to re-compute every 30 seconds by changing
+  // a key prop. This gives the driver a road-aware ETA that accounts
+  // for traffic and route changes without hammering the Directions API.
+  const [directionsKey, setDirectionsKey] = useState(0);
+  useEffect(() => {
+    if (rideState !== 'navigating_to_pickup' && rideState !== 'trip_in_progress') return;
+    const interval = setInterval(() => setDirectionsKey((k) => k + 1), 30000);
+    return () => clearInterval(interval);
+  }, [rideState]);
 
   // Demand heatmap — controlled by admin per service area
   const [heatmapPoints, setHeatmapPoints] = useState<{ latitude: number; longitude: number; weight: number }[]>([]);
@@ -128,9 +145,12 @@ export default function DriverDashboard() {
     setCountdownState(countdownSeconds);
   }, [countdownSeconds]);
 
-  // Clear route when ride state changes (new phase = new route)
+  // Clear route + ETA when ride state changes (new phase = new route)
   useEffect(() => {
     setRouteCoords([]);
+    setRouteEtaMinutes(null);
+    setRouteDistanceKm(null);
+    setDirectionsKey(0);
   }, [rideState]);
 
   // Error handling
@@ -156,7 +176,7 @@ export default function DriverDashboard() {
           description={ride.pickup_address}
         >
           <View style={styles.markerContainer}>
-            <View style={[styles.markerDot, { backgroundColor: COLORS.accent }]}>
+            <View style={[styles.markerDot, { backgroundColor: colors.primary }]}>
               <Ionicons name="location" size={16} color="#fff" />
             </View>
           </View>
@@ -209,14 +229,14 @@ export default function DriverDashboard() {
               <Text style={styles.countdownText}>{countdown}</Text>
             </View>
             <View style={{ flex: 1, marginLeft: 14 }}>
-              <Text style={styles.rideOfferTitle}>New Ride Request!</Text>
+              <Text style={styles.rideOfferTitle}>{t('rideOffer.newRideRequest')}</Text>
               <View style={styles.rideTypeBadge}>
-                <Ionicons name="car-sport" size={12} color={COLORS.accent} />
-                <Text style={styles.rideTypeText}>Standard Ride</Text>
+                <Ionicons name="car-sport" size={12} color={colors.primary} />
+                <Text style={styles.rideTypeText}>{t('rideOffer.standardRide')}</Text>
               </View>
             </View>
             <View style={styles.fareContainer}>
-              <Text style={styles.fareLabel}>Fare</Text>
+              <Text style={styles.fareLabel}>{t('rideOffer.fare')}</Text>
               <Text style={styles.fareAmount}>${fare}</Text>
             </View>
           </View>
@@ -224,22 +244,22 @@ export default function DriverDashboard() {
           {/* Route: Pickup & Dropoff */}
           <View style={styles.routeContainer}>
             <View style={styles.routeIconColumn}>
-              <View style={[styles.routeDot, { backgroundColor: COLORS.accent }]} />
+              <View style={[styles.routeDot, { backgroundColor: colors.primary }]} />
               <View style={styles.routeLine} />
               <View style={[styles.routeDot, { backgroundColor: '#FF4757' }]} />
             </View>
             <View style={styles.routeDetails}>
               <View style={styles.routeRow}>
-                <Text style={styles.routeLabel}>PICKUP</Text>
+                <Text style={styles.routeLabel}>{t('rideOffer.pickup')}</Text>
                 <Text style={styles.routeAddress} numberOfLines={1}>
-                  {incomingRide.pickup_address || 'Pickup location'}
+                  {incomingRide.pickup_address || t('rideOffer.pickupLocation')}
                 </Text>
               </View>
               <View style={styles.routeDivider} />
               <View style={styles.routeRow}>
-                <Text style={styles.routeLabel}>DROP-OFF</Text>
+                <Text style={styles.routeLabel}>{t('rideOffer.dropoff')}</Text>
                 <Text style={styles.routeAddress} numberOfLines={1}>
-                  {incomingRide.dropoff_address || 'Dropoff location'}
+                  {incomingRide.dropoff_address || t('rideOffer.dropoffLocation')}
                 </Text>
               </View>
             </View>
@@ -249,19 +269,19 @@ export default function DriverDashboard() {
           <View style={styles.tripInfoRow}>
             {incomingRide.distance_km && (
               <View style={styles.tripInfoBadge}>
-                <Ionicons name="navigate-outline" size={14} color={COLORS.accent} />
+                <Ionicons name="navigate-outline" size={14} color={colors.primary} />
                 <Text style={styles.tripInfoText}>{incomingRide.distance_km.toFixed(1)} km</Text>
               </View>
             )}
             {incomingRide.duration_minutes && (
               <View style={styles.tripInfoBadge}>
-                <Ionicons name="time-outline" size={14} color={COLORS.accent} />
+                <Ionicons name="time-outline" size={14} color={colors.primary} />
                 <Text style={styles.tripInfoText}>{Math.round(incomingRide.duration_minutes)} min</Text>
               </View>
             )}
             {incomingRide.rider_name && (
               <View style={styles.tripInfoBadge}>
-                <Ionicons name="person-outline" size={14} color={COLORS.accent} />
+                <Ionicons name="person-outline" size={14} color={colors.primary} />
                 <Text style={styles.tripInfoText}>{incomingRide.rider_name}</Text>
                 {incomingRide.rider_rating && (
                   <>
@@ -281,7 +301,7 @@ export default function DriverDashboard() {
               activeOpacity={0.8}
             >
               <Ionicons name="close-circle" size={24} color="#FF4757" />
-              <Text style={styles.declineText}>Decline</Text>
+              <Text style={styles.declineText}>{t('rideOffer.decline')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.acceptBtn}
@@ -289,7 +309,7 @@ export default function DriverDashboard() {
               activeOpacity={0.8}
             >
               <Ionicons name="checkmark-circle" size={24} color="#fff" />
-              <Text style={styles.acceptText}>Accept Ride</Text>
+              <Text style={styles.acceptText}>{t('rideOffer.acceptRide')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -300,19 +320,23 @@ export default function DriverDashboard() {
   if (!location?.coords) {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color={COLORS.accent} />
-        <Text style={{ color: COLORS.text, marginTop: 12, fontSize: 15 }}>Getting your location...</Text>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={{ color: colors.text, marginTop: 12, fontSize: 15 }}>{t('home.gettingLocation')}</Text>
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
+      {/* Offline indicator — slides in from the top when network drops */}
+      <OfflineBanner />
+
       {/* Map */}
       <MapView
         ref={mapRef}
         style={styles.map}
         provider={MAP_PROVIDER}
+        userInterfaceStyle={isDark ? "dark" : "light"}
         initialRegion={{
           latitude: location.coords.latitude,
           longitude: location.coords.longitude,
@@ -359,6 +383,7 @@ export default function DriverDashboard() {
           return (
             <>
               <MapViewDirections
+                key={directionsKey}
                 origin={origin}
                 destination={destination}
                 apikey={GOOGLE_MAPS_API_KEY}
@@ -366,7 +391,13 @@ export default function DriverDashboard() {
                 strokeColor="transparent"
                 onReady={(result) => {
                   setRouteCoords(result.coordinates);
-                  if (mapRef.current && result.coordinates?.length > 1) {
+                  // Capture live ETA + road-distance from the Directions API.
+                  // result.duration is in minutes, result.distance in km.
+                  if (result.duration != null) setRouteEtaMinutes(Math.round(result.duration));
+                  if (result.distance != null) setRouteDistanceKm(Math.round(result.distance * 10) / 10);
+                  // Only fit-to-coordinates on the first computation (key=0)
+                  // to avoid the map jumping every 30s.
+                  if (directionsKey === 0 && mapRef.current && result.coordinates?.length > 1) {
                     mapRef.current.fitToCoordinates(result.coordinates, {
                       edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
                       animated: true,
@@ -374,7 +405,6 @@ export default function DriverDashboard() {
                   }
                 }}
                 onError={(err) => console.log('Directions error:', err)}
-                resetOnChange={false}
               />
               {routeCoords.length > 1 && (
                 <>
@@ -390,7 +420,7 @@ export default function DriverDashboard() {
                   <Polyline
                     coordinates={routeCoords}
                     strokeWidth={4}
-                    strokeColor={rideState === 'trip_in_progress' ? '#10B981' : COLORS.accent}
+                    strokeColor={rideState === 'trip_in_progress' ? '#10B981' : colors.primary}
                     lineCap="round"
                     lineJoin="round"
                   />
@@ -472,6 +502,8 @@ export default function DriverDashboard() {
           onStartRide={() => startRide(activeRide!.ride.id)}
           onCompleteRide={() => completeRide(activeRide!.ride.id)}
           onCancelRide={() => cancelRide(activeRide!.ride.id)}
+          routeEtaMinutes={routeEtaMinutes}
+          routeDistanceKm={routeDistanceKm}
           slideUpAnim={slideUpAnim}
           fadeAnim={fadeAnim}
         />
@@ -480,229 +512,232 @@ export default function DriverDashboard() {
         <TripCompletedPanel
           completedRide={completedRide}
           onDone={resetRideState}
+          onRateRider={rateRider}
         />
       )}
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: COLORS.primary,
-  },
-  map: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  markerContainer: {
-    alignItems: 'center',
-  },
-  markerDot: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#fff',
-  },
-  // ── Rich Ride Offer Panel ──
-  rideOfferOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    justifyContent: 'flex-end',
-  },
-  rideOfferContent: {
-    backgroundColor: COLORS.primary,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingBottom: 34,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 20,
-    elevation: 20,
-  },
-  timerBarContainer: {
-    height: 4,
-    backgroundColor: '#F3F4F6',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    overflow: 'hidden',
-  },
-  timerBar: {
-    height: '100%',
-    backgroundColor: COLORS.accent,
-    borderRadius: 4,
-  },
-  offerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: 14,
-  },
-  countdownCircle: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    borderWidth: 3,
-    borderColor: COLORS.accent,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,212,170,0.06)',
-  },
-  countdownText: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: COLORS.accent,
-  },
-  rideOfferTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: COLORS.text,
-  },
-  rideTypeBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 3,
-  },
-  rideTypeText: {
-    fontSize: 12,
-    color: COLORS.accent,
-    fontWeight: '600',
-  },
-  fareContainer: {
-    alignItems: 'flex-end',
-  },
-  fareLabel: {
-    fontSize: 11,
-    color: COLORS.textDim,
-    fontWeight: '500',
-  },
-  fareAmount: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: COLORS.accent,
-    letterSpacing: -1,
-  },
-  // Route display
-  routeContainer: {
-    flexDirection: 'row',
-    marginHorizontal: 20,
-    backgroundColor: '#F9FAFB',
-    borderRadius: 16,
-    padding: 14,
-    marginBottom: 12,
-  },
-  routeIconColumn: {
-    alignItems: 'center',
-    width: 20,
-    paddingTop: 4,
-  },
-  routeDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-  },
-  routeLine: {
-    width: 2,
-    flex: 1,
-    backgroundColor: '#D1D5DB',
-    marginVertical: 4,
-  },
-  routeDetails: {
-    flex: 1,
-    marginLeft: 12,
-  },
-  routeRow: {
-    paddingVertical: 2,
-  },
-  routeLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: COLORS.textDim,
-    letterSpacing: 0.5,
-    marginBottom: 2,
-  },
-  routeAddress: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: COLORS.text,
-  },
-  routeDivider: {
-    height: 1,
-    backgroundColor: '#E5E7EB',
-    marginVertical: 8,
-  },
-  // Trip info badges
-  tripInfoRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    paddingHorizontal: 20,
-    marginBottom: 16,
-  },
-  tripInfoBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: '#F0FDF9',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#D1FAE5',
-  },
-  tripInfoText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
-  // Action buttons
-  offerActions: {
-    flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: 20,
-  },
-  declineBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FEF2F2',
-    borderRadius: 16,
-    paddingVertical: 16,
-    gap: 8,
-    borderWidth: 1,
-    borderColor: '#FECACA',
-  },
-  declineText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#FF4757',
-  },
-  acceptBtn: {
-    flex: 2,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.accent,
-    borderRadius: 16,
-    paddingVertical: 16,
-    gap: 8,
-    shadowColor: COLORS.accent,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  acceptText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#fff',
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    map: {
+      ...StyleSheet.absoluteFillObject,
+    },
+    markerContainer: {
+      alignItems: 'center',
+    },
+    markerDot: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      justifyContent: 'center',
+      alignItems: 'center',
+      borderWidth: 2,
+      borderColor: '#fff',
+    },
+    // ── Rich Ride Offer Panel ──
+    rideOfferOverlay: {
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: 0,
+      justifyContent: 'flex-end',
+    },
+    rideOfferContent: {
+      backgroundColor: colors.surface,
+      borderTopLeftRadius: 28,
+      borderTopRightRadius: 28,
+      paddingBottom: 34,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: -8 },
+      shadowOpacity: 0.12,
+      shadowRadius: 20,
+      elevation: 20,
+    },
+    timerBarContainer: {
+      height: 4,
+      backgroundColor: colors.surfaceLight,
+      borderTopLeftRadius: 28,
+      borderTopRightRadius: 28,
+      overflow: 'hidden',
+    },
+    timerBar: {
+      height: '100%',
+      backgroundColor: colors.primary,
+      borderRadius: 4,
+    },
+    offerHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 20,
+      paddingTop: 18,
+      paddingBottom: 14,
+    },
+    countdownCircle: {
+      width: 52,
+      height: 52,
+      borderRadius: 26,
+      borderWidth: 3,
+      borderColor: colors.primary,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: 'rgba(0,212,170,0.06)',
+    },
+    countdownText: {
+      fontSize: 22,
+      fontWeight: '800',
+      color: colors.primary,
+    },
+    rideOfferTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    rideTypeBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      marginTop: 3,
+    },
+    rideTypeText: {
+      fontSize: 12,
+      color: colors.primary,
+      fontWeight: '600',
+    },
+    fareContainer: {
+      alignItems: 'flex-end',
+    },
+    fareLabel: {
+      fontSize: 11,
+      color: colors.textDim,
+      fontWeight: '500',
+    },
+    fareAmount: {
+      fontSize: 28,
+      fontWeight: '800',
+      color: colors.primary,
+      letterSpacing: -1,
+    },
+    // Route display
+    routeContainer: {
+      flexDirection: 'row',
+      marginHorizontal: 20,
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 16,
+      padding: 14,
+      marginBottom: 12,
+    },
+    routeIconColumn: {
+      alignItems: 'center',
+      width: 20,
+      paddingTop: 4,
+    },
+    routeDot: {
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+    },
+    routeLine: {
+      width: 2,
+      flex: 1,
+      backgroundColor: colors.border,
+      marginVertical: 4,
+    },
+    routeDetails: {
+      flex: 1,
+      marginLeft: 12,
+    },
+    routeRow: {
+      paddingVertical: 2,
+    },
+    routeLabel: {
+      fontSize: 10,
+      fontWeight: '700',
+      color: colors.textDim,
+      letterSpacing: 0.5,
+      marginBottom: 2,
+    },
+    routeAddress: {
+      fontSize: 14,
+      fontWeight: '500',
+      color: colors.text,
+    },
+    routeDivider: {
+      height: 1,
+      backgroundColor: colors.border,
+      marginVertical: 8,
+    },
+    // Trip info badges
+    tripInfoRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      paddingHorizontal: 20,
+      marginBottom: 16,
+    },
+    tripInfoBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      backgroundColor: '#F0FDF9',
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: '#D1FAE5',
+    },
+    tripInfoText: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.text,
+    },
+    // Action buttons
+    offerActions: {
+      flexDirection: 'row',
+      gap: 12,
+      paddingHorizontal: 20,
+    },
+    declineBtn: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: '#FEF2F2',
+      borderRadius: 16,
+      paddingVertical: 16,
+      gap: 8,
+      borderWidth: 1,
+      borderColor: '#FECACA',
+    },
+    declineText: {
+      fontSize: 15,
+      fontWeight: '600',
+      color: '#FF4757',
+    },
+    acceptBtn: {
+      flex: 2,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.primary,
+      borderRadius: 16,
+      paddingVertical: 16,
+      gap: 8,
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.3,
+      shadowRadius: 8,
+      elevation: 6,
+    },
+    acceptText: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: '#fff',
+    },
+  });
+}

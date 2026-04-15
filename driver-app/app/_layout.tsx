@@ -11,10 +11,14 @@ import { useLocationStore } from '@shared/store/locationStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
+import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
+import { captureMessage, setUser } from '@shared/services/errorReporting';
+import Analytics from '@shared/analytics';
 import {
   initFirebaseServices,
   requestPushPermissionAndGetToken,
   setBackgroundMessageHandler,
+  onTokenRefresh,
 } from '@shared/services/firebase';
 
 // expo-notifications' push-token APIs were removed from Expo Go in SDK 53,
@@ -98,6 +102,8 @@ export default function RootLayout() {
         // an authenticated session (below).
         await initFirebaseServices();
 
+        captureMessage('driver-app cold start', 'log');
+
         // Android notification channels. Android 8+ REQUIRES a channel
         // or FCM messages are silently dropped. `ride-offers` is MAX
         // importance so the device wakes and rings for new ride offers;
@@ -158,11 +164,36 @@ export default function RootLayout() {
           platform: Platform.OS,
         });
         fcmRegisteredRef.current = true;
+        const uid = useAuthStore.getState().user?.id;
+        if (uid) setUser(uid, { role: 'driver' });
+        Analytics.login();
         console.log('[Push] FCM token registered with backend');
       } catch (e) {
         console.log('[Push] FCM token registration failed:', e);
       }
     })();
+
+    // Subscribe to FCM token rotations. Firebase occasionally rotates
+    // the device token; without re-registering, push delivery silently
+    // fails until the next cold start. onTokenRefresh fires with the
+    // new token string and we POST it the same way as the initial
+    // registration above.
+    const unsubTokenRefresh = onTokenRefresh(async (newToken: string) => {
+      try {
+        const api = (await import('@shared/api/client')).default;
+        await api.post('/notifications/register-token', {
+          token: newToken,
+          platform: Platform.OS,
+        });
+        console.log('[Push] Refreshed FCM token registered with backend');
+      } catch (e) {
+        console.log('[Push] Refreshed FCM token registration failed:', e);
+      }
+    });
+
+    return () => {
+      if (typeof unsubTokenRefresh === 'function') unsubTokenRefresh();
+    };
   }, [isAuthInitialized, authToken]);
 
   if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized) {
@@ -177,11 +208,26 @@ export default function RootLayout() {
   }
 
   return (
+    <ThemeProvider>
+      <DriverRootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} />
+    </ThemeProvider>
+  );
+}
+
+function DriverRootLayoutInner({
+  isOffline,
+  setIsOffline,
+}: {
+  isOffline: boolean;
+  setIsOffline: (v: boolean) => void;
+}) {
+  const { isDark } = useTheme();
+  return (
     <ErrorBoundary>
       <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
-          <StatusBar style={isOffline ? "light" : "dark"} />
+          <StatusBar style={isOffline ? "light" : isDark ? "light" : "dark"} />
           <Stack
             screenOptions={{
               headerShown: false,

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
     View,
     Text,
@@ -21,8 +21,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
-
-import SpinrConfig from '@shared/config/spinr.config';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 interface VehicleType {
     id: string;
@@ -32,24 +32,12 @@ interface VehicleType {
     icon: string;
 }
 
-const THEME = SpinrConfig.theme.colors;
-const COLORS = {
-    primary: THEME.background,
-    accent: THEME.primary,
-    accentDim: THEME.primaryDark,
-    surface: THEME.surface,
-    surfaceLight: THEME.surfaceLight,
-    text: THEME.text,
-    textDim: THEME.textDim,
-    success: THEME.success,
-    danger: THEME.error,
-    border: THEME.border,
-};
-
 export default function VehicleInfoScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const { driver, fetchDriverProfile, refreshProfile } = useAuthStore();
+    const { colors } = useTheme();
+    const styles = useMemo(() => createStyles(colors), [colors]);
     const [saving, setSaving] = useState(false);
 
     const scrollRef = useRef<ScrollView>(null);
@@ -168,12 +156,12 @@ export default function VehicleInfoScreen() {
 
     return (
         <View style={styles.container}>
-            <LinearGradient colors={[COLORS.primary, '#F8F9FA']} style={StyleSheet.absoluteFill} />
+            <LinearGradient colors={[colors.background, '#F8F9FA']} style={StyleSheet.absoluteFill} />
 
             {/* Header */}
             <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                    <Ionicons name="arrow-back" size={24} color={COLORS.text} />
+                    <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
                 <Text style={styles.headerTitle}>Vehicle Information</Text>
                 <View style={{ width: 32 }} />
@@ -196,7 +184,7 @@ export default function VehicleInfoScreen() {
                     {/* Hero card */}
                     <View style={styles.heroCard}>
                         <View style={styles.heroIconWrap}>
-                            <Ionicons name="car-sport" size={28} color={COLORS.accent} />
+                            <Ionicons name="car-sport" size={28} color={colors.primary} />
                         </View>
                         <View style={{ flex: 1 }}>
                             <Text style={styles.heroTitle}>Your Vehicle</Text>
@@ -215,7 +203,7 @@ export default function VehicleInfoScreen() {
 
                     {/* Warning */}
                     <View style={styles.warningBox}>
-                        <Ionicons name="information-circle" size={18} color={COLORS.accent} />
+                        <Ionicons name="information-circle" size={18} color={colors.primary} />
                         <Text style={styles.warningText}>
                             Updating these details triggers re-verification. You won't be able to go online until approved.
                         </Text>
@@ -230,7 +218,7 @@ export default function VehicleInfoScreen() {
                             activeOpacity={0.7}
                         >
                             <View style={styles.vehicleTypeIconBox}>
-                                <Ionicons name="car" size={22} color={COLORS.accent} />
+                                <Ionicons name="car" size={22} color={colors.primary} />
                             </View>
                             <View style={{ flex: 1 }}>
                                 <Text style={styles.vehicleTypeLabel}>Vehicle Type *</Text>
@@ -238,7 +226,7 @@ export default function VehicleInfoScreen() {
                                     {vehicleTypeName || 'Tap to select'}
                                 </Text>
                             </View>
-                            <Ionicons name="chevron-forward" size={20} color={COLORS.textDim} />
+                            <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
                         </TouchableOpacity>
                     </View>
 
@@ -251,6 +239,7 @@ export default function VehicleInfoScreen() {
                             onChangeText={t => handleChange('vehicle_make', t)}
                             placeholder="e.g. Toyota"
                             onFocus={handleFocus}
+                            styles={styles}
                         />
                         <View style={styles.divider} />
                         <FormField
@@ -259,6 +248,7 @@ export default function VehicleInfoScreen() {
                             onChangeText={t => handleChange('vehicle_model', t)}
                             placeholder="e.g. Camry"
                             onFocus={handleFocus}
+                            styles={styles}
                         />
                         <View style={styles.divider} />
                         <View style={styles.rowSplit}>
@@ -271,6 +261,7 @@ export default function VehicleInfoScreen() {
                                     keyboardType="numeric"
                                     maxLength={4}
                                     onFocus={handleFocus}
+                                    styles={styles}
                                 />
                             </View>
                             <View style={styles.vDivider} />
@@ -281,6 +272,7 @@ export default function VehicleInfoScreen() {
                                     onChangeText={t => handleChange('vehicle_color', t)}
                                     placeholder="Silver"
                                     onFocus={handleFocus}
+                                    styles={styles}
                                 />
                             </View>
                         </View>
@@ -296,6 +288,7 @@ export default function VehicleInfoScreen() {
                             placeholder="ABC 123"
                             autoCapitalize="characters"
                             onFocus={handleFocus}
+                            styles={styles}
                         />
                         <View style={styles.divider} />
                         <FormField
@@ -307,6 +300,7 @@ export default function VehicleInfoScreen() {
                             maxLength={17}
                             onFocus={handleFocus}
                             helper="17-character vehicle identification number"
+                            styles={styles}
                         />
                     </View>
 
@@ -351,7 +345,7 @@ export default function VehicleInfoScreen() {
                         <View style={styles.modalHeader}>
                             <Text style={styles.modalTitle}>Select Vehicle Type</Text>
                             <TouchableOpacity onPress={() => setShowVehicleTypePicker(false)} style={styles.modalCloseBtn}>
-                                <Ionicons name="close" size={22} color={COLORS.text} />
+                                <Ionicons name="close" size={22} color={colors.text} />
                             </TouchableOpacity>
                         </View>
                         <FlatList
@@ -366,14 +360,14 @@ export default function VehicleInfoScreen() {
                                     onPress={() => handleVehicleTypeSelect(item)}
                                 >
                                     <View style={styles.vehicleTypeOptionIcon}>
-                                        <Ionicons name="car" size={22} color={COLORS.accent} />
+                                        <Ionicons name="car" size={22} color={colors.primary} />
                                     </View>
                                     <View style={styles.vehicleTypeInfo}>
                                         <Text style={styles.vehicleTypeOptionName}>{item.name}</Text>
                                         <Text style={styles.vehicleTypeOptionDesc}>{item.description}</Text>
                                     </View>
                                     {form.vehicle_type_id === item.id && (
-                                        <Ionicons name="checkmark-circle" size={24} color={COLORS.accent} />
+                                        <Ionicons name="checkmark-circle" size={24} color={colors.primary} />
                                     )}
                                 </TouchableOpacity>
                             )}
@@ -396,6 +390,7 @@ interface FormFieldProps {
     maxLength?: number;
     helper?: string;
     onFocus?: (e: any) => void;
+    styles: ReturnType<typeof createStyles>;
 }
 
 const FormField: React.FC<FormFieldProps> = ({
@@ -408,6 +403,7 @@ const FormField: React.FC<FormFieldProps> = ({
     maxLength,
     helper,
     onFocus,
+    styles,
 }) => (
     <View style={styles.field}>
         <Text style={styles.fieldLabel}>{label}</Text>
@@ -426,198 +422,200 @@ const FormField: React.FC<FormFieldProps> = ({
     </View>
 );
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: COLORS.primary },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingBottom: 16,
-        paddingHorizontal: 20,
-        backgroundColor: '#fff',
-        borderBottomWidth: 1,
-        borderBottomColor: '#F3F4F6',
-    },
-    backBtn: { padding: 4, width: 32 },
-    headerTitle: { fontSize: 18, fontWeight: '700', color: COLORS.text, flex: 1, textAlign: 'center' },
+function createStyles(colors: ThemeColors) {
+    return StyleSheet.create({
+        container: { flex: 1, backgroundColor: colors.background },
+        header: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingBottom: 16,
+            paddingHorizontal: 20,
+            backgroundColor: colors.surface,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+        },
+        backBtn: { padding: 4, width: 32 },
+        headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text, flex: 1, textAlign: 'center' },
 
-    content: { padding: 20 },
+        content: { padding: 20 },
 
-    heroCard: {
-        flexDirection: 'row',
-        backgroundColor: '#fff',
-        padding: 18,
-        borderRadius: 18,
-        marginBottom: 16,
-        alignItems: 'center',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.06,
-        shadowRadius: 8,
-        elevation: 2,
-    },
-    heroIconWrap: {
-        width: 52,
-        height: 52,
-        borderRadius: 14,
-        backgroundColor: 'rgba(255,59,48,0.08)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginRight: 14,
-    },
-    heroTitle: { fontSize: 12, fontWeight: '700', color: COLORS.textDim, letterSpacing: 0.8, textTransform: 'uppercase' },
-    heroSub: { fontSize: 16, fontWeight: '600', color: COLORS.text, marginTop: 2 },
-    platePill: {
-        alignSelf: 'flex-start',
-        marginTop: 6,
-        backgroundColor: '#1A1A1A',
-        paddingHorizontal: 10,
-        paddingVertical: 4,
-        borderRadius: 6,
-    },
-    plateText: { color: '#FFD700', fontSize: 12, fontWeight: '800', letterSpacing: 1 },
+        heroCard: {
+            flexDirection: 'row',
+            backgroundColor: colors.surface,
+            padding: 18,
+            borderRadius: 18,
+            marginBottom: 16,
+            alignItems: 'center',
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 2 },
+            shadowOpacity: 0.06,
+            shadowRadius: 8,
+            elevation: 2,
+        },
+        heroIconWrap: {
+            width: 52,
+            height: 52,
+            borderRadius: 14,
+            backgroundColor: 'rgba(255,59,48,0.08)',
+            justifyContent: 'center',
+            alignItems: 'center',
+            marginRight: 14,
+        },
+        heroTitle: { fontSize: 12, fontWeight: '700', color: colors.textDim, letterSpacing: 0.8, textTransform: 'uppercase' },
+        heroSub: { fontSize: 16, fontWeight: '600', color: colors.text, marginTop: 2 },
+        platePill: {
+            alignSelf: 'flex-start',
+            marginTop: 6,
+            backgroundColor: '#1A1A1A',
+            paddingHorizontal: 10,
+            paddingVertical: 4,
+            borderRadius: 6,
+        },
+        plateText: { color: '#FFD700', fontSize: 12, fontWeight: '800', letterSpacing: 1 },
 
-    warningBox: {
-        flexDirection: 'row',
-        backgroundColor: 'rgba(255,59,48,0.06)',
-        padding: 12,
-        borderRadius: 12,
-        marginBottom: 20,
-        alignItems: 'flex-start',
-        borderWidth: 1,
-        borderColor: 'rgba(255,59,48,0.15)',
-        gap: 8,
-    },
-    warningText: { color: COLORS.accent, flex: 1, fontSize: 12, lineHeight: 16, fontWeight: '500' },
+        warningBox: {
+            flexDirection: 'row',
+            backgroundColor: 'rgba(255,59,48,0.06)',
+            padding: 12,
+            borderRadius: 12,
+            marginBottom: 20,
+            alignItems: 'flex-start',
+            borderWidth: 1,
+            borderColor: 'rgba(255,59,48,0.15)',
+            gap: 8,
+        },
+        warningText: { color: colors.primary, flex: 1, fontSize: 12, lineHeight: 16, fontWeight: '500' },
 
-    sectionTitle: {
-        fontSize: 12,
-        fontWeight: '700',
-        color: COLORS.textDim,
-        letterSpacing: 0.8,
-        textTransform: 'uppercase',
-        marginBottom: 8,
-        marginTop: 4,
-        paddingHorizontal: 4,
-    },
-    card: {
-        backgroundColor: '#fff',
-        borderRadius: 16,
-        marginBottom: 20,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.04,
-        shadowRadius: 4,
-        elevation: 1,
-        overflow: 'hidden',
-    },
-    divider: { height: 1, backgroundColor: '#F3F4F6', marginHorizontal: 16 },
-    vDivider: { width: 1, backgroundColor: '#F3F4F6' },
-    rowSplit: { flexDirection: 'row' },
+        sectionTitle: {
+            fontSize: 12,
+            fontWeight: '700',
+            color: colors.textDim,
+            letterSpacing: 0.8,
+            textTransform: 'uppercase',
+            marginBottom: 8,
+            marginTop: 4,
+            paddingHorizontal: 4,
+        },
+        card: {
+            backgroundColor: colors.surface,
+            borderRadius: 16,
+            marginBottom: 20,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 1 },
+            shadowOpacity: 0.04,
+            shadowRadius: 4,
+            elevation: 1,
+            overflow: 'hidden',
+        },
+        divider: { height: 1, backgroundColor: colors.border, marginHorizontal: 16 },
+        vDivider: { width: 1, backgroundColor: colors.border },
+        rowSplit: { flexDirection: 'row' },
 
-    field: { paddingHorizontal: 16, paddingVertical: 12 },
-    fieldLabel: { fontSize: 11, fontWeight: '700', color: COLORS.textDim, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 4 },
-    fieldInput: { fontSize: 16, color: COLORS.text, padding: 0, fontWeight: '500' },
-    fieldHelper: { fontSize: 11, color: COLORS.textDim, marginTop: 4 },
+        field: { paddingHorizontal: 16, paddingVertical: 12 },
+        fieldLabel: { fontSize: 11, fontWeight: '700', color: colors.textDim, letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 4 },
+        fieldInput: { fontSize: 16, color: colors.text, padding: 0, fontWeight: '500' },
+        fieldHelper: { fontSize: 11, color: colors.textDim, marginTop: 4 },
 
-    vehicleTypeBox: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 14,
-        gap: 12,
-    },
-    vehicleTypeIconBox: {
-        width: 40,
-        height: 40,
-        borderRadius: 10,
-        backgroundColor: 'rgba(255,59,48,0.08)',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    vehicleTypeLabel: { fontSize: 11, fontWeight: '700', color: COLORS.textDim, letterSpacing: 0.6, textTransform: 'uppercase' },
-    vehicleTypeValue: { fontSize: 16, fontWeight: '600', color: COLORS.text, marginTop: 2 },
+        vehicleTypeBox: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingHorizontal: 16,
+            paddingVertical: 14,
+            gap: 12,
+        },
+        vehicleTypeIconBox: {
+            width: 40,
+            height: 40,
+            borderRadius: 10,
+            backgroundColor: 'rgba(255,59,48,0.08)',
+            justifyContent: 'center',
+            alignItems: 'center',
+        },
+        vehicleTypeLabel: { fontSize: 11, fontWeight: '700', color: colors.textDim, letterSpacing: 0.6, textTransform: 'uppercase' },
+        vehicleTypeValue: { fontSize: 16, fontWeight: '600', color: colors.text, marginTop: 2 },
 
-    // Sticky footer
-    footer: {
-        backgroundColor: '#fff',
-        paddingHorizontal: 20,
-        paddingTop: 12,
-        borderTopWidth: 1,
-        borderTopColor: '#F3F4F6',
-    },
-    saveButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: COLORS.accent,
-        borderRadius: 14,
-        paddingVertical: 16,
-        gap: 8,
-        shadowColor: COLORS.accent,
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 8,
-        elevation: 4,
-    },
-    saveButtonDisabled: {
-        backgroundColor: '#D1D5DB',
-        shadowOpacity: 0,
-        elevation: 0,
-    },
-    saveButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+        // Sticky footer
+        footer: {
+            backgroundColor: colors.surface,
+            paddingHorizontal: 20,
+            paddingTop: 12,
+            borderTopWidth: 1,
+            borderTopColor: colors.border,
+        },
+        saveButton: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: colors.primary,
+            borderRadius: 14,
+            paddingVertical: 16,
+            gap: 8,
+            shadowColor: colors.primary,
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.3,
+            shadowRadius: 8,
+            elevation: 4,
+        },
+        saveButtonDisabled: {
+            backgroundColor: '#D1D5DB',
+            shadowOpacity: 0,
+            elevation: 0,
+        },
+        saveButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 
-    // Modal
-    modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-    modalContent: {
-        backgroundColor: '#fff',
-        borderTopLeftRadius: 24,
-        borderTopRightRadius: 24,
-        maxHeight: '75%',
-    },
-    modalHandle: {
-        width: 40,
-        height: 4,
-        backgroundColor: '#E5E7EB',
-        borderRadius: 2,
-        alignSelf: 'center',
-        marginTop: 10,
-    },
-    modalHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        padding: 20,
-        paddingBottom: 12,
-    },
-    modalCloseBtn: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
-        backgroundColor: COLORS.surfaceLight,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    modalTitle: { fontSize: 20, fontWeight: '700', color: COLORS.text },
-    vehicleTypeOption: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 20,
-        paddingVertical: 14,
-        gap: 12,
-        borderTopWidth: 1,
-        borderTopColor: '#F3F4F6',
-    },
-    vehicleTypeOptionSelected: { backgroundColor: 'rgba(255,59,48,0.04)' },
-    vehicleTypeOptionIcon: {
-        width: 44,
-        height: 44,
-        borderRadius: 12,
-        backgroundColor: 'rgba(255,59,48,0.08)',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    vehicleTypeInfo: { flex: 1 },
-    vehicleTypeOptionName: { fontSize: 16, fontWeight: '700', color: COLORS.text },
-    vehicleTypeOptionDesc: { fontSize: 13, color: COLORS.textDim, marginTop: 2 },
-});
+        // Modal
+        modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+        modalContent: {
+            backgroundColor: colors.surface,
+            borderTopLeftRadius: 24,
+            borderTopRightRadius: 24,
+            maxHeight: '75%',
+        },
+        modalHandle: {
+            width: 40,
+            height: 4,
+            backgroundColor: colors.border,
+            borderRadius: 2,
+            alignSelf: 'center',
+            marginTop: 10,
+        },
+        modalHeader: {
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: 20,
+            paddingBottom: 12,
+        },
+        modalCloseBtn: {
+            width: 32,
+            height: 32,
+            borderRadius: 16,
+            backgroundColor: colors.surfaceLight,
+            justifyContent: 'center',
+            alignItems: 'center',
+        },
+        modalTitle: { fontSize: 20, fontWeight: '700', color: colors.text },
+        vehicleTypeOption: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingHorizontal: 20,
+            paddingVertical: 14,
+            gap: 12,
+            borderTopWidth: 1,
+            borderTopColor: colors.border,
+        },
+        vehicleTypeOptionSelected: { backgroundColor: 'rgba(255,59,48,0.04)' },
+        vehicleTypeOptionIcon: {
+            width: 44,
+            height: 44,
+            borderRadius: 12,
+            backgroundColor: 'rgba(255,59,48,0.08)',
+            justifyContent: 'center',
+            alignItems: 'center',
+        },
+        vehicleTypeInfo: { flex: 1 },
+        vehicleTypeOptionName: { fontSize: 16, fontWeight: '700', color: colors.text },
+        vehicleTypeOptionDesc: { fontSize: 13, color: colors.textDim, marginTop: 2 },
+    });
+}

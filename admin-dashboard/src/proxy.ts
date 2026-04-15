@@ -3,23 +3,21 @@ import { NextRequest, NextResponse } from "next/server";
 /**
  * Edge middleware — first line of defense for the admin dashboard.
  *
- * Previously the dashboard was gated client-side only (src/app/dashboard/layout.tsx
- * redirects if the Zustand store has no token). That leaks HTML: unauthenticated
- * users saw the dashboard skeleton for one render before the effect fired.
- *
  * Strategy:
  *
- *   1. On login success we dual-write the JWT to localStorage (for React/api.ts
+ *   1. On login success we dual-write the JWT to sessionStorage (for React/api.ts
  *      access) AND to an `admin_token` cookie (for this middleware). The cookie
- *      is path=/ SameSite=Lax and 30-day Max-Age, matching the JWT expiry.
- *   2. This middleware only checks for the COOKIE'S PRESENCE — it never validates
- *      the JWT signature. That stays on the client + backend.
+ *      is path=/ SameSite=Lax and 8-hour Max-Age (standard admin session).
+ *   2. This middleware decodes the JWT and checks the `exp` claim. Expired or
+ *      malformed tokens are rejected — the user is redirected to /login.
+ *      Full signature verification stays on the backend (Edge Runtime cannot
+ *      access the JWT_SECRET environment variable reliably across all hosts).
  *   3. Unauthenticated requests to any non-public path redirect to /login with a
  *      `next` query param so login can bounce back to the original destination.
  *   4. Public paths are explicitly listed: /login, /register/*, /track/[rideId]
  *      (rider share link), /_next/*, /api/*, and static assets.
  *
- * On logout we delete the cookie AND clear localStorage so both sides are in
+ * On logout we delete the cookie AND clear sessionStorage so both sides are in
  * lockstep — see authStore.logout().
  *
  * NOTE: renamed from `middleware` → `proxy` per Next.js 16 convention.
@@ -33,7 +31,36 @@ function isPublic(pathname: string): boolean {
   return PUBLIC_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
 
-export function proxy(request: NextRequest) {
+/**
+ * Decode a JWT's payload without verifying the signature (Edge Runtime
+ * compatible). Returns null if the token is malformed.
+ */
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const json = atob(payload);
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check whether the JWT has a valid structure and has not expired.
+ * Returns true only if the token has a future `exp` claim.
+ */
+function isTokenValid(token: string): boolean {
+  const payload = decodeJwtPayload(token);
+  if (!payload) return false;
+  const exp = payload.exp;
+  if (typeof exp !== "number") return false;
+  // Reject if expired (with 30-second leeway for clock skew)
+  return exp * 1000 > Date.now() - 30_000;
+}
+
+export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Public page — no auth required
@@ -42,17 +69,25 @@ export function proxy(request: NextRequest) {
   }
 
   const token = request.cookies.get("admin_token")?.value;
-  if (token) {
+
+  if (token && isTokenValid(token)) {
     return NextResponse.next();
   }
 
-  // No cookie → bounce to /login and remember where they were going
+  // No cookie or expired/malformed token → bounce to /login
   const redirectUrl = request.nextUrl.clone();
   redirectUrl.pathname = "/login";
   if (pathname !== "/" && pathname !== "/login") {
     redirectUrl.searchParams.set("next", pathname);
   }
-  return NextResponse.redirect(redirectUrl);
+  const response = NextResponse.redirect(redirectUrl);
+
+  // Clear the stale cookie so the user isn't stuck in a redirect loop
+  if (token) {
+    response.cookies.set("admin_token", "", { path: "/", maxAge: 0 });
+  }
+
+  return response;
 }
 
 // Match everything except Next.js internals, /api/* routes, and static assets.

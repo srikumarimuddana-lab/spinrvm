@@ -1,401 +1,226 @@
-// src/app/dashboard/monitoring/page.tsx
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import { v4 as uuidv4 } from "uuid";
-import { useAuthStore } from "@/store/authStore";
-import { getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTypes } from "@/lib/api";
-import { useMonitoringSocket } from "@/hooks/use-monitoring-socket";
-import { MonitoringMap, MapHandles, MonitoringServiceArea } from "./monitoring-map";
-import { MonitoringToolbar } from "./toolbar";
-import { polygonPointsToGeoJSON } from "@/lib/map/maplibre-base";
+import { useEffect, useState, useCallback } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from "@/components/ui/table";
+import {
+  Radio, RefreshCw, Car, MapPin, Users, Clock, Activity, Search,
+  Navigation, CheckCircle,
+} from "lucide-react";
+import { getActiveRides } from "@/lib/api";
 
-// Canadian city centre fallbacks — used when a service area has no
-// polygon drawn (just a city name) so the map still pans somewhere
-// sensible when the operator picks that area.
-const CITY_CENTERS: Record<string, { lat: number; lng: number }> = {
-    saskatoon: { lat: 52.13, lng: -106.67 },
-    regina: { lat: 50.45, lng: -104.62 },
-    calgary: { lat: 51.04, lng: -114.07 },
-    edmonton: { lat: 53.55, lng: -113.49 },
-    winnipeg: { lat: 49.90, lng: -97.14 },
-    toronto: { lat: 43.65, lng: -79.38 },
-    vancouver: { lat: 49.28, lng: -123.12 },
-    montreal: { lat: 45.50, lng: -73.57 },
-    ottawa: { lat: 45.42, lng: -75.70 },
-    halifax: { lat: 44.65, lng: -63.58 },
+const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
+  searching: { label: "Searching", color: "text-amber-600", bg: "bg-amber-100" },
+  driver_assigned: { label: "Assigned", color: "text-blue-600", bg: "bg-blue-100" },
+  driver_accepted: { label: "Accepted", color: "text-blue-600", bg: "bg-blue-100" },
+  driver_arrived: { label: "Arrived", color: "text-green-600", bg: "bg-green-100" },
+  in_progress: { label: "In Progress", color: "text-purple-600", bg: "bg-purple-100" },
 };
 
-// Robust polygon reader. Backend may store polygons as:
-//   { type: "Polygon", coordinates: [[[lng,lat], ...]] }   (GeoJSON, nested)
-//   { type: "Polygon", coordinates: [[lng,lat], ...] }     (GeoJSON, flat — seen in some seeded data)
-//   [{lat, lng}, ...]                                       (plain object array)
-//   [[lat, lng], ...]                                       (plain tuple array)
-//   null / absent                                           (no polygon yet)
-function toLatLngArray(raw: unknown): { lat: number; lng: number }[] {
-    if (!raw) return [];
-
-    // GeoJSON Polygon (nested or flat coordinates)
-    if (typeof raw === "object" && raw !== null) {
-        const obj = raw as { type?: string; coordinates?: unknown };
-        if (obj.type === "Polygon" && Array.isArray(obj.coordinates)) {
-            const coords = obj.coordinates;
-            // Nested: [[[lng,lat], ...]]
-            if (
-                coords.length > 0 &&
-                Array.isArray(coords[0]) &&
-                Array.isArray((coords[0] as unknown[])[0])
-            ) {
-                return (coords[0] as number[][]).map(([lng, lat]) => ({ lat, lng }));
-            }
-            // Flat: [[lng,lat], [lng,lat], ...]
-            if (
-                coords.length > 0 &&
-                Array.isArray(coords[0]) &&
-                typeof (coords[0] as unknown[])[0] === "number"
-            ) {
-                return (coords as number[][]).map(([lng, lat]) => ({ lat, lng }));
-            }
-        }
-    }
-
-    // Plain array forms
-    if (Array.isArray(raw) && raw.length > 0) {
-        const first = raw[0];
-        if (typeof first === "object" && first !== null && "lat" in first && "lng" in first) {
-            return raw as { lat: number; lng: number }[];
-        }
-        if (Array.isArray(first) && typeof first[0] === "number") {
-            return (raw as number[][]).map(([lat, lng]) => ({ lat, lng }));
-        }
-    }
-
-    return [];
-}
-
-function centerOfPoints(points: { lat: number; lng: number }[]): { lat: number; lng: number } | null {
-    if (points.length === 0) return null;
-    return {
-        lat: points.reduce((s, p) => s + p.lat, 0) / points.length,
-        lng: points.reduce((s, p) => s + p.lng, 0) / points.length,
-    };
-}
-import { AlertFeed } from "./alert-feed";
-import { DriverPanel } from "./driver-panel";
-import { RidePanel } from "./ride-panel";
-import {
-    AlertEvent,
-    MonitoringCounts,
-    MonitoringDriver,
-    MonitoringFilters,
-    MonitoringRide,
-    MonitoringWsEvent,
-    SelectedItem,
-} from "./types";
-
 export default function MonitoringPage() {
-    const token = useAuthStore((s) => s.token);
-    const searchParams = useSearchParams();
-    const deepLinkAreaId = searchParams.get("areaId");
+  const [rides, setRides] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-    // ── Ref-based data stores (never cause re-renders) ────────────────
-    const driversRef = useRef<Map<string, MonitoringDriver>>(new Map());
-    const ridesRef = useRef<Map<string, MonitoringRide>>(new Map());
-    const mapHandlesRef = useRef<MapHandles | null>(null);
-    const pendingAreaFitRef = useRef<string | null>(deepLinkAreaId);
+  const fetchRides = useCallback(async () => {
+    try {
+      const data = await getActiveRides();
+      setRides(data?.rides || []);
+      setLastUpdated(new Date());
+    } catch {
+      console.error("Failed to fetch active rides");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-    // ── React state (causes re-renders) ──────────────────────────────
-    const [counts, setCounts] = useState<MonitoringCounts>({ online: 0, onRide: 0, offline: 0, activeRides: 0 });
-    const [filters, setFilters] = useState<MonitoringFilters>({
-        showOnline: true,
-        showOffline: false,
-        showRides: true,
-        serviceAreaId: null,
-        vehicleTypeId: null,
-    });
-    const [searchQuery, setSearchQuery] = useState("");
-    const [followMode, setFollowMode] = useState(false);
-    const [selected, setSelected] = useState<SelectedItem>(null);
-    const [alerts, setAlerts] = useState<AlertEvent[]>([]);
-    const [serviceAreas, setServiceAreas] = useState<MonitoringServiceArea[]>([]);
-    const [vehicleTypes, setVehicleTypes] = useState<{ id: string; name: string }[]>([]);
+  useEffect(() => {
+    fetchRides();
+    if (!autoRefresh) return;
+    const interval = setInterval(fetchRides, 10000);
+    return () => clearInterval(interval);
+  }, [fetchRides, autoRefresh]);
 
-    // ── Derived selections ────────────────────────────────────────────
-    const selectedDriver =
-        selected?.type === "driver" ? driversRef.current.get(selected.id) ?? null : null;
-    const selectedRide =
-        selected?.type === "ride" ? ridesRef.current.get(selected.id) ?? null : null;
+  // Stats
+  const searching = rides.filter(r => r.status === "searching").length;
+  const assigned = rides.filter(r => r.status === "driver_assigned" || r.status === "driver_accepted").length;
+  const arrived = rides.filter(r => r.status === "driver_arrived").length;
+  const inProgress = rides.filter(r => r.status === "in_progress").length;
 
-    // ── Count recalculation ───────────────────────────────────────────
-    const recalcCounts = useCallback(() => {
-        let online = 0, onRide = 0, offline = 0;
-        driversRef.current.forEach((d) => {
-            if (!d.is_online) offline++;
-            else if (d.active_ride_id) onRide++;
-            else online++;
-        });
-        setCounts({ online, onRide, offline, activeRides: ridesRef.current.size });
-    }, []);
-
-    // ── Push alert ────────────────────────────────────────────────────
-    const pushAlert = useCallback((alert: Omit<AlertEvent, "id" | "timestamp">) => {
-        setAlerts((prev) =>
-            [{ ...alert, id: uuidv4(), timestamp: new Date().toISOString() }, ...prev].slice(0, 200)
-        );
-    }, []);
-
-    // ── Initial data load ─────────────────────────────────────────────
-    useEffect(() => {
-        async function load() {
-            const [drivers, rides, areas, vtypes] = await Promise.allSettled([
-                getMonitoringDrivers(),
-                getMonitoringRides(),
-                getServiceAreas(),
-                getVehicleTypes(),
-            ]);
-
-            if (drivers.status === "fulfilled") {
-                drivers.value.forEach((d) => driversRef.current.set(d.id, d));
-            }
-            if (rides.status === "fulfilled") {
-                rides.value.forEach((r) => ridesRef.current.set(r.id, r));
-            }
-            if (areas.status === "fulfilled") {
-                setServiceAreas(
-                    areas.value.map((a: {
-                        id: string;
-                        name: string;
-                        city?: string;
-                        geojson?: unknown;
-                        polygon?: unknown;
-                    }) => {
-                        // Extract polygon points in any of the formats the backend might return.
-                        const points = toLatLngArray(a.polygon) .length
-                            ? toLatLngArray(a.polygon)
-                            : toLatLngArray(a.geojson);
-                        const geojson = points.length >= 3 ? polygonPointsToGeoJSON(points) : null;
-                        // Fallback centre priority:
-                        //   1. Centre of the polygon points (any count >= 1)
-                        //   2. City preset, matched case-insensitively
-                        const cityKey = (a.city ?? "").trim().toLowerCase();
-                        const fallbackCenter =
-                            centerOfPoints(points) ??
-                            (cityKey && CITY_CENTERS[cityKey] ? CITY_CENTERS[cityKey] : null);
-                        return {
-                            id: a.id,
-                            name: a.name,
-                            geojson,
-                            fallbackCenter,
-                        };
-                    }),
-                );
-            }
-            if (vtypes.status === "fulfilled") {
-                setVehicleTypes(vtypes.value.map((v: { id: string; name: string }) => ({ id: v.id, name: v.name })));
-            }
-            recalcCounts();
-        }
-        load();
-    }, [recalcCounts]);
-
-    // ── Deep link: ?areaId=... applies the filter + fits the map ──────
-    // Set the filter once the area exists in the loaded list, and also
-    // try to fit the map — if the map wasn't ready yet, `onReady` will
-    // pick up `pendingAreaFitRef` instead.
-    useEffect(() => {
-        if (!deepLinkAreaId) return;
-        if (serviceAreas.length === 0) return;
-        const exists = serviceAreas.some((a) => a.id === deepLinkAreaId);
-        if (!exists) return;
-        setFilters((prev) => ({ ...prev, serviceAreaId: deepLinkAreaId }));
-        if (mapHandlesRef.current) {
-            mapHandlesRef.current.fitArea(deepLinkAreaId);
-            pendingAreaFitRef.current = null;
-        }
-    }, [deepLinkAreaId, serviceAreas]);
-
-    // ── WebSocket event handler ───────────────────────────────────────
-    const handleWsEvent = useCallback(
-        (event: MonitoringWsEvent) => {
-            switch (event.type) {
-                case "driver_location_update": {
-                    const d = driversRef.current.get(event.driver_id);
-                    if (d) {
-                        const updated = { ...d, lat: event.lat, lng: event.lng };
-                        driversRef.current.set(event.driver_id, updated);
-                        mapHandlesRef.current?.updateDriverMarker(updated);
-                        if (followMode && selected?.type === "driver" && selected.id === event.driver_id) {
-                            mapHandlesRef.current?.panTo(event.lat, event.lng);
-                        }
-                    }
-                    break;
-                }
-                case "driver_status_changed": {
-                    const d = driversRef.current.get(event.driver_id);
-                    if (d) {
-                        const updated = { ...d, is_online: event.is_online };
-                        driversRef.current.set(event.driver_id, updated);
-                        mapHandlesRef.current?.updateDriverMarker(updated);
-                        recalcCounts();
-                        pushAlert({
-                            icon: event.is_online ? "online" : "offline",
-                            message: `Driver ${d.name} went ${event.is_online ? "online" : "offline"}`,
-                            driver_id: event.driver_id,
-                        });
-                    }
-                    break;
-                }
-                case "ride_status_changed": {
-                    const r = ridesRef.current.get(event.ride_id);
-                    if (r) {
-                        const updated = { ...r, status: event.status as MonitoringRide["status"] };
-                        ridesRef.current.set(event.ride_id, updated);
-                        mapHandlesRef.current?.updateRideMarkers(updated);
-                        if (event.status === "completed" || event.status === "cancelled") {
-                            ridesRef.current.delete(event.ride_id);
-                            mapHandlesRef.current?.removeRideMarkers(event.ride_id);
-                            if (selected?.type === "ride" && selected.id === event.ride_id) {
-                                setSelected(null);
-                            }
-                            recalcCounts();
-                            pushAlert({
-                                icon: event.status === "completed" ? "ride_done" : "ride_cancelled",
-                                message: `Ride #${event.ride_id.slice(-8)} ${event.status}${r.total_fare ? ` — $${r.total_fare.toFixed(2)}` : ""}`,
-                                ride_id: event.ride_id,
-                            });
-                        }
-                    }
-                    break;
-                }
-                case "ride_requested": {
-                    ridesRef.current.set(event.ride.id, event.ride);
-                    mapHandlesRef.current?.updateRideMarkers(event.ride);
-                    recalcCounts();
-                    pushAlert({
-                        icon: "ride_new",
-                        message: `New ride #${event.ride.id.slice(-8)} requested`,
-                        ride_id: event.ride.id,
-                    });
-                    break;
-                }
-            }
-        },
-        [followMode, selected, recalcCounts, pushAlert]
-    );
-
-    const { status: wsStatus } = useMonitoringSocket({ token, onEvent: handleWsEvent });
-
-    // ── Selection helpers ─────────────────────────────────────────────
-    const selectDriver = useCallback(
-        (id: string) => {
-            setSelected({ type: "driver", id });
-            const d = driversRef.current.get(id);
-            if (d?.lat && d.lng) mapHandlesRef.current?.panTo(d.lat, d.lng);
-        },
-        []
-    );
-
-    const selectRide = useCallback(
-        (id: string) => {
-            setSelected({ type: "ride", id });
-            const r = ridesRef.current.get(id);
-            if (r) mapHandlesRef.current?.panTo(r.pickup_lat, r.pickup_lng);
-        },
-        []
-    );
-
-    const handleAlertClick = useCallback(
-        (evt: AlertEvent) => {
-            if (evt.driver_id) selectDriver(evt.driver_id);
-            else if (evt.ride_id) selectRide(evt.ride_id);
-        },
-        [selectDriver, selectRide]
-    );
-
-    return (
-        <div className="flex h-screen flex-col overflow-hidden">
-            <MonitoringToolbar
-                counts={counts}
-                filters={filters}
-                onFilterChange={(f) => {
-                    setFilters((prev) => ({ ...prev, ...f }));
-                    // When the user picks an area from the dropdown, also pan
-                    // and fit the map to its bounds.
-                    if (f.serviceAreaId) {
-                        mapHandlesRef.current?.fitArea(f.serviceAreaId);
-                    }
-                }}
-                searchQuery={searchQuery}
-                onSearchChange={setSearchQuery}
-                followMode={followMode}
-                onFollowToggle={() => setFollowMode((v) => !v)}
-                serviceAreas={serviceAreas}
-                vehicleTypes={vehicleTypes}
-                wsStatus={wsStatus}
-            />
-
-            <div className="flex flex-1 overflow-hidden">
-                {/* Map */}
-                <div className="relative flex-1">
-                    <MonitoringMap
-                        driversMap={driversRef}
-                        ridesMap={ridesRef}
-                        filters={filters}
-                        searchQuery={searchQuery}
-                        selected={selected}
-                        followMode={followMode}
-                        serviceAreas={serviceAreas}
-                        onSelectDriver={selectDriver}
-                        onSelectRide={selectRide}
-                        onReady={(handles) => {
-                            mapHandlesRef.current = handles;
-                            // Deep-link arrival: if ?areaId= was provided
-                            // and the areas list has been loaded, fit to it
-                            // as soon as the map is ready.
-                            const pending = pendingAreaFitRef.current;
-                            if (pending) {
-                                handles.fitArea(pending);
-                                pendingAreaFitRef.current = null;
-                            }
-                        }}
-                    />
-                </div>
-
-                {/* Detail panel */}
-                <div className="w-80 shrink-0 overflow-hidden border-l border-border">
-                    {selectedDriver ? (
-                        <DriverPanel
-                            driver={selectedDriver}
-                            onRideClick={selectRide}
-                        />
-                    ) : selectedRide ? (
-                        <RidePanel
-                            ride={selectedRide}
-                            onDriverClick={selectDriver}
-                            onCancelRide={(id) => {
-                                console.log("Cancel ride", id);
-                            }}
-                        />
-                    ) : (
-                        <div className="flex h-full flex-col items-center justify-center gap-2 p-8 text-center">
-                            <div className="rounded-full bg-muted p-4">
-                                <span className="text-2xl">🗺️</span>
-                            </div>
-                            <p className="font-medium">Select a driver or ride</p>
-                            <p className="text-xs text-muted-foreground">
-                                Click any marker on the map to see details here
-                            </p>
-                        </div>
-                    )}
-                </div>
-            </div>
-
-            <AlertFeed
-                events={alerts}
-                onClear={() => setAlerts([])}
-                onEventClick={handleAlertClick}
-            />
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <Radio className="h-6 w-6 text-red-500" />
+            Live Ride Monitoring
+            <span className="relative flex h-3 w-3 ml-1">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500" />
+            </span>
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            Real-time view of all active rides
+            {lastUpdated && (
+              <span className="ml-2 text-xs">
+                · Updated {lastUpdated.toLocaleTimeString()}
+              </span>
+            )}
+          </p>
         </div>
-    );
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              onChange={e => setAutoRefresh(e.target.checked)}
+              className="rounded"
+            />
+            Auto-refresh (10s)
+          </label>
+          <Button variant="outline" size="sm" onClick={fetchRides} disabled={loading}>
+            <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        </div>
+      </div>
+
+      {/* Live Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+        <Card>
+          <CardContent className="pt-4">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Activity className="h-4 w-4" /> Total Active
+            </div>
+            <div className="text-3xl font-bold">{rides.length}</div>
+          </CardContent>
+        </Card>
+        <Card className="border-amber-200/50">
+          <CardContent className="pt-4">
+            <div className="flex items-center gap-2 text-sm text-amber-600">
+              <Search className="h-4 w-4" /> Searching
+            </div>
+            <div className="text-3xl font-bold text-amber-600">{searching}</div>
+          </CardContent>
+        </Card>
+        <Card className="border-blue-200/50">
+          <CardContent className="pt-4">
+            <div className="flex items-center gap-2 text-sm text-blue-600">
+              <Car className="h-4 w-4" /> Assigned
+            </div>
+            <div className="text-3xl font-bold text-blue-600">{assigned}</div>
+          </CardContent>
+        </Card>
+        <Card className="border-green-200/50">
+          <CardContent className="pt-4">
+            <div className="flex items-center gap-2 text-sm text-green-600">
+              <MapPin className="h-4 w-4" /> Arrived
+            </div>
+            <div className="text-3xl font-bold text-green-600">{arrived}</div>
+          </CardContent>
+        </Card>
+        <Card className="border-purple-200/50">
+          <CardContent className="pt-4">
+            <div className="flex items-center gap-2 text-sm text-purple-600">
+              <Navigation className="h-4 w-4" /> In Progress
+            </div>
+            <div className="text-3xl font-bold text-purple-600">{inProgress}</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Map Placeholder + Active Rides Table */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Map Area */}
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <MapPin className="h-5 w-5" /> Live Map
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="bg-blue-50 dark:bg-blue-950/20 rounded-xl h-[400px] flex items-center justify-center relative overflow-hidden">
+              {rides.length === 0 ? (
+                <div className="text-center z-10">
+                  <CheckCircle className="h-12 w-12 text-green-400 mx-auto mb-3" />
+                  <p className="text-lg font-semibold text-muted-foreground">All clear</p>
+                  <p className="text-sm text-muted-foreground">No active rides right now</p>
+                </div>
+              ) : (
+                <div className="text-center z-10 space-y-3">
+                  <div className="flex items-center justify-center gap-2">
+                    <span className="text-4xl">🗺️</span>
+                  </div>
+                  <p className="text-lg font-semibold">{rides.length} Active Rides</p>
+                  <div className="flex flex-wrap justify-center gap-2 max-w-md">
+                    {rides.filter(r => r.driver_lat && r.driver_lng).slice(0, 8).map((r, i) => (
+                      <div key={r.id} className="bg-white/80 dark:bg-zinc-900/80 rounded-lg px-2 py-1 text-xs shadow-sm">
+                        <span className="font-mono">{r.driver_lat?.toFixed(3)}, {r.driver_lng?.toFixed(3)}</span>
+                        <Badge className={`ml-1 text-[10px] ${STATUS_CONFIG[r.status]?.bg || "bg-gray-100"} ${STATUS_CONFIG[r.status]?.color || ""}`}>
+                          {STATUS_CONFIG[r.status]?.label || r.status}
+                        </Badge>
+                      </div>
+                    ))}
+                    {rides.filter(r => r.driver_lat).length > 8 && (
+                      <p className="text-xs text-muted-foreground">+{rides.filter(r => r.driver_lat).length - 8} more</p>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Integrate Leaflet/Mapbox for full map visualization
+                  </p>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Ride List */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Activity className="h-4 w-4" /> Active Rides
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0 max-h-[440px] overflow-y-auto">
+            {rides.length === 0 ? (
+              <p className="text-center py-8 text-muted-foreground text-sm">No active rides</p>
+            ) : (
+              <div className="divide-y">
+                {rides.map(r => (
+                  <div key={r.id} className="px-4 py-3 hover:bg-muted/50 transition">
+                    <div className="flex items-center justify-between mb-1">
+                      <Badge className={`text-[10px] ${STATUS_CONFIG[r.status]?.bg || "bg-gray-100"} ${STATUS_CONFIG[r.status]?.color || ""}`}>
+                        {STATUS_CONFIG[r.status]?.label || r.status}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground font-mono">
+                        ${Number(r.total_fare || 0).toFixed(2)}
+                      </span>
+                    </div>
+                    <p className="text-xs truncate">{r.pickup_address}</p>
+                    <p className="text-xs text-muted-foreground truncate">→ {r.dropoff_address}</p>
+                    <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
+                      <span className="flex items-center gap-0.5">
+                        <Users className="h-3 w-3" /> {r.rider_name || "—"}
+                      </span>
+                      {r.driver_name && (
+                        <span className="flex items-center gap-0.5">
+                          <Car className="h-3 w-3" /> {r.driver_name}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
 }

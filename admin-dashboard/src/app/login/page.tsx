@@ -47,6 +47,9 @@ function LoginForm() {
                 id: data.user.id,
                 email: data.user.email,
                 role: data.user.role,
+                first_name: data.user.first_name,
+                last_name: data.user.last_name,
+                modules: data.user.modules,
             });
 
             // Bounce back to the originally requested page if middleware
@@ -54,12 +57,14 @@ function LoginForm() {
             const next = sanitizeNextPath(searchParams.get("next"));
             router.push(next);
         } catch (e: any) {
-            console.error('Login error:', e);
-            const msg = e.message || "";
-            if (msg.toLowerCase().includes("invalid credentials") || msg.toLowerCase().includes("unauthorized")) {
-                setError("Wrong email or password. Please try again.");
+            if (process.env.NODE_ENV === "development") {
+                console.error('Login error:', e);
+            }
+            const status = e?.response?.status;
+            if (status === 429) {
+                setError("Too many login attempts. Please wait a minute and try again.");
             } else {
-                setError(msg || "Something went wrong. Please try again.");
+                setError(e.message || "Invalid credentials");
             }
         } finally {
             setLoading(false);

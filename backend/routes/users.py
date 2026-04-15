@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile  # type: ignore
 
 try:
-    from ..db import db  # type: ignore
+    from .. import db_supabase  # type: ignore
     from ..dependencies import get_current_user  # type: ignore
     from ..schemas import CreateProfileRequest, UserProfile  # type: ignore
 except ImportError:
-    from db import db  # type: ignore
+    import db_supabase  # type: ignore
     from dependencies import get_current_user  # type: ignore
     from schemas import CreateProfileRequest, UserProfile  # type: ignore
 import base64
@@ -21,7 +21,7 @@ api_router = APIRouter(prefix="/users", tags=["Users"])
 @api_router.get("/profile", response_model=UserProfile)
 async def get_profile(current_user: dict = Depends(get_current_user)):
     """Get the current user's profile."""
-    user = await db.users.find_one({"id": current_user["id"]})
+    user = await db_supabase.get_user_by_id(current_user["id"])
     if not user:
         raise HTTPException(status_code=404, detail="User profile not found")
     return UserProfile(**user)
@@ -35,7 +35,7 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
 
     # GAP FIX: Check for duplicate email across users
     email_lower = request.email.strip().lower()
-    existing_email_user = await db.users.find_one({"email": email_lower, "id": {"$ne": current_user["id"]}})
+    existing_email_user = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("users", {"email": email_lower, "id": {"$ne": current_user["id"]}}, limit=1))
     if existing_email_user:
         raise HTTPException(status_code=400, detail="This email address is already in use by another account")
 
@@ -50,8 +50,8 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
     if request.role and request.role in ("driver", "rider"):
         update_data["role"] = request.role
 
-    await db.users.update_one({"id": current_user["id"]}, {"$set": update_data})
-    updated_user = await db.users.find_one({"id": current_user["id"]})
+    await db_supabase.update_one("users", {"id": current_user["id"]}, update_data)
+    updated_user = await db_supabase.get_user_by_id(current_user["id"])
 
     if not updated_user:
         raise HTTPException(
@@ -70,15 +70,15 @@ async def delete_account(current_user: dict = Depends(get_current_user)):
 
     try:
         # Delete associated driver record
-        await db.drivers.delete_many({"user_id": user_id})
+        await db_supabase.delete_many("drivers", {"user_id": user_id})
         # Delete driver documents
-        await db.driver_documents.delete_many({"driver_id": user_id})
+        await db_supabase.delete_many("driver_documents", {"driver_id": user_id})
         # Delete emergency contacts
-        await db.emergency_contacts.delete_many({"user_id": user_id})
+        await db_supabase.delete_many("emergency_contacts", {"user_id": user_id})
         # Delete saved addresses
-        await db.saved_addresses.delete_many({"user_id": user_id})
+        await db_supabase.delete_many("saved_addresses", {"user_id": user_id})
         # Delete the user record
-        await db.users.delete_one({"id": user_id})
+        await db_supabase.delete_one("users", {"id": user_id})
 
         logger.info(f"Account deleted successfully for user {user_id}")
         return {"success": True, "message": "Account permanently deleted"}
@@ -102,12 +102,12 @@ async def update_phone(request: UpdatePhoneRequest, current_user: dict = Depends
         raise HTTPException(status_code=400, detail="Invalid phone number")
 
     # Check if phone is already in use by another user
-    existing = await db.users.find_one({"phone": phone, "id": {"$ne": current_user["id"]}})
+    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("users", {"phone": phone, "id": {"$ne": current_user["id"]}}, limit=1))
     if existing:
         raise HTTPException(status_code=400, detail="Phone number already in use")
 
-    await db.users.update_one({"id": current_user["id"]}, {"$set": {"phone": phone}})
-    updated_user = await db.users.find_one({"id": current_user["id"]})
+    await db_supabase.update_one("users", {"id": current_user["id"]}, {"phone": phone})
+    updated_user = await db_supabase.get_user_by_id(current_user["id"])
 
     if not updated_user:
         raise HTTPException(status_code=500, detail="Database error: Could not retrieve updated user profile.")
@@ -136,16 +136,8 @@ async def upload_profile_image(file: UploadFile = File(...), current_user: dict 
     # Store as data URI
     data_uri = f"data:{file.content_type};base64,{base64_image}"
 
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {
-            "$set": {
-                "profile_image": data_uri,
-                "profile_image_status": "pending_review",
-            }
-        },
-    )
-    updated_user = await db.users.find_one({"id": current_user["id"]})
+    await db_supabase.update_one("users", {"id": current_user["id"]}, { "profile_image": data_uri, "profile_image_status": "pending_review", })
+    updated_user = await db_supabase.get_user_by_id(current_user["id"])
 
     if not updated_user:
         raise HTTPException(status_code=500, detail="Database error: Could not retrieve updated user profile.")
@@ -161,15 +153,13 @@ class LinkCorporateRequest(BaseModel):
 async def link_corporate_account(request: LinkCorporateRequest, current_user: dict = Depends(get_current_user)):
     """Link or unlink a corporate account to the user profile."""
     if request.corporate_account_id:
-        account = await db.corporate_accounts.find_one({"id": request.corporate_account_id})
+        account = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("corporate_accounts", {"id": request.corporate_account_id}, limit=1))
         if not account:
             raise HTTPException(status_code=404, detail="Corporate account not found")
 
-    await db.users.update_one(
-        {"id": current_user["id"]}, {"$set": {"corporate_account_id": request.corporate_account_id}}
-    )
+    await db_supabase.update_one("users", {"id": current_user["id"]}, {"corporate_account_id": request.corporate_account_id})
 
-    updated_user = await db.users.find_one({"id": current_user["id"]})
+    updated_user = await db_supabase.get_user_by_id(current_user["id"])
     if not updated_user:
         raise HTTPException(status_code=500, detail="Could not retrieve updated profile.")
 
@@ -199,7 +189,7 @@ class EmergencyContactResponse(BaseModel):
 async def get_emergency_contacts(current_user: dict = Depends(get_current_user)):
     """Get the user's emergency contacts."""
     try:
-        contacts_cursor = db.emergency_contacts.find({"user_id": current_user["id"]})
+        contacts_cursor = db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=100)
         contacts = (
             await contacts_cursor.to_list(length=10) if hasattr(contacts_cursor, "to_list") else list(contacts_cursor)
         )
@@ -213,7 +203,7 @@ async def get_emergency_contacts(current_user: dict = Depends(get_current_user))
 async def add_emergency_contact(contact: EmergencyContactCreate, current_user: dict = Depends(get_current_user)):
     """Add an emergency contact (max 3 contacts per user, matching Uber/Lyft)."""
     try:
-        existing_cursor = db.emergency_contacts.find({"user_id": current_user["id"]})
+        existing_cursor = db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=100)
         existing = (
             await existing_cursor.to_list(length=10) if hasattr(existing_cursor, "to_list") else list(existing_cursor)
         )
@@ -239,16 +229,16 @@ async def add_emergency_contact(contact: EmergencyContactCreate, current_user: d
         "relationship": contact.relationship,
     }
 
-    await db.emergency_contacts.insert_one(contact_doc)
+    await db_supabase.insert_one("emergency_contacts", contact_doc)
     return {"success": True, "contact": contact_doc}
 
 
 @api_router.delete("/emergency-contacts/{contact_id}")
 async def delete_emergency_contact(contact_id: str, current_user: dict = Depends(get_current_user)):
     """Remove an emergency contact."""
-    contact = await db.emergency_contacts.find_one({"id": contact_id, "user_id": current_user["id"]})
+    contact = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("emergency_contacts", {"id": contact_id, "user_id": current_user["id"]}, limit=1))
     if not contact:
         raise HTTPException(status_code=404, detail="Emergency contact not found")
 
-    await db.emergency_contacts.delete_one({"id": contact_id})
+    await db_supabase.delete_one("emergency_contacts", {"id": contact_id})
     return {"success": True}

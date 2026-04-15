@@ -1,4 +1,27 @@
 {
+  "name": "@spinr/shared",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Shared code used across Spinr rider-app, driver-app, and admin-dashboard",
+  "sideEffects": false,
+  "exports": {
+    "./api": "./api/client.ts",
+    "./api/client": "./api/client.ts",
+    "./api/cachedClient": "./api/cachedClient.ts",
+    "./api/upload": "./api/upload.ts",
+    "./validators": "./validators/index.ts",
+    "./config": "./config/index.ts",
+    "./config/spinr.config": "./config/spinr.config.ts",
+    "./config/supabase": "./config/supabase.ts",
+    "./config/firebaseConfig": "./config/firebaseConfig.ts",
+    "./store/authStore": "./store/authStore.ts",
+    "./store/locationStore": "./store/locationStore.ts",
+    "./services/firebase": "./services/firebase.ts",
+    "./utils/logger": "./utils/logger.ts",
+    "./cache": "./cache/index.ts",
+    "./types/*": "./types/*",
+    "./components/*": "./components/*"
+  },
   "dependencies": {
     "@react-native-community/netinfo": "^11.4.1",
     "react-native-worklets": "^0.5.1"

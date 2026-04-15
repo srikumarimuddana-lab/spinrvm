@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Platform,
 } from 'react-native';
@@ -8,15 +8,17 @@ import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import api from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
-const COLORS = SpinrConfig.theme.colors;
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 export default function RideDetailsScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [ride, setRide] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [routeCoords, setRouteCoords] = useState<any[]>([]);
@@ -45,7 +47,7 @@ export default function RideDetailsScreen() {
   if (loading) {
     return (
       <SafeAreaView style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator size="large" color={COLORS.primary} />
+        <ActivityIndicator size="large" color={colors.primary} />
       </SafeAreaView>
     );
   }
@@ -55,13 +57,13 @@ export default function RideDetailsScreen() {
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+            <Ionicons name="arrow-back" size={24} color={colors.text} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Ride Details</Text>
           <View style={{ width: 44 }} />
         </View>
         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <Text style={{ color: '#999', fontSize: 16 }}>Ride not found</Text>
+          <Text style={{ color: colors.textDim, fontSize: 16 }}>Ride not found</Text>
         </View>
       </SafeAreaView>
     );
@@ -74,7 +76,7 @@ export default function RideDetailsScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Ride Details</Text>
         <View style={{ width: 44 }} />
@@ -104,6 +106,7 @@ export default function RideDetailsScreen() {
               scrollEnabled={false}
               zoomEnabled={false}
               rotateEnabled={false}
+              userInterfaceStyle={isDark ? "dark" : "light"}
               initialRegion={{
                 latitude: (ride.pickup_lat + ride.dropoff_lat) / 2,
                 longitude: (ride.pickup_lng + ride.dropoff_lng) / 2,
@@ -117,7 +120,7 @@ export default function RideDetailsScreen() {
                   destination={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
                   apikey={GOOGLE_MAPS_API_KEY}
                   strokeWidth={4}
-                  strokeColor={COLORS.primary}
+                  strokeColor={colors.primary}
                   onReady={(r: any) => {
                     setRouteCoords(r.coordinates);
                     mapRef.current?.fitToCoordinates(r.coordinates, {
@@ -132,7 +135,7 @@ export default function RideDetailsScreen() {
                 </View>
               </Marker>
               <Marker coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={[styles.pin, { backgroundColor: COLORS.primary }]}>
+                <View style={[styles.pin, { backgroundColor: colors.primary }]}>
                   <Ionicons name="flag" size={14} color="#FFF" />
                 </View>
               </Marker>
@@ -146,7 +149,7 @@ export default function RideDetailsScreen() {
             <View style={styles.routeDots}>
               <View style={[styles.dot, { backgroundColor: '#10B981' }]} />
               <View style={styles.routeLine} />
-              <View style={[styles.dot, { backgroundColor: COLORS.primary }]} />
+              <View style={[styles.dot, { backgroundColor: colors.primary }]} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.routeLabel}>PICKUP</Text>
@@ -161,18 +164,18 @@ export default function RideDetailsScreen() {
         {/* Fare Card */}
         <View style={styles.fareCard}>
           <Text style={styles.fareTitle}>Fare Breakdown</Text>
-          <FareRow label="Base fare" value={`$${(ride.base_fare || 0).toFixed(2)}`} />
-          <FareRow label={`Distance (${(ride.distance_km || 0).toFixed(1)} km)`} value={`$${(ride.distance_fare || 0).toFixed(2)}`} />
-          <FareRow label={`Time (${ride.duration_minutes || 0} min)`} value={`$${(ride.time_fare || 0).toFixed(2)}`} />
-          <FareRow label="Booking fee" value={`$${(ride.booking_fee || 0).toFixed(2)}`} />
-          {(ride.tip_amount || 0) > 0 && <FareRow label="Tip" value={`$${ride.tip_amount.toFixed(2)}`} highlight />}
+          <FareRow label="Base fare" value={`$${(ride.base_fare || 0).toFixed(2)}`} colors={colors} />
+          <FareRow label={`Distance (${(ride.distance_km || 0).toFixed(1)} km)`} value={`$${(ride.distance_fare || 0).toFixed(2)}`} colors={colors} />
+          <FareRow label={`Time (${ride.duration_minutes || 0} min)`} value={`$${(ride.time_fare || 0).toFixed(2)}`} colors={colors} />
+          <FareRow label="Booking fee" value={`$${(ride.booking_fee || 0).toFixed(2)}`} colors={colors} />
+          {(ride.tip_amount || 0) > 0 && <FareRow label="Tip" value={`$${ride.tip_amount.toFixed(2)}`} highlight colors={colors} />}
           <View style={styles.fareDivider} />
           <View style={styles.fareRowWrap}>
             <Text style={styles.fareTotalLabel}>Total</Text>
             <Text style={styles.fareTotalValue}>${(ride.total_fare || 0).toFixed(2)}</Text>
           </View>
           <View style={styles.paymentRow}>
-            <Ionicons name="card" size={14} color="#666" />
+            <Ionicons name="card" size={14} color={colors.textDim} />
             <Text style={styles.paymentText}>
               {ride.payment_method === 'card' ? 'Card' : ride.payment_method || 'Card'} · {ride.payment_status === 'paid' ? 'Paid' : 'Pending'}
             </Text>
@@ -182,12 +185,12 @@ export default function RideDetailsScreen() {
         {/* Trip Stats */}
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
-            <Ionicons name="speedometer-outline" size={22} color="#999" />
+            <Ionicons name="speedometer-outline" size={22} color={colors.textDim} />
             <Text style={styles.statVal}>{(ride.distance_km || 0).toFixed(1)} km</Text>
             <Text style={styles.statLabel}>Distance</Text>
           </View>
           <View style={styles.statCard}>
-            <Ionicons name="time-outline" size={22} color="#999" />
+            <Ionicons name="time-outline" size={22} color={colors.textDim} />
             <Text style={styles.statVal}>{ride.duration_minutes || 0} min</Text>
             <Text style={styles.statLabel}>Duration</Text>
           </View>
@@ -200,75 +203,77 @@ export default function RideDetailsScreen() {
 
         {/* Help */}
         <TouchableOpacity style={styles.helpBtn} onPress={() => router.push('/support' as any)}>
-          <Ionicons name="help-circle-outline" size={20} color={COLORS.primary} />
+          <Ionicons name="help-circle-outline" size={20} color={colors.primary} />
           <Text style={styles.helpText}>Get help with this ride</Text>
-          <Ionicons name="chevron-forward" size={16} color="#CCC" />
+          <Ionicons name="chevron-forward" size={16} color={colors.border} />
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-function FareRow({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+function FareRow({ label, value, highlight, colors }: { label: string; value: string; highlight?: boolean; colors: ThemeColors }) {
   return (
-    <View style={styles.fareRowWrap}>
-      <Text style={[styles.fareLabel, highlight && { color: '#10B981' }]}>{label}</Text>
-      <Text style={[styles.fareValue, highlight && { color: '#10B981' }]}>{value}</Text>
+    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 }}>
+      <Text style={[{ fontSize: 14, color: colors.textDim }, highlight && { color: '#10B981' }]}>{label}</Text>
+      <Text style={[{ fontSize: 14, fontWeight: '500', color: colors.text }, highlight && { color: '#10B981' }]}>{value}</Text>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFF' },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F0F0F0',
-  },
-  backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A' },
-  content: { padding: 20, paddingBottom: 40 },
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    header: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border,
+    },
+    backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
+    headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
+    content: { padding: 20, paddingBottom: 40 },
 
-  statusBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingHorizontal: 16, paddingVertical: 12, borderRadius: 14, marginBottom: 16,
-  },
-  statusText: { fontSize: 15, fontWeight: '700' },
-  statusDate: { flex: 1, fontSize: 12, color: '#999', textAlign: 'right' },
+    statusBadge: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      paddingHorizontal: 16, paddingVertical: 12, borderRadius: 14, marginBottom: 16,
+    },
+    statusText: { fontSize: 15, fontWeight: '700' },
+    statusDate: { flex: 1, fontSize: 12, color: colors.textDim, textAlign: 'right' },
 
-  mapCard: { height: 180, borderRadius: 18, overflow: 'hidden', marginBottom: 16, backgroundColor: '#F0F0F0' },
-  map: { flex: 1 },
-  pin: {
-    width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center',
-    borderWidth: 2, borderColor: '#FFF', elevation: 3,
-  },
+    mapCard: { height: 180, borderRadius: 18, overflow: 'hidden', marginBottom: 16, backgroundColor: colors.border },
+    map: { flex: 1 },
+    pin: {
+      width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center',
+      borderWidth: 2, borderColor: '#FFF', elevation: 3,
+    },
 
-  routeCard: { backgroundColor: '#F9F9F9', borderRadius: 18, padding: 16, marginBottom: 16 },
-  routeRow: { flexDirection: 'row' },
-  routeDots: { alignItems: 'center', marginRight: 12, paddingTop: 2 },
-  dot: { width: 10, height: 10, borderRadius: 5 },
-  routeLine: { width: 2, flex: 1, backgroundColor: '#DDD', marginVertical: 3 },
-  routeLabel: { fontSize: 10, fontWeight: '600', color: '#999', letterSpacing: 0.5, marginBottom: 2 },
-  routeAddr: { fontSize: 14, fontWeight: '500', color: '#1A1A1A' },
+    routeCard: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 16, marginBottom: 16 },
+    routeRow: { flexDirection: 'row' },
+    routeDots: { alignItems: 'center', marginRight: 12, paddingTop: 2 },
+    dot: { width: 10, height: 10, borderRadius: 5 },
+    routeLine: { width: 2, flex: 1, backgroundColor: colors.border, marginVertical: 3 },
+    routeLabel: { fontSize: 10, fontWeight: '600', color: colors.textDim, letterSpacing: 0.5, marginBottom: 2 },
+    routeAddr: { fontSize: 14, fontWeight: '500', color: colors.text },
 
-  fareCard: { backgroundColor: '#F9F9F9', borderRadius: 18, padding: 16, marginBottom: 16 },
-  fareTitle: { fontSize: 15, fontWeight: '700', color: '#1A1A1A', marginBottom: 12 },
-  fareRowWrap: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 },
-  fareLabel: { fontSize: 14, color: '#666' },
-  fareValue: { fontSize: 14, fontWeight: '500', color: '#1A1A1A' },
-  fareDivider: { height: 1, backgroundColor: '#E8E8E8', marginVertical: 10 },
-  fareTotalLabel: { fontSize: 16, fontWeight: '700', color: '#1A1A1A' },
-  fareTotalValue: { fontSize: 18, fontWeight: '800', color: COLORS.primary },
-  paymentRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
-  paymentText: { fontSize: 13, color: '#666' },
+    fareCard: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 16, marginBottom: 16 },
+    fareTitle: { fontSize: 15, fontWeight: '700', color: colors.text, marginBottom: 12 },
+    fareRowWrap: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 },
+    fareLabel: { fontSize: 14, color: colors.textDim },
+    fareValue: { fontSize: 14, fontWeight: '500', color: colors.text },
+    fareDivider: { height: 1, backgroundColor: colors.border, marginVertical: 10 },
+    fareTotalLabel: { fontSize: 16, fontWeight: '700', color: colors.text },
+    fareTotalValue: { fontSize: 18, fontWeight: '800', color: colors.primary },
+    paymentRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
+    paymentText: { fontSize: 13, color: colors.textDim },
 
-  statsRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
-  statCard: { flex: 1, backgroundColor: '#F9F9F9', borderRadius: 14, padding: 14, alignItems: 'center' },
-  statVal: { fontSize: 18, fontWeight: '700', color: '#1A1A1A', marginTop: 6 },
-  statLabel: { fontSize: 11, color: '#999', marginTop: 2 },
+    statsRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
+    statCard: { flex: 1, backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14, alignItems: 'center' },
+    statVal: { fontSize: 18, fontWeight: '700', color: colors.text, marginTop: 6 },
+    statLabel: { fontSize: 11, color: colors.textDim, marginTop: 2 },
 
-  helpBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    backgroundColor: '#F9F9F9', borderRadius: 14, padding: 16,
-  },
-  helpText: { flex: 1, fontSize: 14, fontWeight: '600', color: COLORS.primary },
-});
+    helpBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 10,
+      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 16,
+    },
+    helpText: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.primary },
+  });
+}

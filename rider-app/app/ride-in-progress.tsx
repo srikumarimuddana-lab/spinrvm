@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -18,10 +18,11 @@ import MapViewDirections from 'react-native-maps-directions';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useRideStore } from '../store/rideStore';
 import api from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
 import { SOSButton } from '@shared/components/SOSButton';
 import { CarMarker } from '@shared/components/CarMarker';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 const { width } = Dimensions.get('window');
 
@@ -43,6 +44,9 @@ export default function RideInProgressScreen() {
   }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = React.useRef<MapView>(null);
   const bottomSheetRef = React.useRef<BottomSheet>(null);
+
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   const snapPoints = React.useMemo(() => ['30%', '50%', '85%'], []);
 
@@ -73,8 +77,8 @@ export default function RideInProgressScreen() {
   useEffect(() => {
     if (rideId) {
       fetchRide(rideId);
-      // Poll every 5 seconds for driver position + ride status updates
-      const interval = setInterval(() => fetchRide(rideId), 5000);
+      // Fallback poll — WS delivers driver position + ride status in real-time.
+      const interval = setInterval(() => fetchRide(rideId), 15000);
       return () => clearInterval(interval);
     }
   }, [rideId]);
@@ -113,7 +117,18 @@ export default function RideInProgressScreen() {
   };
 
   const handleShareTrip = async () => {
-    const liveTrackingUrl = `https://spinr-track.app/${rideId || 'demo'}`;
+    // Get share token from backend API
+    let shareToken = rideId || 'demo';
+    try {
+      const shareRes = await api.get(`/rides/${rideId}/share`);
+      if (shareRes.data?.share_token) {
+        shareToken = shareRes.data.share_token;
+      }
+    } catch {
+      // Fall back to ride ID
+    }
+
+    const liveTrackingUrl = `https://spinr-track.app/${shareToken}`;
     const tripDetails = `
 🚗 TRACK MY SPINR RIDE - LIVE LOCATION
 
@@ -152,7 +167,16 @@ I've shared my live location with you for safety.
   };
 
   const handleCopyTrackingLink = async () => {
-    const trackingLink = `https://spinr-track.app/${rideId || 'demo'}`;
+    let shareToken = rideId || 'demo';
+    try {
+      const shareRes = await api.get(`/rides/${rideId}/share`);
+      if (shareRes.data?.share_token) {
+        shareToken = shareRes.data.share_token;
+      }
+    } catch {
+      // Fall back to ride ID
+    }
+    const trackingLink = `https://spinr-track.app/${shareToken}`;
     await Clipboard.setStringAsync(trackingLink);
     setAlertState({ visible: true, title: 'Copied!', message: 'Live tracking link copied to clipboard', variant: 'success' });
   };
@@ -195,6 +219,7 @@ I've shared my live location with you for safety.
             }}
             showsUserLocation
             showsMyLocationButton={false}
+            userInterfaceStyle={isDark ? "dark" : "light"}
           >
             {/* Route: pickup → dropoff (always show, even without driver coords) */}
             {process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY && (
@@ -286,7 +311,7 @@ I've shared my live location with you for safety.
 
         {/* Location button */}
         <TouchableOpacity style={styles.locationButton} onPress={handleLocation}>
-          <Ionicons name="navigate" size={22} color="#1A1A1A" />
+          <Ionicons name="navigate" size={22} color={colors.text} />
         </TouchableOpacity>
       </View>
 
@@ -323,7 +348,7 @@ I've shared my live location with you for safety.
             <View style={styles.driverCard}>
               <View style={styles.driverRow}>
                 <View style={styles.driverAvatar}>
-                  <Ionicons name="person" size={26} color="#666" />
+                  <Ionicons name="person" size={26} color={colors.textDim} />
                   {currentDriver?.rating && (
                     <View style={styles.ratingPill}>
                       <Ionicons name="star" size={9} color="#FFB800" />
@@ -339,13 +364,13 @@ I've shared my live location with you for safety.
                   style={styles.msgIconBtn}
                   onPress={() => router.push({ pathname: '/chat-driver', params: { rideId } } as any)}
                 >
-                  <Ionicons name="chatbubble" size={20} color={SpinrConfig.theme.colors.primary} />
+                  <Ionicons name="chatbubble" size={20} color={colors.primary} />
                 </TouchableOpacity>
               </View>
 
               {/* Vehicle Info */}
               <View style={styles.vehicleBar}>
-                <Ionicons name="car" size={16} color={SpinrConfig.theme.colors.primary} />
+                <Ionicons name="car" size={16} color={colors.primary} />
                 <Text style={styles.vehicleDetail}>
                   {currentDriver?.vehicle_color} {currentDriver?.vehicle_make} {currentDriver?.vehicle_model}
                 </Text>
@@ -361,7 +386,7 @@ I've shared my live location with you for safety.
                 <View style={styles.tripDots}>
                   <View style={[styles.tripDot, { backgroundColor: '#10B981' }]} />
                   <View style={styles.tripConnector} />
-                  <View style={[styles.tripDot, { backgroundColor: SpinrConfig.theme.colors.primary }]} />
+                  <View style={[styles.tripDot, { backgroundColor: colors.primary }]} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.tripRouteLabel}>PICKUP</Text>
@@ -375,19 +400,19 @@ I've shared my live location with you for safety.
               {/* Fare + Distance */}
               <View style={styles.fareRow}>
                 <View style={styles.fareItem}>
-                  <Ionicons name="cash-outline" size={16} color="#666" />
+                  <Ionicons name="cash-outline" size={16} color={colors.textDim} />
                   <Text style={styles.fareValue}>${(currentRide?.total_fare || 0).toFixed(2)}</Text>
                   <Text style={styles.fareLabel}>Fare</Text>
                 </View>
                 <View style={styles.fareDivider} />
                 <View style={styles.fareItem}>
-                  <Ionicons name="speedometer-outline" size={16} color="#666" />
+                  <Ionicons name="speedometer-outline" size={16} color={colors.textDim} />
                   <Text style={styles.fareValue}>{(currentRide?.distance_km || 0).toFixed(1)} km</Text>
                   <Text style={styles.fareLabel}>Distance</Text>
                 </View>
                 <View style={styles.fareDivider} />
                 <View style={styles.fareItem}>
-                  <Ionicons name="time-outline" size={16} color="#666" />
+                  <Ionicons name="time-outline" size={16} color={colors.textDim} />
                   <Text style={styles.fareValue}>{eta} min</Text>
                   <Text style={styles.fareLabel}>ETA</Text>
                 </View>
@@ -403,7 +428,7 @@ I've shared my live location with you for safety.
                 </View>
                 <Text style={styles.sharingText}>Location sharing active</Text>
                 <TouchableOpacity onPress={handleCopyTrackingLink}>
-                  <Ionicons name="copy-outline" size={18} color="#666" />
+                  <Ionicons name="copy-outline" size={18} color={colors.textDim} />
                 </TouchableOpacity>
               </View>
             )}
@@ -411,7 +436,7 @@ I've shared my live location with you for safety.
             {/* Action Row */}
             <View style={styles.actionRow}>
               <TouchableOpacity style={styles.actionBtn} onPress={handleShareTrip}>
-                <Ionicons name="share-outline" size={20} color="#1A1A1A" />
+                <Ionicons name="share-outline" size={20} color={colors.text} />
                 <Text style={styles.actionBtnText}>Share Trip</Text>
               </TouchableOpacity>
               <View style={styles.actionBtn}>
@@ -437,7 +462,7 @@ I've shared my live location with you for safety.
                   ],
                 });
               }}>
-                <Ionicons name="stop-circle-outline" size={20} color="#999" />
+                <Ionicons name="stop-circle-outline" size={20} color={colors.textDim} />
                 <Text style={styles.actionBtnText}>End Ride</Text>
               </TouchableOpacity>
             </View>
@@ -470,146 +495,148 @@ I've shared my live location with you for safety.
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#E8E8E8' },
-  headerSafeArea: {
-    position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10,
-    alignItems: 'center', paddingTop: 8,
-  },
-  statusPill: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#FFF', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 24,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3,
-  },
-  greenDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#10B981', marginRight: 10 },
-  statusText: { fontSize: 15, fontWeight: '600', color: '#1A1A1A' },
-  sosOverlay: {
-    position: 'absolute', top: 0, right: 16, zIndex: 20,
-    alignItems: 'flex-end', paddingTop: 8,
-  },
-  mapContainer: { flex: 1, position: 'relative' },
-  map: { ...StyleSheet.absoluteFillObject },
-  mapPlaceholder: { flex: 1, backgroundColor: '#F0F0F0', justifyContent: 'center', alignItems: 'center' },
-  locationButton: {
-    position: 'absolute', right: 16, bottom: 16,
-    width: 48, height: 48, borderRadius: 24, backgroundColor: '#FFF',
-    justifyContent: 'center', alignItems: 'center',
-    elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4,
-  },
-  bottomSheetBackground: { backgroundColor: '#FFF', borderTopLeftRadius: 24, borderTopRightRadius: 24 },
-  sheetHandleIndicator: { width: 40, backgroundColor: '#DDD' },
-  bottomSheetContent: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 40 },
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: '#E8E8E8' },
+    headerSafeArea: {
+      position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10,
+      alignItems: 'center', paddingTop: 8,
+    },
+    statusPill: {
+      flexDirection: 'row', alignItems: 'center',
+      backgroundColor: colors.surface, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 24,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4, elevation: 3,
+    },
+    greenDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#10B981', marginRight: 10 },
+    statusText: { fontSize: 15, fontWeight: '600', color: colors.text },
+    sosOverlay: {
+      position: 'absolute', top: 0, right: 16, zIndex: 20,
+      alignItems: 'flex-end', paddingTop: 8,
+    },
+    mapContainer: { flex: 1, position: 'relative' },
+    map: { ...StyleSheet.absoluteFillObject },
+    mapPlaceholder: { flex: 1, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' },
+    locationButton: {
+      position: 'absolute', right: 16, bottom: 16,
+      width: 48, height: 48, borderRadius: 24, backgroundColor: colors.surface,
+      justifyContent: 'center', alignItems: 'center',
+      elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4,
+    },
+    bottomSheetBackground: { backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+    sheetHandleIndicator: { width: 40, backgroundColor: '#DDD' },
+    bottomSheetContent: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 40 },
 
-  // ETA Hero
-  etaHero: {
-    flexDirection: 'row', alignItems: 'center', marginBottom: 12,
-  },
-  etaLabel: { fontSize: 11, fontWeight: '600', color: '#999', letterSpacing: 0.5, marginBottom: 2 },
-  etaTime: { fontSize: 28, fontWeight: '800', color: '#1A1A1A' },
-  etaBadge: {
-    width: 56, height: 56, borderRadius: 28,
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  etaBadgeNum: { fontSize: 20, fontWeight: '800', color: '#FFF', lineHeight: 22 },
-  etaBadgeUnit: { fontSize: 10, fontWeight: '600', color: 'rgba(255,255,255,0.8)', marginTop: -2 },
+    // ETA Hero
+    etaHero: {
+      flexDirection: 'row', alignItems: 'center', marginBottom: 12,
+    },
+    etaLabel: { fontSize: 11, fontWeight: '600', color: colors.textDim, letterSpacing: 0.5, marginBottom: 2 },
+    etaTime: { fontSize: 28, fontWeight: '800', color: colors.text },
+    etaBadge: {
+      width: 56, height: 56, borderRadius: 28,
+      backgroundColor: colors.primary,
+      justifyContent: 'center', alignItems: 'center',
+    },
+    etaBadgeNum: { fontSize: 20, fontWeight: '800', color: '#FFF', lineHeight: 22 },
+    etaBadgeUnit: { fontSize: 10, fontWeight: '600', color: 'rgba(255,255,255,0.8)', marginTop: -2 },
 
-  // Progress
-  progressContainer: { height: 4, backgroundColor: '#F0F0F0', borderRadius: 2, marginBottom: 16 },
-  progressBar: { height: 4, backgroundColor: SpinrConfig.theme.colors.primary, borderRadius: 2 },
+    // Progress
+    progressContainer: { height: 4, backgroundColor: colors.border, borderRadius: 2, marginBottom: 16 },
+    progressBar: { height: 4, backgroundColor: colors.primary, borderRadius: 2 },
 
-  // Driver Card
-  driverCard: { backgroundColor: '#F9F9F9', borderRadius: 16, padding: 16, marginBottom: 14 },
-  driverRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
-  driverAvatar: {
-    width: 48, height: 48, borderRadius: 24, backgroundColor: '#E8E8E8',
-    justifyContent: 'center', alignItems: 'center', marginRight: 12, position: 'relative',
-  },
-  ratingPill: {
-    position: 'absolute', bottom: -4, left: -2,
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#FFF', paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2,
-  },
-  ratingPillText: { fontSize: 10, fontWeight: '700', color: '#1A1A1A', marginLeft: 2 },
-  driverName: { fontSize: 16, fontWeight: '700', color: '#1A1A1A' },
-  driverMeta: { fontSize: 12, color: '#999', marginTop: 2 },
-  msgIconBtn: {
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: `${SpinrConfig.theme.colors.primary}15`,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  vehicleBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingTop: 12, borderTopWidth: 1, borderTopColor: '#ECECEC',
-  },
-  vehicleDetail: { flex: 1, fontSize: 13, fontWeight: '500', color: '#444' },
-  plateBadge: {
-    backgroundColor: '#1A1A1A', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4,
-  },
-  plateNum: { fontSize: 13, fontWeight: '800', color: '#FFF', letterSpacing: 1.5 },
+    // Driver Card
+    driverCard: { backgroundColor: colors.surfaceLight, borderRadius: 16, padding: 16, marginBottom: 14 },
+    driverRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
+    driverAvatar: {
+      width: 48, height: 48, borderRadius: 24, backgroundColor: '#E8E8E8',
+      justifyContent: 'center', alignItems: 'center', marginRight: 12, position: 'relative',
+    },
+    ratingPill: {
+      position: 'absolute', bottom: -4, left: -2,
+      flexDirection: 'row', alignItems: 'center',
+      backgroundColor: colors.surface, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2,
+    },
+    ratingPillText: { fontSize: 10, fontWeight: '700', color: colors.text, marginLeft: 2 },
+    driverName: { fontSize: 16, fontWeight: '700', color: colors.text },
+    driverMeta: { fontSize: 12, color: colors.textDim, marginTop: 2 },
+    msgIconBtn: {
+      width: 44, height: 44, borderRadius: 22,
+      backgroundColor: `${colors.primary}15`,
+      justifyContent: 'center', alignItems: 'center',
+    },
+    vehicleBar: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      paddingTop: 12, borderTopWidth: 1, borderTopColor: '#ECECEC',
+    },
+    vehicleDetail: { flex: 1, fontSize: 13, fontWeight: '500', color: colors.textSecondary },
+    plateBadge: {
+      backgroundColor: colors.text, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4,
+    },
+    plateNum: { fontSize: 13, fontWeight: '800', color: colors.surface, letterSpacing: 1.5 },
 
-  // Trip Card
-  tripCard: { backgroundColor: '#F9F9F9', borderRadius: 16, padding: 16, marginBottom: 14 },
-  tripRow: { flexDirection: 'row' },
-  tripDots: { alignItems: 'center', marginRight: 12, paddingTop: 2 },
-  tripDot: { width: 10, height: 10, borderRadius: 5 },
-  tripConnector: { width: 2, flex: 1, backgroundColor: '#DDD', marginVertical: 4 },
-  tripRouteLabel: { fontSize: 10, fontWeight: '600', color: '#999', letterSpacing: 0.5, marginBottom: 2 },
-  tripRouteAddr: { fontSize: 14, fontWeight: '500', color: '#1A1A1A' },
-  fareRow: {
-    flexDirection: 'row', marginTop: 14, paddingTop: 14,
-    borderTopWidth: 1, borderTopColor: '#ECECEC',
-  },
-  fareItem: { flex: 1, alignItems: 'center' },
-  fareValue: { fontSize: 15, fontWeight: '700', color: '#1A1A1A', marginTop: 4 },
-  fareLabel: { fontSize: 10, color: '#999', marginTop: 2 },
-  fareDivider: { width: 1, backgroundColor: '#ECECEC' },
+    // Trip Card
+    tripCard: { backgroundColor: colors.surfaceLight, borderRadius: 16, padding: 16, marginBottom: 14 },
+    tripRow: { flexDirection: 'row' },
+    tripDots: { alignItems: 'center', marginRight: 12, paddingTop: 2 },
+    tripDot: { width: 10, height: 10, borderRadius: 5 },
+    tripConnector: { width: 2, flex: 1, backgroundColor: '#DDD', marginVertical: 4 },
+    tripRouteLabel: { fontSize: 10, fontWeight: '600', color: colors.textDim, letterSpacing: 0.5, marginBottom: 2 },
+    tripRouteAddr: { fontSize: 14, fontWeight: '500', color: colors.text },
+    fareRow: {
+      flexDirection: 'row', marginTop: 14, paddingTop: 14,
+      borderTopWidth: 1, borderTopColor: '#ECECEC',
+    },
+    fareItem: { flex: 1, alignItems: 'center' },
+    fareValue: { fontSize: 15, fontWeight: '700', color: colors.text, marginTop: 4 },
+    fareLabel: { fontSize: 10, color: colors.textDim, marginTop: 2 },
+    fareDivider: { width: 1, backgroundColor: '#ECECEC' },
 
-  // Live Sharing
-  liveSharingBanner: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#F0FFF4', paddingHorizontal: 14, paddingVertical: 10,
-    borderRadius: 12, marginBottom: 14, borderWidth: 1, borderColor: '#D1FAE5',
-  },
-  liveIndicator: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#EF4444', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, marginRight: 10,
-  },
-  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#FFF', marginRight: 4 },
-  liveText: { fontSize: 10, fontWeight: '700', color: '#FFF', letterSpacing: 0.5 },
-  sharingText: { flex: 1, fontSize: 14, fontWeight: '500', color: '#059669' },
+    // Live Sharing
+    liveSharingBanner: {
+      flexDirection: 'row', alignItems: 'center',
+      backgroundColor: '#F0FFF4', paddingHorizontal: 14, paddingVertical: 10,
+      borderRadius: 12, marginBottom: 14, borderWidth: 1, borderColor: '#D1FAE5',
+    },
+    liveIndicator: {
+      flexDirection: 'row', alignItems: 'center',
+      backgroundColor: '#EF4444', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, marginRight: 10,
+    },
+    liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#FFF', marginRight: 4 },
+    liveText: { fontSize: 10, fontWeight: '700', color: '#FFF', letterSpacing: 0.5 },
+    sharingText: { flex: 1, fontSize: 14, fontWeight: '500', color: '#059669' },
 
-  // Action Row
-  actionRow: { flexDirection: 'row', gap: 10, marginBottom: 8 },
-  actionBtn: {
-    flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4,
-    backgroundColor: '#F5F5F5', paddingVertical: 14, borderRadius: 14,
-  },
-  actionBtnDanger: { backgroundColor: '#FEF2F2' },
-  actionBtnText: { fontSize: 12, fontWeight: '600', color: '#1A1A1A' },
+    // Action Row
+    actionRow: { flexDirection: 'row', gap: 10, marginBottom: 8 },
+    actionBtn: {
+      flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4,
+      backgroundColor: colors.surfaceLight, paddingVertical: 14, borderRadius: 14,
+    },
+    actionBtnDanger: { backgroundColor: '#FEF2F2' },
+    actionBtnText: { fontSize: 12, fontWeight: '600', color: colors.text },
 
-  // Markers
-  pickupMarker: {
-    width: 32, height: 32, borderRadius: 16,
-    backgroundColor: '#10B981', justifyContent: 'center', alignItems: 'center',
-    borderWidth: 2, borderColor: '#FFF',
-    elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3,
-  },
-  dropoffMarker: {
-    width: 32, height: 32, borderRadius: 16,
-    backgroundColor: SpinrConfig.theme.colors.primary, justifyContent: 'center', alignItems: 'center',
-    borderWidth: 2, borderColor: '#FFF',
-    elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3,
-  },
+    // Markers
+    pickupMarker: {
+      width: 32, height: 32, borderRadius: 16,
+      backgroundColor: '#10B981', justifyContent: 'center', alignItems: 'center',
+      borderWidth: 2, borderColor: '#FFF',
+      elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3,
+    },
+    dropoffMarker: {
+      width: 32, height: 32, borderRadius: 16,
+      backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center',
+      borderWidth: 2, borderColor: '#FFF',
+      elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3,
+    },
 
-  // Dev
-  devBar: {
-    flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8,
-    marginTop: 16, padding: 12, backgroundColor: '#FEF3C7', borderRadius: 12,
-    borderWidth: 1, borderColor: '#F59E0B',
-  },
-  devLabel: { fontSize: 11, fontWeight: '700', color: '#92400E', marginRight: 4 },
-  devBtn: { backgroundColor: '#F59E0B', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
-  devBtnText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
-});
+    // Dev
+    devBar: {
+      flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8,
+      marginTop: 16, padding: 12, backgroundColor: '#FEF3C7', borderRadius: 12,
+      borderWidth: 1, borderColor: '#F59E0B',
+    },
+    devLabel: { fontSize: 11, fontWeight: '700', color: '#92400E', marginRight: 4 },
+    devBtn: { backgroundColor: '#F59E0B', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
+    devBtnText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
+  });
+}

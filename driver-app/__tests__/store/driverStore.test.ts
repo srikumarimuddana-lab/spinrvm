@@ -275,4 +275,67 @@ describe('driverStore', () => {
       expect(useDriverStore.getState().error).toBeNull();
     });
   });
+
+  describe('acceptRide — race condition handling', () => {
+    beforeEach(() => {
+      useDriverStore.getState().setIncomingRide(mockIncomingRide);
+    });
+
+    it('clears incomingRide and resets to idle on 404 (ride gone)', async () => {
+      const err = new Error('Not Found');
+      (err as any).response = { status: 404, data: { detail: 'Ride not found' } };
+      api.post.mockRejectedValueOnce(err);
+
+      await useDriverStore.getState().acceptRide('ride-1');
+
+      const state = useDriverStore.getState();
+      expect(state.incomingRide).toBeNull();
+      expect(state.rideState).toBe('idle');
+      expect(state.countdownSeconds).toBe(0);
+      expect(state.error).toMatch(/already taken/i);
+    });
+
+    it('clears incomingRide and resets to idle on 400 "already accepted"', async () => {
+      const err = new Error('Bad Request');
+      (err as any).response = {
+        status: 400,
+        data: { detail: 'Ride already accepted by another driver' },
+      };
+      api.post.mockRejectedValueOnce(err);
+
+      await useDriverStore.getState().acceptRide('ride-1');
+
+      const state = useDriverStore.getState();
+      expect(state.incomingRide).toBeNull();
+      expect(state.rideState).toBe('idle');
+      expect(state.error).toMatch(/already taken/i);
+    });
+
+    it('keeps incomingRide on generic network error (retryable)', async () => {
+      const err = new Error('Network Error');
+      (err as any).response = { status: 500, data: { detail: 'Internal server error' } };
+      api.post.mockRejectedValueOnce(err);
+
+      useDriverStore.getState().setIncomingRide(mockIncomingRide);
+      await useDriverStore.getState().acceptRide('ride-1');
+
+      // Generic 500 should set error but NOT clear incomingRide
+      expect(useDriverStore.getState().error).toBe('Internal server error');
+      // rideState was already 'ride_offered' — verify not forcibly reset to idle
+      expect(useDriverStore.getState().rideState).toBe('ride_offered');
+    });
+  });
+
+  describe('applyDriverConfig', () => {
+    it('stores configuredCountdownSeconds and configuredPickupRadiusMeters', () => {
+      useDriverStore.getState().applyDriverConfig({
+        ride_offer_timeout_seconds: 30,
+        pickup_radius_meters: 200,
+      });
+
+      const state = useDriverStore.getState();
+      expect(state.configuredCountdownSeconds).toBe(30);
+      expect(state.configuredPickupRadiusMeters).toBe(200);
+    });
+  });
 });

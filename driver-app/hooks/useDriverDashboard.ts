@@ -54,6 +54,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     setIncomingRide,
     resetRideState,
     fetchActiveRide,
+    hydrateDriverRideState,
     fetchEarnings,
     applyDriverConfig,
     earnings,
@@ -188,6 +189,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   }, []);
 
   // ─── Batch Location Upload ───────────────────────────────────────
+  // G16: Persist buffer to AsyncStorage so crash doesn't lose GPS
+  // breadcrumbs. On upload success, clear both in-memory + persisted.
+  // On cold start, the buffer initializes from in-memory (empty) but
+  // a recovery effect below loads any persisted points.
+  const LOCATION_BUFFER_KEY = 'spinr_location_buffer';
+
   const uploadLocationBatch = useCallback(async () => {
     if (locationBufferRef.current.length === 0) return;
 
@@ -199,10 +206,37 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         points: pointsToUpload,
       });
       console.log(`Uploaded ${pointsToUpload.length} location points`);
+      // Clear persisted buffer on success
+      try {
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        await AsyncStorage.removeItem(LOCATION_BUFFER_KEY);
+      } catch {}
     } catch (err) {
       console.log('Location batch upload failed:', err);
       locationBufferRef.current = [...pointsToUpload, ...locationBufferRef.current];
+      // Persist to AsyncStorage so crash doesn't lose them
+      try {
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        await AsyncStorage.setItem(LOCATION_BUFFER_KEY, JSON.stringify(locationBufferRef.current.slice(-500)));
+      } catch {}
     }
+  }, []);
+
+  // Recover persisted location buffer on cold start (G16)
+  useEffect(() => {
+    (async () => {
+      try {
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        const saved = await AsyncStorage.getItem(LOCATION_BUFFER_KEY);
+        if (saved) {
+          const points = JSON.parse(saved);
+          if (Array.isArray(points) && points.length > 0) {
+            locationBufferRef.current = [...points, ...locationBufferRef.current];
+            console.log(`[Location] Recovered ${points.length} persisted GPS points`);
+          }
+        }
+      } catch {}
+    })();
   }, []);
 
   // Upload batch every 30 seconds
@@ -303,6 +337,23 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       case 'ride_cancelled':
         Alert.alert('Ride Cancelled', 'The rider has cancelled this ride.');
         resetRideState();
+        break;
+
+      // G20: Reply to server heartbeat so the backend doesn't mark
+      // this connection as dead after HEARTBEAT_TIMEOUT (10s).
+      case 'ping':
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'pong' }));
+        }
+        break;
+
+      // G3: Rider-to-driver chat messages. Backend websocket.py forwards
+      // chat_message to `driver_{user_id}`. Push into driverStore so
+      // chat.tsx updates in real-time without polling. [SPR-01]
+      case 'chat_message':
+        console.log('[WS] Chat from rider:', data.text?.slice(0, 40));
+        useDriverStore.getState().addChatMessage(data);
+        Vibration.vibrate(100);
         break;
     }
   }, [setIncomingRide, resetRideState]);
@@ -498,10 +549,20 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     if (url) Linking.openURL(url);
   };
 
-  // ─── Fetch active ride on mount ──────────────────────────────────
+  // ─── Crash recovery: hydrate from AsyncStorage then fetch from API ──
+  // hydrateDriverRideState() restores the last persisted ride state
+  // instantly (no network required) so the driver sees their active ride
+  // immediately on restart. fetchActiveRide() then confirms/updates the
+  // state with the live server response.
+  useEffect(() => {
+    if (user) {
+      hydrateDriverRideState().then(() => fetchActiveRide());
+    }
+  }, [user]);
+
+  // ─── Fetch earnings when online ─────────────────────────────────
   useEffect(() => {
     if (isOnline) {
-      fetchActiveRide();
       fetchEarnings('today');
     }
   }, [isOnline]);

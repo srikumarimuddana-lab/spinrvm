@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
-import SpinrConfig from '../config/spinr.config';
+import { useTheme } from '../theme/ThemeContext';
+import type { ThemeColors } from '../theme/index';
 
 interface ErrorScreenProps {
   title?: string;
@@ -15,10 +16,10 @@ interface ErrorScreenProps {
 
 /**
  * User-friendly error screen component for displaying errors in the mobile apps.
- * 
+ *
  * Usage:
  * ```tsx
- * <ErrorScreen 
+ * <ErrorScreen
  *   icon="network"
  *   message="Please check your connection and try again"
  *   onRetry={() => refreshData()}
@@ -34,6 +35,9 @@ export function ErrorScreen({
   showGoBack = true,
   icon = 'error',
 }: ErrorScreenProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const router = useRouter();
 
   const handleGoBack = () => {
@@ -61,33 +65,33 @@ export function ErrorScreen({
     <View style={styles.container}>
       <View style={styles.content}>
         <Text style={styles.icon}>{getIcon()}</Text>
-        
+
         <Text style={styles.title}>{title}</Text>
-        
+
         {message && (
           <Text style={styles.message}>{message}</Text>
         )}
-        
+
         {error && __DEV__ && (
           <View style={styles.errorContainer}>
             <Text style={styles.errorText}>{error.message}</Text>
           </View>
         )}
-        
+
         <View style={styles.buttonContainer}>
           {onRetry && (
-            <TouchableOpacity 
-              style={styles.retryButton} 
+            <TouchableOpacity
+              style={styles.retryButton}
               onPress={onRetry}
               activeOpacity={0.7}
             >
               <Text style={styles.retryButtonText}>Try Again</Text>
             </TouchableOpacity>
           )}
-          
+
           {showGoBack && (
-            <TouchableOpacity 
-              style={styles.backButton} 
+            <TouchableOpacity
+              style={styles.backButton}
               onPress={handleGoBack}
               activeOpacity={0.7}
             >
@@ -134,7 +138,7 @@ export function NotFoundScreen({ message }: { message?: string }) {
  */
 export function UnauthorizedScreen({ onLogin }: { onLogin?: () => void }) {
   const router = useRouter();
-  
+
   const handleLogin = () => {
     if (onLogin) {
       onLogin();
@@ -142,7 +146,7 @@ export function UnauthorizedScreen({ onLogin }: { onLogin?: () => void }) {
       router.push('/login' as any);
     }
   };
-  
+
   return (
     <ErrorScreen
       icon="unauthorized"
@@ -154,82 +158,84 @@ export function UnauthorizedScreen({ onLogin }: { onLogin?: () => void }) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: SpinrConfig.theme.colors.background,
-    padding: 20,
-  },
-  content: {
-    alignItems: 'center',
-    maxWidth: 320,
-  },
-  icon: {
-    fontSize: 64,
-    marginBottom: 24,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: SpinrConfig.theme.colors.text,
-    marginBottom: 12,
-    textAlign: 'center',
-  },
-  message: {
-    fontSize: 16,
-    color: SpinrConfig.theme.colors.textSecondary,
-    textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: 24,
-  },
-  errorContainer: {
-    backgroundColor: SpinrConfig.theme.colors.error + '15',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 24,
-    width: '100%',
-  },
-  errorText: {
-    fontSize: 12,
-    color: SpinrConfig.theme.colors.error,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-  },
-  buttonContainer: {
-    flexDirection: 'row',
-    gap: 12,
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-  },
-  retryButton: {
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    paddingHorizontal: 32,
-    paddingVertical: 14,
-    borderRadius: 10,
-    minWidth: 120,
-    alignItems: 'center',
-  },
-  retryButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  backButton: {
-    backgroundColor: SpinrConfig.theme.colors.surface,
-    paddingHorizontal: 32,
-    paddingVertical: 14,
-    borderRadius: 10,
-    minWidth: 120,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: SpinrConfig.theme.colors.border,
-  },
-  backButtonText: {
-    color: SpinrConfig.theme.colors.text,
-    fontSize: 16,
-    fontWeight: '500',
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: colors.background,
+      padding: 20,
+    },
+    content: {
+      alignItems: 'center',
+      maxWidth: 320,
+    },
+    icon: {
+      fontSize: 64,
+      marginBottom: 24,
+    },
+    title: {
+      fontSize: 24,
+      fontWeight: '700',
+      color: colors.text,
+      marginBottom: 12,
+      textAlign: 'center',
+    },
+    message: {
+      fontSize: 16,
+      color: colors.textSecondary,
+      textAlign: 'center',
+      marginBottom: 24,
+      lineHeight: 24,
+    },
+    errorContainer: {
+      backgroundColor: colors.error + '15',
+      padding: 12,
+      borderRadius: 8,
+      marginBottom: 24,
+      width: '100%',
+    },
+    errorText: {
+      fontSize: 12,
+      color: colors.error,
+      fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    },
+    buttonContainer: {
+      flexDirection: 'row',
+      gap: 12,
+      flexWrap: 'wrap',
+      justifyContent: 'center',
+    },
+    retryButton: {
+      backgroundColor: colors.primary,
+      paddingHorizontal: 32,
+      paddingVertical: 14,
+      borderRadius: 10,
+      minWidth: 120,
+      alignItems: 'center',
+    },
+    retryButtonText: {
+      color: '#FFFFFF',
+      fontSize: 16,
+      fontWeight: '600',
+    },
+    backButton: {
+      backgroundColor: colors.surface,
+      paddingHorizontal: 32,
+      paddingVertical: 14,
+      borderRadius: 10,
+      minWidth: 120,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    backButtonText: {
+      color: colors.text,
+      fontSize: 16,
+      fontWeight: '500',
+    },
+  });
+}
 
 export default ErrorScreen;

@@ -15,6 +15,7 @@ import { render, screen } from '@testing-library/react';
 // ---------- mock next/navigation ----------
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 // ---------- mock Zustand authStore ----------
@@ -83,7 +84,7 @@ describe('LoginPage smoke test', () => {
 
   it('renders a submit / login button', () => {
     render(<LoginPage />);
-    const btn = screen.queryByRole('button');
-    expect(btn).toBeTruthy();
+    const buttons = screen.queryAllByRole('button');
+    expect(buttons.length).toBeGreaterThanOrEqual(1);
   });
 });

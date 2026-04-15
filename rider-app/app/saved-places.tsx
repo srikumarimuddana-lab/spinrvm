@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput,
   Platform, ActivityIndicator, KeyboardAvoidingView,
@@ -7,14 +7,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
-import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
-const COLORS = SpinrConfig.theme.colors;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 const PLACE_TYPES = [
-  { key: 'Home', icon: 'home', color: COLORS.primary, bg: '#FEF2F2' },
+  { key: 'Home', icon: 'home', color: '#FF3B30', bg: '#FEF2F2' },
   { key: 'Work', icon: 'briefcase', color: '#3B82F6', bg: '#DBEAFE' },
   { key: 'Gym', icon: 'fitness', color: '#10B981', bg: '#ECFDF5' },
   { key: 'School', icon: 'school', color: '#F59E0B', bg: '#FEF3C7' },
@@ -29,6 +29,9 @@ interface Prediction {
 
 export default function SavedPlacesScreen() {
   const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const { savedAddresses, fetchSavedAddresses, addSavedAddress, deleteSavedAddress } = useRideStore();
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -161,14 +164,14 @@ export default function SavedPlacesScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Saved Places</Text>
         <View style={{ width: 44 }} />
       </View>
 
       {loading ? (
-        <View style={styles.center}><ActivityIndicator size="large" color={COLORS.primary} /></View>
+        <View style={styles.center}><ActivityIndicator size="large" color={colors.primary} /></View>
       ) : (
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <FlatList
@@ -195,7 +198,7 @@ export default function SavedPlacesScreen() {
                         style={[styles.typeChip, selectedType === t.key && { backgroundColor: t.bg, borderColor: t.color }]}
                         onPress={() => { setSelectedType(t.key); if (!placeName) setPlaceName(t.key); }}
                       >
-                        <Ionicons name={t.icon as any} size={16} color={selectedType === t.key ? t.color : '#999'} />
+                        <Ionicons name={t.icon as any} size={16} color={selectedType === t.key ? t.color : colors.textDim} />
                         <Text style={[styles.typeChipText, selectedType === t.key && { color: t.color }]}>{t.key}</Text>
                       </TouchableOpacity>
                     ))}
@@ -220,13 +223,13 @@ export default function SavedPlacesScreen() {
                     value={searchText}
                     onChangeText={searchPlaces}
                   />
-                  {searching && <ActivityIndicator size="small" color={COLORS.primary} style={{ marginTop: 8 }} />}
+                  {searching && <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: 8 }} />}
 
                   {predictions.length > 0 && (
                     <View style={styles.predList}>
                       {predictions.slice(0, 5).map((p) => (
                         <TouchableOpacity key={p.place_id} style={styles.predItem} onPress={() => selectPrediction(p)}>
-                          <Ionicons name="location-outline" size={16} color="#999" />
+                          <Ionicons name="location-outline" size={16} color={colors.textDim} />
                           <Text style={styles.predText} numberOfLines={1}>
                             {p.structured_formatting?.main_text || p.description}
                           </Text>
@@ -258,7 +261,7 @@ export default function SavedPlacesScreen() {
                 </View>
               ) : (
                 <TouchableOpacity style={styles.addBtn} onPress={() => setShowAdd(true)}>
-                  <Ionicons name="add-circle" size={22} color={COLORS.primary} />
+                  <Ionicons name="add-circle" size={22} color={colors.primary} />
                   <Text style={styles.addBtnText}>Add New Place</Text>
                 </TouchableOpacity>
               )
@@ -278,72 +281,74 @@ export default function SavedPlacesScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFF' },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F0F0F0',
-  },
-  backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  list: { padding: 20 },
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    header: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border,
+    },
+    backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
+    headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
+    center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    list: { padding: 20 },
 
-  // Place item
-  placeItem: {
-    flexDirection: 'row', alignItems: 'center', paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: '#F5F5F5',
-  },
-  placeIcon: {
-    width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 14,
-  },
-  placeName: { fontSize: 15, fontWeight: '600', color: '#1A1A1A' },
-  placeAddr: { fontSize: 12, color: '#999', marginTop: 2 },
+    // Place item
+    placeItem: {
+      flexDirection: 'row', alignItems: 'center', paddingVertical: 14,
+      borderBottomWidth: 1, borderBottomColor: colors.surfaceLight,
+    },
+    placeIcon: {
+      width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 14,
+    },
+    placeName: { fontSize: 15, fontWeight: '600', color: colors.text },
+    placeAddr: { fontSize: 12, color: colors.textDim, marginTop: 2 },
 
-  // Empty
-  empty: { alignItems: 'center', paddingVertical: 40 },
-  emptyTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A1A', marginTop: 12 },
-  emptySub: { fontSize: 13, color: '#999', marginTop: 4, textAlign: 'center', paddingHorizontal: 20 },
+    // Empty
+    empty: { alignItems: 'center', paddingVertical: 40 },
+    emptyTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: 12 },
+    emptySub: { fontSize: 13, color: colors.textDim, marginTop: 4, textAlign: 'center', paddingHorizontal: 20 },
 
-  // Add button
-  addBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    paddingVertical: 16, borderRadius: 14, borderWidth: 2, borderColor: COLORS.primary,
-    borderStyle: 'dashed', marginTop: 16,
-  },
-  addBtnText: { fontSize: 15, fontWeight: '700', color: COLORS.primary },
+    // Add button
+    addBtn: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+      paddingVertical: 16, borderRadius: 14, borderWidth: 2, borderColor: colors.primary,
+      borderStyle: 'dashed', marginTop: 16,
+    },
+    addBtnText: { fontSize: 15, fontWeight: '700', color: colors.primary },
 
-  // Add form
-  addForm: { backgroundColor: '#F9F9F9', borderRadius: 18, padding: 20, marginTop: 16 },
-  formLabel: { fontSize: 12, fontWeight: '600', color: '#888', marginBottom: 6, marginTop: 14 },
-  input: {
-    backgroundColor: '#FFF', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14,
-    fontSize: 15, color: '#1A1A1A', borderWidth: 1, borderColor: '#ECECEC',
-  },
-  typeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  typeChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
-    borderWidth: 1.5, borderColor: '#E5E5E5', backgroundColor: '#FFF',
-  },
-  typeChipText: { fontSize: 13, fontWeight: '600', color: '#999' },
+    // Add form
+    addForm: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 20, marginTop: 16 },
+    formLabel: { fontSize: 12, fontWeight: '600', color: '#888', marginBottom: 6, marginTop: 14 },
+    input: {
+      backgroundColor: colors.surface, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14,
+      fontSize: 15, color: colors.text, borderWidth: 1, borderColor: colors.border,
+    },
+    typeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    typeChip: {
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
+      borderWidth: 1.5, borderColor: colors.border, backgroundColor: colors.surface,
+    },
+    typeChipText: { fontSize: 13, fontWeight: '600', color: colors.textDim },
 
-  predList: { backgroundColor: '#FFF', borderRadius: 12, marginTop: 8, borderWidth: 1, borderColor: '#ECECEC' },
-  predItem: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F5F5F5',
-  },
-  predText: { flex: 1, fontSize: 14, color: '#1A1A1A' },
+    predList: { backgroundColor: colors.surface, borderRadius: 12, marginTop: 8, borderWidth: 1, borderColor: colors.border },
+    predItem: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.surfaceLight,
+    },
+    predText: { flex: 1, fontSize: 14, color: colors.text },
 
-  selectedAddr: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    marginTop: 10, padding: 12, backgroundColor: '#F0FFF4', borderRadius: 10,
-  },
-  selectedAddrText: { flex: 1, fontSize: 13, color: '#059669' },
+    selectedAddr: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      marginTop: 10, padding: 12, backgroundColor: '#F0FFF4', borderRadius: 10,
+    },
+    selectedAddrText: { flex: 1, fontSize: 13, color: '#059669' },
 
-  formActions: { flexDirection: 'row', gap: 12, marginTop: 20 },
-  cancelBtn: { flex: 1, alignItems: 'center', paddingVertical: 14, borderRadius: 12, backgroundColor: '#F0F0F0' },
-  cancelText: { fontSize: 15, fontWeight: '600', color: '#666' },
-  saveBtn: { flex: 2, alignItems: 'center', paddingVertical: 14, borderRadius: 12, backgroundColor: COLORS.primary },
-  saveText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
-});
+    formActions: { flexDirection: 'row', gap: 12, marginTop: 20 },
+    cancelBtn: { flex: 1, alignItems: 'center', paddingVertical: 14, borderRadius: 12, backgroundColor: colors.border },
+    cancelText: { fontSize: 15, fontWeight: '600', color: colors.textDim },
+    saveBtn: { flex: 2, alignItems: 'center', paddingVertical: 14, borderRadius: 12, backgroundColor: colors.primary },
+    saveText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+  });
+}

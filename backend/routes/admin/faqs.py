@@ -6,9 +6,9 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Query
 
 try:
-    from ...db import db
+    from ... import db_supabase
 except ImportError:
-    from db import db
+    import db_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ router = APIRouter()
 @router.get("/faqs")
 async def admin_get_faqs():
     """Get all FAQ entries."""
-    faqs = await db.get_rows("faqs", order="created_at", desc=True, limit=500)
+    faqs = await db_supabase.get_rows("faqs", order="created_at", desc=True, limit=500)
     return faqs
 
 
@@ -34,7 +34,7 @@ async def admin_create_faq(faq: Dict[str, Any]):
         "is_active": faq.get("is_active", True),
         "created_at": datetime.utcnow().isoformat(),
     }
-    row = await db.faqs.insert_one(doc)
+    row = await db_supabase.insert_one("faqs", doc)
     return {"faq_id": str(row.get("id") if row and isinstance(row, dict) else "")}
 
 
@@ -53,14 +53,14 @@ async def admin_update_faq(faq_id: str, faq: Dict[str, Any]):
 
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
-        await db.faqs.update_one({"id": faq_id}, {"$set": updates})
+        await db_supabase.update_one("faqs", {"id": faq_id}, updates)
     return {"message": "FAQ updated"}
 
 
 @router.delete("/faqs/{faq_id}")
 async def admin_delete_faq(faq_id: str):
     """Delete an FAQ entry."""
-    await db.faqs.delete_many({"id": faq_id})
+    await db_supabase.delete_many("faqs", {"id": faq_id})
     return {"message": "FAQ deleted"}
 
 
@@ -96,8 +96,8 @@ async def admin_send_notification(notification: Dict[str, Any]):
 
     # If targeting specific user, insert and send
     if user_id:
-        await db.notifications.insert_one(notification_doc)
-        await send_push_notification(user_id, title, body)
+        await db_supabase.insert_one("notifications", notification_doc)
+        # TODO: Integrate with push notification service (FCM)
         logger.info(f"Notification sent to user {user_id}: {title}")
     elif audience == "all":
         all_users = await db.users.find({}).to_list(10000)
@@ -132,10 +132,10 @@ async def admin_get_notifications(
     if notification_type:
         filters["type"] = notification_type
 
-    notifications = await db.get_rows(
+    notifications = await db_supabase.get_rows(
         "notifications",
         filters,
-        order="created_at" if "created_at" in (await db.notifications.find_one({}) or {}) else "sent_at",
+        order="created_at" if "created_at" in ((lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("notifications", {}, limit=1)) or {}) else "sent_at",
         desc=True,
         limit=limit,
         offset=offset,

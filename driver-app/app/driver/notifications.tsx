@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
     View,
     Text,
@@ -12,109 +12,85 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-
-import SpinrConfig from '@shared/config/spinr.config';
-
-const THEME = SpinrConfig.theme.colors;
-const COLORS = {
-    primary: THEME.background, // Background (white)
-    accent: THEME.primary, // Action/brand color (red)
-    accentDim: THEME.primaryDark,
-    surface: THEME.surface,
-    surfaceLight: THEME.surfaceLight,
-    text: THEME.text,
-    textDim: THEME.textDim,
-    success: THEME.success,
-    gold: '#FFD700',
-    orange: '#FF9500',
-    danger: THEME.error,
-    border: THEME.border,
-};
+import api from '@shared/api/client';
+import { useLanguageStore } from '../../store/languageStore';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 interface Notification {
     id: string;
     title: string;
     body: string;
-    type: 'ride' | 'earnings' | 'promo' | 'system' | 'safety';
-    read: boolean;
+    type: string;
+    is_read: boolean;
     created_at: string;
 }
-
-// Sample notifications for display (in production, fetch from API)
-const sampleNotifications: Notification[] = [
-    {
-        id: '1',
-        title: 'New Ride Request',
-        body: 'You have a new ride request from John near 8th Ave.',
-        type: 'ride',
-        read: false,
-        created_at: new Date().toISOString(),
-    },
-    {
-        id: '2',
-        title: 'Daily Earnings Summary',
-        body: 'You earned $142.50 today across 8 trips. Great work!',
-        type: 'earnings',
-        read: false,
-        created_at: new Date(Date.now() - 3600000).toISOString(),
-    },
-    {
-        id: '3',
-        title: 'Weekend Bonus',
-        body: 'Complete 15 rides this weekend to earn a $50 bonus!',
-        type: 'promo',
-        read: true,
-        created_at: new Date(Date.now() - 86400000).toISOString(),
-    },
-    {
-        id: '4',
-        title: 'Safety Reminder',
-        body: "Please ensure your vehicle inspection is up to date. It expires in 7 days.",
-        type: 'safety',
-        read: true,
-        created_at: new Date(Date.now() - 172800000).toISOString(),
-    },
-    {
-        id: '5',
-        title: 'System Update',
-        body: 'A new version of the Spinr Driver app is available. Update now for the latest features.',
-        type: 'system',
-        read: true,
-        created_at: new Date(Date.now() - 259200000).toISOString(),
-    },
-];
-
-const iconMap: Record<string, { name: string; color: string }> = {
-    ride: { name: 'car', color: COLORS.accent },
-    earnings: { name: 'wallet', color: COLORS.gold },
-    promo: { name: 'gift', color: COLORS.orange },
-    system: { name: 'settings', color: COLORS.textDim },
-    safety: { name: 'shield-checkmark', color: COLORS.danger },
-};
 
 export default function NotificationsScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
-    const [notifications, setNotifications] = useState<Notification[]>(sampleNotifications);
+    const { colors } = useTheme();
+    const styles = useMemo(() => createStyles(colors), [colors]);
+    const { t } = useLanguageStore();
+    const [notifications, setNotifications] = useState<Notification[]>([]);
+    const [unreadCount, setUnreadCount] = useState(0);
     const [refreshing, setRefreshing] = useState(false);
+    const [loading, setLoading] = useState(true);
 
-    const markAsRead = (id: string) => {
+    const iconMap: Record<string, { name: string; color: string }> = {
+        ride_update: { name: 'car', color: colors.primary },
+        ride: { name: 'car', color: colors.primary },
+        earnings: { name: 'wallet', color: colors.gold },
+        promotion: { name: 'gift', color: colors.orange },
+        general: { name: 'notifications', color: colors.textDim },
+        system: { name: 'settings', color: colors.textDim },
+        safety: { name: 'shield-checkmark', color: colors.danger },
+    };
+
+    const fetchNotifications = useCallback(async () => {
+        try {
+            const res = await api.get('/notifications?limit=50&offset=0');
+            setNotifications(res.data?.notifications || []);
+            setUnreadCount(res.data?.unread_count || 0);
+        } catch (e) {
+            console.log('[Notifications] fetch error:', e);
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchNotifications();
+    }, [fetchNotifications]);
+
+    const markAsRead = async (id: string) => {
+        // Optimistic update
         setNotifications((prev) =>
-            prev.map((n) => (n.id === id ? { ...n, read: true } : n))
+            prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
         );
+        setUnreadCount((c) => Math.max(0, c - 1));
+        try {
+            await api.put(`/notifications/${id}/read`);
+        } catch (e) {
+            console.log('[Notifications] markAsRead error:', e);
+        }
     };
 
-    const markAllRead = () => {
-        setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    const markAllRead = async () => {
+        setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+        setUnreadCount(0);
+        try {
+            await api.put('/notifications/read-all');
+        } catch (e) {
+            console.log('[Notifications] markAllRead error:', e);
+        }
     };
 
-    const onRefresh = () => {
+    const onRefresh = async () => {
         setRefreshing(true);
-        // In production, fetch from API
-        setTimeout(() => setRefreshing(false), 800);
+        await fetchNotifications();
+        setRefreshing(false);
     };
-
-    const unreadCount = notifications.filter((n) => !n.read).length;
 
     const formatTime = (dateStr: string) => {
         const diff = Date.now() - new Date(dateStr).getTime();
@@ -130,7 +106,7 @@ export default function NotificationsScreen() {
         const icon = iconMap[item.type] || iconMap.system;
         return (
             <TouchableOpacity
-                style={[styles.notifCard, !item.read && styles.notifUnread]}
+                style={[styles.notifCard, !item.is_read && styles.notifUnread]}
                 onPress={() => markAsRead(item.id)}
                 activeOpacity={0.7}
             >
@@ -144,7 +120,7 @@ export default function NotificationsScreen() {
                     </View>
                     <Text style={styles.notifBody} numberOfLines={2}>{item.body}</Text>
                 </View>
-                {!item.read && <View style={styles.unreadDot} />}
+                {!item.is_read && <View style={styles.unreadDot} />}
             </TouchableOpacity>
         );
     };
@@ -152,22 +128,22 @@ export default function NotificationsScreen() {
     return (
         <View style={styles.container}>
             {/* Header */}
-            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
+            <LinearGradient colors={[colors.surface, colors.background]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <View style={styles.headerRow}>
                     <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                        <Ionicons name="arrow-back" size={22} color={COLORS.text} />
+                        <Ionicons name="arrow-back" size={22} color={colors.text} />
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>Notifications</Text>
+                    <Text style={styles.headerTitle}>{t('notifications.title')}</Text>
                     {unreadCount > 0 ? (
                         <TouchableOpacity onPress={markAllRead} style={styles.markAllBtn}>
-                            <Text style={styles.markAllText}>Mark All Read</Text>
+                            <Text style={styles.markAllText}>{t('notifications.markAllRead')}</Text>
                         </TouchableOpacity>
                     ) : (
                         <View style={{ width: 80 }} />
                     )}
                 </View>
                 {unreadCount > 0 && (
-                    <Text style={styles.unreadCountText}>{unreadCount} unread notification{unreadCount !== 1 ? 's' : ''}</Text>
+                    <Text style={styles.unreadCountText}>{unreadCount} {unreadCount !== 1 ? t('notifications.unreadCountPlural').replace('{{count}}', '') : t('notifications.unreadCount').replace('{{count}}', '')}</Text>
                 )}
             </LinearGradient>
 
@@ -178,13 +154,13 @@ export default function NotificationsScreen() {
                 contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 40 }}
                 showsVerticalScrollIndicator={false}
                 refreshControl={
-                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={COLORS.accent} />
+                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
                 }
                 ListEmptyComponent={
                     <View style={styles.emptyState}>
-                        <Ionicons name="notifications-off-outline" size={56} color={COLORS.surfaceLight} />
-                        <Text style={styles.emptyTitle}>No notifications</Text>
-                        <Text style={styles.emptySub}>You're all caught up!</Text>
+                        <Ionicons name="notifications-off-outline" size={56} color={colors.surfaceLight} />
+                        <Text style={styles.emptyTitle}>{t('notifications.noNotifications')}</Text>
+                        <Text style={styles.emptySub}>{t('notifications.allCaughtUp')}</Text>
                     </View>
                 }
             />
@@ -192,74 +168,76 @@ export default function NotificationsScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: COLORS.primary },
-    header: {
-        paddingBottom: 14,
-        paddingHorizontal: 16,
-    },
-    headerRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-    },
-    backBtn: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: COLORS.surfaceLight,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    headerTitle: { color: COLORS.text, fontSize: 20, fontWeight: '700' },
-    markAllBtn: { padding: 8 },
-    markAllText: { color: COLORS.accent, fontSize: 13, fontWeight: '600' },
-    unreadCountText: {
-        color: COLORS.textDim,
-        fontSize: 12,
-        marginTop: 6,
-        textAlign: 'center',
-    },
-    notifCard: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        gap: 12,
-        backgroundColor: COLORS.surface,
-        borderRadius: 16,
-        padding: 14,
-        marginBottom: 8,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.04)',
-    },
-    notifUnread: {
-        borderColor: 'rgba(0,212,170,0.15)',
-        backgroundColor: 'rgba(0,212,170,0.04)',
-    },
-    notifIcon: {
-        width: 40,
-        height: 40,
-        borderRadius: 12,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginTop: 2,
-    },
-    notifHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 4,
-    },
-    notifTitle: { color: COLORS.text, fontSize: 14, fontWeight: '600', flex: 1 },
-    notifTime: { color: COLORS.textDim, fontSize: 11, marginLeft: 8 },
-    notifBody: { color: COLORS.textDim, fontSize: 13, lineHeight: 18 },
-    unreadDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-        backgroundColor: COLORS.accent,
-        marginTop: 8,
-    },
-    emptyState: { alignItems: 'center', paddingVertical: 60, gap: 8 },
-    emptyTitle: { color: COLORS.textDim, fontSize: 18, fontWeight: '600' },
-    emptySub: { color: COLORS.surfaceLight, fontSize: 13 },
-});
+function createStyles(colors: ThemeColors) {
+    return StyleSheet.create({
+        container: { flex: 1, backgroundColor: colors.background },
+        header: {
+            paddingBottom: 14,
+            paddingHorizontal: 16,
+        },
+        headerRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+        },
+        backBtn: {
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            backgroundColor: colors.surfaceLight,
+            justifyContent: 'center',
+            alignItems: 'center',
+        },
+        headerTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
+        markAllBtn: { padding: 8 },
+        markAllText: { color: colors.primary, fontSize: 13, fontWeight: '600' },
+        unreadCountText: {
+            color: colors.textDim,
+            fontSize: 12,
+            marginTop: 6,
+            textAlign: 'center',
+        },
+        notifCard: {
+            flexDirection: 'row',
+            alignItems: 'flex-start',
+            gap: 12,
+            backgroundColor: colors.surface,
+            borderRadius: 16,
+            padding: 14,
+            marginBottom: 8,
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
+        notifUnread: {
+            borderColor: `${colors.primary}30`,
+            backgroundColor: `${colors.primary}08`,
+        },
+        notifIcon: {
+            width: 40,
+            height: 40,
+            borderRadius: 12,
+            justifyContent: 'center',
+            alignItems: 'center',
+            marginTop: 2,
+        },
+        notifHeader: {
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: 4,
+        },
+        notifTitle: { color: colors.text, fontSize: 14, fontWeight: '600', flex: 1 },
+        notifTime: { color: colors.textDim, fontSize: 11, marginLeft: 8 },
+        notifBody: { color: colors.textDim, fontSize: 13, lineHeight: 18 },
+        unreadDot: {
+            width: 8,
+            height: 8,
+            borderRadius: 4,
+            backgroundColor: colors.primary,
+            marginTop: 8,
+        },
+        emptyState: { alignItems: 'center', paddingVertical: 60, gap: 8 },
+        emptyTitle: { color: colors.textDim, fontSize: 18, fontWeight: '600' },
+        emptySub: { color: colors.textSecondary, fontSize: 13 },
+    });
+}

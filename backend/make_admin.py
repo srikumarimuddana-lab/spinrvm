@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 # Load .env BEFORE importing db
 load_dotenv()
 
-from db import db  # noqa: E402
+import db_supabase  # noqa: E402
 
 
 async def make_admin():
@@ -13,12 +13,12 @@ async def make_admin():
     print(f"Updating user {user_id} to admin...")
 
     # Check if user exists
-    user = await db.users.find_one({"id": user_id})
+    user = await db_supabase.get_user_by_id(user_id)
     if not user:
         print("User not found!")
         # Fallback: list all users to see if ID is different
         print("Listing available users:")
-        all_users = await db.users.find({}).to_list(10)
+        all_users = await db_supabase.get_rows("users", {}, limit=10)
         for u in all_users:
             print(f" - {u['id']} ({u.get('phone')})")
         return
@@ -26,12 +26,12 @@ async def make_admin():
     print(f"Current role: {user.get('role')}")
 
     # Update role
-    result = await db.users.update_one({"id": user_id}, {"$set": {"role": "admin"}})
+    result = await db_supabase.update_one("users", {"id": user_id}, {"role": "admin"})
 
     print(f"Modified count: {result.modified_count}")
 
     # Verify
-    user = await db.users.find_one({"id": user_id})
+    user = await db_supabase.get_user_by_id(user_id)
     print(f"New role: {user.get('role')}")
 
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput,
   Platform, ActivityIndicator, BackHandler, Share, KeyboardAvoidingView,
@@ -9,19 +9,22 @@ import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { useRideStore } from '../store/rideStore';
-import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
 import api from '@shared/api/client';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
+import Analytics from '@shared/analytics';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
-
-const COLORS = SpinrConfig.theme.colors;
 
 export default function RideCompletedScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const { currentRide, currentDriver, fetchRide, rateRide, clearRide } = useRideStore();
+
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('');
@@ -128,8 +131,21 @@ export default function RideCompletedScreen() {
       if (!alreadyPaid) {
         try {
           await api.post(`/rides/${rideId}/process-payment`, { tip_amount: tipAmount });
+          const total = (currentRide?.total_fare || 0) + (tipAmount || 0);
+          Analytics.paymentCompleted({ method: 'default', amount: total });
         } catch { /* backend handles idempotency */ }
       }
+
+      Analytics.rideCompleted({
+        fare: currentRide?.total_fare || 0,
+        distance_km: currentRide?.distance_km,
+      });
+
+      // 3. Trigger app store rating prompt after good rides
+      try {
+        const { onRideRated } = require('@shared/utils/appRating');
+        await onRideRated(rating);
+      } catch { /* non-critical */ }
 
       clearRide();
       router.replace('/(tabs)');
@@ -148,7 +164,7 @@ export default function RideCompletedScreen() {
         {/* Success Header */}
         <View style={styles.successSection}>
           <View style={styles.checkCircle}>
-            <Ionicons name="checkmark" size={36} color={COLORS.primary} />
+            <Ionicons name="checkmark" size={36} color={colors.primary} />
           </View>
           <Text style={styles.title}>Ride Complete!</Text>
           <Text style={styles.subtitle} numberOfLines={1}>
@@ -156,12 +172,22 @@ export default function RideCompletedScreen() {
           </Text>
         </View>
 
-        {/* Invoice Button */}
-        <TouchableOpacity style={styles.invoiceBtn} onPress={handleShareInvoice}>
-          <Ionicons name="receipt-outline" size={18} color={COLORS.primary} />
-          <Text style={styles.invoiceBtnText}>Download / Share Invoice</Text>
-          <Ionicons name="share-outline" size={16} color="#999" />
-        </TouchableOpacity>
+        {/* Post-Trip Actions */}
+        <View style={styles.postTripActions}>
+          <TouchableOpacity style={styles.invoiceBtn} onPress={handleShareInvoice}>
+            <Ionicons name="receipt-outline" size={18} color={colors.primary} />
+            <Text style={styles.invoiceBtnText}>Share Invoice</Text>
+            <Ionicons name="share-outline" size={16} color={colors.textDim} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.chatBtn}
+            onPress={() => router.push(`/chat-driver?rideId=${rideId}` as any)}
+          >
+            <Ionicons name="chatbubble-ellipses-outline" size={18} color="#3B82F6" />
+            <Text style={styles.chatBtnText}>Message Driver</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+          </TouchableOpacity>
+        </View>
 
         {/* Route Map */}
         {currentRide && Number(currentRide.pickup_lat) && Number(currentRide.dropoff_lat) && (
@@ -174,6 +200,7 @@ export default function RideCompletedScreen() {
               zoomEnabled={false}
               rotateEnabled={false}
               pitchEnabled={false}
+              userInterfaceStyle={isDark ? "dark" : "light"}
               initialRegion={{
                 latitude: (Number(currentRide.pickup_lat) + Number(currentRide.dropoff_lat)) / 2,
                 longitude: (Number(currentRide.pickup_lng) + Number(currentRide.dropoff_lng)) / 2,
@@ -242,7 +269,7 @@ export default function RideCompletedScreen() {
                 coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
                 anchor={{ x: 0.5, y: 0.5 }}
               >
-                <View style={[styles.mapPin, { backgroundColor: COLORS.primary }]}>
+                <View style={[styles.mapPin, { backgroundColor: colors.primary }]}>
                   <Ionicons name="flag" size={14} color="#FFF" />
                 </View>
               </Marker>
@@ -259,7 +286,7 @@ export default function RideCompletedScreen() {
         <View style={styles.fareCard}>
           <Text style={styles.fareAmount}>${fare.toFixed(2)}</Text>
           <View style={styles.paymentBadge}>
-            <Ionicons name="card" size={14} color="#666" />
+            <Ionicons name="card" size={14} color={colors.textDim} />
             <Text style={styles.paymentText}>
               Card ending •••• {currentRide?.card_last4 || '4242'}
             </Text>
@@ -274,19 +301,19 @@ export default function RideCompletedScreen() {
           {/* Stats */}
           <View style={styles.statsRow}>
             <View style={styles.stat}>
-              <Ionicons name="time-outline" size={18} color="#999" />
+              <Ionicons name="time-outline" size={18} color={colors.textDim} />
               <Text style={styles.statVal}>{duration} min</Text>
               <Text style={styles.statLbl}>Duration</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.stat}>
-              <Ionicons name="speedometer-outline" size={18} color="#999" />
+              <Ionicons name="speedometer-outline" size={18} color={colors.textDim} />
               <Text style={styles.statVal}>{distance.toFixed(1)} km</Text>
               <Text style={styles.statLbl}>Distance</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.stat}>
-              <Ionicons name="cash-outline" size={18} color="#999" />
+              <Ionicons name="cash-outline" size={18} color={colors.textDim} />
               <Text style={styles.statVal}>${fare.toFixed(2)}</Text>
               <Text style={styles.statLbl}>Total</Text>
             </View>
@@ -297,7 +324,7 @@ export default function RideCompletedScreen() {
         <View style={styles.rateCard}>
           <View style={styles.driverRow}>
             <View style={styles.driverAvatar}>
-              <Ionicons name="person" size={24} color="#888" />
+              <Ionicons name="person" size={24} color={colors.textDim} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.driverName}>{currentDriver?.name || 'Your Driver'}</Text>
@@ -407,117 +434,126 @@ export default function RideCompletedScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFF' },
-  content: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 20 },
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    content: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 20 },
 
-  // Success
-  successSection: { alignItems: 'center', marginBottom: 20 },
-  checkCircle: {
-    width: 80, height: 80, borderRadius: 40, backgroundColor: '#FEF2F2',
-    justifyContent: 'center', alignItems: 'center', marginBottom: 14,
-  },
-  title: { fontSize: 24, fontWeight: '800', color: '#1A1A1A', marginBottom: 4 },
-  subtitle: { fontSize: 14, color: '#888' },
+    // Success
+    successSection: { alignItems: 'center', marginBottom: 20 },
+    checkCircle: {
+      width: 80, height: 80, borderRadius: 40, backgroundColor: '#FEF2F2',
+      justifyContent: 'center', alignItems: 'center', marginBottom: 14,
+    },
+    title: { fontSize: 24, fontWeight: '800', color: colors.text, marginBottom: 4 },
+    subtitle: { fontSize: 14, color: colors.textDim },
 
-  // Invoice
-  invoiceBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',
-    backgroundColor: '#F9F9F9', borderRadius: 14, padding: 14, marginBottom: 16,
-    borderWidth: 1, borderColor: '#ECECEC',
-  },
-  invoiceBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#1A1A1A' },
+    // Invoice
+    invoiceBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',
+      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14, marginBottom: 16,
+      borderWidth: 1, borderColor: '#ECECEC',
+    },
+    invoiceBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text },
+    postTripActions: { width: '100%', gap: 8, marginBottom: 8 },
+    chatBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',
+      backgroundColor: '#EFF6FF', borderRadius: 14, padding: 14,
+      borderWidth: 1, borderColor: '#DBEAFE',
+    },
+    chatBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#3B82F6' },
 
-  // Route Map
-  mapCard: {
-    width: '100%', height: 220, borderRadius: 18, overflow: 'hidden',
-    marginBottom: 16, backgroundColor: '#F0F0F0',
-  },
-  map: { flex: 1 },
-  mapPin: {
-    width: 28, height: 28, borderRadius: 14,
-    backgroundColor: '#10B981', justifyContent: 'center', alignItems: 'center',
-    borderWidth: 2, borderColor: '#FFF',
-    elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2,
-  },
-  mapLabel: {
-    position: 'absolute', bottom: 8, left: 8,
-    backgroundColor: 'rgba(255,255,255,0.9)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
-  },
-  mapLabelText: { fontSize: 10, fontWeight: '700', color: '#1A1A1A', letterSpacing: 0.5 },
+    // Route Map
+    mapCard: {
+      width: '100%', height: 220, borderRadius: 18, overflow: 'hidden',
+      marginBottom: 16, backgroundColor: colors.border,
+    },
+    map: { flex: 1 },
+    mapPin: {
+      width: 28, height: 28, borderRadius: 14,
+      backgroundColor: '#10B981', justifyContent: 'center', alignItems: 'center',
+      borderWidth: 2, borderColor: '#FFF',
+      elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2,
+    },
+    mapLabel: {
+      position: 'absolute', bottom: 8, left: 8,
+      backgroundColor: 'rgba(255,255,255,0.9)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
+    },
+    mapLabelText: { fontSize: 10, fontWeight: '700', color: colors.text, letterSpacing: 0.5 },
 
-  // Fare Card
-  fareCard: {
-    backgroundColor: '#F9F9F9', borderRadius: 20, padding: 20, alignItems: 'center', marginBottom: 16,
-  },
-  fareAmount: { fontSize: 42, fontWeight: '800', color: COLORS.primary, marginBottom: 8 },
-  paymentBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: '#FFF', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20,
-    marginBottom: 16,
-  },
-  paymentText: { fontSize: 12, fontWeight: '600', color: '#666' },
-  statsRow: { flexDirection: 'row', width: '100%' },
-  stat: { flex: 1, alignItems: 'center' },
-  statVal: { fontSize: 16, fontWeight: '700', color: '#1A1A1A', marginTop: 4 },
-  statLbl: { fontSize: 10, color: '#999', marginTop: 2 },
-  statDivider: { width: 1, backgroundColor: '#E8E8E8' },
+    // Fare Card
+    fareCard: {
+      backgroundColor: colors.surfaceLight, borderRadius: 20, padding: 20, alignItems: 'center', marginBottom: 16,
+    },
+    fareAmount: { fontSize: 42, fontWeight: '800', color: colors.primary, marginBottom: 8 },
+    paymentBadge: {
+      flexDirection: 'row', alignItems: 'center', gap: 6,
+      backgroundColor: colors.surface, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20,
+      marginBottom: 16,
+    },
+    paymentText: { fontSize: 12, fontWeight: '600', color: colors.textDim },
+    statsRow: { flexDirection: 'row', width: '100%' },
+    stat: { flex: 1, alignItems: 'center' },
+    statVal: { fontSize: 16, fontWeight: '700', color: colors.text, marginTop: 4 },
+    statLbl: { fontSize: 10, color: colors.textDim, marginTop: 2 },
+    statDivider: { width: 1, backgroundColor: '#E8E8E8' },
 
-  // Rate Card
-  rateCard: {
-    backgroundColor: '#F9F9F9', borderRadius: 20, padding: 20, marginBottom: 16,
-  },
-  driverRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
-  driverAvatar: {
-    width: 48, height: 48, borderRadius: 24, backgroundColor: '#E8E8E8',
-    justifyContent: 'center', alignItems: 'center', marginRight: 12,
-  },
-  driverName: { fontSize: 16, fontWeight: '700', color: '#1A1A1A' },
-  driverMeta: { fontSize: 12, color: '#888', marginTop: 2 },
-  rateLabel: { fontSize: 15, fontWeight: '600', color: '#1A1A1A', textAlign: 'center', marginBottom: 12 },
-  starsRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 6 },
-  starBtn: { padding: 4 },
-  ratingText: { fontSize: 13, color: '#888', textAlign: 'center', marginBottom: 14 },
-  commentInput: {
-    backgroundColor: '#FFF', borderRadius: 14, padding: 14, fontSize: 14, color: '#1A1A1A',
-    minHeight: 60, textAlignVertical: 'top', borderWidth: 1, borderColor: '#ECECEC',
-  },
+    // Rate Card
+    rateCard: {
+      backgroundColor: colors.surfaceLight, borderRadius: 20, padding: 20, marginBottom: 16,
+    },
+    driverRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
+    driverAvatar: {
+      width: 48, height: 48, borderRadius: 24, backgroundColor: '#E8E8E8',
+      justifyContent: 'center', alignItems: 'center', marginRight: 12,
+    },
+    driverName: { fontSize: 16, fontWeight: '700', color: colors.text },
+    driverMeta: { fontSize: 12, color: colors.textDim, marginTop: 2 },
+    rateLabel: { fontSize: 15, fontWeight: '600', color: colors.text, textAlign: 'center', marginBottom: 12 },
+    starsRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 6 },
+    starBtn: { padding: 4 },
+    ratingText: { fontSize: 13, color: colors.textDim, textAlign: 'center', marginBottom: 14 },
+    commentInput: {
+      backgroundColor: colors.surface, borderRadius: 14, padding: 14, fontSize: 14, color: colors.text,
+      minHeight: 60, textAlignVertical: 'top', borderWidth: 1, borderColor: '#ECECEC',
+    },
 
-  // Tip
-  tipCard: {
-    backgroundColor: '#F9F9F9', borderRadius: 20, padding: 20,
-  },
-  tipTitle: { fontSize: 15, fontWeight: '600', color: '#1A1A1A', marginBottom: 14, textAlign: 'center' },
-  tipRow: { flexDirection: 'row', gap: 10, justifyContent: 'center' },
-  tipBtn: {
-    paddingHorizontal: 20, paddingVertical: 12, borderRadius: 14,
-    backgroundColor: '#FFF', borderWidth: 1.5, borderColor: '#E5E5E5',
-  },
-  tipBtnActive: { backgroundColor: `${COLORS.primary}15`, borderColor: COLORS.primary },
-  tipBtnText: { fontSize: 16, fontWeight: '700', color: '#1A1A1A' },
-  tipBtnTextActive: { color: COLORS.primary },
-  tipCustom: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#FFF', borderRadius: 14, borderWidth: 1.5, borderColor: '#E5E5E5',
-    paddingHorizontal: 12, minWidth: 80,
-  },
-  tipCustomActive: { borderColor: COLORS.primary },
-  tipDollar: { fontSize: 16, fontWeight: '600', color: '#999' },
-  tipCustomInput: { fontSize: 16, fontWeight: '600', color: '#1A1A1A', paddingVertical: 12, paddingHorizontal: 4, minWidth: 44 },
-  tipDone: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    paddingVertical: 12, backgroundColor: '#F0FFF4', borderRadius: 12,
-  },
-  tipDoneText: { fontSize: 15, fontWeight: '600', color: '#059669' },
+    // Tip
+    tipCard: {
+      backgroundColor: colors.surfaceLight, borderRadius: 20, padding: 20,
+    },
+    tipTitle: { fontSize: 15, fontWeight: '600', color: colors.text, marginBottom: 14, textAlign: 'center' },
+    tipRow: { flexDirection: 'row', gap: 10, justifyContent: 'center' },
+    tipBtn: {
+      paddingHorizontal: 20, paddingVertical: 12, borderRadius: 14,
+      backgroundColor: colors.surface, borderWidth: 1.5, borderColor: colors.border,
+    },
+    tipBtnActive: { backgroundColor: `${colors.primary}15`, borderColor: colors.primary },
+    tipBtnText: { fontSize: 16, fontWeight: '700', color: colors.text },
+    tipBtnTextActive: { color: colors.primary },
+    tipCustom: {
+      flexDirection: 'row', alignItems: 'center',
+      backgroundColor: colors.surface, borderRadius: 14, borderWidth: 1.5, borderColor: colors.border,
+      paddingHorizontal: 12, minWidth: 80,
+    },
+    tipCustomActive: { borderColor: colors.primary },
+    tipDollar: { fontSize: 16, fontWeight: '600', color: colors.textDim },
+    tipCustomInput: { fontSize: 16, fontWeight: '600', color: colors.text, paddingVertical: 12, paddingHorizontal: 4, minWidth: 44 },
+    tipDone: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+      paddingVertical: 12, backgroundColor: '#F0FFF4', borderRadius: 12,
+    },
+    tipDoneText: { fontSize: 15, fontWeight: '600', color: '#059669' },
 
-  // Bottom
-  bottomBar: {
-    paddingHorizontal: 20, paddingVertical: 14,
-    borderTopWidth: 1, borderTopColor: '#F0F0F0',
-  },
-  submitBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: COLORS.primary, paddingVertical: 16, borderRadius: 28,
-  },
-  submitBtnText: { fontSize: 17, fontWeight: '700', color: '#FFF' },
-});
+    // Bottom
+    bottomBar: {
+      paddingHorizontal: 20, paddingVertical: 14,
+      borderTopWidth: 1, borderTopColor: colors.border,
+    },
+    submitBtn: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+      backgroundColor: colors.primary, paddingVertical: 16, borderRadius: 28,
+    },
+    submitBtnText: { fontSize: 17, fontWeight: '700', color: '#FFF' },
+  });
+}

@@ -34,20 +34,9 @@
       "Bash(python3 -m py_compile routes/rides.py)",
       "Bash(python3 -c ':*)",
       "Bash(python:*)",
-      "Bash(C:\\\\Users\\\\swarn\\\\.unsloth\\\\studio\\\\unsloth_studio\\\\Scripts\\\\python.exe:*)",
-      "Bash(C:/Users/swarn/.unsloth/studio/unsloth_studio/Scripts/python.exe:*)",
-      "Bash(\"C:/Users/swarn/.unsloth/studio/unsloth_studio/Scripts/python.exe\" -c \"import websockets; print\\(dir\\(websockets\\)\\)\")",
-      "Read(//c/Users/swarn/.unsloth/studio/unsloth_studio/Lib/site-packages/websockets/**)",
-      "Bash(\"C:/Users/swarn/.unsloth/studio/unsloth_studio/Scripts/python.exe\" -c \"import websockets; print\\(websockets.__version__\\)\")",
-      "Bash(cp \"C:/Users/swarn/Documents/vikas/admin-dashboard/src/middleware.ts\" \"C:/Users/swarn/Documents/vikas/admin-dashboard/src/proxy.ts\")",
-      "Bash(rm \"C:/Users/swarn/Documents/vikas/admin-dashboard/src/middleware.ts\")",
-      "Bash(netstat -ano)",
-      "Bash(C:/Users/swarn/.unsloth/studio/unsloth_studio/Scripts/pip.exe install:*)",
-      "Bash(curl:*)",
-      "Bash(npx tsc:*)",
-      "Bash(node:*)",
-      "Read(//c/Program Files/**)",
-      "Read(//c/Program Files/Eclipse Adoptium/**)"
+      "Bash(git reset:*)",
+      "Bash(git push:*)",
+      "Bash(git config:*)"
     ]
   }
 }

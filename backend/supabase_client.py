@@ -30,7 +30,7 @@ if SUPABASE_URL and SUPABASE_KEY:
             timeout=_old.timeout,
             verify=True,
         )
-    except Exception:
+    except Exception:  # noqa: S110
         # If the internal API changes, fall back gracefully — the retry
         # in run_sync still handles the transient error.
         pass

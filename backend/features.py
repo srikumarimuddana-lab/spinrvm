@@ -1,7 +1,7 @@
 """
 features.py – Extended feature endpoints for Spinr.
 Includes: Support Tickets, FAQs, Surge Pricing, Scheduled Rides,
-           Multi-stop Rides, Safety Toolkit, Push Notifications.
+Multi-stop Rides, Safety Toolkit, Push Notifications.
 """
 
 import asyncio
@@ -14,11 +14,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 try:
-    from .db import db
+    from . import db_supabase
     from .dependencies import get_current_user
     from .geo_utils import get_service_area_polygon
 except ImportError:
-    from db import db
+    import db_supabase
     from dependencies import get_current_user
     from geo_utils import get_service_area_polygon
 
@@ -50,7 +50,8 @@ def point_in_polygon(lat: float, lng: float, polygon: List[Dict[str, float]]) ->
     for i in range(n):
         yi, xi = polygon[i].get("lat", 0), polygon[i].get("lng", 0)
         yj, xj = polygon[j].get("lat", 0), polygon[j].get("lng", 0)
-        if ((yi > lat) != (yj > lat)) and (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi):
+        # Guard: skip horizontal edges where yj == yi to avoid division by zero
+        if yi != yj and ((yi > lat) != (yj > lat)) and (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi):
             inside = not inside
         j = i
     return inside
@@ -70,9 +71,9 @@ async def calculate_airport_fee(
     For multi-stop rides, each stop is also checked.
 
     Returns {'airport_fee': float, 'airport_zone_name': str | None,
-             'is_pickup': bool, 'is_dropoff': bool, 'is_stop': bool}
+    'is_pickup': bool, 'is_dropoff': bool, 'is_stop': bool}
     """
-    areas = await db.service_areas.find({"is_airport": True}).to_list(50)
+    areas = await db_supabase.get_rows("service_areas", {"is_airport": True}, limit=50)
     result: Dict[str, Any] = {
         "airport_fee": 0.0,
         "airport_zone_name": None,
@@ -216,7 +217,7 @@ async def create_ticket(req: CreateTicketRequest, user_id: str = Query(...)):
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
     }
-    await db.support_tickets.insert_one(ticket)
+    await db_supabase.insert_one("support_tickets", ticket)
     return ticket
 
 
@@ -239,21 +240,21 @@ async def create_safety_report(req: SafetyReportRequest, user_id: str = Depends(
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
     }
-    await db.support_tickets.insert_one(ticket)
+    await db_supabase.insert_one("support_tickets", ticket)
     return ticket
 
 
 @support_router.get("/tickets")
 async def get_user_tickets(user_id: str = Query(...)):
     """Get all tickets for a specific user."""
-    tickets = await db.support_tickets.find({"user_id": user_id}).sort("created_at", -1).to_list(100)
+    tickets = await db_supabase.get_rows("support_tickets", {"user_id": user_id}, limit=100, order="created_at", desc=True)
     return tickets
 
 
 @support_router.get("/tickets/{ticket_id}")
 async def get_ticket(ticket_id: str):
     """Get a specific ticket by ID."""
-    ticket = await db.support_tickets.find_one({"id": ticket_id})
+    ticket = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("support_tickets", {"id": ticket_id}, limit=1))
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
     return ticket
@@ -268,7 +269,7 @@ async def get_faqs(category: Optional[str] = None):
     query: Dict[str, Any] = {"is_active": True}
     if category:
         query["category"] = category
-    faqs = await db.faqs.find(query).sort("sort_order", 1).to_list(200)
+    faqs = await db_supabase.get_rows("faqs", query, limit=200, order="sort_order", desc=False)
     return faqs
 
 
@@ -281,14 +282,14 @@ async def admin_get_tickets(status: Optional[str] = None):
     query: Dict[str, Any] = {}
     if status:
         query["status"] = status
-    tickets = await db.support_tickets.find(query).sort("created_at", -1).to_list(500)
+    tickets = await db_supabase.get_rows("support_tickets", query, limit=500, order="created_at", desc=True)
     return tickets
 
 
 @admin_support_router.post("/tickets/{ticket_id}/reply")
 async def admin_reply_ticket(ticket_id: str, req: ReplyToTicketRequest):
     """Reply to a support ticket."""
-    ticket = await db.support_tickets.find_one({"id": ticket_id})
+    ticket = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("support_tickets", {"id": ticket_id}, limit=1))
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
 
@@ -301,25 +302,14 @@ async def admin_reply_ticket(ticket_id: str, req: ReplyToTicketRequest):
     replies = ticket.get("replies", [])
     replies.append(reply)
 
-    await db.support_tickets.update_one(
-        {"id": ticket_id},
-        {
-            "$set": {
-                "replies": replies,
-                "status": "in_progress",
-                "updated_at": datetime.utcnow(),
-            }
-        },
-    )
+    await db_supabase.update_one("support_tickets", {"id": ticket_id}, { "replies": replies, "status": "in_progress", "updated_at": datetime.utcnow(), })
     return {"status": "replied", "reply": reply}
 
 
 @admin_support_router.post("/tickets/{ticket_id}/close")
 async def admin_close_ticket(ticket_id: str):
     """Close a support ticket."""
-    result = await db.support_tickets.update_one(
-        {"id": ticket_id}, {"$set": {"status": "closed", "updated_at": datetime.utcnow()}}
-    )
+    result = await db_supabase.update_one("support_tickets", {"id": ticket_id}, {"status": "closed", "updated_at": datetime.utcnow()})
     if not result:
         raise HTTPException(status_code=404, detail="Ticket not found")
     return {"status": "closed"}
@@ -331,7 +321,7 @@ async def admin_close_ticket(ticket_id: str):
 @admin_support_router.get("/faqs")
 async def admin_get_faqs():
     """Get all FAQs (including inactive) for admin."""
-    faqs = await db.faqs.find().sort("sort_order", 1).to_list(500)
+    faqs = await db_supabase.get_rows("faqs", None, limit=500, order="sort_order", desc=False)
     return faqs
 
 
@@ -348,7 +338,7 @@ async def admin_create_faq(req: CreateFaqRequest):
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
     }
-    await db.faqs.insert_one(faq)
+    await db_supabase.insert_one("faqs", faq)
     return faq
 
 
@@ -367,14 +357,14 @@ async def admin_update_faq(faq_id: str, req: UpdateFaqRequest):
     if req.is_active is not None:
         update_data["is_active"] = req.is_active
 
-    await db.faqs.update_one({"id": faq_id}, {"$set": update_data})
-    return await db.faqs.find_one({"id": faq_id})
+    await db_supabase.update_one("faqs", {"id": faq_id}, update_data)
+    return (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("faqs", {"id": faq_id}, limit=1))
 
 
 @admin_support_router.delete("/faqs/{faq_id}")
 async def admin_delete_faq(faq_id: str):
     """Delete a FAQ."""
-    await db.faqs.delete_one({"id": faq_id})
+    await db_supabase.delete_one("faqs", {"id": faq_id})
     return {"deleted": True}
 
 
@@ -393,12 +383,26 @@ async def admin_update_surge(area_id: str, req: UpdateSurgeRequest):
         update_data["surge_multiplier"] = req.surge_multiplier
 
     if update_data:
-        await db.service_areas.update_one({"id": area_id}, {"$set": update_data})
+        await db_supabase.update_one("service_areas", {"id": area_id}, update_data)
 
-    area = await db.service_areas.find_one({"id": area_id})
+    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
     if not area:
         raise HTTPException(status_code=404, detail="Service area not found")
     return area
+
+
+@admin_support_router.put("/service-areas/{area_id}/surge/auto")
+async def admin_reset_surge_to_auto(area_id: str):
+    """Reset surge pricing to automatic mode for a service area."""
+    area = await db.service_areas.find_one({"id": area_id})
+    if not area:
+        raise HTTPException(status_code=404, detail="Service area not found")
+    await db.service_areas.update_one(
+        {"id": area_id},
+        {"$set": {"surge_source": "auto", "surge_active": True}},
+    )
+    updated = await db.service_areas.find_one({"id": area_id})
+    return updated
 
 
 # ============ Admin: Area Fees (Pricing) ============
@@ -438,14 +442,14 @@ class UpdateTaxConfigRequest(BaseModel):
 @pricing_router.get("/areas/{area_id}/fees")
 async def get_area_fees(area_id: str):
     """Get all fees for a service area."""
-    fees = await db.area_fees.find({"service_area_id": area_id}).sort("created_at", 1).to_list(100)
+    fees = await db_supabase.get_rows("area_fees", {"service_area_id": area_id}, limit=100, order="created_at", desc=False)
     return fees
 
 
 @pricing_router.post("/areas/{area_id}/fees")
 async def create_area_fee(area_id: str, req: CreateAreaFeeRequest):
     """Add a fee to a service area."""
-    area = await db.service_areas.find_one({"id": area_id})
+    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
     if not area:
         raise HTTPException(status_code=404, detail="Service area not found")
 
@@ -466,7 +470,7 @@ async def create_area_fee(area_id: str, req: CreateAreaFeeRequest):
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow(),
     }
-    await db.area_fees.insert_one(fee)
+    await db_supabase.insert_one("area_fees", fee)
     return fee
 
 
@@ -482,14 +486,14 @@ async def update_area_fee(area_id: str, fee_id: str, req: UpdateAreaFeeRequest):
     if "calc_mode" in update_data and update_data["calc_mode"] not in ["flat", "per_km", "percentage"]:
         raise HTTPException(status_code=400, detail="calc_mode must be flat, per_km, or percentage")
 
-    await db.area_fees.update_one({"id": fee_id, "service_area_id": area_id}, {"$set": update_data})
-    return await db.area_fees.find_one({"id": fee_id})
+    await db_supabase.update_one("area_fees", {"id": fee_id, "service_area_id": area_id}, update_data)
+    return (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("area_fees", {"id": fee_id}, limit=1))
 
 
 @pricing_router.delete("/areas/{area_id}/fees/{fee_id}")
 async def delete_area_fee(area_id: str, fee_id: str):
     """Delete an area fee."""
-    await db.area_fees.delete_one({"id": fee_id, "service_area_id": area_id})
+    await db_supabase.delete_one("area_fees", {"id": fee_id, "service_area_id": area_id})
     return {"deleted": True}
 
 
@@ -503,9 +507,9 @@ async def update_area_tax(area_id: str, req: UpdateTaxConfigRequest):
             update_data[field] = val
 
     if update_data:
-        await db.service_areas.update_one({"id": area_id}, {"$set": update_data})
+        await db_supabase.update_one("service_areas", {"id": area_id}, update_data)
 
-    area = await db.service_areas.find_one({"id": area_id})
+    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
     if not area:
         raise HTTPException(status_code=404, detail="Service area not found")
     return {
@@ -521,7 +525,7 @@ async def update_area_tax(area_id: str, req: UpdateTaxConfigRequest):
 @pricing_router.get("/areas/{area_id}/tax")
 async def get_area_tax(area_id: str):
     """Get tax configuration for a service area."""
-    area = await db.service_areas.find_one({"id": area_id})
+    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
     if not area:
         raise HTTPException(status_code=404, detail="Service area not found")
     return {
@@ -537,19 +541,19 @@ async def get_area_tax(area_id: str):
 @pricing_router.get("/areas/{area_id}/vehicle-pricing")
 async def get_vehicle_pricing(area_id: str):
     """Get all fare configs for a service area grouped by vehicle type."""
-    configs = await db.fare_configs.find({"service_area_id": area_id}).to_list(50)
-    vehicles = await db.vehicle_types.find().to_list(50)
+    configs = await db_supabase.get_rows("fare_configs", {"service_area_id": area_id}, limit=50)
+    vehicles = await db_supabase.get_rows("vehicle_types", None, limit=50)
     return {"fare_configs": configs, "vehicle_types": vehicles}
 
 
 @pricing_router.put("/drivers/{driver_id}/area")
 async def assign_driver_area(driver_id: str, service_area_id: str = Query(...)):
     """Assign a driver to a service area (restricts them to that zone)."""
-    area = await db.service_areas.find_one({"id": service_area_id})
+    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": service_area_id}, limit=1))
     if not area:
         raise HTTPException(status_code=404, detail="Service area not found")
 
-    await db.drivers.update_one({"id": driver_id}, {"$set": {"service_area_id": service_area_id}})
+    await db_supabase.update_one("drivers", {"id": driver_id}, {"service_area_id": service_area_id})
     return {"driver_id": driver_id, "service_area_id": service_area_id, "area_name": area.get("name")}
 
 
@@ -574,7 +578,7 @@ async def calculate_all_fees(
         ride_time_hour = dt.utcnow().hour
 
     # Find which service area the pickup is in
-    all_areas = await db.service_areas.find({"is_active": True}).to_list(100)
+    all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
     matched_area = None
     for area in all_areas:
         polygon = get_service_area_polygon(area)
@@ -595,7 +599,7 @@ async def calculate_all_fees(
         return result
 
     # Get all active fees for this area
-    area_fees_list = await db.area_fees.find({"service_area_id": matched_area["id"], "is_active": True}).to_list(50)
+    area_fees_list = await db_supabase.get_rows("area_fees", {"service_area_id": matched_area["id"], "is_active": True}, limit=50)
 
     # Pre-compute airport zone check once (reuses all_areas already fetched above)
     airport_areas = [a for a in all_areas if a.get("is_airport")]
@@ -698,7 +702,7 @@ async def fare_estimate(
 ):
     """Full fare estimate including base fare, area fees, and taxes."""
     # Get fare config
-    fare_config = await db.fare_configs.find_one({"vehicle_type_id": vehicle_type_id})
+    fare_config = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("fare_configs", {"vehicle_type_id": vehicle_type_id}, limit=1))
     if fare_config:
         base_fare = fare_config.get("base_fare", 3.50)
         distance_fare = distance_km * fare_config.get("per_km_rate", 1.50)
@@ -738,7 +742,7 @@ async def get_area_config(
 ):
     """Get service area config (fees, taxes, vehicle pricing) for a location.
     Called by rider/driver apps on launch to cache area settings."""
-    all_areas = await db.service_areas.find({"is_active": True}).to_list(100)
+    all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
     matched_area = None
     for area in all_areas:
         polygon = get_service_area_polygon(area)
@@ -750,7 +754,7 @@ async def get_area_config(
         return {"found": False, "service_area": None}
 
     # Get active fees for this area
-    area_fees = await db.area_fees.find({"service_area_id": matched_area["id"], "is_active": True}).to_list(50)
+    area_fees = await db_supabase.get_rows("area_fees", {"service_area_id": matched_area["id"], "is_active": True}, limit=50)
 
     # Build tax config
     tax_config = {}
@@ -806,9 +810,9 @@ async def schedule_ride(req: ScheduleRideRequest):
 
     # Compute fare like a normal ride
     # Look up fare config
-    areas = await db.service_areas.find().to_list(100)
+    areas = await db_supabase.get_rows("service_areas", None, limit=100)
     # For simplicity, use first active area (in production, match pickup location to area polygon)
-    fare_config = await db.fare_configs.find_one({"vehicle_type_id": req.vehicle_type_id})
+    fare_config = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("fare_configs", {"vehicle_type_id": req.vehicle_type_id}, limit=1))
 
     if fare_config:
         base_fare = fare_config.get("base_fare", 3.50)
@@ -870,7 +874,7 @@ async def schedule_ride(req: ScheduleRideRequest):
         "updated_at": datetime.utcnow(),
     }
 
-    await db.rides.insert_one(ride)
+    await db_supabase.insert_ride(ride)
     return ride
 
 
@@ -878,15 +882,7 @@ async def schedule_ride(req: ScheduleRideRequest):
 async def get_scheduled_rides(user_id: str = Query(...)):
     """Get all scheduled rides for a user."""
     rides = (
-        await db.rides.find(
-            {
-                "rider_id": user_id,
-                "is_scheduled": True,
-                "status": "scheduled",
-            }
-        )
-        .sort("scheduled_time", 1)
-        .to_list(50)
+    await db_supabase.get_rides_for_user(user_id, limit=50)
     )
     return rides
 
@@ -894,13 +890,13 @@ async def get_scheduled_rides(user_id: str = Query(...)):
 @support_router.delete("/rides/scheduled/{ride_id}")
 async def cancel_scheduled_ride(ride_id: str):
     """Cancel a scheduled ride."""
-    ride = await db.rides.find_one({"id": ride_id})
+    ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("status") != "scheduled":
         raise HTTPException(status_code=400, detail="Only scheduled rides can be cancelled this way")
 
-    await db.rides.update_one({"id": ride_id}, {"$set": {"status": "cancelled", "cancelled_at": datetime.utcnow()}})
+    await db_supabase.update_ride(ride_id, {"status": "cancelled", "cancelled_at": datetime.utcnow()})
     return {"cancelled": True}
 
 
@@ -910,7 +906,7 @@ async def cancel_scheduled_ride(ride_id: str):
 @support_router.post("/rides/{ride_id}/stops")
 async def add_stop(ride_id: str, req: AddStopRequest):
     """Add a stop to an existing ride."""
-    ride = await db.rides.find_one({"id": ride_id})
+    ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("status") in ["completed", "cancelled"]:
@@ -929,14 +925,14 @@ async def add_stop(ride_id: str, req: AddStopRequest):
     stops.append(new_stop)
     stops.sort(key=lambda s: s.get("order", 0))
 
-    await db.rides.update_one({"id": ride_id}, {"$set": {"stops": stops, "updated_at": datetime.utcnow()}})
+    await db_supabase.update_ride(ride_id, {"stops": stops, "updated_at": datetime.utcnow()})
     return {"stops": stops}
 
 
 @support_router.put("/rides/{ride_id}/stops/{stop_id}/complete")
 async def complete_stop(ride_id: str, stop_id: str):
     """Mark a stop as completed."""
-    ride = await db.rides.find_one({"id": ride_id})
+    ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
@@ -949,7 +945,7 @@ async def complete_stop(ride_id: str, stop_id: str):
     else:
         raise HTTPException(status_code=404, detail="Stop not found")
 
-    await db.rides.update_one({"id": ride_id}, {"$set": {"stops": stops, "updated_at": datetime.utcnow()}})
+    await db_supabase.update_ride(ride_id, {"stops": stops, "updated_at": datetime.utcnow()})
     return {"stops": stops}
 
 
@@ -959,7 +955,7 @@ async def complete_stop(ride_id: str, stop_id: str):
 @support_router.post("/rides/{ride_id}/share")
 async def share_trip(ride_id: str, req: ShareTripRequest):
     """Share a live trip link with a contact."""
-    ride = await db.rides.find_one({"id": ride_id})
+    ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
@@ -975,15 +971,7 @@ async def share_trip(ride_id: str, req: ShareTripRequest):
         }
     )
 
-    await db.rides.update_one(
-        {"id": ride_id},
-        {
-            "$set": {
-                "shared_trip_token": token,
-                "shared_trip_contacts": contacts,
-            }
-        },
-    )
+    await db_supabase.update_ride(ride_id, { "shared_trip_token": token, "shared_trip_contacts": contacts, })
 
     # The share URL format – frontend or web page would render this
     share_url = f"/trip/live/{token}"
@@ -998,7 +986,7 @@ async def share_trip(ride_id: str, req: ShareTripRequest):
 @support_router.get("/trip/live/{token}")
 async def get_shared_trip(token: str):
     """Get live trip info via share token (no auth required)."""
-    ride = await db.rides.find_one({"shared_trip_token": token})
+    ride = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("rides", {"shared_trip_token": token}, limit=1))
     if not ride:
         raise HTTPException(status_code=404, detail="Trip not found or link expired")
 
@@ -1024,7 +1012,7 @@ async def get_shared_trip(token: str):
 @support_router.post("/users/fcm-token")
 async def register_fcm_token(req: RegisterFcmTokenRequest, user_id: str = Query(...)):
     """Register/update the user's FCM token for push notifications."""
-    await db.users.update_one({"id": user_id}, {"$set": {"fcm_token": req.token}})
+    await db_supabase.update_one("users", {"id": user_id}, {"fcm_token": req.token})
     return {"registered": True}
 
 
@@ -1086,6 +1074,11 @@ async def send_push_notification(user_id: str, title: str, body: str, data: Dict
         logger.warning("firebase_admin not available for push notifications")
         return False
 
+    user = await db_supabase.get_user_by_id(user_id)
+    if not user or not user.get("fcm_token"):
+        logger.info(f"No FCM token for user {user_id}")
+        return False
+
     try:
         message = messaging.Message(
             notification=messaging.Notification(title=title, body=body),
@@ -1118,12 +1111,7 @@ async def check_scheduled_rides():
             # Find rides scheduled within the next 5 minutes
             window = now + timedelta(minutes=5)
 
-            scheduled = await db.rides.find(
-                {
-                    "status": "scheduled",
-                    "is_scheduled": True,
-                }
-            ).to_list(50)
+            scheduled = await db_supabase.get_rows("rides",  { "status": "scheduled", "is_scheduled": True, } , limit=50)
 
             for ride in scheduled:
                 sched_time = ride.get("scheduled_time")
@@ -1132,16 +1120,7 @@ async def check_scheduled_rides():
 
                 if sched_time and sched_time <= window:
                     # Transition to "searching" so the normal matching logic picks it up
-                    await db.rides.update_one(
-                        {"id": ride["id"]},
-                        {
-                            "$set": {
-                                "status": "searching",
-                                "ride_requested_at": datetime.utcnow(),
-                                "updated_at": datetime.utcnow(),
-                            }
-                        },
-                    )
+                    await db_supabase.update_ride(ride["id"], { "status": "searching", "ride_requested_at": datetime.utcnow(), "updated_at": datetime.utcnow(), })
                     logger.info(f"Dispatched scheduled ride {ride['id']}")
 
                     # Send push notification to rider

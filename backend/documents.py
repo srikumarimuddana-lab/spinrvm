@@ -17,15 +17,52 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from pydantic import BaseModel
 
 try:
-    from .db import db
+    from . import db_supabase
     from .dependencies import get_current_user
     from .supabase_client import supabase
 except ImportError:
-    from db import db
+    import db_supabase
     from dependencies import get_current_user
     from supabase_client import supabase
 
 from loguru import logger
+
+# --- File Upload Security ---
+ALLOWED_MIME_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "application/pdf",
+}
+
+# Magic byte signatures for content-type verification
+_MAGIC_BYTES = {
+    b"\xff\xd8\xff": "image/jpeg",
+    b"\x89PNG": "image/png",
+    b"GIF8": "image/gif",
+    b"RIFF": "image/webp",  # WebP starts with RIFF
+    b"%PDF": "application/pdf",
+}
+
+
+def _validate_file_type(content: bytes, declared_type: str) -> None:
+    """Validate file MIME type against allowlist and verify magic bytes."""
+    if declared_type not in ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type '{declared_type}' not allowed. Accepted: {', '.join(sorted(ALLOWED_MIME_TYPES))}",
+        )
+    # Verify magic bytes match the declared content type
+    if content:
+        header = content[:4]
+        for magic, expected_type in _MAGIC_BYTES.items():
+            if header.startswith(magic) and declared_type != expected_type:
+                raise HTTPException(
+                    status_code=400,
+                    detail="File content does not match declared type",
+                )
+
 
 # Routers
 # Routers
@@ -139,33 +176,17 @@ async def _supersede_and_flag_pending_review(
             query["document_type"] = document_type
         if side is not None:
             query["side"] = side
-        await db.driver_documents.update_many(
-            query,
-            {"$set": {"status": "superseded", "updated_at": datetime.utcnow()}},
-        )
+        await db_supabase.update_one("driver_documents", query, {"status": "superseded", "updated_at": datetime.utcnow()})
     except Exception as e:
         logger.warning(f"Could not supersede prior docs for driver {driver_id}: {e}")
 
     # Set driver to needs_review so they can't go online until admin re-approves.
     try:
-        driver = await db.drivers.find_one({"id": driver_id})
+        driver = await db_supabase.get_driver_by_id(driver_id)
         if driver and driver.get("status") == "active":
-            await db.drivers.update_one(
-                {"id": driver_id},
-                {
-                    "$set": {
-                        "status": "needs_review",
-                        "is_online": False,
-                        "is_available": False,
-                        "updated_at": datetime.utcnow(),
-                    }
-                },
-            )
+            await db_supabase.update_one("drivers", {"id": driver_id}, {"status": "needs_review", "is_online": False, "is_available": False, "updated_at": datetime.utcnow()})
         else:
-            await db.drivers.update_one(
-                {"id": driver_id},
-                {"$set": {"updated_at": datetime.utcnow()}},
-            )
+            await db_supabase.update_one("drivers", {"id": driver_id}, {"updated_at": datetime.utcnow()})
     except Exception as e:
         logger.warning(f"Could not flag driver {driver_id} for review: {e}")
 
@@ -176,6 +197,7 @@ async def save_upload(file: UploadFile) -> str:
 
     try:
         file_bytes = await file.read()
+        _validate_file_type(file_bytes, file.content_type or "application/octet-stream")
         supabase.storage.from_("driver-documents").upload(
             file=file_bytes, path=filename, file_options={"content-type": file.content_type}
         )
@@ -235,20 +257,20 @@ async def get_document_requirements(
     Priority:
     1. If service_area_id is passed, use that area's required_documents.
     2. Else if the current user has a driver profile with a service_area_id,
-       use that area's required_documents.
+    use that area's required_documents.
     3. Fall back to the global document_requirements table.
     """
     area_id = service_area_id
 
     # Try to get area from driver profile if not explicitly passed
     if not area_id and current_user:
-        driver = await db.drivers.find_one({"user_id": current_user.get("id")})
+        driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1))
         if driver:
             area_id = driver.get("service_area_id")
 
     # If we have an area, return its required_documents
     if area_id:
-        area = await db.service_areas.find_one({"id": area_id})
+        area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
         if area and area.get("required_documents"):
             area_docs = area["required_documents"]
             # Transform to match DocumentRequirement shape so driver app works
@@ -268,7 +290,7 @@ async def get_document_requirements(
             return result
 
     # Fallback: global document_requirements table
-    requirements = await db.document_requirements.find().sort("created_at", 1).to_list(100)
+    requirements = await db_supabase.get_rows("document_requirements", None, limit=100, order="created_at", desc=False)
     return requirements
 
 
@@ -277,18 +299,21 @@ async def get_driver_documents(current_user: dict = Depends(get_current_user)):
     """Get all documents uploaded by the current driver."""
     # Look up the driver profile directly — avoids a stale is_driver flag and
     # returns an empty list gracefully during the onboarding flow.
-    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
     if not driver:
         return []  # No driver profile yet — not an error
 
-    documents = await db.driver_documents.find({"driver_id": driver["id"]}).sort("uploaded_at", -1).to_list(100)
+    documents = await db_supabase.get_rows("driver_documents", {"driver_id": driver["id"]}, limit=100, order="uploaded_at", desc=True)
     return documents
 
 
 @documents_router.post("/documents")
 async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict = Depends(get_current_user)):
     """Link an uploaded document to the current driver."""
-    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    if not current_user.get("is_driver"):
+        raise HTTPException(status_code=403, detail="User is not a driver")
+
+    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
     if not driver:
         # Auto-create a minimal driver row so documents can be uploaded
         # before the driver has completed the vehicle-info step.
@@ -319,25 +344,12 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
     # Validate requirement exists — check global table first (if UUID), then
     # fall back to the driver's service area required_documents list
     # (since we moved to per-area docs, requirement_id is now the area doc key).
-    req = None
-    logger.info(
-        f"Validating requirement: {doc_data.requirement_id}, is_uuid: {_is_valid_uuid(doc_data.requirement_id)}"
-    )
-
-    if _is_valid_uuid(doc_data.requirement_id):
-        req = await db.document_requirements.find_one({"id": doc_data.requirement_id})
-        logger.info(f"Global lookup result: {req is not None}")
-
+    req = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("document_requirements", {"id": doc_data.requirement_id}, limit=1))
     if not req:
         # Try looking it up from the driver's service area
         area_req = None
-        service_area_id = driver.get("service_area_id")
-        logger.info(f"Driver service_area_id: {service_area_id}")
-
-        if service_area_id:
-            area = await db.service_areas.find_one({"id": service_area_id})
-            logger.info(f"Service area found: {area is not None}")
-
+        if driver.get("service_area_id"):
+            area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1))
             if area:
                 required_docs = area.get("required_documents") or []
                 logger.info(f"Required documents: {required_docs}")
@@ -412,7 +424,7 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
         "updated_at": datetime.utcnow(),
     }
 
-    await _insert_driver_document(doc_record)
+    await db_supabase.insert_one("driver_documents", doc_record)
     # Stash the admin-facing expiry on the response so the caller can
     # display it back, without persisting a non-existent column.
     if doc_data.expiry_date:
@@ -433,13 +445,13 @@ async def upload_driver_document(
     url = await save_upload(file)
 
     # Validate requirement — check global table first, then service area docs.
-    req = await db.document_requirements.find_one({"id": requirement_id})
+    req = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("document_requirements", {"id": requirement_id}, limit=1))
     if not req:
         area_req = None
         if driver_id:
-            drv = await db.drivers.find_one({"id": driver_id})
+            drv = await db_supabase.get_driver_by_id(driver_id)
             if drv and drv.get("service_area_id"):
-                area = await db.service_areas.find_one({"id": drv["service_area_id"]})
+                area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": drv["service_area_id"]}, limit=1))
                 if area:
                     area_req = next(
                         (d for d in (area.get("required_documents") or []) if d.get("key") == requirement_id), None
@@ -488,7 +500,7 @@ async def upload_driver_document(
         "updated_at": datetime.utcnow(),
     }
 
-    await _insert_driver_document(doc_record)
+    await db_supabase.insert_one("driver_documents", doc_record)
 
     # Return the admin-facing expiry as part of the response without
     # persisting it to a non-existent column.
@@ -503,7 +515,7 @@ async def upload_driver_document(
 @admin_documents_router.get("/requirements")
 async def admin_get_requirements():
     """Get all document requirements."""
-    requirements = await db.document_requirements.find().sort("created_at", 1).to_list(100)
+    requirements = await db_supabase.get_rows("document_requirements", None, limit=100, order="created_at", desc=False)
     return requirements
 
 
@@ -518,7 +530,7 @@ async def admin_create_requirement(req: CreateRequirementRequest):
         "requires_back_side": req.requires_back_side,
         "created_at": datetime.utcnow(),
     }
-    await db.document_requirements.insert_one(new_req)
+    await db_supabase.insert_one("document_requirements", new_req)
     return new_req
 
 
@@ -538,11 +550,11 @@ async def admin_update_requirement(req_id: str, req: UpdateRequirementRequest):
     if not update_data:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    result = await db.document_requirements.update_one({"id": req_id}, {"$set": update_data})
+    result = await db_supabase.update_one("document_requirements", {"id": req_id}, update_data)
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Requirement not found")
 
-    return await db.document_requirements.find_one({"id": req_id})
+    return (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("document_requirements", {"id": req_id}, limit=1))
 
 
 @admin_documents_router.delete("/requirements/{req_id}")
@@ -550,7 +562,7 @@ async def admin_delete_requirement(req_id: str):
     """Delete a document requirement."""
     # Check if used?
     # For now, allow delete.
-    result = await db.document_requirements.delete_one({"id": req_id})
+    result = await db_supabase.delete_one("document_requirements", {"id": req_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Requirement not found")
     return {"deleted": True}
@@ -559,7 +571,7 @@ async def admin_delete_requirement(req_id: str):
 @admin_documents_router.get("/drivers/{driver_id}")
 async def admin_get_driver_documents(driver_id: str):
     """Get all documents uploaded by a specific driver."""
-    documents = await db.driver_documents.find({"driver_id": driver_id}).sort("uploaded_at", -1).to_list(100)
+    documents = await db_supabase.get_rows("driver_documents", {"driver_id": driver_id}, limit=100, order="uploaded_at", desc=True)
     return documents
 
 
@@ -582,7 +594,7 @@ async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
         raise HTTPException(status_code=400, detail="Status must be 'approved' or 'rejected'")
 
     # Pull the existing doc so we know which driver/requirement this is.
-    existing = await db.driver_documents.find_one({"id": doc_id})
+    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("driver_documents", {"id": doc_id}, limit=1))
     if not existing:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -593,7 +605,7 @@ async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
     if req.rejection_reason is not None:
         update_data["rejection_reason"] = req.rejection_reason
 
-    await db.driver_documents.update_one({"id": doc_id}, {"$set": update_data})
+    await db_supabase.update_one("driver_documents", {"id": doc_id}, update_data)
 
     # On approval, propagate the expiry to the legacy drivers.* column so the
     # go-online check in routes/drivers.py update_driver_status stops blocking
@@ -604,14 +616,14 @@ async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
         # Look up requirement name — first from global table, then from
         # the driver's service area required_documents (since requirement_id
         # may now be a service-area doc key like "drivers_license").
-        req_row = await db.document_requirements.find_one({"id": existing.get("requirement_id")})
+        req_row = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("document_requirements", {"id": existing.get("requirement_id")}, limit=1))
         req_name = req_row.get("name") if req_row else None
 
         if not req_name:
             # Try the service area's required_documents
-            driver = await db.drivers.find_one({"id": existing.get("driver_id")})
+            driver = await db_supabase.get_driver_by_id(existing.get("driver_id"))
             if driver and driver.get("service_area_id"):
-                area = await db.service_areas.find_one({"id": driver["service_area_id"]})
+                area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1))
                 if area:
                     area_doc = next(
                         (
@@ -635,16 +647,13 @@ async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
             # rejecting on a past date from original onboarding.
             new_val = effective_expiry.isoformat() if effective_expiry else None
             try:
-                await db.drivers.update_one(
-                    {"id": existing.get("driver_id")},
-                    {"$set": {legacy_field: new_val, "updated_at": datetime.utcnow()}},
-                )
+                await db_supabase.update_one("drivers", {"id": existing.get("driver_id")}, {legacy_field: new_val, "updated_at": datetime.utcnow()})
             except Exception as e:
                 logger.warning(
                     f"Could not update legacy expiry field {legacy_field} for driver {existing.get('driver_id')}: {e}"
                 )
 
-    return await db.driver_documents.find_one({"id": doc_id})
+    return (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("driver_documents", {"id": doc_id}, limit=1))
 
 
 # --- File Serving Router ---
@@ -683,19 +692,25 @@ async def upload_file(
         original_filename = file.filename or "upload"
         content_type = file.content_type or "application/octet-stream"
 
-        # Build a unique storage path preserving the file extension
-        ext = os.path.splitext(original_filename)[1] or ""
-        file_id = str(uuid.uuid4())
-        storage_path = f"{file_id}{ext}"
+        _validate_file_type(content, content_type)
+
+        # Only insert columns that actually exist on the Supabase
+        # `document_files` table. Historically this table was created with
+        # just { id, data, content_type, created_at } — adding columns like
+        # `size`, `filename`, `uploaded_by` to the insert raises PGRST204
+        # ("Could not find the X column of document_files in the schema
+        # cache"). We still return size/filename in the response so the
+        # client gets full metadata without us having to touch the schema.
+        record = {
+            "id": file_id,
+            "content_type": content_type,
+            "data": base64.b64encode(content).decode("utf-8"),
+            "created_at": datetime.utcnow().isoformat(),
+        }
 
         # Upload to Supabase Storage
         try:
-            supabase.storage.from_("driver-documents").upload(
-                file=content,
-                path=storage_path,
-                file_options={"content-type": content_type},
-            )
-            public_url = supabase.storage.from_("driver-documents").get_public_url(storage_path)
+            await db_supabase.insert_one("document_files", record)
         except Exception as e:
             logger.error(f"Supabase Storage upload failed: {e}")
             raise HTTPException(status_code=500, detail=f"Storage upload failed: {e}") from e
@@ -718,9 +733,9 @@ async def upload_file(
 @files_router.get("/{file_id}")
 async def get_document_file(file_id: str):
     """Serve a document file by ID."""
-    # Check legacy DB storage (base64 blobs uploaded before this fix)
-    legacy_file = await db.document_files.find_one({"id": file_id})
-    if legacy_file:
+    # check if it's in document_files (DB storage)
+    video_file = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("document_files", {"id": file_id}, limit=1))
+    if video_file:
         try:
             content = base64.b64decode(legacy_file.get("data", ""))
             media_type = legacy_file.get("content_type", "application/octet-stream")
@@ -729,8 +744,11 @@ async def get_document_file(file_id: str):
             logger.error(f"Error serving legacy file {file_id}: {e}")
             raise HTTPException(status_code=500, detail="Error serving file") from e
 
-    # Check driver_documents -- redirect to its stored URL (Supabase Storage public URL)
-    doc = await db.driver_documents.find_one({"id": file_id})
+    # If not found in DB files, maybe it's a direct reference to a driver document
+    # which might have a URL. But the request is specifically for /ids that are likely file IDs if generated by the legacy upload.
+
+    # If the ID passed is actually a driver_document ID, we might want to redirect to its document_url
+    doc = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("driver_documents", {"id": file_id}, limit=1))
     if doc and doc.get("document_url"):
         from fastapi.responses import RedirectResponse
         return RedirectResponse(doc["document_url"])

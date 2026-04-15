@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -15,7 +15,8 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useRideStore } from '../store/rideStore';
 import { useAuthStore } from '@shared/store/authStore';
-import SpinrConfig from '@shared/config/spinr.config';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 import CustomAlert from '@shared/components/CustomAlert';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -40,6 +41,9 @@ export default function SearchDestinationScreen() {
     recentSearches, addRecentSearch, loadRecentSearches,
     userLocation, setUserLocation,
   } = useRideStore();
+
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   const [activeField, setActiveField] = useState<'pickup' | 'dropoff' | number>('dropoff');
   const [pickupText, setPickupText] = useState(pickup?.address || 'Current Location');
@@ -295,7 +299,7 @@ export default function SearchDestinationScreen() {
       onPress={() => handleSelectPrediction(item)}
     >
       <View style={styles.predictionIcon}>
-        <Ionicons name="location-outline" size={20} color="#666" />
+        <Ionicons name="location-outline" size={20} color={colors.textDim} />
       </View>
       <View style={styles.predictionContent}>
         <Text style={styles.predictionMainText} numberOfLines={1}>
@@ -315,7 +319,7 @@ export default function SearchDestinationScreen() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Set destination</Text>
         <View style={{ width: 44 }} />
@@ -334,7 +338,7 @@ export default function SearchDestinationScreen() {
               onChangeText={(text) => handleTextChange(text, 'pickup')}
               onFocus={() => handleFieldFocus('pickup')}
               placeholder="Pickup location"
-              placeholderTextColor="#999"
+              placeholderTextColor={colors.textDim}
               selectTextOnFocus
             />
             {pickupText ? (
@@ -365,11 +369,11 @@ export default function SearchDestinationScreen() {
                   onChangeText={(text) => handleTextChange(text, index)}
                   onFocus={() => handleFieldFocus(index)}
                   placeholder="Enter stop address"
-                  placeholderTextColor="#999"
+                  placeholderTextColor={colors.textDim}
                 />
               </View>
               <TouchableOpacity onPress={() => handleRemoveStop(index)} style={styles.removeButton}>
-                <Ionicons name="close-circle" size={20} color="#999" />
+                <Ionicons name="close-circle" size={20} color={colors.textDim} />
               </TouchableOpacity>
             </View>
             <View style={styles.connectorLine} />
@@ -378,7 +382,7 @@ export default function SearchDestinationScreen() {
 
         {/* Dropoff */}
         <View style={styles.inputRow}>
-          <View style={[styles.dot, { backgroundColor: SpinrConfig.theme.colors.primary }]} />
+          <View style={[styles.dot, { backgroundColor: colors.primary }]} />
           <View style={[styles.inputWrapper, activeField === 'dropoff' && styles.inputActive]}>
             <TextInput
               ref={dropoffRef}
@@ -387,7 +391,7 @@ export default function SearchDestinationScreen() {
               onChangeText={(text) => handleTextChange(text, 'dropoff')}
               onFocus={() => handleFieldFocus('dropoff')}
               placeholder="Where to?"
-              placeholderTextColor="#999"
+              placeholderTextColor={colors.textDim}
               autoFocus
             />
             {dropoffText ? (
@@ -406,7 +410,7 @@ export default function SearchDestinationScreen() {
         {/* Add Stop Button */}
         {stops.length < 3 && (
           <TouchableOpacity style={styles.addStopButton} onPress={handleAddStop}>
-            <Ionicons name="add-circle" size={20} color={SpinrConfig.theme.colors.primary} />
+            <Ionicons name="add-circle" size={20} color={colors.primary} />
             <Text style={styles.addStopText}>Add stop</Text>
           </TouchableOpacity>
         )}
@@ -416,7 +420,7 @@ export default function SearchDestinationScreen() {
       <View style={styles.suggestionsContainer}>
         {isSearching && (
           <View style={styles.loadingRow}>
-            <ActivityIndicator size="small" color={SpinrConfig.theme.colors.primary} />
+            <ActivityIndicator size="small" color={colors.primary} />
             <Text style={styles.loadingText}>Searching...</Text>
           </View>
         )}
@@ -494,7 +498,7 @@ export default function SearchDestinationScreen() {
                             }
                           }}
                         >
-                          <Ionicons name="home" size={18} color={homeAddr ? SpinrConfig.theme.colors.primary : '#BBB'} />
+                          <Ionicons name="home" size={18} color={homeAddr ? colors.primary : '#BBB'} />
                           <Text style={[styles.quickChipText, !homeAddr && { color: '#BBB' }]}>Home</Text>
                           {homeAddr && <Ionicons name="chevron-forward" size={14} color="#CCC" />}
                         </TouchableOpacity>
@@ -567,7 +571,7 @@ export default function SearchDestinationScreen() {
                             <Ionicons
                               name={addr.name?.toLowerCase() === 'home' ? 'home' : 'briefcase'}
                               size={20}
-                              color={addr.name?.toLowerCase() === 'home' ? SpinrConfig.theme.colors.primary : '#3B82F6'}
+                              color={addr.name?.toLowerCase() === 'home' ? colors.primary : '#3B82F6'}
                             />
                           </View>
                           <View style={styles.predictionContent}>
@@ -591,8 +595,8 @@ export default function SearchDestinationScreen() {
                             handleSelectLocation({ address: search.address, lat: search.lat, lng: search.lng });
                           }}
                         >
-                          <View style={[styles.predictionIcon, { backgroundColor: '#F5F5F5' }]}>
-                            <Ionicons name="time-outline" size={20} color="#999" />
+                          <View style={[styles.predictionIcon, { backgroundColor: colors.surfaceLight }]}>
+                            <Ionicons name="time-outline" size={20} color={colors.textDim} />
                           </View>
                           <View style={styles.predictionContent}>
                             <Text style={styles.predictionMainText} numberOfLines={1}>{search.address}</Text>
@@ -632,189 +636,191 @@ export default function SearchDestinationScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
-  },
-  backButton: {
-    width: 44,
-    height: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
-  },
-  inputsContainer: {
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    backgroundColor: '#F9F9F9',
-  },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  dot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginRight: 16,
-  },
-  connectorLine: {
-    width: 2,
-    height: 20,
-    backgroundColor: '#E0E0E0',
-    marginLeft: 5,
-    marginVertical: 2,
-  },
-  inputWrapper: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: 'transparent',
-  },
-  inputActive: {
-    borderColor: SpinrConfig.theme.colors.primary,
-  },
-  textInput: {
-    flex: 1,
-    height: 46,
-    fontSize: 15,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#1A1A1A',
-  },
-  removeButton: {
-    padding: 8,
-  },
-  addStopButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 10,
-    marginLeft: 28,
-  },
-  addStopText: {
-    marginLeft: 8,
-    fontSize: 14,
-    color: SpinrConfig.theme.colors.primary,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-  },
-  suggestionsContainer: {
-    flex: 1,
-    paddingHorizontal: 20,
-  },
-  loadingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 16,
-    gap: 10,
-  },
-  loadingText: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#999',
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#999',
-    marginTop: 16,
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  predictionsList: {
-    flex: 1,
-  },
-  predictionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F5F5F5',
-  },
-  predictionIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#F5F5F5',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  predictionContent: {
-    flex: 1,
-  },
-  predictionMainText: {
-    fontSize: 15,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#1A1A1A',
-  },
-  predictionSecondaryText: {
-    fontSize: 13,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#999',
-    marginTop: 2,
-  },
-  quickChips: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 14,
-    marginBottom: 6,
-  },
-  quickChip: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F5F5F5',
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    gap: 8,
-  },
-  quickChipText: {
-    flex: 1,
-    fontSize: 15,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
-  },
-  searchButtonContainer: {
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#F0F0F0',
-    backgroundColor: '#FFFFFF',
-  },
-  searchRideButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    borderRadius: 28,
-    paddingVertical: 16,
-    gap: 10,
-  },
-  searchRideButtonDisabled: {
-    backgroundColor: '#CCC',
-  },
-  searchRideButtonText: {
-    fontSize: 17,
-    fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#FFFFFF',
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.surface,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    backButton: {
+      width: 44,
+      height: 44,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    headerTitle: {
+      fontSize: 18,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.text,
+    },
+    inputsContainer: {
+      paddingHorizontal: 20,
+      paddingVertical: 16,
+      backgroundColor: colors.surfaceLight,
+    },
+    inputRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    dot: {
+      width: 12,
+      height: 12,
+      borderRadius: 6,
+      marginRight: 16,
+    },
+    connectorLine: {
+      width: 2,
+      height: 20,
+      backgroundColor: colors.border,
+      marginLeft: 5,
+      marginVertical: 2,
+    },
+    inputWrapper: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 16,
+      backgroundColor: colors.surface,
+      borderRadius: 12,
+      borderWidth: 1.5,
+      borderColor: 'transparent',
+    },
+    inputActive: {
+      borderColor: colors.primary,
+    },
+    textInput: {
+      flex: 1,
+      height: 46,
+      fontSize: 15,
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.text,
+    },
+    removeButton: {
+      padding: 8,
+    },
+    addStopButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginTop: 10,
+      marginLeft: 28,
+    },
+    addStopText: {
+      marginLeft: 8,
+      fontSize: 14,
+      color: colors.primary,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+    },
+    suggestionsContainer: {
+      flex: 1,
+      paddingHorizontal: 20,
+    },
+    loadingRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 16,
+      gap: 10,
+    },
+    loadingText: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+    },
+    sectionTitle: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.textDim,
+      marginTop: 16,
+      marginBottom: 8,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+    },
+    predictionsList: {
+      flex: 1,
+    },
+    predictionRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingVertical: 14,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.surfaceLight,
+    },
+    predictionIcon: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.surfaceLight,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginRight: 12,
+    },
+    predictionContent: {
+      flex: 1,
+    },
+    predictionMainText: {
+      fontSize: 15,
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.text,
+    },
+    predictionSecondaryText: {
+      fontSize: 13,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+      marginTop: 2,
+    },
+    quickChips: {
+      flexDirection: 'row',
+      gap: 10,
+      marginTop: 14,
+      marginBottom: 6,
+    },
+    quickChip: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 14,
+      paddingVertical: 14,
+      paddingHorizontal: 14,
+      gap: 8,
+    },
+    quickChipText: {
+      flex: 1,
+      fontSize: 15,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.text,
+    },
+    searchButtonContainer: {
+      paddingHorizontal: 20,
+      paddingVertical: 12,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    searchRideButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.primary,
+      borderRadius: 28,
+      paddingVertical: 16,
+      gap: 10,
+    },
+    searchRideButtonDisabled: {
+      backgroundColor: '#CCC',
+    },
+    searchRideButtonText: {
+      fontSize: 17,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: '#FFFFFF',
+    },
+  });
+}

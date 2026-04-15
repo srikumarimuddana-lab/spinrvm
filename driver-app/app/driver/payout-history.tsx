@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import {
     View,
     Text,
@@ -12,24 +12,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useDriverStore } from '../../store/driverStore';
-import SpinrConfig from '@shared/config/spinr.config';
-
-const THEME = SpinrConfig.theme.colors;
-const COLORS = {
-    primary: THEME.background,
-    accent: THEME.primary,
-    surface: THEME.surface,
-    surfaceLight: THEME.surfaceLight,
-    text: THEME.text,
-    textDim: THEME.textDim,
-    success: THEME.success,
-    warning: THEME.warning,
-    danger: THEME.error,
-};
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 export default function PayoutHistoryScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
+    const { colors } = useTheme();
+    const styles = useMemo(() => createStyles(colors), [colors]);
     const { payoutHistory, fetchPayoutHistory, isLoading } = useDriverStore();
 
     useEffect(() => {
@@ -39,14 +29,14 @@ export default function PayoutHistoryScreen() {
     const getStatusColor = (status: string) => {
         switch (status) {
             case 'completed':
-                return COLORS.success;
+                return colors.success;
             case 'pending':
             case 'processing':
-                return COLORS.warning;
+                return colors.warning;
             case 'failed':
-                return COLORS.danger;
+                return colors.danger;
             default:
-                return COLORS.textDim;
+                return colors.textDim;
         }
     };
 
@@ -126,7 +116,7 @@ export default function PayoutHistoryScreen() {
 
     const renderEmpty = () => (
         <View style={styles.emptyState}>
-            <Ionicons name="wallet-outline" size={64} color={COLORS.surfaceLight} />
+            <Ionicons name="wallet-outline" size={64} color={colors.surfaceLight} />
             <Text style={styles.emptyTitle}>No payouts yet</Text>
             <Text style={styles.emptySub}>
                 Your payout history will appear here
@@ -136,7 +126,7 @@ export default function PayoutHistoryScreen() {
 
     return (
         <View style={styles.container}>
-            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
+            <LinearGradient colors={[colors.surface, colors.background]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <View style={styles.headerRow}>
                     <View style={styles.backBtn} />
                     <Text style={styles.headerTitle}>Payout History</Text>
@@ -155,7 +145,7 @@ export default function PayoutHistoryScreen() {
                     <RefreshControl
                         refreshing={isLoading}
                         onRefresh={() => fetchPayoutHistory()}
-                        tintColor={COLORS.accent}
+                        tintColor={colors.primary}
                     />
                 }
             />
@@ -163,93 +153,95 @@ export default function PayoutHistoryScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: COLORS.primary },
-    header: {
-        paddingBottom: 12,
-        paddingHorizontal: 16,
-    },
-    headerRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-    },
-    backBtn: { width: 40 },
-    headerTitle: { color: COLORS.text, fontSize: 20, fontWeight: '700' },
+function createStyles(colors: ThemeColors) {
+    return StyleSheet.create({
+        container: { flex: 1, backgroundColor: colors.background },
+        header: {
+            paddingBottom: 12,
+            paddingHorizontal: 16,
+        },
+        headerRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+        },
+        backBtn: { width: 40 },
+        headerTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
 
-    payoutCard: {
-        backgroundColor: COLORS.surface,
-        borderRadius: 16,
-        padding: 16,
-        marginBottom: 12,
-    },
-    payoutHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 12,
-    },
-    statusIcon: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginRight: 12,
-    },
-    payoutInfo: { flex: 1 },
-    payoutAmount: {
-        color: COLORS.text,
-        fontSize: 20,
-        fontWeight: '700',
-    },
-    payoutStatus: {
-        fontSize: 13,
-        fontWeight: '600',
-        marginTop: 2,
-    },
-    payoutDetails: {
-        paddingTop: 12,
-        borderTopWidth: 1,
-        borderTopColor: COLORS.surfaceLight,
-    },
-    detailRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 8,
-    },
-    detailLabel: {
-        color: COLORS.textDim,
-        fontSize: 13,
-    },
-    detailValue: {
-        color: COLORS.text,
-        fontSize: 13,
-        fontWeight: '500',
-    },
-    errorRow: {
-        marginTop: 8,
-        padding: 10,
-        backgroundColor: 'rgba(255,71,87,0.1)',
-        borderRadius: 8,
-    },
-    errorText: {
-        color: COLORS.danger,
-        fontSize: 12,
-    },
+        payoutCard: {
+            backgroundColor: colors.surface,
+            borderRadius: 16,
+            padding: 16,
+            marginBottom: 12,
+        },
+        payoutHeader: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            marginBottom: 12,
+        },
+        statusIcon: {
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            justifyContent: 'center',
+            alignItems: 'center',
+            marginRight: 12,
+        },
+        payoutInfo: { flex: 1 },
+        payoutAmount: {
+            color: colors.text,
+            fontSize: 20,
+            fontWeight: '700',
+        },
+        payoutStatus: {
+            fontSize: 13,
+            fontWeight: '600',
+            marginTop: 2,
+        },
+        payoutDetails: {
+            paddingTop: 12,
+            borderTopWidth: 1,
+            borderTopColor: colors.surfaceLight,
+        },
+        detailRow: {
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            marginBottom: 8,
+        },
+        detailLabel: {
+            color: colors.textDim,
+            fontSize: 13,
+        },
+        detailValue: {
+            color: colors.text,
+            fontSize: 13,
+            fontWeight: '500',
+        },
+        errorRow: {
+            marginTop: 8,
+            padding: 10,
+            backgroundColor: 'rgba(255,71,87,0.1)',
+            borderRadius: 8,
+        },
+        errorText: {
+            color: colors.danger,
+            fontSize: 12,
+        },
 
-    emptyState: {
-        alignItems: 'center',
-        paddingVertical: 80,
-    },
-    emptyTitle: {
-        color: COLORS.text,
-        fontSize: 18,
-        fontWeight: '600',
-        marginTop: 16,
-    },
-    emptySub: {
-        color: COLORS.textDim,
-        fontSize: 14,
-        marginTop: 4,
-    },
-});
+        emptyState: {
+            alignItems: 'center',
+            paddingVertical: 80,
+        },
+        emptyTitle: {
+            color: colors.text,
+            fontSize: 18,
+            fontWeight: '600',
+            marginTop: 16,
+        },
+        emptySub: {
+            color: colors.textDim,
+            fontSize: 14,
+            marginTop: 4,
+        },
+    });
+}

@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
+import { useTheme } from '../theme/ThemeContext';
+import type { ThemeColors } from '../theme/index';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -85,6 +87,9 @@ export default function CustomAlert({
   inputValue,
   onInputChange,
 }: CustomAlertProps) {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const scaleAnim = useRef(new Animated.Value(0.85)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
 
@@ -156,7 +161,7 @@ export default function CustomAlert({
             <TextInput
               style={styles.input}
               placeholder={inputPlaceholder}
-              placeholderTextColor="#999"
+              placeholderTextColor={colors.textDim}
               value={inputValue}
               onChangeText={onInputChange}
               autoCapitalize="characters"
@@ -212,87 +217,89 @@ export default function CustomAlert({
   );
 }
 
-const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-  },
-  container: {
-    width: SCREEN_WIDTH - 56,
-    maxWidth: 360,
-    backgroundColor: '#fff',
-    borderRadius: 24,
-    padding: 28,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 20 },
-    shadowOpacity: 0.15,
-    shadowRadius: 40,
-    elevation: 25,
-  },
-  iconCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#1A1A1A',
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  message: {
-    fontSize: 14,
-    color: '#6B7280',
-    textAlign: 'center',
-    lineHeight: 20,
-    marginBottom: 20,
-  },
-  input: {
-    width: '100%',
-    borderWidth: 1.5,
-    borderColor: '#E0E0E0',
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: '#1A1A1A',
-    textAlign: 'center',
-    letterSpacing: 2,
-    fontWeight: '600',
-    marginBottom: 20,
-  },
-  buttonContainer: {
-    width: '100%',
-    gap: 10,
-  },
-  button: {
-    width: '100%',
-    paddingVertical: 14,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  buttonText: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  destructiveButton: {
-    backgroundColor: '#EF4444',
-  },
-  cancelButton: {
-    backgroundColor: '#F3F4F6',
-  },
-  cancelButtonText: {
-    color: '#6B7280',
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    overlay: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    backdrop: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    },
+    container: {
+      width: SCREEN_WIDTH - 56,
+      maxWidth: 360,
+      backgroundColor: colors.surface,
+      borderRadius: 24,
+      padding: 28,
+      alignItems: 'center',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 20 },
+      shadowOpacity: 0.15,
+      shadowRadius: 40,
+      elevation: 25,
+    },
+    iconCircle: {
+      width: 64,
+      height: 64,
+      borderRadius: 32,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginBottom: 16,
+    },
+    title: {
+      fontSize: 20,
+      fontWeight: '700',
+      color: colors.text,
+      textAlign: 'center',
+      marginBottom: 8,
+    },
+    message: {
+      fontSize: 14,
+      color: colors.textSecondary,
+      textAlign: 'center',
+      lineHeight: 20,
+      marginBottom: 20,
+    },
+    input: {
+      width: '100%',
+      borderWidth: 1.5,
+      borderColor: colors.border,
+      borderRadius: 14,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      fontSize: 16,
+      color: colors.text,
+      textAlign: 'center',
+      letterSpacing: 2,
+      fontWeight: '600',
+      marginBottom: 20,
+    },
+    buttonContainer: {
+      width: '100%',
+      gap: 10,
+    },
+    button: {
+      width: '100%',
+      paddingVertical: 14,
+      borderRadius: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    buttonText: {
+      fontSize: 16,
+      fontWeight: '600',
+    },
+    destructiveButton: {
+      backgroundColor: '#EF4444',
+    },
+    cancelButton: {
+      backgroundColor: colors.surfaceLight,
+    },
+    cancelButtonText: {
+      color: colors.textSecondary,
+    },
+  });
+}

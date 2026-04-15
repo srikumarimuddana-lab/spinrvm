@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
-import SpinrConfig from '@shared/config/spinr.config';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 interface Message {
   id: string;
@@ -26,31 +27,45 @@ interface Message {
 export default function ChatDriverScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
-  const { currentDriver } = useRideStore();
+  const { currentDriver, chatMessages, addChatMessage, setChatMessages } = useRideStore();
   const scrollViewRef = useRef<ScrollView>(null);
   const [message, setMessage] = useState('');
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      text: "Hi " + (currentDriver?.name?.split(' ')[0] || 'Driver') + ", I'm waiting near the main entrance.",
-      isUser: true,
-      time: '10:42 AM',
-      status: 'read',
-    },
-    {
-      id: '2',
-      text: "Got it! I'm just turning the corner now. Be there in 1 min.",
-      isUser: false,
-      time: '10:43 AM',
-    },
-    {
-      id: '3',
-      text: 'Perfect, see you soon.',
-      isUser: true,
-      time: '10:44 AM',
-      status: 'delivered',
-    },
-  ]);
+  const [sending, setSending] = useState(false);
+
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
+  // Load chat history from the backend on mount.
+  useEffect(() => {
+    if (!rideId) return;
+    (async () => {
+      try {
+        const api = (await import('@shared/api/client')).default;
+        const res = await api.get(`/rides/${rideId}/messages`);
+        if (res.data?.messages) {
+          setChatMessages(res.data.messages);
+        }
+      } catch (e) {
+        console.log('[Chat] Failed to load history:', e);
+      }
+    })();
+  }, [rideId]);
+
+  // Scroll to bottom when new messages arrive (via WS or local send).
+  useEffect(() => {
+    setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+  }, [chatMessages.length]);
+
+  // Map backend message shape to the UI's Message interface.
+  const messages: Message[] = chatMessages.map((m: any) => ({
+    id: m.id,
+    text: m.text,
+    isUser: m.sender === 'rider',
+    time: m.timestamp
+      ? new Date(m.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      : '',
+    status: m.sender === 'rider' ? 'sent' : undefined,
+  }));
 
   const quickReplies = [
     { id: '1', text: "\ud83d\udc4b I'm here", icon: null },
@@ -62,40 +77,36 @@ export default function ChatDriverScreen() {
     router.back();
   };
 
-  const handleCall = () => {
-    // Initiate call
+  const handleCall = async () => {
+    if (!rideId) return;
+    try {
+      const api = (await import('@shared/api/client')).default;
+      const res = await api.get(`/rides/${rideId}/call`);
+      if (res.data?.phone) {
+        const { Linking } = require('react-native');
+        Linking.openURL(`tel:${res.data.phone}`);
+      }
+    } catch (e: any) {
+      console.log('[Chat] Call failed:', e?.response?.data?.detail || e.message);
+    }
   };
 
-  const sendMessage = (text: string) => {
-    if (!text.trim()) return;
-
-    const newMsg: Message = {
-      id: Date.now().toString(),
-      text: text.trim(),
-      isUser: true,
-      time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-      status: 'sent',
-    };
-
-    setMessages([...messages, newMsg]);
-    setMessage('');
-
-    // Scroll to bottom
-    setTimeout(() => {
-      scrollViewRef.current?.scrollToEnd({ animated: true });
-    }, 100);
-
-    // Simulate driver response
-    setTimeout(() => {
-      const reply: Message = {
-        id: (Date.now() + 1).toString(),
-        text: "Thanks for letting me know!",
-        isUser: false,
-        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-      };
-      setMessages(prev => [...prev, reply]);
-      scrollViewRef.current?.scrollToEnd({ animated: true });
-    }, 2000);
+  const sendMessage = async (text: string) => {
+    if (!text.trim() || !rideId || sending) return;
+    setSending(true);
+    try {
+      const api = (await import('@shared/api/client')).default;
+      const res = await api.post(`/rides/${rideId}/messages`, { text: text.trim() });
+      if (res.data?.message) {
+        // Optimistically add to local state (deduplicated by the store).
+        addChatMessage(res.data.message);
+      }
+    } catch (e) {
+      console.log('[Chat] Send failed:', e);
+    } finally {
+      setSending(false);
+      setMessage('');
+    }
   };
 
   const handleQuickReply = (text: string) => {
@@ -110,12 +121,12 @@ export default function ChatDriverScreen() {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={handleBack}>
-          <Ionicons name="chevron-back" size={28} color="#1A1A1A" />
+          <Ionicons name="chevron-back" size={28} color={colors.text} />
         </TouchableOpacity>
 
         <View style={styles.driverHeader}>
           <View style={styles.driverAvatar}>
-            <Ionicons name="person" size={22} color="#666" />
+            <Ionicons name="person" size={22} color={colors.textDim} />
             <View style={styles.onlineDot} />
           </View>
           <View style={styles.driverInfo}>
@@ -127,7 +138,7 @@ export default function ChatDriverScreen() {
         </View>
 
         <TouchableOpacity style={styles.callButton} onPress={handleCall}>
-          <Ionicons name="call" size={22} color={SpinrConfig.theme.colors.primary} />
+          <Ionicons name="call" size={22} color={colors.primary} />
         </TouchableOpacity>
 
         <View style={styles.toggleContainer}>
@@ -156,7 +167,7 @@ export default function ChatDriverScreen() {
             <View key={msg.id} style={[styles.messageRow, msg.isUser && styles.messageRowUser]}>
               {!msg.isUser && (
                 <View style={styles.messageSenderAvatar}>
-                  <Ionicons name="person" size={16} color="#666" />
+                  <Ionicons name="person" size={16} color={colors.textDim} />
                 </View>
               )}
               <View>
@@ -193,7 +204,7 @@ export default function ChatDriverScreen() {
         {/* Input Area */}
         <View style={styles.inputContainer}>
           <TouchableOpacity style={styles.cameraButton}>
-            <Ionicons name="camera-outline" size={24} color="#666" />
+            <Ionicons name="camera-outline" size={24} color={colors.textDim} />
             <View style={styles.cameraBadge}>
               <Ionicons name="add" size={10} color="#FFF" />
             </View>
@@ -203,7 +214,7 @@ export default function ChatDriverScreen() {
             <TextInput
               style={styles.textInput}
               placeholder={`Message ${driverFirstName}...`}
-              placeholderTextColor="#999"
+              placeholderTextColor={colors.textDim}
               value={message}
               onChangeText={setMessage}
               multiline
@@ -223,234 +234,236 @@ export default function ChatDriverScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F5F5F5',
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFF',
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
-  },
-  backButton: {
-    padding: 4,
-  },
-  driverHeader: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginLeft: 8,
-  },
-  driverAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#E8E8E8',
-    justifyContent: 'center',
-    alignItems: 'center',
-    position: 'relative',
-  },
-  onlineDot: {
-    position: 'absolute',
-    bottom: 2,
-    right: 2,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#10B981',
-    borderWidth: 2,
-    borderColor: '#FFF',
-  },
-  driverInfo: {
-    marginLeft: 10,
-  },
-  driverName: {
-    fontSize: 17,
-    fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
-  },
-  vehicleInfo: {
-    fontSize: 13,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666',
-  },
-  callButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#FFF0F0',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 8,
-  },
-  toggleContainer: {
-    width: 36,
-    height: 22,
-    backgroundColor: '#E0E0E0',
-    borderRadius: 11,
-    justifyContent: 'center',
-    alignItems: 'flex-end',
-    paddingHorizontal: 3,
-  },
-  toggleDot: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: '#999',
-  },
-  messagesContainer: {
-    flex: 1,
-  },
-  messagesList: {
-    flex: 1,
-  },
-  messagesContent: {
-    padding: 16,
-    paddingBottom: 8,
-  },
-  systemMessage: {
-    alignSelf: 'center',
-    backgroundColor: '#E8E8E8',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 16,
-    marginBottom: 20,
-  },
-  systemMessageText: {
-    fontSize: 13,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666',
-  },
-  messageRow: {
-    flexDirection: 'row',
-    marginBottom: 12,
-    alignItems: 'flex-end',
-  },
-  messageRowUser: {
-    justifyContent: 'flex-end',
-  },
-  messageSenderAvatar: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: '#D4E4B4',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 8,
-  },
-  messageBubble: {
-    maxWidth: 280,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 20,
-  },
-  userBubble: {
-    backgroundColor: SpinrConfig.theme.colors.primary,
-    borderBottomRightRadius: 6,
-  },
-  driverBubble: {
-    backgroundColor: '#FFF',
-    borderBottomLeftRadius: 6,
-  },
-  messageText: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#1A1A1A',
-    lineHeight: 22,
-  },
-  userMessageText: {
-    color: '#FFF',
-  },
-  messageTime: {
-    fontSize: 11,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#999',
-    marginTop: 4,
-    marginLeft: 4,
-  },
-  messageTimeUser: {
-    textAlign: 'right',
-    marginRight: 4,
-  },
-  readIndicator: {
-    color: SpinrConfig.theme.colors.primary,
-  },
-  deliveredIndicator: {
-    color: '#999',
-  },
-  quickReplies: {
-    flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 8,
-  },
-  quickReplyButton: {
-    backgroundColor: '#FFF',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#E0E0E0',
-  },
-  quickReplyText: {
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#1A1A1A',
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    backgroundColor: '#FFF',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 10,
-  },
-  cameraButton: {
-    width: 44,
-    height: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-    position: 'relative',
-  },
-  cameraBadge: {
-    position: 'absolute',
-    top: 4,
-    right: 4,
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: '#1A1A1A',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  textInputContainer: {
-    flex: 1,
-    backgroundColor: '#F5F5F5',
-    borderRadius: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    maxHeight: 120,
-  },
-  textInput: {
-    fontSize: 16,
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#1A1A1A',
-    maxHeight: 100,
-  },
-  sendButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#CCC',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  sendButtonActive: {
-    backgroundColor: SpinrConfig.theme.colors.primary,
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.surfaceLight,
+    },
+    header: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      paddingHorizontal: 12,
+      paddingVertical: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    backButton: {
+      padding: 4,
+    },
+    driverHeader: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginLeft: 8,
+    },
+    driverAvatar: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: '#E8E8E8',
+      justifyContent: 'center',
+      alignItems: 'center',
+      position: 'relative',
+    },
+    onlineDot: {
+      position: 'absolute',
+      bottom: 2,
+      right: 2,
+      width: 10,
+      height: 10,
+      borderRadius: 5,
+      backgroundColor: '#10B981',
+      borderWidth: 2,
+      borderColor: '#FFF',
+    },
+    driverInfo: {
+      marginLeft: 10,
+    },
+    driverName: {
+      fontSize: 17,
+      fontFamily: 'PlusJakartaSans_700Bold',
+      color: colors.text,
+    },
+    vehicleInfo: {
+      fontSize: 13,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+    },
+    callButton: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: '#FFF0F0',
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginRight: 8,
+    },
+    toggleContainer: {
+      width: 36,
+      height: 22,
+      backgroundColor: colors.border,
+      borderRadius: 11,
+      justifyContent: 'center',
+      alignItems: 'flex-end',
+      paddingHorizontal: 3,
+    },
+    toggleDot: {
+      width: 18,
+      height: 18,
+      borderRadius: 9,
+      backgroundColor: colors.textDim,
+    },
+    messagesContainer: {
+      flex: 1,
+    },
+    messagesList: {
+      flex: 1,
+    },
+    messagesContent: {
+      padding: 16,
+      paddingBottom: 8,
+    },
+    systemMessage: {
+      alignSelf: 'center',
+      backgroundColor: '#E8E8E8',
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      borderRadius: 16,
+      marginBottom: 20,
+    },
+    systemMessageText: {
+      fontSize: 13,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+    },
+    messageRow: {
+      flexDirection: 'row',
+      marginBottom: 12,
+      alignItems: 'flex-end',
+    },
+    messageRowUser: {
+      justifyContent: 'flex-end',
+    },
+    messageSenderAvatar: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: '#D4E4B4',
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginRight: 8,
+    },
+    messageBubble: {
+      maxWidth: 280,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      borderRadius: 20,
+    },
+    userBubble: {
+      backgroundColor: colors.primary,
+      borderBottomRightRadius: 6,
+    },
+    driverBubble: {
+      backgroundColor: colors.surfaceLight,
+      borderBottomLeftRadius: 6,
+    },
+    messageText: {
+      fontSize: 16,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.text,
+      lineHeight: 22,
+    },
+    userMessageText: {
+      color: '#FFF',
+    },
+    messageTime: {
+      fontSize: 11,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+      marginTop: 4,
+      marginLeft: 4,
+    },
+    messageTimeUser: {
+      textAlign: 'right',
+      marginRight: 4,
+    },
+    readIndicator: {
+      color: colors.primary,
+    },
+    deliveredIndicator: {
+      color: colors.textDim,
+    },
+    quickReplies: {
+      flexDirection: 'row',
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      gap: 8,
+    },
+    quickReplyButton: {
+      backgroundColor: colors.surface,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderRadius: 20,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    quickReplyText: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.text,
+    },
+    inputContainer: {
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      backgroundColor: colors.surface,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      gap: 10,
+    },
+    cameraButton: {
+      width: 44,
+      height: 44,
+      justifyContent: 'center',
+      alignItems: 'center',
+      position: 'relative',
+    },
+    cameraBadge: {
+      position: 'absolute',
+      top: 4,
+      right: 4,
+      width: 14,
+      height: 14,
+      borderRadius: 7,
+      backgroundColor: colors.text,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    textInputContainer: {
+      flex: 1,
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 24,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      maxHeight: 120,
+    },
+    textInput: {
+      fontSize: 16,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.text,
+      maxHeight: 100,
+    },
+    sendButton: {
+      width: 44,
+      height: 44,
+      borderRadius: 22,
+      backgroundColor: '#CCC',
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    sendButtonActive: {
+      backgroundColor: colors.primary,
+    },
+  });
+}

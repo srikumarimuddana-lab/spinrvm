@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
     View,
     Text,
@@ -18,21 +18,31 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import api from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
 import { useLanguageStore } from '../../store/languageStore';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
-const THEME = SpinrConfig.theme.colors;
-const COLORS = {
-    primary: THEME.background,
-    accent: THEME.primary,
-    accentDim: THEME.primaryDark,
-    surface: THEME.surface,
-    surfaceLight: THEME.surfaceLight,
-    text: THEME.text,
-    textDim: THEME.textDim,
-    danger: THEME.error,
-    border: THEME.border,
-};
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
+
+/** Geocode a free-text address into {lat, lng}.
+ *  Falls back to null if the API is unavailable or returns no results. */
+async function geocodeAddress(address: string): Promise<{ lat: number; lng: number } | null> {
+    if (!GOOGLE_MAPS_API_KEY) return null;
+    try {
+        const encoded = encodeURIComponent(address);
+        const res = await fetch(
+            `https://maps.googleapis.com/maps/api/geocode/json?address=${encoded}&key=${GOOGLE_MAPS_API_KEY}`
+        );
+        const data = await res.json();
+        if (data.status === 'OK' && data.results?.length > 0) {
+            const { lat, lng } = data.results[0].geometry.location;
+            return { lat, lng };
+        }
+    } catch {
+        // Network or parse error — caller handles null
+    }
+    return null;
+}
 
 interface SavedAddress {
     id: string;
@@ -47,6 +57,8 @@ export default function AddressesScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const { t } = useLanguageStore();
+    const { colors } = useTheme();
+    const styles = useMemo(() => createStyles(colors), [colors]);
     const [addresses, setAddresses] = useState<SavedAddress[]>([]);
     const [loading, setLoading] = useState(true);
     const [showAddModal, setShowAddModal] = useState(false);
@@ -99,13 +111,21 @@ export default function AddressesScreen() {
         }
 
         try {
-            // For now, create with placeholder coordinates
-            // In a full implementation, you would geocode the address
+            // Geocode the address to get real coordinates
+            const coords = await geocodeAddress(newAddress.address.trim());
+            if (!coords) {
+                Alert.alert(
+                    'Address not found',
+                    'We could not locate that address on the map. Please enter a more specific address (include city/province).'
+                );
+                return;
+            }
+
             await api.post('/addresses', {
                 name: newAddress.name.trim(),
                 address: newAddress.address.trim(),
-                lat: 52.1332, // Default Saskatoon coordinates
-                lng: -106.6700,
+                lat: coords.lat,
+                lng: coords.lng,
                 icon: 'home',
             });
             setShowAddModal(false);
@@ -129,21 +149,21 @@ export default function AddressesScreen() {
             {/* Header */}
             <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-                    <Ionicons name="arrow-back" size={24} color={COLORS.text} />
+                    <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
                 <Text style={styles.headerTitle}>Saved Addresses</Text>
                 <TouchableOpacity
                     style={styles.addBtn}
                     onPress={() => setShowAddModal(true)}
                 >
-                    <Ionicons name="add" size={24} color={COLORS.accent} />
+                    <Ionicons name="add" size={24} color={colors.primary} />
                 </TouchableOpacity>
             </View>
 
             <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
                 {loading ? (
                     <View style={styles.loadingContainer}>
-                        <ActivityIndicator color={COLORS.accent} size="large" />
+                        <ActivityIndicator color={colors.primary} size="large" />
                     </View>
                 ) : addresses.length > 0 ? (
                     <View style={styles.addressList}>
@@ -157,7 +177,7 @@ export default function AddressesScreen() {
                                         <Ionicons
                                             name={address.icon === 'work' ? 'briefcase' : 'home'}
                                             size={20}
-                                            color={COLORS.accent}
+                                            color={colors.primary}
                                         />
                                     </View>
                                     <View style={styles.addressInfo}>
@@ -171,14 +191,14 @@ export default function AddressesScreen() {
                                     style={styles.deleteBtn}
                                     onPress={() => handleDelete(address.id)}
                                 >
-                                    <Ionicons name="trash-outline" size={20} color={COLORS.danger} />
+                                    <Ionicons name="trash-outline" size={20} color={colors.danger} />
                                 </TouchableOpacity>
                             </View>
                         ))}
                     </View>
                 ) : (
                     <View style={styles.emptyState}>
-                        <Ionicons name="location-outline" size={64} color={COLORS.surfaceLight} />
+                        <Ionicons name="location-outline" size={64} color={colors.surfaceLight} />
                         <Text style={styles.emptyTitle}>No saved addresses</Text>
                         <Text style={styles.emptyText}>
                             Save your frequent addresses for quick access
@@ -187,7 +207,7 @@ export default function AddressesScreen() {
                             style={styles.emptyBtn}
                             onPress={() => setShowAddModal(true)}
                         >
-                            <Ionicons name="add" size={20} color={COLORS.accent} />
+                            <Ionicons name="add" size={20} color={colors.primary} />
                             <Text style={styles.emptyBtnText}>Add Address</Text>
                         </TouchableOpacity>
                     </View>
@@ -214,7 +234,7 @@ export default function AddressesScreen() {
                             <TextInput
                                 style={styles.input}
                                 placeholder="Enter name"
-                                placeholderTextColor={COLORS.textDim}
+                                placeholderTextColor={colors.textDim}
                                 value={newAddress.name}
                                 onChangeText={(text) => setNewAddress({ ...newAddress, name: text })}
                             />
@@ -225,7 +245,7 @@ export default function AddressesScreen() {
                             <TextInput
                                 style={styles.input}
                                 placeholder="Enter full address"
-                                placeholderTextColor={COLORS.textDim}
+                                placeholderTextColor={colors.textDim}
                                 value={newAddress.address}
                                 onChangeText={(text) => setNewAddress({ ...newAddress, address: text })}
                                 multiline
@@ -254,10 +274,11 @@ export default function AddressesScreen() {
     );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors) {
+    return StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: COLORS.primary,
+        backgroundColor: colors.background,
     },
     header: {
         flexDirection: 'row',
@@ -266,18 +287,18 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         paddingBottom: 16,
         borderBottomWidth: 1,
-        borderBottomColor: COLORS.border,
+        borderBottomColor: colors.border,
     },
     headerTitle: {
         fontSize: 18,
         fontWeight: '700',
-        color: COLORS.text,
+        color: colors.text,
     },
     backBtn: {
         width: 40,
         height: 40,
         borderRadius: 20,
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
         justifyContent: 'center',
         alignItems: 'center',
     },
@@ -285,7 +306,7 @@ const styles = StyleSheet.create({
         width: 40,
         height: 40,
         borderRadius: 20,
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
         justifyContent: 'center',
         alignItems: 'center',
     },
@@ -305,11 +326,11 @@ const styles = StyleSheet.create({
     addressCard: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
         borderRadius: 16,
         padding: 16,
         borderWidth: 1,
-        borderColor: COLORS.border,
+        borderColor: colors.border,
     },
     addressContent: {
         flex: 1,
@@ -321,7 +342,7 @@ const styles = StyleSheet.create({
         width: 44,
         height: 44,
         borderRadius: 22,
-        backgroundColor: `${COLORS.accent}15`,
+        backgroundColor: `${colors.primary}15`,
         justifyContent: 'center',
         alignItems: 'center',
     },
@@ -331,18 +352,18 @@ const styles = StyleSheet.create({
     addressName: {
         fontSize: 16,
         fontWeight: '600',
-        color: COLORS.text,
+        color: colors.text,
         marginBottom: 4,
     },
     addressText: {
         fontSize: 14,
-        color: COLORS.textDim,
+        color: colors.textDim,
     },
     deleteBtn: {
         width: 40,
         height: 40,
         borderRadius: 20,
-        backgroundColor: `${COLORS.danger}15`,
+        backgroundColor: `${colors.danger}15`,
         justifyContent: 'center',
         alignItems: 'center',
     },
@@ -355,12 +376,12 @@ const styles = StyleSheet.create({
     emptyTitle: {
         fontSize: 18,
         fontWeight: '600',
-        color: COLORS.text,
+        color: colors.text,
         marginTop: 16,
     },
     emptyText: {
         fontSize: 14,
-        color: COLORS.textDim,
+        color: colors.textDim,
         marginTop: 8,
         textAlign: 'center',
     },
@@ -372,12 +393,12 @@ const styles = StyleSheet.create({
         paddingHorizontal: 20,
         paddingVertical: 12,
         borderRadius: 24,
-        backgroundColor: `${COLORS.accent}15`,
+        backgroundColor: `${colors.primary}15`,
     },
     emptyBtnText: {
         fontSize: 15,
         fontWeight: '600',
-        color: COLORS.accent,
+        color: colors.primary,
     },
     modalOverlay: {
         flex: 1,
@@ -385,7 +406,7 @@ const styles = StyleSheet.create({
         justifyContent: 'flex-end',
     },
     modalContent: {
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
         borderTopLeftRadius: 24,
         borderTopRightRadius: 24,
         padding: 24,
@@ -393,7 +414,7 @@ const styles = StyleSheet.create({
     modalTitle: {
         fontSize: 20,
         fontWeight: '700',
-        color: COLORS.text,
+        color: colors.text,
         marginBottom: 24,
         textAlign: 'center',
     },
@@ -403,17 +424,17 @@ const styles = StyleSheet.create({
     inputLabel: {
         fontSize: 14,
         fontWeight: '500',
-        color: COLORS.text,
+        color: colors.text,
         marginBottom: 8,
     },
     input: {
-        backgroundColor: COLORS.primary,
+        backgroundColor: colors.background,
         borderRadius: 12,
         padding: 14,
         fontSize: 15,
-        color: COLORS.text,
+        color: colors.text,
         borderWidth: 1,
-        borderColor: COLORS.border,
+        borderColor: colors.border,
         minHeight: 44,
     },
     modalActions: {
@@ -428,21 +449,22 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     cancelBtn: {
-        backgroundColor: COLORS.primary,
+        backgroundColor: colors.background,
         borderWidth: 1,
-        borderColor: COLORS.border,
+        borderColor: colors.border,
     },
     cancelBtnText: {
         fontSize: 15,
         fontWeight: '600',
-        color: COLORS.text,
+        color: colors.text,
     },
     saveBtn: {
-        backgroundColor: COLORS.accent,
+        backgroundColor: colors.primary,
     },
     saveBtnText: {
         fontSize: 15,
         fontWeight: '600',
         color: '#fff',
     },
-});
+    });
+}

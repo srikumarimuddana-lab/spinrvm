@@ -12,13 +12,13 @@ import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useRideStore } from '../store/rideStore';
 import { CarMarker } from '@shared/components/CarMarker';
 import api from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
 import { SOSButton } from '@shared/components/SOSButton';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
-const COLORS = SpinrConfig.theme.colors;
 
 export default function DriverArrivedScreen() {
   const router = useRouter();
@@ -36,6 +36,8 @@ export default function DriverArrivedScreen() {
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', message: '', variant: 'info' });
   const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   const fare = currentRide?.total_fare || 0;
   // Use server-provided cancellation fee; fall back to $3 default (matches app_settings).
@@ -70,7 +72,8 @@ export default function DriverArrivedScreen() {
   useEffect(() => {
     if (rideId) {
       fetchRide(rideId);
-      const interval = setInterval(() => fetchRide(rideId), 3000);
+      // Fallback poll — WS delivers updates in real-time.
+      const interval = setInterval(() => fetchRide(rideId), 15000);
       return () => clearInterval(interval);
     }
   }, [rideId]);
@@ -133,6 +136,7 @@ export default function DriverArrivedScreen() {
           }}
           showsUserLocation
           showsMyLocationButton={false}
+          userInterfaceStyle={isDark ? "dark" : "light"}
         >
           {/* Route: pickup → dropoff */}
           {GOOGLE_MAPS_API_KEY && (
@@ -205,7 +209,7 @@ export default function DriverArrivedScreen() {
       <SafeAreaView edges={['top']} style={styles.headerOverlay}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.hBtn} onPress={handleCancelPress}>
-            <Ionicons name="arrow-back" size={22} color="#1A1A1A" />
+            <Ionicons name="arrow-back" size={22} color={colors.text} />
           </TouchableOpacity>
           <View style={styles.arrivedChip}>
             <View style={styles.pulseGreen} />
@@ -264,14 +268,14 @@ export default function DriverArrivedScreen() {
                 </Text>
               </View>
               <TouchableOpacity style={styles.msgBtn} onPress={handleMessage}>
-                <Ionicons name="chatbubble" size={18} color={COLORS.primary} />
+                <Ionicons name="chatbubble" size={18} color={colors.primary} />
               </TouchableOpacity>
             </View>
 
             {/* Vehicle */}
             <View style={styles.vehicleBar}>
               <View style={styles.vehicleIcon}>
-                <Ionicons name="car" size={16} color={COLORS.primary} />
+                <Ionicons name="car" size={16} color={colors.primary} />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.vehicleName}>
@@ -290,7 +294,7 @@ export default function DriverArrivedScreen() {
               <View style={styles.tripDots}>
                 <View style={[styles.tripDot, { backgroundColor: '#10B981' }]} />
                 <View style={styles.tripLine} />
-                <View style={[styles.tripDot, { backgroundColor: COLORS.primary }]} />
+                <View style={[styles.tripDot, { backgroundColor: colors.primary }]} />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.tripLabel}>PICKUP</Text>
@@ -327,10 +331,10 @@ export default function DriverArrivedScreen() {
               <Text style={styles.actionPrimaryText}>Message Driver</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.actionIcon} onPress={handleShareTrip}>
-              <Ionicons name="share-outline" size={20} color="#1A1A1A" />
+              <Ionicons name="share-outline" size={20} color={colors.text} />
             </TouchableOpacity>
             <TouchableOpacity style={styles.actionIcon} onPress={handleCopyOtp}>
-              <Ionicons name="copy-outline" size={20} color="#1A1A1A" />
+              <Ionicons name="copy-outline" size={20} color={colors.text} />
             </TouchableOpacity>
           </View>
 
@@ -376,144 +380,146 @@ export default function DriverArrivedScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#E8E8E8' },
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: '#E8E8E8' },
 
-  // Map markers
-  pickupMarkerWrap: { alignItems: 'center', justifyContent: 'center', width: 56, height: 56 },
-  pickupPulse: {
-    position: 'absolute', width: 56, height: 56, borderRadius: 28,
-    backgroundColor: 'rgba(238, 43, 43, 0.12)',
-  },
-  pickupPin: {
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center',
-    borderWidth: 3, borderColor: '#FFF',
-    elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4,
-  },
+    // Map markers
+    pickupMarkerWrap: { alignItems: 'center', justifyContent: 'center', width: 56, height: 56 },
+    pickupPulse: {
+      position: 'absolute', width: 56, height: 56, borderRadius: 28,
+      backgroundColor: 'rgba(238, 43, 43, 0.12)',
+    },
+    pickupPin: {
+      width: 36, height: 36, borderRadius: 18,
+      backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center',
+      borderWidth: 3, borderColor: '#FFF',
+      elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4,
+    },
 
-  dropoffPin: {
-    width: 32, height: 32, borderRadius: 16,
-    backgroundColor: COLORS.primary, justifyContent: 'center', alignItems: 'center',
-    borderWidth: 2, borderColor: '#FFF',
-    elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3,
-  },
+    dropoffPin: {
+      width: 32, height: 32, borderRadius: 16,
+      backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center',
+      borderWidth: 2, borderColor: '#FFF',
+      elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3,
+    },
 
-  // Header
-  headerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 10,
-  },
-  hBtn: {
-    width: 44, height: 44, borderRadius: 22, backgroundColor: '#FFF',
-    justifyContent: 'center', alignItems: 'center',
-    elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 4,
-  },
-  arrivedChip: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#FFF', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24,
-    elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 4,
-  },
-  pulseGreen: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#10B981', marginRight: 8 },
-  arrivedChipText: { fontSize: 14, fontWeight: '700', color: '#1A1A1A' },
+    // Header
+    headerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10 },
+    header: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: 16, paddingVertical: 10,
+    },
+    hBtn: {
+      width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surface,
+      justifyContent: 'center', alignItems: 'center',
+      elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 4,
+    },
+    arrivedChip: {
+      flexDirection: 'row', alignItems: 'center',
+      backgroundColor: colors.surface, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 24,
+      elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 4,
+    },
+    pulseGreen: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#10B981', marginRight: 8 },
+    arrivedChipText: { fontSize: 14, fontWeight: '700', color: colors.text },
 
-  // Sheet
-  sheetBg: { borderTopLeftRadius: 24, borderTopRightRadius: 24 },
-  sheetHandle: { backgroundColor: '#DDD', width: 40, height: 4, borderRadius: 2 },
-  sheetContent: { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 4 },
+    // Sheet
+    sheetBg: { borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+    sheetHandle: { backgroundColor: '#DDD', width: 40, height: 4, borderRadius: 2 },
+    sheetContent: { paddingHorizontal: 20, paddingBottom: 40, paddingTop: 4 },
 
-  // OTP Card
-  otpCard: {
-    backgroundColor: COLORS.primary, borderRadius: 20, padding: 20,
-    alignItems: 'center', marginBottom: 16,
-  },
-  otpHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 },
-  otpTitle: { fontSize: 14, fontWeight: '600', color: 'rgba(255,255,255,0.85)' },
-  otpDigits: { flexDirection: 'row', gap: 10, marginBottom: 12 },
-  otpBox: {
-    width: 52, height: 60, backgroundColor: 'rgba(255,255,255,0.18)',
-    borderRadius: 14, justifyContent: 'center', alignItems: 'center',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
-  },
-  otpNum: { fontSize: 28, fontWeight: '800', color: '#FFF' },
-  otpSub: { fontSize: 12, color: 'rgba(255,255,255,0.6)', textAlign: 'center' },
+    // OTP Card
+    otpCard: {
+      backgroundColor: colors.primary, borderRadius: 20, padding: 20,
+      alignItems: 'center', marginBottom: 16,
+    },
+    otpHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 },
+    otpTitle: { fontSize: 14, fontWeight: '600', color: 'rgba(255,255,255,0.85)' },
+    otpDigits: { flexDirection: 'row', gap: 10, marginBottom: 12 },
+    otpBox: {
+      width: 52, height: 60, backgroundColor: 'rgba(255,255,255,0.18)',
+      borderRadius: 14, justifyContent: 'center', alignItems: 'center',
+      borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
+    },
+    otpNum: { fontSize: 28, fontWeight: '800', color: '#FFF' },
+    otpSub: { fontSize: 12, color: 'rgba(255,255,255,0.6)', textAlign: 'center' },
 
-  // Driver Card
-  driverCard: { backgroundColor: '#F9F9F9', borderRadius: 18, padding: 16, marginBottom: 14 },
-  driverTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
-  avatar: {
-    width: 50, height: 50, borderRadius: 25, backgroundColor: '#E8E8E8',
-    justifyContent: 'center', alignItems: 'center', marginRight: 12, position: 'relative',
-  },
-  ratingPill: {
-    position: 'absolute', bottom: -3, left: -3,
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#FFF', paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 2,
-  },
-  ratingNum: { fontSize: 10, fontWeight: '700', color: '#1A1A1A', marginLeft: 2 },
-  driverName: { fontSize: 17, fontWeight: '700', color: '#1A1A1A' },
-  driverMeta: { fontSize: 12, color: '#888', marginTop: 2 },
-  msgBtn: {
-    width: 44, height: 44, borderRadius: 22,
-    backgroundColor: `${COLORS.primary}12`, justifyContent: 'center', alignItems: 'center',
-  },
+    // Driver Card
+    driverCard: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 16, marginBottom: 14 },
+    driverTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
+    avatar: {
+      width: 50, height: 50, borderRadius: 25, backgroundColor: '#E8E8E8',
+      justifyContent: 'center', alignItems: 'center', marginRight: 12, position: 'relative',
+    },
+    ratingPill: {
+      position: 'absolute', bottom: -3, left: -3,
+      flexDirection: 'row', alignItems: 'center',
+      backgroundColor: colors.surface, paddingHorizontal: 5, paddingVertical: 2, borderRadius: 8,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2, elevation: 2,
+    },
+    ratingNum: { fontSize: 10, fontWeight: '700', color: colors.text, marginLeft: 2 },
+    driverName: { fontSize: 17, fontWeight: '700', color: colors.text },
+    driverMeta: { fontSize: 12, color: '#888', marginTop: 2 },
+    msgBtn: {
+      width: 44, height: 44, borderRadius: 22,
+      backgroundColor: `${colors.primary}12`, justifyContent: 'center', alignItems: 'center',
+    },
 
-  vehicleBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingTop: 14, borderTopWidth: 1, borderTopColor: '#ECECEC',
-  },
-  vehicleIcon: {
-    width: 32, height: 32, borderRadius: 8, backgroundColor: `${COLORS.primary}12`,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  vehicleName: { fontSize: 13, fontWeight: '500', color: '#444' },
-  plateBadge: {
-    backgroundColor: '#1A1A1A', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5,
-  },
-  plateNum: { fontSize: 13, fontWeight: '800', color: '#FFF', letterSpacing: 1.5 },
+    vehicleBar: {
+      flexDirection: 'row', alignItems: 'center', gap: 10,
+      paddingTop: 14, borderTopWidth: 1, borderTopColor: '#ECECEC',
+    },
+    vehicleIcon: {
+      width: 32, height: 32, borderRadius: 8, backgroundColor: `${colors.primary}12`,
+      justifyContent: 'center', alignItems: 'center',
+    },
+    vehicleName: { fontSize: 13, fontWeight: '500', color: colors.textSecondary },
+    plateBadge: {
+      backgroundColor: colors.text, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5,
+    },
+    plateNum: { fontSize: 13, fontWeight: '800', color: '#FFF', letterSpacing: 1.5 },
 
-  // Trip Card
-  tripCard: { backgroundColor: '#F9F9F9', borderRadius: 18, padding: 16, marginBottom: 14 },
-  tripRow: { flexDirection: 'row' },
-  tripDots: { alignItems: 'center', marginRight: 12, paddingTop: 2 },
-  tripDot: { width: 10, height: 10, borderRadius: 5 },
-  tripLine: { width: 2, flex: 1, backgroundColor: '#DDD', marginVertical: 3 },
-  tripLabel: { fontSize: 10, fontWeight: '600', color: '#999', letterSpacing: 0.5, marginBottom: 2 },
-  tripAddr: { fontSize: 14, fontWeight: '500', color: '#1A1A1A' },
+    // Trip Card
+    tripCard: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 16, marginBottom: 14 },
+    tripRow: { flexDirection: 'row' },
+    tripDots: { alignItems: 'center', marginRight: 12, paddingTop: 2 },
+    tripDot: { width: 10, height: 10, borderRadius: 5 },
+    tripLine: { width: 2, flex: 1, backgroundColor: '#DDD', marginVertical: 3 },
+    tripLabel: { fontSize: 10, fontWeight: '600', color: colors.textDim, letterSpacing: 0.5, marginBottom: 2 },
+    tripAddr: { fontSize: 14, fontWeight: '500', color: colors.text },
 
-  fareRow: {
-    flexDirection: 'row', marginTop: 14, paddingTop: 14,
-    borderTopWidth: 1, borderTopColor: '#ECECEC',
-  },
-  fareItem: { flex: 1, alignItems: 'center' },
-  fareVal: { fontSize: 15, fontWeight: '700', color: '#1A1A1A' },
-  fareLbl: { fontSize: 10, color: '#999', marginTop: 2 },
-  fareDivider: { width: 1, backgroundColor: '#ECECEC' },
+    fareRow: {
+      flexDirection: 'row', marginTop: 14, paddingTop: 14,
+      borderTopWidth: 1, borderTopColor: '#ECECEC',
+    },
+    fareItem: { flex: 1, alignItems: 'center' },
+    fareVal: { fontSize: 15, fontWeight: '700', color: colors.text },
+    fareLbl: { fontSize: 10, color: colors.textDim, marginTop: 2 },
+    fareDivider: { width: 1, backgroundColor: '#ECECEC' },
 
-  // Actions
-  actionsRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
-  actionPrimary: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: COLORS.primary, paddingVertical: 15, borderRadius: 16,
-  },
-  actionPrimaryText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
-  actionIcon: {
-    width: 50, height: 50, borderRadius: 14,
-    backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center',
-  },
+    // Actions
+    actionsRow: { flexDirection: 'row', gap: 10, marginBottom: 10 },
+    actionPrimary: {
+      flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+      backgroundColor: colors.primary, paddingVertical: 15, borderRadius: 16,
+    },
+    actionPrimaryText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+    actionIcon: {
+      width: 50, height: 50, borderRadius: 14,
+      backgroundColor: colors.surfaceLight, justifyContent: 'center', alignItems: 'center',
+    },
 
-  cancelLink: { alignItems: 'center', paddingVertical: 10, marginBottom: 4 },
-  cancelLinkText: { fontSize: 13, fontWeight: '500', color: '#999' },
+    cancelLink: { alignItems: 'center', paddingVertical: 10, marginBottom: 4 },
+    cancelLinkText: { fontSize: 13, fontWeight: '500', color: colors.textDim },
 
-  // Dev
-  devBar: {
-    flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8,
-    marginTop: 8, padding: 12, backgroundColor: '#FEF3C7', borderRadius: 12,
-    borderWidth: 1, borderColor: '#F59E0B',
-  },
-  devLabel: { fontSize: 11, fontWeight: '700', color: '#92400E', marginRight: 4 },
-  devBtn: { backgroundColor: '#F59E0B', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
-  devBtnText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
-});
+    // Dev
+    devBar: {
+      flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8,
+      marginTop: 8, padding: 12, backgroundColor: '#FEF3C7', borderRadius: 12,
+      borderWidth: 1, borderColor: '#F59E0B',
+    },
+    devLabel: { fontSize: 11, fontWeight: '700', color: '#92400E', marginRight: 4 },
+    devBtn: { backgroundColor: '#F59E0B', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
+    devBtnText: { fontSize: 12, fontWeight: '700', color: '#FFF' },
+  });
+}

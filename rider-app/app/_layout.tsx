@@ -3,6 +3,7 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
@@ -10,14 +11,19 @@ import NetInfo from '@react-native-community/netinfo';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useRideStore } from '../store/rideStore';
+import { useRiderSocket } from '../hooks/useRiderSocket';
 import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
+import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
+import { captureMessage, setUser } from '@shared/services/errorReporting';
+import Analytics from '@shared/analytics';
 import {
   initFirebaseServices,
   requestPushPermissionAndGetToken,
   onForegroundMessage,
   setBackgroundMessageHandler,
+  onTokenRefresh,
 } from '@shared/services/firebase';
 
 // expo-notifications' push-token APIs were removed from Expo Go in SDK 53,
@@ -79,8 +85,38 @@ export default function RootLayout() {
   const { initialize: initializeAuth, isInitialized: isAuthInitialized, token: authToken } = useAuthStore();
   const { initialize: initializeLocation, isInitialized: isLocationInitialized } = useLocationStore();
   const [isOffline, setIsOffline] = useState(false);
+  // Stripe publishable key is fetched from the backend at boot so operators
+  // can rotate it without an app release. Until it loads, we render children
+  // without StripeProvider — payment screens that call useStripe() will
+  // early-return a friendly "Payments unavailable" state in that window.
+  const [stripePublishableKey, setStripePublishableKey] = useState<string | null>(null);
   // Guard so we only register the FCM token once per auth session.
   const fcmRegisteredRef = useRef(false);
+
+  // ── Real-time WebSocket for ride-state + driver-location updates ─
+  // Connects when the rider has an active ride (currentRide is set in
+  // the store by ride-options.tsx after createRide). Disconnects
+  // automatically when the ride finishes or is cancelled. Screens that
+  // previously polled every 3s now poll every 15s as a fallback — the
+  // WebSocket delivers the same updates in <100ms.
+  const { connectionState: wsState } = useRiderSocket();
+
+  // ── Fetch Stripe publishable key from backend /settings ──
+  // Public endpoint — no auth required. Key comes from the admin
+  // settings row so ops can rotate without a new app build. Tokenization
+  // (manage-cards.tsx, payment-confirm.tsx) depends on this being set.
+  useEffect(() => {
+    (async () => {
+      try {
+        const api = (await import('@shared/api/client')).default;
+        const res = await api.get<{ stripe_publishable_key?: string }>('/settings');
+        const key = res.data?.stripe_publishable_key;
+        if (key) setStripePublishableKey(key);
+      } catch (e) {
+        console.log('[Stripe] Failed to fetch publishable key:', e);
+      }
+    })();
+  }, []);
 
   // ── Cold-start init: auth, location, Firebase, Android channel ──
   useEffect(() => {
@@ -92,6 +128,8 @@ export default function RootLayout() {
         // registration is deferred to a separate effect that waits for
         // an authenticated session (below).
         await initFirebaseServices();
+
+        captureMessage('rider-app cold start', 'log');
 
         // Android notification channels. Android 8+ REQUIRES a channel
         // or FCM messages are silently dropped. `ride-updates` is
@@ -161,11 +199,34 @@ export default function RootLayout() {
           platform: Platform.OS,
         });
         fcmRegisteredRef.current = true;
+        // Tag error reports with user identity from this point on.
+        const uid = useAuthStore.getState().user?.id;
+        if (uid) setUser(uid);
+        Analytics.login();
         console.log('[Push] Rider FCM token registered with backend');
       } catch (e) {
         console.log('[Push] Rider FCM token registration failed:', e);
       }
     })();
+
+    // Subscribe to FCM token rotations so push delivery doesn't
+    // silently fail when Firebase rotates the device token.
+    const unsubTokenRefresh = onTokenRefresh(async (newToken: string) => {
+      try {
+        const api = (await import('@shared/api/client')).default;
+        await api.post('/notifications/register-token', {
+          token: newToken,
+          platform: Platform.OS,
+        });
+        console.log('[Push] Rider refreshed FCM token registered with backend');
+      } catch (e) {
+        console.log('[Push] Rider refreshed FCM token registration failed:', e);
+      }
+    });
+
+    return () => {
+      if (typeof unsubTokenRefresh === 'function') unsubTokenRefresh();
+    };
   }, [isAuthInitialized, authToken]);
 
   // ── Foreground FCM message handler ──
@@ -229,12 +290,37 @@ export default function RootLayout() {
   }
 
   return (
+    <ThemeProvider>
+      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} />
+    </ThemeProvider>
+  );
+}
+
+function RootLayoutInner({
+  isOffline,
+  setIsOffline,
+}: {
+  isOffline: boolean;
+  setIsOffline: (v: boolean) => void;
+}) {
+  const { isDark } = useTheme();
+  return (
     <ErrorBoundary>
       <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
       <GestureHandlerRootView>
         <View style={{ flex: 1 }}>
           <SafeAreaProvider>
-            <StatusBar style={isOffline ? "light" : "dark"} />
+            <StatusBar style={isOffline ? "light" : isDark ? "light" : "dark"} />
+            {/* StripeProvider always wraps the Stack so useStripe() /
+                <CardField> work on any screen. When the publishable key
+                isn't loaded yet (or the fetch failed) we pass an empty
+                string; createPaymentMethod will reject with a clear
+                error and the manage-cards screen surfaces it as
+                "Payments unavailable — try again shortly". */}
+            <StripeProvider
+              publishableKey={stripePublishableKey || ''}
+              merchantIdentifier="merchant.com.spinr.user"
+            >
             <Stack
               screenOptions={{
                 headerShown: false,
@@ -276,6 +362,7 @@ export default function RootLayout() {
               <Stack.Screen name="ride-details" />
               <Stack.Screen name="settings" />
             </Stack>
+            </StripeProvider>
           </SafeAreaProvider>
         </View>
       </GestureHandlerRootView>

@@ -5,9 +5,9 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException
 
 try:
-    from ...db import db
+    from ... import db_supabase
 except ImportError:
-    from db import db
+    import db_supabase
 
 from .drivers import _log_driver_activity
 
@@ -21,7 +21,7 @@ router = APIRouter()
 @router.get("/documents/requirements")
 async def admin_get_document_requirements():
     """Get all document requirements."""
-    requirements = await db.get_rows("document_requirements", order="created_at", limit=100)
+    requirements = await db_supabase.get_rows("document_requirements", order="created_at", limit=100)
     return requirements or []
 
 
@@ -36,7 +36,7 @@ async def admin_create_document_requirement(requirement: Dict[str, Any]):
         "applicable_to": requirement.get("applicable_to", "driver"),  # driver, rider, vehicle
         "created_at": datetime.utcnow().isoformat(),
     }
-    row = await db.document_requirements.insert_one(doc)
+    row = await db_supabase.insert_one("document_requirements", doc)
     return {"requirement_id": str(row.get("id") if row and isinstance(row, dict) else "")}
 
 
@@ -57,14 +57,14 @@ async def admin_update_document_requirement(requirement_id: str, requirement: Di
 
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
-        await db.document_requirements.update_one({"id": requirement_id}, {"$set": updates})
+        await db_supabase.update_one("document_requirements", {"id": requirement_id}, updates)
     return {"message": "Document requirement updated"}
 
 
 @router.delete("/documents/requirements/{requirement_id}")
 async def admin_delete_document_requirement(requirement_id: str):
     """Delete a document requirement."""
-    await db.document_requirements.delete_one({"id": requirement_id})
+    await db_supabase.delete_one("document_requirements", {"id": requirement_id})
     return {"message": "Document requirement deleted"}
 
 
@@ -74,7 +74,7 @@ async def admin_delete_document_requirement(requirement_id: str):
 @router.get("/documents/drivers/{driver_id}")
 async def admin_get_driver_documents(driver_id: str):
     """Get all documents for a specific driver."""
-    documents = await db.get_rows(
+    documents = await db_supabase.get_rows(
         "driver_documents",
         {"driver_id": driver_id},
         order="uploaded_at",
@@ -128,7 +128,7 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
         raise HTTPException(status_code=400, detail="Invalid status")
 
     # Load existing doc so we know which driver + requirement this is.
-    existing = await db.driver_documents.find_one({"id": document_id})
+    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("driver_documents", {"id": document_id}, limit=1))
     if not existing:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -154,10 +154,7 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
         updates["rejection_reason"] = rejection_reason
 
     try:
-        await db.driver_documents.update_one(
-            {"id": document_id},
-            {"$set": updates},
-        )
+        await db_supabase.update_one("driver_documents", {"id": document_id}, updates)
     except Exception as e:
         logger.error(f"Failed to update driver_document {document_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update document: {e}") from e
@@ -169,7 +166,7 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
 
         req_row = None
         try:
-            req_row = await db.document_requirements.find_one({"id": existing.get("requirement_id")})
+            req_row = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("document_requirements", {"id": existing.get("requirement_id")}, limit=1))
         except Exception:
             req_row = None
 
@@ -179,15 +176,7 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
             # value (None) so the go-online check skips it instead of
             # rejecting on a past date from original onboarding.
             try:
-                await db.drivers.update_one(
-                    {"id": existing.get("driver_id")},
-                    {
-                        "$set": {
-                            legacy_field: effective_expiry_iso,
-                            "updated_at": datetime.utcnow().isoformat(),
-                        }
-                    },
-                )
+                await db_supabase.update_one("drivers", {"id": existing.get("driver_id")}, { legacy_field: effective_expiry_iso, "updated_at": datetime.utcnow().isoformat(), })
             except Exception as e:
                 logger.warning(
                     f"Could not update legacy expiry field {legacy_field} for driver {existing.get('driver_id')}: {e}"
@@ -197,7 +186,7 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
     if status == "approved":
         driver_id = existing.get("driver_id")
         if driver_id:
-            remaining_pending = await db.get_rows(
+            remaining_pending = await db_supabase.get_rows(
                 "driver_documents",
                 {"driver_id": driver_id, "status": "pending"},
                 limit=1,
@@ -205,12 +194,9 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
             if not remaining_pending:
                 # All pending docs approved → set driver back to active
                 try:
-                    drv = await db.drivers.find_one({"id": driver_id})
+                    drv = await db_supabase.get_driver_by_id(driver_id)
                     if drv and drv.get("status") == "needs_review":
-                        await db.drivers.update_one(
-                            {"id": driver_id},
-                            {"$set": {"status": "active", "is_verified": True}},
-                        )
+                        await db_supabase.update_one("drivers", {"id": driver_id}, {"status": "active", "is_verified": True})
                 except Exception as _exc:
                     logger.debug(f"Could not reset driver {driver_id} status to active: {_exc}")
 

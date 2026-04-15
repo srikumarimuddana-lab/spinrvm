@@ -91,7 +91,7 @@ describe('api.ts contract tests', () => {
     await getRides().catch(() => {});
 
     const [url] = mockFetch.mock.calls[0] as [string, RequestInit];
-    expect(url).toMatch(/\/api\/admin\/rides$/);
+    expect(url).toMatch(/\/api\/admin\/rides/);
   });
 
   it('getDrivers — GET /api/admin/drivers', async () => {

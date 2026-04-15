@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
     View,
     Text,
@@ -11,13 +11,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SpinrConfig } from '@shared/config/spinr.config';
-
-const THEME = SpinrConfig.theme.colors;
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 export default function LegalScreen() {
     const router = useRouter();
     const params = useLocalSearchParams();
     const type = params.type as 'tos' | 'privacy';
+    const { colors, isDark } = useTheme();
+    const styles = useMemo(() => createStyles(colors), [colors]);
 
     const [content, setContent] = useState<string>('');
     const [loading, setLoading] = useState(true);
@@ -53,7 +55,7 @@ export default function LegalScreen() {
                     style={styles.backButton}
                     onPress={() => router.back()}
                 >
-                    <Ionicons name="arrow-back" size={24} color={THEME.text} />
+                    <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
                 <Text style={styles.headerTitle}>{title}</Text>
                 <View style={styles.headerRight} />
@@ -63,7 +65,7 @@ export default function LegalScreen() {
             <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
                 {loading ? (
                     <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color={THEME.primary} />
+                        <ActivityIndicator size="large" color={colors.primary} />
                     </View>
                 ) : (
                     <Text style={styles.textContent}>{content}</Text>
@@ -73,48 +75,50 @@ export default function LegalScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    safeArea: {
-        flex: 1,
-        backgroundColor: '#fff',
-    },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 20,
-        paddingVertical: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: '#F3F4F6',
-        backgroundColor: '#fff',
-    },
-    backButton: {
-        padding: 8,
-        marginLeft: -8,
-    },
-    headerTitle: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: THEME.text,
-    },
-    headerRight: {
-        width: 40,
-    },
-    container: {
-        flex: 1,
-        backgroundColor: '#fff',
-    },
-    contentContainer: {
-        padding: 24,
-        paddingBottom: 40,
-    },
-    loadingContainer: {
-        paddingTop: 100,
-        alignItems: 'center',
-    },
-    textContent: {
-        fontSize: 15,
-        lineHeight: 24,
-        color: THEME.text,
-    },
-});
+function createStyles(colors: ThemeColors) {
+    return StyleSheet.create({
+        safeArea: {
+            flex: 1,
+            backgroundColor: colors.surface,
+        },
+        header: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingHorizontal: 20,
+            paddingVertical: 16,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+            backgroundColor: colors.surface,
+        },
+        backButton: {
+            padding: 8,
+            marginLeft: -8,
+        },
+        headerTitle: {
+            fontSize: 18,
+            fontWeight: '600',
+            color: colors.text,
+        },
+        headerRight: {
+            width: 40,
+        },
+        container: {
+            flex: 1,
+            backgroundColor: colors.surface,
+        },
+        contentContainer: {
+            padding: 24,
+            paddingBottom: 40,
+        },
+        loadingContainer: {
+            paddingTop: 100,
+            alignItems: 'center',
+        },
+        textContent: {
+            fontSize: 15,
+            lineHeight: 24,
+            color: colors.text,
+        },
+    });
+}

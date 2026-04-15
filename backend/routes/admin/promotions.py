@@ -5,9 +5,9 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Query
 
 try:
-    from ...db import db
+    from ... import db_supabase
 except ImportError:
-    from db import db
+    import db_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ router = APIRouter()
 @router.get("/promotions")
 async def admin_get_promotions():
     """Get all promotions/discount codes."""
-    promotions = await db.get_rows("promotions", order="created_at", desc=True, limit=500)
+    promotions = await db_supabase.get_rows("promotions", order="created_at", desc=True, limit=500)
     return promotions
 
 
@@ -79,11 +79,11 @@ async def admin_create_promotion(promotion: Dict[str, Any]):
     try:
         # Try inserting with all fields first
         full_doc = {**doc, **optional_fields}
-        row = await db.promotions.insert_one(full_doc)
+        row = await db_supabase.insert_one("promotions", full_doc)
     except Exception:
         # Fallback: insert without optional fields that may not exist in schema
         logger.warning("Promotions insert failed with optional fields, retrying without them")
-        row = await db.promotions.insert_one(doc)
+        row = await db_supabase.insert_one("promotions", doc)
 
     return {"promotion_id": str(row.get("id") if row and isinstance(row, dict) else "")}
 
@@ -102,7 +102,7 @@ async def admin_get_promo_usage(
         filters["promo_id"] = promo_id
 
     try:
-        applications = await db.get_rows(
+        applications = await db_supabase.get_rows(
             "promo_applications",
             filters,
             order="created_at",
@@ -132,9 +132,9 @@ async def admin_get_promo_usage(
 @router.get("/promotions/stats")
 async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="range")):
     """Get promotion statistics with daily usage data."""
-    all_promos = await db.get_rows("promotions", {}, limit=10000)
+    all_promos = await db_supabase.get_rows("promotions", {}, limit=10000)
     try:
-        all_usage = await db.get_rows("promo_applications", {}, order="created_at", desc=True, limit=10000)
+        all_usage = await db_supabase.get_rows("promo_applications", {}, order="created_at", desc=True, limit=10000)
     except Exception:
         logger.warning("promo_applications table may not exist yet")
         all_usage = []
@@ -242,18 +242,18 @@ async def admin_update_promotion(promotion_id: str, promotion: Dict[str, Any]):
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
         try:
-            await db.promotions.update_one({"id": promotion_id}, {"$set": updates})
+            await db_supabase.update_one("promotions", {"id": promotion_id}, updates)
         except Exception:
             # If update fails (e.g. column doesn't exist yet), remove optional fields and retry
             for f in ["assigned_user_ids", "inactive_days", "min_total_rides", "max_total_rides"]:
                 updates.pop(f, None)
             if updates:
-                await db.promotions.update_one({"id": promotion_id}, {"$set": updates})
+                await db_supabase.update_one("promotions", {"id": promotion_id}, updates)
     return {"message": "Promotion updated"}
 
 
 @router.delete("/promotions/{promotion_id}")
 async def admin_delete_promotion(promotion_id: str):
     """Delete a promotion."""
-    await db.promotions.delete_many({"id": promotion_id})
+    await db_supabase.delete_many("promotions", {"id": promotion_id})
     return {"message": "Promotion deleted"}

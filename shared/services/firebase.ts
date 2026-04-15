@@ -108,6 +108,25 @@ export function setBackgroundMessageHandler(handler: (message: any) => void) {
 
 
 /**
+ * Subscribe to FCM token refresh events.
+ *
+ * Firebase periodically rotates the device token. If the app doesn't
+ * re-register the new token with the backend, push delivery fails
+ * silently until the next cold start (which calls
+ * `requestPushPermissionAndGetToken` → registers the new token).
+ *
+ * Call this once from the root layout effect. The returned unsubscribe
+ * function should be called on unmount.
+ *
+ * @param onRefresh - called with the new FCM token string.
+ */
+export function onTokenRefresh(onRefresh: (newToken: string) => void): () => void {
+  if (!messaging) return () => {};
+  return messaging().onTokenRefresh(onRefresh);
+}
+
+
+/**
  * Log a custom event to Crashlytics.
  */
 export function logCrashlyticsEvent(message: string) {

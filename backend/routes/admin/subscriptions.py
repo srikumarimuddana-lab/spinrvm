@@ -7,9 +7,9 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 try:
-    from ...db import db
+    from ... import db_supabase
 except ImportError:
-    from db import db
+    import db_supabase
 
 from .drivers import _batch_fetch_drivers_and_users, _user_display_name
 
@@ -49,7 +49,7 @@ class SubscriptionPlanUpdate(BaseModel):
 @router.get("/subscription-plans")
 async def list_subscription_plans():
     """List all Spinr Pass subscription plans."""
-    plans = await db.get_rows("subscription_plans", limit=50)
+    plans = await db_supabase.get_rows("subscription_plans", limit=50)
     return plans
 
 
@@ -70,7 +70,7 @@ async def create_subscription_plan(req: SubscriptionPlanCreate):
         "subscriber_count": 0,
         "created_at": datetime.utcnow().isoformat(),
     }
-    await db.subscription_plans.insert_one(plan)
+    await db_supabase.insert_one("subscription_plans", plan)
     return plan
 
 
@@ -80,14 +80,14 @@ async def update_subscription_plan(plan_id: str, req: SubscriptionPlanUpdate):
     updates = {k: v for k, v in req.dict().items() if v is not None}
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
-        await db.subscription_plans.update_one({"id": plan_id}, {"$set": updates})
+        await db_supabase.update_one("subscription_plans", {"id": plan_id}, updates)
     return {"success": True}
 
 
 @router.delete("/subscription-plans/{plan_id}")
 async def delete_subscription_plan(plan_id: str):
     """Delete a subscription plan."""
-    await db.subscription_plans.delete_many({"id": plan_id})
+    await db_supabase.delete_many("subscription_plans", {"id": plan_id})
     return {"success": True}
 
 
@@ -97,7 +97,7 @@ async def delete_subscription_plan(plan_id: str):
 @router.get("/driver-subscriptions")
 async def list_driver_subscriptions(status: Optional[str] = Query(None)):
     """List all driver subscriptions, optionally filtered by status."""
-    subs = await db.driver_subscriptions.find({}).to_list(200)
+    subs = await db_supabase.get_rows("driver_subscriptions", {}, limit=200)
     if status:
         subs = [s for s in subs if s.get("status") == status]
     return subs
@@ -131,10 +131,10 @@ async def admin_get_subscription_stats(
         range_end = now
 
     # Fetch all subscriptions
-    all_subs = await db.driver_subscriptions.find({}).to_list(10000)
+    all_subs = await db_supabase.get_rows("driver_subscriptions", {}, limit=10000)
 
     # Fetch all plans for lookup
-    all_plans = await db.get_rows("subscription_plans", limit=100)
+    all_plans = await db_supabase.get_rows("subscription_plans", limit=100)
     plan_map = {p["id"]: p for p in all_plans}
 
     # Fetch drivers for name + area lookup (batch)
@@ -243,7 +243,7 @@ async def admin_get_subscription_stats(
         "transactions": transactions,
         "service_areas": [
             {"id": a["id"], "name": a.get("name", "Unknown")}
-            for a in await db.get_rows("service_areas", order="name", limit=200)
+            for a in await db_supabase.get_rows("service_areas", order="name", limit=200)
             if not a.get("parent_service_area_id")
         ],
     }

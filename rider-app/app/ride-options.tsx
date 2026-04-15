@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -18,8 +18,9 @@ import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Circle, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { useRideStore } from '../store/rideStore';
-import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 import { CarMarker } from '@shared/components/CarMarker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
@@ -28,6 +29,8 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MAP_HEIGHT = 280;
 
 export default function RideOptionsScreen() {
+  const { colors, isDark } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const router = useRouter();
   const {
     pickup,
@@ -356,7 +359,7 @@ export default function RideOptionsScreen() {
           </MapView>
         ) : (
           <View style={styles.mapPlaceholder}>
-            <ActivityIndicator size="small" color={SpinrConfig.theme.colors.primary} />
+            <ActivityIndicator size="small" color={colors.primary} />
           </View>
         )}
       </View>
@@ -402,7 +405,7 @@ export default function RideOptionsScreen() {
       {/* Vehicle Options */}
       {isLoading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={SpinrConfig.theme.colors.primary} />
+          <ActivityIndicator size="large" color={colors.primary} />
           <Text style={styles.loadingText}>Finding best rides...</Text>
         </View>
       ) : (
@@ -442,6 +445,12 @@ export default function RideOptionsScreen() {
                 <View style={[styles.optionInfo, !isAvailable && { opacity: 0.4 }]}>
                   <View style={styles.optionNameRow}>
                     <Text style={styles.optionName}>{estimate.vehicle_type.name}</Text>
+                    {(estimate.surge_multiplier ?? 1) > 1.0 && (
+                      <View style={styles.surgeBadge}>
+                        <Ionicons name="trending-up" size={10} color="#fff" />
+                        <Text style={styles.surgeBadgeText}>{estimate.surge_multiplier}x</Text>
+                      </View>
+                    )}
                     <View style={styles.capacityBadge}>
                       <Ionicons name="person" size={12} color="#666" />
                       <Text style={styles.capacityText}>{estimate.vehicle_type.capacity}</Text>
@@ -455,6 +464,9 @@ export default function RideOptionsScreen() {
                     </Text>
                   ) : (
                     <Text style={styles.unavailableText}>No drivers nearby</Text>
+                  )}
+                  {(estimate.surge_multiplier ?? 1) > 1.0 && (
+                    <Text style={styles.surgeNotice}>Fares are higher due to increased demand</Text>
                   )}
                 </View>
 
@@ -472,7 +484,7 @@ export default function RideOptionsScreen() {
                   )}
                   {isSelected && isAvailable && (
                     <View style={styles.selectedCheck}>
-                      <Ionicons name="checkmark-circle" size={22} color={SpinrConfig.theme.colors.primary} />
+                      <Ionicons name="checkmark-circle" size={22} color={colors.primary} />
                     </View>
                   )}
                 </View>
@@ -494,8 +506,8 @@ export default function RideOptionsScreen() {
             <Switch
               value={isScheduling}
               onValueChange={handleToggleSchedule}
-              trackColor={{ false: '#D1D5DB', true: SpinrConfig.theme.colors.primary + '60' }}
-              thumbColor={isScheduling ? SpinrConfig.theme.colors.primary : '#F3F4F6'}
+              trackColor={{ false: '#D1D5DB', true: colors.primary + '60' }}
+              thumbColor={isScheduling ? colors.primary : '#F3F4F6'}
             />
           </View>
 
@@ -505,7 +517,7 @@ export default function RideOptionsScreen() {
               style={styles.scheduledTimeRow}
               onPress={() => setShowDatePicker(true)}
             >
-              <Ionicons name="calendar-outline" size={18} color={SpinrConfig.theme.colors.primary} />
+              <Ionicons name="calendar-outline" size={18} color={colors.primary} />
               <Text style={styles.scheduledTimeText}>
                 {scheduledTime.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })}{' '}
                 at {scheduledTime.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })}
@@ -623,10 +635,11 @@ export default function RideOptionsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
   },
   header: {
     flexDirection: 'row',
@@ -643,7 +656,7 @@ const styles = StyleSheet.create({
   },
   destinationChip: {
     flex: 1,
-    backgroundColor: '#F2F2F2',
+    backgroundColor: colors.surfaceLight,
     borderRadius: 20,
     paddingHorizontal: 16,
     paddingVertical: 8,
@@ -653,12 +666,12 @@ const styles = StyleSheet.create({
   destinationChipText: {
     fontSize: 12,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#333',
+    color: colors.textSecondary,
     letterSpacing: 0.5,
   },
   mapContainer: {
     marginHorizontal: 0,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: colors.border,
     height: MAP_HEIGHT,
   },
   map: {
@@ -671,7 +684,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   markerContainer: {
-    backgroundColor: 'white',
+    backgroundColor: colors.surface,
     padding: 3,
     borderRadius: 12,
     shadowColor: '#000',
@@ -692,12 +705,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
+    borderBottomColor: colors.border,
   },
   sectionTitle: {
     fontSize: 18,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   commissionBadge: {
     backgroundColor: '#E8F5E9',
@@ -719,7 +732,7 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontSize: 14,
     fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666',
+    color: colors.textDim,
   },
   optionsList: {
     flex: 1,
@@ -730,15 +743,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 14,
     borderBottomWidth: 1,
-    borderBottomColor: '#F5F5F5',
+    borderBottomColor: colors.border,
   },
   optionCardSelected: {
-    backgroundColor: '#FFF5F5',
+    backgroundColor: `${colors.primary}14`,
     borderLeftWidth: 3,
-    borderLeftColor: SpinrConfig.theme.colors.primary,
+    borderLeftColor: colors.primary,
   },
   optionCardDisabled: {
-    backgroundColor: '#FAFAFA',
+    backgroundColor: colors.surfaceLight,
   },
   carImageContainer: {
     width: 72,
@@ -755,7 +768,7 @@ const styles = StyleSheet.create({
     width: 72,
     height: 48,
     borderRadius: 8,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: colors.surfaceLight,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -770,13 +783,33 @@ const styles = StyleSheet.create({
   optionName: {
     fontSize: 16,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
+    color: colors.text,
+  },
+  surgeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#EF4444',
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  surgeBadgeText: {
+    fontSize: 10,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: '#fff',
+  },
+  surgeNotice: {
+    fontSize: 11,
+    fontFamily: 'PlusJakartaSans_400Regular',
+    color: '#EF4444',
+    marginTop: 2,
   },
   capacityBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 2,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: colors.surfaceLight,
     borderRadius: 8,
     paddingHorizontal: 5,
     paddingVertical: 2,
@@ -784,7 +817,7 @@ const styles = StyleSheet.create({
   capacityText: {
     fontSize: 11,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#666',
+    color: colors.textDim,
   },
   optionETA: {
     fontSize: 13,
@@ -795,7 +828,7 @@ const styles = StyleSheet.create({
   unavailableText: {
     fontSize: 13,
     fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#999',
+    color: colors.textDim,
     marginTop: 2,
     fontStyle: 'italic',
   },
@@ -805,12 +838,12 @@ const styles = StyleSheet.create({
   optionPrice: {
     fontSize: 18,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   optionPriceStruck: {
     fontSize: 13,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#999',
+    color: colors.textDim,
     textDecorationLine: 'line-through',
   },
   optionPriceDiscounted: {
@@ -849,8 +882,8 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 20,
     borderTopWidth: 1,
-    borderTopColor: '#F0F0F0',
-    backgroundColor: '#FFFFFF',
+    borderTopColor: colors.border,
+    backgroundColor: colors.surface,
   },
   paymentRow: {
     flexDirection: 'row',
@@ -858,14 +891,14 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#F5F5F5',
+    borderBottomColor: colors.border,
     marginBottom: 12,
   },
   paymentText: {
     flex: 1,
     fontSize: 14,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   cancelPolicyRow: {
     flexDirection: 'row',
@@ -877,11 +910,11 @@ const styles = StyleSheet.create({
   cancelPolicyText: {
     flex: 1,
     fontSize: 12,
-    color: '#6B7280',
+    color: colors.textSecondary,
     lineHeight: 17,
   },
   confirmButton: {
-    backgroundColor: SpinrConfig.theme.colors.primary,
+    backgroundColor: colors.primary,
     borderRadius: 28,
     paddingVertical: 18,
     alignItems: 'center',
@@ -915,7 +948,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: '#F5F5F5',
+    borderBottomColor: colors.border,
     marginBottom: 4,
   },
   scheduleInfo: {
@@ -926,7 +959,7 @@ const styles = StyleSheet.create({
   scheduleLabel: {
     fontSize: 14,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   scheduledTimeRow: {
     flexDirection: 'row',
@@ -934,7 +967,7 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 10,
     paddingHorizontal: 12,
-    backgroundColor: '#F0F7FF',
+    backgroundColor: colors.surfaceLight,
     borderRadius: 10,
     marginBottom: 8,
   },
@@ -942,12 +975,12 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 14,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   changeText: {
     fontSize: 13,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: SpinrConfig.theme.colors.primary,
+    color: colors.primary,
   },
   modalOverlay: {
     flex: 1,
@@ -955,7 +988,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.4)',
   },
   pickerContainer: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     paddingBottom: 20,
@@ -966,26 +999,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
+    borderBottomColor: colors.border,
   },
   pickerCancelText: {
     fontSize: 16,
-    color: '#6B7280',
+    color: colors.textSecondary,
     fontFamily: 'PlusJakartaSans_500Medium',
   },
   pickerDoneText: {
     fontSize: 16,
-    color: SpinrConfig.theme.colors.primary,
+    color: colors.primary,
     fontFamily: 'PlusJakartaSans_600SemiBold',
   },
   fareBreakdown: {
-    backgroundColor: '#F9FAFB',
+    backgroundColor: colors.surfaceLight,
     marginHorizontal: 16,
     marginVertical: 8,
     borderRadius: 12,
     padding: 16,
     borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderColor: colors.border,
   },
   fareBreakdownHeader: {
     flexDirection: 'row',
@@ -996,13 +1029,13 @@ const styles = StyleSheet.create({
   fareBreakdownTitle: {
     fontSize: 15,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   fareBreakdownVehicle: {
     fontSize: 12,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#6B7280',
-    backgroundColor: '#E5E7EB',
+    color: colors.textSecondary,
+    backgroundColor: colors.border,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
@@ -1016,26 +1049,27 @@ const styles = StyleSheet.create({
   fareLabel: {
     fontSize: 13,
     fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#6B7280',
+    color: colors.textSecondary,
   },
   fareValue: {
     fontSize: 13,
     fontFamily: 'PlusJakartaSans_500Medium',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   fareDivider: {
     height: 1,
-    backgroundColor: '#E5E7EB',
+    backgroundColor: colors.border,
     marginVertical: 8,
   },
   fareTotalLabel: {
     fontSize: 15,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   fareTotalValue: {
     fontSize: 17,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: SpinrConfig.theme.colors.primary,
+    color: colors.primary,
   },
-});
+  });
+}

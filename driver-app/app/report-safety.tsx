@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
     View,
     Text,
@@ -12,14 +12,14 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { SpinrConfig } from '@shared/config/spinr.config';
-import { useLocationStore } from '@shared/store/locationStore';
-import { useDriverStore } from '../store/driverStore';
-
-const THEME = SpinrConfig.theme.colors;
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
+import api from '@shared/api/client';
 
 export default function ReportSafetyScreen() {
     const router = useRouter();
+    const { colors } = useTheme();
+    const styles = useMemo(() => createStyles(colors), [colors]);
     const [issue, setIssue] = useState('');
     const [submitting, setSubmitting] = useState(false);
 
@@ -54,11 +54,9 @@ export default function ReportSafetyScreen() {
 
         // Submit to the safety-report endpoint
         try {
-            const response = await fetch(`${SpinrConfig.backendUrl}/support/tickets/safety-report`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(reportData)
-            });
+            // G22: Use the shared API client which attaches the auth token.
+            // Previously used raw fetch without Authorization header.
+            await api.post('/support/tickets/safety-report', { description: issue });
 
             if (!response.ok) {
                 throw new Error('Failed to submit report');
@@ -83,7 +81,7 @@ export default function ReportSafetyScreen() {
                     style={styles.backButton}
                     onPress={() => router.back()}
                 >
-                    <Ionicons name="arrow-back" size={24} color={THEME.text} />
+                    <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
                 <Text style={styles.headerTitle}>Report Safety Issue</Text>
                 <View style={styles.headerRight} />
@@ -129,86 +127,88 @@ export default function ReportSafetyScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    safeArea: {
-        flex: 1,
-        backgroundColor: '#fff',
-    },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 20,
-        paddingVertical: 16,
-        borderBottomWidth: 1,
-        borderBottomColor: '#F3F4F6',
-        backgroundColor: '#fff',
-    },
-    backButton: {
-        padding: 8,
-        marginLeft: -8,
-    },
-    headerTitle: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: THEME.text,
-    },
-    headerRight: {
-        width: 40,
-    },
-    container: {
-        flex: 1,
-        backgroundColor: '#fff',
-    },
-    content: {
-        padding: 24,
-        flex: 1,
-    },
-    warningBox: {
-        flexDirection: 'row',
-        backgroundColor: 'rgba(245,158,11,0.1)',
-        padding: 16,
-        borderRadius: 12,
-        marginBottom: 24,
-        alignItems: 'flex-start',
-    },
-    warningText: {
-        flex: 1,
-        marginLeft: 12,
-        fontSize: 14,
-        color: '#D97706',
-        lineHeight: 20,
-    },
-    label: {
-        fontSize: 16,
-        fontWeight: '500',
-        color: THEME.text,
-        marginBottom: 12,
-    },
-    input: {
-        backgroundColor: '#F9FAFB',
-        borderWidth: 1,
-        borderColor: '#E5E7EB',
-        borderRadius: 12,
-        padding: 16,
-        fontSize: 16,
-        color: THEME.text,
-        minHeight: 160,
-        marginBottom: 24,
-    },
-    submitButton: {
-        backgroundColor: THEME.primary,
-        borderRadius: 12,
-        paddingVertical: 16,
-        alignItems: 'center',
-        marginTop: 'auto',
-    },
-    submitButtonDisabled: {
-        opacity: 0.7,
-    },
-    submitButtonText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '600',
-    },
-});
+function createStyles(colors: ThemeColors) {
+    return StyleSheet.create({
+        safeArea: {
+            flex: 1,
+            backgroundColor: colors.surface,
+        },
+        header: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingHorizontal: 20,
+            paddingVertical: 16,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
+            backgroundColor: colors.surface,
+        },
+        backButton: {
+            padding: 8,
+            marginLeft: -8,
+        },
+        headerTitle: {
+            fontSize: 18,
+            fontWeight: '600',
+            color: colors.text,
+        },
+        headerRight: {
+            width: 40,
+        },
+        container: {
+            flex: 1,
+            backgroundColor: colors.surface,
+        },
+        content: {
+            padding: 24,
+            flex: 1,
+        },
+        warningBox: {
+            flexDirection: 'row',
+            backgroundColor: 'rgba(245,158,11,0.1)',
+            padding: 16,
+            borderRadius: 12,
+            marginBottom: 24,
+            alignItems: 'flex-start',
+        },
+        warningText: {
+            flex: 1,
+            marginLeft: 12,
+            fontSize: 14,
+            color: '#D97706',
+            lineHeight: 20,
+        },
+        label: {
+            fontSize: 16,
+            fontWeight: '500',
+            color: colors.text,
+            marginBottom: 12,
+        },
+        input: {
+            backgroundColor: colors.surfaceLight,
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderRadius: 12,
+            padding: 16,
+            fontSize: 16,
+            color: colors.text,
+            minHeight: 160,
+            marginBottom: 24,
+        },
+        submitButton: {
+            backgroundColor: colors.primary,
+            borderRadius: 12,
+            paddingVertical: 16,
+            alignItems: 'center',
+            marginTop: 'auto',
+        },
+        submitButtonDisabled: {
+            opacity: 0.7,
+        },
+        submitButtonText: {
+            color: '#fff',
+            fontSize: 16,
+            fontWeight: '600',
+        },
+    });
+}

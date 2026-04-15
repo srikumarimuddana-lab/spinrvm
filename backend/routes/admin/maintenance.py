@@ -6,9 +6,9 @@ from typing import Dict, Optional
 from fastapi import APIRouter, Query
 
 try:
-    from ...db import db
+    from ... import db_supabase
 except ImportError:
-    from db import db
+    import db_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -36,31 +36,26 @@ async def admin_cleanup_location_history(days: int = 30):
     deleted_idle = 0
     try:
         # Count rows to be deleted for reporting
-        old_rows = await db.get_rows(
+        old_rows = await db_supabase.get_rows(
             "driver_location_history",
             {"timestamp": {"$lt": cutoff_historical}},
             limit=100000,
         )
         deleted_historical = len(old_rows or [])
         if deleted_historical > 0:
-            await db.driver_location_history.delete_many({"timestamp": {"$lt": cutoff_historical}})
+            await db_supabase.delete_many("driver_location_history", {"timestamp": {"$lt": cutoff_historical}})
     except Exception as e:
         logger.warning(f"Cleanup historical GPS failed: {e}")
 
     try:
-        idle_rows = await db.get_rows(
+        idle_rows = await db_supabase.get_rows(
             "driver_location_history",
             {"timestamp": {"$lt": cutoff_idle}, "tracking_phase": "online_idle"},
             limit=100000,
         )
         deleted_idle = len(idle_rows or [])
         if deleted_idle > 0:
-            await db.driver_location_history.delete_many(
-                {
-                    "timestamp": {"$lt": cutoff_idle},
-                    "tracking_phase": "online_idle",
-                }
-            )
+            await db_supabase.delete_many("driver_location_history", {"timestamp": {"$lt": cutoff_idle}, "tracking_phase": "online_idle"})
     except Exception as e:
         logger.warning(f"Cleanup idle GPS failed: {e}")
 
@@ -113,7 +108,7 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         return 2 * R * math.asin(math.sqrt(a))
 
     # Pull all GPS points from that day
-    all_points = await db.get_rows(
+    all_points = await db_supabase.get_rows(
         "driver_location_history",
         {"timestamp": {"$gte": day_start_iso, "$lt": day_end_iso}},
         order="timestamp",
@@ -128,7 +123,7 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
             by_driver[did].append(p)
 
     # Pull all rides from that day to count + sum earnings
-    day_rides = await db.get_rows(
+    day_rides = await db_supabase.get_rows(
         "rides",
         {"created_at": {"$gte": day_start_iso, "$lt": day_end_iso}},
         limit=10000,
@@ -196,7 +191,7 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         total_tips = sum(float(r.get("tip_amount") or 0) for r in rides if r.get("status") == "completed")
 
         # Determine service area from driver profile
-        drv = await db.drivers.find_one({"id": driver_id})
+        drv = await db_supabase.get_driver_by_id(driver_id)
         service_area_id = drv.get("service_area_id") if drv else None
 
         total_km = round(idle_km + navigating_km + trip_km, 2)
@@ -222,13 +217,13 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         }
 
         # Upsert
-        existing = await db.driver_daily_stats.find_one({"id": stat_row["id"]})
+        existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("driver_daily_stats", {"id": stat_row["id"]}, limit=1))
         if existing:
-            await db.driver_daily_stats.update_one({"id": stat_row["id"]}, {"$set": stat_row})
+            await db_supabase.update_one("driver_daily_stats", {"id": stat_row["id"]}, stat_row)
             updated += 1
         else:
             stat_row["created_at"] = datetime.utcnow().isoformat()
-            await db.driver_daily_stats.insert_one(stat_row)
+            await db_supabase.insert_one("driver_daily_stats", stat_row)
             created += 1
 
     logger.info(f"[ROLLUP] driver_daily_stats for {stat_date}: created={created} updated={updated}")
@@ -248,13 +243,13 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
 @router.get("/audit-logs")
 async def get_audit_logs(limit: int = Query(50), offset: int = Query(0)):
     """Get audit log entries."""
-    logs = await db.get_rows("audit_logs", order="created_at", desc=True, limit=limit)
+    logs = await db_supabase.get_rows("audit_logs", order="created_at", desc=True, limit=limit)
     return logs
 
 
 async def log_audit(action: str, entity_type: str, entity_id: str, user_email: str, details: str = ""):
     """Record an audit log entry. Call from admin endpoints."""
-    await db.audit_logs.insert_one(
+    await db_supabase.insert_one("audit_logs", 
         {
             "id": str(uuid.uuid4()),
             "action": action,  # created, updated, deleted, login, status_change

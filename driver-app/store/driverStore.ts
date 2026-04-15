@@ -1,6 +1,20 @@
 import { create } from 'zustand';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const DRIVER_RIDE_KEY = '@spinr:driver_active_ride';
+const DRIVER_TERMINAL_STATES = new Set<string>(['idle', 'trip_completed']);
+
+// Write activeRide + rideState to AsyncStorage so the driver can resume
+// after an app restart mid-trip. Clears the key when the ride is over.
+const _persistDriverState = (rideState: string, activeRide: any) => {
+  if (!activeRide || DRIVER_TERMINAL_STATES.has(rideState)) {
+    AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
+  } else {
+    AsyncStorage.setItem(DRIVER_RIDE_KEY, JSON.stringify({ rideState, activeRide })).catch(() => {});
+  }
+};
 
 // These are fallbacks used ONLY until the driver-app pulls
 // `GET /drivers/config` from the backend on mount (see
@@ -26,6 +40,14 @@ const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: numbe
     return R * c; // Distance in meters
 };
 
+export interface ChatMessage {
+    id: string;
+    ride_id: string;
+    text: string;
+    sender: 'driver' | 'rider';
+    timestamp: string;
+}
+
 export type RideState =
     | 'idle'
     | 'ride_offered'
@@ -34,10 +56,49 @@ export type RideState =
     | 'trip_in_progress'
     | 'trip_completed';
 
+export interface RideInfo {
+    id: string;
+    status: string;
+    pickup_address: string;
+    dropoff_address: string;
+    pickup_lat: number;
+    pickup_lng: number;
+    dropoff_lat: number;
+    dropoff_lng: number;
+    estimated_fare: number;
+    distance_km: number;
+    duration_minutes: number;
+    rider_id: string;
+    driver_id?: string;
+    otp?: string;
+    surge_multiplier?: number;
+    payment_method?: string;
+    created_at: string;
+    [key: string]: unknown;
+}
+
+export interface RiderInfo {
+    id: string;
+    first_name?: string;
+    last_name?: string;
+    phone?: string;
+    rating?: number;
+    profile_image?: string;
+    [key: string]: unknown;
+}
+
+export interface VehicleTypeInfo {
+    id: string;
+    name: string;
+    icon?: string;
+    capacity?: number;
+    [key: string]: unknown;
+}
+
 export interface ActiveRide {
-    ride: any;
-    rider: any;
-    vehicle_type: any;
+    ride: RideInfo;
+    rider: RiderInfo;
+    vehicle_type: VehicleTypeInfo;
 }
 
 export interface EarningsSummary {
@@ -118,6 +179,33 @@ export interface T4ADocument {
     status: string;
 }
 
+export interface WeeklyEarning {
+    week_start: string;
+    week_end: string;
+    earnings: number;
+    tips: number;
+    rides: number;
+    online_hours: number;
+    distance_km: number;
+}
+
+export interface MonthlyEarning {
+    month: string;
+    year: number;
+    earnings: number;
+    tips: number;
+    rides: number;
+    online_hours: number;
+    distance_km: number;
+}
+
+export interface EarningsComparison {
+    period: string;
+    current: { earnings: number; rides: number; tips: number };
+    previous: { earnings: number; rides: number; tips: number };
+    change_pct: { earnings: number; rides: number; tips: number };
+}
+
 interface IncomingRide {
     ride_id: string;
     pickup_address: string;
@@ -149,6 +237,9 @@ interface DriverState {
     // Earnings
     earnings: EarningsSummary | null;
     dailyEarnings: DailyEarning[];
+    weeklyEarnings: WeeklyEarning[];
+    monthlyEarnings: MonthlyEarning[];
+    earningsComparison: EarningsComparison | null;
     tripEarnings: TripEarning[];
 
     // Payout/Bank Account
@@ -165,6 +256,9 @@ interface DriverState {
     // Ride history
     rideHistory: any[];
     historyTotal: number;
+
+    // In-ride chat (real-time via WS, seeded from REST on screen mount)
+    chatMessages: ChatMessage[];
 
     // Loading states
     isLoading: boolean;
@@ -187,6 +281,9 @@ interface DriverState {
     fetchRideHistory: (limit?: number, offset?: number) => Promise<void>;
     fetchEarnings: (period?: string) => Promise<void>;
     fetchDailyEarnings: (days?: number) => Promise<void>;
+    fetchWeeklyEarnings: (weeks?: number) => Promise<void>;
+    fetchMonthlyEarnings: (months?: number) => Promise<void>;
+    fetchEarningsComparison: (period?: string) => Promise<void>;
     fetchTripEarnings: (limit?: number, offset?: number) => Promise<void>;
 
     // Payout actions
@@ -203,7 +300,13 @@ interface DriverState {
     fetchT4ADetails: (year: number) => Promise<void>;
     setSelectedYear: (year: number | null) => void;
 
+    // Chat actions
+    addChatMessage: (msg: ChatMessage) => void;
+    setChatMessages: (msgs: ChatMessage[]) => void;
+    clearChatMessages: () => void;
+
     // State management
+    hydrateDriverRideState: () => Promise<void>;
     resetRideState: () => void;
     rateRider: (rideId: string, rating: number, comment?: string) => Promise<void>;
     submitTip: (rideId: string, amount: number) => Promise<boolean>;
@@ -222,6 +325,9 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     configuredPickupRadiusMeters: FALLBACK_PICKUP_RADIUS_METERS,
     earnings: null,
     dailyEarnings: [],
+    weeklyEarnings: [],
+    monthlyEarnings: [],
+    earningsComparison: null,
     tripEarnings: [],
     // Payout state
     bankAccount: null,
@@ -235,6 +341,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     // History
     rideHistory: [],
     historyTotal: 0,
+    // Chat messages for the active ride (seeded via REST, kept live by WS)
+    chatMessages: [],
     isLoading: false,
     error: null,
 
@@ -263,34 +371,28 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     setCountdown: (seconds) => {
         set({ countdownSeconds: seconds });
         if (seconds <= 0 && get().rideState === 'ride_offered') {
-            // Auto-decline on timeout
+            // Auto-decline on timeout + show a clear toast so the driver
+            // knows the offer expired (G10). Previously the offer just
+            // silently disappeared with no feedback.
             const incoming = get().incomingRide;
             if (incoming) {
                 get().declineRide(incoming.ride_id).catch(console.log);
+                set({ error: 'Ride offer expired. You\'ll see the next one when it comes in.' });
             }
         }
     },
 
     acceptRide: async (rideId: string) => {
-        console.log('[DRV-DBG] acceptRide called ride_id=', rideId);
         set({ isLoading: true, error: null });
         try {
-            const resp = await api.post(`/drivers/rides/${rideId}/accept`);
-            console.log('[DRV-DBG] acceptRide POST response:', resp.status, JSON.stringify(resp.data));
-            set({
-                rideState: 'navigating_to_pickup',
-                incomingRide: null,
-                countdownSeconds: 0,
-            });
-            console.log('[DRV-DBG] acceptRide set rideState=navigating_to_pickup, calling fetchActiveRide...');
+            await api.post(`/drivers/rides/${rideId}/accept`);
+            set({ rideState: 'navigating_to_pickup', incomingRide: null, countdownSeconds: 0 });
             // Fetch the full active ride data
             await get().fetchActiveRide();
-            const after = get();
-            console.log('[DRV-DBG] acceptRide after fetchActiveRide: rideState=', after.rideState, 'activeRide.ride?=', !!after.activeRide?.ride, 'ride_id=', after.activeRide?.ride?.id, 'status=', after.activeRide?.ride?.status);
+            _persistDriverState('navigating_to_pickup', get().activeRide);
         } catch (err: any) {
             const status = err?.response?.status;
             const detail: string = err?.response?.data?.detail || '';
-            console.log('[DRV-DBG] acceptRide ERROR:', status, err?.response?.data, err?.message);
 
             // Race-condition handling: another driver beat us to the ride, or
             // the rider cancelled between dispatch and accept. Backend returns
@@ -320,8 +422,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     declineRide: async (rideId: string) => {
         try {
             await api.post(`/drivers/rides/${rideId}/decline`);
-        } catch (err) {
-            console.log('Decline error:', err);
+        } catch {
+            // Decline failure is non-critical — reset state regardless
         }
         set({ rideState: 'idle', incomingRide: null, countdownSeconds: 0 });
     },
@@ -352,6 +454,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await api.post(`/drivers/rides/${rideId}/arrive`);
             set({ rideState: 'arrived_at_pickup' });
             await get().fetchActiveRide();
+            _persistDriverState('arrived_at_pickup', get().activeRide);
             return { success: true };
         } catch (err: any) {
             set({ error: err.response?.data?.detail || 'Failed to mark arrival' });
@@ -367,6 +470,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await api.post(`/drivers/rides/${rideId}/verify-otp`, { otp });
             set({ rideState: 'trip_in_progress' });
             await get().fetchActiveRide();
+            _persistDriverState('trip_in_progress', get().activeRide);
             return true;
         } catch (err: any) {
             set({ error: err.response?.data?.detail || 'Invalid OTP' });
@@ -382,6 +486,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await api.post(`/drivers/rides/${rideId}/start`);
             set({ rideState: 'trip_in_progress' });
             await get().fetchActiveRide();
+            _persistDriverState('trip_in_progress', get().activeRide);
         } catch (err: any) {
             set({ error: err.response?.data?.detail || 'Failed to start ride' });
         } finally {
@@ -393,11 +498,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         set({ isLoading: true, error: null });
         try {
             const res = await api.post(`/drivers/rides/${rideId}/complete`);
-            set({
-                rideState: 'trip_completed',
-                completedRide: res.data,
-                activeRide: null,
-            });
+            set({ rideState: 'trip_completed', completedRide: res.data, activeRide: null });
+            AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
         } catch (err: any) {
             set({ error: err.response?.data?.detail || 'Failed to complete ride' });
         } finally {
@@ -410,6 +512,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         try {
             await api.post(`/drivers/rides/${rideId}/cancel?reason=${encodeURIComponent(reason || '')}`);
             set({ rideState: 'idle', activeRide: null, incomingRide: null });
+            AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
         } catch (err: any) {
             set({ error: err.response?.data?.detail || 'Failed to cancel ride' });
         } finally {
@@ -419,9 +522,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchActiveRide: async () => {
         try {
-            console.log('[DRV-DBG] fetchActiveRide START');
             const res = await api.get('/drivers/rides/active');
-            console.log('[DRV-DBG] fetchActiveRide response status=', res.status, 'has_data=', !!res.data, 'has_ride=', !!res.data?.ride, 'ride_status=', res.data?.ride?.status, 'ride_id=', res.data?.ride?.id);
             if (res.data && res.data.ride) {
                 const ride = res.data.ride;
                 let rideState: RideState = 'idle';
@@ -430,15 +531,14 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 else if (ride.status === 'driver_arrived') rideState = 'arrived_at_pickup';
                 else if (ride.status === 'in_progress') rideState = 'trip_in_progress';
 
-                console.log('[DRV-DBG] fetchActiveRide SET activeRide + rideState=', rideState);
                 set({ activeRide: res.data, rideState });
+                _persistDriverState(rideState, res.data);
             } else {
-                console.log('[DRV-DBG] fetchActiveRide NULL branch — clearing activeRide');
                 set({ activeRide: null });
+                AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
             }
-        } catch (err: any) {
-            console.log('[DRV-DBG] fetchActiveRide ERROR:', err?.response?.status, err?.response?.data, err?.message);
-            console.log('Fetch active ride error:', err);
+        } catch {
+            // Non-critical — caller state remains unchanged
         }
     },
 
@@ -469,12 +569,73 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         }
     },
 
+    fetchWeeklyEarnings: async (weeks = 4) => {
+        try {
+            const res = await api.get(`/drivers/earnings/weekly?weeks=${weeks}`);
+            set({ weeklyEarnings: res.data || [] });
+        } catch (err) {
+            console.log('Fetch weekly earnings error:', err);
+        }
+    },
+
+    fetchMonthlyEarnings: async (months = 6) => {
+        try {
+            const res = await api.get(`/drivers/earnings/monthly?months=${months}`);
+            set({ monthlyEarnings: res.data || [] });
+        } catch (err) {
+            console.log('Fetch monthly earnings error:', err);
+        }
+    },
+
+    fetchEarningsComparison: async (period = 'week') => {
+        try {
+            const res = await api.get(`/drivers/earnings/comparison?period=${period}`);
+            set({ earningsComparison: res.data || null });
+        } catch (err) {
+            console.log('Fetch earnings comparison error:', err);
+        }
+    },
+
     fetchTripEarnings: async (limit = 20, offset = 0) => {
         try {
             const res = await api.get(`/drivers/earnings/trips?limit=${limit}&offset=${offset}`);
             set({ tripEarnings: res.data || [] });
         } catch (err) {
             console.log('Fetch trip earnings error:', err);
+        }
+    },
+
+    // ── Chat actions ────────────────────────────────────────────────
+    addChatMessage: (msg: ChatMessage) => {
+        const { chatMessages } = get();
+        // Deduplicate by id — WS and REST may both deliver the same message
+        if (chatMessages.some((m) => m.id === msg.id)) return;
+        set({ chatMessages: [...chatMessages, msg] });
+    },
+
+    setChatMessages: (msgs: ChatMessage[]) => set({ chatMessages: msgs }),
+
+    clearChatMessages: () => set({ chatMessages: [] }),
+
+    // ── Offline hydration ────────────────────────────────────────────
+    // Called once on mount (before fetchActiveRide). Restores the last
+    // known driver ride state from AsyncStorage so the UI resumes
+    // instantly after an app restart mid-trip.
+    hydrateDriverRideState: async () => {
+        try {
+            const raw = await AsyncStorage.getItem(DRIVER_RIDE_KEY);
+            if (!raw) return;
+            const { rideState, activeRide } = JSON.parse(raw);
+            if (!activeRide || DRIVER_TERMINAL_STATES.has(rideState)) {
+                await AsyncStorage.removeItem(DRIVER_RIDE_KEY);
+                return;
+            }
+            // Only restore if no active ride is already in memory.
+            if (!get().activeRide) {
+                set({ activeRide, rideState });
+            }
+        } catch {
+            AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
         }
     },
 
@@ -485,8 +646,10 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             activeRide: null,
             completedRide: null,
             countdownSeconds: 0,
+            chatMessages: [],
             error: null,
         });
+        AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
     },
 
     clearError: () => set({ error: null }),

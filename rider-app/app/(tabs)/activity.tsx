@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,7 +11,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useRideStore } from '../../store/rideStore';
-import SpinrConfig from '@shared/config/spinr.config';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 
@@ -38,6 +39,8 @@ export default function ActivityScreen() {
   const [filter, setFilter] = useState<FilterType>('all');
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
   const fetchData = async () => {
     try {
@@ -162,7 +165,7 @@ export default function ActivityScreen() {
       <View style={styles.header}>
         <Text style={styles.title}>Activity</Text>
         <TouchableOpacity style={styles.filterIcon}>
-          <Ionicons name="options-outline" size={24} color="#1A1A1A" />
+          <Ionicons name="options-outline" size={24} color={colors.text} />
         </TouchableOpacity>
       </View>
 
@@ -221,7 +224,7 @@ export default function ActivityScreen() {
                     <Ionicons
                       name={getRideIcon(ride.status) as any}
                       size={20}
-                      color={ride.status === 'cancelled' ? SpinrConfig.theme.colors.primary : SpinrConfig.theme.colors.primary}
+                      color={colors.primary}
                     />
                   </View>
 
@@ -255,10 +258,10 @@ export default function ActivityScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors) { return StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: colors.surface,
   },
   header: {
     flexDirection: 'row',
@@ -270,7 +273,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 28,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   filterIcon: {
     padding: 4,
@@ -286,20 +289,20 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 24,
     borderWidth: 1.5,
-    borderColor: '#E0E0E0',
-    backgroundColor: '#FFF',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
   filterTabActive: {
-    backgroundColor: '#1A1A1A',
-    borderColor: '#1A1A1A',
+    backgroundColor: colors.text,
+    borderColor: colors.text,
   },
   filterTabText: {
     fontSize: 14,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
+    color: colors.text,
   },
   filterTabTextActive: {
-    color: '#FFF',
+    color: colors.surface,
   },
   content: {
     flex: 1,
@@ -311,7 +314,7 @@ const styles = StyleSheet.create({
   monthHeader: {
     fontSize: 12,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: '#999',
+    color: colors.textDim,
     letterSpacing: 0.5,
     marginTop: 16,
     marginBottom: 12,
@@ -321,7 +324,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#F5F5F5',
+    borderBottomColor: colors.border,
   },
   rideIcon: {
     width: 48,
@@ -337,13 +340,13 @@ const styles = StyleSheet.create({
   rideDestination: {
     fontSize: 16,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
+    color: colors.text,
     marginBottom: 4,
   },
   rideInfo: {
     fontSize: 13,
     fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#999',
+    color: colors.textDim,
   },
   rideFareContainer: {
     alignItems: 'flex-end',
@@ -351,11 +354,11 @@ const styles = StyleSheet.create({
   rideFare: {
     fontSize: 17,
     fontFamily: 'PlusJakartaSans_700Bold',
-    color: SpinrConfig.theme.colors.primary,
+    color: colors.primary,
     marginBottom: 4,
   },
   rideFareCancelled: {
-    color: '#999',
+    color: colors.textDim,
   },
   rideStatusContainer: {
     flexDirection: 'row',
@@ -381,7 +384,7 @@ const styles = StyleSheet.create({
     width: 100,
     height: 100,
     borderRadius: 50,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: colors.surfaceLight,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 24,
@@ -389,14 +392,14 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 20,
     fontFamily: 'PlusJakartaSans_600SemiBold',
-    color: '#1A1A1A',
+    color: colors.text,
     marginBottom: 8,
   },
   emptyText: {
     fontSize: 14,
     fontFamily: 'PlusJakartaSans_400Regular',
-    color: '#666',
+    color: colors.textDim,
     textAlign: 'center',
     lineHeight: 22,
   },
-});
+}); }

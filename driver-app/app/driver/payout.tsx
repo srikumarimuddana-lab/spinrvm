@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
     View,
     Text,
@@ -19,27 +19,14 @@ import { useRouter } from 'expo-router';
 import { useDriverStore } from '../../store/driverStore';
 import { useAuthStore } from '@shared/store/authStore';
 import api from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
-
-const THEME = SpinrConfig.theme.colors;
-const COLORS = {
-    primary: THEME.background,
-    accent: THEME.primary,
-    accentDim: THEME.primaryDark,
-    surface: THEME.surface,
-    surfaceLight: THEME.surfaceLight,
-    text: THEME.text,
-    textDim: THEME.textDim,
-    success: THEME.success,
-    gold: '#FFD700',
-    orange: '#FF9500',
-    danger: THEME.error,
-    border: THEME.border,
-};
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 export default function PayoutScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
+    const { colors } = useTheme();
+    const styles = useMemo(() => createStyles(colors), [colors]);
     const {
         driverBalance,
         hasBankAccount,
@@ -177,7 +164,7 @@ export default function PayoutScreen() {
     if (initialLoading) {
         return (
             <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
-                <ActivityIndicator size="large" color={COLORS.accent} />
+                <ActivityIndicator size="large" color={colors.primary} />
             </View>
         );
     }
@@ -185,14 +172,14 @@ export default function PayoutScreen() {
     return (
         <View style={styles.container}>
             {/* Header */}
-            <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
+            <LinearGradient colors={[colors.surface, colors.background]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <View style={styles.headerRow}>
                     <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                        <Ionicons name="arrow-back" size={22} color={COLORS.text} />
+                        <Ionicons name="arrow-back" size={22} color={colors.text} />
                     </TouchableOpacity>
                     <Text style={styles.headerTitle}>Payouts</Text>
                     <TouchableOpacity onPress={() => router.push('/driver/payout-history' as any)}>
-                        <Ionicons name="time" size={22} color={COLORS.text} />
+                        <Ionicons name="time" size={22} color={colors.text} />
                     </TouchableOpacity>
                 </View>
             </LinearGradient>
@@ -236,7 +223,7 @@ export default function PayoutScreen() {
                     {stripeAccountStatus === 'active' ? (
                         <View style={styles.stripeCard}>
                             <View style={styles.stripeIconContainer}>
-                                <Ionicons name="checkmark-circle" size={28} color={COLORS.success} />
+                                <Ionicons name="checkmark-circle" size={28} color={colors.success} />
                             </View>
                             <View style={{ flex: 1 }}>
                                 <Text style={styles.stripeTitle}>Stripe Connected</Text>
@@ -245,7 +232,7 @@ export default function PayoutScreen() {
                                 </Text>
                             </View>
                             <TouchableOpacity onPress={handleStripeOnboarding}>
-                                <Text style={{ color: COLORS.accent, fontSize: 13, fontWeight: '600' }}>Update</Text>
+                                <Text style={{ color: colors.primary, fontSize: 13, fontWeight: '600' }}>Update</Text>
                             </TouchableOpacity>
                         </View>
                     ) : (
@@ -255,11 +242,11 @@ export default function PayoutScreen() {
                             disabled={stripeOnboarding}
                         >
                             {stripeOnboarding ? (
-                                <ActivityIndicator size="small" color={COLORS.accent} />
+                                <ActivityIndicator size="small" color={colors.primary} />
                             ) : (
                                 <>
                                     <View style={styles.stripeSetupIcon}>
-                                        <Ionicons name="shield-checkmark" size={32} color={COLORS.accent} />
+                                        <Ionicons name="shield-checkmark" size={32} color={colors.primary} />
                                     </View>
                                     <Text style={styles.stripeSetupTitle}>Set Up Payouts with Stripe</Text>
                                     <Text style={styles.stripeSetupDesc}>
@@ -267,19 +254,19 @@ export default function PayoutScreen() {
                                     </Text>
                                     <View style={styles.requirementsList}>
                                         <View style={styles.requirementItem}>
-                                            <Ionicons name="person" size={16} color={COLORS.textDim} />
+                                            <Ionicons name="person" size={16} color={colors.textDim} />
                                             <Text style={styles.requirementText}>Government-issued photo ID</Text>
                                         </View>
                                         <View style={styles.requirementItem}>
-                                            <Ionicons name="camera" size={16} color={COLORS.textDim} />
+                                            <Ionicons name="camera" size={16} color={colors.textDim} />
                                             <Text style={styles.requirementText}>Selfie for proof of liveness</Text>
                                         </View>
                                         <View style={styles.requirementItem}>
-                                            <Ionicons name="home" size={16} color={COLORS.textDim} />
+                                            <Ionicons name="home" size={16} color={colors.textDim} />
                                             <Text style={styles.requirementText}>Home address verification</Text>
                                         </View>
                                         <View style={styles.requirementItem}>
-                                            <Ionicons name="card" size={16} color={COLORS.textDim} />
+                                            <Ionicons name="card" size={16} color={colors.textDim} />
                                             <Text style={styles.requirementText}>Bank account or debit card</Text>
                                         </View>
                                     </View>
@@ -313,7 +300,7 @@ export default function PayoutScreen() {
                             <TextInput
                                 style={styles.textInput}
                                 placeholder="123456789RT0001"
-                                placeholderTextColor={COLORS.textDim}
+                                placeholderTextColor={colors.textDim}
                                 value={gstNumber}
                                 onChangeText={setGstNumber}
                                 autoCapitalize="characters"
@@ -344,7 +331,7 @@ export default function PayoutScreen() {
                         </View>
                     ) : (
                         <View style={styles.gstCard}>
-                            <Ionicons name="document-text" size={22} color={COLORS.textDim} />
+                            <Ionicons name="document-text" size={22} color={colors.textDim} />
                             <View style={{ flex: 1, marginLeft: 12 }}>
                                 <Text style={styles.gstLabel}>GST/HST Number</Text>
                                 <Text style={styles.gstValue}>
@@ -354,6 +341,30 @@ export default function PayoutScreen() {
                         </View>
                     )}
                 </View>
+
+                {/* G14: Show a clear CTA when Stripe isn't set up yet */}
+                {!isStripeReady && !initialLoading && (
+                    <View style={styles.section}>
+                        <View style={[styles.payoutCard, { alignItems: 'center', paddingVertical: 24 }]}>
+                            <Ionicons name="card-outline" size={40} color={colors.textDim} />
+                            <Text style={[styles.sectionTitle, { marginTop: 12, textAlign: 'center' }]}>
+                                Set Up Payouts
+                            </Text>
+                            <Text style={{ color: colors.textDim, fontSize: 13, textAlign: 'center', marginTop: 4, marginBottom: 16, lineHeight: 18 }}>
+                                Connect your bank account via Stripe to start receiving your earnings.
+                            </Text>
+                            <TouchableOpacity
+                                style={[styles.payoutButton, { paddingHorizontal: 24, paddingVertical: 12, opacity: stripeOnboarding ? 0.6 : 1 }]}
+                                onPress={handleStripeOnboarding}
+                                disabled={stripeOnboarding}
+                            >
+                                <Text style={styles.payoutButtonText}>
+                                    {stripeOnboarding ? 'Opening Stripe...' : 'Connect Bank Account'}
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                )}
 
                 {/* Payout Request */}
                 {isStripeReady && driverBalance && driverBalance.available_balance > 0 && (
@@ -365,7 +376,7 @@ export default function PayoutScreen() {
                                 <TextInput
                                     style={styles.payoutInput}
                                     placeholder="Amount"
-                                    placeholderTextColor={COLORS.textDim}
+                                    placeholderTextColor={colors.textDim}
                                     keyboardType="decimal-pad"
                                     value={payoutAmount}
                                     onChangeText={setPayoutAmount}
@@ -389,7 +400,7 @@ export default function PayoutScreen() {
                                 onPress={() => setPayoutAmount(driverBalance.available_balance.toString())}
                             >
                                 <Text style={styles.maxAmount}>
-                                    Available: {formatCurrency(driverBalance.available_balance)}
+                                    Available: {formatCurrency(driverBalance.available_balance)} · Min $10.00
                                 </Text>
                             </TouchableOpacity>
                         </View>
@@ -398,7 +409,7 @@ export default function PayoutScreen() {
 
                 {/* Info Note */}
                 <View style={styles.infoNote}>
-                    <Ionicons name="information-circle" size={20} color={COLORS.textDim} />
+                    <Ionicons name="information-circle" size={20} color={colors.textDim} />
                     <Text style={styles.infoText}>
                         Payouts are processed via Stripe within 2-3 business days. Minimum payout is $10. Stripe handles all identity verification and banking securely.
                     </Text>
@@ -409,297 +420,299 @@ export default function PayoutScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: COLORS.primary },
-    header: {
-        paddingBottom: 12,
-        paddingHorizontal: 16,
-    },
-    headerRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-    },
-    backBtn: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        backgroundColor: COLORS.surfaceLight,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    headerTitle: { color: COLORS.text, fontSize: 20, fontWeight: '700' },
+function createStyles(colors: ThemeColors) {
+    return StyleSheet.create({
+        container: { flex: 1, backgroundColor: colors.background },
+        header: {
+            paddingBottom: 12,
+            paddingHorizontal: 16,
+        },
+        headerRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+        },
+        backBtn: {
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            backgroundColor: colors.surfaceLight,
+            justifyContent: 'center',
+            alignItems: 'center',
+        },
+        headerTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
 
-    balanceCard: {
-        backgroundColor: COLORS.accent,
-        marginHorizontal: 16,
-        marginTop: 16,
-        borderRadius: 20,
-        padding: 24,
-    },
-    balanceLabel: {
-        color: 'rgba(255,255,255,0.7)',
-        fontSize: 11,
-        letterSpacing: 1.5,
-        fontWeight: '600',
-        textAlign: 'center',
-    },
-    balanceAmount: {
-        color: '#fff',
-        fontSize: 48,
-        fontWeight: '800',
-        textAlign: 'center',
-        marginVertical: 8,
-    },
-    balanceDetails: {
-        flexDirection: 'row',
-        marginTop: 16,
-        paddingTop: 16,
-        borderTopWidth: 1,
-        borderTopColor: 'rgba(255,255,255,0.2)',
-    },
-    balanceItem: { flex: 1, alignItems: 'center' },
-    balanceItemLabel: {
-        color: 'rgba(255,255,255,0.7)',
-        fontSize: 10,
-        marginBottom: 4,
-    },
-    balanceItemValue: {
-        color: '#fff',
-        fontSize: 14,
-        fontWeight: '600',
-    },
-    balanceDivider: {
-        width: 1,
-        backgroundColor: 'rgba(255,255,255,0.2)',
-    },
+        balanceCard: {
+            backgroundColor: colors.primary,
+            marginHorizontal: 16,
+            marginTop: 16,
+            borderRadius: 20,
+            padding: 24,
+        },
+        balanceLabel: {
+            color: 'rgba(255,255,255,0.7)',
+            fontSize: 11,
+            letterSpacing: 1.5,
+            fontWeight: '600',
+            textAlign: 'center',
+        },
+        balanceAmount: {
+            color: '#fff',
+            fontSize: 48,
+            fontWeight: '800',
+            textAlign: 'center',
+            marginVertical: 8,
+        },
+        balanceDetails: {
+            flexDirection: 'row',
+            marginTop: 16,
+            paddingTop: 16,
+            borderTopWidth: 1,
+            borderTopColor: 'rgba(255,255,255,0.2)',
+        },
+        balanceItem: { flex: 1, alignItems: 'center' },
+        balanceItemLabel: {
+            color: 'rgba(255,255,255,0.7)',
+            fontSize: 10,
+            marginBottom: 4,
+        },
+        balanceItemValue: {
+            color: '#fff',
+            fontSize: 14,
+            fontWeight: '600',
+        },
+        balanceDivider: {
+            width: 1,
+            backgroundColor: 'rgba(255,255,255,0.2)',
+        },
 
-    section: {
-        paddingHorizontal: 16,
-        marginTop: 24,
-    },
-    sectionHeader: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 12,
-    },
-    sectionTitle: {
-        color: COLORS.text,
-        fontSize: 17,
-        fontWeight: '700',
-        marginBottom: 12,
-    },
-    addLink: {
-        color: COLORS.accent,
-        fontSize: 14,
-        fontWeight: '600',
-        marginBottom: 12,
-    },
+        section: {
+            paddingHorizontal: 16,
+            marginTop: 24,
+        },
+        sectionHeader: {
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: 12,
+        },
+        sectionTitle: {
+            color: colors.text,
+            fontSize: 17,
+            fontWeight: '700',
+            marginBottom: 12,
+        },
+        addLink: {
+            color: colors.primary,
+            fontSize: 14,
+            fontWeight: '600',
+            marginBottom: 12,
+        },
 
-    // Stripe Connected Card
-    stripeCard: {
-        backgroundColor: COLORS.surface,
-        borderRadius: 16,
-        padding: 16,
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    stripeIconContainer: { marginRight: 12 },
-    stripeTitle: { color: COLORS.text, fontSize: 16, fontWeight: '600' },
-    stripeSubtitle: { color: COLORS.textDim, fontSize: 13, marginTop: 2 },
+        // Stripe Connected Card
+        stripeCard: {
+            backgroundColor: colors.surface,
+            borderRadius: 16,
+            padding: 16,
+            flexDirection: 'row',
+            alignItems: 'center',
+        },
+        stripeIconContainer: { marginRight: 12 },
+        stripeTitle: { color: colors.text, fontSize: 16, fontWeight: '600' },
+        stripeSubtitle: { color: colors.textDim, fontSize: 13, marginTop: 2 },
 
-    // Stripe Setup Card
-    stripeSetupCard: {
-        backgroundColor: COLORS.surface,
-        borderRadius: 16,
-        padding: 20,
-        alignItems: 'center',
-        borderWidth: 1,
-        borderColor: COLORS.border,
-    },
-    stripeSetupIcon: {
-        width: 64,
-        height: 64,
-        borderRadius: 32,
-        backgroundColor: `${COLORS.accent}15`,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginBottom: 12,
-    },
-    stripeSetupTitle: {
-        color: COLORS.text,
-        fontSize: 18,
-        fontWeight: '700',
-        marginBottom: 8,
-        textAlign: 'center',
-    },
-    stripeSetupDesc: {
-        color: COLORS.textDim,
-        fontSize: 13,
-        textAlign: 'center',
-        lineHeight: 18,
-        marginBottom: 16,
-    },
-    requirementsList: {
-        width: '100%',
-        marginBottom: 20,
-    },
-    requirementItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingVertical: 6,
-        gap: 10,
-    },
-    requirementText: {
-        color: COLORS.text,
-        fontSize: 14,
-    },
-    stripeSetupBtn: {
-        backgroundColor: COLORS.accent,
-        paddingHorizontal: 28,
-        paddingVertical: 14,
-        borderRadius: 12,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    stripeSetupBtnText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '700',
-    },
+        // Stripe Setup Card
+        stripeSetupCard: {
+            backgroundColor: colors.surface,
+            borderRadius: 16,
+            padding: 20,
+            alignItems: 'center',
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
+        stripeSetupIcon: {
+            width: 64,
+            height: 64,
+            borderRadius: 32,
+            backgroundColor: `${colors.primary}15`,
+            justifyContent: 'center',
+            alignItems: 'center',
+            marginBottom: 12,
+        },
+        stripeSetupTitle: {
+            color: colors.text,
+            fontSize: 18,
+            fontWeight: '700',
+            marginBottom: 8,
+            textAlign: 'center',
+        },
+        stripeSetupDesc: {
+            color: colors.textDim,
+            fontSize: 13,
+            textAlign: 'center',
+            lineHeight: 18,
+            marginBottom: 16,
+        },
+        requirementsList: {
+            width: '100%',
+            marginBottom: 20,
+        },
+        requirementItem: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingVertical: 6,
+            gap: 10,
+        },
+        requirementText: {
+            color: colors.text,
+            fontSize: 14,
+        },
+        stripeSetupBtn: {
+            backgroundColor: colors.primary,
+            paddingHorizontal: 28,
+            paddingVertical: 14,
+            borderRadius: 12,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+        },
+        stripeSetupBtnText: {
+            color: '#fff',
+            fontSize: 16,
+            fontWeight: '700',
+        },
 
-    // GST Form
-    gstForm: {
-        backgroundColor: COLORS.surface,
-        borderRadius: 16,
-        padding: 16,
-    },
-    gstCard: {
-        backgroundColor: COLORS.surface,
-        borderRadius: 16,
-        padding: 16,
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    gstLabel: {
-        color: COLORS.textDim,
-        fontSize: 12,
-    },
-    gstValue: {
-        color: COLORS.text,
-        fontSize: 15,
-        fontWeight: '500',
-        marginTop: 2,
-    },
-    gstHelpText: {
-        color: COLORS.textDim,
-        fontSize: 12,
-        lineHeight: 17,
-        marginBottom: 12,
-        marginTop: 4,
-    },
-    gstNote: {
-        color: COLORS.textDim,
-        fontSize: 11,
-        marginTop: 8,
-        fontStyle: 'italic',
-    },
-    gstFormButtons: {
-        flexDirection: 'row',
-        gap: 12,
-        marginTop: 16,
-    },
-    cancelBtn: {
-        flex: 1,
-        paddingVertical: 12,
-        borderRadius: 10,
-        backgroundColor: COLORS.surfaceLight,
-        alignItems: 'center',
-    },
-    cancelBtnText: { color: COLORS.textDim, fontSize: 14, fontWeight: '600' },
-    saveBtn: {
-        flex: 2,
-        paddingVertical: 12,
-        borderRadius: 10,
-        backgroundColor: COLORS.accent,
-        alignItems: 'center',
-    },
-    saveBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
+        // GST Form
+        gstForm: {
+            backgroundColor: colors.surface,
+            borderRadius: 16,
+            padding: 16,
+        },
+        gstCard: {
+            backgroundColor: colors.surface,
+            borderRadius: 16,
+            padding: 16,
+            flexDirection: 'row',
+            alignItems: 'center',
+        },
+        gstLabel: {
+            color: colors.textDim,
+            fontSize: 12,
+        },
+        gstValue: {
+            color: colors.text,
+            fontSize: 15,
+            fontWeight: '500',
+            marginTop: 2,
+        },
+        gstHelpText: {
+            color: colors.textDim,
+            fontSize: 12,
+            lineHeight: 17,
+            marginBottom: 12,
+            marginTop: 4,
+        },
+        gstNote: {
+            color: colors.textDim,
+            fontSize: 11,
+            marginTop: 8,
+            fontStyle: 'italic',
+        },
+        gstFormButtons: {
+            flexDirection: 'row',
+            gap: 12,
+            marginTop: 16,
+        },
+        cancelBtn: {
+            flex: 1,
+            paddingVertical: 12,
+            borderRadius: 10,
+            backgroundColor: colors.surfaceLight,
+            alignItems: 'center',
+        },
+        cancelBtnText: { color: colors.textDim, fontSize: 14, fontWeight: '600' },
+        saveBtn: {
+            flex: 2,
+            paddingVertical: 12,
+            borderRadius: 10,
+            backgroundColor: colors.primary,
+            alignItems: 'center',
+        },
+        saveBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
 
-    inputLabel: {
-        color: COLORS.text,
-        fontSize: 13,
-        marginBottom: 4,
-        fontWeight: '600',
-    },
-    textInput: {
-        backgroundColor: COLORS.surfaceLight,
-        borderRadius: 12,
-        paddingHorizontal: 14,
-        paddingVertical: 12,
-        fontSize: 15,
-        color: COLORS.text,
-    },
+        inputLabel: {
+            color: colors.text,
+            fontSize: 13,
+            marginBottom: 4,
+            fontWeight: '600',
+        },
+        textInput: {
+            backgroundColor: colors.surfaceLight,
+            borderRadius: 12,
+            paddingHorizontal: 14,
+            paddingVertical: 12,
+            fontSize: 15,
+            color: colors.text,
+        },
 
-    // Payout
-    payoutCard: {
-        backgroundColor: COLORS.surface,
-        borderRadius: 16,
-        padding: 16,
-    },
-    payoutInputRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    dollarSign: {
-        fontSize: 24,
-        fontWeight: '700',
-        color: COLORS.text,
-        marginRight: 4,
-    },
-    payoutInput: {
-        flex: 1,
-        fontSize: 24,
-        fontWeight: '700',
-        color: COLORS.text,
-        paddingVertical: 8,
-    },
-    payoutButton: {
-        backgroundColor: COLORS.accent,
-        paddingHorizontal: 24,
-        paddingVertical: 12,
-        borderRadius: 12,
-    },
-    payoutButtonDisabled: {
-        opacity: 0.5,
-    },
-    payoutButtonText: {
-        color: '#fff',
-        fontSize: 16,
-        fontWeight: '700',
-    },
-    maxAmount: {
-        color: COLORS.accent,
-        fontSize: 13,
-        marginTop: 8,
-    },
+        // Payout
+        payoutCard: {
+            backgroundColor: colors.surface,
+            borderRadius: 16,
+            padding: 16,
+        },
+        payoutInputRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+        },
+        dollarSign: {
+            fontSize: 24,
+            fontWeight: '700',
+            color: colors.text,
+            marginRight: 4,
+        },
+        payoutInput: {
+            flex: 1,
+            fontSize: 24,
+            fontWeight: '700',
+            color: colors.text,
+            paddingVertical: 8,
+        },
+        payoutButton: {
+            backgroundColor: colors.primary,
+            paddingHorizontal: 24,
+            paddingVertical: 12,
+            borderRadius: 12,
+        },
+        payoutButtonDisabled: {
+            opacity: 0.5,
+        },
+        payoutButtonText: {
+            color: '#fff',
+            fontSize: 16,
+            fontWeight: '700',
+        },
+        maxAmount: {
+            color: colors.primary,
+            fontSize: 13,
+            marginTop: 8,
+        },
 
-    infoNote: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        marginHorizontal: 16,
-        marginTop: 24,
-        padding: 14,
-        backgroundColor: COLORS.surface,
-        borderRadius: 12,
-        gap: 8,
-    },
-    infoText: {
-        flex: 1,
-        color: COLORS.textDim,
-        fontSize: 13,
-        lineHeight: 18,
-    },
-});
+        infoNote: {
+            flexDirection: 'row',
+            alignItems: 'flex-start',
+            marginHorizontal: 16,
+            marginTop: 24,
+            padding: 14,
+            backgroundColor: colors.surface,
+            borderRadius: 12,
+            gap: 8,
+        },
+        infoText: {
+            flex: 1,
+            color: colors.textDim,
+            fontSize: 13,
+            lineHeight: 18,
+        },
+    });
+}

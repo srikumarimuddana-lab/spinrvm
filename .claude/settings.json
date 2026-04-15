@@ -1,5 +1,8 @@
 {
   "model": "claude-sonnet-4-6",
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
   "attribution": {
     "commit": "Co-developed with Claude Code (claude-sonnet-4-6)\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
     "pr": "AI-assisted — spinr platform (Claude Code)"
@@ -66,5 +69,16 @@
       "Write(.github/workflows/test-env.yml)",
       "Write(.github/workflows/apply-supabase-schema.yml)"
     ]
+  },
+  "extraKnownMarketplaces": {
+    "karpathy-skills": {
+      "source": {
+        "source": "github",
+        "repo": "forrestchang/andrej-karpathy-skills"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "andrej-karpathy-skills@karpathy-skills": true
   }
 }

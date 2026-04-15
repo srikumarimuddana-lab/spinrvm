@@ -3,15 +3,13 @@ import uuid
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 try:
-    from ...db import db
-    from ...utils.password import hash_password
+    from ... import db_supabase
 except ImportError:
-    from db import db
-    from utils.password import hash_password
+    import db_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +74,9 @@ class StaffUpdateRequest(BaseModel):
 
 
 @router.get("/staff")
-async def list_staff(authorization: Optional[str] = Header(None)):
+async def list_staff(admin: dict = Depends(get_admin_user)):
     """List all staff members."""
-    staff = await db.get_rows("admin_staff", limit=100)
+    staff = await db_supabase.get_rows("admin_staff", limit=100)
     # Remove passwords from response
     for s in staff:
         s.pop("password_hash", None)
@@ -87,8 +85,13 @@ async def list_staff(authorization: Optional[str] = Header(None)):
 
 
 @router.post("/staff")
-async def create_staff(req: StaffCreateRequest, authorization: Optional[str] = Header(None)):
-    """Create a new staff member with role-based module access."""
+async def create_staff(req: StaffCreateRequest, admin: dict = Depends(get_admin_user)):
+    """Create a new staff member with role-based module access.
+
+    Only super_admin can create new staff members.
+    """
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Only super admins can create staff")
     # Basic password policy: short passwords defeat bcrypt's cost factor
     # because the keyspace is too small. 12 chars is the floor; operators
     # should pick much longer in practice.
@@ -99,7 +102,7 @@ async def create_staff(req: StaffCreateRequest, authorization: Optional[str] = H
         )
 
     # Check if email already exists
-    existing = await db.admin_staff.find_one({"email": req.email.lower()})
+    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"email": req.email.lower()}, limit=1))
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered as staff")
 
@@ -126,7 +129,7 @@ async def create_staff(req: StaffCreateRequest, authorization: Optional[str] = H
         "last_login": None,
     }
 
-    await db.admin_staff.insert_one(staff)
+    await db_supabase.insert_one("admin_staff", staff)
     staff.pop("password_hash")
     return staff
 
@@ -143,7 +146,7 @@ async def list_modules():
 @router.get("/staff/{staff_id}")
 async def get_staff(staff_id: str):
     """Get a single staff member."""
-    s = await db.admin_staff.find_one({"id": staff_id})
+    s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
     if not s:
         raise HTTPException(status_code=404, detail="Staff member not found")
     s.pop("password_hash", None)
@@ -154,7 +157,7 @@ async def get_staff(staff_id: str):
 @router.put("/staff/{staff_id}")
 async def update_staff(staff_id: str, req: StaffUpdateRequest):
     """Update staff member role/modules/status."""
-    s = await db.admin_staff.find_one({"id": staff_id})
+    s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
     if not s:
         raise HTTPException(status_code=404, detail="Staff member not found")
 
@@ -174,7 +177,7 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest):
 
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
-        await db.admin_staff.update_one({"id": staff_id}, {"$set": updates})
+        await db_supabase.update_one("admin_staff", {"id": staff_id}, updates)
 
     return {"success": True}
 
@@ -182,5 +185,5 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest):
 @router.delete("/staff/{staff_id}")
 async def delete_staff(staff_id: str):
     """Delete a staff member."""
-    await db.admin_staff.delete_many({"id": staff_id})
+    await db_supabase.delete_many("admin_staff", {"id": staff_id})
     return {"success": True}

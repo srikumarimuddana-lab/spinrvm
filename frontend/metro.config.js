@@ -32,4 +32,17 @@ config.watchFolders = [
   path.resolve(__dirname, '../shared')
 ];
 
+// Prevent native-only modules from crashing the web bundler.
+// react-native-maps imports codegenNativeCommands which doesn't exist on web.
+// Returning { type: 'empty' } is the Expo-canonical no-op resolution.
+const _resolveRequest = config.resolver.resolveRequest;
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (platform === 'web' && moduleName === 'react-native/Libraries/Utilities/codegenNativeCommands') {
+    return { type: 'empty' };
+  }
+  return _resolveRequest
+    ? _resolveRequest(context, moduleName, platform)
+    : context.resolveRequest(context, moduleName, platform);
+};
+
 module.exports = config;

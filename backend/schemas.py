@@ -60,6 +60,13 @@ class AuthResponse(BaseModel):
     token: str
     user: UserProfile
     is_new_user: bool
+    # Refresh-token fields. Added in P0-S3 — existing mobile clients
+    # ignore unknown response fields, so this is additive. Clients that
+    # know about the refresh flow persist `refresh_token` and call
+    # /auth/refresh before the access token hits `access_expires_at`.
+    refresh_token: Optional[str] = None
+    access_expires_at: Optional[datetime] = None
+    refresh_expires_at: Optional[datetime] = None
 
 
 class AppSettings(BaseModel):

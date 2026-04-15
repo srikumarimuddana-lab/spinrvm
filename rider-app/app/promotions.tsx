@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput,
   ActivityIndicator,
@@ -7,10 +7,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
-import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
-
-const COLORS = SpinrConfig.theme.colors;
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 interface Promo {
   promo_id: string;
@@ -24,6 +23,9 @@ interface Promo {
 
 export default function PromotionsScreen() {
   const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const [promos, setPromos] = useState<Promo[]>([]);
   const [loading, setLoading] = useState(true);
   const [code, setCode] = useState('');
@@ -90,7 +92,7 @@ export default function PromotionsScreen() {
     <View style={styles.promoCard}>
       <View style={styles.promoLeft}>
         <View style={styles.promoIcon}>
-          <Ionicons name="pricetag" size={20} color={COLORS.primary} />
+          <Ionicons name="pricetag" size={20} color={colors.primary} />
         </View>
       </View>
       <View style={{ flex: 1 }}>
@@ -110,7 +112,7 @@ export default function PromotionsScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
+          <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Promotions</Text>
         <View style={{ width: 44 }} />
@@ -137,7 +139,7 @@ export default function PromotionsScreen() {
 
       {/* Available promos */}
       {loading ? (
-        <View style={styles.center}><ActivityIndicator size="large" color={COLORS.primary} /></View>
+        <View style={styles.center}><ActivityIndicator size="large" color={colors.primary} /></View>
       ) : (
         <FlatList
           data={promos}
@@ -168,45 +170,47 @@ export default function PromotionsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FFF' },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F0F0F0',
-  },
-  backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: '#1A1A1A' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  list: { padding: 20 },
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    header: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+      paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border,
+    },
+    backBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
+    headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
+    center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+    list: { padding: 20 },
 
-  inputSection: { flexDirection: 'row', gap: 10, paddingHorizontal: 20, paddingVertical: 16 },
-  input: {
-    flex: 1, backgroundColor: '#F5F5F5', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14,
-    fontSize: 16, fontWeight: '600', color: '#1A1A1A', letterSpacing: 1,
-  },
-  applyBtn: { backgroundColor: COLORS.primary, borderRadius: 14, paddingHorizontal: 24, justifyContent: 'center' },
-  applyText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+    inputSection: { flexDirection: 'row', gap: 10, paddingHorizontal: 20, paddingVertical: 16 },
+    input: {
+      flex: 1, backgroundColor: colors.surfaceLight, borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14,
+      fontSize: 16, fontWeight: '600', color: colors.text, letterSpacing: 1,
+    },
+    applyBtn: { backgroundColor: colors.primary, borderRadius: 14, paddingHorizontal: 24, justifyContent: 'center' },
+    applyText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
 
-  sectionTitle: { fontSize: 13, fontWeight: '700', color: '#999', letterSpacing: 0.5, marginBottom: 12 },
+    sectionTitle: { fontSize: 13, fontWeight: '700', color: colors.textDim, letterSpacing: 0.5, marginBottom: 12 },
 
-  promoCard: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#F9F9F9', borderRadius: 16, padding: 16, marginBottom: 12,
-    borderLeftWidth: 4, borderLeftColor: COLORS.primary,
-  },
-  promoLeft: { marginRight: 14 },
-  promoIcon: {
-    width: 44, height: 44, borderRadius: 12, backgroundColor: '#FEF2F2',
-    justifyContent: 'center', alignItems: 'center',
-  },
-  codeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
-  promoCode: { fontSize: 16, fontWeight: '800', color: '#1A1A1A', letterSpacing: 1 },
-  discountBadge: { backgroundColor: '#ECFDF5', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
-  discountText: { fontSize: 12, fontWeight: '700', color: '#10B981' },
-  promoDesc: { fontSize: 13, color: '#666', marginBottom: 2 },
-  promoExpiry: { fontSize: 11, color: '#999' },
+    promoCard: {
+      flexDirection: 'row', alignItems: 'center',
+      backgroundColor: colors.surfaceLight, borderRadius: 16, padding: 16, marginBottom: 12,
+      borderLeftWidth: 4, borderLeftColor: colors.primary,
+    },
+    promoLeft: { marginRight: 14 },
+    promoIcon: {
+      width: 44, height: 44, borderRadius: 12, backgroundColor: '#FEF2F2',
+      justifyContent: 'center', alignItems: 'center',
+    },
+    codeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+    promoCode: { fontSize: 16, fontWeight: '800', color: colors.text, letterSpacing: 1 },
+    discountBadge: { backgroundColor: '#ECFDF5', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+    discountText: { fontSize: 12, fontWeight: '700', color: '#10B981' },
+    promoDesc: { fontSize: 13, color: colors.textDim, marginBottom: 2 },
+    promoExpiry: { fontSize: 11, color: colors.textDim },
 
-  empty: { alignItems: 'center', paddingVertical: 40 },
-  emptyTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A1A', marginTop: 12 },
-  emptySub: { fontSize: 13, color: '#999', marginTop: 4, textAlign: 'center' },
-});
+    empty: { alignItems: 'center', paddingVertical: 40 },
+    emptyTitle: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: 12 },
+    emptySub: { fontSize: 13, color: colors.textDim, marginTop: 4, textAlign: 'center' },
+  });
+}

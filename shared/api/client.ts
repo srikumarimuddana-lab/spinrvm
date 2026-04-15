@@ -6,7 +6,7 @@ const isFirebaseConfigured = typeof auth.onAuthStateChanged === 'function';
 
 const API_URL = SpinrConfig.backendUrl;
 
-console.log('API Client configured with URL:', API_URL);
+if (__DEV__) console.log('API Client configured with URL:', API_URL);
 
 // Request timeout in milliseconds
 const REQUEST_TIMEOUT = 15000;
@@ -48,14 +48,14 @@ let _inMemoryToken: string | null = null;
 
 export function setInMemoryToken(token: string | null) {
   _inMemoryToken = token;
-  console.log('[API] In-memory token:', token ? 'SET' : 'CLEARED');
+  if (__DEV__) console.log('[API] In-memory token:', token ? 'SET' : 'CLEARED');
 }
 
 // Helper to get stored token
 const getStoredToken = async (): Promise<string | null> => {
   try {
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      return localStorage.getItem('auth_token');
+      return sessionStorage.getItem('auth_token');
     } else {
       const SecureStore = require('expo-secure-store');
       const token = await SecureStore.getItemAsync('auth_token');
@@ -152,6 +152,35 @@ const handleApiError = async (response: Response, method: string, url: string): 
     exception_type: exceptionType,
     data: errorData,
   });
+
+  // ── G2: Catch expired / invalid tokens globally ──────────────
+  // If the backend returns 401, the JWT has expired or been revoked.
+  // Clear the in-memory token and the persisted auth state so the
+  // Zustand auth store flips `isAuthenticated` to false — which
+  // triggers the layout's redirect-to-login effect in both apps.
+  // This prevents the "session limbo" state where API calls silently
+  // fail 401 while the driver/rider still sees the dashboard.
+  if (response.status === 401) {
+    console.log('[API] 401 Unauthorized — clearing session');
+    setInMemoryToken(null);
+    try {
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        localStorage.removeItem('auth_token');
+      } else {
+        const SecureStore = require('expo-secure-store');
+        await SecureStore.deleteItemAsync('auth_token');
+      }
+    } catch { /* best-effort clear */ }
+
+    // Lazily import the auth store to avoid circular deps. The store's
+    // logout() clears user/token/isAuthenticated — the layout effects
+    // in both apps watch isAuthenticated and redirect to /login.
+    try {
+      const { useAuthStore } = require('../store/authStore');
+      useAuthStore.getState().logout();
+    } catch { /* store may not be initialized yet on cold start */ }
+  }
+
   const error: any = new Error(message);
   error.response = { data: errorData, status: response.status };
   error.requestId = requestId;
@@ -168,9 +197,6 @@ const client = {
     };
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
-      console.log('DEBUG: Adding auth header for GET', url, 'Token starts with:', token.substring(0, 20));
-    } else {
-      console.log('DEBUG: NO TOKEN for GET', url);
     }
 
     const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
@@ -221,7 +247,7 @@ const client = {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(`${API_URL}/api/v1${url}`, {
+    const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
       method: 'PUT',
       headers,
       body: body === undefined || body === null ? undefined : (isFormData ? body : JSON.stringify(body)),
@@ -243,7 +269,7 @@ const client = {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(`${API_URL}/api/v1${url}`, {
+    const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
       method: 'PATCH',
       headers,
       body: body ? JSON.stringify(body) : undefined,
@@ -265,7 +291,7 @@ const client = {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await fetch(`${API_URL}/api/v1${url}`, {
+    const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
       method: 'DELETE',
       headers,
     });

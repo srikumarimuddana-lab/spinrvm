@@ -6,9 +6,9 @@ from typing import Any, Dict
 from fastapi import APIRouter
 
 try:
-    from ...db import db
+    from ... import db_supabase
 except ImportError:
-    from db import db
+    import db_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ router = APIRouter()
 @router.get("/service-areas")
 async def admin_get_service_areas():
     """Get all service areas. Sub-regions are nested under their parent as 'sub_regions'."""
-    areas = await db.get_rows("service_areas", order="name", limit=500)
+    areas = await db_supabase.get_rows("service_areas", order="name", limit=500)
     # Build parent -> children mapping
     parent_map: Dict[str, list] = {}
     parents = []
@@ -68,7 +68,7 @@ async def admin_create_service_area(area: Dict[str, Any]):
         "show_demand_heatmap": area.get("show_demand_heatmap", False),
         "created_at": datetime.utcnow().isoformat(),
     }
-    await db.service_areas.insert_one(doc)
+    await db_supabase.insert_one("service_areas", doc)
     return {"area_id": doc["id"]}
 
 
@@ -113,14 +113,14 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
     if update_payload:
         # NOTE: service_areas table does not have an updated_at column in Supabase schema.
         # Adding it causes PGRST204 -> 500 error.
-        await db.service_areas.update_one({"id": area_id}, {"$set": update_payload})
+        await db_supabase.update_one("service_areas", {"id": area_id}, update_payload)
     return {"message": "Service area updated"}
 
 
 @router.delete("/service-areas/{area_id}")
 async def admin_delete_service_area(area_id: str):
     """Delete service area."""
-    await db.service_areas.delete_many({"id": area_id})
+    await db_supabase.delete_many("service_areas", {"id": area_id})
     return {"message": "Service area deleted"}
 
 
@@ -131,19 +131,38 @@ async def admin_delete_service_area(area_id: str):
 async def admin_update_surge_pricing(area_id: str, surge: Dict[str, Any]):
     """Update surge pricing for a service area."""
     surge_doc = {
+        "id": str(uuid.uuid4()),
         "service_area_id": area_id,
         "multiplier": surge.get("multiplier", 1.0),
+        "demand_count": 0,
+        "supply_count": 0,
+        "ratio": 0,
+        "source": "manual",
         "is_active": surge.get("is_active", False),
+        "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }
 
-    existing = await db.surge_pricing.find_one({"service_area_id": area_id})
+    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("surge_pricing", {"service_area_id": area_id}, limit=1))
     if existing:
-        await db.surge_pricing.update_one({"service_area_id": area_id}, {"$set": surge_doc})
+        await db_supabase.update_one("surge_pricing", {"service_area_id": area_id}, surge_doc)
     else:
-        await db.surge_pricing.insert_one(surge_doc)
+        await db_supabase.insert_one("surge_pricing", surge_doc)
 
     return {"message": "Surge pricing updated"}
+
+
+@router.get("/surge/status")
+async def admin_get_surge_status():
+    """Get current surge status for all active service areas."""
+    try:
+        from utils.surge_engine import get_surge_status
+
+        return await get_surge_status()
+    except ImportError:
+        from ...utils.surge_engine import get_surge_status
+
+        return await get_surge_status()
 
 
 # ---------- Area Management (Pricing, Tax, Vehicle Pricing) ----------
@@ -152,7 +171,7 @@ async def admin_update_surge_pricing(area_id: str, surge: Dict[str, Any]):
 @router.get("/areas/{area_id}/fees")
 async def admin_get_area_fees(area_id: str):
     """Get all fees for a service area."""
-    fees = await db.get_rows("area_fees", {"service_area_id": area_id}, order="created_at", limit=100)
+    fees = await db_supabase.get_rows("area_fees", {"service_area_id": area_id}, order="created_at", limit=100)
     return fees
 
 
@@ -172,7 +191,7 @@ async def admin_create_area_fee(area_id: str, fee: Dict[str, Any]):
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }
-    await db.area_fees.insert_one(doc)
+    await db_supabase.insert_one("area_fees", doc)
     return doc
 
 
@@ -185,21 +204,21 @@ async def admin_update_area_fee(area_id: str, fee_id: str, fee: Dict[str, Any]):
         updates["amount"] = float(updates["amount"])
     if updates:
         updates["updated_at"] = datetime.utcnow().isoformat()
-        await db.area_fees.update_one({"id": fee_id}, {"$set": updates})
+        await db_supabase.update_one("area_fees", {"id": fee_id}, updates)
     return {"message": "Area fee updated"}
 
 
 @router.delete("/areas/{area_id}/fees/{fee_id}")
 async def admin_delete_area_fee(area_id: str, fee_id: str):
     """Delete an area fee."""
-    await db.area_fees.delete_many({"id": fee_id})
+    await db_supabase.delete_many("area_fees", {"id": fee_id})
     return {"message": "Area fee deleted"}
 
 
 @router.get("/areas/{area_id}/tax")
 async def admin_get_area_tax(area_id: str):
     """Get tax configuration for a service area."""
-    area = await db.service_areas.find_one({"id": area_id})
+    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
     if not area:
         return {
             "service_area_id": area_id,
@@ -227,8 +246,8 @@ async def admin_update_area_tax(area_id: str, tax: Dict[str, Any]):
     allowed = ["gst_enabled", "gst_rate", "pst_enabled", "pst_rate", "hst_enabled", "hst_rate"]
     updates = {k: tax[k] for k in allowed if k in tax}
     if updates:
-        await db.service_areas.update_one({"id": area_id}, {"$set": updates})
-    area = await db.service_areas.find_one({"id": area_id})
+        await db_supabase.update_one("service_areas", {"id": area_id}, updates)
+    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
     return {k: area.get(k) for k in allowed}
 
 
@@ -239,8 +258,8 @@ async def admin_get_vehicle_pricing(area_id: str):
     Returns {vehicle_types, fare_configs} so the fare-config editor can
     display a row per vehicle type with the area's specific rates.
     """
-    vehicle_types = await db.get_rows("vehicle_types", {"is_active": True}, order="name", limit=50)
-    fare_configs = await db.get_rows("fare_configs", {"service_area_id": area_id}, limit=100)
+    vehicle_types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, order="name", limit=50)
+    fare_configs = await db_supabase.get_rows("fare_configs", {"service_area_id": area_id}, limit=100)
     return {
         "vehicle_types": vehicle_types or [],
         "fare_configs": fare_configs or [],

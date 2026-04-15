@@ -1,12 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import en from './en.json';
 import fr from './fr.json';
+import es from './es.json';
 
-export type Language = 'en' | 'fr';
+export type Language = 'en' | 'fr' | 'es';
 
 export const languages: { code: Language; name: string; nativeName: string }[] = [
     { code: 'en', name: 'English', nativeName: 'English' },
     { code: 'fr', name: 'French', nativeName: 'Français' },
+    { code: 'es', name: 'Spanish', nativeName: 'Español' },
 ];
 
 const LANGUAGE_KEY = '@spinr_language';
@@ -17,12 +19,13 @@ type Translations = { [key: string]: TranslationValue };
 const translations: Record<Language, Translations> = {
     en: en as Translations,
     fr: fr as Translations,
+    es: es as Translations,
 };
 
 export async function getStoredLanguage(): Promise<Language> {
     try {
         const stored = await AsyncStorage.getItem(LANGUAGE_KEY);
-        if (stored === 'en' || stored === 'fr') {
+        if (stored === 'en' || stored === 'fr' || stored === 'es') {
             return stored;
         }
         return 'en';

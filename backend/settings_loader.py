@@ -7,10 +7,10 @@ All readers use get_app_settings() for consistent defaults and shape.
 from typing import Any, Dict
 
 try:
-    from .db import db
+    from . import db_supabase
     from .schemas import AppSettings
 except ImportError:
-    from db import db
+    import db_supabase
     from schemas import AppSettings
 
 
@@ -23,10 +23,10 @@ async def get_app_settings() -> Dict[str, Any]:
     """
     Load app settings from DB (single row id='app_settings') and merge with
     schema defaults so every caller gets the same keys. Use this everywhere
-    instead of db.settings.find_one({'id': 'app_settings'}).
+    instead of (lambda _r: _r[0] if _r else None)(db_supabase.get_rows("settings", {'id': 'app_settings'}, limit=1)).
     """
     defaults = _defaults_dict()
-    row = await db.settings.find_one({"id": "app_settings"})
+    row = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("settings", {"id": "app_settings"}, limit=1))
     if not row:
         return defaults
     # Merge: row overrides defaults; include any extra keys from admin (heat_map_*, app_name, etc.)

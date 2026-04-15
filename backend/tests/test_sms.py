@@ -3,6 +3,7 @@ Unit tests for SMS service functionality.
 Tests cover OTP SMS sending, general SMS, and Twilio integration.
 """
 
+import importlib
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -10,6 +11,20 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+@pytest.fixture(autouse=True)
+def _restore_real_sms_service():
+    """The project-wide autouse fixture in conftest.py stubs
+    ``backend.sms_service.send_sms`` / ``send_otp_sms`` with AsyncMocks
+    so route tests don't inadvertently dial Twilio. This file IS the
+    test for those two functions — rebind the module attributes to the
+    real implementations for the duration of every test here.
+    """
+    import backend.sms_service as sms_mod
+
+    importlib.reload(sms_mod)
+    yield
 
 
 class TestSMSService:
@@ -30,7 +45,7 @@ class TestSMSService:
         """Test SMS sending via Twilio successfully."""
         from backend.sms_service import send_sms
 
-        with patch("backend.sms_service.Client") as mock_client:
+        with patch("twilio.rest.Client") as mock_client:
             mock_sms = MagicMock()
             mock_sms.sid = "SM123"
             mock_client.return_value.messages.create.return_value = mock_sms
@@ -48,7 +63,7 @@ class TestSMSService:
         """Test SMS sending via Twilio handles failure."""
         from backend.sms_service import send_sms
 
-        with patch("backend.sms_service.Client") as mock_client:
+        with patch("twilio.rest.Client") as mock_client:
             mock_client.return_value.messages.create.side_effect = Exception("Twilio error")
 
             result = await send_sms(
@@ -64,7 +79,7 @@ class TestSMSService:
         """Test sending OTP SMS."""
         from backend.sms_service import send_otp_sms
 
-        with patch("backend.sms_service.Client") as mock_client:
+        with patch("twilio.rest.Client") as mock_client:
             mock_sms = MagicMock()
             mock_sms.sid = "SM456"
             mock_client.return_value.messages.create.return_value = mock_sms

@@ -14,4 +14,5 @@ so it can be unit-tested without spinning up FastAPI or the database.
 See services/README.md for the pattern, conventions, and migration plan.
 """
 
+from .dispatch_service import DispatchService  # noqa: F401
 from .fare_service import FareService  # noqa: F401

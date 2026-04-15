@@ -9,6 +9,11 @@ try:
     from ..features import calculate_airport_fee, calculate_all_fees, send_push_notification
     from ..geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
     from ..schemas import CreateRideRequest, Ride, RideRatingRequest
+    from ..services import DispatchService
+    from ..services.dispatch_service import (
+        filter_and_rank_drivers,
+        select_driver_by_algorithm,
+    )
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
     from ..validators import validate_ride_location
@@ -19,6 +24,11 @@ except ImportError:
     from features import calculate_airport_fee, calculate_all_fees, send_push_notification
     from geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
     from schemas import CreateRideRequest, Ride, RideRatingRequest
+    from services import DispatchService
+    from services.dispatch_service import (
+        filter_and_rank_drivers,
+        select_driver_by_algorithm,
+    )
     from settings_loader import get_app_settings
     from socket_manager import manager
     from validators import validate_ride_location
@@ -87,20 +97,13 @@ async def match_driver_to_ride(ride_id: str):
         logger.warning(f"[DISPATCH] match_driver_to_ride: ride {ride_id} not found")
         return
 
-    # Try to load matching settings from the ride's service area first,
-    # then fall back to global app settings for backward compatibility.
-    app_settings = await get_app_settings()
-    area_settings: dict = {}
-    if ride.get("service_area_id"):
-        area = await db.service_areas.find_one({"id": ride["service_area_id"]})
-        if area:
-            area_settings = area
+    dispatch = DispatchService(db)
 
-    algorithm = area_settings.get("driver_matching_algorithm") or app_settings.get(
-        "driver_matching_algorithm", "nearest"
-    )
-    min_rating = float(area_settings.get("min_driver_rating") or app_settings.get("min_driver_rating", 4.0))
-    search_radius = float(area_settings.get("search_radius_km") or app_settings.get("search_radius_km", 10.0))
+    # Algorithm + radius + rating floor (area overrides app settings).
+    algorithm, min_rating, search_radius = await dispatch.resolve_matching_config(ride)
+
+    # Keep app_settings for the ride_offer_timeout_seconds lookup at the end.
+    app_settings = await get_app_settings()
 
     logger.info(
         f"[DISPATCH] match start ride_id={ride_id} "
@@ -109,44 +112,16 @@ async def match_driver_to_ride(ride_id: str):
         f"radius_km={search_radius}"
     )
 
-    # Find candidate drivers. We read the drivers table directly and filter
-    # in Python using the legacy lat/lng columns — same pattern as /rides/estimate.
-    # We deliberately DO NOT use the find_nearby_drivers RPC because it reads
-    # the PostGIS `location` column, which update_driver_location does not
-    # populate, so the RPC would always return zero drivers.
-    #
-    # We also require user_id IS NOT NULL to skip legacy "demo" driver rows
-    # that lack a real user and can never be notified.
-    all_drivers = await db.drivers.find(
-        {
-            "is_online": True,
-            "is_available": True,
-            "vehicle_type_id": ride["vehicle_type_id"],
-        }
-    ).to_list(500)
-
+    # Candidate pool — online + available + matching vehicle type.
+    all_drivers = await dispatch.find_candidate_drivers(ride)
     logger.info(
         f"[DISPATCH] candidate pool (pre-filter): {len(all_drivers)} drivers "
         f"matching vehicle_type_id + online + available"
     )
 
-    drivers_with_distance = []
-    for d in all_drivers:
-        # Skip orphan/demo drivers that cannot be notified.
-        if not d.get("user_id"):
-            continue
-        d_lat = d.get("lat")
-        d_lng = d.get("lng")
-        if d_lat is None or d_lng is None:
-            continue
-        # Rating floor for rating-based / combined algorithms.
-        if algorithm in ("rating_based", "combined"):
-            if float(d.get("rating") or 5.0) < min_rating:
-                continue
-        dist_km = calculate_distance(ride["pickup_lat"], ride["pickup_lng"], d_lat, d_lng)
-        if dist_km <= search_radius:
-            drivers_with_distance.append((d, dist_km))
-
+    # Pure filter+rank: drops orphan/no-location/low-rated drivers and
+    # attaches per-driver distance. Pure function — no I/O.
+    drivers_with_distance = filter_and_rank_drivers(ride, all_drivers, algorithm, min_rating, search_radius)
     logger.info(
         f"[DISPATCH] candidate pool (post-filter): {len(drivers_with_distance)} "
         f"real drivers within {search_radius}km with valid lat/lng and "
@@ -157,63 +132,24 @@ async def match_driver_to_ride(ride_id: str):
         logger.info(f"[DISPATCH] no eligible drivers for ride {ride_id} — ride stays in searching")
         return
 
-    selected_driver = None
-
-    if algorithm == "nearest" or algorithm == "combined":
-        drivers_with_distance.sort(key=lambda x: x[1])
-        selected_driver = drivers_with_distance[0][0]
-    elif algorithm == "rating_based":
-        drivers_with_distance.sort(key=lambda x: x[0].get("rating", 5.0), reverse=True)
-        selected_driver = drivers_with_distance[0][0]
-    elif algorithm == "round_robin":
-        last_ride = await db.rides.find_one({"driver_id": {"$ne": None}}, sort=[("created_at", -1)])
-        if last_ride:
-            last_driver_idx = next(
-                (i for i, (d, _) in enumerate(drivers_with_distance) if d["id"] == last_ride["driver_id"]), -1
-            )
-            next_idx = (last_driver_idx + 1) % len(drivers_with_distance)
-            selected_driver = drivers_with_distance[next_idx][0]
-        else:
-            selected_driver = drivers_with_distance[0][0]
+    # Algorithm pick. round_robin needs the id of the previous assignee.
+    last_assigned_id = await dispatch.last_assigned_driver_id() if algorithm == "round_robin" else None
+    selected_driver = select_driver_by_algorithm(drivers_with_distance, algorithm, last_assigned_id)
 
     if selected_driver:
-        # Attempt to atomically claim the driver (only if still available)
-        claim_result = await db.drivers.update_one(
-            {"id": selected_driver["id"], "is_available": True}, {"$set": {"is_available": False}}
-        )
-
-        if claim_result.modified_count == 0:
-            # Driver was taken by another process; try to find next candidate
-            claimed = False
-            for d, _ in drivers_with_distance:
-                res = await db.drivers.update_one(
-                    {"id": d["id"], "is_available": True}, {"$set": {"is_available": False}}
-                )
-                if res.modified_count > 0:
-                    selected_driver = d
-                    claimed = True
-                    break
-            if not claimed:
-                # No drivers could be claimed
+        # Atomic claim. If lost to a concurrent dispatcher, walk the
+        # ranked list and claim the first still-available driver.
+        if not await dispatch.claim_driver(selected_driver["id"]):
+            fallback = await dispatch.claim_any_driver(drivers_with_distance)
+            if not fallback:
                 return
+            selected_driver = fallback
 
-        # Update ride with selected driver. Do NOT pre-populate
-        # driver_accepted_at here — that field is set by the
-        # /drivers/rides/{id}/accept endpoint when the driver actually taps
-        # Accept. Setting it at dispatch time was a "demo auto-accept" hack
-        # that made the rider-app show the driver card before the driver
-        # had actually agreed to the ride.
-        await db.rides.update_one(
-            {"id": ride_id},
-            {
-                "$set": {
-                    "driver_id": selected_driver["id"],
-                    "status": "driver_assigned",
-                    "driver_notified_at": datetime.utcnow(),
-                    "updated_at": datetime.utcnow(),
-                }
-            },
-        )
+        # Flip the ride from searching → driver_assigned.
+        # Do NOT pre-populate driver_accepted_at — that field is set by
+        # /drivers/rides/{id}/accept when the driver actually taps Accept.
+        now = datetime.utcnow()
+        await dispatch.assign_driver_to_ride(ride_id, selected_driver["id"], now)
 
         logger.info(
             f"[DISPATCH] ride {ride_id} assigned to driver_id={selected_driver['id']} "

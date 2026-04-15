@@ -440,6 +440,8 @@ jobs:
   docker-image-scan:
     runs-on: ubuntu-latest
     needs: [backend-test]
+    permissions:
+      security-events: write  # required for Trivy SARIF upload to GitHub Security tab
 
     steps:
       - uses: actions/checkout@v4

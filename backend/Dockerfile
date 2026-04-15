@@ -9,7 +9,8 @@ WORKDIR /build
 RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get install -y --no-install-recommends \
         gcc \
         libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --upgrade pip setuptools
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
@@ -22,7 +23,8 @@ FROM python:3.12.9-slim AS runtime
 # The builder's patched packages don't transfer to the runtime stage
 # (only /install is copied), so the runtime layer must be patched independently.
 RUN apt-get update && apt-get upgrade -y --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --upgrade pip setuptools
 
 # ── Security: run as non-root ──────────────────────────────────────────────────
 RUN groupadd --gid 1001 spinr \

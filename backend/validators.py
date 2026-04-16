@@ -542,3 +542,52 @@ def pydantic_coordinates_validator(v: Union[float, int, str]) -> float:
         return float(v)
     except (ValueError, TypeError):
         raise ValueError("Coordinate must be a number") from None
+
+
+# ============================================================================
+# Corporate B2B Validators (CRA BN, Canadian tax region, email domain)
+# ============================================================================
+
+_BN_FORMAT = re.compile(r"^\d{9}(?:R[CMPRTZ]\d{4})?$")
+_CA_TAX_REGIONS = frozenset({
+    "ON", "QC", "BC", "AB", "SK", "MB",
+    "NS", "NB", "NL", "PE", "YT", "NT", "NU",
+})
+_DOMAIN_RE = re.compile(
+    r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"
+)
+
+
+def validate_cra_business_number(bn: str) -> str:
+    """Validate a CRA Business Number format (9 digits, optional CRA program identifier R[C|M|P|R|T|Z] + 4 digits).
+
+    Accepts hyphenated and unhyphenated forms; returns the canonical uppercase
+    unhyphenated form. Format-only — does not verify against CRA.
+    """
+    if not isinstance(bn, str):
+        raise ValueError("business number must be a string")
+    canon = bn.replace("-", "").replace(" ", "").upper()
+    if not _BN_FORMAT.match(canon):
+        raise ValueError(f"invalid CRA business number format: {bn!r}")
+    return canon
+
+
+def validate_canadian_tax_region(region: str) -> str:
+    """Validate a two-letter Canadian province/territory code."""
+    if region not in _CA_TAX_REGIONS:
+        raise ValueError(f"unknown Canadian tax region: {region!r}")
+    return region
+
+
+def validate_email_domain(domain: str) -> str:
+    """Normalize and validate an email domain for allowlist use.
+
+    Strips whitespace, a leading '@', lowercases, and validates against an
+    RFC-1035-ish domain regex. Maximum 253 chars per RFC.
+    """
+    if not isinstance(domain, str):
+        raise ValueError("domain must be a string")
+    cleaned = domain.strip().lstrip("@").lower()
+    if not _DOMAIN_RE.match(cleaned):
+        raise ValueError(f"invalid email domain: {domain!r}")
+    return cleaned

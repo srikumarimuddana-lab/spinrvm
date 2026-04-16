@@ -3,12 +3,11 @@ import pytest
 from pydantic import ValidationError
 
 from schemas.corporate import (
+    CompanyStatus,
     CorporateAccountCreate,
     CorporateAccountUpdate,
-    CorporateAccountResponse,
-    CompanyStatus,
-    SizeTier,
     Locale,
+    SizeTier,
 )
 
 
@@ -68,7 +67,7 @@ class TestEnums:
         assert {s.value for s in SizeTier} == {"smb", "mid_market", "enterprise"}
 
     def test_locale_values(self):
-        assert {l.value for l in Locale} == {"en-CA", "fr-CA"}
+        assert {loc.value for loc in Locale} == {"en-CA", "fr-CA"}
 
 
 class TestCorporateAccountUpdate:

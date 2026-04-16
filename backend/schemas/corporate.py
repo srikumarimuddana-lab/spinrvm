@@ -119,7 +119,7 @@ class CorporateAccountResponse(CorporateAccountBase):
     kyb_document_url: Optional[str] = None
     kyb_reviewed_at: Optional[datetime] = None
     kyb_reviewed_by: Optional[str] = None
-    credit_limit: float = 0
+    credit_limit: float = Field(0, ge=0)
     created_at: datetime
     updated_at: datetime
 

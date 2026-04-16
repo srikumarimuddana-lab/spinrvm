@@ -264,7 +264,12 @@ export default function CorporateAccountsPage() {
                                         <TableCell className="font-medium">
                                             <div className="flex items-center gap-2">
                                                 <Building2 className="h-4 w-4 text-muted-foreground" />
-                                                <span>{account.name}</span>
+                                                <Link
+                                                    href={`/dashboard/corporate-accounts/${account.id}`}
+                                                    className="hover:underline"
+                                                >
+                                                    {account.name}
+                                                </Link>
                                                 <StatusPill status={account.status} />
                                             </div>
                                         </TableCell>

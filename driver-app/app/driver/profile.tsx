@@ -413,12 +413,12 @@ export default function ProfileScreen() {
                 const isExpiringSoon = expiresIn !== null && expiresIn > 0 && expiresIn < 30;
 
                 const iconColor =
-                    isExpired ? COLORS.danger :
-                    isValid ? COLORS.success :
-                    docStatus === 'approved' ? COLORS.success :
-                    docStatus === 'pending' ? COLORS.warning :
-                    docStatus === 'rejected' ? COLORS.danger :
-                    COLORS.textDim;
+                    isExpired ? '#EF4444' :
+                    isValid ? '#10B981' :
+                    docStatus === 'approved' ? '#10B981' :
+                    docStatus === 'pending' ? '#F59E0B' :
+                    docStatus === 'rejected' ? '#EF4444' :
+                    colors.textDim;
 
                 const iconBg =
                     isExpired ? 'rgba(239, 68, 68, 0.1)' :
@@ -451,15 +451,15 @@ export default function ProfileScreen() {
                                 </View>
                             </View>
                         ) : docStatus === 'approved' ? (
-                            <View style={[styles.docStatusBadge, {backgroundColor: COLORS.success, marginTop: 2}]}>
+                            <View style={[styles.docStatusBadge, {backgroundColor: '#10B981', marginTop: 2}]}>
                                 <Text style={styles.docStatusText}>APPROVED</Text>
                             </View>
                         ) : docStatus === 'pending' ? (
-                            <View style={[styles.docStatusBadge, {backgroundColor: COLORS.warning, marginTop: 2}]}>
+                            <View style={[styles.docStatusBadge, {backgroundColor: '#F59E0B', marginTop: 2}]}>
                                 <Text style={styles.docStatusText}>PENDING REVIEW</Text>
                             </View>
                         ) : docStatus === 'rejected' ? (
-                            <View style={[styles.docStatusBadge, {backgroundColor: COLORS.danger, marginTop: 2}]}>
+                            <View style={[styles.docStatusBadge, {backgroundColor: '#EF4444', marginTop: 2}]}>
                                 <Text style={styles.docStatusText}>REJECTED</Text>
                             </View>
                         ) : (

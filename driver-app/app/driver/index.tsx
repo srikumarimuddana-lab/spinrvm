@@ -327,7 +327,7 @@ export default function DriverDashboard() {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} collapsable={false}>
       {/* Offline indicator — slides in from the top when network drops */}
       <OfflineBanner />
 

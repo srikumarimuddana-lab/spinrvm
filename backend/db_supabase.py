@@ -1141,15 +1141,19 @@ async def list_corporate_accounts_filtered(
             safe = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
             safe = re.sub(r"[,\.\(\)]", "", safe)
             q = q.or_(f"name.ilike.%{safe}%,legal_name.ilike.%{safe}%")
-        q = q.order("created_at", desc=True).offset(skip).limit(limit)
+        q = q.order("created_at", desc=True).range(skip, skip + limit - 1)
         return _rows_from_res(q.execute())
     return await run_sync(_fn)
 
 
 async def update_corporate_account_status(company_id: str, status: str) -> Optional[Dict[str, Any]]:
     def _fn():
-        supabase.table("corporate_accounts").update({"status": status}).eq("id", company_id).execute()
-        res = supabase.table("corporate_accounts").select("*").eq("id", company_id).execute()
+        res = (
+            supabase.table("corporate_accounts")
+            .update({"status": status})
+            .eq("id", company_id)
+            .execute()
+        )
         return _single_row_from_res(res)
     return await run_sync(_fn)
 

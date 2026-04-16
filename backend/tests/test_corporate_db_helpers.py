@@ -10,7 +10,9 @@ def _fake_resp(data):
 
 @pytest.mark.asyncio
 async def test_list_companies_by_status_filter(mock_supabase_client):
-    mock_supabase_client.table.return_value.execute = MagicMock(
+    table = mock_supabase_client.table.return_value
+    table.range.return_value = table  # wire the chain (range not in conftest)
+    table.execute = MagicMock(
         return_value=_fake_resp([{"id": "c1", "status": "pending_verification"}])
     )
     with patch("db_supabase.supabase", mock_supabase_client):
@@ -25,7 +27,9 @@ async def test_list_companies_by_status_filter(mock_supabase_client):
 
 @pytest.mark.asyncio
 async def test_update_company_status(mock_supabase_client):
-    mock_supabase_client.table.return_value.execute = MagicMock(
+    table = mock_supabase_client.table.return_value
+    table.update.return_value = table  # wire the chain
+    table.execute = MagicMock(
         return_value=_fake_resp([{"id": "c1", "status": "active"}])
     )
     with patch("db_supabase.supabase", mock_supabase_client):
@@ -37,7 +41,9 @@ async def test_update_company_status(mock_supabase_client):
 
 @pytest.mark.asyncio
 async def test_record_kyb_decision(mock_supabase_client):
-    mock_supabase_client.table.return_value.execute = MagicMock(
+    table = mock_supabase_client.table.return_value
+    table.update.return_value = table  # wire the chain
+    table.execute = MagicMock(
         return_value=_fake_resp([{"id": "c1"}])
     )
     with patch("db_supabase.supabase", mock_supabase_client):

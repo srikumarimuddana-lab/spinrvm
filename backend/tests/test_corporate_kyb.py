@@ -1,40 +1,13 @@
 # backend/tests/test_corporate_kyb.py
 from unittest.mock import AsyncMock, patch
 
-import pytest
+from backend.tests._factories import corporate_account_row
 
 
-@pytest.fixture
-def _admin_override():
-    from backend.server import app
-    from dependencies import get_admin_user
-
-    app.dependency_overrides[get_admin_user] = lambda: {"id": "admin_1", "role": "admin"}
-    yield
-    app.dependency_overrides.pop(get_admin_user, None)
-
-
-def _row(status_value: str) -> dict:
-    return {
-        "id": "c1",
-        "name": "Acme",
-        "status": status_value,
-        "country_code": "CA",
-        "currency": "CAD",
-        "locale": "en-CA",
-        "timezone": "America/Toronto",
-        "size_tier": "smb",
-        "is_active": True,
-        "credit_limit": 0,
-        "created_at": "2026-01-01T00:00:00Z",
-        "updated_at": "2026-01-01T00:00:00Z",
-    }
-
-
-def test_approve_kyb_flips_status_to_active(test_client, _admin_override):
+def test_approve_kyb_flips_status_to_active(test_client, admin_override):
     with patch(
         "db_supabase.record_kyb_decision",
-        AsyncMock(return_value=_row("active")),
+        AsyncMock(return_value=corporate_account_row("active")),
     ):
         resp = test_client.post(
             "/api/admin/corporate-accounts/c1/kyb-review",
@@ -44,10 +17,10 @@ def test_approve_kyb_flips_status_to_active(test_client, _admin_override):
     assert resp.json()["status"] == "active"
 
 
-def test_reject_kyb_flips_status_to_suspended(test_client, _admin_override):
+def test_reject_kyb_flips_status_to_suspended(test_client, admin_override):
     with patch(
         "db_supabase.record_kyb_decision",
-        AsyncMock(return_value=_row("suspended")),
+        AsyncMock(return_value=corporate_account_row("suspended")),
     ):
         resp = test_client.post(
             "/api/admin/corporate-accounts/c1/kyb-review",
@@ -57,7 +30,7 @@ def test_reject_kyb_flips_status_to_suspended(test_client, _admin_override):
     assert resp.json()["status"] == "suspended"
 
 
-def test_kyb_review_404_on_missing_company(test_client, _admin_override):
+def test_kyb_review_404_on_missing_company(test_client, admin_override):
     with patch(
         "db_supabase.record_kyb_decision",
         AsyncMock(return_value=None),

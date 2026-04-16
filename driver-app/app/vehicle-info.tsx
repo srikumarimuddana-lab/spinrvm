@@ -179,7 +179,7 @@ export default function VehicleInfoScreen() {
 
             <KeyboardAvoidingView
                 style={{ flex: 1 }}
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                 keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
             >
                 <ScrollView
@@ -189,6 +189,7 @@ export default function VehicleInfoScreen() {
                         { paddingBottom: insets.bottom + 140 }, // space for sticky footer + keyboard
                     ]}
                     keyboardShouldPersistTaps="handled"
+                    automaticallyAdjustKeyboardInsets={true}
                     showsVerticalScrollIndicator={false}
                 >
                     {/* Hero card */}

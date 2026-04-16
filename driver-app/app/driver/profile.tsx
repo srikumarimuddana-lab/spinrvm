@@ -552,11 +552,12 @@ export default function ProfileScreen() {
 
           <KeyboardAvoidingView
             style={{ flex: 1 }}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           >
             <ScrollView
               contentContainerStyle={[modalStyles.content, { paddingBottom: insets.bottom + 140 }]}
               keyboardShouldPersistTaps="handled"
+                    automaticallyAdjustKeyboardInsets={true}
               showsVerticalScrollIndicator={false}
             >
               {/* Hero card — mirrors vehicle-info hero */}

@@ -7,6 +7,7 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "prebuildCommand": "npx expo prebuild --clean --platform android",
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "http://your-local-ip:8000"
       }
@@ -15,26 +16,29 @@
       "developmentClient": true,
       "distribution": "internal",
       "channel": "test",
+      "prebuildCommand": "npx expo prebuild --clean --platform android",
       "android": {
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://spinr-api.onrender.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://spinr-backend-production.up.railway.app"
       }
     },
     "preview": {
       "channel": "preview",
+      "prebuildCommand": "npx expo prebuild --clean --platform android",
       "android": {
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://spinr-api.fly.dev"
+        "EXPO_PUBLIC_BACKEND_URL": "https://spinr-backend-production.up.railway.app"
       }
     },
     "production": {
       "distribution": "store",
       "autoIncrement": true,
       "channel": "production",
+      "prebuildCommand": "npx expo prebuild --clean --platform android",
       "env": {
         "EXPO_PUBLIC_BACKEND_URL": "$EXPO_PUBLIC_BACKEND_URL",
         "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "$EXPO_PUBLIC_GOOGLE_MAPS_API_KEY"

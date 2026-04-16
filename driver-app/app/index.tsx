@@ -11,7 +11,7 @@ const log = createLogger('Index');
 export default function Index() {
   const router = useRouter();
   const navigationRef = useNavigationContainerRef();
-  const { isInitialized, token, user, logout } = useAuthStore();
+  const { isInitialized, token, user, driver, logout } = useAuthStore();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.5)).current;
   const hasNavigated = useRef(false);
@@ -67,10 +67,14 @@ export default function Index() {
       logout().then(() => {
         router.replace('/login' as any);
       });
+    } else if (!driver) {
+      // Profile complete but no driver record yet — send to driver onboarding.
+      log.info('No driver row found → /become-driver');
+      router.replace('/become-driver' as any);
     } else {
       router.replace('/driver/' as any);
     }
-  }, [isInitialized, token, user, navigationRef.isReady()]);
+  }, [isInitialized, token, user, driver, navigationRef.isReady()]);
 
   return (
     <View style={styles.container}>

@@ -30,6 +30,7 @@ except ImportError:
     from geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
     from schemas import CreateRideRequest, Ride, RideRatingRequest
     from services.dispatch_service import (
+        DispatchService,
         filter_and_rank_drivers,
     )
     from settings_loader import get_app_settings

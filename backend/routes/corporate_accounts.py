@@ -24,6 +24,7 @@ from db_supabase import (  # noqa: E402
 from dependencies import get_admin_user
 from schemas.corporate import (  # noqa: E402
     CompanyStatus,
+    CompanyStatusTransition,
     KYBReviewDecision,
     SizeTier,
 )
@@ -259,3 +260,37 @@ async def delete_corporate_account(account_id: str, current_admin: dict = Depend
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete corporate account: {str(e)}"
         ) from e
+
+
+@router.post(
+    "/{company_id}/status",
+    response_model=CorporateAccountDetailResponse,
+)
+async def change_company_status(
+    company_id: str,
+    transition: CompanyStatusTransition,
+    request: Request,
+    current_admin: dict = Depends(get_current_admin),
+):
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
+
+    current = await get_corporate_account_by_id(validated_id=normalized_id)
+    if not current:
+        raise HTTPException(status_code=404, detail="Corporate account not found")
+
+    if current.get("status") == CompanyStatus.CLOSED.value:
+        raise HTTPException(
+            status_code=409,
+            detail="Corporate account is closed and cannot be reopened",
+        )
+
+    from db_supabase import update_corporate_account_status
+
+    row = await update_corporate_account_status(
+        company_id=normalized_id,
+        status=transition.status.value,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Corporate account not found")
+    # TODO(Plan 2): freeze/unfreeze the corporate wallet in sync with status transitions.
+    return row

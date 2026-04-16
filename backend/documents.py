@@ -756,28 +756,18 @@ async def upload_file(
 
         _validate_file_type(content, content_type)
 
-        # Generate a stable file_id and the URL clients use to fetch the blob
-        # back via get_document_file below.
-        file_id = str(uuid.uuid4())
-        public_url = f"/api/v1/documents/{file_id}"
+        # Preserve extension so Supabase serves the object with a sensible
+        # content-type when the browser fetches the public URL.
+        file_ext = os.path.splitext(original_filename)[1]
+        storage_key = f"{uuid.uuid4()}{file_ext}"
 
-        # Only insert columns that actually exist on the Supabase
-        # `document_files` table. Historically this table was created with
-        # just { id, data, content_type, created_at } — adding columns like
-        # `size`, `filename`, `uploaded_by` to the insert raises PGRST204
-        # ("Could not find the X column of document_files in the schema
-        # cache"). We still return size/filename in the response so the
-        # client gets full metadata without us having to touch the schema.
-        record = {
-            "id": file_id,
-            "content_type": content_type,
-            "data": base64.b64encode(content).decode("utf-8"),
-            "created_at": datetime.utcnow().isoformat(),
-        }
-
-        # Upload to Supabase Storage
         try:
-            await db_supabase.insert_one("document_files", record)
+            supabase.storage.from_("driver-documents").upload(
+                file=content,
+                path=storage_key,
+                file_options={"content-type": content_type},
+            )
+            public_url = supabase.storage.from_("driver-documents").get_public_url(storage_key)
         except Exception as e:
             logger.error(f"Supabase Storage upload failed: {e}")
             raise HTTPException(status_code=500, detail=f"Storage upload failed: {e}") from e
@@ -785,7 +775,7 @@ async def upload_file(
         return {
             "success": True,
             "url": public_url,
-            "file_id": file_id,
+            "file_id": storage_key,
             "filename": original_filename,
             "content_type": content_type,
             "size": size,

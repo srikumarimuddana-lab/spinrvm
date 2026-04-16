@@ -446,7 +446,18 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
         "updated_at": datetime.utcnow(),
     }
 
-    await db_supabase.insert_one("driver_documents", doc_record)
+    try:
+        await db_supabase.insert_one("driver_documents", doc_record)
+    except Exception as e:
+        err = str(e)
+        # requirement_key column may not exist yet (migration 28 pending).
+        # Fall back to inserting without it so uploads aren't broken.
+        if "requirement_key" in err or "PGRST204" in err or "42703" in err:
+            logger.warning("requirement_key column missing — inserting without it. Run migration 28.")
+            doc_record_fallback = {k: v for k, v in doc_record.items() if k != "requirement_key"}
+            await db_supabase.insert_one("driver_documents", doc_record_fallback)
+        else:
+            raise
     # Stash the admin-facing expiry on the response so the caller can
     # display it back, without persisting a non-existent column.
     if doc_data.expiry_date:

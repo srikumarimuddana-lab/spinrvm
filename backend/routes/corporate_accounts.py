@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from db_supabase import (  # noqa: E402
     delete_corporate_account as db_delete_corporate_account,
@@ -101,6 +101,38 @@ async def get_corporate_accounts(
             status_code=500,
             detail=f"Failed to fetch corporate accounts: {str(e)}",
         ) from e
+
+
+_ALLOWED_KYB_CONTENT = {"application/pdf", "image/png", "image/jpeg"}
+
+
+class KYBUploadURLRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content_type: str = Field(..., description="MIME type of the KYB document to upload")
+
+
+@router.post("/{company_id}/kyb-upload-url")
+async def kyb_upload_url(
+    company_id: str,
+    body: KYBUploadURLRequest,
+    current_admin: dict = Depends(get_current_admin),
+):
+    """Return a short-lived signed upload URL for a KYB document.
+
+    The caller uploads the document directly to Supabase Storage using the
+    returned URL; the backend never streams binary data.
+    """
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
+
+    if body.content_type not in _ALLOWED_KYB_CONTENT:
+        raise HTTPException(status_code=400, detail="Unsupported content type for KYB")
+
+    from db_supabase import create_kyb_upload_url
+
+    return await create_kyb_upload_url(
+        company_id=normalized_id, content_type=body.content_type
+    )
 
 
 @router.post("/{company_id}/kyb-review", response_model=CorporateAccountDetailResponse)

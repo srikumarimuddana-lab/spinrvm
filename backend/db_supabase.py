@@ -1205,3 +1205,37 @@ async def get_corporate_members_for_user(user_id: str) -> List[Dict[str, Any]]:
         )
         return _rows_from_res(res)
     return await run_sync(_fn)
+
+
+_KYB_CONTENT_EXT = {
+    "application/pdf": "pdf",
+    "image/png": "png",
+    "image/jpeg": "jpg",
+}
+
+
+async def create_kyb_upload_url(
+    *, company_id: str, content_type: str, ttl_seconds: int = 3600
+) -> Dict[str, Any]:
+    """Return a short-lived signed upload URL for a KYB document.
+
+    The bucket 'kyb-documents' is private; the caller uploads with the
+    returned URL and we later record the object path on the corporate
+    account when review completes.
+    """
+    import uuid
+    from datetime import timedelta
+
+    ext = _KYB_CONTENT_EXT[content_type]
+    path = f"kyb/{company_id}/{uuid.uuid4()}.{ext}"
+
+    def _fn():
+        return supabase.storage.from_("kyb-documents").create_signed_upload_url(path)
+
+    signed = await run_sync(_fn)
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
+    return {
+        "signed_url": signed["signed_url"],
+        "path": signed.get("path", path),
+        "expires_at": expires_at,
+    }

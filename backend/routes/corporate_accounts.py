@@ -24,6 +24,7 @@ from db_supabase import (  # noqa: E402
 from dependencies import get_admin_user
 from schemas.corporate import (  # noqa: E402
     CompanyStatus,
+    KYBReviewDecision,
     SizeTier,
 )
 from schemas.corporate import (
@@ -99,6 +100,33 @@ async def get_corporate_accounts(
             status_code=500,
             detail=f"Failed to fetch corporate accounts: {str(e)}",
         ) from e
+
+
+@router.post("/{company_id}/kyb-review", response_model=CorporateAccountDetailResponse)
+async def kyb_review(
+    company_id: str,
+    decision: KYBReviewDecision,
+    request: Request,
+    current_admin: dict = Depends(get_current_admin),
+):
+    """Approve or reject a pending KYB submission.
+
+    Approve → status='active'. Reject → status='suspended' so the company
+    can re-upload and be re-reviewed from the queue.
+    """
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
+
+    from db_supabase import record_kyb_decision
+
+    row = await record_kyb_decision(
+        company_id=normalized_id,
+        reviewer_id=current_admin["id"],
+        approved=decision.approve,
+        note=decision.note,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Corporate account not found")
+    return row
 
 
 @router.post("", response_model=CorporateAccountResponse, status_code=status.HTTP_201_CREATED)

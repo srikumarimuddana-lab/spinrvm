@@ -194,8 +194,9 @@ export default function PayoutScreen() {
                 </View>
             </LinearGradient>
 
-            <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-            <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 140 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+            <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 140 }} keyboardShouldPersistTaps="handled"
+                    automaticallyAdjustKeyboardInsets={true} showsVerticalScrollIndicator={false}>
                 {/* Balance Card */}
                 <View style={styles.balanceCard}>
                     <Text style={styles.balanceLabel}>AVAILABLE BALANCE</Text>

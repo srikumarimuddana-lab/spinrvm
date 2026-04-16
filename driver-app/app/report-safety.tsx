@@ -6,6 +6,7 @@ import {
     TextInput,
     TouchableOpacity,
     KeyboardAvoidingView,
+    ScrollView,
     Platform,
     SafeAreaView
 } from 'react-native';
@@ -99,9 +100,14 @@ export default function ReportSafetyScreen() {
 
             <KeyboardAvoidingView
                 style={styles.container}
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             >
-                <View style={styles.content}>
+                <ScrollView
+                    contentContainerStyle={styles.content}
+                    keyboardShouldPersistTaps="handled"
+                    automaticallyAdjustKeyboardInsets={true}
+                    showsVerticalScrollIndicator={false}
+                >
                     <View style={styles.warningBox}>
                         <Ionicons name="warning" size={24} color="#F59E0B" />
                         <Text style={styles.warningText}>
@@ -131,7 +137,7 @@ export default function ReportSafetyScreen() {
                             {submitting ? 'Submitting...' : 'Submit Report'}
                         </Text>
                     </TouchableOpacity>
-                </View>
+                </ScrollView>
             </KeyboardAvoidingView>
             <CustomAlert
                 visible={alert.visible}

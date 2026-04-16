@@ -7,9 +7,9 @@ import {
     ScrollView,
     Platform,
     ActivityIndicator,
-    Alert,
     Share,
 } from 'react-native';
+import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
 import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -38,6 +38,15 @@ export default function TaxDocumentsScreen() {
     const [selectedYear, setSelectedYear] = useState<number | null>(null);
     const [t4aData, setT4aData] = useState<T4AYear | null>(null);
     const [loading, setLoading] = useState(true);
+    const [alert, setAlert] = useState<{
+        visible: boolean; title: string; message?: string;
+        variant: 'info' | 'success' | 'danger' | 'warning';
+        buttons?: AlertButton[];
+    }>({ visible: false, title: '', variant: 'info' });
+
+    const showAlert = (title: string, message: string, variant: 'success' | 'danger' | 'warning' | 'info' = 'info', buttons?: AlertButton[]) => {
+        setAlert({ visible: true, title, message, variant, buttons });
+    };
 
     useEffect(() => {
         fetchAvailableYears();
@@ -77,7 +86,7 @@ export default function TaxDocumentsScreen() {
             });
         } catch (err) {
             console.log('Error fetching T4A:', err);
-            Alert.alert('Error', 'Failed to load tax data');
+            showAlert('Error', 'Failed to load tax data', 'danger');
         } finally {
             setLoading(false);
         }
@@ -233,7 +242,7 @@ export default function TaxDocumentsScreen() {
                                     const csv: string = res.data?.data || '';
                                     const filename: string = res.data?.filename || `earnings_${selectedYear}.csv`;
                                     if (!csv) {
-                                        Alert.alert('Export Failed', 'No data returned for this year.');
+                                        showAlert('Export Failed', 'No data returned for this year.', 'warning');
                                         return;
                                     }
 
@@ -252,22 +261,24 @@ export default function TaxDocumentsScreen() {
                                             // User dismissed the sheet — offer clipboard
                                             // as a graceful fallback so the data isn't lost.
                                             await Clipboard.setStringAsync(csv);
-                                            Alert.alert(
+                                            showAlert(
                                                 'Copied to Clipboard',
-                                                `${filename} is on your clipboard. Paste into Mail, Notes, or your accountant tool.`
+                                                `${filename} is on your clipboard. Paste into Mail, Notes, or your accountant tool.`,
+                                                'info',
                                             );
                                         }
                                     } catch (shareErr) {
                                         console.log('[earnings export] Share failed:', shareErr);
                                         await Clipboard.setStringAsync(csv);
-                                        Alert.alert(
+                                        showAlert(
                                             'Copied to Clipboard',
-                                            `${filename} is on your clipboard. Paste into Mail, Notes, or your accountant tool.`
+                                            `${filename} is on your clipboard. Paste into Mail, Notes, or your accountant tool.`,
+                                            'info',
                                         );
                                     }
                                 } catch (err) {
                                     console.log('[earnings export] API failed:', err);
-                                    Alert.alert('Error', 'Failed to export data. Please try again.');
+                                    showAlert('Error', 'Failed to export data. Please try again.', 'danger');
                                 }
                             }}
                         >
@@ -285,6 +296,15 @@ export default function TaxDocumentsScreen() {
                     </View>
                 )}
             </ScrollView>
+
+            <CustomAlert
+                visible={alert.visible}
+                title={alert.title}
+                message={alert.message}
+                variant={alert.variant}
+                buttons={alert.buttons || [{ text: 'OK', style: 'default' }]}
+                onClose={() => setAlert(a => ({ ...a, visible: false }))}
+            />
         </View>
     );
 }

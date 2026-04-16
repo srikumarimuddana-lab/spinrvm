@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  ActivityIndicator, Alert, Platform, Linking,
+  ActivityIndicator, Platform, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
 
 interface Plan {
   id: string;
@@ -40,6 +41,15 @@ export default function SubscriptionScreen() {
   const [subscribing, setSubscribing] = useState<string | null>(null);
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const [alert, setAlert] = useState<{
+    visible: boolean; title: string; message?: string;
+    variant: 'info' | 'success' | 'danger' | 'warning';
+    buttons?: AlertButton[];
+  }>({ visible: false, title: '', variant: 'info' });
+
+  const showAlert = (title: string, message: string, variant: 'success' | 'danger' | 'warning' | 'info' = 'info', buttons?: AlertButton[]) => {
+    setAlert({ visible: true, title, message, variant, buttons });
+  };
 
   useEffect(() => { loadData(); }, []);
 
@@ -58,9 +68,9 @@ export default function SubscriptionScreen() {
       try {
         const res = await api.get(`/drivers/subscription/verify-session?session_id=${sessionId}`);
         if (res.data?.status === 'active') {
-          Alert.alert('Payment Successful!', 'Your Spinr Pass is now active. Go online and start earning!');
+          showAlert('Payment Successful!', 'Your Spinr Pass is now active. Go online and start earning!', 'success');
         } else {
-          Alert.alert('Processing...', 'Your payment is being confirmed. This may take a moment.');
+          showAlert('Processing...', 'Your payment is being confirmed. This may take a moment.', 'info');
         }
       } catch (e) {
         console.log('[Subscription] verify-session error:', e);
@@ -103,21 +113,23 @@ export default function SubscriptionScreen() {
 
   const handleSubscribe = async (plan: Plan) => {
     if (currentSub?.has_subscription) {
-      Alert.alert(
+      showAlert(
         'Switch Plan?',
         `You currently have "${currentSub.subscription.plan_name}". Switch to "${plan.name}" for $${plan.price.toFixed(2)}?`,
+        'warning',
         [
+          { text: 'Switch', style: 'destructive', onPress: () => doSubscribe(plan) },
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Switch', onPress: () => doSubscribe(plan) },
         ]
       );
     } else {
-      Alert.alert(
+      showAlert(
         'Subscribe',
         `Subscribe to "${plan.name}" for $${plan.price.toFixed(2)}/${getDurationLabel(plan.duration_days).toLowerCase()}?`,
+        'info',
         [
+          { text: 'Subscribe', style: 'destructive', onPress: () => doSubscribe(plan) },
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Subscribe', onPress: () => doSubscribe(plan) },
         ]
       );
     }
@@ -148,7 +160,7 @@ export default function SubscriptionScreen() {
             try {
               const verifyRes = await api.get(`/drivers/subscription/verify-session?session_id=${sessionId}`);
               if (verifyRes.data?.status === 'active') {
-                Alert.alert('Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`);
+                showAlert('Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`, 'success');
                 loadData();
                 return;
               }
@@ -156,37 +168,38 @@ export default function SubscriptionScreen() {
           }
           // All retries exhausted — still pending. The deep-link handler
           // or next screen load will catch it.
-          Alert.alert('Processing...', 'Your payment is being confirmed. This may take a moment.');
+          showAlert('Processing...', 'Your payment is being confirmed. This may take a moment.', 'info');
           loadData();
         }
       } else {
         // Dev/test mode — subscription activated immediately
-        Alert.alert('Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`);
+        showAlert('Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`, 'success');
         loadData();
       }
     } catch (e: any) {
-      Alert.alert('Error', e.response?.data?.detail || 'Failed to subscribe');
+      showAlert('Error', e.response?.data?.detail || 'Failed to subscribe', 'danger');
     } finally { setSubscribing(null); }
   };
 
   const handleCancel = () => {
-    Alert.alert(
+    showAlert(
       'Cancel Subscription',
       'Are you sure? You can still drive until your current plan expires.',
+      'warning',
       [
-        { text: 'Keep Plan', style: 'cancel' },
         {
           text: 'Cancel Plan', style: 'destructive',
           onPress: async () => {
             try {
               await api.post('/drivers/subscription/cancel');
-              Alert.alert('Cancelled', 'Your subscription has been cancelled.');
+              showAlert('Cancelled', 'Your subscription has been cancelled.', 'info');
               loadData();
             } catch (e: any) {
-              Alert.alert('Error', e.response?.data?.detail || 'Failed to cancel');
+              showAlert('Error', e.response?.data?.detail || 'Failed to cancel', 'danger');
             }
           },
         },
+        { text: 'Keep Plan', style: 'cancel' },
       ]
     );
   };
@@ -348,6 +361,15 @@ export default function SubscriptionScreen() {
         )}
 
       </ScrollView>
+
+      <CustomAlert
+        visible={alert.visible}
+        title={alert.title}
+        message={alert.message}
+        variant={alert.variant}
+        buttons={alert.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlert(a => ({ ...a, visible: false }))}
+      />
     </SafeAreaView>
   );
 }

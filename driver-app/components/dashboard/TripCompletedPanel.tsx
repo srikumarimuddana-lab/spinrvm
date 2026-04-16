@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Share, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, Share } from 'react-native';
+import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -51,6 +52,15 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
   const [comment, setComment] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [alert, setAlert] = useState<{
+    visible: boolean; title: string; message?: string;
+    variant: 'info' | 'success' | 'danger' | 'warning';
+    buttons?: AlertButton[];
+  }>({ visible: false, title: '', variant: 'info' });
+
+  const showAlert = (title: string, message: string, variant: 'success' | 'danger' | 'warning' | 'info' = 'info', buttons?: AlertButton[]) => {
+    setAlert({ visible: true, title, message, variant, buttons });
+  };
 
   if (!completedRide) return null;
 
@@ -157,7 +167,7 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
             try {
               await Share.share({ title: 'Spinr Trip Receipt', message: receipt });
             } catch {
-              Alert.alert('Receipt', receipt);
+              showAlert('Receipt', receipt, 'info');
             }
           }}
           activeOpacity={0.7}
@@ -224,6 +234,14 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
             </Text>
           </LinearGradient>
         </TouchableOpacity>
+        <CustomAlert
+          visible={alert.visible}
+          title={alert.title}
+          message={alert.message}
+          variant={alert.variant}
+          buttons={alert.buttons || [{ text: 'OK', style: 'default' }]}
+          onClose={() => setAlert(a => ({ ...a, visible: false }))}
+        />
       </LinearGradient>
     </View>
   );

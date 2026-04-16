@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { View, Text, StyleSheet, Alert, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator } from 'react-native';
+import CustomAlert from '@shared/components/CustomAlert';
 import MapView, { Marker, Polyline, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
@@ -71,6 +72,9 @@ export default function DriverDashboard() {
     pulseAnim,
     slideUpAnim,
     fadeAnim,
+    dashAlert,
+    showDashAlert,
+    closeDashAlert,
   } = useDriverDashboard();
 
   // Route polyline coordinates for active rides
@@ -157,7 +161,7 @@ export default function DriverDashboard() {
   useEffect(() => {
     const { error } = useDriverStore.getState();
     if (error) {
-      Alert.alert('Error', error, [{ text: 'OK', onPress: clearError }]);
+      showDashAlert('Error', error, 'danger', [{ text: 'OK', style: 'default', onPress: clearError }]);
     }
   }, [useDriverStore.getState().error]);
 
@@ -515,6 +519,14 @@ export default function DriverDashboard() {
           onRateRider={rateRider}
         />
       )}
+      <CustomAlert
+        visible={dashAlert.visible}
+        title={dashAlert.title}
+        message={dashAlert.message}
+        variant={dashAlert.variant}
+        buttons={dashAlert.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={closeDashAlert}
+      />
     </View>
   );
 }

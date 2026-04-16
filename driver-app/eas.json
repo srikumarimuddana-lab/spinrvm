@@ -9,7 +9,8 @@
       "distribution": "internal",
       "prebuildCommand": "npx expo prebuild --clean --platform android",
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "http://your-local-ip:8000"
+        "EXPO_PUBLIC_BACKEND_URL": "http://your-local-ip:8000",
+        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "$EXPO_PUBLIC_GOOGLE_MAPS_API_KEY"
       }
     },
     "test": {

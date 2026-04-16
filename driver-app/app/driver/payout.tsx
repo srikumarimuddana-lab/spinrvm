@@ -7,11 +7,11 @@ import {
     ScrollView,
     Platform,
     TextInput,
-    Alert,
     ActivityIndicator,
     Linking,
     KeyboardAvoidingView,
 } from 'react-native';
+import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -46,6 +46,15 @@ export default function PayoutScreen() {
     const [savingGst, setSavingGst] = useState(false);
     const [stripeAccountStatus, setStripeAccountStatus] = useState<string | null>(null);
     const [initialLoading, setInitialLoading] = useState(true);
+    const [alert, setAlert] = useState<{
+        visible: boolean; title: string; message?: string;
+        variant: 'info' | 'success' | 'danger' | 'warning';
+        buttons?: AlertButton[];
+    }>({ visible: false, title: '', variant: 'info' });
+
+    const showAlert = (title: string, message: string, variant: 'success' | 'danger' | 'warning' | 'info' = 'info', buttons?: AlertButton[]) => {
+        setAlert({ visible: true, title, message, variant, buttons });
+    };
 
     useEffect(() => {
         loadData();
@@ -89,7 +98,7 @@ export default function PayoutScreen() {
 
     useEffect(() => {
         if (error) {
-            Alert.alert('Error', error);
+            showAlert('Error', error, 'danger');
             clearError();
         }
     }, [error]);
@@ -101,15 +110,16 @@ export default function PayoutScreen() {
             const { url, mock } = res.data;
 
             if (mock) {
-                Alert.alert(
+                showAlert(
                     'Demo Mode',
                     'Stripe is not configured yet. In production, you will be redirected to Stripe to complete identity verification and add your bank account.',
+                    'info',
                 );
             } else if (url) {
                 await Linking.openURL(url);
             }
         } catch (err: any) {
-            Alert.alert('Error', err.response?.data?.detail || 'Failed to start Stripe onboarding');
+            showAlert('Error', err.response?.data?.detail || 'Failed to start Stripe onboarding', 'danger');
         } finally {
             setStripeOnboarding(false);
         }
@@ -119,7 +129,7 @@ export default function PayoutScreen() {
         // Validate GST/BN format: 9 digits or 15 chars (9-digit BN + RT0001)
         const cleaned = gstNumber.replace(/\s/g, '');
         if (cleaned && !/^\d{9}(RT\d{4})?$/.test(cleaned)) {
-            Alert.alert('Invalid Format', 'Enter your 9-digit Business Number (BN) or full GST number (e.g., 123456789RT0001)');
+            showAlert('Invalid Format', 'Enter your 9-digit Business Number (BN) or full GST number (e.g., 123456789RT0001)', 'warning');
             return;
         }
 
@@ -127,9 +137,9 @@ export default function PayoutScreen() {
         try {
             await api.put('/drivers/me', { gst_number: cleaned || null });
             setShowGstForm(false);
-            Alert.alert('Saved', 'GST/BN number updated successfully');
+            showAlert('Saved', 'GST/BN number updated successfully', 'success');
         } catch (err: any) {
-            Alert.alert('Error', err.response?.data?.detail || 'Failed to save GST number');
+            showAlert('Error', err.response?.data?.detail || 'Failed to save GST number', 'danger');
         } finally {
             setSavingGst(false);
         }
@@ -138,22 +148,22 @@ export default function PayoutScreen() {
     const handleRequestPayout = async () => {
         const amount = parseFloat(payoutAmount);
         if (isNaN(amount) || amount <= 0) {
-            Alert.alert('Error', 'Please enter a valid amount');
+            showAlert('Error', 'Please enter a valid amount', 'danger');
             return;
         }
         if (amount < 10) {
-            Alert.alert('Error', 'Minimum payout amount is $10');
+            showAlert('Error', 'Minimum payout amount is $10', 'danger');
             return;
         }
         if (driverBalance && amount > driverBalance.available_balance) {
-            Alert.alert('Error', `Insufficient balance. Available: $${driverBalance.available_balance.toFixed(2)}`);
+            showAlert('Error', `Insufficient balance. Available: $${driverBalance.available_balance.toFixed(2)}`, 'danger');
             return;
         }
 
         const result = await requestPayout(amount);
         if (result.success) {
             setPayoutAmount('');
-            Alert.alert('Success', 'Payout request submitted. Funds will arrive in 2-3 business days.');
+            showAlert('Success', 'Payout request submitted. Funds will arrive in 2-3 business days.', 'success');
         }
     };
 
@@ -416,6 +426,15 @@ export default function PayoutScreen() {
                 </View>
             </ScrollView>
             </KeyboardAvoidingView>
+
+            <CustomAlert
+                visible={alert.visible}
+                title={alert.title}
+                message={alert.message}
+                variant={alert.variant}
+                buttons={alert.buttons || [{ text: 'OK', style: 'default' }]}
+                onClose={() => setAlert(a => ({ ...a, visible: false }))}
+            />
         </View>
     );
 }

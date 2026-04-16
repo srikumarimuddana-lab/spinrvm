@@ -11,23 +11,28 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from dependencies import get_admin_user
-
-# Alias for backward compatibility
-get_current_admin = get_admin_user
-# Validate that we're importing the right function
 from db_supabase import (  # noqa: E402
     delete_corporate_account as db_delete_corporate_account,
 )
 from db_supabase import (  # noqa: E402
-    get_all_corporate_accounts,
     get_corporate_account_by_id,
     insert_corporate_account,
 )
 from db_supabase import (  # noqa: E402
     update_corporate_account as db_update_corporate_account,
 )
+from dependencies import get_admin_user
+from schemas.corporate import (  # noqa: E402
+    CompanyStatus,
+    SizeTier,
+)
+from schemas.corporate import (
+    CorporateAccountResponse as CorporateAccountDetailResponse,
+)
 from validators import sanitize_string, validate_email, validate_id, validate_phone  # noqa: E402
+
+# Alias for backward compatibility
+get_current_admin = get_admin_user
 
 router = APIRouter(prefix="/admin/corporate-accounts", tags=["Corporate Accounts"])
 
@@ -64,31 +69,35 @@ class CorporateAccountResponse(CorporateAccountBase):
         from_attributes = True
 
 
-@router.get("", response_model=List[CorporateAccountResponse])
+@router.get("", response_model=List[CorporateAccountDetailResponse])
 async def get_corporate_accounts(
     request: Request,
     skip: int = 0,
     limit: int = 100,
     search: Optional[str] = None,
+    status: Optional[CompanyStatus] = None,
+    size_tier: Optional[SizeTier] = None,
     is_active: Optional[bool] = None,
     current_admin: dict = Depends(get_current_admin),
 ):
-    """
-    Get all corporate accounts with optional filtering and pagination.
+    """List corporate accounts with optional filters and pagination."""
+    from db_supabase import list_corporate_accounts_filtered
 
-    Args:
-        skip: Number of records to skip (for pagination)
-        limit: Maximum number of records to return
-        search: Search term to match against company name, contact name, or email
-        is_active: Filter by active status
-        current_admin: Authenticated admin user
-    """
     try:
-        accounts = await get_all_corporate_accounts(skip=skip, limit=limit, search=search, is_active=is_active)
-        return accounts
+        rows = await list_corporate_accounts_filtered(
+            status=status.value if status else None,
+            size_tier=size_tier.value if size_tier else None,
+            search=search,
+            skip=skip,
+            limit=min(limit, 500),
+        )
+        if is_active is not None:
+            rows = [r for r in rows if bool(r.get("is_active")) == is_active]
+        return rows
     except Exception as e:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch corporate accounts: {str(e)}"
+            status_code=500,
+            detail=f"Failed to fetch corporate accounts: {str(e)}",
         ) from e
 
 

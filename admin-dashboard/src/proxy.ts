@@ -60,7 +60,7 @@ function isTokenValid(token: string): boolean {
   return exp * 1000 > Date.now() - 30_000;
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Public page — no auth required

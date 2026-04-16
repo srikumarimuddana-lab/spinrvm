@@ -6,10 +6,16 @@ import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Notifications from 'expo-notifications';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useAuthStore, DriverOnboardingStatus } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
+
+// expo-notifications push APIs were removed from Expo Go in SDK 53.
+// Lazy-require so the module doesn't crash on import in Expo Go.
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+const Notifications: typeof import('expo-notifications') | null =
+  (!isExpoGo && Platform.OS !== 'web') ? require('expo-notifications') : null;
 
 const COLORS = {
   primary: SpinrConfig.theme.colors.background,
@@ -142,7 +148,7 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
       const triggerWelcomeNotif = async () => {
         try {
           const hasSent = await AsyncStorage.getItem('@notif_welcome_docs');
-          if (!hasSent) {
+          if (!hasSent && Notifications) {
             await Notifications.scheduleNotificationAsync({
               content: {
                 title: 'Welcome to Spinr! 🎉',

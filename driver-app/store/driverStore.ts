@@ -534,7 +534,10 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 set({ activeRide: res.data, rideState });
                 _persistDriverState(rideState, res.data);
             } else {
-                set({ activeRide: null });
+                // No active ride on the server — reset everything including
+                // rideState so a stale AsyncStorage restore (from hydrateDriverRideState)
+                // doesn't leave the idle panel hidden indefinitely.
+                set({ activeRide: null, rideState: 'idle' });
                 AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
             }
         } catch {

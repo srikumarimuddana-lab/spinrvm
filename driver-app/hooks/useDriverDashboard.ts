@@ -88,29 +88,42 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   useEffect(() => { isOnlineRef.current = isOnline; }, [isOnline]);
 
   // ─── Animate ActiveRidePanel in/out based on rideState ──────────
-  // The panel starts at translateY=screenHeight + opacity=0 (invisible).
-  // Without this animation, the panel IS mounted in the React tree and
-  // HAS the correct ride data + buttons, but is pushed off-screen and
-  // invisible — which is why drivers saw a "blank map" after accepting.
+  // Track whether the first active-ride state transition has already
+  // happened. On mount, if the store already has an active ride (hydrated
+  // or fetched from the API before this effect fires), we snap the panel
+  // to its final position instead of animating from off-screen — otherwise
+  // the driver sees a blank map for ~500ms while the panel slides up.
+  const hasDoneInitialActiveAnim = useRef(false);
+
   useEffect(() => {
     const isActive = rideState === 'navigating_to_pickup' ||
                      rideState === 'arrived_at_pickup' ||
                      rideState === 'trip_in_progress';
     if (isActive) {
-      Animated.parallel([
-        Animated.spring(slideUpAnim, {
-          toValue: 0,
-          useNativeDriver: true,
-          friction: 8,
-        }),
-        Animated.timing(fadeAnim, {
-          toValue: 1,
-          duration: 300,
-          useNativeDriver: true,
-        }),
-      ]).start();
+      if (!hasDoneInitialActiveAnim.current) {
+        // First time the panel becomes active — snap into view immediately
+        // so there's no blank-map window when state is restored on cold start.
+        hasDoneInitialActiveAnim.current = true;
+        slideUpAnim.setValue(0);
+        fadeAnim.setValue(1);
+      } else {
+        // Subsequent transitions (user accepted a new ride) — animate in.
+        Animated.parallel([
+          Animated.spring(slideUpAnim, {
+            toValue: 0,
+            useNativeDriver: true,
+            friction: 8,
+          }),
+          Animated.timing(fadeAnim, {
+            toValue: 1,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+        ]).start();
+      }
     } else {
       // Reset to hidden when not in an active ride state
+      hasDoneInitialActiveAnim.current = false;
       slideUpAnim.setValue(height);
       fadeAnim.setValue(0);
     }

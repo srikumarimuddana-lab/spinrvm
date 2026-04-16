@@ -31,7 +31,7 @@ export default function ProfileSetupScreen() {
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [isCheckingExisting, setIsCheckingExisting] = useState(true);
 
-  const { user, token, createProfile, logout, isLoading: authLoading } = useAuthStore();
+  const { user, token, createProfile, registerDriver, logout, isLoading: authLoading } = useAuthStore();
 
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
@@ -201,6 +201,18 @@ export default function ProfileSetupScreen() {
         city: city || undefined,
         service_area_id: serviceAreaId || undefined,
       });
+      // Auto-create the driver record so the user lands on the home screen
+      // ready to go — no separate "become a driver" step required.
+      try {
+        await registerDriver({
+          service_area_id: serviceAreaId || undefined,
+          city: city || undefined,
+        });
+      } catch (regErr: any) {
+        // Non-fatal: the driver record might already exist (idempotent register)
+        // or will be created on the next refresh. Don't block navigation.
+        if (__DEV__) console.log('[ProfileSetup] auto-register result:', regErr?.message);
+      }
       router.replace('/driver' as any);
     } catch (err: any) {
       setAlertState({

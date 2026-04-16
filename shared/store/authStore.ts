@@ -340,8 +340,14 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
         try {
           const driverRes = await api.get('/drivers/me');
           set({ driver: driverRes.data as Driver });
-        } catch (e) {
+        } catch (e: any) {
           if (__DEV__) console.log('refreshProfile: driver fetch failed', e);
+          // 404 means the driver row no longer exists (e.g. deleted in admin).
+          // Clear the stale driver from the store so the home screen guard
+          // can redirect to /become-driver instead of looping on 404s.
+          if (e?.response?.status === 404) {
+            set({ driver: null });
+          }
         }
       }
     } catch (e) {

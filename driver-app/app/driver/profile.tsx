@@ -502,6 +502,14 @@ export default function ProfileScreen() {
                     <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
+                <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/emergency-contacts' as any)}>
+                    <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.05)' }]}>
+                        <Ionicons name="shield-checkmark" size={18} color="#EF4444" />
+                    </View>
+                    <Text style={styles.actionText}>Emergency Contacts</Text>
+                    <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                </TouchableOpacity>
+                <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/settings' as any)}>
                     <View style={[styles.iconBox, { backgroundColor: colors.surfaceLight }]}>
                         <Ionicons name="settings" size={18} color={colors.textDim} />

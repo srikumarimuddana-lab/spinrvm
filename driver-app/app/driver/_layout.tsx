@@ -91,6 +91,7 @@ export default function DriverLayout() {
       <Tabs.Screen name="addresses" options={{ href: null }} />
       <Tabs.Screen name="subscription" options={{ href: null }} />
       <Tabs.Screen name="quests" options={{ href: null }} />
+      <Tabs.Screen name="emergency-contacts" options={{ href: null }} />
     </Tabs>
   );
 }

@@ -17,6 +17,31 @@
 
 ---
 
+## ⚠️ Codebase async/sync pattern (read before implementing any Supabase code)
+
+`supabase-py 2.x` in this repo is **synchronous**. `supabase.table(...).select(...).execute()` and `supabase.rpc(name, params).execute()` return an `APIResponse` directly — **do not `await` them**, you will get `TypeError: object APIResponse can't be used in 'await' expression`.
+
+The codebase offloads these sync calls to a threadpool with the `run_sync` wrapper defined at `backend/db_supabase.py:18-32`. Every async helper in `backend/db_supabase.py` follows this shape:
+
+```python
+async def some_helper(...) -> ...:
+    def _fn():
+        res = supabase.table("x").select("*")...execute()  # SYNC
+        return _rows_from_res(res)                          # or _single_row_from_res
+    return await run_sync(_fn)
+```
+
+When writing tests for helpers that use `run_sync`, the test mocks need to match the sync shape. **Do not use `AsyncMock` on `.execute()`** — it returns a coroutine that the closure won't `await`. Use `MagicMock(return_value=...)` so the chained builder returns a sync APIResponse-like object:
+
+```python
+fake_resp = MagicMock(data=[{"id": "c1"}], count=1)
+mock_supabase_client.table.return_value.execute = MagicMock(return_value=fake_resp)
+```
+
+Every code snippet below that uses Supabase follows this pattern. If you see an `await ...execute()` anywhere in a plan snippet, treat it as a plan typo and convert to the `run_sync` form.
+
+---
+
 ## Task 1: Apply migration 27 and verify schema
 
 **Files:**
@@ -46,7 +71,13 @@ Then in the Supabase dashboard SQL editor, paste and run `backend/migrations/27_
 
 ```python
 # backend/tests/test_corporate_b2b_schema.py
-"""Smoke test: the nine new B2B tables + new corporate_accounts columns exist."""
+"""Smoke test: the nine new B2B tables + new corporate_accounts columns exist.
+
+Uses the project's sync Supabase client directly — `supabase-py` 2.x exposes
+a synchronous `.execute()` that returns an APIResponse. See
+`backend/db_supabase.py:run_sync` for the async wrapper used in app code;
+these marker-gated integration tests don't need the threadpool hop.
+"""
 import pytest
 
 from db_supabase import supabase
@@ -82,19 +113,25 @@ REQUIRED_CORP_COLS = [
 ]
 
 
+# ride_payment_sources uses ride_id as its PK instead of a surrogate id column
+# (see migration 27 §9) — probe a column that definitely exists on each table.
+_PROBE_COLUMN = {
+    "ride_payment_sources": "ride_id",
+}
+
+
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_b2b_tables_exist():
+def test_b2b_tables_exist():
     for t in REQUIRED_TABLES:
+        col = _PROBE_COLUMN.get(t, "id")
         # Reading zero rows is enough — table absence raises APIError.
-        resp = await supabase.table(t).select("id").limit(1).execute()
+        resp = supabase.table(t).select(col).limit(1).execute()
         assert resp.data is not None, f"table {t} missing"
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_corporate_accounts_has_new_columns():
-    resp = await (
+def test_corporate_accounts_has_new_columns():
+    resp = (
         supabase.table("corporate_accounts")
         .select(",".join(REQUIRED_CORP_COLS))
         .limit(1)
@@ -528,17 +565,23 @@ git commit -m "feat(corporate): expanded Pydantic v2 schemas for B2B v1"
 
 - [ ] **Step 1: Write failing tests (using the existing mock_supabase_client)**
 
+Recall from the codebase pattern: `.execute()` is **sync** and is called inside a `def _fn()` closure that `run_sync` offloads. So mock `.execute` with `MagicMock(return_value=...)`, not `AsyncMock`.
+
 ```python
 # backend/tests/test_corporate_db_helpers.py
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 
+def _fake_resp(data):
+    return MagicMock(data=data, count=len(data) if isinstance(data, list) else 0)
+
+
 @pytest.mark.asyncio
 async def test_list_companies_by_status_filter(mock_supabase_client):
-    mock_supabase_client.table.return_value.execute = AsyncMock(
-        return_value=MagicMock(data=[{"id": "c1", "status": "pending_verification"}])
+    mock_supabase_client.table.return_value.execute = MagicMock(
+        return_value=_fake_resp([{"id": "c1", "status": "pending_verification"}])
     )
     with patch("db_supabase.supabase", mock_supabase_client):
         from db_supabase import list_corporate_accounts_filtered
@@ -552,8 +595,8 @@ async def test_list_companies_by_status_filter(mock_supabase_client):
 
 @pytest.mark.asyncio
 async def test_update_company_status(mock_supabase_client):
-    mock_supabase_client.table.return_value.execute = AsyncMock(
-        return_value=MagicMock(data=[{"id": "c1", "status": "active"}])
+    mock_supabase_client.table.return_value.execute = MagicMock(
+        return_value=_fake_resp([{"id": "c1", "status": "active"}])
     )
     with patch("db_supabase.supabase", mock_supabase_client):
         from db_supabase import update_corporate_account_status
@@ -564,8 +607,8 @@ async def test_update_company_status(mock_supabase_client):
 
 @pytest.mark.asyncio
 async def test_record_kyb_decision(mock_supabase_client):
-    mock_supabase_client.table.return_value.execute = AsyncMock(
-        return_value=MagicMock(data=[{"id": "c1"}])
+    mock_supabase_client.table.return_value.execute = MagicMock(
+        return_value=_fake_resp([{"id": "c1"}])
     )
     with patch("db_supabase.supabase", mock_supabase_client):
         from db_supabase import record_kyb_decision
@@ -577,7 +620,6 @@ async def test_record_kyb_decision(mock_supabase_client):
             note=None,
         )
     # .update(...) was called with status='active' + kyb_reviewed_at + kyb_reviewed_by
-    # Assert via the mock's .update call chain:
     update_call = mock_supabase_client.table.return_value.update.call_args
     assert update_call is not None
     patch_body = update_call.args[0]
@@ -594,7 +636,7 @@ pytest backend/tests/test_corporate_db_helpers.py -v
 
 - [ ] **Step 3: Implement the helpers**
 
-Append to `backend/db_supabase.py`:
+Append to `backend/db_supabase.py`. Note the `run_sync` pattern: every Supabase call goes inside a `def _fn()` closure, the closure is offloaded to a threadpool, and `.execute()` is **sync** inside it (no `await`).
 
 ```python
 # ── Corporate Accounts (B2B v1) ──────────────────────────────────────
@@ -608,28 +650,33 @@ async def list_corporate_accounts_filtered(
     limit: int,
 ) -> list[dict]:
     """List corporate accounts with optional status / size-tier / name-search filters."""
-    q = supabase.table("corporate_accounts").select("*")
-    if status:
-        q = q.eq("status", status)
-    if size_tier:
-        q = q.eq("size_tier", size_tier)
-    if search:
-        like = f"%{search}%"
-        q = q.or_(f"name.ilike.{like},legal_name.ilike.{like}")
-    q = q.order("created_at", desc=True).range(skip, skip + limit - 1)
-    resp = await q.execute()
-    return resp.data or []
+    def _fn():
+        q = supabase.table("corporate_accounts").select("*")
+        if status:
+            q = q.eq("status", status)
+        if size_tier:
+            q = q.eq("size_tier", size_tier)
+        if search:
+            # Escape PostgREST ilike special chars to prevent filter injection
+            # (same pattern as get_all_corporate_accounts above).
+            safe = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            safe = re.sub(r"[,\.\(\)]", "", safe)
+            q = q.or_(f"name.ilike.%{safe}%,legal_name.ilike.%{safe}%")
+        q = q.order("created_at", desc=True).range(skip, skip + limit - 1)
+        return _rows_from_res(q.execute())
+    return await run_sync(_fn)
 
 
 async def update_corporate_account_status(company_id: str, status: str) -> dict | None:
-    resp = await (
-        supabase.table("corporate_accounts")
-        .update({"status": status})
-        .eq("id", company_id)
-        .execute()
-    )
-    rows = resp.data or []
-    return rows[0] if rows else None
+    def _fn():
+        res = (
+            supabase.table("corporate_accounts")
+            .update({"status": status})
+            .eq("id", company_id)
+            .execute()
+        )
+        return _single_row_from_res(res)
+    return await run_sync(_fn)
 
 
 async def record_kyb_decision(
@@ -654,14 +701,16 @@ async def record_kyb_decision(
     }
     if note:
         patch["kyb_review_note"] = note  # column added in a follow-up migration if desired
-    resp = await (
-        supabase.table("corporate_accounts")
-        .update(patch)
-        .eq("id", company_id)
-        .execute()
-    )
-    rows = resp.data or []
-    return rows[0] if rows else None
+
+    def _fn():
+        res = (
+            supabase.table("corporate_accounts")
+            .update(patch)
+            .eq("id", company_id)
+            .execute()
+        )
+        return _single_row_from_res(res)
+    return await run_sync(_fn)
 
 
 async def get_corporate_members_for_user(user_id: str) -> list[dict]:
@@ -669,14 +718,16 @@ async def get_corporate_members_for_user(user_id: str) -> list[dict]:
 
     Hot path: called on every work-profile check.
     """
-    resp = await (
-        supabase.table("corporate_members")
-        .select("id, company_id, role, policy_override")
-        .eq("user_id", user_id)
-        .eq("status", "active")
-        .execute()
-    )
-    return resp.data or []
+    def _fn():
+        res = (
+            supabase.table("corporate_members")
+            .select("id, company_id, role, policy_override")
+            .eq("user_id", user_id)
+            .eq("status", "active")
+            .execute()
+        )
+        return _rows_from_res(res)
+    return await run_sync(_fn)
 ```
 
 - [ ] **Step 4: Run tests**

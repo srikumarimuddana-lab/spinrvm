@@ -1,5 +1,11 @@
 # backend/tests/test_corporate_b2b_schema.py
-"""Smoke test: the nine new B2B tables + new corporate_accounts columns exist."""
+"""Smoke test: the nine new B2B tables + new corporate_accounts columns exist.
+
+Uses the project's sync Supabase client directly — `supabase-py` 2.x exposes
+a synchronous `.execute()` that returns an APIResponse. See
+`backend/db_supabase.py:run_sync` for the async wrapper used in app code;
+these marker-gated integration tests don't need the threadpool hop.
+"""
 import pytest
 
 from db_supabase import supabase
@@ -35,19 +41,25 @@ REQUIRED_CORP_COLS = [
 ]
 
 
+# ride_payment_sources uses ride_id as its PK instead of a surrogate id column
+# (see migration 27 §9) — probe a column that definitely exists on each table.
+_PROBE_COLUMN = {
+    "ride_payment_sources": "ride_id",
+}
+
+
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_b2b_tables_exist():
+def test_b2b_tables_exist():
     for t in REQUIRED_TABLES:
+        col = _PROBE_COLUMN.get(t, "id")
         # Reading zero rows is enough — table absence raises APIError.
-        resp = await supabase.table(t).select("id").limit(1).execute()
+        resp = supabase.table(t).select(col).limit(1).execute()
         assert resp.data is not None, f"table {t} missing"
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_corporate_accounts_has_new_columns():
-    resp = await (
+def test_corporate_accounts_has_new_columns():
+    resp = (
         supabase.table("corporate_accounts")
         .select(",".join(REQUIRED_CORP_COLS))
         .limit(1)

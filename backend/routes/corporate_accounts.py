@@ -269,7 +269,6 @@ async def delete_corporate_account(account_id: str, current_admin: dict = Depend
 async def change_company_status(
     company_id: str,
     transition: CompanyStatusTransition,
-    request: Request,
     current_admin: dict = Depends(get_current_admin),
 ):
     _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
@@ -286,11 +285,15 @@ async def change_company_status(
 
     from db_supabase import update_corporate_account_status
 
+    # transition.reason is accepted but not persisted — audit log table lands
+    # with Plan 2, wallet freeze/unfreeze follows status in the same plan.
     row = await update_corporate_account_status(
         company_id=normalized_id,
         status=transition.status.value,
     )
     if not row:
-        raise HTTPException(status_code=404, detail="Corporate account not found")
-    # TODO(Plan 2): freeze/unfreeze the corporate wallet in sync with status transitions.
+        raise HTTPException(
+            status_code=404,
+            detail="Corporate account disappeared mid-transition",
+        )
     return row

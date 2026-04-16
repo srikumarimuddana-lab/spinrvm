@@ -284,6 +284,22 @@ def test_client() -> TestClient:
 
 
 @pytest.fixture
+def admin_override():
+    """Override get_admin_user so authenticated admin routes see a fake admin.
+
+    FastAPI binds `Depends(get_admin_user)` at import time, so patching the
+    module attribute has no effect — the canonical pattern for admin-route
+    tests is to install an override on the app.
+    """
+    from backend.server import app
+    from dependencies import get_admin_user
+
+    app.dependency_overrides[get_admin_user] = lambda: {"id": "admin_1", "role": "admin"}
+    yield
+    app.dependency_overrides.pop(get_admin_user, None)
+
+
+@pytest.fixture
 def async_http_client() -> httpx.AsyncClient:
     """Create an async HTTP client for testing."""
     transport = httpx.AsyncHTTPTransport(app=MagicMock())

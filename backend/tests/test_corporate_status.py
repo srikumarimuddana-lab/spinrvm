@@ -1,43 +1,16 @@
 # backend/tests/test_corporate_status.py
 from unittest.mock import AsyncMock, patch
 
-import pytest
+from backend.tests._factories import corporate_account_row
 
 
-@pytest.fixture
-def _admin_override():
-    from backend.server import app
-    from dependencies import get_admin_user
-
-    app.dependency_overrides[get_admin_user] = lambda: {"id": "admin_1", "role": "admin"}
-    yield
-    app.dependency_overrides.pop(get_admin_user, None)
-
-
-def _row(status_value: str) -> dict:
-    return {
-        "id": "c1",
-        "name": "Acme",
-        "status": status_value,
-        "country_code": "CA",
-        "currency": "CAD",
-        "locale": "en-CA",
-        "timezone": "America/Toronto",
-        "size_tier": "smb",
-        "is_active": True,
-        "credit_limit": 0,
-        "created_at": "2026-01-01T00:00:00Z",
-        "updated_at": "2026-01-01T00:00:00Z",
-    }
-
-
-def test_suspend_active_company(test_client, _admin_override):
+def test_suspend_active_company(test_client, admin_override):
     with patch(
         "routes.corporate_accounts.get_corporate_account_by_id",
-        AsyncMock(return_value=_row("active")),
+        AsyncMock(return_value=corporate_account_row("active")),
     ), patch(
         "db_supabase.update_corporate_account_status",
-        AsyncMock(return_value=_row("suspended")),
+        AsyncMock(return_value=corporate_account_row("suspended")),
     ):
         resp = test_client.post(
             "/api/admin/corporate-accounts/c1/status",
@@ -47,10 +20,10 @@ def test_suspend_active_company(test_client, _admin_override):
     assert resp.json()["status"] == "suspended"
 
 
-def test_cannot_reopen_closed_company(test_client, _admin_override):
+def test_cannot_reopen_closed_company(test_client, admin_override):
     with patch(
         "routes.corporate_accounts.get_corporate_account_by_id",
-        AsyncMock(return_value=_row("closed")),
+        AsyncMock(return_value=corporate_account_row("closed")),
     ):
         resp = test_client.post(
             "/api/admin/corporate-accounts/c1/status",
@@ -60,7 +33,7 @@ def test_cannot_reopen_closed_company(test_client, _admin_override):
     assert "closed" in resp.json()["detail"].lower()
 
 
-def test_status_change_404_when_company_missing(test_client, _admin_override):
+def test_status_change_404_when_company_missing(test_client, admin_override):
     with patch(
         "routes.corporate_accounts.get_corporate_account_by_id",
         AsyncMock(return_value=None),

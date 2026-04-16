@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Animated } from 'react-native';
 import * as Location from 'expo-location';
-import { Platform, Alert, Vibration, Linking, AppState } from 'react-native';
+import { Platform, Vibration, Linking, AppState } from 'react-native';
 
 export type ConnectionState = 'connected' | 'reconnecting' | 'disconnected';
 import { router } from 'expo-router';
@@ -23,6 +23,20 @@ interface UseDriverDashboardReturn {
   location: Location.LocationObject | null;
   otpInput: string;
   setOtpInput: (value: string) => void;
+
+  // Alert state
+  dashAlert: {
+    visible: boolean; title: string; message?: string;
+    variant: 'info' | 'success' | 'danger' | 'warning';
+    buttons?: Array<{ text: string; style?: 'default'|'cancel'|'destructive'; onPress?: () => void }>;
+  };
+  showDashAlert: (
+    title: string,
+    message: string,
+    variant?: 'info'|'success'|'danger'|'warning',
+    buttons?: Array<{ text: string; style?: 'default'|'cancel'|'destructive'; onPress?: () => void }>
+  ) => void;
+  closeDashAlert: () => void;
 
   // Actions
   toggleOnline: () => Promise<void>;
@@ -65,6 +79,22 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [otpInput, setOtpInput] = useState('');
+
+  // Alert state (replaces Alert.alert() so consumers can render <CustomAlert>)
+  const [dashAlert, setDashAlert] = useState<{
+    visible: boolean; title: string; message?: string;
+    variant: 'info' | 'success' | 'danger' | 'warning';
+    buttons?: Array<{ text: string; style?: 'default'|'cancel'|'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', variant: 'info' });
+
+  const showDashAlert = (
+    title: string,
+    message: string,
+    variant: 'info'|'success'|'danger'|'warning' = 'info',
+    buttons?: Array<{ text: string; style?: 'default'|'cancel'|'destructive'; onPress?: () => void }>
+  ) => setDashAlert({ visible: true, title, message, variant, buttons });
+
+  const closeDashAlert = () => setDashAlert(a => ({ ...a, visible: false }));
 
   // Refs
   const mapRef = useRef<any>(null);
@@ -348,7 +378,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         });
         break;
       case 'ride_cancelled':
-        Alert.alert('Ride Cancelled', 'The rider has cancelled this ride.');
+        showDashAlert('Ride Cancelled', 'The rider has cancelled this ride.', 'warning');
         resetRideState();
         break;
 
@@ -497,9 +527,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // ─── Toggle Online/Offline ───────────────────────────────────────
   const toggleOnline = async () => {
     if (!driverData?.vehicle_make || !driverData?.license_plate) {
-      Alert.alert(
+      showDashAlert(
         "Profile Incomplete",
         "You must provide vehicle details before going online.",
+        'warning',
         [
           {
             text: "Add Vehicle Info",
@@ -512,9 +543,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     }
 
     if (!driverData?.is_verified) {
-      Alert.alert(
+      showDashAlert(
         "Account Not Verified",
         "Your account is not verified yet. Please complete your profile and wait for admin approval before going online.",
+        'warning',
         [
           {
             text: "Check Status",
@@ -536,18 +568,20 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
       // 402 = no subscription
       if (err.response?.status === 402) {
-        Alert.alert(
+        showDashAlert(
           "Spinr Pass Required",
           err.response?.data?.detail || "You need an active subscription to go online.",
+          'warning',
           [
             { text: "Subscribe", onPress: () => router.push('/driver/subscription' as any) },
             { text: "Cancel", style: "cancel" },
           ]
         );
       } else {
-        Alert.alert(
+        showDashAlert(
           "Cannot Go Online",
-          err.response?.data?.detail || "Failed to update status. Please try again."
+          err.response?.data?.detail || "Failed to update status. Please try again.",
+          'danger'
         );
       }
     }
@@ -618,7 +652,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           rider_rating: data.rider_rating ? parseFloat(data.rider_rating) : undefined,
         });
       } else if (data?.type === 'ride_cancelled') {
-        Alert.alert('Ride Cancelled', 'The rider has cancelled this ride.');
+        showDashAlert('Ride Cancelled', 'The rider has cancelled this ride.', 'warning');
         resetRideState();
       }
     });
@@ -635,6 +669,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     location,
     otpInput,
     setOtpInput,
+
+    // Alert state
+    dashAlert,
+    showDashAlert,
+    closeDashAlert,
 
     // Actions
     toggleOnline,

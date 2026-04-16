@@ -62,22 +62,22 @@ class Settings(BaseSettings):
     RATE_LIMIT: str = "10/minute"
     # Storage backend for the distributed rate limiter. When empty the
     # limiter uses slowapi's in-process "memory://" backend, which is fine
-    # for local dev but wrong in production: each Fly machine / worker
+    # for local dev but wrong in production: each replica / worker
     # keeps its own counters, so a 5/minute limit effectively becomes
-    # (5 × N_machines)/minute and an attacker can sidestep OTP / login
+    # (5 × N_replicas)/minute and an attacker can sidestep OTP / login
     # limits by riding LB stickiness. Production deploys must set this
-    # to a redis:// (or rediss://) URL backed by Upstash / Fly Redis;
-    # _validate_production_config() enforces this at boot.
+    # to a redis:// (or rediss://) URL (e.g. Railway Redis plugin or
+    # Upstash); _validate_production_config() enforces this at boot.
     RATE_LIMIT_REDIS_URL: str = ""
 
     # WebSocket pub/sub backend (audit P0-B3). The ConnectionManager keeps
     # sockets in an in-process dict, so "send to rider_X" only reaches X
-    # if X is connected to the SAME Fly machine that's doing the sending.
-    # With >1 machine, ride-dispatch events, driver-arrival pings and
+    # if X is connected to the SAME replica that's doing the sending.
+    # With >1 replica, ride-dispatch events, driver-arrival pings and
     # chat messages silently disappear whenever the LB puts the sender
-    # and receiver on different VMs. Setting WS_REDIS_URL makes every
-    # machine publish outbound socket sends to a shared Redis channel
-    # and have every machine's subscriber deliver to its own locals —
+    # and receiver on different containers. Setting WS_REDIS_URL makes every
+    # replica publish outbound socket sends to a shared Redis channel
+    # and have every replica's subscriber deliver to its own locals —
     # a leaked message costs one Redis round-trip; a lost dispatch costs
     # a rider. If empty we fall back to RATE_LIMIT_REDIS_URL (the prod
     # validator already ensures that's set) so operators don't have to

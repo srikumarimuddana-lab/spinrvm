@@ -8,7 +8,7 @@ webhook handler lives in `backend/routes/webhooks.py`.
 
 **Prerequisites:**
 - Stripe Dashboard access (developer/admin role)
-- Backend logs access (Fly.io CLI or Render dashboard)
+- Backend logs access (Railway CLI or Render dashboard)
 - Access to admin app settings (where `stripe_webhook_secret` and `stripe_secret_key`
   are stored in the `app_settings` Supabase table)
 
@@ -40,7 +40,7 @@ webhook handler lives in `backend/routes/webhooks.py`.
 ### Step 1 — Check recent webhook deliveries in Stripe Dashboard
 
 1. Go to https://dashboard.stripe.com/webhooks.
-2. Select the endpoint registered for Spinr (e.g. `https://spinr-api.fly.dev/webhooks/stripe`).
+2. Select the endpoint registered for Spinr (e.g. `https://spinr-api.up.railway.app/webhooks/stripe`).
 3. Click "Recent deliveries".
 4. Look for failed deliveries (red X). Click one to expand the error.
 
@@ -55,9 +55,9 @@ Common HTTP response codes from the backend and their meaning:
 
 ### Step 2 — Check backend logs for webhook errors
 
-**Fly.io:**
+**Railway:**
 ```bash
-fly logs --app spinr-backend | grep -i 'stripe\|webhook'
+railway logs --service backend | grep -i 'stripe\|webhook'
 ```
 
 **Render:** Dashboard → spinr-backend → Logs, filter "stripe".
@@ -89,7 +89,7 @@ The webhook handler reads `stripe_webhook_secret` from the `app_settings` table 
 
 **Verify the endpoint URL is correct in Stripe:**
 The registered endpoint must match exactly:
-- Fly.io: `https://spinr-api.fly.dev/webhooks/stripe`
+- Railway: `https://spinr-api.up.railway.app/webhooks/stripe`
 - Render: `https://spinr-api.onrender.com/webhooks/stripe`
 
 Note: the path is `/webhooks/stripe` (no `/api/v1/` prefix).
@@ -97,7 +97,7 @@ Note: the path is `/webhooks/stripe` (no `/api/v1/` prefix).
 ### Step 4 — Confirm Stripe can reach the endpoint
 
 ```bash
-curl -X POST https://spinr-api.fly.dev/webhooks/stripe \
+curl -X POST https://spinr-api.up.railway.app/webhooks/stripe \
   -H "Content-Type: application/json" \
   -d '{}' \
   -w "\nHTTP Status: %{http_code}\n"
@@ -120,7 +120,7 @@ After fixing the root cause, replay failed events so payments are retroactively 
 **For bulk replay (Stripe CLI):**
 ```bash
 # Install Stripe CLI if not present: https://stripe.com/docs/stripe-cli
-stripe listen --forward-to https://spinr-api.fly.dev/webhooks/stripe
+stripe listen --forward-to https://spinr-api.up.railway.app/webhooks/stripe
 
 # In a second terminal, replay a specific event by ID
 stripe events resend evt_XXXXXXXXXXXXXXXX

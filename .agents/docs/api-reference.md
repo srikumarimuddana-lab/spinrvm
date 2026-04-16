@@ -5,7 +5,7 @@
 
 ## Base URL
 - Development: `http://localhost:8000`
-- Production: `https://<your-app>.fly.dev`
+- Production: `https://<your-app>.up.railway.app`
 
 ## Authentication
 All authenticated endpoints require:

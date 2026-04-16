@@ -37,8 +37,8 @@ _rate_limit_storage_uri = settings.RATE_LIMIT_REDIS_URL or "memory://"
 if _rate_limit_storage_uri == "memory://":
     logger.warning(
         "Rate limiter using in-process 'memory://' storage — counters are "
-        "per-worker and will NOT rate-limit correctly across multiple Fly "
-        "machines. Set RATE_LIMIT_REDIS_URL for production deployments."
+        "per-worker and will NOT rate-limit correctly across multiple "
+        "replicas. Set RATE_LIMIT_REDIS_URL for production deployments."
     )
 else:
     # Don't log the full URL; it contains the Redis password.

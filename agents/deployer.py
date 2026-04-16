@@ -20,11 +20,11 @@ class DeploymentAgent(BaseAgent):
                 "deployment_preparation", "deployment_execution",
                 "deployment_verification", "ci_cd_management",
                 "environment_configuration", "rollback",
-                "eas_build", "fly_io", "vercel"
+                "eas_build", "railway", "vercel"
             ]
         )
         self.platforms = {
-            "backend": "Fly.io",
+            "backend": "Railway",
             "rider_app": "EAS Build",
             "driver_app": "EAS Build",
             "admin_dashboard": "Vercel"

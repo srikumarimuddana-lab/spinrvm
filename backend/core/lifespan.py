@@ -127,12 +127,12 @@ async def lifespan(app: FastAPI):
     app.state.background_tasks = background_tasks
 
     # WebSocket pub/sub (audit P0-B3): before this, socket sends were
-    # in-process only, so on >1 Fly machine the driver and the rider
-    # regularly ended up on different VMs and dispatch events silently
-    # disappeared. Starting the pub/sub attaches a Redis subscriber to
-    # the shared ConnectionManager; every outbound send now fans out
-    # across machines. In dev (no Redis URL configured) this is a
-    # no-op and the manager stays in local-only mode.
+    # in-process only, so on >1 replica the driver and the rider
+    # regularly ended up on different containers and dispatch events
+    # silently disappeared. Starting the pub/sub attaches a Redis
+    # subscriber to the shared ConnectionManager; every outbound send
+    # now fans out across replicas. In dev (no Redis URL configured)
+    # this is a no-op and the manager stays in local-only mode.
     try:
         from socket_manager import manager as ws_manager
         from utils.ws_pubsub import pubsub as ws_pubsub

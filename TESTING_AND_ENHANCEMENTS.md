@@ -322,7 +322,7 @@ GitHub Actions workflow for continuous integration and deployment.
    - E2E test execution
 
 5. **Deployment**
-   - Backend: Render or Fly.io
+   - Backend: Railway or Render
    - Frontend: Vercel
    - Admin Dashboard: Vercel
 
@@ -343,7 +343,7 @@ SUPABASE_SERVICE_ROLE_KEY
 # Deployment
 RENDER_API_KEY
 RENDER_BACKEND_SERVICE_ID
-FLY_API_TOKEN
+RAILWAY_TOKEN
 VERCEL_TOKEN
 VERCEL_ORG_ID
 VERCEL_FRONTEND_PROJECT_ID

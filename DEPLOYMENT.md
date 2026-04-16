@@ -1,44 +1,48 @@
-# Deployment Guide: Vercel + Fly.io (or Render)
+# Deployment Guide: Vercel + Railway (or Render)
 
 This guide explains how to deploy the Spinr application using a hybrid approach:
-- **Backend (Python/FastAPI)**: Fly.io (Recommended) or Render
+- **Backend (Python/FastAPI)**: Railway (Recommended) or Render
 - **Frontend (Expo Web)**: Vercel (Static Site)
 - **Admin Dashboard (Next.js)**: Vercel (Next.js App)
 
-## 1. Backend Deployment (Fly.io - Recommended)
+## 1. Backend Deployment (Railway - Recommended)
 
-Fly.io is recommended for better WebSocket support and lower latency.
+Railway runs the backend from `backend/Dockerfile` with managed Redis/Postgres add-ons
+and built-in WebSocket support.
 
-1.  **Install Fly CLI**: Follow instructions at [fly.io/docs/hands-on/install-flyctl/](https://fly.io/docs/hands-on/install-flyctl/).
-2.  **Login**: Run `fly auth login`.
-3.  **Launch App**:
-    - Run `fly launch` from the project root.
-    - It will detect `fly.toml`.
-    - Select "Yes" to copy configuration.
-    - Choose a unique app name (e.g., `spinr-backend-production`) if asked, or stick with `spinr-backend`.
-    - Select a region close to your users (e.g., `sjc` for San Jose, `yyz` for Toronto).
-    - **Do not deploy yet** if asked (say No), so we can set secrets first.
-4.  **Set Secrets**:
-    Run the following command to set production secrets:
+1.  **Install Railway CLI**: `npm i -g @railway/cli` (or use the web dashboard).
+2.  **Login**: Run `railway login`.
+3.  **Initialize Project**:
+    - Run `railway init` from the project root, or create a project in the
+      Railway dashboard and link it with `railway link`.
+    - Railway will detect `railway.json` and use `backend/Dockerfile` as the
+      build source.
+    - Choose a service name (e.g., `backend`).
+4.  **Set Variables**:
+    Set secrets via `railway variables set KEY=VALUE` or in the dashboard:
     ```bash
-    fly secrets set \
+    railway variables set \
       SUPABASE_URL="your_supabase_url" \
       SUPABASE_KEY="your_supabase_service_role_key" \
       FIREBASE_SERVICE_ACCOUNT_JSON='{"type": "service_account", ...}' \
-      JWT_SECRET="your_strong_jwt_secret"
+      JWT_SECRET="your_strong_jwt_secret" \
+      RATE_LIMIT_REDIS_URL="$REDIS_URL"
     ```
     *Note: The Firebase JSON must be minified (on one line) or enclosed in single quotes.*
+    *Note: `RATE_LIMIT_REDIS_URL` should point at the Railway Redis plugin (or Upstash).*
 5.  **Deploy**:
     ```bash
-    fly deploy
+    railway up --service backend
     ```
-6.  **Get URL**: The URL will be `https://<your-app-name>.fly.dev`.
+6.  **Get URL**: Railway assigns a public domain under `*.up.railway.app`.
+    Generate or map a custom domain via the dashboard ("Networking" → "Public Domain").
 
-### CI/CD for Fly.io
+### CI/CD for Railway
 A GitHub Action is included in `.github/workflows/deploy-backend.yml`.
 1.  Go to your GitHub Repo -> Settings -> Secrets and variables -> Actions.
-2.  Add a new secret `FLY_API_TOKEN`.
-    - You can generate this token by running `fly tokens create deploy -x 999999h`.
+2.  Add a new secret `RAILWAY_TOKEN`.
+    - Generate this token in the Railway dashboard under *Account Settings → Tokens*
+      (project-scoped tokens are recommended).
 3.  Now, every push to `main` that changes `backend/` will auto-deploy.
 
 ---
@@ -76,7 +80,7 @@ Deploy the Expo Web app as a static site.
     - **Output Directory**: `dist`
 5.  **Environment Variables**:
     Add the following environment variables in Vercel Project Settings:
-    - `EXPO_PUBLIC_BACKEND_URL`: Your backend URL (e.g., `https://spinr-backend.fly.dev`).
+    - `EXPO_PUBLIC_BACKEND_URL`: Your backend URL (e.g., `https://spinr-backend.up.railway.app`).
     - `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY`: Your Google Maps API Key.
     - `EXPO_PUBLIC_FIREBASE_API_KEY`: Your Firebase API Key.
     - `EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN`: Your Firebase Auth Domain.
@@ -119,7 +123,7 @@ Deploy the Next.js admin panel.
     - **Root Directory**: `admin-dashboard` (Click "Edit").
     - **Framework Preset**: Next.js (Should be auto-detected).
 3.  **Environment Variables**:
-    - Add `NEXT_PUBLIC_API_URL`: The URL of your backend (e.g., `https://spinr-backend.fly.dev`).
+    - Add `NEXT_PUBLIC_API_URL`: The URL of your backend (e.g., `https://spinr-backend.up.railway.app`).
 4.  **Deploy**: Click "Deploy".
 
 ## Troubleshooting
@@ -131,10 +135,10 @@ Deploy the Next.js admin panel.
 
 -   **CORS Issues**:
     - Ensure your Backend Environment Variable `ALLOWED_ORIGINS` includes your new Vercel domains (e.g., `https://spinr-frontend.vercel.app,https://spinr-admin.vercel.app`).
-    - For Fly.io, verify secrets with `fly secrets list`.
+    - For Railway, verify variables with `railway variables` or the dashboard.
 
 -   **Missing Maps**:
     - If maps don't load, verify `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` is set in Vercel.
 
 -   **WebSockets**:
-    - Vercel does not support persistent WebSockets. Ensure your frontend connects to the backend URL (Fly/Render) for WebSocket connections, not the Vercel frontend URL.
+    - Vercel does not support persistent WebSockets. Ensure your frontend connects to the backend URL (Railway/Render) for WebSocket connections, not the Vercel frontend URL.

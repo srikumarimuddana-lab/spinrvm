@@ -1,4 +1,4 @@
-name: Deploy Backend to Fly.io
+name: Deploy Backend to Railway
 
 on:
   push:
@@ -6,7 +6,8 @@ on:
       - main
     paths:
       - 'backend/**'
-      - 'fly.toml'
+      - 'railway.json'
+      - '.github/workflows/deploy-backend.yml'
 
 jobs:
   deploy:
@@ -14,8 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli
       - name: Deploy
-        run: flyctl deploy --remote-only
+        run: railway up --service backend --ci
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

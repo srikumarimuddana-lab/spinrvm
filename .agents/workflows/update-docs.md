@@ -24,7 +24,7 @@ git diff --name-only HEAD~1
 Categorize changes:
 - `backend/routes/` → Update API reference
 - `backend/supabase_schema.sql` or `backend/migrations/` → Update database schema
-- `fly.toml` or `Dockerfile` or `eas.json` → Update deployment guide
+- `railway.json` or `Dockerfile` or `eas.json` → Update deployment guide
 - New directories or major restructuring → Update architecture
 
 ## Step 2: Update API Reference

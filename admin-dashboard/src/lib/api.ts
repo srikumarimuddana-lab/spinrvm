@@ -362,17 +362,71 @@ export const reviewDocument = (
     });
 
 /* ── Corporate Accounts ─────────────────────── */
+export type CompanyStatus =
+    | "pending_verification"
+    | "active"
+    | "suspended"
+    | "closed";
+
+export type SizeTier = "smb" | "mid_market" | "enterprise";
+
+export interface CorporateAccount {
+    id: string;
+    name: string;
+    legal_name?: string | null;
+    business_number?: string | null;
+    tax_region?: string | null;
+    billing_email?: string | null;
+    contact_name?: string | null;
+    contact_email?: string | null;
+    contact_phone?: string | null;
+    status: CompanyStatus;
+    size_tier: SizeTier;
+    kyb_document_url?: string | null;
+    kyb_reviewed_at?: string | null;
+    kyb_reviewed_by?: string | null;
+    credit_limit?: number;
+    is_active: boolean;
+    created_at: string;
+    updated_at: string;
+}
+
 export const getCorporateAccounts = () =>
-    request<any[]>("/api/admin/corporate-accounts");
+    request<CorporateAccount[]>("/api/admin/corporate-accounts");
+
+export const listCorporateAccounts = (opts: {
+    status?: CompanyStatus;
+    size_tier?: SizeTier;
+    search?: string;
+    skip?: number;
+    limit?: number;
+} = {}) => {
+    const p = new URLSearchParams();
+    if (opts.status) p.set("status", opts.status);
+    if (opts.size_tier) p.set("size_tier", opts.size_tier);
+    if (opts.search) p.set("search", opts.search);
+    if (opts.skip != null) p.set("skip", String(opts.skip));
+    if (opts.limit != null) p.set("limit", String(opts.limit));
+    const qs = p.toString();
+    return request<CorporateAccount[]>(
+        `/api/admin/corporate-accounts${qs ? `?${qs}` : ""}`
+    );
+};
+
+export const reviewKyb = (id: string, decision: { approve: boolean; note?: string }) =>
+    request<CorporateAccount>(`/api/admin/corporate-accounts/${id}/kyb-review`, {
+        method: "POST",
+        body: JSON.stringify(decision),
+    });
 
 export const createCorporateAccount = (data: any) =>
-    request<any>("/api/admin/corporate-accounts", {
+    request<CorporateAccount>("/api/admin/corporate-accounts", {
         method: "POST",
         body: JSON.stringify(data),
     });
 
 export const updateCorporateAccount = (id: string, data: any) =>
-    request<any>(`/api/admin/corporate-accounts/${id}`, {
+    request<CorporateAccount>(`/api/admin/corporate-accounts/${id}`, {
         method: "PUT",
         body: JSON.stringify(data),
     });

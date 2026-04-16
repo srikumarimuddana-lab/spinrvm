@@ -9,7 +9,7 @@ and escalation to manual OTP testing.
 **Prerequisites:**
 - Redis CLI access (or access to the Redis provider dashboard)
 - Supabase dashboard access (to look up the user by phone)
-- Backend logs access (Fly.io CLI or Render dashboard)
+- Backend logs access (Railway CLI or Render dashboard)
 - The affected user's phone number in E.164 format (e.g. `+14165551234`)
 
 ---
@@ -59,9 +59,9 @@ environment settings:
 
 Check current values:
 
-**Fly.io:**
+**Railway:**
 ```bash
-fly secrets list --app spinr-backend
+railway variables --service backend
 ```
 
 **Render:** Dashboard → spinr-backend → Environment.
@@ -70,9 +70,9 @@ If these vars are not set, the defaults apply. Confirm the actual values match p
 
 ### Step 3 — Check backend logs for the user's failed attempts
 
-**Fly.io:**
+**Railway:**
 ```bash
-fly logs --app spinr-backend | grep "${PHONE}"
+railway logs --service backend | grep "${PHONE}"
 ```
 
 **Render:** Dashboard → spinr-backend → Logs, filter by the phone number.

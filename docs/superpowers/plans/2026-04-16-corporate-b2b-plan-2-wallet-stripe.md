@@ -20,6 +20,35 @@
 
 ---
 
+## ⚠️ Codebase async/sync pattern (read before implementing any Supabase code)
+
+`supabase-py 2.x` in this repo is **synchronous**. `supabase.table(...).select(...).execute()` and `supabase.rpc(name, params).execute()` return an `APIResponse` directly — **do not `await` them**.
+
+The codebase wraps sync calls with `run_sync` (defined at `backend/db_supabase.py:18-32`). Every async helper in `db_supabase.py` follows this shape:
+
+```python
+async def some_helper(...) -> ...:
+    def _fn():
+        res = supabase.table("x").select("*")...execute()    # SYNC
+        return _rows_from_res(res)                            # or _single_row_from_res
+    return await run_sync(_fn)
+```
+
+**For RPC calls** (wallet arithmetic, etc.) the pattern is identical — `.rpc(name, params)` returns a query builder, `.execute()` is sync:
+
+```python
+def _fn():
+    res = supabase.rpc("my_function", params).execute()
+    return _rows_from_res(res)
+return await run_sync(_fn)
+```
+
+**For test mocks:** `.execute()` is called inside the `_fn` closure which is offloaded to a threadpool — mock it with `MagicMock(return_value=...)`, NOT `AsyncMock`. An `AsyncMock` returns a coroutine that the sync closure can't `await`, and the chained access (`res.data`) will dereference the coroutine instead of the APIResponse.
+
+Every code snippet below that uses Supabase follows this pattern. If a snippet in this plan shows `await q.execute()` or `await supabase.rpc(...)`, treat it as a plan typo and convert to the `run_sync` form. See Plan 1 Task 4 for worked examples.
+
+---
+
 ## Task 1: Wallet bootstrap on company activation
 
 **Files:**

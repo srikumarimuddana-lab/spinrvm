@@ -16,6 +16,8 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import api from '@shared/api/client';
 import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
+import { useLocationStore } from '@shared/store/locationStore';
+import useDriverStore from '../store/driverStore';
 
 export default function ReportSafetyScreen() {
     const router = useRouter();
@@ -66,11 +68,7 @@ export default function ReportSafetyScreen() {
         try {
             // G22: Use the shared API client which attaches the auth token.
             // Previously used raw fetch without Authorization header.
-            await api.post('/support/tickets/safety-report', { description: issue });
-
-            if (!response.ok) {
-                throw new Error('Failed to submit report');
-            }
+            await api.post('/support/tickets/safety-report', reportData);
 
             showAlert(
                 'Report Submitted',

@@ -559,7 +559,7 @@ _DOMAIN_RE = re.compile(
 
 
 def validate_cra_business_number(bn: str) -> str:
-    """Validate a CRA Business Number format (9 digits, optional CRA program identifier R[C|M|P|R|T|Z] + 4 digits).
+    """Validate a CRA Business Number format (9 digits, optional CRA program identifier R[CMPRTZ] + 4 digits).
 
     Accepts hyphenated and unhyphenated forms; returns the canonical uppercase
     unhyphenated form. Format-only — does not verify against CRA.
@@ -574,6 +574,8 @@ def validate_cra_business_number(bn: str) -> str:
 
 def validate_canadian_tax_region(region: str) -> str:
     """Validate a two-letter Canadian province/territory code."""
+    if not isinstance(region, str):
+        raise ValueError("region must be a string")
     if region not in _CA_TAX_REGIONS:
         raise ValueError(f"unknown Canadian tax region: {region!r}")
     return region

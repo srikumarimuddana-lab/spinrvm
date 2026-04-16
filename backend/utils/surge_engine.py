@@ -15,7 +15,6 @@ from loguru import logger
 
 try:
     from db import db
-
     from geo_utils import get_service_area_polygon, point_in_polygon
 except ImportError:
     from ..db import db

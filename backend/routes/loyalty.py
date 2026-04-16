@@ -21,7 +21,6 @@ try:
     from ..dependencies import get_current_user
 except ImportError:
     from db import db
-
     from dependencies import get_current_user
 
 logger = logging.getLogger(__name__)

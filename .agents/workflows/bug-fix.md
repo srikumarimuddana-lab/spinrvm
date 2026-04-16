@@ -9,7 +9,7 @@ description: Structured workflow for investigating and fixing bugs in the Spinr 
 2. Identify the affected component (backend, rider-app, driver-app, admin)
 3. Try to reproduce locally
 4. Check logs for errors:
-   - Backend: `backend/logs/app.log` or `fly logs`
+   - Backend: `backend/logs/app.log` or `railway logs --service backend`
    - Sentry: Check for error reports
    - Frontend: Check console output
 

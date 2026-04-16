@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
     getCorporateAccounts,
     createCorporateAccount,
@@ -40,7 +41,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { Building2, Plus, Pencil, Trash2, Search, Mail, Phone, RefreshCw } from "lucide-react";
+import { Building2, Plus, Pencil, Trash2, Search, Mail, Phone, RefreshCw, ShieldCheck } from "lucide-react";
 
 export default function CorporateAccountsPage() {
     const [accounts, setAccounts] = useState<any[]>([]);
@@ -160,6 +161,11 @@ export default function CorporateAccountsPage() {
                     </p>
                 </div>
                 <div className="flex gap-2">
+                    <Button asChild variant="outline">
+                        <Link href="/dashboard/corporate-accounts/kyb-queue">
+                            <ShieldCheck className="mr-2 h-4 w-4" /> KYB Queue
+                        </Link>
+                    </Button>
                     <Button variant="outline" size="icon" onClick={fetchAccounts}>
                         <RefreshCw className="h-4 w-4" />
                     </Button>

@@ -21,7 +21,7 @@
         "promotional_text": "Saskatchewan's first 0% commission rideshare. Sign up now — no weekly fees, ever."
       }
     },
-    "review_notes": "This is the driver partner app for a rideshare marketplace. Drivers authenticate via SMS OTP and complete a document-upload onboarding flow before they can go online. Location is used continuously while the driver is online so ride requests and navigation update in real time.\n\nTest account (driver):\n  Phone: +1 306 555 0202\n  OTP: 1234 (test environment)\n  Onboarding: tap 'Skip for review' on the document upload screen to bypass the real upload in the review build.\n\nBackend smoke-test URL: https://spinr-api.fly.dev/healthz\n\nPayments use Stripe test mode. No real charges or payouts are made during review.",
+    "review_notes": "This is the driver partner app for a rideshare marketplace. Drivers authenticate via SMS OTP and complete a document-upload onboarding flow before they can go online. Location is used continuously while the driver is online so ride requests and navigation update in real time.\n\nTest account (driver):\n  Phone: +1 306 555 0202\n  OTP: 1234 (test environment)\n  Onboarding: tap 'Skip for review' on the document upload screen to bypass the real upload in the review build.\n\nBackend smoke-test URL: https://spinr-api.up.railway.app/healthz\n\nPayments use Stripe test mode. No real charges or payouts are made during review.",
     "content_rights": {
       "contains_third_party_content": false
     }

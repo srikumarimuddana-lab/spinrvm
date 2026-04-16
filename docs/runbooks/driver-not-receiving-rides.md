@@ -8,7 +8,7 @@ flag, and Supabase RLS policies.
 
 **Prerequisites:**
 - Supabase dashboard access (SQL editor or Table editor)
-- Backend logs access (Fly.io CLI or Render dashboard)
+- Backend logs access (Railway CLI or Render dashboard)
 - Redis CLI access (for OTP key inspection)
 - Driver's phone number and/or user ID (get from the driver or admin dashboard)
 
@@ -63,9 +63,9 @@ WHERE user_id = '<driver_user_id>';
 
 ### Step 2 — Check WebSocket connection in backend logs
 
-**Fly.io:**
+**Railway:**
 ```bash
-fly logs --app spinr-backend | grep '<driver_user_id>'
+railway logs --service backend | grep '<driver_user_id>'
 ```
 
 **Render:** Dashboard → spinr-backend → Logs, then filter by the driver's user ID.
@@ -77,7 +77,7 @@ Look for:
 
 Verify the driver app is pointing at the correct backend URL. The Expo env var is
 `EXPO_PUBLIC_BACKEND_URL`. In production this must be the deployed API base URL (e.g.
-`https://spinr-api.fly.dev`).
+`https://spinr-api.up.railway.app`).
 
 ### Step 3 — Check FCM token validity
 

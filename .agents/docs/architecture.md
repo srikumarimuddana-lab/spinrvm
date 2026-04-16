@@ -20,7 +20,7 @@ Spinr is a ride-sharing platform with four main components communicating through
            ┌────────▼────────┐
            │  Backend API    │
            │  (FastAPI)      │
-           │  Fly.io         │
+           │  Railway        │
            └────────┬────────┘
                     │
         ┌───────────┼───────────┐
@@ -38,7 +38,7 @@ Spinr is a ride-sharing platform with four main components communicating through
 |--------|---------|
 | Framework | FastAPI |
 | Language | Python 3.11+ |
-| Hosting | Fly.io |
+| Hosting | Railway |
 | Entry point | `backend/server.py` |
 | API prefix | `/api/v1/` |
 | Auth | Firebase tokens + legacy JWT |

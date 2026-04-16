@@ -2,7 +2,7 @@
 
 This document lists every environment variable used across all four Spinr services.
 Variables are sourced from `backend/core/config.py`, each app's `.env.example`, CI workflow
-secrets (`ci.yml`), and deployment manifests (`render.yaml`, `fly.toml`).
+secrets (`ci.yml`), and deployment manifests (`render.yaml`, `railway.json`).
 
 **Notation:**
 - `Required` — the service will not start correctly or will behave insecurely without this.
@@ -59,7 +59,8 @@ These are only used in the CI/CD pipeline and are stored as GitHub repository se
 | `SUPABASE_SERVICE_ROLE_KEY` | Same as above; injected into test runs. |
 | `RENDER_API_KEY` | Render API key for triggering deployments. Render Dashboard → Account → API Keys |
 | `RENDER_BACKEND_SERVICE_ID` | Render service ID for `spinr-backend`. Render Dashboard → service URL contains the ID. |
-| `FLY_API_TOKEN` | Fly.io personal access token for alternative deploys. `fly tokens create deploy` |
+| `RAILWAY_TOKEN` | Railway project token for automated deploys. Railway Dashboard → Account Settings → Tokens |
+| `RAILWAY_PUBLIC_URL` | Public base URL of the deployed Railway backend (e.g. `https://spinr-backend.up.railway.app`), used by the post-deploy smoke tests. |
 | `SLACK_WEBHOOK` | Incoming webhook URL for CI failure notifications. Slack → App settings → Incoming Webhooks |
 
 ---
@@ -72,7 +73,7 @@ Set them in `rider-app/.env` (local) or as EAS build secrets for production buil
 | Variable | Required | Default | Description | How to obtain |
 |----------|----------|---------|-------------|---------------|
 | `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` | Required | none | Google Maps API key for in-app maps, search, and directions. Restrict this key to your app's bundle ID in Google Cloud Console. | Google Cloud Console → APIs & Services → Credentials → Create API key |
-| `EXPO_PUBLIC_BACKEND_URL` | Optional (prod) | Auto-detected in dev | Base URL of the FastAPI backend (e.g. `https://spinr-api.fly.dev`). Must be set for production / EAS builds; Expo dev client auto-detects the local server. | Your deployment URL (Fly.io or Render) |
+| `EXPO_PUBLIC_BACKEND_URL` | Optional (prod) | Auto-detected in dev | Base URL of the FastAPI backend (e.g. `https://spinr-api.up.railway.app`). Must be set for production / EAS builds; Expo dev client auto-detects the local server. | Your deployment URL (Railway or Render) |
 | `EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Optional | none | Stripe publishable key for client-side payment sheet initialisation. Starts with `pk_`. Required if payments are enabled. | Stripe Dashboard → Developers → API keys → Publishable key |
 
 ### Rider App — EAS / CI secrets
@@ -104,7 +105,7 @@ The admin dashboard does not have a committed `.env.example`. Variables are set 
 
 | Variable | Required | Default | Description | How to obtain |
 |----------|----------|---------|-------------|---------------|
-| `NEXT_PUBLIC_API_URL` | Required | none | Base URL of the FastAPI backend used for all admin API calls (e.g. `https://spinr-api.fly.dev`). | Your deployment URL |
+| `NEXT_PUBLIC_API_URL` | Required | none | Base URL of the FastAPI backend used for all admin API calls (e.g. `https://spinr-api.up.railway.app`). | Your deployment URL |
 | `NEXT_PUBLIC_SUPABASE_URL` | Optional | none | Supabase project URL — used if the dashboard reads from Supabase directly (realtime, auth). | Supabase Dashboard → Settings → API → Project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Optional | none | Supabase anon/public key for client-side Supabase queries. Safe to expose publicly; RLS protects data. | Supabase Dashboard → Settings → API → `anon` key |
 

@@ -91,7 +91,7 @@ Ruff replaces `flake8` + `black` + `isort` in a single tool, 10–100× faster. 
 New `smoke-test` job appended to `ci.yml`:
 - `needs: [deploy-backend]`
 - `if: false` — disabled until deploys are re-activated (mirrors existing deploy job pattern)
-- Three curl steps hitting both `spinr-api.fly.dev` and `spinr-api.onrender.com` fallback:
+- Three curl steps hitting both `$RAILWAY_PUBLIC_URL` and `spinr-api.onrender.com` fallback:
   1. `GET /health`
   2. `GET /api/v1/settings`
   3. `GET /api/v1/vehicle-types`
@@ -172,7 +172,7 @@ All runbooks follow: **What this covers → Severity → Prerequisites → Sympt
 
 `docs/ENVIRONMENT_VARIABLES.md` — four sections (backend, rider-app, driver-app, admin-dashboard), each a table with: variable name, required/optional, default, description, where to obtain.
 
-Sourced from: `backend/core/config.py`, `.env.example` files, `render.yaml`, `fly.toml`, CI secrets. Includes a Quick Start section distinguishing env vars from `app_settings` table values.
+Sourced from: `backend/core/config.py`, `.env.example` files, `render.yaml`, `railway.json`, CI secrets. Includes a Quick Start section distinguishing env vars from `app_settings` table values.
 
 ---
 

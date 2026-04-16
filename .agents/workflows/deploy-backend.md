@@ -1,5 +1,5 @@
 ---
-description: Backend deployment workflow for the Spinr API on Fly.io
+description: Backend deployment workflow for the Spinr API on Railway
 ---
 
 # Backend Deployment Workflow
@@ -15,29 +15,29 @@ cd backend && python -m pytest -v --tb=short
 - [ ] No critical security issues (run `.agents/workflows/security-audit.md` first if unsure)
 
 ## Step 2: Verify Configuration
-- [ ] `fly.toml` has correct app name and region
+- [ ] `railway.json` has the correct builder and Dockerfile path
 - [ ] `Dockerfile` is up to date
-- [ ] All required environment variables are set on Fly.io:
+- [ ] All required environment variables are set on Railway:
   ```bash
-  fly secrets list --app spinr-backend
+  railway variables --service backend
   ```
 - [ ] Environment matches production requirements
 
 ## Step 3: Build and Deploy
 ```bash
-fly deploy --app spinr-backend
+railway up --service backend
 ```
 
 ## Step 4: Post-Deployment Verification
 ```bash
 # Check deployment status
-fly status --app spinr-backend
+railway status
 
 # Verify health endpoint
-curl -s https://your-app.fly.dev/api/v1/health
+curl -s https://<your-app>.up.railway.app/api/v1/health
 
 # Check recent logs for errors
-fly logs --app spinr-backend -n 50
+railway logs --service backend
 ```
 
 - [ ] App is running
@@ -57,11 +57,13 @@ Test critical endpoints:
 - [ ] Update version if applicable
 
 ## Rollback Procedure
-If issues are found after deployment:
-```bash
-# List recent releases
-fly releases --app spinr-backend
+If issues are found after deployment, roll back via the Railway dashboard:
 
-# Rollback to previous release
-fly deploy --image <previous-image> --app spinr-backend
+1. Open the Railway project → backend service → **Deployments** tab.
+2. Find the last known-good deployment.
+3. Click the overflow menu → **Redeploy**.
+
+CLI alternative:
+```bash
+railway redeploy --service backend
 ```

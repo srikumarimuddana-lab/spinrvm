@@ -1,13 +1,13 @@
 # Spinr Deployment Guide
 
 > **Living Document** — Update this file whenever deployment procedures change.
-> Last updated: 2026-03-26
+> Last updated: 2026-04-16
 
 ## Infrastructure Overview
 
 | Component | Hosting | URL |
 |-----------|---------|-----|
-| Backend API | Fly.io | `https://<app>.fly.dev` |
+| Backend API | Railway | `https://<app>.up.railway.app` |
 | Rider App | Expo EAS (iOS/Android) | App Store / Play Store |
 | Driver App | Expo EAS (iOS/Android) | App Store / Play Store |
 | Admin Dashboard | Vercel | `https://<project>.vercel.app` |
@@ -15,20 +15,23 @@
 
 ---
 
-## Backend Deployment (Fly.io)
+## Backend Deployment (Railway)
 
 ### Config Files
-- `fly.toml` — Fly.io app configuration
-- `Dockerfile` — Container build
-- `Procfile` — Process command
+- `railway.json` — Railway build + deploy configuration
+- `backend/Dockerfile` — Container build
+- `backend/requirements.txt` — Python dependencies
 
 ### Prerequisites
 ```bash
-# Install Fly CLI
-curl -L https://fly.io/install.sh | sh
+# Install Railway CLI
+npm i -g @railway/cli
 
 # Login
-fly auth login
+railway login
+
+# Link the project (one-time)
+railway link
 ```
 
 ### Deploy Steps
@@ -37,30 +40,32 @@ fly auth login
 cd backend && python -m pytest -v
 
 # 2. Deploy
-fly deploy
+railway up --service backend
 
 # 3. Verify
-fly status
-fly logs -n 20
+railway status
+railway logs --service backend
 ```
 
 ### Environment Variables
-Set via Fly.io secrets:
+Set via Railway CLI or dashboard:
 ```bash
-fly secrets set JWT_SECRET=<value>
-fly secrets set SUPABASE_URL=<value>
-fly secrets set SUPABASE_KEY=<value>
-fly secrets set STRIPE_SECRET_KEY=<value>
-fly secrets set TWILIO_ACCOUNT_SID=<value>
-fly secrets set TWILIO_AUTH_TOKEN=<value>
-fly secrets set SENTRY_DSN=<value>
-fly secrets set GOOGLE_API_KEY=<value>
+railway variables set JWT_SECRET=<value> --service backend
+railway variables set SUPABASE_URL=<value> --service backend
+railway variables set SUPABASE_KEY=<value> --service backend
+railway variables set STRIPE_SECRET_KEY=<value> --service backend
+railway variables set TWILIO_ACCOUNT_SID=<value> --service backend
+railway variables set TWILIO_AUTH_TOKEN=<value> --service backend
+railway variables set SENTRY_DSN=<value> --service backend
+railway variables set GOOGLE_API_KEY=<value> --service backend
+railway variables set RATE_LIMIT_REDIS_URL=<redis-url> --service backend
 ```
 
 ### Rollback
+Railway dashboard → backend service → **Deployments** tab → select last
+known-good deployment → **Redeploy**. CLI alternative:
 ```bash
-fly releases
-fly deploy --image <previous-image>
+railway redeploy --service backend
 ```
 
 ---
@@ -104,7 +109,7 @@ eas update --branch production --message "description of update"
 ### Environment Variables
 Set in `app.config.ts` or `.env`:
 ```
-EXPO_PUBLIC_API_URL=https://<backend>.fly.dev
+EXPO_PUBLIC_API_URL=https://<backend>.up.railway.app
 EXPO_PUBLIC_SUPABASE_URL=<supabase-url>
 EXPO_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
 EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=<key>
@@ -137,7 +142,7 @@ If Vercel Git integration is connected, pushes to `main` auto-deploy.
 ### Environment Variables
 Set in Vercel dashboard:
 ```
-NEXT_PUBLIC_API_URL=https://<backend>.fly.dev
+NEXT_PUBLIC_API_URL=https://<backend>.up.railway.app
 NEXT_PUBLIC_SUPABASE_URL=<supabase-url>
 NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
 ```
@@ -153,5 +158,5 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
 
 ## Monitoring
 - **Sentry**: Error tracking — configured in `backend/server.py`
-- **Fly.io Metrics**: CPU, memory, request count
+- **Railway Metrics**: CPU, memory, request count (Railway dashboard → Observability)
 - **Vercel Analytics**: Page load times, errors

@@ -15,7 +15,7 @@ description: Deployment, CI/CD, infrastructure, and monitoring for the Spinr pla
 ## Tech Stack
 | Component | Technology | Purpose |
 |-----------|------------|---------|
-| Backend Hosting | Fly.io | Container deployment |
+| Backend Hosting | Railway | Container deployment |
 | Frontend Hosting | Vercel | Static site hosting |
 | Mobile Builds | Expo EAS | iOS/Android builds |
 | Database | Supabase | PostgreSQL + Auth |
@@ -26,7 +26,7 @@ description: Deployment, CI/CD, infrastructure, and monitoring for the Spinr pla
 ## Infrastructure Overview
 | Component | Hosting | Config File |
 |-----------|---------|-------------|
-| Backend API | Fly.io | `fly.toml`, `Dockerfile`, `Procfile` |
+| Backend API | Railway | `railway.json`, `backend/Dockerfile` |
 | Rider App | Expo EAS / Vercel (web) | `rider-app/eas.json`, `vercel.json` |
 | Driver App | Expo EAS | `driver-app/eas.json` |
 | Admin Dashboard | Vercel | `admin-dashboard/` |
@@ -35,20 +35,20 @@ description: Deployment, CI/CD, infrastructure, and monitoring for the Spinr pla
 
 ## Deployment Procedures
 
-### Backend Deployment (Fly.io)
+### Backend Deployment (Railway)
 ```bash
 # 1. Run tests
 cd backend && python -m pytest -v
 
 # 2. Build and deploy
-fly deploy
+railway up --service backend
 
 # 3. Verify health
-fly status
-curl https://your-app.fly.dev/api/v1/health
+railway status
+curl https://<your-app>.up.railway.app/api/v1/health
 
 # 4. Check logs
-fly logs --app spinr-backend
+railway logs --service backend
 ```
 
 ### Rider App Deployment (Expo EAS)
@@ -75,7 +75,7 @@ cd admin-dashboard && npx vercel --prod
 | Environment | Backend URL | Database | Purpose |
 |------------|-------------|----------|---------|
 | Development | `localhost:8000` | Supabase (dev project) | Local dev |
-| Staging | `staging.fly.dev` | Supabase (staging) | Pre-release testing |
+| Staging | `<staging>.up.railway.app` | Supabase (staging) | Pre-release testing |
 | Production | `api.spinr.app` | Supabase (prod) | Live users |
 
 ### Required Environment Variables
@@ -90,6 +90,7 @@ TWILIO_ACCOUNT_SID=<sid>
 TWILIO_AUTH_TOKEN=<token>
 SENTRY_DSN=<dsn>
 GOOGLE_API_KEY=<key>
+RATE_LIMIT_REDIS_URL=<redis-url>
 
 # Frontend (.env)
 EXPO_PUBLIC_API_URL=<backend-url>
@@ -104,13 +105,12 @@ After every deployment, verify:
 2. **Database**: Supabase dashboard shows active connections
 3. **Auth**: Test login flow end-to-end
 4. **Sentry**: Verify no new error spikes
-5. **Logs**: Check `fly logs` for startup errors
+5. **Logs**: Check `railway logs --service backend` for startup errors
 
 ## Rollback Procedures
 ```bash
-# Backend rollback (Fly.io)
-fly releases
-fly deploy --image <previous-image>
+# Backend rollback (Railway) — dashboard: Deployments tab → Redeploy last good
+railway redeploy --service backend
 
 # Frontend rollback (Expo)
 eas update --branch production --message "rollback"
@@ -121,5 +121,5 @@ vercel rollback
 
 ## Monitoring Alerts
 - Sentry: Error rate > 5% triggers alert
-- Fly.io: Health check failures trigger restart
+- Railway: Healthcheck failures trigger automatic restart (per `railway.json`)
 - Supabase: Connection pool exhaustion alert

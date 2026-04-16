@@ -6,10 +6,10 @@ unreachable or returning 5xx errors to clients.
 **Severity:** P0 — production outage. Begin immediately.
 
 **Prerequisites:**
-- Render dashboard access (or Fly.io dashboard access)
+- Railway dashboard access (or Render dashboard access)
 - Supabase project dashboard access
 - Sentry access (error monitoring)
-- SSH / shell access to run `curl` / `fly` CLI commands
+- SSH / shell access to run `curl` / `railway` CLI commands
 - Redis CLI or access to the Redis instance
 
 ---
@@ -18,7 +18,7 @@ unreachable or returning 5xx errors to clients.
 
 - Rider or driver app shows "Cannot connect" / network error
 - Admin dashboard returns blank or 502/503
-- Health endpoint returns non-200: `GET https://spinr-api.fly.dev/health`
+- Health endpoint returns non-200: `GET https://spinr-api.up.railway.app/health`
 - Sentry shows a sudden spike in unhandled exceptions
 
 ---
@@ -39,8 +39,8 @@ unreachable or returning 5xx errors to clients.
 ### 3.1 Check health endpoint
 
 ```bash
-# Fly.io primary
-curl -f https://spinr-api.fly.dev/health
+# Railway primary
+curl -f https://spinr-api.up.railway.app/health
 
 # Render fallback
 curl -f https://spinr-api.onrender.com/health
@@ -72,9 +72,9 @@ Expected: `PONG`. Timeout or connection refused → Redis is down.
 
 ### 3.4 View live application logs
 
-**Fly.io:**
+**Railway:**
 ```bash
-fly logs --app spinr-backend
+railway logs --service backend
 ```
 
 **Render:**
@@ -84,10 +84,9 @@ Look for tracebacks, `ConnectionError`, `OperationalError`, or OOM messages.
 
 ### 3.5 Check recent deploys
 
-**Fly.io:**
-```bash
-fly releases --app spinr-backend
-```
+**Railway:**
+Dashboard → backend service → Deployments tab. Compare timestamps against
+when alerts started. CLI: `railway status`.
 
 **Render:**
 Dashboard → spinr-backend → Deploys. Compare timestamps against when alerts started.
@@ -104,14 +103,10 @@ Dashboard → spinr-backend → Deploys. Compare timestamps against when alerts 
 
 ### 4a. Bad deploy — rollback
 
-**Fly.io:**
-```bash
-# List recent releases to find the last good version number
-fly releases --app spinr-backend
-
-# Roll back to a specific version
-fly deploy --image registry.fly.io/spinr-backend:<VERSION>
-```
+**Railway:**
+Dashboard → backend service → Deployments tab → click the last known-good
+deployment → "Redeploy". CLI alternative: `railway redeploy` pointing at a
+specific build.
 
 **Render:**
 Dashboard → spinr-backend → Deploys → click the last successful deploy → "Redeploy".
@@ -125,8 +120,9 @@ Dashboard → spinr-backend → Deploys → click the last successful deploy →
 
 ### 4c. Redis down
 
-- Check your Redis provider dashboard (Render Redis, Upstash, etc.).
-- If using Fly Redis: `fly redis status`.
+- Check your Redis provider dashboard (Railway Redis plugin, Upstash, etc.).
+- For the Railway Redis plugin: Dashboard → Redis service → verify it is
+  healthy; redeploy if stuck.
 - Restart Redis if self-hosted and the process has died.
 - The backend degrades gracefully on rate-limit middleware failures; core auth
   OTP flows will be affected.
@@ -134,8 +130,8 @@ Dashboard → spinr-backend → Deploys → click the last successful deploy →
 ### 4d. Application crash loop
 
 ```bash
-# Fly.io — restart all instances
-fly restart --app spinr-backend
+# Railway — redeploy current image to reset containers
+railway redeploy --service backend
 
 # Render — manual restart via dashboard or:
 curl -X POST \
@@ -147,10 +143,10 @@ curl -X POST \
 
 If logs show `JWT_SECRET not set` or similar startup errors:
 
-**Fly.io:**
+**Railway:**
 ```bash
-fly secrets set JWT_SECRET=<value> --app spinr-backend
-fly restart --app spinr-backend
+railway variables set JWT_SECRET=<value> --service backend
+railway redeploy --service backend
 ```
 
 **Render:**
@@ -162,13 +158,13 @@ Dashboard → spinr-backend → Environment → add/update the variable → Save
 
 ```bash
 # 1. Health check
-curl -f https://spinr-api.fly.dev/health
+curl -f https://spinr-api.up.railway.app/health
 
 # 2. Settings endpoint (verifies DB connection)
-curl -f https://spinr-api.fly.dev/api/v1/settings
+curl -f https://spinr-api.up.railway.app/api/v1/settings
 
 # 3. Vehicle types (lightweight read query)
-curl -f https://spinr-api.fly.dev/api/v1/vehicle-types
+curl -f https://spinr-api.up.railway.app/api/v1/vehicle-types
 ```
 
 All three should return 200 before closing the incident.
@@ -180,7 +176,7 @@ All three should return 200 before closing the incident.
 | Escalation trigger | Contact |
 |--------------------|---------|
 | Supabase outage confirmed | Supabase support chat (Dashboard → Support) |
-| Fly.io infrastructure issue | Fly.io status page + support ticket |
+| Railway infrastructure issue | Railway status page + support ticket |
 | Render infrastructure issue | Render status page + support ticket |
 | Stripe-related errors in logs | See `stripe-webhook-failure.md` runbook |
 | OTP / auth failures | See `otp-lockout-false-positive.md` runbook |

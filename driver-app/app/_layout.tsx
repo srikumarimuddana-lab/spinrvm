@@ -13,7 +13,6 @@ import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
 import { captureMessage, setUser } from '@shared/services/errorReporting';
-import Analytics from '@shared/analytics';
 import {
   initFirebaseServices,
   requestPushPermissionAndGetToken,
@@ -166,7 +165,6 @@ export default function RootLayout() {
         fcmRegisteredRef.current = true;
         const uid = useAuthStore.getState().user?.id;
         if (uid) setUser(uid, { role: 'driver' });
-        Analytics.login();
         console.log('[Push] FCM token registered with backend');
       } catch (e) {
         console.log('[Push] FCM token registration failed:', e);

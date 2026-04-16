@@ -541,7 +541,11 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
             }
         } catch {
-            // Non-critical — caller state remains unchanged
+            // On any error (500, network, etc.) reset to idle — it is safer
+            // to show the idle panel than to leave a stale rideState from
+            // AsyncStorage that hides the GO button and shows a blank panel.
+            set({ rideState: 'idle', activeRide: null });
+            AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
         }
     },
 

@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
-    getCorporateAccounts,
+    listCorporateAccounts,
     createCorporateAccount,
     updateCorporateAccount,
-    deleteCorporateAccount
+    deleteCorporateAccount,
+    CorporateAccount,
+    CompanyStatus,
 } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -41,12 +43,35 @@ import {
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from "@/components/ui/select";
 import { Building2, Plus, Pencil, Trash2, Search, Mail, Phone, RefreshCw, ShieldCheck } from "lucide-react";
 
+const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
+    pending_verification: "bg-yellow-100 text-yellow-800 hover:bg-yellow-100",
+    active: "bg-emerald-100 text-emerald-800 hover:bg-emerald-100",
+    suspended: "bg-orange-100 text-orange-800 hover:bg-orange-100",
+    closed: "bg-gray-200 text-gray-700 hover:bg-gray-200",
+};
+
+function StatusPill({ status }: { status: CompanyStatus }) {
+    return (
+        <Badge variant="secondary" className={STATUS_PILL_CLASSES[status]}>
+            {status.replace("_", " ")}
+        </Badge>
+    );
+}
+
 export default function CorporateAccountsPage() {
-    const [accounts, setAccounts] = useState<any[]>([]);
+    const [accounts, setAccounts] = useState<CorporateAccount[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
+    const [statusFilter, setStatusFilter] = useState<CompanyStatus | "all">("all");
 
     // Dialog states
     const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -66,12 +91,15 @@ export default function CorporateAccountsPage() {
 
     useEffect(() => {
         fetchAccounts();
-    }, []);
+    }, [statusFilter]);
 
     const fetchAccounts = async () => {
         setLoading(true);
         try {
-            const data = await getCorporateAccounts();
+            const data = await listCorporateAccounts({
+                status: statusFilter === "all" ? undefined : statusFilter,
+                limit: 500,
+            });
             setAccounts(data);
         } catch (error) {
             console.error("Failed to fetch corporate accounts:", error);
@@ -93,7 +121,7 @@ export default function CorporateAccountsPage() {
         setIsDialogOpen(true);
     };
 
-    const handleOpenEdit = (account: any) => {
+    const handleOpenEdit = (account: CorporateAccount) => {
         setCurrentAccount(account);
         setFormData({
             name: account.name,
@@ -106,7 +134,7 @@ export default function CorporateAccountsPage() {
         setIsDialogOpen(true);
     };
 
-    const handleOpenDelete = (account: any) => {
+    const handleOpenDelete = (account: CorporateAccount) => {
         setCurrentAccount(account);
         setIsDeleteDialogOpen(true);
     };
@@ -175,7 +203,7 @@ export default function CorporateAccountsPage() {
                 </div>
             </div>
 
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center gap-2">
                 <div className="relative flex-1 max-w-sm">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
@@ -185,6 +213,21 @@ export default function CorporateAccountsPage() {
                         className="pl-9"
                     />
                 </div>
+                <Select
+                    value={statusFilter}
+                    onValueChange={(v) => setStatusFilter(v as CompanyStatus | "all")}
+                >
+                    <SelectTrigger className="w-52">
+                        <SelectValue placeholder="Filter by status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="all">All statuses</SelectItem>
+                        <SelectItem value="pending_verification">Pending verification</SelectItem>
+                        <SelectItem value="active">Active</SelectItem>
+                        <SelectItem value="suspended">Suspended</SelectItem>
+                        <SelectItem value="closed">Closed</SelectItem>
+                    </SelectContent>
+                </Select>
             </div>
 
             <Card className="border-border/50">
@@ -221,7 +264,8 @@ export default function CorporateAccountsPage() {
                                         <TableCell className="font-medium">
                                             <div className="flex items-center gap-2">
                                                 <Building2 className="h-4 w-4 text-muted-foreground" />
-                                                {account.name}
+                                                <span>{account.name}</span>
+                                                <StatusPill status={account.status} />
                                             </div>
                                         </TableCell>
                                         <TableCell>{account.contact_name || "N/A"}</TableCell>

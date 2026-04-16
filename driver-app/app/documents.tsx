@@ -28,6 +28,24 @@ const getAuthToken = async (): Promise<string | null> => {
     }
 };
 
+// Derive a proper MIME type from a file URI / name.
+// expo-image-picker returns asset.type = 'image' (not a MIME), so we check
+// the extension instead. HEIC/HEIF are mapped to image/jpeg because the
+// backend allowlist doesn't include Apple-native formats.
+const EXT_TO_MIME: Record<string, string> = {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg',
+    png: 'image/png',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    pdf: 'application/pdf',
+    heic: 'image/jpeg', heif: 'image/jpeg',
+};
+function getMimeFromUri(uri: string, fileName?: string | null): string {
+    const name = fileName || uri;
+    const ext = name.split('.').pop()?.toLowerCase() || '';
+    return EXT_TO_MIME[ext] || 'image/jpeg';
+}
+
 interface Requirement {
     id: string;
     name: string;
@@ -205,7 +223,10 @@ export default function DocumentsScreen() {
             if (!result.canceled && result.assets && result.assets.length > 0) {
                 const asset = result.assets[0];
                 const name = asset.fileName || `photo_${Date.now()}.jpg`;
-                const mimeType = asset.type === 'image' || !asset.type ? 'image/jpeg' : asset.type;
+                // asset.type from expo-image-picker is 'image'|'video', not a MIME type.
+                // Derive the real MIME from the file extension so the backend magic-byte
+                // check doesn't reject a PNG declared as image/jpeg.
+                const mimeType = getMimeFromUri(asset.uri, name);
 
                 await processUpload(asset.uri, name, mimeType, reqId, side);
             }
@@ -224,7 +245,7 @@ export default function DocumentsScreen() {
             if (result.canceled) return;
 
             const asset = result.assets[0];
-            await processUpload(asset.uri, asset.name, asset.mimeType || 'image/jpeg', reqId, side);
+            await processUpload(asset.uri, asset.name, asset.mimeType || getMimeFromUri(asset.uri, asset.name), reqId, side);
 
         } catch (err: any) {
             showAlert('Upload Failed', err.message, 'danger');

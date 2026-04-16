@@ -31,6 +31,7 @@ def _is_valid_uuid(value: str) -> bool:
 # --- File Upload Security ---
 ALLOWED_MIME_TYPES = {
     "image/jpeg",
+    "image/jpg",   # alias — some devices/pickers send this
     "image/png",
     "image/gif",
     "image/webp",
@@ -49,20 +50,28 @@ _MAGIC_BYTES = {
 
 def _validate_file_type(content: bytes, declared_type: str) -> None:
     """Validate file MIME type against allowlist and verify magic bytes."""
-    if declared_type not in ALLOWED_MIME_TYPES:
+    # Normalise image/jpg → image/jpeg before allowlist check
+    normalised = "image/jpeg" if declared_type == "image/jpg" else declared_type
+    if normalised not in ALLOWED_MIME_TYPES:
         raise HTTPException(
             status_code=400,
             detail=f"File type '{declared_type}' not allowed. Accepted: {', '.join(sorted(ALLOWED_MIME_TYPES))}",
         )
-    # Verify magic bytes match the declared content type
+    # Verify magic bytes: detect the actual type from the file header.
+    # Only reject if we can positively identify a DIFFERENT type from the bytes —
+    # unknown headers (e.g. HEIC, camera raw) pass through.
     if content:
         header = content[:4]
-        for magic, expected_type in _MAGIC_BYTES.items():
-            if header.startswith(magic) and declared_type != expected_type:
-                raise HTTPException(
-                    status_code=400,
-                    detail="File content does not match declared type",
-                )
+        detected_type: str | None = None
+        for magic, magic_mime in _MAGIC_BYTES.items():
+            if header.startswith(magic):
+                detected_type = magic_mime
+                break
+        if detected_type and detected_type != normalised:
+            raise HTTPException(
+                status_code=400,
+                detail="File content does not match declared type",
+            )
 
 
 # Routers

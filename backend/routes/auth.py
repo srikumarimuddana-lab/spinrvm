@@ -1,8 +1,16 @@
+import logging
+import uuid
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 try:
     from .. import db_supabase
+    from ..core.config import settings
+    from ..core.config import settings as _core_settings
     from ..dependencies import (
         OTP_EXPIRY_MINUTES,
         create_jwt_token,
@@ -21,6 +29,8 @@ try:
     from ..validators import validate_phone
 except ImportError:
     import db_supabase
+    from core.config import settings
+    from core.config import settings as _core_settings
     from dependencies import (
         OTP_EXPIRY_MINUTES,
         create_jwt_token,
@@ -37,12 +47,8 @@ except ImportError:
         revoke_refresh_token,
     )
     from validators import validate_phone
-import logging
-import uuid
-from datetime import datetime, timedelta, timezone
 
-from slowapi import Limiter
-from slowapi.util import get_remote_address
+db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
@@ -277,7 +283,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         # Self-heal the column so the next login is fast and consistent.
         try:
             await db_supabase.update_one("users", {"id": current_user["id"]}, {"profile_complete": True})
-        except Exception as e:
+        except Exception:
             logger.warning("Could not self-heal profile_complete")
         current_user["profile_complete"] = True
 
@@ -291,7 +297,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         current_user["driver_onboarding_status"] = status
         current_user["driver_onboarding_detail"] = detail
         current_user["driver_onboarding_next_screen"] = next_screen
-    except Exception as e:
+    except Exception:
         logger.warning("Could not derive onboarding status")
 
     return UserProfile(**current_user)

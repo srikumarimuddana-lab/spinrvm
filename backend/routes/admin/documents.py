@@ -128,7 +128,9 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
         raise HTTPException(status_code=400, detail="Invalid status")
 
     # Load existing doc so we know which driver + requirement this is.
-    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("driver_documents", {"id": document_id}, limit=1))
+    existing = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("driver_documents", {"id": document_id}, limit=1)
+    )
     if not existing:
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -166,7 +168,9 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
 
         req_row = None
         try:
-            req_row = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("document_requirements", {"id": existing.get("requirement_id")}, limit=1))
+            req_row = (lambda _r: _r[0] if _r else None)(
+                await db_supabase.get_rows("document_requirements", {"id": existing.get("requirement_id")}, limit=1)
+            )
         except Exception:
             req_row = None
 
@@ -176,7 +180,14 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
             # value (None) so the go-online check skips it instead of
             # rejecting on a past date from original onboarding.
             try:
-                await db_supabase.update_one("drivers", {"id": existing.get("driver_id")}, { legacy_field: effective_expiry_iso, "updated_at": datetime.utcnow().isoformat(), })
+                await db_supabase.update_one(
+                    "drivers",
+                    {"id": existing.get("driver_id")},
+                    {
+                        legacy_field: effective_expiry_iso,
+                        "updated_at": datetime.utcnow().isoformat(),
+                    },
+                )
             except Exception as e:
                 logger.warning(
                     f"Could not update legacy expiry field {legacy_field} for driver {existing.get('driver_id')}: {e}"
@@ -196,7 +207,9 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
                 try:
                     drv = await db_supabase.get_driver_by_id(driver_id)
                     if drv and drv.get("status") == "needs_review":
-                        await db_supabase.update_one("drivers", {"id": driver_id}, {"status": "active", "is_verified": True})
+                        await db_supabase.update_one(
+                            "drivers", {"id": driver_id}, {"status": "active", "is_verified": True}
+                        )
                 except Exception as _exc:
                     logger.debug(f"Could not reset driver {driver_id} status to active: {_exc}")
 

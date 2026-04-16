@@ -127,7 +127,9 @@ async def derive_driver_onboarding_status(
     # Step 2: driver row + vehicle fields
     driver = None
     try:
-        driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1))
+        driver = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1)
+        )
     except Exception:
         driver = None
 

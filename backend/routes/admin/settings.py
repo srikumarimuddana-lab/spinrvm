@@ -53,7 +53,12 @@ async def admin_get_settings():
 async def admin_update_settings(settings: SettingsUpdateRequest):
     """Update settings (upsert single app_settings row)."""
     # First check if settings row exists
-    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("settings", {"id": "app_settings"}, limit=1))
+    existing = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("settings", {"id": "app_settings"}, limit=1)
+    )
+
+    # Only persist fields the caller actually set (None = leave unchanged).
+    update_fields = settings.model_dump(exclude_none=True)
 
     payload = {
         "id": "app_settings",
@@ -94,7 +99,9 @@ _DEFAULT_HEATMAP_SETTINGS = {
 @router.get("/settings/heatmap")
 async def admin_get_heatmap_settings():
     """Return heat-map display settings (single settings row)."""
-    row = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("settings", {"id": _HEATMAP_SETTINGS_ID}, limit=1))
+    row = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("settings", {"id": _HEATMAP_SETTINGS_ID}, limit=1)
+    )
     if row:
         # Merge defaults with stored values so new keys always appear
         merged = {**_DEFAULT_HEATMAP_SETTINGS, **row}
@@ -112,7 +119,9 @@ async def admin_update_heatmap_settings(data: Dict[str, Any]):
         "updated_at": datetime.utcnow().isoformat(),
     }
 
-    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("settings", {"id": _HEATMAP_SETTINGS_ID}, limit=1))
+    existing = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("settings", {"id": _HEATMAP_SETTINGS_ID}, limit=1)
+    )
     if existing:
         update_fields = {k: v for k, v in payload.items() if k != "id"}
         await db_supabase.update_one("settings", {"id": _HEATMAP_SETTINGS_ID}, update_fields)

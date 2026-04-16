@@ -16,6 +16,27 @@ except ImportError:
     import db_supabase
     from geo_utils import get_service_area_polygon, point_in_polygon
 
+db = db_supabase  # legacy alias
+
+
+def serialize_doc(doc):
+    """Identity passthrough kept for legacy callers (Supabase dicts)."""
+    return doc
+
+
+def _fd(value) -> float:
+    """Normalise *value* to a 2-decimal-place float.
+
+    Historical reason: fare_configs may carry values as Decimal, str, int or
+    float. Downstream Decimal arithmetic in rides.py expects clean 2-dp floats
+    so rounding doesn't drift on IEEE-754 representations.
+    """
+    try:
+        return float(f"{float(value):.2f}")
+    except (TypeError, ValueError):
+        return 0.0
+
+
 api_router = APIRouter(tags=["Fares"])
 logger = logging.getLogger(__name__)
 
@@ -76,7 +97,9 @@ async def get_fares_for_location(lat: float = Query(...), lng: float = Query(...
     surge = matching_area.get("surge_multiplier", 1.0)
 
     # Try to get fare_configs for this service area
-    fares = await db_supabase.get_rows("fare_configs", {"service_area_id": matching_area["id"], "is_active": True}, limit=100)
+    fares = await db_supabase.get_rows(
+        "fare_configs", {"service_area_id": matching_area["id"], "is_active": True}, limit=100
+    )
 
     if not fares:
         # No fare configs for this area — fall back to defaults with area surge

@@ -8,9 +8,7 @@ from pydantic import BaseModel
 
 try:
     from ... import db_supabase
-    from ... import db_supabase
 except ImportError:
-    import db_supabase
     import db_supabase
 
 logger = logging.getLogger(__name__)

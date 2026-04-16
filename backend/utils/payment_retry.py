@@ -14,6 +14,7 @@ try:
     from ..settings_loader import get_app_settings
 except ImportError:
     from db import db
+
     from features import send_push_notification
     from settings_loader import get_app_settings
 

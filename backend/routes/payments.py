@@ -19,7 +19,15 @@ logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/payments", tags=["Payments"])
 
 
-async def get_or_create_stripe_customer(user_id: str):
+class PaymentIntentRequest(BaseModel):
+    """Request body for POST /payments/create-intent."""
+
+    amount: float = Field(..., gt=0, le=100000, description="Amount in CAD (1–100000)")
+    ride_id: Optional[str] = None
+    payment_method_id: Optional[str] = None
+
+
+async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
     user = await db_supabase.get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -104,7 +112,9 @@ async def confirm_payment(request: Dict[str, Any], current_user: dict = Depends(
             intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
 
             if ride_id:
-                await db_supabase.update_ride(ride_id, {"payment_status": intent.status, "payment_intent_id": payment_intent_id})
+                await db_supabase.update_ride(
+                    ride_id, {"payment_status": intent.status, "payment_intent_id": payment_intent_id}
+                )
 
             return {"status": intent.status, "mock": False}
         except Exception as e:

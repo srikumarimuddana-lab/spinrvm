@@ -8,8 +8,14 @@ from pydantic import BaseModel
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
+    from ...utils.password import hash_password
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user
+    from utils.password import hash_password
+
+db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +108,9 @@ async def create_staff(req: StaffCreateRequest, admin: dict = Depends(get_admin_
         )
 
     # Check if email already exists
-    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"email": req.email.lower()}, limit=1))
+    existing = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("admin_staff", {"email": req.email.lower()}, limit=1)
+    )
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered as staff")
 

@@ -1,30 +1,30 @@
+import asyncio
+import logging
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
 
+import stripe
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 
 try:
     from .. import db_supabase
-    from ..logging_utils import diag_logger
     from ..dependencies import get_admin_user, get_current_user
     from ..features import send_push_notification
     from ..geo_utils import calculate_distance
+    from ..logging_utils import diag_logger
     from ..schemas import Driver, RideRatingRequest
     from ..socket_manager import manager
 except ImportError:
     import db_supabase
-
-    from logging_utils import diag_logger
     from dependencies import get_admin_user, get_current_user
     from features import send_push_notification
     from geo_utils import calculate_distance
+    from logging_utils import diag_logger
     from schemas import Driver, RideRatingRequest
     from socket_manager import manager
-import asyncio
-import logging
-from datetime import datetime, timedelta
 
-import stripe
-from pydantic import BaseModel
+db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +130,9 @@ def serialize_doc(doc):
 @api_router.get("/me")
 async def get_my_driver(current_user: dict = Depends(get_current_user)):
     """Get the current user's driver profile."""
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
     return serialize_doc(driver)
@@ -169,7 +171,9 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     verified driver changes vehicle fields, they are automatically
     un-verified and must wait for admin re-approval.
     """
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
 
     # Fields that always update without affecting verification
     safe_fields = {"gst_number", "preferred_language", "photo_url"}
@@ -247,12 +251,16 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
     Only returns data when the admin has enabled `show_demand_heatmap`
     on the driver's service area.
     """
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
 
     # Check if heatmap is enabled for this driver's service area
     service_area = None
     if driver and driver.get("service_area_id"):
-        service_area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1))
+        service_area = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1)
+        )
 
     enabled = bool(service_area and service_area.get("show_demand_heatmap"))
     if not enabled:
@@ -407,7 +415,9 @@ async def update_driver_status_self(
     Called by `updateDriverStatus()` in the shared authStore when the driver
     flips the Go Online switch.
     """
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -496,7 +506,9 @@ async def get_destination_mode(current_user: dict = Depends(get_current_user)):
 @api_router.get("/balance")
 async def get_driver_balance(current_user: dict = Depends(get_current_user)):
     """Get driver's current balance/earnings summary."""
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -541,7 +553,9 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
 @api_router.get("/earnings")
 async def get_driver_earnings(period: str = Query("week"), current_user: dict = Depends(get_current_user)):
     """Get driver's earnings summary for a period."""
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         # Try to find by id directly in case user_id isn't set, or log error
         logger.error(f"Driver not found for user {current_user['id']}")
@@ -607,7 +621,9 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
 @api_router.get("/earnings/daily")
 async def get_driver_daily_earnings(days: int = Query(7), current_user: dict = Depends(get_current_user)):
     """Get driver's daily earnings breakdown."""
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -652,7 +668,9 @@ async def get_driver_trip_earnings(
     limit: int = Query(20), offset: int = Query(0), current_user: dict = Depends(get_current_user)
 ):
     """Get driver's individual trip earnings."""
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -1016,7 +1034,9 @@ async def get_drivers(
 @api_router.post("")
 async def create_driver(driver: Driver, admin_user: dict = Depends(get_admin_user)):
     """Register a new driver (admin only or internal process)"""
-    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"phone": driver.phone}, limit=1))
+    existing = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"phone": driver.phone}, limit=1)
+    )
     if existing:
         raise HTTPException(status_code=400, detail="Driver with this phone already exists")
 
@@ -1077,11 +1097,15 @@ class PayoutRequest(BaseModel):
 
 @api_router.get("/bank-account")
 async def get_bank_account(current_user: dict = Depends(get_current_user)):
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
-    account = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("bank_accounts", {"driver_id": driver["id"]}, limit=1))
+    account = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("bank_accounts", {"driver_id": driver["id"]}, limit=1)
+    )
     if account:
         return {"has_bank_account": True, "bank_account": serialize_doc(account)}
 
@@ -1096,7 +1120,9 @@ async def get_bank_account(current_user: dict = Depends(get_current_user)):
 
 @api_router.post("/stripe-onboard")
 async def onboard_stripe(current_user: dict = Depends(get_current_user)):
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
+    )
     user = await db_supabase.get_user_by_id(current_user.get("id"))
     if not driver or not user:
         raise HTTPException(status_code=404, detail="Driver/User profile not found")
@@ -1145,7 +1171,9 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
 
 @api_router.post("/bank-account")
 async def save_bank_account(req: BankAccountCreate, current_user: dict = Depends(get_current_user)):
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
@@ -1175,7 +1203,9 @@ async def save_bank_account(req: BankAccountCreate, current_user: dict = Depends
 
 @api_router.delete("/bank-account")
 async def delete_bank_account(current_user: dict = Depends(get_current_user)):
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
     await db_supabase.delete_many("bank_accounts", {"driver_id": driver["id"]})
@@ -1184,7 +1214,9 @@ async def delete_bank_account(current_user: dict = Depends(get_current_user)):
 
 @api_router.post("/payouts")
 async def request_payout(req: PayoutRequest, current_user: dict = Depends(get_current_user)):
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
@@ -1193,7 +1225,9 @@ async def request_payout(req: PayoutRequest, current_user: dict = Depends(get_cu
         raise HTTPException(status_code=400, detail="Insufficient funds")
 
     stripe_account_id = driver.get("stripe_account_id")
-    account = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("bank_accounts", {"driver_id": driver["id"]}, limit=1))
+    account = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("bank_accounts", {"driver_id": driver["id"]}, limit=1)
+    )
 
     if not stripe_account_id and not account:
         raise HTTPException(status_code=400, detail="No bank account linked")
@@ -1240,7 +1274,9 @@ async def request_payout(req: PayoutRequest, current_user: dict = Depends(get_cu
 async def get_payout_history(
     limit: int = Query(20), offset: int = Query(0), current_user: dict = Depends(get_current_user)
 ):
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
@@ -1254,13 +1290,14 @@ async def get_payout_history(
 
 @api_router.get("/t4a/{year}")
 async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_user)):
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
-    start_date = datetime(year, 1, 1).isoformat()
-    end_date = datetime(year, 12, 31, 23, 59, 59).isoformat()
-
+    # TODO: filter get_rides_for_driver by (year-01-01 .. year+1-01-01); the
+    # Supabase adapter currently returns all rides for the driver.
     rides_cursor = db_supabase.get_rides_for_driver(driver, limit=100)
     rides = await rides_cursor.to_list(length=10000) if hasattr(rides_cursor, "to_list") else list(rides_cursor)
 
@@ -1298,7 +1335,9 @@ async def export_earnings(year: int = Query(None), current_user: dict = Depends(
 async def get_active_ride(current_user: dict = Depends(get_current_user)):
     """Get the driver's current active ride."""
     diag_logger.info(f"[ACTIVE] called by user_id={current_user.get('id')}")
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         diag_logger.info(f"[ACTIVE] no driver row for user_id={current_user.get('id')}")
         raise HTTPException(status_code=404, detail="Driver not found")
@@ -1306,7 +1345,16 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
     diag_logger.info(f"[ACTIVE] lookup user_id={current_user.get('id')} driver_id={driver.get('id')}")
 
     # improved query to catch any active state
-    ride = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("rides", { "driver_id": driver["id"], "status": {"$in": ["driver_assigned", "driver_accepted", "driver_arrived", "in_progress"]}, }, limit=1))
+    ride = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows(
+            "rides",
+            {
+                "driver_id": driver["id"],
+                "status": {"$in": ["driver_assigned", "driver_accepted", "driver_arrived", "in_progress"]},
+            },
+            limit=1,
+        )
+    )
 
     if not ride:
         # Help diagnose: list the driver's most recent rides regardless of
@@ -1341,7 +1389,9 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
         logger.warning(f"get_active_ride: failed to load rider {ride['rider_id']}: {e}")
         rider = None
     try:
-        vehicle_type = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("vehicle_types", {"id": ride["vehicle_type_id"]}, limit=1))
+        vehicle_type = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("vehicle_types", {"id": ride["vehicle_type_id"]}, limit=1)
+        )
     except Exception as e:
         logger.warning(f"get_active_ride: failed to load vehicle_type {ride['vehicle_type_id']}: {e}")
         vehicle_type = None
@@ -1358,7 +1408,9 @@ async def get_ride_history(
     limit: int = Query(20), offset: int = Query(0), current_user: dict = Depends(get_current_user)
 ):
     """Get driver's ride history."""
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -1384,7 +1436,9 @@ async def get_ride_history(
 
 @api_router.post("/rides/{ride_id}/accept")
 async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -1413,7 +1467,15 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             )
             raise HTTPException(status_code=400, detail="Ride not assigned to you")
 
-    await db_supabase.update_ride(ride_id, {"status": "driver_accepted", "driver_id": driver["id"], "driver_accepted_at": datetime.utcnow(), "updated_at": datetime.utcnow()})
+    await db_supabase.update_ride(
+        ride_id,
+        {
+            "status": "driver_accepted",
+            "driver_id": driver["id"],
+            "driver_accepted_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+        },
+    )
 
     # Verify the update landed. The RideCollection.update_one wrapper routes
     # to db_supabase.update_ride which returns None on zero-rows-affected
@@ -1469,7 +1531,9 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
 
 @api_router.post("/rides/{ride_id}/decline")
 async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -1510,11 +1574,15 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
 
 @api_router.post("/rides/{ride_id}/arrive")
 async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_current_user)):
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    ride = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1))
+    ride = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1)
+    )
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
@@ -1535,7 +1603,9 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
                 f"Please move within 200m of the pickup location to mark arrival.",
             )
 
-    await db_supabase.update_ride(ride_id, {"status": "driver_arrived", "driver_arrived_at": datetime.utcnow(), "updated_at": datetime.utcnow()})
+    await db_supabase.update_ride(
+        ride_id, {"status": "driver_arrived", "driver_arrived_at": datetime.utcnow(), "updated_at": datetime.utcnow()}
+    )
 
     if ride.get("rider_id"):
         await manager.send_personal_message({"type": "driver_arrived", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
@@ -1551,11 +1621,15 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
 
 @api_router.post("/rides/{ride_id}/verify-otp")
 async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user: dict = Depends(get_current_user)):
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    ride = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1))
+    ride = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1)
+    )
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
@@ -1563,7 +1637,9 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
         raise HTTPException(status_code=400, detail="Invalid OTP")
 
     # OTP correct, start ride
-    await db_supabase.update_ride(ride_id, {"status": "in_progress", "ride_started_at": datetime.utcnow(), "updated_at": datetime.utcnow()})
+    await db_supabase.update_ride(
+        ride_id, {"status": "in_progress", "ride_started_at": datetime.utcnow(), "updated_at": datetime.utcnow()}
+    )
 
     if ride.get("rider_id"):
         await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
@@ -1581,11 +1657,15 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
 async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Start ride without OTP (if configured) or fallback."""
     # Logic similar to verify_otp but without check
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    await db_supabase.update_ride(ride_id, {"status": "in_progress", "ride_started_at": datetime.utcnow(), "updated_at": datetime.utcnow()})
+    await db_supabase.update_ride(
+        ride_id, {"status": "in_progress", "ride_started_at": datetime.utcnow(), "updated_at": datetime.utcnow()}
+    )
 
     ride = await db_supabase.get_ride(ride_id)
     if ride and ride.get("rider_id"):
@@ -1601,11 +1681,15 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
 
 @api_router.post("/rides/{ride_id}/complete")
 async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    ride = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1))
+    ride = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1)
+    )
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
@@ -1621,7 +1705,13 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     gps_points_count = 0
 
     try:
-        all_breadcrumbs = await db_supabase.get_rows("driver_location_history",  { "ride_id": ride_id, } , limit=10000)
+        all_breadcrumbs = await db_supabase.get_rows(
+            "driver_location_history",
+            {
+                "ride_id": ride_id,
+            },
+            limit=10000,
+        )
         all_breadcrumbs = [b for b in all_breadcrumbs if b.get("lat") and b.get("lng")]
         all_breadcrumbs.sort(key=lambda b: str(b.get("timestamp", "")))
         gps_points_count = len(all_breadcrumbs)
@@ -1727,7 +1817,9 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         logger.info(f"Sending email receipt for ride {ride_id} to {rider['email']}")
 
     # Update driver stats
-    await db_supabase.update_one("drivers", {"id": driver["id"]}, {"$inc": {"total_rides": 1}, "$set": {"is_available": True}})
+    await db_supabase.update_one(
+        "drivers", {"id": driver["id"]}, {"$inc": {"total_rides": 1}, "$set": {"is_available": True}}
+    )
 
     completed_ride = await db_supabase.get_ride(ride_id)
 
@@ -1752,14 +1844,23 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
 @api_router.post("/rides/{ride_id}/cancel")
 async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict = Depends(get_current_user)):
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
     # Only write columns guaranteed to exist. cancelled_by and
     # cancellation_reason may not be in the Supabase schema — including
     # them causes PGRST204 which crashes the whole cancel with 500.
-    await db_supabase.update_ride(ride_id, { "status": "cancelled", "cancelled_at": datetime.utcnow(), "updated_at": datetime.utcnow(), })
+    await db_supabase.update_ride(
+        ride_id,
+        {
+            "status": "cancelled",
+            "cancelled_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow(),
+        },
+    )
 
     # Make driver available again
     await db_supabase.set_driver_available(driver["id"], True)
@@ -1781,12 +1882,21 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
 
 @api_router.post("/rides/{ride_id}/rate-rider")
 async def rate_rider(ride_id: str, rating_data: RideRatingRequest, current_user: dict = Depends(get_current_user)):
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
     # Update ride with rating
-    await db_supabase.update_ride(ride_id, { "rider_rating": rating_data.rating, "rider_comment": rating_data.comment, "updated_at": datetime.utcnow(), })
+    await db_supabase.update_ride(
+        ride_id,
+        {
+            "rider_rating": rating_data.rating,
+            "rider_comment": rating_data.comment,
+            "updated_at": datetime.utcnow(),
+        },
+    )
 
     return {"success": True}
 
@@ -1801,7 +1911,9 @@ class ApplyReferralCodeRequest(BaseModel):
 @api_router.get("/referral")
 async def get_driver_referral_info(current_user: dict = Depends(get_current_user)):
     """Get driver's referral code and earnings from referrals."""
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -1823,9 +1935,13 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
     # Check how many referred drivers have completed rides
     for user in referred_users:
         # Check if user became a driver and completed rides
-        referred_driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1))
+        referred_driver = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
+        )
         if referred_driver:
-            completed_rides = await db_supabase.count_documents("rides", {"driver_id": referred_driver["id"], "status": "completed"})
+            completed_rides = await db_supabase.count_documents(
+                "rides", {"driver_id": referred_driver["id"], "status": "completed"}
+            )
             if completed_rides >= 10:
                 referral_earnings += 10  # $10 bonus
 
@@ -1849,7 +1965,9 @@ async def apply_referral_code(req: ApplyReferralCodeRequest, current_user: dict 
         raise HTTPException(status_code=400, detail="Referral code already applied")
 
     # Validate referral code exists (check if any driver has this code)
-    ref_driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"referral_code": code}, limit=1))
+    ref_driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"referral_code": code}, limit=1)
+    )
     if not ref_driver:
         # Legacy fallback: allow `DRIVER<id-suffix>` format where the
         # suffix is the last 8 chars of a driver ID. The original
@@ -1863,13 +1981,17 @@ async def apply_referral_code(req: ApplyReferralCodeRequest, current_user: dict 
         # original code was trying to do.
         potential_id = code.replace("DRIVER", "")
         if len(potential_id) == 8:
-            ref_driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"id": {"$regex": f".*{potential_id}.*"}}, limit=1))
+            ref_driver = (lambda _r: _r[0] if _r else None)(
+                await db_supabase.get_rows("drivers", {"id": {"$regex": f".*{potential_id}.*"}}, limit=1)
+            )
 
     if not ref_driver:
         raise HTTPException(status_code=404, detail="Invalid referral code")
 
     # Apply referral code to user
-    await db_supabase.update_one("users", {"id": current_user["id"]}, {"referral_code_used": code, "referred_by": ref_driver["id"]})
+    await db_supabase.update_one(
+        "users", {"id": current_user["id"]}, {"referral_code_used": code, "referred_by": ref_driver["id"]}
+    )
 
     return {"success": True, "referral_code": code}
 
@@ -1879,7 +2001,9 @@ async def get_referred_drivers(
     limit: int = Query(50), offset: int = Query(0), current_user: dict = Depends(get_current_user)
 ):
     """Get list of drivers referred by current driver."""
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -1895,10 +2019,14 @@ async def get_referred_drivers(
 
     referred_drivers = []
     for user in referred_users:
-        referred_driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1))
+        referred_driver = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
+        )
         if referred_driver:
             # Get completed rides count
-            completed_rides = await db_supabase.count_documents("rides", {"driver_id": referred_driver["id"], "status": "completed"})
+            completed_rides = await db_supabase.count_documents(
+                "rides", {"driver_id": referred_driver["id"], "status": "completed"}
+            )
             referred_drivers.append(
                 {
                     "name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or "Driver",
@@ -2051,7 +2179,14 @@ async def update_driver_status(
         # driver re-uploads a document, which used to leave drivers stuck
         # offline even after admin re-approval.
         try:
-            approved_docs = await db_supabase.get_rows("driver_documents",  { "driver_id": driver_id, "status": "approved", } , limit=200)
+            approved_docs = await db_supabase.get_rows(
+                "driver_documents",
+                {
+                    "driver_id": driver_id,
+                    "status": "approved",
+                },
+                limit=200,
+            )
         except Exception:
             approved_docs = []
 
@@ -2148,7 +2283,16 @@ async def update_driver_status(
 
         if require_sub:
             try:
-                sub = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("driver_subscriptions", { "driver_id": driver_id, "status": "active", }, limit=1))
+                sub = (lambda _r: _r[0] if _r else None)(
+                    await db_supabase.get_rows(
+                        "driver_subscriptions",
+                        {
+                            "driver_id": driver_id,
+                            "status": "active",
+                        },
+                        limit=1,
+                    )
+                )
             except Exception as e:
                 # The table doesn't exist yet (PGRST205) or the query failed
                 # for some other reason. Fail loudly with a clear message so
@@ -2194,7 +2338,11 @@ async def update_driver_status(
         f"pre_update_row_is_online={driver.get('is_online')} "
         f"pre_update_row_is_available={driver.get('is_available')}"
     )
-    await db_supabase.update_one("drivers", {"id": driver_id}, {"is_online": is_online, "is_available": is_online, "updated_at": datetime.utcnow().isoformat()})
+    await db_supabase.update_one(
+        "drivers",
+        {"id": driver_id},
+        {"is_online": is_online, "is_available": is_online, "updated_at": datetime.utcnow().isoformat()},
+    )
 
     # Verify the update actually landed. db_supabase.update_one silently
     # returns None if the write matched zero rows (RLS deny, schema cache miss,
@@ -2245,12 +2393,16 @@ async def get_subscription_plans(current_user: dict = Depends(get_current_user))
     spinr_pass_enabled=false, returns an empty list so the driver never
     sees subscription options.
     """
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
 
     # Check the area-level kill switch — when Spinr Pass is disabled for
     # the driver's area, return a friendly free-ride message instead of plans.
     if driver and driver.get("service_area_id"):
-        area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1))
+        area = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1)
+        )
         if area and area.get("spinr_pass_enabled") is False:
             return {
                 "plans": [],
@@ -2278,11 +2430,22 @@ async def get_subscription_plans(current_user: dict = Depends(get_current_user))
 @api_router.get("/subscription/current")
 async def get_current_subscription(current_user: dict = Depends(get_current_user)):
     """Get driver's active subscription."""
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         return {"has_subscription": False, "subscription": None}
 
-    sub = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("driver_subscriptions", { "driver_id": driver["id"], "status": "active", }, limit=1))
+    sub = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows(
+            "driver_subscriptions",
+            {
+                "driver_id": driver["id"],
+                "status": "active",
+            },
+            limit=1,
+        )
+    )
 
     if not sub:
         return {"has_subscription": False, "subscription": None}
@@ -2303,7 +2466,14 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
 
     # Get today's ride count
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_rides = await db_supabase.count_documents("rides", { "driver_id": driver["id"], "status": "completed", "ride_completed_at": {"$gte": today_start.isoformat()}, })
+    today_rides = await db_supabase.count_documents(
+        "rides",
+        {
+            "driver_id": driver["id"],
+            "status": "completed",
+            "ride_completed_at": {"$gte": today_start.isoformat()},
+        },
+    )
 
     rides_per_day = sub.get("rides_per_day", -1)
     rides_remaining = "unlimited" if rides_per_day == -1 else max(0, rides_per_day - today_rides)
@@ -2335,25 +2505,44 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
     data = await request.json()
     plan_id = data.get("plan_id")
 
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
     # Block subscription if Spinr Pass is disabled for this area
     if driver.get("service_area_id"):
-        area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1))
+        area = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1)
+        )
         if area and area.get("spinr_pass_enabled") is False:
             raise HTTPException(status_code=403, detail="Spinr Pass is not available in your service area")
 
-    plan = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("subscription_plans", {"id": plan_id, "is_active": True}, limit=1))
+    plan = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("subscription_plans", {"id": plan_id, "is_active": True}, limit=1)
+    )
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found or inactive")
 
-    # Check for existing active subscription
-        existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("driver_subscriptions", { "driver_id": driver["id"], "status": "active", }, limit=1))
+        # Check for existing active subscription
+        existing = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows(
+                "driver_subscriptions",
+                {
+                    "driver_id": driver["id"],
+                    "status": "active",
+                },
+                limit=1,
+            )
+        )
     if existing:
         # Cancel old subscription
-        await db_supabase.update_one("driver_subscriptions", {"id": existing["id"]}, {"status": "cancelled", "cancelled_at": datetime.utcnow().isoformat()})
+        await db_supabase.update_one(
+            "driver_subscriptions",
+            {"id": existing["id"]},
+            {"status": "cancelled", "cancelled_at": datetime.utcnow().isoformat()},
+        )
 
     now = datetime.utcnow()
     expires = now + timedelta(days=plan.get("duration_days", 30))
@@ -2413,7 +2602,9 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
     await db_supabase.insert_one("driver_subscriptions", subscription)
 
     # Update plan subscriber count
-    await db_supabase.update_one("subscription_plans", {"id": plan_id}, {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1})
+    await db_supabase.update_one(
+        "subscription_plans", {"id": plan_id}, {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1}
+    )
 
     logger.info(f"[SUBSCRIBE] Dev mode: driver {driver['id']} subscribed to {plan['name']} (${plan['price']})")
 
@@ -2524,15 +2715,30 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
 @api_router.post("/subscription/cancel")
 async def cancel_subscription(current_user: dict = Depends(get_current_user)):
     """Cancel driver's active subscription."""
-    driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1))
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
-    sub = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("driver_subscriptions", { "driver_id": driver["id"], "status": "active", }, limit=1))
+    sub = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows(
+            "driver_subscriptions",
+            {
+                "driver_id": driver["id"],
+                "status": "active",
+            },
+            limit=1,
+        )
+    )
     if not sub:
         raise HTTPException(status_code=400, detail="No active subscription")
 
-    await db_supabase.update_one("driver_subscriptions", {"id": sub["id"]}, {"status": "cancelled", "cancelled_at": datetime.utcnow().isoformat()})
+    await db_supabase.update_one(
+        "driver_subscriptions",
+        {"id": sub["id"]},
+        {"status": "cancelled", "cancelled_at": datetime.utcnow().isoformat()},
+    )
 
     return {"success": True}
 

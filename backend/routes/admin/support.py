@@ -8,9 +8,7 @@ from pydantic import BaseModel
 
 try:
     from ... import db_supabase
-    from ... import db_supabase
 except ImportError:
-    import db_supabase
     import db_supabase
 
 logger = logging.getLogger(__name__)
@@ -150,7 +148,9 @@ async def admin_create_ticket(ticket: Dict[str, Any]):
 @router.get("/tickets/{ticket_id}")
 async def admin_get_ticket_details(ticket_id: str):
     """Get detailed ticket information."""
-    ticket = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("support_tickets", {"id": ticket_id}, limit=1))
+    ticket = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("support_tickets", {"id": ticket_id}, limit=1)
+    )
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
 
@@ -176,7 +176,11 @@ async def admin_reply_to_ticket(ticket_id: str, reply: Dict[str, Any]):
 
     # Update ticket status if needed
     if reply.get("status"):
-        await db_supabase.update_one("support_tickets", {"id": ticket_id}, {"status": reply.get("status"), "updated_at": datetime.utcnow().isoformat()})
+        await db_supabase.update_one(
+            "support_tickets",
+            {"id": ticket_id},
+            {"status": reply.get("status"), "updated_at": datetime.utcnow().isoformat()},
+        )
 
     return {"message": "Reply sent"}
 
@@ -184,7 +188,9 @@ async def admin_reply_to_ticket(ticket_id: str, reply: Dict[str, Any]):
 @router.post("/tickets/{ticket_id}/close")
 async def admin_close_ticket(ticket_id: str):
     """Close a support ticket."""
-    await db_supabase.update_one("support_tickets", {"id": ticket_id}, {"status": "closed", "closed_at": datetime.utcnow().isoformat()})
+    await db_supabase.update_one(
+        "support_tickets", {"id": ticket_id}, {"status": "closed", "closed_at": datetime.utcnow().isoformat()}
+    )
     return {"message": "Ticket closed"}
 
 

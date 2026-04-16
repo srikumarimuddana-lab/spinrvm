@@ -8,8 +8,12 @@ from pydantic import BaseModel
 
 try:
     from ... import db_supabase
+    from ...features import send_push_notification
 except ImportError:
     import db_supabase
+    from features import send_push_notification
+
+db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +34,9 @@ def _user_display_name(user: Optional[Dict]) -> str:
 async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[str]) -> tuple:
     """Batch-fetch drivers and users in 2-3 queries instead of N+1 loops."""
     drivers_list = (
-        await db_supabase.get_rows("drivers", {"id": {"$in": driver_ids}}, limit=max(len(driver_ids), 1)) if driver_ids else []
+        await db_supabase.get_rows("drivers", {"id": {"$in": driver_ids}}, limit=max(len(driver_ids), 1))
+        if driver_ids
+        else []
     )
     drivers_map = {d["id"]: d for d in drivers_list if d.get("id")}
 
@@ -63,7 +69,8 @@ async def _log_driver_activity(
 ):
     """Helper to record a driver lifecycle event."""
     try:
-        await db_supabase.insert_one("driver_activity_log", 
+        await db_supabase.insert_one(
+            "driver_activity_log",
             {
                 "id": str(uuid.uuid4()),
                 "driver_id": driver_id,
@@ -73,7 +80,7 @@ async def _log_driver_activity(
                 "metadata": metadata or {},
                 "actor": actor,
                 "created_at": datetime.utcnow().isoformat(),
-            }
+            },
         )
     except Exception as e:
         logger.warning(f"Failed to log driver activity: {e}")
@@ -120,7 +127,9 @@ async def admin_get_drivers(
         filters["is_online"] = is_online
     drivers = await db_supabase.get_rows("drivers", filters, order="created_at", desc=True, limit=limit, offset=offset)
     user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
-    users_list = await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    users_list = (
+        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    )
     users_map = {u["id"]: u for u in users_list if u.get("id")}
     out = []
     for d in drivers:
@@ -175,7 +184,9 @@ async def admin_get_driver_stats(
 
     # Enrich with user info (batch)
     user_ids = list({d.get("user_id") for d in all_drivers if d.get("user_id")})
-    users_list = await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    users_list = (
+        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    )
     users_map: Dict[str, Any] = {u["id"]: u for u in users_list if u.get("id")}
 
     # Auto-detect needs_review: active drivers with expired docs or pending re-uploads
@@ -604,7 +615,9 @@ async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride
 @router.get("/drivers/{driver_id}/notes")
 async def admin_get_driver_notes(driver_id: str):
     """Get all notes for a driver, newest first."""
-    notes = await db_supabase.get_rows("driver_notes", {"driver_id": driver_id}, order="created_at", desc=True, limit=200)
+    notes = await db_supabase.get_rows(
+        "driver_notes", {"driver_id": driver_id}, order="created_at", desc=True, limit=200
+    )
     return notes or []
 
 
@@ -692,7 +705,14 @@ async def admin_get_driver_daily_stats(
 @router.put("/drivers/{driver_id}/area")
 async def admin_assign_driver_area(driver_id: str, service_area_id: str):
     """Assign a driver to a specific service area."""
-    await db_supabase.update_one("drivers", {"id": driver_id}, { "service_area_id": service_area_id, "updated_at": datetime.utcnow().isoformat(), })
+    await db_supabase.update_one(
+        "drivers",
+        {"id": driver_id},
+        {
+            "service_area_id": service_area_id,
+            "updated_at": datetime.utcnow().isoformat(),
+        },
+    )
     return {"message": f"Driver assigned to area {service_area_id}"}
 
 

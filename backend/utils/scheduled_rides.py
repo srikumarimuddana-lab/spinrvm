@@ -17,6 +17,7 @@ try:
     from ..features import send_push_notification
 except ImportError:
     from db import db
+
     from features import send_push_notification
 
 logger = logging.getLogger(__name__)

@@ -22,13 +22,15 @@ ON_RIDE_STATUSES = ["driver_assigned", "driver_arrived", "in_progress"]
 async def get_monitoring_drivers(current_admin: dict = Depends(get_admin_user)) -> List[Dict[str, Any]]:
     """Return all drivers with current location and status for the live map."""
     drivers_res = await run_sync(
-        lambda: supabase.table("drivers")
-        .select(
-            "id, user_id, is_online, is_available, lat, lng, "
-            "vehicle_make, vehicle_model, vehicle_color, license_plate, "
-            "vehicle_type_id, rating, total_rides, service_area_id"
+        lambda: (
+            supabase.table("drivers")
+            .select(
+                "id, user_id, is_online, is_available, lat, lng, "
+                "vehicle_make, vehicle_model, vehicle_color, license_plate, "
+                "vehicle_type_id, rating, total_rides, service_area_id"
+            )
+            .execute()
         )
-        .execute()
     )
     drivers = _rows_from_res(drivers_res)
     if not drivers:
@@ -36,20 +38,24 @@ async def get_monitoring_drivers(current_admin: dict = Depends(get_admin_user)) 
 
     user_ids = [d["user_id"] for d in drivers if d.get("user_id")]
     users_res = await run_sync(
-        lambda: supabase.table("users")
-        .select("id, first_name, last_name, phone, profile_image")
-        .in_("id", user_ids)
-        .execute()
+        lambda: (
+            supabase.table("users")
+            .select("id, first_name, last_name, phone, profile_image")
+            .in_("id", user_ids)
+            .execute()
+        )
     )
     users_by_id = {u["id"]: u for u in _rows_from_res(users_res)}
 
     driver_ids = [d["id"] for d in drivers]
     rides_res = await run_sync(
-        lambda: supabase.table("rides")
-        .select("id, driver_id")
-        .in_("status", ON_RIDE_STATUSES)
-        .in_("driver_id", driver_ids)
-        .execute()
+        lambda: (
+            supabase.table("rides")
+            .select("id, driver_id")
+            .in_("status", ON_RIDE_STATUSES)
+            .in_("driver_id", driver_ids)
+            .execute()
+        )
     )
     active_ride_by_driver = {r["driver_id"]: r["id"] for r in _rows_from_res(rides_res)}
 
@@ -86,15 +92,17 @@ async def get_monitoring_drivers(current_admin: dict = Depends(get_admin_user)) 
 async def get_monitoring_rides(current_admin: dict = Depends(get_admin_user)) -> List[Dict[str, Any]]:
     """Return all active rides with rider/driver info for the live map."""
     rides_res = await run_sync(
-        lambda: supabase.table("rides")
-        .select(
-            "id, status, rider_id, driver_id, "
-            "pickup_lat, pickup_lng, pickup_address, "
-            "dropoff_lat, dropoff_lng, dropoff_address, "
-            "total_fare, distance_km, created_at, corporate_account_id"
+        lambda: (
+            supabase.table("rides")
+            .select(
+                "id, status, rider_id, driver_id, "
+                "pickup_lat, pickup_lng, pickup_address, "
+                "dropoff_lat, dropoff_lng, dropoff_address, "
+                "total_fare, distance_km, created_at, corporate_account_id"
+            )
+            .in_("status", ACTIVE_RIDE_STATUSES)
+            .execute()
         )
-        .in_("status", ACTIVE_RIDE_STATUSES)
-        .execute()
     )
     rides = _rows_from_res(rides_res)
     if not rides:
@@ -104,28 +112,24 @@ async def get_monitoring_rides(current_admin: dict = Depends(get_admin_user)) ->
     driver_ids = list({r["driver_id"] for r in rides if r.get("driver_id")})
 
     riders_res = await run_sync(
-        lambda: supabase.table("users")
-        .select("id, first_name, last_name, phone, profile_image")
-        .in_("id", rider_ids)
-        .execute()
+        lambda: (
+            supabase.table("users")
+            .select("id, first_name, last_name, phone, profile_image")
+            .in_("id", rider_ids)
+            .execute()
+        )
     )
     riders_by_id = {u["id"]: u for u in _rows_from_res(riders_res)}
 
     drivers_map_res = await run_sync(
-        lambda: supabase.table("drivers")
-        .select("id, user_id, lat, lng")
-        .in_("id", driver_ids)
-        .execute()
+        lambda: supabase.table("drivers").select("id, user_id, lat, lng").in_("id", driver_ids).execute()
     )
     drivers_rows = _rows_from_res(drivers_map_res)
     drivers_by_id = {d["id"]: d for d in drivers_rows}
 
     driver_user_ids = [d["user_id"] for d in drivers_rows if d.get("user_id")]
     driver_users_res = await run_sync(
-        lambda: supabase.table("users")
-        .select("id, first_name, last_name, phone")
-        .in_("id", driver_user_ids)
-        .execute()
+        lambda: supabase.table("users").select("id, first_name, last_name, phone").in_("id", driver_user_ids).execute()
     )
     driver_users_by_id = {u["id"]: u for u in _rows_from_res(driver_users_res)}
 

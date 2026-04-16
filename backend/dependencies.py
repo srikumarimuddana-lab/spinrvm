@@ -18,8 +18,12 @@ from loguru import logger
 
 try:
     from . import db_supabase
+    from .core.config import settings
 except ImportError:
     import db_supabase
+    from core.config import settings
+
+db = db_supabase  # legacy alias
 
 # Security Configuration
 # JWT signing secret is the single `settings.JWT_SECRET` defined in
@@ -142,7 +146,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                     user = new_user
 
             if user:
-                driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1))
+                driver = (lambda _r: _r[0] if _r else None)(
+                    await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
+                )
                 user["is_driver"] = True if driver else False
             return user
     except HTTPException:
@@ -201,7 +207,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         return user
 
     try:
-        driver = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1))
+        driver = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
+        )
         user["is_driver"] = True if driver else False
     except Exception:
         user["is_driver"] = False

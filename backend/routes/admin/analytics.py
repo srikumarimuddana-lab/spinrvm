@@ -15,6 +15,7 @@ try:
     from ...dependencies import get_admin_user
 except ImportError:
     from db import db
+
     from dependencies import get_admin_user
 
 logger = logging.getLogger(__name__)

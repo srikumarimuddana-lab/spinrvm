@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from loguru import logger
 from pydantic import BaseModel
 
 try:
@@ -22,7 +23,8 @@ except ImportError:
     from dependencies import get_current_user
     from geo_utils import get_service_area_polygon
 
-from loguru import logger
+# Legacy alias for call sites that still reference the pre-refactor ``db`` module.
+db = db_supabase
 
 # ============ Routers ============
 support_router = APIRouter(tags=["Support"])
@@ -247,14 +249,18 @@ async def create_safety_report(req: SafetyReportRequest, user_id: str = Depends(
 @support_router.get("/tickets")
 async def get_user_tickets(user_id: str = Query(...)):
     """Get all tickets for a specific user."""
-    tickets = await db_supabase.get_rows("support_tickets", {"user_id": user_id}, limit=100, order="created_at", desc=True)
+    tickets = await db_supabase.get_rows(
+        "support_tickets", {"user_id": user_id}, limit=100, order="created_at", desc=True
+    )
     return tickets
 
 
 @support_router.get("/tickets/{ticket_id}")
 async def get_ticket(ticket_id: str):
     """Get a specific ticket by ID."""
-    ticket = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("support_tickets", {"id": ticket_id}, limit=1))
+    ticket = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("support_tickets", {"id": ticket_id}, limit=1)
+    )
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
     return ticket
@@ -289,7 +295,9 @@ async def admin_get_tickets(status: Optional[str] = None):
 @admin_support_router.post("/tickets/{ticket_id}/reply")
 async def admin_reply_ticket(ticket_id: str, req: ReplyToTicketRequest):
     """Reply to a support ticket."""
-    ticket = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("support_tickets", {"id": ticket_id}, limit=1))
+    ticket = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("support_tickets", {"id": ticket_id}, limit=1)
+    )
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
 
@@ -302,14 +310,24 @@ async def admin_reply_ticket(ticket_id: str, req: ReplyToTicketRequest):
     replies = ticket.get("replies", [])
     replies.append(reply)
 
-    await db_supabase.update_one("support_tickets", {"id": ticket_id}, { "replies": replies, "status": "in_progress", "updated_at": datetime.utcnow(), })
+    await db_supabase.update_one(
+        "support_tickets",
+        {"id": ticket_id},
+        {
+            "replies": replies,
+            "status": "in_progress",
+            "updated_at": datetime.utcnow(),
+        },
+    )
     return {"status": "replied", "reply": reply}
 
 
 @admin_support_router.post("/tickets/{ticket_id}/close")
 async def admin_close_ticket(ticket_id: str):
     """Close a support ticket."""
-    result = await db_supabase.update_one("support_tickets", {"id": ticket_id}, {"status": "closed", "updated_at": datetime.utcnow()})
+    result = await db_supabase.update_one(
+        "support_tickets", {"id": ticket_id}, {"status": "closed", "updated_at": datetime.utcnow()}
+    )
     if not result:
         raise HTTPException(status_code=404, detail="Ticket not found")
     return {"status": "closed"}
@@ -442,7 +460,9 @@ class UpdateTaxConfigRequest(BaseModel):
 @pricing_router.get("/areas/{area_id}/fees")
 async def get_area_fees(area_id: str):
     """Get all fees for a service area."""
-    fees = await db_supabase.get_rows("area_fees", {"service_area_id": area_id}, limit=100, order="created_at", desc=False)
+    fees = await db_supabase.get_rows(
+        "area_fees", {"service_area_id": area_id}, limit=100, order="created_at", desc=False
+    )
     return fees
 
 
@@ -549,7 +569,9 @@ async def get_vehicle_pricing(area_id: str):
 @pricing_router.put("/drivers/{driver_id}/area")
 async def assign_driver_area(driver_id: str, service_area_id: str = Query(...)):
     """Assign a driver to a service area (restricts them to that zone)."""
-    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": service_area_id}, limit=1))
+    area = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("service_areas", {"id": service_area_id}, limit=1)
+    )
     if not area:
         raise HTTPException(status_code=404, detail="Service area not found")
 
@@ -599,7 +621,9 @@ async def calculate_all_fees(
         return result
 
     # Get all active fees for this area
-    area_fees_list = await db_supabase.get_rows("area_fees", {"service_area_id": matched_area["id"], "is_active": True}, limit=50)
+    area_fees_list = await db_supabase.get_rows(
+        "area_fees", {"service_area_id": matched_area["id"], "is_active": True}, limit=50
+    )
 
     # Pre-compute airport zone check once (reuses all_areas already fetched above)
     airport_areas = [a for a in all_areas if a.get("is_airport")]
@@ -702,7 +726,9 @@ async def fare_estimate(
 ):
     """Full fare estimate including base fare, area fees, and taxes."""
     # Get fare config
-    fare_config = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("fare_configs", {"vehicle_type_id": vehicle_type_id}, limit=1))
+    fare_config = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("fare_configs", {"vehicle_type_id": vehicle_type_id}, limit=1)
+    )
     if fare_config:
         base_fare = fare_config.get("base_fare", 3.50)
         distance_fare = distance_km * fare_config.get("per_km_rate", 1.50)
@@ -754,7 +780,9 @@ async def get_area_config(
         return {"found": False, "service_area": None}
 
     # Get active fees for this area
-    area_fees = await db_supabase.get_rows("area_fees", {"service_area_id": matched_area["id"], "is_active": True}, limit=50)
+    area_fees = await db_supabase.get_rows(
+        "area_fees", {"service_area_id": matched_area["id"], "is_active": True}, limit=50
+    )
 
     # Build tax config
     tax_config = {}
@@ -812,7 +840,9 @@ async def schedule_ride(req: ScheduleRideRequest):
     # Look up fare config
     areas = await db_supabase.get_rows("service_areas", None, limit=100)
     # For simplicity, use first active area (in production, match pickup location to area polygon)
-    fare_config = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("fare_configs", {"vehicle_type_id": req.vehicle_type_id}, limit=1))
+    fare_config = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("fare_configs", {"vehicle_type_id": req.vehicle_type_id}, limit=1)
+    )
 
     if fare_config:
         base_fare = fare_config.get("base_fare", 3.50)
@@ -881,9 +911,7 @@ async def schedule_ride(req: ScheduleRideRequest):
 @support_router.get("/rides/scheduled")
 async def get_scheduled_rides(user_id: str = Query(...)):
     """Get all scheduled rides for a user."""
-    rides = (
-    await db_supabase.get_rides_for_user(user_id, limit=50)
-    )
+    rides = await db_supabase.get_rides_for_user(user_id, limit=50)
     return rides
 
 
@@ -971,7 +999,13 @@ async def share_trip(ride_id: str, req: ShareTripRequest):
         }
     )
 
-    await db_supabase.update_ride(ride_id, { "shared_trip_token": token, "shared_trip_contacts": contacts, })
+    await db_supabase.update_ride(
+        ride_id,
+        {
+            "shared_trip_token": token,
+            "shared_trip_contacts": contacts,
+        },
+    )
 
     # The share URL format – frontend or web page would render this
     share_url = f"/trip/live/{token}"
@@ -986,7 +1020,9 @@ async def share_trip(ride_id: str, req: ShareTripRequest):
 @support_router.get("/trip/live/{token}")
 async def get_shared_trip(token: str):
     """Get live trip info via share token (no auth required)."""
-    ride = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("rides", {"shared_trip_token": token}, limit=1))
+    ride = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("rides", {"shared_trip_token": token}, limit=1)
+    )
     if not ride:
         raise HTTPException(status_code=404, detail="Trip not found or link expired")
 
@@ -1111,7 +1147,14 @@ async def check_scheduled_rides():
             # Find rides scheduled within the next 5 minutes
             window = now + timedelta(minutes=5)
 
-            scheduled = await db_supabase.get_rows("rides",  { "status": "scheduled", "is_scheduled": True, } , limit=50)
+            scheduled = await db_supabase.get_rows(
+                "rides",
+                {
+                    "status": "scheduled",
+                    "is_scheduled": True,
+                },
+                limit=50,
+            )
 
             for ride in scheduled:
                 sched_time = ride.get("scheduled_time")
@@ -1120,7 +1163,14 @@ async def check_scheduled_rides():
 
                 if sched_time and sched_time <= window:
                     # Transition to "searching" so the normal matching logic picks it up
-                    await db_supabase.update_ride(ride["id"], { "status": "searching", "ride_requested_at": datetime.utcnow(), "updated_at": datetime.utcnow(), })
+                    await db_supabase.update_ride(
+                        ride["id"],
+                        {
+                            "status": "searching",
+                            "ride_requested_at": datetime.utcnow(),
+                            "updated_at": datetime.utcnow(),
+                        },
+                    )
                     logger.info(f"Dispatched scheduled ride {ride['id']}")
 
                     # Send push notification to rider

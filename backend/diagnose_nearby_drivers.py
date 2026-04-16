@@ -140,24 +140,28 @@ async def main(pickup_lat, pickup_lng):
         print("  (no active service areas — estimate will use default fares for all vehicle types)")
     else:
         for a in areas:
-            fares = await db_supabase.get_rows("fare_configs", 
+            fares = await db_supabase.get_rows(
+                "fare_configs",
                 {
                     "service_area_id": a["id"],
                     "vehicle_type_id": xl_vt["id"],
                     "is_active": True,
-                }
-            , limit=10)
+                },
+                limit=10,
+            )
             tick = "✅" if fares else "❌"
             name = a.get("name") or a.get("id")
             print(f"  {tick} service_area '{name}': {len(fares)} active XL fare_config row(s)")
             if not fares:
                 # Also show what IS configured so the user can see the gap
-                all_area_fares = await db_supabase.get_rows("fare_configs", 
+                all_area_fares = await db_supabase.get_rows(
+                    "fare_configs",
                     {
                         "service_area_id": a["id"],
                         "is_active": True,
-                    }
-                , limit=20)
+                    },
+                    limit=20,
+                )
                 if all_area_fares:
                     configured_names = []
                     for f in all_area_fares:

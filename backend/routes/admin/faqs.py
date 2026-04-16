@@ -10,6 +10,8 @@ try:
 except ImportError:
     import db_supabase
 
+db = db_supabase  # legacy alias
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -135,7 +137,10 @@ async def admin_get_notifications(
     notifications = await db_supabase.get_rows(
         "notifications",
         filters,
-        order="created_at" if "created_at" in ((lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("notifications", {}, limit=1)) or {}) else "sent_at",
+        order="created_at"
+        if "created_at"
+        in ((lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("notifications", {}, limit=1)) or {})
+        else "sent_at",
         desc=True,
         limit=limit,
         offset=offset,

@@ -10,6 +10,8 @@ try:
 except ImportError:
     import db_supabase
 
+db = db_supabase  # legacy alias
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -55,7 +57,9 @@ async def admin_cleanup_location_history(days: int = 30):
         )
         deleted_idle = len(idle_rows or [])
         if deleted_idle > 0:
-            await db_supabase.delete_many("driver_location_history", {"timestamp": {"$lt": cutoff_idle}, "tracking_phase": "online_idle"})
+            await db_supabase.delete_many(
+                "driver_location_history", {"timestamp": {"$lt": cutoff_idle}, "tracking_phase": "online_idle"}
+            )
     except Exception as e:
         logger.warning(f"Cleanup idle GPS failed: {e}")
 
@@ -217,7 +221,9 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         }
 
         # Upsert
-        existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("driver_daily_stats", {"id": stat_row["id"]}, limit=1))
+        existing = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("driver_daily_stats", {"id": stat_row["id"]}, limit=1)
+        )
         if existing:
             await db_supabase.update_one("driver_daily_stats", {"id": stat_row["id"]}, stat_row)
             updated += 1
@@ -249,7 +255,8 @@ async def get_audit_logs(limit: int = Query(50), offset: int = Query(0)):
 
 async def log_audit(action: str, entity_type: str, entity_id: str, user_email: str, details: str = ""):
     """Record an audit log entry. Call from admin endpoints."""
-    await db_supabase.insert_one("audit_logs", 
+    await db_supabase.insert_one(
+        "audit_logs",
         {
             "id": str(uuid.uuid4()),
             "action": action,  # created, updated, deleted, login, status_change
@@ -258,5 +265,5 @@ async def log_audit(action: str, entity_type: str, entity_id: str, user_email: s
             "user_email": user_email,
             "details": details,
             "created_at": datetime.utcnow().isoformat(),
-        }
+        },
     )

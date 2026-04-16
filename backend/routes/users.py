@@ -35,7 +35,9 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
 
     # GAP FIX: Check for duplicate email across users
     email_lower = request.email.strip().lower()
-    existing_email_user = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("users", {"email": email_lower, "id": {"$ne": current_user["id"]}}, limit=1))
+    existing_email_user = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("users", {"email": email_lower, "id": {"$ne": current_user["id"]}}, limit=1)
+    )
     if existing_email_user:
         raise HTTPException(status_code=400, detail="This email address is already in use by another account")
 
@@ -102,7 +104,9 @@ async def update_phone(request: UpdatePhoneRequest, current_user: dict = Depends
         raise HTTPException(status_code=400, detail="Invalid phone number")
 
     # Check if phone is already in use by another user
-    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("users", {"phone": phone, "id": {"$ne": current_user["id"]}}, limit=1))
+    existing = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("users", {"phone": phone, "id": {"$ne": current_user["id"]}}, limit=1)
+    )
     if existing:
         raise HTTPException(status_code=400, detail="Phone number already in use")
 
@@ -136,7 +140,14 @@ async def upload_profile_image(file: UploadFile = File(...), current_user: dict 
     # Store as data URI
     data_uri = f"data:{file.content_type};base64,{base64_image}"
 
-    await db_supabase.update_one("users", {"id": current_user["id"]}, { "profile_image": data_uri, "profile_image_status": "pending_review", })
+    await db_supabase.update_one(
+        "users",
+        {"id": current_user["id"]},
+        {
+            "profile_image": data_uri,
+            "profile_image_status": "pending_review",
+        },
+    )
     updated_user = await db_supabase.get_user_by_id(current_user["id"])
 
     if not updated_user:
@@ -153,11 +164,15 @@ class LinkCorporateRequest(BaseModel):
 async def link_corporate_account(request: LinkCorporateRequest, current_user: dict = Depends(get_current_user)):
     """Link or unlink a corporate account to the user profile."""
     if request.corporate_account_id:
-        account = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("corporate_accounts", {"id": request.corporate_account_id}, limit=1))
+        account = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("corporate_accounts", {"id": request.corporate_account_id}, limit=1)
+        )
         if not account:
             raise HTTPException(status_code=404, detail="Corporate account not found")
 
-    await db_supabase.update_one("users", {"id": current_user["id"]}, {"corporate_account_id": request.corporate_account_id})
+    await db_supabase.update_one(
+        "users", {"id": current_user["id"]}, {"corporate_account_id": request.corporate_account_id}
+    )
 
     updated_user = await db_supabase.get_user_by_id(current_user["id"])
     if not updated_user:
@@ -236,7 +251,9 @@ async def add_emergency_contact(contact: EmergencyContactCreate, current_user: d
 @api_router.delete("/emergency-contacts/{contact_id}")
 async def delete_emergency_contact(contact_id: str, current_user: dict = Depends(get_current_user)):
     """Remove an emergency contact."""
-    contact = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("emergency_contacts", {"id": contact_id, "user_id": current_user["id"]}, limit=1))
+    contact = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("emergency_contacts", {"id": contact_id, "user_id": current_user["id"]}, limit=1)
+    )
     if not contact:
         raise HTTPException(status_code=404, detail="Emergency contact not found")
 

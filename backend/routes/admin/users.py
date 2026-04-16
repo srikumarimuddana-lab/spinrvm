@@ -23,8 +23,19 @@ async def admin_get_users(
     offset: int = 0,
     search: Optional[str] = None,
 ):
-    """Get all users (riders) with optional search and pagination.
-
+    """Get all users (riders) with optional search and pagination."""
+    filters: Dict[str, Any] = {"role": "rider"}
+    if search:
+        # Basic contains-match on phone / email / first_name; callers typically
+        # pass partial phone digits or email substrings.
+        term = search.strip()
+        if term:
+            filters["$or"] = [
+                {"phone": {"$regex": re.escape(term), "$options": "i"}},
+                {"email": {"$regex": re.escape(term), "$options": "i"}},
+                {"first_name": {"$regex": re.escape(term), "$options": "i"}},
+                {"last_name": {"$regex": re.escape(term), "$options": "i"}},
+            ]
     users = await db_supabase.get_rows("users", filters, order="created_at", desc=True, limit=limit, offset=offset)
     return users
 
@@ -55,5 +66,7 @@ async def admin_update_user_status(user_id: str, status_data: Dict[str, Any]):
     if new_status not in valid_status:
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_status}")
 
-    await db_supabase.update_one("users", {"id": user_id}, {"status": new_status, "updated_at": datetime.utcnow().isoformat()})
+    await db_supabase.update_one(
+        "users", {"id": user_id}, {"status": new_status, "updated_at": datetime.utcnow().isoformat()}
+    )
     return {"message": f"User status updated to {new_status}"}

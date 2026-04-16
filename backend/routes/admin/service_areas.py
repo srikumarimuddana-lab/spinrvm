@@ -143,7 +143,9 @@ async def admin_update_surge_pricing(area_id: str, surge: Dict[str, Any]):
         "updated_at": datetime.utcnow().isoformat(),
     }
 
-    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("surge_pricing", {"service_area_id": area_id}, limit=1))
+    existing = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("surge_pricing", {"service_area_id": area_id}, limit=1)
+    )
     if existing:
         await db_supabase.update_one("surge_pricing", {"service_area_id": area_id}, surge_doc)
     else:

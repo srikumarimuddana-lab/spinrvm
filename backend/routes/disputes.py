@@ -20,6 +20,8 @@ except ImportError:
     from dependencies import get_current_user
     from settings_loader import get_app_settings
 
+db = db_supabase  # legacy alias
+
 logger = logging.getLogger(__name__)
 
 api_router = APIRouter(prefix="/disputes", tags=["Disputes"])
@@ -55,7 +57,11 @@ async def create_dispute(
         raise HTTPException(status_code=400, detail="Can only dispute completed or cancelled rides")
 
     # Check for existing open dispute on same ride
-    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("disputes", {"ride_id": req.ride_id, "status": {"$in": ["open", "under_review"]}}, limit=1))
+    existing = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows(
+            "disputes", {"ride_id": req.ride_id, "status": {"$in": ["open", "under_review"]}}, limit=1
+        )
+    )
     if existing:
         raise HTTPException(status_code=400, detail="A dispute is already open for this ride")
 
@@ -115,7 +121,9 @@ async def admin_get_disputes(
     filters: Dict[str, Any] = {}
     if status:
         filters["status"] = status
-    disputes = await db_supabase.get_rows("disputes", filters, order="created_at", desc=True, limit=limit, offset=offset)
+    disputes = await db_supabase.get_rows(
+        "disputes", filters, order="created_at", desc=True, limit=limit, offset=offset
+    )
 
     # Enrich with user + ride info
     enriched = []

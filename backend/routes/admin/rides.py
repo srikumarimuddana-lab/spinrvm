@@ -6,16 +6,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 try:
     from ... import db_supabase
-    from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...settings_loader import get_app_settings
 except ImportError:
-    import db_supabase
     import db_supabase
     from dependencies import get_admin_user
     from settings_loader import get_app_settings
 
 from .drivers import _batch_fetch_drivers_and_users, _user_display_name
+
+db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +122,15 @@ async def admin_get_stats():
     """Get admin dashboard statistics."""
     total_drivers = await db_supabase.count_documents("drivers", {})
     active_drivers = await db_supabase.count_documents("drivers", {"is_online": True})
+    online_drivers = active_drivers
     total_rides = await db_supabase.count_documents("rides", {})
+    completed_rides = await db_supabase.count_documents("rides", {"status": "completed"})
+    cancelled_rides = await db_supabase.count_documents("rides", {"status": "cancelled"})
+    active_rides = await db_supabase.count_documents(
+        "rides",
+        {"status": {"$in": ["requested", "driver_assigned", "driver_arrived", "in_progress"]}},
+    )
+    total_users = await db_supabase.count_documents("users", {})
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     rides_today = await db_supabase.count_documents("rides", {"created_at": {"$gte": today_start}})
     completed_today = await db_supabase.get_rows(
@@ -138,6 +146,12 @@ async def admin_get_stats():
         limit=10000,
     )
     revenue_month = sum(float(r.get("total_fare") or 0) for r in completed_month)
+    # Earnings + tip totals are aggregated over completed rides in the
+    # current month; upstream's stats API never wired these up so we compute
+    # them here rather than returning stale zeroes.
+    total_driver_earnings = sum(float(r.get("driver_earnings") or 0) for r in completed_month)
+    total_admin_earnings = sum(float(r.get("admin_earnings") or 0) for r in completed_month)
+    total_tips = sum(float(r.get("tip_amount") or 0) for r in completed_month)
     pending_applications = await db_supabase.count_documents("drivers", {"is_verified": False})
     return {
         # Fields the dashboard page expects
@@ -153,7 +167,7 @@ async def admin_get_stats():
         "total_tips": total_tips,
         # Legacy fields kept for other consumers
         "active_drivers": online_drivers,
-        "rides_today": await db.rides.count_documents({"created_at": {"$gte": today_start}}),
+        "rides_today": rides_today,
         "revenue_today": revenue_today,
         "revenue_month": revenue_month,
         "pending_applications": pending_applications,
@@ -526,7 +540,9 @@ async def admin_export_drivers():
     """Export drivers data."""
     drivers = await db_supabase.get_rows("drivers", order="created_at", desc=True, limit=1000)
     user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
-    users_list = await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    users_list = (
+        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    )
     users_map = {u["id"]: u for u in users_list if u.get("id")}
     out = []
     for d in drivers:

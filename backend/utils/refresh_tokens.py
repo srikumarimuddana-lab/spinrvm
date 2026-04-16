@@ -33,8 +33,9 @@ try:
     from ..core.config import settings
     from ..db import db
 except ImportError:  # pragma: no cover — package-relative fallback
-    from core.config import settings
     from db import db
+
+    from core.config import settings
 
 # 48 random bytes → 64 base64url chars. 384 bits of entropy comfortably
 # exceeds any practical brute-force budget.

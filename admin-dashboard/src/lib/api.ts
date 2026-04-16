@@ -419,6 +419,18 @@ export const reviewKyb = (id: string, decision: { approve: boolean; note?: strin
         body: JSON.stringify(decision),
     });
 
+export const getCorporateAccount = (id: string) =>
+    request<CorporateAccount>(`/api/admin/corporate-accounts/${id}`);
+
+export const changeCompanyStatus = (
+    id: string,
+    transition: { status: CompanyStatus; reason?: string }
+) =>
+    request<CorporateAccount>(`/api/admin/corporate-accounts/${id}/status`, {
+        method: "POST",
+        body: JSON.stringify(transition),
+    });
+
 export const createCorporateAccount = (data: any) =>
     request<CorporateAccount>("/api/admin/corporate-accounts", {
         method: "POST",

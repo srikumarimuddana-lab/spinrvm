@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, Alert, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator } from 'react-native';
-import { router } from 'expo-router';
 import MapView, { Marker, Polyline, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
@@ -36,17 +35,6 @@ export default function DriverDashboard() {
   // left the GO button permanently disabled.
   const driverData = useAuthStore(s => s.driver);
   const user = useAuthStore(s => s.user);
-  const isInitialized = useAuthStore(s => s.isInitialized);
-
-  // Guard: if auth is ready but there's no driver row, send to /become-driver.
-  // This handles the case where refreshProfile clears driver=null because
-  // /drivers/me returned 404 (row deleted or never created) after index.tsx
-  // has already replaced itself with this screen.
-  useEffect(() => {
-    if (isInitialized && !driverData) {
-      router.replace('/become-driver' as any);
-    }
-  }, [isInitialized, driverData]);
   const {
     rideState,
     incomingRide,

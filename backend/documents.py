@@ -227,7 +227,7 @@ async def _insert_driver_document(record: dict) -> dict:
     Supabase table (i.e. the ALTER TABLE migration hasn't been run yet).
     """
     try:
-        result = await db.driver_documents.insert_one(record)
+        result = await db.insert_one("driver_documents", record)
         return result if result else record
     except Exception as e:
         err = str(e)
@@ -246,7 +246,7 @@ async def _insert_driver_document(record: dict) -> dict:
                 "uploaded_at": record.get("uploaded_at"),
                 "updated_at": record.get("updated_at"),
             }
-            result = await db.driver_documents.insert_one(minimal)
+            result = await db.insert_one("driver_documents", minimal)
             return result if result else minimal
         raise
 
@@ -349,8 +349,9 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
             "lng": 0,
             "created_at": datetime.utcnow().isoformat(),
         }
-        await db.drivers.insert_one(driver)
-        await db.users.update_one(
+        await db.insert_one("drivers", driver)
+        await db.update_one(
+            "users",
             {"id": current_user["id"]},
             {"$set": {"role": "driver", "is_driver": True}},
         )

@@ -35,7 +35,7 @@ def _d(v) -> Decimal:
 
 async def get_or_create_wallet(user_id: str) -> dict:
     """Return the user's wallet, creating one if it doesn't exist."""
-    wallet = await db.wallets.find_one({"user_id": user_id})
+    wallet = await db.find_one("wallets", {"user_id": user_id})
     if wallet:
         return wallet
 
@@ -48,7 +48,7 @@ async def get_or_create_wallet(user_id: str) -> dict:
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }
-    await db.wallets.insert_one(wallet_data)
+    await db.insert_one("wallets", wallet_data)
     return wallet_data
 
 
@@ -75,7 +75,7 @@ async def _record_transaction(
         "metadata": metadata or {},
         "created_at": datetime.utcnow().isoformat(),
     }
-    await db.wallet_transactions.insert_one(txn)
+    await db.insert_one("wallet_transactions", txn)
     return txn
 
 
@@ -122,7 +122,8 @@ async def top_up_wallet(req: TopUpRequest, current_user: dict = Depends(get_curr
     old_balance = _d(wallet.get("balance", 0))
     new_balance = old_balance + _d(req.amount)
 
-    await db.wallets.update_one(
+    await db.update_one(
+        "wallets",
         {"id": wallet["id"]},
         {"$set": {"balance": float(new_balance), "updated_at": datetime.utcnow().isoformat()}},
     )
@@ -158,13 +159,15 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
 
     new_balance = old_balance - debit_amount
 
-    await db.wallets.update_one(
+    await db.update_one(
+        "wallets",
         {"id": wallet["id"]},
         {"$set": {"balance": float(new_balance), "updated_at": datetime.utcnow().isoformat()}},
     )
 
     # Mark ride as paid via wallet
-    await db.rides.update_one(
+    await db.update_one(
+        "rides",
         {"id": req.ride_id},
         {"$set": {"payment_status": "paid", "payment_method": "wallet"}},
     )
@@ -200,8 +203,7 @@ async def get_transactions(
             {"wallet_id": wallet["id"]},
             limit=limit,
             skip=offset,
-            order_by="created_at",
-            order_desc=True,
+            order="created_at",
         )
     except Exception as e:
         logger.error(f"Error fetching transactions: {e}")
@@ -228,7 +230,7 @@ async def get_transactions(
 async def transfer_to_user(req: TransferRequest, current_user: dict = Depends(get_current_user)):
     """Transfer wallet balance to another user by phone number."""
     # Find recipient
-    recipient = await db.users.find_one({"phone": req.recipient_phone})
+    recipient = await db.find_one("users", {"phone": req.recipient_phone})
     if not recipient:
         raise HTTPException(status_code=404, detail="Recipient not found")
 
@@ -251,7 +253,8 @@ async def transfer_to_user(req: TransferRequest, current_user: dict = Depends(ge
     new_recipient_balance = _d(recipient_wallet.get("balance", 0)) + transfer_amount
 
     # Debit sender
-    await db.wallets.update_one(
+    await db.update_one(
+        "wallets",
         {"id": sender_wallet["id"]},
         {"$set": {"balance": float(new_sender_balance), "updated_at": datetime.utcnow().isoformat()}},
     )
@@ -265,7 +268,8 @@ async def transfer_to_user(req: TransferRequest, current_user: dict = Depends(ge
     )
 
     # Credit recipient
-    await db.wallets.update_one(
+    await db.update_one(
+        "wallets",
         {"id": recipient_wallet["id"]},
         {"$set": {"balance": float(new_recipient_balance), "updated_at": datetime.utcnow().isoformat()}},
     )

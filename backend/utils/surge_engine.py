@@ -76,7 +76,7 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
         return 0
 
     try:
-        drivers = await db.drivers.find({"is_online": True, "is_available": True}).to_list(500)
+        drivers = await db.get_rows("drivers", {"is_online": True, "is_available": True}, limit=500)
 
         count = 0
         for d in drivers:
@@ -123,7 +123,7 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
     results = []
 
     try:
-        areas = await db.service_areas.find({"is_active": True}).to_list(100)
+        areas = await db.get_rows("service_areas", {"is_active": True}, limit=100)
     except Exception as e:
         logger.error(f"Surge: failed to fetch service areas: {e}")
         return results
@@ -145,13 +145,12 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
 
             # Only update DB if multiplier changed
             if new_multiplier != old_multiplier:
-                await db.service_areas.update_one(
+                await db.update_one(
+                    "service_areas",
                     {"id": area["id"]},
                     {
-                        "$set": {
-                            "surge_multiplier": new_multiplier,
-                            "surge_active": new_multiplier > 1.0,
-                        }
+                        "surge_multiplier": new_multiplier,
+                        "surge_active": new_multiplier > 1.0,
                     },
                 )
                 logger.info(
@@ -162,7 +161,8 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
                 )
 
             # Log to surge_pricing history
-            await db.surge_pricing.insert_one(
+            await db.insert_one(
+                "surge_pricing",
                 {
                     "id": str(uuid.uuid4()),
                     "service_area_id": area["id"],
@@ -190,7 +190,7 @@ async def get_surge_status() -> List[Dict[str, Any]]:
     Used by the admin dashboard to display live surge info.
     """
     try:
-        areas = await db.service_areas.find({"is_active": True}).to_list(100)
+        areas = await db.get_rows("service_areas", {"is_active": True}, limit=100)
     except Exception as e:
         logger.error(f"Surge: failed to fetch areas for status: {e}")
         return []

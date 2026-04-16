@@ -59,16 +59,17 @@ async def _require_ride_in_state(ride_id: str, driver_id: str, allowed_states: t
     wrong state; raises 404 if the ride doesn't exist or isn't owned
     by this driver.
     """
-    ride = await db.rides.find_one(
+    ride = await db.find_one(
+        "rides",
         {
             "id": ride_id,
             "driver_id": driver_id,
             "status": {"$in": list(allowed_states)},
-        }
+        },
     )
     if ride:
         return ride
-    existing = await db.rides.find_one({"id": ride_id, "driver_id": driver_id})
+    existing = await db.find_one("rides", {"id": ride_id, "driver_id": driver_id})
     if existing:
         current = existing.get("status", "unknown")
         raise HTTPException(
@@ -443,11 +444,12 @@ class SetDestinationRequest(BaseModel):
 async def set_destination_mode(req: SetDestinationRequest, current_user: dict = Depends(get_current_user)):
     """Set driver's preferred destination. Ride matching will prioritize
     rides heading toward this destination to reduce empty miles."""
-    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    await db.drivers.update_one(
+    await db.update_one(
+        "drivers",
         {"id": driver["id"]},
         {
             "$set": {
@@ -469,11 +471,12 @@ async def set_destination_mode(req: SetDestinationRequest, current_user: dict = 
 @api_router.delete("/destination")
 async def clear_destination_mode(current_user: dict = Depends(get_current_user)):
     """Clear driver's destination mode."""
-    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    await db.drivers.update_one(
+    await db.update_one(
+        "drivers",
         {"id": driver["id"]},
         {
             "$set": {
@@ -491,7 +494,7 @@ async def clear_destination_mode(current_user: dict = Depends(get_current_user))
 @api_router.get("/destination")
 async def get_destination_mode(current_user: dict = Depends(get_current_user)):
     """Get driver's current destination mode status."""
-    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -712,7 +715,7 @@ async def get_driver_trip_earnings(
 @api_router.get("/earnings/weekly")
 async def get_driver_weekly_earnings(weeks: int = Query(4), current_user: dict = Depends(get_current_user)):
     """Get driver's weekly earnings breakdown."""
-    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -815,7 +818,7 @@ async def get_driver_weekly_earnings(weeks: int = Query(4), current_user: dict =
 @api_router.get("/earnings/monthly")
 async def get_driver_monthly_earnings(months: int = Query(6), current_user: dict = Depends(get_current_user)):
     """Get driver's monthly earnings breakdown."""
-    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -900,7 +903,7 @@ async def get_driver_monthly_earnings(months: int = Query(6), current_user: dict
 @api_router.get("/earnings/comparison")
 async def get_driver_earnings_comparison(period: str = Query("week"), current_user: dict = Depends(get_current_user)):
     """Compare current period earnings vs previous period."""
-    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -1504,7 +1507,7 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=400, detail="Ride already accepted by another driver")
 
     # Re-read the now-claimed ride so we can notify the rider with fresh data.
-    ride = await db.rides.find_one({"id": ride_id})
+    ride = await db.find_one("rides", {"id": ride_id})
     diag_logger.info(
         f"[ACCEPT] success ride_id={ride_id} driver_id={driver['id']} "
         f"post_status={ride.get('status') if ride else 'ROW_GONE'}"
@@ -1544,7 +1547,8 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     try:
         import uuid as _uuid
 
-        await db.audit_logs.insert_one(
+        await db.insert_one(
+            "audit_logs",
             {
                 "id": str(_uuid.uuid4()),
                 "action": "ride_declined",
@@ -1553,7 +1557,7 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
                 "user_email": driver["id"],  # reuse user_email column to store driver_id
                 "details": f"driver_id={driver['id']}",
                 "created_at": datetime.utcnow().isoformat(),
-            }
+            },
         )
     except Exception as _e:
         logger.warning(f"Could not log ride decline to audit_logs: {_e}")
@@ -2054,7 +2058,7 @@ async def get_driver_leaderboard(
     Returns the top drivers for the specified period with the current
     driver's rank highlighted.
     """
-    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -2067,7 +2071,7 @@ async def get_driver_leaderboard(
         start = "2020-01-01"
 
     try:
-        all_drivers = await db.drivers.find({}).to_list(500)
+        all_drivers = await db.get_rows("drivers", {}, limit=500)
     except Exception:
         all_drivers = []
 
@@ -2090,7 +2094,7 @@ async def get_driver_leaderboard(
         total_earnings = sum(float(r.get("driver_earnings", 0) or 0) for r in period_rides)
         total_tips = sum(float(r.get("tip_amount", 0) or 0) for r in period_rides)
 
-        user = await db.users.find_one({"id": d.get("user_id")})
+        user = await db.find_one("users", {"id": d.get("user_id")})
         name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Driver"
 
         rankings.append(
@@ -2560,7 +2564,7 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             if _stripe_secret:
                 stripe.api_key = _stripe_secret
                 # Use the driver's saved default payment method via their Stripe customer
-                _user = await db.users.find_one({"id": current_user["id"]})
+                _user = await db.find_one("users", {"id": current_user["id"]})
                 _customer_id = _user.get("stripe_customer_id") if _user else None
                 if _customer_id:
                     _amount_cents = int(float(plan_price) * 100)
@@ -2626,7 +2630,7 @@ async def verify_subscription_session(
     Returns `{status: "active"}` if payment succeeded or `{status: "pending"}`
     if Stripe hasn't confirmed yet (caller should poll).
     """
-    sub = await db.driver_subscriptions.find_one({"stripe_session_id": session_id})
+    sub = await db.find_one("driver_subscriptions", {"stripe_session_id": session_id})
     if not sub:
         raise HTTPException(status_code=404, detail="Subscription session not found")
 
@@ -2655,7 +2659,7 @@ async def verify_subscription_session(
     if session.payment_status == "paid":
         # Activate the subscription (same as webhook path, idempotent).
         await _activate_subscription(sub["id"], sub.get("plan_id"))
-        sub = await db.driver_subscriptions.find_one({"id": sub["id"]})
+        sub = await db.find_one("driver_subscriptions", {"id": sub["id"]})
         return {"status": "active", "subscription": sub}
 
     return {"status": "pending"}
@@ -2667,31 +2671,34 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
     Called by both the webhook handler and the verify-session endpoint
     (whichever runs first). Idempotent — skips if already active.
     """
-    sub = await db.driver_subscriptions.find_one({"id": subscription_id})
+    sub = await db.find_one("driver_subscriptions", {"id": subscription_id})
     if not sub or sub.get("status") == "active":
         return  # already done
 
     driver_id = sub.get("driver_id")
 
     # Cancel any prior active subscription for this driver.
-    existing = await db.driver_subscriptions.find_one({"driver_id": driver_id, "status": "active"})
+    existing = await db.find_one("driver_subscriptions", {"driver_id": driver_id, "status": "active"})
     if existing and existing["id"] != subscription_id:
-        await db.driver_subscriptions.update_one(
+        await db.update_one(
+            "driver_subscriptions",
             {"id": existing["id"]},
             {"$set": {"status": "cancelled", "cancelled_at": datetime.utcnow().isoformat()}},
         )
 
     # Activate.
-    await db.driver_subscriptions.update_one(
+    await db.update_one(
+        "driver_subscriptions",
         {"id": subscription_id},
         {"$set": {"status": "active", "payment_status": "paid"}},
     )
 
     # Increment subscriber count.
     if plan_id:
-        plan = await db.subscription_plans.find_one({"id": plan_id})
+        plan = await db.find_one("subscription_plans", {"id": plan_id})
         if plan:
-            await db.subscription_plans.update_one(
+            await db.update_one(
+                "subscription_plans",
                 {"id": plan_id},
                 {"$set": {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1}},
             )
@@ -2700,7 +2707,7 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
 
     # Push notification to driver.
     if driver_id:
-        driver = await db.drivers.find_one({"id": driver_id})
+        driver = await db.find_one("drivers", {"id": driver_id})
         if driver and driver.get("user_id"):
             try:
                 await send_push_notification(
@@ -2759,7 +2766,7 @@ async def check_expiring_subscriptions():
             now = datetime.utcnow()
             window = now + timedelta(hours=24)
 
-            active_subs = await db.driver_subscriptions.find({"status": "active"}).to_list(500)
+            active_subs = await db.get_rows("driver_subscriptions", {"status": "active"}, limit=500)
 
             warned_count = 0
             for sub in active_subs:
@@ -2779,7 +2786,7 @@ async def check_expiring_subscriptions():
                     expires_dt = expires_at
 
                 if now < expires_dt <= window:
-                    driver = await db.drivers.find_one({"id": sub["driver_id"]})
+                    driver = await db.find_one("drivers", {"id": sub["driver_id"]})
                     if driver and driver.get("user_id"):
                         hours_left = max(1, int((expires_dt - now).total_seconds() / 3600))
                         plan_name = sub.get("plan_name", "Spinr Pass")
@@ -2794,7 +2801,8 @@ async def check_expiring_subscriptions():
                         except Exception as e:
                             logger.warning(f"[SUB-EXPIRY] Push failed for driver {sub['driver_id']}: {e}")
 
-                    await db.driver_subscriptions.update_one(
+                    await db.update_one(
+                        "driver_subscriptions",
                         {"id": sub["id"]},
                         {"$set": {"expiry_warned": True}},
                     )

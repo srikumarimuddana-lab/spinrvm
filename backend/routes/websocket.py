@@ -125,7 +125,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
 
         # Notify admins that a driver came online
         if client_type == "driver":
-            driver_profile_for_status = await db.drivers.find_one({"user_id": user["id"]})
+            driver_profile_for_status = await db.find_one("drivers", {"user_id": user["id"]})
             if driver_profile_for_status:
                 await manager.broadcast_to_admins(
                     {
@@ -393,7 +393,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
     except WebSocketDisconnect:
         if connection_key and connection_key.startswith("driver_"):
             # Notify admins the driver went offline
-            driver_profile_off = await db.drivers.find_one({"user_id": user["id"]}) if user else None
+            driver_profile_off = await db.find_one("drivers", {"user_id": user["id"]}) if user else None
             if driver_profile_off:
                 await manager.broadcast_to_admins(
                     {

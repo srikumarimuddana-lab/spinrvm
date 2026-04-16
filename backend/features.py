@@ -412,14 +412,15 @@ async def admin_update_surge(area_id: str, req: UpdateSurgeRequest):
 @admin_support_router.put("/service-areas/{area_id}/surge/auto")
 async def admin_reset_surge_to_auto(area_id: str):
     """Reset surge pricing to automatic mode for a service area."""
-    area = await db.service_areas.find_one({"id": area_id})
+    area = await db.find_one("service_areas", {"id": area_id})
     if not area:
         raise HTTPException(status_code=404, detail="Service area not found")
-    await db.service_areas.update_one(
+    await db.update_one(
+        "service_areas",
         {"id": area_id},
         {"$set": {"surge_source": "auto", "surge_active": True}},
     )
-    updated = await db.service_areas.find_one({"id": area_id})
+    updated = await db.find_one("service_areas", {"id": area_id})
     return updated
 
 
@@ -1094,7 +1095,7 @@ async def send_push_notification(user_id: str, title: str, body: str, data: Dict
     Routes automatically: Expo push tokens go via Expo's REST API; all other
     tokens are assumed to be FCM and sent via Firebase Admin SDK.
     """
-    user = await db.users.find_one({"id": user_id})
+    user = await db.find_one("users", {"id": user_id})
     if not user or not user.get("fcm_token"):
         logger.info(f"No push token for user {user_id}")
         return False

@@ -167,7 +167,7 @@ async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
     refund_result: Dict[str, Any] = {}
     if req.resolution in ("approved", "partial_refund") and req.refund_amount:
         refund_amount_cents = int(float(req.refund_amount) * 100)
-        ride = await db.rides.find_one({"id": dispute.get("ride_id")})
+        ride = await db.find_one("rides", {"id": dispute.get("ride_id")})
         payment_intent_id = (ride or {}).get("stripe_charge_id") or (ride or {}).get("payment_intent_id")
 
         if not payment_intent_id:
@@ -208,7 +208,8 @@ async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
                 refund_result = {"status": "failed", "error": str(refund_err)}
 
         # Persist refund outcome on the dispute record
-        await db.disputes.update_one(
+        await db.update_one(
+            "disputes",
             {"id": dispute_id},
             {"$set": {"refund_result": refund_result, "updated_at": datetime.utcnow().isoformat()}},
         )

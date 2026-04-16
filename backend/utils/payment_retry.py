@@ -31,8 +31,7 @@ async def retry_failed_payments():
             "rides",
             {"payment_status": {"$in": ["failed", "requires_action"]}},
             limit=50,
-            order_by="created_at",
-            order_desc=True,
+            order="created_at",
         )
     except Exception as e:
         logger.error(f"Payment retry: failed to fetch rides: {e}")
@@ -70,7 +69,8 @@ async def retry_failed_payments():
 
             if intent.status == "succeeded":
                 # Already succeeded (webhook may have missed it)
-                await db.rides.update_one(
+                await db.update_one(
+                    "rides",
                     {"id": ride_id},
                     {
                         "$set": {
@@ -85,7 +85,8 @@ async def retry_failed_payments():
             elif intent.status in ("requires_payment_method", "requires_confirmation"):
                 # Try to confirm again
                 stripe.PaymentIntent.confirm(payment_intent_id, api_key=stripe_secret)
-                await db.rides.update_one(
+                await db.update_one(
+                    "rides",
                     {"id": ride_id},
                     {
                         "$set": {
@@ -99,14 +100,16 @@ async def retry_failed_payments():
 
             elif intent.status == "canceled":
                 # Cannot retry a cancelled intent
-                await db.rides.update_one(
+                await db.update_one(
+                    "rides",
                     {"id": ride_id},
                     {"$set": {"payment_retry_count": MAX_RETRIES}},
                 )
 
         except Exception as e:
             logger.warning(f"Payment retry failed for ride {ride_id}: {e}")
-            await db.rides.update_one(
+            await db.update_one(
+                "rides",
                 {"id": ride_id},
                 {
                     "$set": {

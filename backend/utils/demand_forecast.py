@@ -72,7 +72,7 @@ async def _get_historical_hourly_demand(
 
     try:
         filters: Dict[str, Any] = {"status": "completed"}
-        rides = await db.get_rows("rides", filters, limit=10000, order_by="created_at", order_desc=True)
+        rides = await db.get_rows("rides", filters, limit=10000, order="created_at")
     except Exception as e:
         logger.error(f"Forecast: failed to fetch rides: {e}")
         return {}

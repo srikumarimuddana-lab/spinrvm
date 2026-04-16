@@ -329,7 +329,7 @@ async def _offer_timeout_handler(
     """
     await asyncio.sleep(timeout_seconds)
     try:
-        ride = await db.rides.find_one({"id": ride_id})
+        ride = await db.find_one("rides", {"id": ride_id})
         if not ride:
             return
 
@@ -343,14 +343,16 @@ async def _offer_timeout_handler(
         )
 
         # Release the driver back to the available pool.
-        await db.drivers.update_one(
+        await db.update_one(
+            "drivers",
             {"id": driver_id},
             {"$set": {"is_available": True}},
         )
 
         # Put the ride back in the searching state so it can be
         # re-dispatched or picked up by the next dispatch cycle.
-        await db.rides.update_one(
+        await db.update_one(
+            "rides",
             {"id": ride_id},
             {
                 "$set": {
@@ -493,7 +495,7 @@ async def create_ride(
 
     # Pre-ride payment method validation: ensure rider has a card on file
     if request.payment_method == "card":
-        _rider = await db.users.find_one({"id": current_user["id"]})
+        _rider = await db.find_one("users", {"id": current_user["id"]})
         if not _rider or not _rider.get("stripe_customer_id"):
             raise HTTPException(status_code=400, detail="No payment method on file. Please add a card first.")
 
@@ -925,7 +927,8 @@ async def process_payment(ride_id: str, request: Request, current_user: dict = D
 
     # Atomic guard: set payment_status to "processing" only if it's still pending.
     # This prevents race conditions when two concurrent payment requests hit the endpoint.
-    guard_result = await db.rides.update_one(
+    guard_result = await db.update_one(
+        "rides",
         {"id": ride_id, "payment_status": {"$nin": ["paid", "processing"]}},
         {"$set": {"payment_status": "processing"}},
     )
@@ -1011,7 +1014,7 @@ async def share_trip_with_contact(
     ride_id: str, body: ShareTripWithContactRequest, current_user: dict = Depends(get_current_user)
 ):
     """Share trip with a specific contact and send them a notification."""
-    ride = await db.rides.find_one({"id": ride_id})
+    ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("rider_id") != current_user["id"]:
@@ -1023,7 +1026,8 @@ async def share_trip_with_contact(
     share_token = ride.get("shared_trip_token")
     if not share_token:
         share_token = secrets.token_urlsafe(32)
-        await db.rides.update_one(
+        await db.update_one(
+            "rides",
             {"id": ride_id},
             {
                 "$set": {
@@ -1043,7 +1047,8 @@ async def share_trip_with_contact(
     # Avoid duplicates by phone
     if not any(c.get("phone") == body.contact_phone for c in shared_with):
         shared_with.append(contact_entry)
-        await db.rides.update_one(
+        await db.update_one(
+            "rides",
             {"id": ride_id},
             {"$set": {"shared_with": shared_with}},
         )
@@ -1051,9 +1056,9 @@ async def share_trip_with_contact(
     share_url = f"/track/{share_token}"
 
     # Send push notification to contact if they're a registered user
-    contact_user = await db.users.find_one({"phone": body.contact_phone})
+    contact_user = await db.find_one("users", {"phone": body.contact_phone})
     if contact_user:
-        rider = await db.users.find_one({"id": current_user["id"]})
+        rider = await db.find_one("users", {"id": current_user["id"]})
         rider_name = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() if rider else "Someone"
         await send_push_notification(
             contact_user["id"],
@@ -1074,7 +1079,7 @@ async def share_trip_with_contact(
 @api_router.get("/{ride_id}/shared-contacts")
 async def get_shared_contacts(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Get list of contacts this ride has been shared with."""
-    ride = await db.rides.find_one({"id": ride_id})
+    ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("rider_id") != current_user["id"]:
@@ -1330,7 +1335,7 @@ class AddStopMidTripRequest(BaseModel):
 @api_router.post("/{ride_id}/stops")
 async def add_stop_mid_trip(ride_id: str, req: AddStopMidTripRequest, current_user: dict = Depends(get_current_user)):
     """Add a stop to an active ride mid-trip."""
-    ride = await db.rides.find_one({"id": ride_id})
+    ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("rider_id") != current_user["id"]:
@@ -1346,14 +1351,15 @@ async def add_stop_mid_trip(ride_id: str, req: AddStopMidTripRequest, current_us
     else:
         stops.append(new_stop)
 
-    await db.rides.update_one(
+    await db.update_one(
+        "rides",
         {"id": ride_id},
         {"$set": {"stops": stops, "updated_at": datetime.utcnow().isoformat()}},
     )
 
     # Notify driver via WebSocket
     if ride.get("driver_id"):
-        driver = await db.drivers.find_one({"id": ride["driver_id"]})
+        driver = await db.find_one("drivers", {"id": ride["driver_id"]})
         if driver and driver.get("user_id"):
             await manager.send_personal_message(
                 {"type": "stops_updated", "ride_id": ride_id, "stops": stops},
@@ -1366,7 +1372,7 @@ async def add_stop_mid_trip(ride_id: str, req: AddStopMidTripRequest, current_us
 @api_router.delete("/{ride_id}/stops/{stop_index}")
 async def remove_stop_mid_trip(ride_id: str, stop_index: int, current_user: dict = Depends(get_current_user)):
     """Remove a stop from an active ride by index."""
-    ride = await db.rides.find_one({"id": ride_id})
+    ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("rider_id") != current_user["id"]:
@@ -1380,14 +1386,15 @@ async def remove_stop_mid_trip(ride_id: str, stop_index: int, current_user: dict
 
     stops.pop(stop_index)
 
-    await db.rides.update_one(
+    await db.update_one(
+        "rides",
         {"id": ride_id},
         {"$set": {"stops": stops, "updated_at": datetime.utcnow().isoformat()}},
     )
 
     # Notify driver
     if ride.get("driver_id"):
-        driver = await db.drivers.find_one({"id": ride["driver_id"]})
+        driver = await db.find_one("drivers", {"id": ride["driver_id"]})
         if driver and driver.get("user_id"):
             await manager.send_personal_message(
                 {"type": "stops_updated", "ride_id": ride_id, "stops": stops},
@@ -1471,7 +1478,7 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
 @api_router.get("/{ride_id}/chat-status")
 async def get_chat_status(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Check if chat is available for this ride (active rides + 24h post-trip window)."""
-    ride = await db.rides.find_one({"id": ride_id})
+    ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
@@ -1509,7 +1516,7 @@ async def get_call_info(ride_id: str, current_user: dict = Depends(get_current_u
     parties' real numbers. For now, it returns the other party's phone
     directly so the call button works immediately.
     """
-    ride = await db.rides.find_one({"id": ride_id})
+    ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
@@ -1517,7 +1524,7 @@ async def get_call_info(ride_id: str, current_user: dict = Depends(get_current_u
         raise HTTPException(status_code=400, detail="Cannot call on a completed or cancelled ride")
 
     is_rider = ride.get("rider_id") == current_user["id"]
-    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     is_driver = driver and ride.get("driver_id") == driver["id"]
 
     if not (is_rider or is_driver):
@@ -1527,10 +1534,10 @@ async def get_call_info(ride_id: str, current_user: dict = Depends(get_current_u
         # Rider wants to call the driver
         if not ride.get("driver_id"):
             raise HTTPException(status_code=400, detail="No driver assigned yet")
-        target_driver = await db.drivers.find_one({"id": ride["driver_id"]})
+        target_driver = await db.find_one("drivers", {"id": ride["driver_id"]})
         if not target_driver:
             raise HTTPException(status_code=404, detail="Driver not found")
-        target_user = await db.users.find_one({"id": target_driver.get("user_id")})
+        target_user = await db.find_one("users", {"id": target_driver.get("user_id")})
         phone = target_user.get("phone") if target_user else None
         name = (
             f"{target_user.get('first_name', '')} {target_user.get('last_name', '')}".strip()
@@ -1539,7 +1546,7 @@ async def get_call_info(ride_id: str, current_user: dict = Depends(get_current_u
         )
     else:
         # Driver wants to call the rider
-        target_user = await db.users.find_one({"id": ride["rider_id"]})
+        target_user = await db.find_one("users", {"id": ride["rider_id"]})
         phone = target_user.get("phone") if target_user else None
         name = (
             f"{target_user.get('first_name', '')} {target_user.get('last_name', '')}".strip()
@@ -1614,7 +1621,7 @@ async def send_ride_message(ride_id: str, body: SendMessageRequest, current_user
     completion to support lost-item, feedback, and coordination use cases.
     Only the rider or the assigned driver of the ride can send.
     """
-    ride = await db.rides.find_one({"id": ride_id})
+    ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
@@ -1635,7 +1642,7 @@ async def send_ride_message(ride_id: str, body: SendMessageRequest, current_user
                 raise HTTPException(status_code=400, detail="Post-trip chat window has expired (24 hours)")
 
     is_rider = ride.get("rider_id") == current_user["id"]
-    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     is_driver = driver and ride.get("driver_id") == driver["id"]
 
     if not (is_rider or is_driver):
@@ -1650,12 +1657,12 @@ async def send_ride_message(ride_id: str, body: SendMessageRequest, current_user
         "timestamp": datetime.utcnow().isoformat(),
     }
 
-    await db.ride_messages.insert_one(msg_data)
+    await db.insert_one("ride_messages", msg_data)
 
     # Forward to the other party via WebSocket.
     target = None
     if sender == "rider" and ride.get("driver_id"):
-        d = await db.drivers.find_one({"id": ride["driver_id"]})
+        d = await db.find_one("drivers", {"id": ride["driver_id"]})
         if d and d.get("user_id"):
             target = f"driver_{d['user_id']}"
     elif sender == "driver":

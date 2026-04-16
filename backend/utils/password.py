@@ -26,7 +26,8 @@ Usage
     # On login:
     ok, needs_upgrade = verify_password(plain_password, staff["password_hash"])
     if ok and needs_upgrade:
-        await db.admin_staff.update_one(
+        await db.update_one(
+            "admin_staff",
             {"id": staff["id"]},
             {"$set": {"password_hash": hash_password(plain_password)}},
         )

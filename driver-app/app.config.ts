@@ -85,6 +85,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 backgroundColor: '#ee2b2b'
             }
         ],
+        'expo-font',
+        'expo-secure-store',
         '@react-native-firebase/app',
         '@react-native-firebase/messaging',
         '@react-native-firebase/crashlytics',

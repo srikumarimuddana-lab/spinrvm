@@ -64,7 +64,7 @@ class UpdateQuestRequest(BaseModel):
 @api_router.get("")
 async def get_available_quests(current_user: dict = Depends(get_current_user)):
     """Get quests available to the current driver."""
-    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -76,8 +76,7 @@ async def get_available_quests(current_user: dict = Depends(get_current_user)):
             "quests",
             {"is_active": True},
             limit=50,
-            order_by="created_at",
-            order_desc=True,
+            order="created_at",
         )
     except Exception as e:
         logger.error(f"Error fetching quests: {e}")
@@ -148,11 +147,11 @@ async def get_available_quests(current_user: dict = Depends(get_current_user)):
 @api_router.post("/{quest_id}/join")
 async def join_quest(quest_id: str, current_user: dict = Depends(get_current_user)):
     """Opt-in to a quest."""
-    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    quest = await db.quests.find_one({"id": quest_id})
+    quest = await db.find_one("quests", {"id": quest_id})
     if not quest:
         raise HTTPException(status_code=404, detail="Quest not found")
 
@@ -164,7 +163,7 @@ async def join_quest(quest_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=400, detail="Quest has ended")
 
     # Check if already joined
-    existing = await db.quest_progress.find_one({"quest_id": quest_id, "driver_id": driver["id"]})
+    existing = await db.find_one("quest_progress", {"quest_id": quest_id, "driver_id": driver["id"]})
     if existing:
         raise HTTPException(status_code=400, detail="Already joined this quest")
 
@@ -193,7 +192,7 @@ async def join_quest(quest_id: str, current_user: dict = Depends(get_current_use
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }
-    await db.quest_progress.insert_one(progress_data)
+    await db.insert_one("quest_progress", progress_data)
 
     return {
         "progress_id": progress_data["id"],
@@ -207,7 +206,7 @@ async def join_quest(quest_id: str, current_user: dict = Depends(get_current_use
 @api_router.get("/my-quests")
 async def get_my_quests(current_user: dict = Depends(get_current_user)):
     """Get all quests the driver has joined with current progress."""
-    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
@@ -216,8 +215,7 @@ async def get_my_quests(current_user: dict = Depends(get_current_user)):
             "quest_progress",
             {"driver_id": driver["id"]},
             limit=50,
-            order_by="created_at",
-            order_desc=True,
+            order="created_at",
         )
     except Exception as e:
         logger.error(f"Error fetching quest progress: {e}")
@@ -225,7 +223,7 @@ async def get_my_quests(current_user: dict = Depends(get_current_user)):
 
     result = []
     for p in progress_rows:
-        quest = await db.quests.find_one({"id": p["quest_id"]})
+        quest = await db.find_one("quests", {"id": p["quest_id"]})
         if not quest:
             continue
 
@@ -262,11 +260,11 @@ async def get_my_quests(current_user: dict = Depends(get_current_user)):
 @api_router.post("/progress/{progress_id}/claim")
 async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_current_user)):
     """Claim the reward for a completed quest."""
-    driver = await db.drivers.find_one({"user_id": current_user["id"]})
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    progress = await db.quest_progress.find_one({"id": progress_id})
+    progress = await db.find_one("quest_progress", {"id": progress_id})
     if not progress:
         raise HTTPException(status_code=404, detail="Quest progress not found")
 
@@ -276,7 +274,7 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
     if progress["status"] != "completed":
         raise HTTPException(status_code=400, detail="Quest is not completed yet")
 
-    quest = await db.quests.find_one({"id": progress["quest_id"]})
+    quest = await db.find_one("quests", {"id": progress["quest_id"]})
     if not quest:
         raise HTTPException(status_code=404, detail="Quest not found")
 
@@ -290,7 +288,8 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
         old_balance = _d(wallet.get("balance", 0))
         new_balance = old_balance + _d(reward_amount)
 
-        await db.wallets.update_one(
+        await db.update_one(
+            "wallets",
             {"id": wallet["id"]},
             {"$set": {"balance": float(new_balance), "updated_at": datetime.utcnow().isoformat()}},
         )
@@ -305,7 +304,8 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
         )
 
     # Mark as claimed
-    await db.quest_progress.update_one(
+    await db.update_one(
+        "quest_progress",
         {"id": progress_id},
         {
             "$set": {
@@ -347,7 +347,7 @@ async def admin_create_quest(req: CreateQuestRequest, admin: dict = Depends(get_
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }
-    await db.quests.insert_one(quest_data)
+    await db.insert_one("quests", quest_data)
 
     return quest_data
 
@@ -370,8 +370,7 @@ async def admin_list_quests(
             filters,
             limit=limit,
             skip=offset,
-            order_by="created_at",
-            order_desc=True,
+            order="created_at",
         )
     except Exception as e:
         logger.error(f"Error fetching quests: {e}")
@@ -409,7 +408,7 @@ async def admin_list_quests(
 @api_router.patch("/admin/{quest_id}")
 async def admin_update_quest(quest_id: str, req: UpdateQuestRequest, admin: dict = Depends(get_admin_user)):
     """Update a quest (admin only)."""
-    quest = await db.quests.find_one({"id": quest_id})
+    quest = await db.find_one("quests", {"id": quest_id})
     if not quest:
         raise HTTPException(status_code=404, detail="Quest not found")
 
@@ -425,7 +424,7 @@ async def admin_update_quest(quest_id: str, req: UpdateQuestRequest, admin: dict
     if req.max_participants is not None:
         update_data["max_participants"] = req.max_participants
 
-    await db.quests.update_one({"id": quest_id}, {"$set": update_data})
+    await db.update_one("quests", {"id": quest_id}, {"$set": update_data})
 
     return {**quest, **update_data}
 
@@ -439,7 +438,7 @@ async def admin_get_quest_participants(
     admin: dict = Depends(get_admin_user),
 ):
     """Get participants of a quest with progress details (admin only)."""
-    quest = await db.quests.find_one({"id": quest_id})
+    quest = await db.find_one("quests", {"id": quest_id})
     if not quest:
         raise HTTPException(status_code=404, detail="Quest not found")
 
@@ -453,8 +452,7 @@ async def admin_get_quest_participants(
             filters,
             limit=limit,
             skip=offset,
-            order_by="created_at",
-            order_desc=True,
+            order="created_at",
         )
     except Exception as e:
         logger.error(f"Error fetching participants: {e}")
@@ -462,10 +460,10 @@ async def admin_get_quest_participants(
 
     result = []
     for p in progress_rows:
-        driver = await db.drivers.find_one({"id": p["driver_id"]})
+        driver = await db.find_one("drivers", {"id": p["driver_id"]})
         driver_name = "Unknown"
         if driver:
-            user = await db.users.find_one({"id": driver.get("user_id")})
+            user = await db.find_one("users", {"id": driver.get("user_id")})
             if user:
                 driver_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
 

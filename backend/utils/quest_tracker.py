@@ -32,14 +32,15 @@ async def update_quest_progress_on_ride_complete(driver_id: str, ride: dict):
 
     for progress in progress_rows:
         try:
-            quest = await db.quests.find_one({"id": progress["quest_id"]})
+            quest = await db.find_one("quests", {"id": progress["quest_id"]})
             if not quest or not quest.get("is_active"):
                 continue
 
             # Check if quest has expired
             now = datetime.utcnow().isoformat()
             if quest.get("end_date", "") < now:
-                await db.quest_progress.update_one(
+                await db.update_one(
+                    "quest_progress",
                     {"id": progress["id"]},
                     {"$set": {"status": "expired", "updated_at": now}},
                 )
@@ -80,7 +81,8 @@ async def update_quest_progress_on_ride_complete(driver_id: str, ride: dict):
                 update_data["completed_at"] = datetime.utcnow().isoformat()
                 logger.info(f"Driver {driver_id} completed quest {quest['id']} ({quest['title']})")
 
-            await db.quest_progress.update_one(
+            await db.update_one(
+                "quest_progress",
                 {"id": progress["id"]},
                 {"$set": update_data},
             )

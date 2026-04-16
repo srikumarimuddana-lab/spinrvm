@@ -19,7 +19,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://spinr-api.onrender.com"
+        "EXPO_PUBLIC_BACKEND_URL": "https://spinr-backend-production.up.railway.app"
       }
     },
     "preview": {
@@ -28,7 +28,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://spinr-api.fly.dev"
+        "EXPO_PUBLIC_BACKEND_URL": "https://spinr-backend-production.up.railway.app"
       }
     },
     "production": {

@@ -493,6 +493,9 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
                 q = q.lte(k, v["$lte"])
             elif "$ne" in v:
                 q = q.neq(k, v["$ne"])
+            elif "$nin" in v and isinstance(v["$nin"], (list, tuple)):
+                # Supabase: not.in_(k, values)
+                q = q.not_.in_(k, list(v["$nin"]))
             # Add more query operators as needed
         else:
             q = q.eq(k, v)
@@ -546,6 +549,12 @@ async def count_documents(table: str, filters: Optional[Dict[str, Any]] = None) 
         return 0
 
     return await run_sync(_fn)
+
+
+async def find_one(table: str, filters: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Return the first row matching filters, or None."""
+    rows = await get_rows(table, filters, limit=1)
+    return rows[0] if rows else None
 
 
 async def insert_one(table: str, doc: Dict[str, Any]):

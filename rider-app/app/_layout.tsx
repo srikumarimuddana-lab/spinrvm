@@ -291,7 +291,7 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider>
-      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} />
+      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} />
     </ThemeProvider>
   );
 }
@@ -299,9 +299,11 @@ export default function RootLayout() {
 function RootLayoutInner({
   isOffline,
   setIsOffline,
+  stripePublishableKey,
 }: {
   isOffline: boolean;
   setIsOffline: (v: boolean) => void;
+  stripePublishableKey: string | null;
 }) {
   const { isDark } = useTheme();
   return (

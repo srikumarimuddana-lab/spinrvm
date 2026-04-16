@@ -11,7 +11,7 @@ Example:
     @app.get("/users")
     async def get_users(app: FastAPI):
         db = app.state.db
-        users = await db.users.find({})
+        users = await db.get_rows("users", {})
         return users
 """
 

@@ -52,7 +52,7 @@ def _calculate_tier(lifetime_points: int) -> str:
 
 
 async def _get_or_create_account(user_id: str) -> dict:
-    account = await db.loyalty_accounts.find_one({"user_id": user_id})
+    account = await db.find_one("loyalty_accounts", {"user_id": user_id})
     if account:
         return account
     account = {
@@ -64,7 +64,7 @@ async def _get_or_create_account(user_id: str) -> dict:
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }
-    await db.loyalty_accounts.insert_one(account)
+    await db.insert_one("loyalty_accounts", account)
     return account
 
 
@@ -100,8 +100,7 @@ async def get_loyalty_history(
             "loyalty_transactions",
             {"user_id": current_user["id"]},
             limit=limit,
-            order_by="created_at",
-            order_desc=True,
+            order="created_at",
         )
     except Exception as e:
         logger.error(f"Failed to fetch loyalty history: {e}")
@@ -112,7 +111,7 @@ async def get_loyalty_history(
 @api_router.post("/earn")
 async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = Depends(get_current_user)):
     """Award loyalty points for a completed ride. Called after ride completion."""
-    ride = await db.rides.find_one({"id": ride_id})
+    ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("rider_id") != current_user["id"]:
@@ -121,7 +120,7 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
         raise HTTPException(status_code=400, detail="Ride not completed")
 
     # Check if already awarded
-    existing = await db.loyalty_transactions.find_one(
+    existing = await db.find_one("loyalty_transactions",
         {"user_id": current_user["id"], "reference_id": ride_id, "type": "ride_earned"}
     )
     if existing:
@@ -142,7 +141,8 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
     new_lifetime = account.get("lifetime_points", 0) + total_points
     new_tier = _calculate_tier(new_lifetime)
 
-    await db.loyalty_accounts.update_one(
+    await db.update_one(
+        "loyalty_accounts",
         {"id": account["id"]},
         {
             "$set": {
@@ -155,7 +155,7 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
     )
 
     # Record transaction
-    await db.loyalty_transactions.insert_one(
+    await db.insert_one("loyalty_transactions",
         {
             "id": str(uuid.uuid4()),
             "user_id": current_user["id"],
@@ -196,7 +196,8 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
     credit_amount = round(req.points / REDEMPTION_RATE, 2)
     new_balance = account.get("points", 0) - req.points
 
-    await db.loyalty_accounts.update_one(
+    await db.update_one(
+        "loyalty_accounts",
         {"id": account["id"]},
         {"$set": {"points": new_balance, "updated_at": datetime.utcnow().isoformat()}},
     )
@@ -208,7 +209,8 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
         wallet = await get_or_create_wallet(current_user["id"])
         old_wb = _d(wallet.get("balance", 0))
         new_wb = old_wb + _d(credit_amount)
-        await db.wallets.update_one(
+        await db.update_one(
+            "wallets",
             {"id": wallet["id"]},
             {"$set": {"balance": float(new_wb), "updated_at": datetime.utcnow().isoformat()}},
         )
@@ -223,7 +225,8 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
     except Exception as e:
         logger.error(f"Loyalty redeem wallet credit failed: {e}")
 
-    await db.loyalty_transactions.insert_one(
+    await db.insert_one(
+        "loyalty_transactions",
         {
             "id": str(uuid.uuid4()),
             "user_id": current_user["id"],
@@ -231,7 +234,7 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
             "type": "redeemed",
             "description": f"Redeemed {req.points} pts for ${credit_amount:.2f} wallet credit",
             "created_at": datetime.utcnow().isoformat(),
-        }
+        },
     )
 
     return {

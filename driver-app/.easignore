@@ -1,0 +1,35 @@
+# Inherit from .gitignore
+node_modules/
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+.metro-health-check*
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+.DS_Store
+*.pem
+.env*.local
+*.tsbuildinfo
+app-example
+
+# EAS-specific: skip Gradle caches (rebuilt on EAS servers)
+android/.gradle/
+.gradle/
+.metro-cache/
+
+# Skip test/dev files not needed for builds
+e2e/
+__tests__/
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx

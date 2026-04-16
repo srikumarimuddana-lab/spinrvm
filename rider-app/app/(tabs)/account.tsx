@@ -193,6 +193,16 @@ export default function AccountScreen() {
             title="Promotions" subtitle="Promo codes & rewards"
             onPress={() => router.push('/promotions' as any)}
           />
+          <MenuItem
+            icon="notifications-outline" iconColor="#6366F1" iconBg="#EEF2FF"
+            title="Notifications" subtitle="Alerts, ride updates, offers"
+            onPress={() => router.push('/notifications' as any)}
+          />
+          <MenuItem
+            icon="trophy-outline" iconColor="#F59E0B" iconBg="#FEF3C7"
+            title="Rewards" subtitle="Points, tier status, history"
+            onPress={() => router.push('/loyalty' as any)}
+          />
         </View>
 
         {/* Safety & Privacy */}

@@ -41,8 +41,7 @@ async def get_favorite_routes(current_user: dict = Depends(get_current_user)):
             "favorite_routes",
             {"user_id": current_user["id"]},
             limit=20,
-            order_by="use_count",
-            order_desc=True,
+            order="use_count",
         )
     except Exception as e:
         logger.error(f"Failed to fetch favorites: {e}")
@@ -83,18 +82,19 @@ async def save_favorite_route(req: SaveFavoriteRequest, current_user: dict = Dep
         "use_count": 0,
         "created_at": datetime.utcnow().isoformat(),
     }
-    await db.favorite_routes.insert_one(fav_data)
+    await db.insert_one("favorite_routes", fav_data)
     return fav_data
 
 
 @api_router.post("/{favorite_id}/use")
 async def use_favorite_route(favorite_id: str, current_user: dict = Depends(get_current_user)):
     """Increment use count when rider books from a favorite. Returns the route data."""
-    fav = await db.favorite_routes.find_one({"id": favorite_id, "user_id": current_user["id"]})
+    fav = await db.find_one("favorite_routes", {"id": favorite_id, "user_id": current_user["id"]})
     if not fav:
         raise HTTPException(status_code=404, detail="Favorite not found")
 
-    await db.favorite_routes.update_one(
+    await db.update_one(
+        "favorite_routes",
         {"id": favorite_id},
         {"$set": {"use_count": (fav.get("use_count", 0) or 0) + 1, "last_used_at": datetime.utcnow().isoformat()}},
     )
@@ -104,11 +104,11 @@ async def use_favorite_route(favorite_id: str, current_user: dict = Depends(get_
 @api_router.delete("/{favorite_id}")
 async def delete_favorite_route(favorite_id: str, current_user: dict = Depends(get_current_user)):
     """Remove a favorite route."""
-    fav = await db.favorite_routes.find_one({"id": favorite_id, "user_id": current_user["id"]})
+    fav = await db.find_one("favorite_routes", {"id": favorite_id, "user_id": current_user["id"]})
     if not fav:
         raise HTTPException(status_code=404, detail="Favorite not found")
 
-    await db.favorite_routes.delete_one({"id": favorite_id})
+    await db.delete_one("favorite_routes", {"id": favorite_id})
     return {"success": True}
 
 
@@ -117,7 +117,7 @@ async def save_favorite_from_ride(
     ride_id: str, name: str = Query("My Route"), current_user: dict = Depends(get_current_user)
 ):
     """Save a completed ride's route as a favorite."""
-    ride = await db.rides.find_one({"id": ride_id})
+    ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("rider_id") != current_user["id"]:

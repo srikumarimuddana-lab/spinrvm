@@ -18,7 +18,7 @@ except ImportError:
     from dependencies import get_admin_user
 
 logger = logging.getLogger(__name__)
-api_router = APIRouter(prefix="/admin/analytics", tags=["Admin Analytics"])
+api_router = APIRouter(prefix="/analytics", tags=["Admin Analytics"])
 
 
 def _parse_date_range(date_range: str) -> datetime:
@@ -49,7 +49,7 @@ async def get_cancellation_breakdown(
 
     try:
         filters = {"status": "cancelled"}
-        rides = await db.get_rows("rides", filters, limit=10000, order_by="created_at", order_desc=True)
+        rides = await db.get_rows("rides", filters, limit=10000, order="created_at")
     except Exception as e:
         logger.error(f"Failed to fetch cancelled rides: {e}")
         rides = []
@@ -155,8 +155,7 @@ async def get_driver_acceptance_rates(
                 "rides",
                 {"driver_id": driver_id},
                 limit=500,
-                order_by="created_at",
-                order_desc=True,
+                order="created_at",
             )
         except Exception:
             all_rides = []
@@ -180,7 +179,7 @@ async def get_driver_acceptance_rates(
         cancellation_rate = round((cancelled_by_driver / total_assigned * 100), 1) if total_assigned > 0 else 0
 
         # Get driver name
-        user = await db.users.find_one({"id": driver.get("user_id")})
+        user = await db.find_one("users", {"id": driver.get("user_id")})
         name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Unknown"
 
         result.append(
@@ -227,7 +226,7 @@ async def get_analytics_overview(
     start_date = _parse_date_range(date_range)
 
     try:
-        all_rides = await db.get_rows("rides", {}, limit=10000, order_by="created_at", order_desc=True)
+        all_rides = await db.get_rows("rides", {}, limit=10000, order="created_at")
     except Exception as e:
         logger.error(f"Failed to fetch rides: {e}")
         all_rides = []
@@ -347,8 +346,7 @@ async def get_surge_history(
             "surge_pricing",
             {"service_area_id": area_id},
             limit=500,
-            order_by="created_at",
-            order_desc=True,
+            order="created_at",
         )
         # Filter by time
         filtered = [

@@ -352,7 +352,7 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
 
     user = None
     try:
-        user = await db.users.find_one({"id": user_id})
+        user = await db.find_one("users", {"id": user_id})
     except Exception as e:
         logger.warning(f"refresh: user lookup failed for {user_id}: {e}")
     if not user:
@@ -419,7 +419,7 @@ async def logout_all(request: Request, current_user: dict = Depends(get_current_
     user_id = current_user["id"]
     new_version = int(current_user.get("token_version") or 0) + 1
     try:
-        await db.users.update_one({"id": user_id}, {"$set": {"token_version": new_version}})
+        await db.update_one("users", {"id": user_id}, {"$set": {"token_version": new_version}})
     except Exception as e:
         logger.warning(f"logout-all: could not bump token_version for {user_id}: {e}")
         raise HTTPException(status_code=500, detail="Could not invalidate sessions") from e

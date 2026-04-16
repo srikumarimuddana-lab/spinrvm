@@ -66,9 +66,9 @@ async def admin_send_cloud_message(payload: Dict[str, Any]):
         if audience in ("particular_customer", "particular_driver"):
             target_users = [{"id": uid} for uid in particular_ids]
         elif audience == "customers":
-            target_users = await db.users.find({"role": "rider"}).to_list(10000)
+            target_users = await db.get_rows("users", {"role": "rider"}, limit=10000)
         elif audience == "drivers":
-            target_users = await db.users.find({"role": "driver"}).to_list(10000)
+            target_users = await db.get_rows("users", {"role": "driver"}, limit=10000)
 
         for u in target_users:
             uid = u.get("id") if isinstance(u, dict) else u

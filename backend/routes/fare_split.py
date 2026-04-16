@@ -55,7 +55,7 @@ class PaySplitRequest(BaseModel):
 @api_router.post("")
 async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = Depends(get_current_user)):
     """Create a fare split request for a ride."""
-    ride = await db.rides.find_one({"id": req.ride_id})
+    ride = await db.find_one("rides", {"id": req.ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
@@ -63,7 +63,7 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
         raise HTTPException(status_code=403, detail="Only the ride requester can split the fare")
 
     # Check no existing active split for this ride
-    existing = await db.fare_splits.find_one({"ride_id": req.ride_id, "status": {"$ne": "cancelled"}})
+    existing = await db.find_one("fare_splits", {"ride_id": req.ride_id, "status": {"$ne": "cancelled"}})
     if existing:
         raise HTTPException(status_code=400, detail="Fare split already exists for this ride")
 
@@ -83,13 +83,13 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }
-    await db.fare_splits.insert_one(split_data)
+    await db.insert_one("fare_splits", split_data)
 
     # Create participant entries
     participants = []
     for phone in req.participant_phones:
         # Look up user by phone (may not exist yet)
-        user = await db.users.find_one({"phone": phone})
+        user = await db.find_one("users", {"phone": phone})
         participant = {
             "id": str(uuid.uuid4()),
             "fare_split_id": split_id,
@@ -99,7 +99,7 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
             "status": "pending",
             "created_at": datetime.utcnow().isoformat(),
         }
-        await db.fare_split_participants.insert_one(participant)
+        await db.insert_one("fare_split_participants", participant)
         participants.append(participant)
 
     return {
@@ -123,7 +123,7 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
 @api_router.get("/{split_id}")
 async def get_fare_split(split_id: str, current_user: dict = Depends(get_current_user)):
     """Get fare split details."""
-    split = await db.fare_splits.find_one({"id": split_id})
+    split = await db.find_one("fare_splits", {"id": split_id})
     if not split:
         raise HTTPException(status_code=404, detail="Fare split not found")
 
@@ -167,7 +167,7 @@ async def get_fare_split(split_id: str, current_user: dict = Depends(get_current
 @api_router.get("/ride/{ride_id}")
 async def get_fare_split_for_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Get fare split for a specific ride (if any)."""
-    split = await db.fare_splits.find_one({"ride_id": ride_id, "status": {"$ne": "cancelled"}})
+    split = await db.find_one("fare_splits", {"ride_id": ride_id, "status": {"$ne": "cancelled"}})
     if not split:
         return {"has_split": False}
 
@@ -207,7 +207,7 @@ async def respond_to_split(
     current_user: dict = Depends(get_current_user),
 ):
     """Accept or decline a fare split invitation."""
-    participant = await db.fare_split_participants.find_one({"id": participant_id})
+    participant = await db.find_one("fare_split_participants", {"id": participant_id})
     if not participant:
         raise HTTPException(status_code=404, detail="Split invitation not found")
 
@@ -218,14 +218,15 @@ async def respond_to_split(
         raise HTTPException(status_code=400, detail=f"Already {participant['status']}")
 
     new_status = "accepted" if req.action == "accept" else "declined"
-    await db.fare_split_participants.update_one(
+    await db.update_one(
+        "fare_split_participants",
         {"id": participant_id},
         {"$set": {"status": new_status}},
     )
 
     # If declined, update split status and recalculate shares
     if new_status == "declined":
-        split = await db.fare_splits.find_one({"id": participant["fare_split_id"]})
+        split = await db.find_one("fare_splits", {"id": participant["fare_split_id"]})
         if split:
             all_participants = await db.get_rows(
                 "fare_split_participants",
@@ -238,12 +239,14 @@ async def respond_to_split(
             # Update share amounts for remaining participants
             for p in all_participants:
                 if p["status"] not in ("declined",):
-                    await db.fare_split_participants.update_one(
+                    await db.update_one(
+                        "fare_split_participants",
                         {"id": p["id"]},
                         {"$set": {"share_amount": new_share}},
                     )
 
-            await db.fare_splits.update_one(
+            await db.update_one(
+                "fare_splits",
                 {"id": split["id"]},
                 {"$set": {"split_count": active_count, "updated_at": datetime.utcnow().isoformat()}},
             )
@@ -258,7 +261,7 @@ async def pay_split_share(
     current_user: dict = Depends(get_current_user),
 ):
     """Pay your share of a fare split."""
-    participant = await db.fare_split_participants.find_one({"id": participant_id})
+    participant = await db.find_one("fare_split_participants", {"id": participant_id})
     if not participant:
         raise HTTPException(status_code=404, detail="Split invitation not found")
 
@@ -285,7 +288,8 @@ async def pay_split_share(
             raise HTTPException(status_code=400, detail="Insufficient wallet balance")
 
         new_balance = balance - debit
-        await db.wallets.update_one(
+        await db.update_one(
+            "wallets",
             {"id": wallet["id"]},
             {"$set": {"balance": float(new_balance), "updated_at": datetime.utcnow().isoformat()}},
         )
@@ -300,13 +304,14 @@ async def pay_split_share(
         )
 
     # Mark participant as paid
-    await db.fare_split_participants.update_one(
+    await db.update_one(
+        "fare_split_participants",
         {"id": participant_id},
         {"$set": {"status": "paid", "paid_at": datetime.utcnow().isoformat()}},
     )
 
     # Check if all participants have paid → mark split as completed
-    split = await db.fare_splits.find_one({"id": participant["fare_split_id"]})
+    split = await db.find_one("fare_splits", {"id": participant["fare_split_id"]})
     if split:
         all_participants = await db.get_rows(
             "fare_split_participants",
@@ -315,7 +320,8 @@ async def pay_split_share(
         )
         all_resolved = all(p["status"] in ("paid", "declined") for p in all_participants)
         if all_resolved:
-            await db.fare_splits.update_one(
+            await db.update_one(
+                "fare_splits",
                 {"id": split["id"]},
                 {"$set": {"status": "completed", "updated_at": datetime.utcnow().isoformat()}},
             )
@@ -326,7 +332,7 @@ async def pay_split_share(
 @api_router.post("/{split_id}/cancel")
 async def cancel_fare_split(split_id: str, current_user: dict = Depends(get_current_user)):
     """Cancel a fare split (only the requester can do this)."""
-    split = await db.fare_splits.find_one({"id": split_id})
+    split = await db.find_one("fare_splits", {"id": split_id})
     if not split:
         raise HTTPException(status_code=404, detail="Fare split not found")
 
@@ -336,7 +342,8 @@ async def cancel_fare_split(split_id: str, current_user: dict = Depends(get_curr
     if split["status"] == "completed":
         raise HTTPException(status_code=400, detail="Cannot cancel a completed split")
 
-    await db.fare_splits.update_one(
+    await db.update_one(
+        "fare_splits",
         {"id": split_id},
         {"$set": {"status": "cancelled", "updated_at": datetime.utcnow().isoformat()}},
     )

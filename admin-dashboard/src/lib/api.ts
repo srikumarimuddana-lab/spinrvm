@@ -728,3 +728,9 @@ export const resolveDispute = (id: string, data: { resolution: string; refund_am
 /* ── Live Ride Monitoring ───────────────── */
 export const getActiveRides = () =>
     request<any>("/api/admin/rides/active");
+
+export const getMonitoringDrivers = () =>
+    request<any[]>("/api/admin/monitoring/drivers");
+
+export const getMonitoringRides = () =>
+    request<any[]>("/api/admin/monitoring/rides");

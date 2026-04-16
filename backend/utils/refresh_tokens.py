@@ -88,7 +88,7 @@ async def issue_refresh_token(
         "ip": (ip or "")[:64] or None,
     }
 
-    result = await db.refresh_tokens.insert_one(row)
+    result = await db.insert_one("refresh_tokens", row)
     row_id = (result or {}).get("id") or row.get("id") or ""
 
     if replaces:
@@ -96,7 +96,8 @@ async def issue_refresh_token(
         # update fails we still return the new token; the worst case
         # is an un-chained row that the audit script will flag.
         try:
-            await db.refresh_tokens.update_one(
+            await db.update_one(
+                "refresh_tokens",
                 {"id": replaces},
                 {"$set": {"replaced_by": row_id, "revoked_at": now.isoformat()}},
             )
@@ -119,7 +120,7 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
 
     token_hash = _hash_refresh_token(raw)
     try:
-        row = await db.refresh_tokens.find_one({"token_hash": token_hash})
+        row = await db.find_one("refresh_tokens", {"token_hash": token_hash})
     except Exception as e:
         logger.error(f"refresh_tokens lookup failed: {e}")
         return None
@@ -159,14 +160,15 @@ async def revoke_refresh_token(raw: str) -> bool:
         return False
     token_hash = _hash_refresh_token(raw)
     try:
-        row = await db.refresh_tokens.find_one({"token_hash": token_hash})
+        row = await db.find_one("refresh_tokens", {"token_hash": token_hash})
     except Exception as e:
         logger.warning(f"revoke_refresh_token lookup failed: {e}")
         return False
     if not row or row.get("revoked_at"):
         return False
     try:
-        await db.refresh_tokens.update_one(
+        await db.update_one(
+            "refresh_tokens",
             {"id": row["id"]},
             {"$set": {"revoked_at": datetime.now(timezone.utc).isoformat()}},
         )
@@ -191,7 +193,7 @@ async def revoke_all_for_user(user_id: str) -> int:
     """
     now_iso = datetime.now(timezone.utc).isoformat()
     try:
-        rows = await db.refresh_tokens.find({"user_id": user_id}).to_list(1000)
+        rows = await db.get_rows("refresh_tokens", {"user_id": user_id}, limit=1000)
     except Exception as e:
         logger.warning(f"refresh_tokens scan failed for user {user_id}: {e}")
         return 0
@@ -200,7 +202,8 @@ async def revoke_all_for_user(user_id: str) -> int:
         if row.get("revoked_at"):
             continue
         try:
-            await db.refresh_tokens.update_one(
+            await db.update_one(
+                "refresh_tokens",
                 {"id": row["id"]},
                 {"$set": {"revoked_at": now_iso}},
             )

@@ -14,6 +14,11 @@ config.cacheStores = [
 // Reduce the number of workers to decrease resource usage
 config.maxWorkers = 2;
 
+// Add path aliases for shared modules (mirrors driver-app setup)
+config.resolver.extraNodeModules = {
+  '@shared': path.resolve(__dirname, '../shared'),
+};
+
 // Watch the shared directory
 config.watchFolders = [
   path.resolve(__dirname, '../shared'),

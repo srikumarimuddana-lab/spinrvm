@@ -102,17 +102,17 @@ async def admin_send_notification(notification: Dict[str, Any]):
         # TODO: Integrate with push notification service (FCM)
         logger.info(f"Notification sent to user {user_id}: {title}")
     elif audience == "all":
-        all_users = await db.users.find({}).to_list(10000)
+        all_users = await db.get_rows("users", {}, limit=10000)
         for u in all_users or []:
             await send_push_notification(u["id"], title, body)
         logger.info(f"Broadcast notification to all users: {title}")
     elif audience == "riders":
-        riders = await db.users.find({"role": "rider"}).to_list(10000)
+        riders = await db.get_rows("users", {"role": "rider"}, limit=10000)
         for u in riders or []:
             await send_push_notification(u["id"], title, body)
         logger.info(f"Broadcast notification to all riders: {title}")
     elif audience == "drivers":
-        drivers = await db.users.find({"role": "driver"}).to_list(10000)
+        drivers = await db.get_rows("users", {"role": "driver"}, limit=10000)
         for u in drivers or []:
             await send_push_notification(u["id"], title, body)
         logger.info(f"Broadcast notification to all drivers: {title}")

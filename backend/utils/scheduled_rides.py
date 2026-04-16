@@ -27,7 +27,7 @@ async def _dispatch_scheduled_ride(ride: dict):
     ride_id = ride["id"]
     try:
         # Only dispatch if still in scheduled state
-        current = await db.rides.find_one({"id": ride_id})
+        current = await db.find_one("rides", {"id": ride_id})
         if not current or current.get("status") != "searching":
             # Already dispatched, cancelled, or status changed
             if current and current.get("is_scheduled") and current.get("status") == "searching":
@@ -36,7 +36,8 @@ async def _dispatch_scheduled_ride(ride: dict):
                 return
 
         # Mark as dispatched so we don't process it again
-        await db.rides.update_one(
+        await db.update_one(
+            "rides",
             {"id": ride_id},
             {
                 "$set": {
@@ -87,7 +88,8 @@ async def _send_reminder(ride: dict):
                 data={"type": "scheduled_ride_reminder", "ride_id": ride_id},
             )
 
-        await db.rides.update_one(
+        await db.update_one(
+            "rides",
             {"id": ride_id},
             {"$set": {"reminder_sent": True}},
         )
@@ -111,7 +113,7 @@ async def check_scheduled_rides():
                 "status": "searching",
             },
             limit=100,
-            order_by="scheduled_time",
+            order="scheduled_time",
         )
     except Exception as e:
         logger.error(f"Failed to fetch scheduled rides: {e}")

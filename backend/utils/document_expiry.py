@@ -27,7 +27,7 @@ async def check_expiring_documents():
     warning_cutoff = now + timedelta(days=EXPIRY_WARNING_DAYS)
 
     try:
-        all_drivers = await db.drivers.find({}).to_list(1000)
+        all_drivers = await db.get_rows("drivers", {}, limit=1000)
     except Exception as e:
         logger.error(f"Doc expiry: failed to fetch drivers: {e}")
         return
@@ -116,7 +116,8 @@ async def check_expiring_documents():
                 f"Please renew: {doc_list}. You won't be able to go online with expired documents.",
                 data={"type": "document_expiry_warning", "driver_id": driver["id"]},
             )
-            await db.drivers.update_one(
+            await db.update_one(
+                "drivers",
                 {"id": driver["id"]},
                 {"$set": {"doc_expiry_warned_at": now.isoformat()}},
             )

@@ -122,7 +122,7 @@ class FareService:
 
     async def list_active_vehicle_types(self) -> List[Dict[str, Any]]:
         """Fetch all active vehicle types."""
-        return await self.db.vehicle_types.find({"is_active": True}).to_list(100)
+        return await self.db.get_rows("vehicle_types", {"is_active": True}, limit=100)
 
     async def fares_for_location(self, lat: float, lng: float) -> List[Dict[str, Any]]:
         """
@@ -139,16 +139,18 @@ class FareService:
         if not vehicle_types:
             return []
 
-        all_areas = await self.db.service_areas.find({"is_active": True}).to_list(100)
+        all_areas = await self.db.get_rows("service_areas", {"is_active": True}, limit=100)
         matching_area = find_service_area_for_point(all_areas, lat, lng)
 
         if not matching_area:
             return build_default_fares(vehicle_types)
 
         surge = float(matching_area.get("surge_multiplier", 1.0))
-        fare_configs = await self.db.fare_configs.find(
-            {"service_area_id": matching_area["id"], "is_active": True}
-        ).to_list(100)
+        fare_configs = await self.db.get_rows(
+            "fare_configs",
+            {"service_area_id": matching_area["id"], "is_active": True},
+            limit=100,
+        )
 
         if not fare_configs:
             return build_default_fares(vehicle_types, surge)

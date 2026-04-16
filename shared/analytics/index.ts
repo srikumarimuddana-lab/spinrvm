@@ -39,7 +39,11 @@ async function getInstance(): Promise<AnalyticsInstance | null> {
       _instance = { kind: 'web', instance: getAnalytics(firebaseApp) };
     } else {
       // Native: @react-native-firebase/analytics (only in EAS builds)
-      const rnAnalytics = require('@react-native-firebase/analytics').default;
+      // Use globalThis to grab require at runtime so Metro's static
+      // analysis cannot trace this call — the module only exists in
+      // EAS builds, not in Expo Go.
+      const dynamicRequire = (globalThis as any).require ?? require;
+      const rnAnalytics = dynamicRequire('@react-native-firebase/analytics').default;
       _instance = { kind: 'native', instance: rnAnalytics() };
     }
   } catch {

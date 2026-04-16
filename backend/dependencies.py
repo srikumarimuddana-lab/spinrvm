@@ -162,6 +162,25 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         logger.error(f"JWT verification failed: {e}")
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}") from e
 
+    # Admin tokens are minted by routes/admin/auth.py and carry `role` +
+    # `email` + `modules` claims that regular rider/driver tokens do not
+    # have. Since the token is signed with our own JWT_SECRET, we can
+    # trust these claims and return the user directly without a DB lookup.
+    # Without this check, admin-001 (which has no users row) would be
+    # auto-created as a rider and fail the get_admin_user role check.
+    _admin_roles = {"admin", "super_admin", "operations", "support", "finance", "custom"}
+    if payload.get("role") in _admin_roles and payload.get("email"):
+        return {
+            "id": payload["user_id"],
+            "email": payload.get("email"),
+            "phone": payload.get("phone", ""),
+            "role": payload["role"],
+            "modules": payload.get("modules", []),
+            "token_version": int(payload.get("token_version") or 0),
+            "profile_complete": True,
+            "is_driver": False,
+        }
+
     user = None
     try:
         user = await db_supabase.get_user_by_id(payload["user_id"])

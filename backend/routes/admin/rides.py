@@ -72,8 +72,7 @@ async def admin_get_active_rides():
             "rides",
             {"status": {"$in": active_statuses}},
             limit=200,
-            order_by="created_at",
-            order_desc=True,
+            order="created_at",
         )
     except Exception as e:
         logger.error(f"Failed to fetch active rides: {e}")
@@ -587,10 +586,10 @@ async def admin_get_payouts(
     # Enrich with driver names
     enriched = []
     for p in payouts:
-        driver = await db.drivers.find_one({"id": p.get("driver_id")}) if p.get("driver_id") else None
+        driver = await db.find_one("drivers", {"id": p.get("driver_id")}) if p.get("driver_id") else None
         driver_name = "Unknown"
         if driver and driver.get("user_id"):
-            user = await db.users.find_one({"id": driver["user_id"]})
+            user = await db.find_one("users", {"id": driver["user_id"]})
             if user:
                 driver_name = _user_display_name(user)
         enriched.append({**p, "driver_name": driver_name})

@@ -33,7 +33,7 @@ const CONFIDENCE_COLORS: Record<string, string> = {
 
 export default function ForecastPage() {
   const [hoursAhead, setHoursAhead] = useState("24");
-  const [areaId, setAreaId] = useState<string>("");
+  const [areaId, setAreaId] = useState<string>("all");
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState<any>(null);
   const [forecast, setForecast] = useState<any[]>([]);
@@ -42,9 +42,10 @@ export default function ForecastPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
+      const areaParam = areaId === "all" ? undefined : areaId;
       const [fc, summ, areaList] = await Promise.all([
-        getDemandForecast(Number(hoursAhead), areaId || undefined).catch(() => null),
-        getDemandForecastSummary(areaId || undefined).catch(() => null),
+        getDemandForecast(Number(hoursAhead), areaParam).catch(() => null),
+        getDemandForecastSummary(areaParam).catch(() => null),
         areas.length ? Promise.resolve(areas) : getServiceAreas().catch(() => []),
       ]);
       if (fc?.forecast) setForecast(fc.forecast);
@@ -83,7 +84,7 @@ export default function ForecastPage() {
               <SelectValue placeholder="All Areas" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All Areas</SelectItem>
+              <SelectItem value="all">All Areas</SelectItem>
               {areas.filter((a: any) => a.is_active && !a.parent_service_area_id).map((a: any) => (
                 <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
               ))}

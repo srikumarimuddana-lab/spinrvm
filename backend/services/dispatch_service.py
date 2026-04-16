@@ -142,7 +142,7 @@ class DispatchService:
 
         area_settings: Dict[str, Any] = {}
         if ride.get("service_area_id"):
-            area = await self.db.service_areas.find_one({"id": ride["service_area_id"]})
+            area = await self.db.find_one("service_areas", {"id": ride["service_area_id"]})
             if area:
                 area_settings = area
 
@@ -159,13 +159,15 @@ class DispatchService:
 
     async def find_candidate_drivers(self, ride: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Online + available drivers for the ride's vehicle type."""
-        return await self.db.drivers.find(
+        return await self.db.get_rows(
+            "drivers",
             {
                 "is_online": True,
                 "is_available": True,
                 "vehicle_type_id": ride["vehicle_type_id"],
-            }
-        ).to_list(500)
+            },
+            limit=500,
+        )
 
     async def claim_driver(self, driver_id: str) -> bool:
         """
@@ -175,7 +177,8 @@ class DispatchService:
         ``is_available: True`` at write time. Two dispatchers racing
         on the same driver will see exactly one True and one False.
         """
-        result = await self.db.drivers.update_one(
+        result = await self.db.update_one(
+            "drivers",
             {"id": driver_id, "is_available": True},
             {"$set": {"is_available": False}},
         )
@@ -204,7 +207,8 @@ class DispatchService:
         can inject a deterministic timestamp and the timezone policy
         stays the route's responsibility.
         """
-        await self.db.rides.update_one(
+        await self.db.update_one(
+            "rides",
             {"id": ride_id},
             {
                 "$set": {
@@ -222,5 +226,6 @@ class DispatchService:
         recently assigned ride. Returns None if no ride has ever been
         assigned (first-dispatch case).
         """
-        last_ride = await self.db.rides.find_one({"driver_id": {"$ne": None}}, sort=[("created_at", -1)])
+        _last_rides = await self.db.get_rows("rides", {"driver_id": {"$ne": None}}, order="created_at", desc=True, limit=1)
+        last_ride = _last_rides[0] if _last_rides else None
         return last_ride["driver_id"] if last_ride else None

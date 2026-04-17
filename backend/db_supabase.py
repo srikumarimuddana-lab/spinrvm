@@ -1386,3 +1386,52 @@ async def mark_low_balance_notified(*, wallet_id: str) -> None:
         ).eq("id", wallet_id).execute()
 
     await run_sync(_fn)
+
+
+async def list_wallet_transactions(
+    *, wallet_id: str, skip: int = 0, limit: int = 50
+) -> List[Dict[str, Any]]:
+    """Return the most recent ledger entries for a wallet, newest first."""
+    upper = skip + max(limit, 1) - 1
+
+    def _fn():
+        return (
+            supabase.table("corporate_wallet_transactions")
+            .select("*")
+            .eq("wallet_id", wallet_id)
+            .order("created_at", desc=True)
+            .range(skip, upper)
+            .execute()
+        )
+
+    res = await run_sync(_fn)
+    return _rows_from_res(res)
+
+
+async def update_corporate_wallet_autotopup(
+    *,
+    wallet_id: str,
+    enabled: bool,
+    threshold: Optional[float],
+    amount: Optional[float],
+    daily_cap: Optional[float],
+) -> Dict[str, Any]:
+    """Persist a wallet's auto-topup configuration and return the refreshed row."""
+    patch = {
+        "auto_topup_enabled": enabled,
+        "auto_topup_threshold": threshold,
+        "auto_topup_amount": amount,
+        "auto_topup_daily_cap": daily_cap,
+    }
+
+    def _fn():
+        res = (
+            supabase.table("corporate_wallets")
+            .update(patch)
+            .eq("id", wallet_id)
+            .execute()
+        )
+        return _single_row_from_res(res)
+
+    row = await run_sync(_fn)
+    return row or {}

@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { NativeModules, Platform } from 'react-native';
 
 /**
  * Firebase Services — FCM, Crashlytics, App Check
@@ -7,22 +7,32 @@ import { Platform } from 'react-native';
  * Only work in custom dev builds, NOT Expo Go.
  */
 
-// Safe imports — these will fail in Expo Go, so we wrap them
+// Gate on native-module presence. require()-ing @react-native-firebase
+// side-effects construct a NativeEventEmitter for RNFBAppModule; in Expo Go
+// that throws synchronously from module scope, and LogBox still reports it
+// even when wrapped in try/catch. Skip the require entirely if the native
+// module isn't linked.
+const hasFirebaseNative = !!NativeModules.RNFBAppModule;
+
 let messaging: any = null;
 let crashlytics: any = null;
 let appCheck: any = null;
 
-try {
-  messaging = require('@react-native-firebase/messaging').default;
-} catch { console.log('[Firebase] messaging not available (Expo Go?)'); }
+if (hasFirebaseNative) {
+  try {
+    messaging = require('@react-native-firebase/messaging').default;
+  } catch (e) { console.log('[Firebase] messaging load error:', e); }
 
-try {
-  crashlytics = require('@react-native-firebase/crashlytics').default;
-} catch { console.log('[Firebase] crashlytics not available'); }
+  try {
+    crashlytics = require('@react-native-firebase/crashlytics').default;
+  } catch (e) { console.log('[Firebase] crashlytics load error:', e); }
 
-try {
-  appCheck = require('@react-native-firebase/app-check').default;
-} catch { console.log('[Firebase] app-check not available'); }
+  try {
+    appCheck = require('@react-native-firebase/app-check').default;
+  } catch (e) { console.log('[Firebase] app-check load error:', e); }
+} else {
+  console.log('[Firebase] native module not linked (Expo Go) — push/crashlytics disabled');
+}
 
 
 /**

@@ -80,6 +80,20 @@ export default function DriverDashboard() {
   // Route polyline coordinates for active rides
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
 
+  // MapView remount key. Bumped when a ride ends so Android's Google Maps
+  // native layer fully drops leftover polyline overlays and the CarMarker
+  // re-snapshots cleanly. Without this, after rating/Done the driver sees
+  // a ghost polyline near the destination and a blank car marker.
+  const [mapKey, setMapKey] = useState(0);
+  const prevRideStateRef = useRef(rideState);
+  useEffect(() => {
+    const prev = prevRideStateRef.current;
+    if (rideState === 'idle' && prev !== 'idle') {
+      setMapKey((k) => k + 1);
+    }
+    prevRideStateRef.current = rideState;
+  }, [rideState]);
+
   // Live ETA from Google Directions — updated every 30s via the
   // directionsKey mechanism below.
   const [routeEtaMinutes, setRouteEtaMinutes] = useState<number | null>(null);
@@ -391,6 +405,7 @@ export default function DriverDashboard() {
 
       {/* Map */}
       <MapView
+        key={mapKey}
         ref={mapRef}
         style={styles.map}
         provider={MAP_PROVIDER}

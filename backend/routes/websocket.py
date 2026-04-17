@@ -123,6 +123,13 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
         connection_key = f"{client_type}_{user['id']}"
         await manager.connect(websocket, connection_key)
 
+        # Immediately ack auth so the client can flip its banner from
+        # "Connection lost" to connected. Without this, the first server
+        # message is the 30s-later heartbeat ping — the UI sits on
+        # "Connection lost" for that whole window and users assume the
+        # socket is broken (observed: repeated online toggles on Railway).
+        await websocket.send_json({"type": "auth_success", "client_type": client_type})
+
         # Notify admins that a driver came online
         if client_type == "driver":
             driver_profile_for_status = await db.find_one("drivers", {"user_id": user["id"]})

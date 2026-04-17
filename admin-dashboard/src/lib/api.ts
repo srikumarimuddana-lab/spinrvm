@@ -446,6 +446,69 @@ export const updateCorporateAccount = (id: string, data: any) =>
 export const deleteCorporateAccount = (id: string) =>
     request<any>(`/api/admin/corporate-accounts/${id}`, { method: "DELETE" });
 
+/* ── Corporate Wallet ─────────────────────── */
+export interface WalletTxn {
+    id: string;
+    type: string;
+    scope: string;
+    amount: string;
+    balance_after: string;
+    created_at: string;
+    notes?: string | null;
+    ride_id?: string | null;
+    member_id?: string | null;
+}
+
+export interface CorporateWallet {
+    id: string;
+    company_id: string;
+    balance: string;
+    currency: string;
+    auto_topup_enabled: boolean;
+    auto_topup_threshold: string | null;
+    auto_topup_amount: string | null;
+    auto_topup_daily_cap: string;
+    soft_negative_floor: string;
+    transactions: WalletTxn[];
+}
+
+export type WalletConfigPatch = Partial<
+    Pick<
+        CorporateWallet,
+        | "auto_topup_enabled"
+        | "auto_topup_threshold"
+        | "auto_topup_amount"
+        | "auto_topup_daily_cap"
+    >
+>;
+
+export const getCorporateWallet = (companyId: string) =>
+    request<CorporateWallet>(`/api/admin/corporate-accounts/${companyId}/wallet`);
+
+export const updateWalletConfig = (companyId: string, patch: WalletConfigPatch) =>
+    request<CorporateWallet>(
+        `/api/admin/corporate-accounts/${companyId}/wallet/config`,
+        { method: "PUT", body: JSON.stringify(patch) }
+    );
+
+export const walletTopupIntent = (
+    companyId: string,
+    body: { amount: number; payment_method_id?: string }
+) =>
+    request<{ payment_intent_id: string; client_secret: string }>(
+        `/api/admin/corporate-accounts/${companyId}/wallet/topup`,
+        { method: "POST", body: JSON.stringify(body) }
+    );
+
+export const walletAdjust = (
+    companyId: string,
+    body: { amount: number; notes: string }
+) =>
+    request<{ transaction_id: string; balance_after: string }>(
+        `/api/admin/corporate-accounts/${companyId}/wallet/adjust`,
+        { method: "POST", body: JSON.stringify(body) }
+    );
+
 /* ── Cloud Messaging (merged with Notifications) ── */
 export const getCloudMessages = (status?: string, audience?: string) => {
     const params = new URLSearchParams();

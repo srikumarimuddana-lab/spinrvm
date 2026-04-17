@@ -131,14 +131,24 @@ class DispatchService:
     def __init__(self, db):
         self.db = db
 
-    async def resolve_matching_config(self, ride: Dict[str, Any]) -> Tuple[str, float, float]:
+    async def resolve_matching_config(
+        self,
+        ride: Dict[str, Any],
+        *,
+        app_settings: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, float, float]:
         """
         Return ``(algorithm, min_rating, search_radius_km)`` for this ride.
 
         Reads ``service_areas`` first (the area can override matching
         behaviour), then falls back to the global ``app_settings``.
+
+        ``app_settings`` may be passed by callers that already fetched it
+        to avoid a redundant ``settings`` lookup. When omitted this
+        method loads it itself.
         """
-        app_settings = await get_app_settings()
+        if app_settings is None:
+            app_settings = await get_app_settings()
 
         area_settings: Dict[str, Any] = {}
         if ride.get("service_area_id"):

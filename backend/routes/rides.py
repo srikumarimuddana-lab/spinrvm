@@ -38,7 +38,7 @@ except ImportError:
     from utils.rate_limiter import ride_request_limit
     from validators import validate_ride_location
 
-from .fares import get_fares_for_location
+from .fares import _fares_for_location_impl, get_fares_for_location
 
 db = db_supabase  # legacy alias
 dispatch = DispatchService(db_supabase)  # module-level instance for legacy call sites
@@ -86,24 +86,33 @@ async def create_demo_drivers(vehicle_type_id: str, lat: float, lng: float):
     return
 
 
-async def match_driver_to_ride(ride_id: str):
-    ride = await db_supabase.get_ride(ride_id)
+async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
+    """Dispatch a driver for ``ride_id``.
+
+    ``ride`` may be passed when the caller already has the fresh row
+    (e.g. straight after ``insert_ride``) so we skip a redundant
+    ``get_ride`` round-trip. When omitted, the ride is re-fetched —
+    needed by the offer-timeout and scheduled-ride paths that run
+    much later and must see the current state.
+    """
+    if ride is None:
+        ride = await db_supabase.get_ride(ride_id)
     if not ride:
         logger.warning(f"[DISPATCH] match_driver_to_ride: ride {ride_id} not found")
         return
 
-    # Try to load matching settings from the ride's service area first,
-    # then fall back to global app settings for backward compatibility.
+    # Single app_settings fetch — used both for matching config (via
+    # DispatchService.resolve_matching_config) and for the offer-timeout
+    # lookup at the end. Previously this loaded twice; the dead
+    # ``get_rows("service_areas", {"id": ...})`` call that followed has
+    # been removed — resolve_matching_config does its own find_one
+    # against the same table.
     app_settings = await get_app_settings()
-    if ride.get("service_area_id"):
-        # Area-specific overrides resolved inside DispatchService below.
-        await db_supabase.get_rows("service_areas", {"id": ride["service_area_id"]}, limit=1)
 
     # Algorithm + radius + rating floor (area overrides app settings).
-    algorithm, min_rating, search_radius = await dispatch.resolve_matching_config(ride)
-
-    # Keep app_settings for the ride_offer_timeout_seconds lookup at the end.
-    app_settings = await get_app_settings()
+    algorithm, min_rating, search_radius = await dispatch.resolve_matching_config(
+        ride, app_settings=app_settings
+    )
 
     logger.info(
         f"[DISPATCH] match start ride_id={ride_id} "
@@ -493,26 +502,50 @@ async def create_ride(
 ):
     validate_ride_location(request.pickup_lat, request.pickup_lng, request.dropoff_lat, request.dropoff_lng)
 
-    # Pre-ride payment method validation: ensure rider has a card on file
-    if request.payment_method == "card":
-        _rider = await db.find_one("users", {"id": current_user["id"]})
-        if not _rider or not _rider.get("stripe_customer_id"):
-            raise HTTPException(status_code=400, detail="No payment method on file. Please add a card first.")
-
-    # Ban check: prevent banned users from creating rides
-    user_status = await db_supabase.get_user_status(current_user["id"])
+    # Ban check + payment method validation share a single users-row read.
+    # Previously this was two round-trips: ``find_one(users)`` (for card path)
+    # + ``get_user_status`` (always). ``status`` lives on the same row.
+    rider_row = await db.find_one("users", {"id": current_user["id"]})
+    user_status = (rider_row or {}).get("status", "active")
     if user_status == "banned":
         raise HTTPException(status_code=403, detail="Your account has been suspended due to policy violations.")
     if user_status == "suspended":
         raise HTTPException(status_code=403, detail="Your account is currently suspended. Please contact support.")
+    if request.payment_method == "card":
+        if not rider_row or not rider_row.get("stripe_customer_id"):
+            raise HTTPException(status_code=400, detail="No payment method on file. Please add a card first.")
 
     distance_km = calculate_distance(request.pickup_lat, request.pickup_lng, request.dropoff_lat, request.dropoff_lng)
     duration_minutes = int(distance_km / 30 * 60) + 5
 
-    fares = await get_fares_for_location(request.pickup_lat, request.pickup_lng)
+    # Fetch service_areas ONCE for this request and share across:
+    # (1) fare resolution, (2) airport-fee lookup, (3) area-fees/taxes,
+    # (4) service_area_id resolution. Previously each of these hit the
+    # table independently — 3-4 full scans per POST /rides.
+    all_areas = []
+    try:
+        all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
+    except Exception as e:
+        logger.warning(f"Failed to fetch service areas: {e}")
 
-    # Serialize the fare objects if they aren't dicts, or just access them if they are
-    # get_fares_for_location returns a list of dictionaries as seen in server.py
+    # Resolve the pickup service area once and pass the match downstream.
+    matched_area = None
+    for area in all_areas:
+        poly = get_service_area_polygon(area)
+        if poly and point_in_polygon(request.pickup_lat, request.pickup_lng, poly):
+            matched_area = area
+            break
+    service_area_id = matched_area["id"] if matched_area else None
+
+    # Vehicle types are also needed by fare building — fetch once, reuse.
+    vehicle_types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
+
+    fares = await _fares_for_location_impl(
+        request.pickup_lat,
+        request.pickup_lng,
+        all_areas=all_areas,
+        vehicle_types=vehicle_types,
+    )
 
     fare_info = next(
         (f for f in fares if f["vehicle_type"]["id"] == request.vehicle_type_id), fares[0] if fares else None
@@ -528,13 +561,15 @@ async def create_ride(
     booking_fee = _d(fare_info.get("booking_fee", 2.0))
     base_fare = _d(fare_info["base_fare"])
 
-    # Airport surcharge (pickup, dropoff, or any stop in airport sub-region)
+    # Airport surcharge (pickup, dropoff, or any stop in airport sub-region).
+    # Reuses the same all_areas list — filters for is_airport locally.
     airport_result = await calculate_airport_fee(
         request.pickup_lat,
         request.pickup_lng,
         request.dropoff_lat,
         request.dropoff_lng,
         stops=request.stops,
+        _all_areas=all_areas,
     )
     airport_fee = _d(airport_result.get("airport_fee", 0.0))
     airport_zone_name = airport_result.get("airport_zone_name")
@@ -542,7 +577,7 @@ async def create_ride(
     total_fare = _round(base_fare + distance_fare + time_fare + booking_fee + airport_fee)
     total_fare = max(total_fare, _d(fare_info["minimum_fare"]))
 
-    # Calculate area fees + taxes
+    # Calculate area fees + taxes (reuses all_areas + pre-resolved match)
     fees_result = {}
     try:
         fees_result = await calculate_all_fees(
@@ -552,6 +587,8 @@ async def create_ride(
             request.dropoff_lng,
             distance_km,
             _f(total_fare),
+            _all_areas=all_areas,
+            _matched_area=matched_area,
         )
     except Exception as e:
         logger.warning(f"Failed to calculate area fees: {e}")
@@ -563,18 +600,6 @@ async def create_ride(
     # Earnings split: Distance fare goes to driver, booking + airport fee goes to admin
     driver_earnings = _round(base_fare + distance_fare + time_fare)
     admin_earnings = _round(booking_fee + airport_fee)
-
-    # Resolve service area from pickup location
-    service_area_id = None
-    try:
-        all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
-        for area in all_areas:
-            poly = get_service_area_polygon(area)
-            if poly and point_in_polygon(request.pickup_lat, request.pickup_lng, poly):
-                service_area_id = area["id"]
-                break
-    except Exception as e:
-        logger.warning(f"Failed to resolve service area: {e}")
 
     ride = Ride(
         rider_id=current_user["id"],
@@ -622,11 +647,20 @@ async def create_ride(
     ride_data["tax_breakdown"] = fees_result.get("tax_breakdown", {})
     ride_data["grand_total"] = grand_total
 
-    await db_supabase.insert_ride(ride_data)
+    # ``insert_ride`` returns the row Supabase just wrote — use it directly
+    # instead of a follow-up ``get_ride`` round-trip. Fall back to the
+    # local ride_data if the driver returns None (e.g. stub DB in tests).
+    inserted = await db_supabase.insert_ride(ride_data)
+    fresh_ride = inserted or ride_data
 
-    # Match driver
-    await match_driver_to_ride(ride.id)
+    # Match driver — pass the fresh ride through so the dispatch path
+    # doesn't re-fetch the row we just inserted.
+    await match_driver_to_ride(ride.id, ride=fresh_ride)
 
+    # Dispatch may have set driver_id / status; read the current state
+    # for the response. Skipping this extra fetch would mean the rider
+    # app sees "searching" even when a driver was already assigned in
+    # the same request, so we keep this one round-trip on purpose.
     updated_ride = await db_supabase.get_ride(ride.id)
 
     # Small helper to ensure we return a clean dict

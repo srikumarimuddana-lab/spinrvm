@@ -6,6 +6,7 @@ thin: validate input, delegate, return.
 """
 
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, Query
 
@@ -47,64 +48,71 @@ async def get_vehicle_types():
     return serialize_doc(types)
 
 
-@api_router.get("/fares")
-async def get_fares_for_location(lat: float = Query(...), lng: float = Query(...)):
-    import logging
+def _build_default_fares(vt_list, surge=1.0):
+    """Default fare rows when no service area / fare_configs apply.
 
-    logger = logging.getLogger(__name__)
+    Literal values go through ``_fd()`` so they are stored as exact 2-dp
+    floats rather than raw IEEE-754 representations — keeps downstream
+    Decimal arithmetic drift-free.
+    """
+    return [
+        serialize_doc(
+            {
+                "vehicle_type": vt,
+                "base_fare": _fd(3.50),
+                "per_km_rate": _fd(1.50),
+                "per_minute_rate": _fd(0.25),
+                "minimum_fare": _fd(8.00),
+                "booking_fee": _fd(2.00),
+                "surge_multiplier": _fd(surge),
+            }
+        )
+        for vt in vt_list
+    ]
 
-    # Fetch all active vehicle types (needed for both paths)
-    vehicle_types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
-    logger.info(f"Fares: Found {len(vehicle_types)} active vehicle types")
 
-    if not vehicle_types:
-        logger.warning("Fares: No active vehicle types found in database!")
-        return []
+async def resolve_service_area_for_point(
+    lat: float,
+    lng: float,
+    all_areas: Optional[list] = None,
+):
+    """Return the first active service area whose polygon contains (lat, lng), or None.
 
-    # Default fares function (used when no service area or no fare_configs).
-    # Literal values are passed through _fd() so they are stored as exact
-    # 2-dp floats rather than raw IEEE 754 representations.
-    def build_default_fares(vt_list, surge=1.0):
-        return [
-            serialize_doc(
-                {
-                    "vehicle_type": vt,
-                    "base_fare": _fd(3.50),
-                    "per_km_rate": _fd(1.50),
-                    "per_minute_rate": _fd(0.25),
-                    "minimum_fare": _fd(8.00),
-                    "booking_fee": _fd(2.00),
-                    "surge_multiplier": _fd(surge),
-                }
-            )
-            for vt in vt_list
-        ]
-
-    # Try to find matching service area
-    all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
-    matching_area = None
+    ``all_areas`` may be passed by callers that already fetched the active
+    service areas list to avoid a redundant round-trip. When omitted, this
+    falls back to fetching the list itself.
+    """
+    if all_areas is None:
+        all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
     for area in all_areas:
         poly = get_service_area_polygon(area)
         if poly and point_in_polygon(lat, lng, poly):
-            matching_area = area
-            break
+            return area
+    return None
 
-    if not matching_area:
-        logger.info(f"Fares: No matching service area for ({lat}, {lng}), using defaults")
-        return build_default_fares(vehicle_types)
 
-    logger.info(f"Fares: Matched service area '{matching_area.get('name', matching_area['id'])}'")
-    surge = matching_area.get("surge_multiplier", 1.0)
+async def build_fares_for_area(matched_area, vehicle_types):
+    """Build the fare estimate list for an already-matched service area.
 
-    # Try to get fare_configs for this service area
+    Extracted from ``get_fares_for_location`` so callers that already
+    resolved the area (e.g. ``create_ride``) can skip the second
+    ``service_areas`` fetch. If ``matched_area`` is None, returns the
+    default fares.
+    """
+    if not vehicle_types:
+        return []
+
+    if not matched_area:
+        return _build_default_fares(vehicle_types)
+
+    surge = matched_area.get("surge_multiplier", 1.0)
+
     fares = await db_supabase.get_rows(
-        "fare_configs", {"service_area_id": matching_area["id"], "is_active": True}, limit=100
+        "fare_configs", {"service_area_id": matched_area["id"], "is_active": True}, limit=100
     )
 
     if not fares:
-        # No fare configs for this area — fall back to defaults with area surge
-        logger.info(f"Fares: No fare_configs for area, using defaults with surge={surge}")
-        return build_default_fares(vehicle_types, surge)
+        return _build_default_fares(vehicle_types, surge)
 
     vt_map = {vt["id"]: serialize_doc(vt) for vt in vehicle_types}
 
@@ -112,8 +120,6 @@ async def get_fares_for_location(lat: float = Query(...), lng: float = Query(...
     for fare in fares:
         vt = vt_map.get(fare["vehicle_type_id"])
         if vt:
-            # Normalise all monetary values from DB through _fd() so downstream
-            # Decimal arithmetic in rides.py starts from clean 2-dp floats.
             result.append(
                 {
                     "vehicle_type": vt,
@@ -126,10 +132,44 @@ async def get_fares_for_location(lat: float = Query(...), lng: float = Query(...
                 }
             )
 
-    # If fare_configs exist but none matched vehicle types, fall back
     if not result:
-        logger.info("Fares: fare_configs found but no matching vehicle types, using defaults")
-        return build_default_fares(vehicle_types, surge)
+        return _build_default_fares(vehicle_types, surge)
 
-    logger.info(f"Fares: Returning {len(result)} fare estimates")
     return result
+
+
+async def _fares_for_location_impl(
+    lat: float,
+    lng: float,
+    all_areas: Optional[list] = None,
+    vehicle_types: Optional[list] = None,
+):
+    """Shared implementation for /fares.
+
+    Accepts optional pre-fetched ``all_areas`` / ``vehicle_types`` so
+    callers that already loaded those lists (e.g. ``create_ride``) can
+    skip redundant round-trips.
+    """
+    if vehicle_types is None:
+        vehicle_types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
+    logger.info(f"Fares: Found {len(vehicle_types)} active vehicle types")
+
+    if not vehicle_types:
+        logger.warning("Fares: No active vehicle types found in database!")
+        return []
+
+    matching_area = await resolve_service_area_for_point(lat, lng, all_areas=all_areas)
+    if not matching_area:
+        logger.info(f"Fares: No matching service area for ({lat}, {lng}), using defaults")
+        return _build_default_fares(vehicle_types)
+
+    logger.info(f"Fares: Matched service area '{matching_area.get('name', matching_area['id'])}'")
+    return await build_fares_for_area(matching_area, vehicle_types)
+
+
+@api_router.get("/fares")
+async def get_fares_for_location(lat: float = Query(...), lng: float = Query(...)):
+    """HTTP handler for /fares. For in-process callers that already have
+    ``service_areas`` / ``vehicle_types``, use ``_fares_for_location_impl``
+    directly."""
+    return await _fares_for_location_impl(lat, lng)

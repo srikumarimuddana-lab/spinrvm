@@ -8,6 +8,9 @@ def test_approve_kyb_flips_status_to_active(test_client, admin_override):
     with patch(
         "db_supabase.record_kyb_decision",
         AsyncMock(return_value=corporate_account_row("active")),
+    ), patch(
+        "routes.corporate_accounts.ensure_corporate_wallet",
+        AsyncMock(return_value={"id": "w1"}),
     ):
         resp = test_client.post(
             "/api/admin/corporate-accounts/c1/kyb-review",

@@ -118,21 +118,49 @@ async def admin_get_drivers(
     offset: int = 0,
     is_verified: Optional[bool] = None,
     is_online: Optional[bool] = None,
+    status: Optional[str] = None,
 ):
-    """Get all drivers with filters, enriched with user name/email/phone."""
+    """Get drivers with filters, enriched with user name/email/phone.
+
+    Defense-in-depth dedup: migration 31 adds UNIQUE(drivers.phone) and
+    UNIQUE(drivers.user_id) so duplicates can't exist at the DB level.
+    We still collapse by phone/user_id here so that if a legacy snapshot
+    ever restores old state, the admin UI won't show duplicate rows.
+    """
     filters = {}
     if is_verified is not None:
         filters["is_verified"] = is_verified
     if is_online is not None:
         filters["is_online"] = is_online
+    if status:
+        filters["status"] = status
+
     drivers = await db_supabase.get_rows("drivers", filters, order="created_at", desc=True, limit=limit, offset=offset)
-    user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
+
+    # Defensive dedup — keep the earliest-created row per (user_id, phone).
+    seen_user_ids: set = set()
+    seen_phones: set = set()
+    deduped = []
+    for d in sorted(drivers, key=lambda r: r.get("created_at") or ""):
+        uid = d.get("user_id")
+        phone = d.get("phone")
+        if (uid and uid in seen_user_ids) or (phone and phone in seen_phones):
+            continue
+        if uid:
+            seen_user_ids.add(uid)
+        if phone:
+            seen_phones.add(phone)
+        deduped.append(d)
+    # Restore the original newest-first order expected by the UI.
+    deduped.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+
+    user_ids = list({d.get("user_id") for d in deduped if d.get("user_id")})
     users_list = (
         await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
     )
     users_map = {u["id"]: u for u in users_list if u.get("id")}
     out = []
-    for d in drivers:
+    for d in deduped:
         u = users_map.get(d.get("user_id"))
         out.append(
             {

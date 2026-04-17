@@ -22,9 +22,27 @@ async def admin_get_users(
     limit: int = 50,
     offset: int = 0,
     search: Optional[str] = None,
+    role: Optional[str] = None,
 ):
-    """Get all users (riders) with optional search and pagination."""
-    filters: Dict[str, Any] = {"role": "rider"}
+    """Get users with optional role filter, search, and pagination.
+
+    `role` accepts: "rider", "driver", "admin", or "all" (default).
+    Legacy callers that omit `role` get every non-admin user — so
+    anyone the admin sees in the app (rider or driver) is represented
+    here. This replaces the old hardcoded `role='rider'` filter that
+    silently hid driver-registered users from the Users page.
+    """
+    filters: Dict[str, Any] = {}
+    role_param = (role or "all").lower()
+    if role_param in ("rider", "driver", "admin"):
+        filters["role"] = role_param
+    elif role_param == "all":
+        # Every non-admin. Admin dashboard users are managed on the Staff
+        # page, not here.
+        filters["role"] = {"$ne": "admin"}
+    else:
+        raise HTTPException(status_code=400, detail="role must be one of rider, driver, admin, all")
+
     if search:
         # Basic contains-match on phone / email / first_name; callers typically
         # pass partial phone digits or email substrings.

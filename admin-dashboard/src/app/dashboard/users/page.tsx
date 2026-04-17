@@ -40,6 +40,7 @@ export default function UsersPage() {
     const [search, setSearch] = useState("");
     const [statusUpdating, setStatusUpdating] = useState<string | null>(null);
     const [verifiedFilter, setVerifiedFilter] = useState("all");
+    const [roleFilter, setRoleFilter] = useState<"all" | "rider" | "driver">("all");
     const [selectedUser, setSelectedUser] = useState<any>(null);
     const [page, setPage] = useState(1);
 
@@ -96,14 +97,14 @@ export default function UsersPage() {
 
     useEffect(() => {
         fetchUsers();
-    }, []);
+    }, [roleFilter]);
 
     const fetchUsers = async () => {
         setLoading(true);
         setError("");
         try {
             const [usersData, statsData] = await Promise.all([
-                getUsers(),
+                getUsers(roleFilter),
                 getStats()
             ]);
             const transformedUsers = (usersData || []).map((u: any) => ({
@@ -111,6 +112,7 @@ export default function UsersPage() {
                 name: `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.email || u.phone,
                 email: u.email,
                 phone: u.phone,
+                role: u.role,
                 created_at: u.created_at,
                 total_rides: u.total_rides || 0,
                 rating: u.rating || null,
@@ -270,6 +272,16 @@ export default function UsersPage() {
                         className="pl-9"
                     />
                 </div>
+                <Select value={roleFilter} onValueChange={(v) => setRoleFilter(v as "all" | "rider" | "driver")}>
+                    <SelectTrigger className="w-36">
+                        <SelectValue placeholder="Role" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="all">All Roles</SelectItem>
+                        <SelectItem value="rider">Riders</SelectItem>
+                        <SelectItem value="driver">Drivers</SelectItem>
+                    </SelectContent>
+                </Select>
                 <Select value={verifiedFilter} onValueChange={setVerifiedFilter}>
                     <SelectTrigger className="w-40">
                         <SelectValue placeholder="Filter by verification" />

@@ -92,8 +92,28 @@ async def stripe_webhook(request: Request):
     # NULL so either (a) Stripe retries, or (b) the nightly reconciliation
     # job replays the event from the persisted payload.
     if event_type == "payment_intent.succeeded":
-        ride_id = data_object.get("metadata", {}).get("ride_id")
-        user_id = data_object.get("metadata", {}).get("user_id")
+        meta = data_object.get("metadata") or {}
+
+        if meta.get("scope") == "corporate_topup":
+            try:
+                from ..services.corporate_wallet_service import apply_topup  # type: ignore
+            except ImportError:
+                from services.corporate_wallet_service import apply_topup  # type: ignore
+
+            amount_cents = data_object.get("amount_received") or data_object.get("amount", 0)
+            amount_cad = amount_cents / 100
+            await apply_topup(
+                wallet_id=meta["wallet_id"],
+                amount=amount_cad,
+                stripe_payment_intent_id=data_object["id"],
+                actor_user_id=meta.get("initiated_by"),
+                notes=f"Stripe top-up via {event_id}",
+            )
+            await mark_stripe_event_processed(event_id)
+            return {"received": True, "scope": "corporate_topup", "event_id": event_id}
+
+        ride_id = meta.get("ride_id")
+        user_id = meta.get("user_id")
         payment_intent_id = data_object.get("id")
 
         if ride_id:

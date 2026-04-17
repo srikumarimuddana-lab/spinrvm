@@ -1152,6 +1152,48 @@ async def send_push_notification(user_id: str, title: str, body: str, data: Dict
         return False
 
 
+async def send_email(*, to: str, subject: str, body: str) -> bool:
+    """Send a plain-text email via SendGrid when configured, log otherwise.
+
+    Mirrors the fallback behaviour of utils.email_receipt.send_receipt_email —
+    in dev/test we don't require SendGrid credentials and the message is just
+    logged. Returns True if delivery was attempted against SendGrid and
+    accepted (2xx), False otherwise.
+    """
+    if not to:
+        return False
+
+    try:
+        from settings_loader import get_app_settings
+
+        settings = await get_app_settings()
+        sendgrid_key = settings.get("sendgrid_api_key", "")
+
+        if sendgrid_key:
+            import httpx
+
+            response = await httpx.AsyncClient().post(
+                "https://api.sendgrid.com/v3/mail/send",
+                headers={
+                    "Authorization": f"Bearer {sendgrid_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "personalizations": [{"to": [{"email": to}]}],
+                    "from": {"email": "noreply@spinr.ca", "name": "Spinr"},
+                    "subject": subject,
+                    "content": [{"type": "text/plain", "value": body}],
+                },
+            )
+            logger.info(f"[EMAIL] SendGrid to={to} subject={subject!r} status={response.status_code}")
+            return response.status_code in (200, 201, 202)
+    except Exception as e:
+        logger.warning(f"[EMAIL] SendGrid failed: {e}")
+
+    logger.info(f"[EMAIL] (fallback log) to={to} subject={subject!r}")
+    return False
+
+
 @admin_support_router.post("/notifications/send")
 async def admin_send_notification(req: SendNotificationRequest):
     """Send a push notification to a specific user (admin)."""

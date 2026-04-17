@@ -15,9 +15,14 @@ from db_supabase import (  # noqa: E402
     delete_corporate_account as db_delete_corporate_account,
 )
 from db_supabase import (  # noqa: E402
+    ensure_corporate_wallet,
     get_corporate_account_by_id,
+    get_corporate_wallet_by_company,
     insert_corporate_account,
+    update_corporate_stripe_customer_id,
+    update_corporate_wallet_config,
 )
+from settings_loader import get_app_settings  # noqa: E402
 from db_supabase import (  # noqa: E402
     update_corporate_account as db_update_corporate_account,
 )
@@ -159,6 +164,24 @@ async def kyb_review(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Corporate account not found")
+
+    if decision.approve:
+        await ensure_corporate_wallet(company_id=normalized_id)
+        if not row.get("stripe_customer_id"):
+            settings = await get_app_settings()
+            stripe_secret = settings.get("stripe_secret_key", "")
+            if stripe_secret:
+                import stripe
+                customer = stripe.Customer.create(
+                    email=row.get("billing_email"),
+                    name=row.get("legal_name") or row.get("name"),
+                    metadata={"corporate_account_id": normalized_id},
+                    api_key=stripe_secret,
+                )
+                await update_corporate_stripe_customer_id(
+                    company_id=normalized_id, stripe_customer_id=customer.id
+                )
+
     return row
 
 
@@ -317,8 +340,8 @@ async def change_company_status(
 
     from db_supabase import update_corporate_account_status
 
-    # transition.reason is accepted but not persisted — audit log table lands
-    # with Plan 2, wallet freeze/unfreeze follows status in the same plan.
+    # transition.reason is accepted but not persisted — the audit log table
+    # lands in a later plan. Wallet freeze/unfreeze is handled below.
     row = await update_corporate_account_status(
         company_id=normalized_id,
         status=transition.status.value,
@@ -328,4 +351,17 @@ async def change_company_status(
             status_code=404,
             detail="Corporate account disappeared mid-transition",
         )
+
+    # ── Wallet freeze ────────────────────────────────────────────────
+    # Suspending or closing a company disables auto top-up so the next
+    # scheduler tick won't silently charge the customer while rides are
+    # blocked. Manual top-up / adjust endpoints already enforce the
+    # status check themselves, so we only touch the auto-topup switch.
+    if transition.status in (CompanyStatus.SUSPENDED, CompanyStatus.CLOSED):
+        wallet = await get_corporate_wallet_by_company(normalized_id)
+        if wallet and wallet.get("auto_topup_enabled"):
+            await update_corporate_wallet_config(
+                wallet_id=wallet["id"], patch={"auto_topup_enabled": False}
+            )
+
     return row

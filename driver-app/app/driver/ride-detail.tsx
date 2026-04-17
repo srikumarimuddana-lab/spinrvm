@@ -118,7 +118,7 @@ export default function RideDetailScreen() {
                                 coordinate={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }}
                                 title="Pickup"
                             >
-                                <View style={[styles.markerDot, { backgroundColor: colors.primary }]}>
+                                <View style={[styles.markerDot, { backgroundColor: '#10B981' }]}>
                                     <Ionicons name="location" size={14} color="#fff" />
                                 </View>
                             </Marker>
@@ -128,7 +128,7 @@ export default function RideDetailScreen() {
                                 coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
                                 title="Dropoff"
                             >
-                                <View style={[styles.markerDot, { backgroundColor: colors.primary }]}>
+                                <View style={[styles.markerDot, { backgroundColor: '#EF4444' }]}>
                                     <Ionicons name="flag" size={14} color="#fff" />
                                 </View>
                             </Marker>
@@ -136,7 +136,7 @@ export default function RideDetailScreen() {
                         {routeCoords.length === 2 && (
                             <Polyline
                                 coordinates={routeCoords}
-                                strokeColor={colors.primary}
+                                strokeColor="#EE2B2B"
                                 strokeWidth={3}
                                 lineDashPattern={[6, 4]}
                             />

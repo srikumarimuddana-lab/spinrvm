@@ -113,7 +113,7 @@ export const SpinrConfig = {
 
   // OTP Configuration
   otp: {
-    length: 6, // 6-digit phone-verification OTP (backend-issued)
+    length: 4, // 4-digit phone-verification OTP (backend-issued)
     expiryMinutes: 5,
   },
 

@@ -1,0 +1,316 @@
+"""Regression tests for the driver-accept → rider-sees-update handoff.
+
+User report
+-----------
+    "driver got the ride and accepted but still the rider is still
+     searching for driver page"
+
+The rider app polls GET /rides/{id} every 15 s and also listens on
+WebSocket for a `driver_accepted` message. Either signal should flip
+the store from status=`searching` → `driver_accepted`, which makes the
+UI render the driver-info panel instead of the spinning search circle.
+
+Those paths only work if:
+  1. POST /drivers/rides/{id}/accept actually flips the DB row to
+     status=`driver_accepted` (and the handler's own verify re-read
+     agrees with the write).
+  2. The follow-up GET /rides/{id} returns that updated status + the
+     embedded driver dict that the rider UI needs.
+  3. A ws message `{type: "driver_accepted"}` is published to
+     `rider_<rider_id>` so the app transitions instantly instead of
+     waiting 15 s for the next poll.
+
+These tests exercise those three invariants end-to-end at the handler
+level, with DB + WS + push mocked. A regression in any of the three
+will break the rider's "Finding driver..." transition in prod.
+
+Also covers the admin force-cancel endpoint added for the live
+monitoring page (admins previously had a Cancel button that did
+nothing — just removed the pin from the map without calling the API).
+"""
+
+import asyncio
+from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+
+RIDER_ID = "rider-abc"
+DRIVER_USER_ID = "driver-user-xyz"
+DRIVER_ID = "driver-row-123"
+RIDE_ID = "ride-456"
+
+
+def _ride_row(status: str, driver_id=None, driver_accepted_at=None):
+    """Canonical rides-table row shape used across the mocks."""
+    row = {
+        "id": RIDE_ID,
+        "rider_id": RIDER_ID,
+        "status": status,
+        "driver_id": driver_id,
+        "driver_accepted_at": driver_accepted_at,
+        "pickup_lat": 50.41,
+        "pickup_lng": -104.65,
+        "dropoff_lat": 50.45,
+        "dropoff_lng": -104.60,
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    return row
+
+
+def _driver_row():
+    return {
+        "id": DRIVER_ID,
+        "user_id": DRIVER_USER_ID,
+        "name": "Test Driver",
+        "rating": 4.9,
+        "total_rides": 120,
+        "vehicle_make": "Toyota",
+        "vehicle_model": "Camry",
+        "vehicle_color": "Blue",
+        "license_plate": "ABC123",
+        "vehicle_year": 2020,
+        "lat": 50.41,
+        "lng": -104.65,
+    }
+
+
+class TestAcceptRideFlipsStatus:
+    """Backend invariant: POST /drivers/rides/{id}/accept must leave the
+    ride row in status=`driver_accepted` and emit the WS message the
+    rider-app hook is listening for. Without either, the rider screen
+    is stuck on the 'Finding your driver' pulse animation."""
+
+    def test_accept_updates_status_and_sends_ws(self):
+        from backend.routes import drivers as drivers_mod
+
+        # Ride starts as `driver_assigned` (offer sent to this driver).
+        pre_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
+        # After update_ride runs, subsequent reads return the new row.
+        post_ride = _ride_row(
+            "driver_accepted",
+            driver_id=DRIVER_ID,
+            driver_accepted_at=datetime.utcnow().isoformat(),
+        )
+
+        get_ride_mock = AsyncMock(side_effect=[pre_ride, post_ride])
+        update_ride_mock = AsyncMock(return_value=post_ride)
+        get_rows_mock = AsyncMock(return_value=[_driver_row()])
+        find_one_mock = AsyncMock(return_value=post_ride)
+        send_ws_mock = AsyncMock()
+        send_push_mock = AsyncMock()
+
+        with patch("backend.routes.drivers.db_supabase.get_ride", get_ride_mock), \
+             patch("backend.routes.drivers.db_supabase.update_ride", update_ride_mock), \
+             patch("backend.routes.drivers.db_supabase.get_rows", get_rows_mock), \
+             patch("backend.routes.drivers.db.find_one", find_one_mock), \
+             patch("backend.routes.drivers.manager.send_personal_message", send_ws_mock), \
+             patch("backend.routes.drivers.send_push_notification", send_push_mock):
+            result = asyncio.run(
+                drivers_mod.accept_ride(
+                    ride_id=RIDE_ID,
+                    current_user={"id": DRIVER_USER_ID},
+                )
+            )
+
+        assert result == {"success": True}
+
+        # 1) update_ride was called with status=driver_accepted + driver_id
+        assert update_ride_mock.await_count == 1
+        _, kwargs = update_ride_mock.call_args
+        args = update_ride_mock.call_args.args
+        patch_payload = args[1] if len(args) > 1 else kwargs.get("updates")
+        assert patch_payload["status"] == "driver_accepted"
+        assert patch_payload["driver_id"] == DRIVER_ID
+        assert "driver_accepted_at" in patch_payload
+
+        # 2) WS notification fired on the rider_<id> channel — this is
+        #    what the rider-app's useRiderSocket.ts listens for to
+        #    trigger fetchRide without waiting for the 15 s poll.
+        assert send_ws_mock.await_count == 1
+        ws_args = send_ws_mock.call_args.args
+        ws_message, channel = ws_args[0], ws_args[1]
+        assert ws_message["type"] == "driver_accepted"
+        assert ws_message["ride_id"] == RIDE_ID
+        assert channel == f"rider_{RIDER_ID}", (
+            f"WS channel must be rider_<rider_id> to match the hook's "
+            f"server-side key (backend/routes/websocket.py builds "
+            f"connection_key = f'{{client_type}}_{{user_id}}'); got {channel}"
+        )
+
+        # 3) Push notification too so a backgrounded rider app still gets it.
+        assert send_push_mock.await_count == 1
+
+    def test_verify_reread_catches_silent_noop(self):
+        """If update_ride succeeds but the row didn't flip (missing column,
+        stale cache, etc.), the endpoint MUST 4xx instead of returning
+        {success:true}. Returning success here is exactly what caused
+        the bug in the first place — client thinks it worked but the
+        rider keeps polling a `searching` row."""
+        from backend.routes import drivers as drivers_mod
+        from fastapi import HTTPException
+
+        pre_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
+        # Stale row after the "write" — simulates the silent-no-op case.
+        stuck_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
+
+        with patch(
+            "backend.routes.drivers.db_supabase.get_ride",
+            AsyncMock(side_effect=[pre_ride, stuck_ride]),
+        ), patch(
+            "backend.routes.drivers.db_supabase.update_ride", AsyncMock(return_value=None)
+        ), patch(
+            "backend.routes.drivers.db_supabase.get_rows",
+            AsyncMock(return_value=[_driver_row()]),
+        ), patch(
+            "backend.routes.drivers.db.find_one", AsyncMock(return_value=stuck_ride)
+        ), patch(
+            "backend.routes.drivers.manager.send_personal_message", AsyncMock()
+        ), patch(
+            "backend.routes.drivers.send_push_notification", AsyncMock()
+        ):
+            with pytest.raises(HTTPException) as excinfo:
+                asyncio.run(
+                    drivers_mod.accept_ride(
+                        ride_id=RIDE_ID,
+                        current_user={"id": DRIVER_USER_ID},
+                    )
+                )
+        assert excinfo.value.status_code == 400
+
+
+class TestGetRideReturnsAcceptedStatus:
+    """The rider app's polling fallback calls GET /rides/{id} every 15 s.
+    Once accept lands, the very next poll (and every poll after) must
+    return status=driver_accepted AND the embedded driver dict — the UI
+    needs both to flip out of the searching view."""
+
+    def test_get_ride_after_accept_has_driver_payload(self):
+        from backend.routes import rides as rides_mod
+
+        post_ride = _ride_row(
+            "driver_accepted",
+            driver_id=DRIVER_ID,
+            driver_accepted_at=datetime.utcnow().isoformat(),
+        )
+        driver = _driver_row()
+
+        with patch(
+            "backend.routes.rides.db_supabase.get_ride",
+            AsyncMock(return_value=dict(post_ride)),
+        ), patch(
+            "backend.routes.rides.db_supabase.get_rows",
+            AsyncMock(return_value=[]),  # caller is the rider, not a driver
+        ), patch(
+            "backend.routes.rides.db_supabase.get_driver_by_id",
+            AsyncMock(return_value=driver),
+        ):
+            result = asyncio.run(
+                rides_mod.get_ride(
+                    ride_id=RIDE_ID,
+                    current_user={"id": RIDER_ID, "role": "rider"},
+                )
+            )
+
+        assert result["status"] == "driver_accepted"
+        assert result.get("driver"), (
+            "Rider must receive a .driver payload so the useRideStore "
+            "fetchRide() action can populate currentDriver and the "
+            "ride-status screen can render the driver-info panel."
+        )
+        assert result["driver"]["id"] == DRIVER_ID
+        assert result["driver"]["name"] == "Test Driver"
+        # PII scrub sanity: no phone/license etc. leaked to rider.
+        assert "phone" not in result["driver"]
+        assert "license_number" not in result["driver"]
+
+
+class TestAdminCancelRide:
+    """Admin force-cancel from the live monitoring page. Previously the
+    'Cancel Ride' button in ride-panel.tsx just removed the pin from
+    the local map — no backend call. Now it hits POST
+    /api/admin/rides/{id}/cancel which flips the row, frees the driver,
+    and notifies both sides."""
+
+    def test_cancel_flips_status_and_notifies_both_sides(self):
+        from backend.routes.admin import rides as admin_rides
+
+        pre_ride = _ride_row("driver_accepted", driver_id=DRIVER_ID)
+        post_ride = _ride_row("cancelled", driver_id=DRIVER_ID)
+
+        get_ride_mock = AsyncMock(side_effect=[pre_ride, post_ride])
+        update_ride_mock = AsyncMock(return_value=post_ride)
+        set_avail_mock = AsyncMock()
+        get_driver_mock = AsyncMock(return_value=_driver_row())
+        send_ws_mock = AsyncMock()
+        send_push_mock = AsyncMock()
+
+        with patch(
+            "backend.routes.admin.rides.db_supabase.get_ride", get_ride_mock
+        ), patch(
+            "backend.routes.admin.rides.db_supabase.update_ride", update_ride_mock
+        ), patch(
+            "backend.routes.admin.rides.db_supabase.set_driver_available",
+            set_avail_mock,
+        ), patch(
+            "backend.routes.admin.rides.db_supabase.get_driver_by_id",
+            get_driver_mock,
+        ), patch(
+            "backend.routes.admin.rides.manager.send_personal_message",
+            send_ws_mock,
+        ), patch(
+            "backend.routes.admin.rides.send_push_notification",
+            send_push_mock,
+        ):
+            from backend.routes.admin.rides import AdminCancelRideRequest
+
+            result = asyncio.run(
+                admin_rides.admin_cancel_ride(
+                    ride_id=RIDE_ID,
+                    body=AdminCancelRideRequest(reason="ops test"),
+                    admin_user={"id": "admin-1", "role": "admin"},
+                )
+            )
+
+        assert result["success"] is True
+        assert result["status"] == "cancelled"
+
+        # The write must set status=cancelled + stamp the reason + admin id
+        update_payload = update_ride_mock.call_args.args[1]
+        assert update_payload["status"] == "cancelled"
+        assert update_payload["cancellation_reason"] == "ops test"
+        assert update_payload["cancelled_by_admin_id"] == "admin-1"
+
+        # Driver freed so they can take new rides immediately.
+        set_avail_mock.assert_awaited_once_with(DRIVER_ID, True)
+
+        # Both sides notified: 1 rider_<id> ws + 1 driver_<user_id> ws.
+        ws_channels = [call.args[1] for call in send_ws_mock.call_args_list]
+        assert f"rider_{RIDER_ID}" in ws_channels
+        assert f"driver_{DRIVER_USER_ID}" in ws_channels
+
+    def test_cancel_rejects_terminal_states(self):
+        """Admin cannot 'cancel' an already-completed or already-cancelled
+        ride — the endpoint should 400 with no DB write."""
+        from backend.routes.admin import rides as admin_rides
+        from backend.routes.admin.rides import AdminCancelRideRequest
+        from fastapi import HTTPException
+
+        update_ride_mock = AsyncMock()
+        with patch(
+            "backend.routes.admin.rides.db_supabase.get_ride",
+            AsyncMock(return_value=_ride_row("completed", driver_id=DRIVER_ID)),
+        ), patch(
+            "backend.routes.admin.rides.db_supabase.update_ride", update_ride_mock
+        ):
+            with pytest.raises(HTTPException) as excinfo:
+                asyncio.run(
+                    admin_rides.admin_cancel_ride(
+                        ride_id=RIDE_ID,
+                        body=AdminCancelRideRequest(),
+                        admin_user={"id": "admin-1"},
+                    )
+                )
+        assert excinfo.value.status_code == 400
+        update_ride_mock.assert_not_awaited()

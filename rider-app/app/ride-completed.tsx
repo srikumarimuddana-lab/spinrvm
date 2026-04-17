@@ -269,7 +269,7 @@ export default function RideCompletedScreen() {
                 coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
                 anchor={{ x: 0.5, y: 0.5 }}
               >
-                <View style={[styles.mapPin, { backgroundColor: colors.primary }]}>
+                <View style={[styles.mapPin, { backgroundColor: '#EF4444' }]}>
                   <Ionicons name="flag" size={14} color="#FFF" />
                 </View>
               </Marker>

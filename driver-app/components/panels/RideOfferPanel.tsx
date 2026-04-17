@@ -54,9 +54,32 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                 {/* Ride Info */}
                 <View style={styles.rideOfferInfo}>
                     <View style={styles.fareHighlight}>
-                        <Text style={styles.fareLabel}>ESTIMATED FARE</Text>
+                        <Text style={styles.fareLabel}>YOUR EARNINGS</Text>
                         <Text style={styles.fareAmount}>${(incomingRide.fare || 0).toFixed(2)}</Text>
                     </View>
+
+                    {(incomingRide.distance_km != null || incomingRide.duration_minutes != null) && (
+                        <View style={styles.tripStatsRow}>
+                            {incomingRide.distance_km != null && (
+                                <View style={styles.tripStat}>
+                                    <Ionicons name="navigate-outline" size={18} color="#fff" />
+                                    <Text style={styles.tripStatValue}>
+                                        {incomingRide.distance_km.toFixed(1)} km
+                                    </Text>
+                                    <Text style={styles.tripStatLabel}>trip distance</Text>
+                                </View>
+                            )}
+                            {incomingRide.duration_minutes != null && (
+                                <View style={styles.tripStat}>
+                                    <Ionicons name="time-outline" size={18} color="#fff" />
+                                    <Text style={styles.tripStatValue}>
+                                        {Math.round(incomingRide.duration_minutes)} min
+                                    </Text>
+                                    <Text style={styles.tripStatLabel}>estimated</Text>
+                                </View>
+                            )}
+                        </View>
+                    )}
 
                     <View style={styles.addressRow}>
                         <View style={styles.addressDot}>
@@ -181,6 +204,30 @@ const styles = StyleSheet.create({
         fontWeight: '700',
         color: '#fff',
         marginTop: 4,
+    },
+    tripStatsRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        backgroundColor: 'rgba(255,255,255,0.08)',
+        borderRadius: 12,
+        paddingVertical: 10,
+        marginBottom: 16,
+    },
+    tripStat: {
+        alignItems: 'center',
+        flex: 1,
+    },
+    tripStatValue: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: '#fff',
+        marginTop: 4,
+    },
+    tripStatLabel: {
+        fontSize: 10,
+        color: 'rgba(255,255,255,0.7)',
+        letterSpacing: 0.5,
+        marginTop: 2,
     },
     addressRow: {
         flexDirection: 'row',

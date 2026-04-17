@@ -47,7 +47,7 @@ export const SpinrConfig = {
 
   // OTP Configuration
   otp: {
-    length: 6,
+    length: 4,
     expiryMinutes: 5,
   },
 

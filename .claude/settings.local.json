@@ -49,7 +49,8 @@
       "Bash(npx -y @railway/cli status)",
       "Bash(git rm *)",
       "Bash(python3 *)",
-      "Bash(py *)"
+      "Bash(py *)",
+      "Bash(npx jest *)"
     ]
   }
 }

@@ -3,15 +3,20 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
+    from ...features import send_push_notification
     from ...settings_loader import get_app_settings
+    from ...socket_manager import manager
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
+    from features import send_push_notification
     from settings_loader import get_app_settings
+    from socket_manager import manager
 
 from .drivers import _batch_fetch_drivers_and_users, _user_display_name
 
@@ -111,6 +116,98 @@ async def admin_get_active_rides():
         )
 
     return {"rides": result, "count": len(result)}
+
+
+# ---------- Admin Ride Actions ----------
+
+
+class AdminCancelRideRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+@router.post("/rides/{ride_id}/cancel")
+async def admin_cancel_ride(
+    ride_id: str,
+    body: AdminCancelRideRequest,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Admin force-cancels an in-flight ride from the live monitoring page.
+
+    Terminal states are rejected. Driver (if assigned) is freed so they
+    can immediately accept new requests. Rider + driver both receive a
+    ws ride_cancelled push so their apps reset out of the active-ride
+    flow — the rider's "Finding driver" screen was otherwise stuck
+    showing forever because the UI had no cancel signal.
+    """
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    if ride.get("status") in ("completed", "cancelled"):
+        raise HTTPException(status_code=400, detail="Ride already completed or cancelled")
+
+    reason = (body.reason or "Cancelled by admin").strip()[:500]
+    now = datetime.utcnow()
+
+    await db_supabase.update_ride(
+        ride_id,
+        {
+            "status": "cancelled",
+            "cancelled_at": now,
+            "cancellation_reason": reason,
+            "cancelled_by_admin_id": admin_user.get("id"),
+            "updated_at": now,
+        },
+    )
+
+    verify = await db_supabase.get_ride(ride_id)
+    if not verify or verify.get("status") != "cancelled":
+        logger.error(f"admin_cancel_ride: silent no-op on {ride_id}")
+        raise HTTPException(
+            status_code=500,
+            detail="Cancel did not persist — see backend logs.",
+        )
+
+    driver_id = ride.get("driver_id")
+    if driver_id:
+        try:
+            await db_supabase.set_driver_available(driver_id, True)
+        except Exception as e:
+            logger.warning(f"admin_cancel_ride: could not free driver {driver_id}: {e}")
+
+        driver = await db_supabase.get_driver_by_id(driver_id)
+        if driver and driver.get("user_id"):
+            await manager.send_personal_message(
+                {"type": "ride_cancelled", "ride_id": ride_id, "reason": reason},
+                f"driver_{driver['user_id']}",
+            )
+            try:
+                await send_push_notification(
+                    driver["user_id"],
+                    "Ride Cancelled",
+                    reason,
+                    {"type": "ride_cancelled", "ride_id": ride_id},
+                )
+            except Exception as e:
+                logger.warning(f"admin_cancel_ride: driver push failed: {e}")
+
+    rider_id = ride.get("rider_id")
+    if rider_id:
+        await manager.send_personal_message(
+            {"type": "ride_cancelled", "ride_id": ride_id, "reason": reason},
+            f"rider_{rider_id}",
+        )
+        try:
+            await send_push_notification(
+                rider_id,
+                "Ride Cancelled",
+                reason,
+                {"type": "ride_cancelled", "ride_id": ride_id},
+            )
+        except Exception as e:
+            logger.warning(f"admin_cancel_ride: rider push failed: {e}")
+
+    return {"success": True, "ride_id": ride_id, "status": "cancelled"}
 
 
 # ---------- Stats ----------

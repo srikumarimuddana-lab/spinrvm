@@ -127,34 +127,59 @@ export default function DriverDashboard() {
   }, [rideState]);
 
   const [countdown, setCountdownState] = useState(countdownSeconds);
-  // Countdown timer effect
+
+  // Countdown timer — starts on every rideState transition into
+  // 'ride_offered'. Previously this was gated on `countdown > 0`, but on
+  // the render where rideState flipped to 'ride_offered' the local
+  // `countdown` was still the stale 0 from the previous render (the
+  // sync-from-store effect hadn't fired yet), so the gate failed and the
+  // interval never started — the number stuck at 15 until the offer
+  // auto-declined in the background.
   useEffect(() => {
-    if (rideState === 'ride_offered' && countdown > 0) {
-      const interval = setInterval(() => {
-        setCountdownState((prev) => {
-          if (prev <= 1) {
-            clearInterval(interval);
-            setCountdown(0);
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-      return () => clearInterval(interval);
-    }
+    if (rideState !== 'ride_offered') return;
+    // Re-seed local state from the store so we always start from the
+    // configured countdown when a fresh offer arrives.
+    setCountdownState(countdownSeconds);
+    const interval = setInterval(() => {
+      setCountdownState((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          setCountdown(0);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+    // `countdownSeconds` is read at effect-start only; we intentionally
+    // don't re-run on every tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rideState]);
 
-  // Sync with store countdown
-  useEffect(() => {
-    setCountdownState(countdownSeconds);
-  }, [countdownSeconds]);
-
-  // Clear route + ETA when ride state changes (new phase = new route)
+  // Clear route + ETA when ride state changes (new phase = new route).
+  // Additionally, when transitioning back to idle (ride cancelled / completed),
+  // re-center the map on the driver's current location — otherwise the map
+  // stays framed on the pickup/dropoff bounding box from the previous ride
+  // and the driver marker ends up off-screen.
   useEffect(() => {
     setRouteCoords([]);
     setRouteEtaMinutes(null);
     setRouteDistanceKm(null);
     setDirectionsKey(0);
+    if (rideState === 'idle' && mapRef.current && location?.coords) {
+      mapRef.current.animateToRegion(
+        {
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+          latitudeDelta: 0.04,
+          longitudeDelta: 0.04,
+        },
+        600
+      );
+    }
+    // location intentionally excluded — we only want to re-center on state
+    // transition, not on every GPS tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rideState]);
 
   // Error handling
@@ -165,48 +190,57 @@ export default function DriverDashboard() {
     }
   }, [useDriverStore.getState().error]);
 
-  // Map markers
-  const getMapMarkers = () => {
-    const markers: any[] = [];
-    const ride = activeRide?.ride || incomingRide;
-    if (!ride) return markers;
+  // Ride pickup/dropoff markers. Memoised so the countdown ticking
+  // every second during `ride_offered` doesn't rebuild the marker
+  // elements (new `coordinate` object refs each render forced
+  // react-native-maps to re-animate the markers, producing visible
+  // flicker on the map).
+  const ride = activeRide?.ride || incomingRide;
+  const pickupLat = ride?.pickup_lat;
+  const pickupLng = ride?.pickup_lng;
+  const dropoffLat = ride?.dropoff_lat;
+  const dropoffLng = ride?.dropoff_lng;
+  const pickupAddress = ride?.pickup_address;
+  const dropoffAddress = ride?.dropoff_address;
 
-    if (ride.pickup_lat && ride.pickup_lng) {
+  const mapMarkers = useMemo(() => {
+    const markers: any[] = [];
+    if (pickupLat && pickupLng) {
       markers.push(
         <Marker
           key="pickup"
-          coordinate={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }}
+          coordinate={{ latitude: pickupLat, longitude: pickupLng }}
           title="Pickup"
-          description={ride.pickup_address}
+          description={pickupAddress}
+          tracksViewChanges={false}
         >
           <View style={styles.markerContainer}>
-            <View style={[styles.markerDot, { backgroundColor: colors.primary }]}>
+            <View style={[styles.markerDot, { backgroundColor: '#10B981' }]}>
               <Ionicons name="location" size={16} color="#fff" />
             </View>
           </View>
         </Marker>
       );
     }
-
-    if (ride.dropoff_lat && ride.dropoff_lng) {
+    if (dropoffLat && dropoffLng) {
       markers.push(
         <Marker
           key="dropoff"
-          coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
+          coordinate={{ latitude: dropoffLat, longitude: dropoffLng }}
           title="Dropoff"
-          description={ride.dropoff_address}
+          description={dropoffAddress}
+          tracksViewChanges={false}
         >
           <View style={styles.markerContainer}>
-            <View style={[styles.markerDot, { backgroundColor: '#FF4757' }]}>
+            <View style={[styles.markerDot, { backgroundColor: '#EF4444' }]}>
               <Ionicons name="flag" size={16} color="#fff" />
             </View>
           </View>
         </Marker>
       );
     }
-
     return markers;
-  };
+  }, [pickupLat, pickupLng, dropoffLat, dropoffLng, pickupAddress, dropoffAddress, styles]);
 
   // Ride Offer Panel
   const renderRideOfferPanel = () => {
@@ -218,6 +252,28 @@ export default function DriverDashboard() {
     const maxCountdown = configuredCountdownSeconds || 15;
     const progress = Math.max(0, Math.min(1, countdown / maxCountdown));
     const fare = (incomingRide.fare || 0).toFixed(2);
+
+    // Haversine distance from driver → pickup so the offer shows how far
+    // the driver has to travel to start the trip (not just the trip
+    // distance, which is pickup → dropoff).
+    let pickupDistanceKm: number | null = null;
+    if (
+      location?.coords?.latitude != null &&
+      location?.coords?.longitude != null &&
+      incomingRide.pickup_lat != null &&
+      incomingRide.pickup_lng != null
+    ) {
+      const R = 6371; // km
+      const toRad = (d: number) => (d * Math.PI) / 180;
+      const dLat = toRad(incomingRide.pickup_lat - location.coords.latitude);
+      const dLng = toRad(incomingRide.pickup_lng - location.coords.longitude);
+      const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.cos(toRad(location.coords.latitude)) *
+          Math.cos(toRad(incomingRide.pickup_lat)) *
+          Math.sin(dLng / 2) ** 2;
+      pickupDistanceKm = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
 
     return (
       <View style={styles.rideOfferOverlay}>
@@ -271,16 +327,14 @@ export default function DriverDashboard() {
 
           {/* Trip info badges */}
           <View style={styles.tripInfoRow}>
-            {incomingRide.distance_km && (
+            {pickupDistanceKm != null && (
               <View style={styles.tripInfoBadge}>
-                <Ionicons name="navigate-outline" size={14} color={colors.primary} />
-                <Text style={styles.tripInfoText}>{incomingRide.distance_km.toFixed(1)} km</Text>
-              </View>
-            )}
-            {incomingRide.duration_minutes && (
-              <View style={styles.tripInfoBadge}>
-                <Ionicons name="time-outline" size={14} color={colors.primary} />
-                <Text style={styles.tripInfoText}>{Math.round(incomingRide.duration_minutes)} min</Text>
+                <Ionicons name="walk-outline" size={14} color={colors.primary} />
+                <Text style={styles.tripInfoText}>
+                  {pickupDistanceKm < 1
+                    ? `${Math.round(pickupDistanceKm * 1000)} m to pickup`
+                    : `${pickupDistanceKm.toFixed(1)} km to pickup`}
+                </Text>
               </View>
             )}
             {incomingRide.rider_name && (
@@ -367,25 +421,42 @@ export default function DriverDashboard() {
             isOnline={isOnline}
           />
         )}
-        {getMapMarkers()}
+        {mapMarkers}
 
-        {/* Route polyline during active rides */}
-        {GOOGLE_MAPS_API_KEY && activeRide?.ride && (rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && (() => {
-          const ride = activeRide.ride;
-          // During pickup phase: driver → pickup
-          // During trip phase: pickup → dropoff (or driver → dropoff)
-          const origin = rideState === 'trip_in_progress' && location?.coords
-            ? { latitude: location.coords.latitude, longitude: location.coords.longitude }
-            : location?.coords
-              ? { latitude: location.coords.latitude, longitude: location.coords.longitude }
+        {/* Route polyline.
+            - ride_offered: pickup → dropoff, so the driver previews the
+              actual trip they'd be accepting.
+            - active phases: driver → pickup, then pickup → dropoff once
+              the trip starts.
+            Snap the driver's GPS to a 4-decimal grid (~11 m) so small
+            jitter doesn't refetch the Directions API and flicker the
+            polyline every render. */}
+        {GOOGLE_MAPS_API_KEY && ride && (rideState === 'ride_offered' || rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && (() => {
+          const driverLat = location?.coords?.latitude != null ? Math.round(location.coords.latitude * 10000) / 10000 : null;
+          const driverLng = location?.coords?.longitude != null ? Math.round(location.coords.longitude * 10000) / 10000 : null;
+
+          let origin: { latitude: number; longitude: number };
+          let destination: { latitude: number; longitude: number };
+          if (rideState === 'ride_offered') {
+            origin = { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
+            destination = { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
+          } else if (rideState === 'trip_in_progress') {
+            origin = driverLat != null && driverLng != null
+              ? { latitude: driverLat, longitude: driverLng }
               : { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
-
-          const destination = rideState === 'trip_in_progress'
-            ? { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }
-            : { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
+            destination = { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
+          } else {
+            origin = driverLat != null && driverLng != null
+              ? { latitude: driverLat, longitude: driverLng }
+              : { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
+            destination = { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
+          }
 
           return (
-            <>
+            // Key the entire route subtree on rideState so Android's native
+            // map layer fully drops the old polyline (trace artifact) when
+            // the ride ends or transitions to a new phase.
+            <React.Fragment key={`route-${rideState}`}>
               <MapViewDirections
                 key={directionsKey}
                 origin={origin}
@@ -395,12 +466,8 @@ export default function DriverDashboard() {
                 strokeColor="transparent"
                 onReady={(result) => {
                   setRouteCoords(result.coordinates);
-                  // Capture live ETA + road-distance from the Directions API.
-                  // result.duration is in minutes, result.distance in km.
                   if (result.duration != null) setRouteEtaMinutes(Math.round(result.duration));
                   if (result.distance != null) setRouteDistanceKm(Math.round(result.distance * 10) / 10);
-                  // Only fit-to-coordinates on the first computation (key=0)
-                  // to avoid the map jumping every 30s.
                   if (directionsKey === 0 && mapRef.current && result.coordinates?.length > 1) {
                     mapRef.current.fitToCoordinates(result.coordinates, {
                       edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
@@ -410,27 +477,42 @@ export default function DriverDashboard() {
                 }}
                 onError={(err) => console.log('Directions error:', err)}
               />
-              {routeCoords.length > 1 && (
-                <>
-                  {/* Shadow line */}
-                  <Polyline
-                    coordinates={routeCoords}
-                    strokeWidth={7}
-                    strokeColor="rgba(0, 0, 0, 0.08)"
-                    lineCap="round"
-                    lineJoin="round"
-                  />
-                  {/* Main route line */}
-                  <Polyline
-                    coordinates={routeCoords}
-                    strokeWidth={4}
-                    strokeColor={rideState === 'trip_in_progress' ? '#10B981' : colors.primary}
-                    lineCap="round"
-                    lineJoin="round"
-                  />
-                </>
-              )}
-            </>
+              {routeCoords.length > 1 && (() => {
+                const total = routeCoords.length;
+                const SEGS = 20;
+                const chunk = Math.max(1, Math.floor(total / SEGS));
+                const segments: { coords: any[]; color: string }[] = [];
+                for (let i = 0; i < total - 1; i += chunk) {
+                  const end = Math.min(i + chunk + 1, total);
+                  const t = i / Math.max(total - 1, 1);
+                  // Interpolate: #FF9500 (orange) → #EE2B2B (red)
+                  const r = Math.round(255 + (238 - 255) * t);
+                  const g = Math.round(149 + (43 - 149) * t);
+                  const b = Math.round(0 + (43 - 0) * t);
+                  segments.push({ coords: routeCoords.slice(i, end), color: `rgb(${r},${g},${b})` });
+                }
+                return (
+                  <>
+                    {/* Outer glow */}
+                    <Polyline
+                      coordinates={routeCoords}
+                      strokeWidth={9}
+                      strokeColor="rgba(238, 43, 43, 0.12)"
+                    />
+                    {segments.map((seg, idx) => (
+                      <Polyline
+                        key={`route-seg-${idx}`}
+                        coordinates={seg.coords}
+                        strokeWidth={5}
+                        strokeColor={seg.color}
+                        lineCap="round"
+                        lineJoin="round"
+                      />
+                    ))}
+                  </>
+                );
+              })()}
+            </React.Fragment>
           );
         })()}
 

@@ -105,9 +105,15 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const reconnectAttemptRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const locationBufferRef = useRef<any[]>([]);
-  // Refs used inside WebSocket callbacks to avoid stale closure values
+  // Refs used inside WebSocket callbacks to avoid stale closure values.
+  // Also used to stabilize the connectWebSocket useCallback — if we closed
+  // over `user` / `handleWSMessage` directly, any store state change would
+  // recreate the callback, re-fire the mount effect, and tear down the
+  // socket (observed as a perpetual "Reconnecting…" banner).
   const isOnlineRef = useRef(isOnline);
   const locationRef = useRef<Location.LocationObject | null>(null);
+  const userRef = useRef(user);
+  useEffect(() => { userRef.current = user; }, [user]);
 
   // Animations
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -401,9 +407,21 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     }
   }, [setIncomingRide, resetRideState]);
 
+  // Stable ref to the message handler so connectWebSocket's identity
+  // doesn't flip every time the handler closure changes.
+  const handleWSMessageRef = useRef(handleWSMessage);
+  useEffect(() => { handleWSMessageRef.current = handleWSMessage; }, [handleWSMessage]);
+
   // ─── WebSocket Connection ────────────────────────────────────────
+  // Empty dep array: this callback reads everything through refs (userRef,
+  // isOnlineRef, locationRef, handleWSMessageRef) so its identity is stable
+  // for the lifetime of the hook. Previously this depended on [user,
+  // handleWSMessage] and recreated on unrelated store changes — the mount
+  // effect saw a "new" connectWebSocket, closed the socket, and reconnected,
+  // leaving the banner stuck on "Reconnecting…".
   const connectWebSocket = useCallback(() => {
-    if (!isOnlineRef.current || !user) return;
+    const currentUser = userRef.current;
+    if (!isOnlineRef.current || !currentUser) return;
 
     const token = useAuthStore.getState().token;
     if (!token) {
@@ -413,15 +431,17 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
     // Enforce secure WebSocket connection (wss://) in production
     const isProduction = !__DEV__ && !API_URL.includes('localhost');
-    const wsUrl = `${API_URL.replace(/^https?/, isProduction ? 'wss' : 'ws')}/ws/driver/${user.id}`;
+    const wsUrl = `${API_URL.replace(/^https?/, isProduction ? 'wss' : 'ws')}/ws/driver/${currentUser.id}`;
     console.log('Connecting to WebSocket:', wsUrl);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
+    // Don't claim 'connected' at onopen — the backend requires a post-open
+    // `auth` message and will close the socket if it fails. We flip to
+    // 'connected' on the first non-error server message, which proves auth
+    // passed. Until then, stay in 'reconnecting' (or initial 'disconnected').
     ws.onopen = () => {
-      console.log('WebSocket connected, sending auth...');
-      reconnectAttemptRef.current = 0;
-      setConnectionState('connected');
+      console.log('WebSocket open, sending auth...');
       const currentToken = useAuthStore.getState().token;
       ws.send(JSON.stringify({
         type: 'auth',
@@ -450,8 +470,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         const data = JSON.parse(event.data);
         if (data.type === 'error') {
           console.log('WebSocket auth error:', data.message);
+          return;
         }
-        handleWSMessage(data);
+        // First valid (non-error) server message = auth accepted.
+        if (wsRef.current === ws) {
+          reconnectAttemptRef.current = 0;
+          setConnectionState('connected');
+        }
+        handleWSMessageRef.current(data);
       } catch { }
     };
 
@@ -461,8 +487,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
     ws.onclose = (event) => {
       console.log('WebSocket closed:', event.code, event.reason);
-      // Use ref — not the closure value — so going offline stops reconnects immediately
-      if (isOnlineRef.current && user) {
+      if (isOnlineRef.current && userRef.current) {
         setConnectionState('reconnecting');
         const baseDelay = RECONNECT_DELAYS[Math.min(reconnectAttemptRef.current, RECONNECT_DELAYS.length - 1)];
         const jitter = Math.random() * 1000 - 500; // ±500 ms
@@ -476,7 +501,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         setConnectionState('disconnected');
       }
     };
-  }, [user, handleWSMessage]);
+  }, []);
 
   useEffect(() => {
     if (!isOnline || !user) {
@@ -503,12 +528,17 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         wsRef.current = null;
       }
     };
-  }, [isOnline, user, connectWebSocket]);
+    // connectWebSocket is stable (empty deps, reads state through refs), so
+    // we intentionally leave it out — listing it would tear down the socket
+    // on unrelated re-renders. We DO need user.id to trigger reconnect when
+    // the signed-in user changes; use the id specifically, not the object.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline, user?.id]);
 
   // Re-connect when app returns to foreground (mobile networks drop on background)
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active' && isOnlineRef.current && user) {
+      if (nextState === 'active' && isOnlineRef.current && userRef.current) {
         const ws = wsRef.current;
         if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
           console.log('App foregrounded — reconnecting WebSocket');
@@ -522,7 +552,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       }
     });
     return () => sub.remove();
-  }, [user, connectWebSocket]);
+    // connectWebSocket is stable; user read via ref. Empty deps so this
+    // listener is registered exactly once per hook instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ─── Toggle Online/Offline ───────────────────────────────────────
   const toggleOnline = async () => {

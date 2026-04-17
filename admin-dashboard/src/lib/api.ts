@@ -892,3 +892,12 @@ export const getMonitoringDrivers = () =>
 
 export const getMonitoringRides = () =>
     request<any[]>("/api/admin/monitoring/rides");
+
+export const adminCancelRide = (rideId: string, reason?: string) =>
+    request<{ success: boolean; ride_id: string; status: string }>(
+        `/api/admin/rides/${rideId}/cancel`,
+        {
+            method: "POST",
+            body: JSON.stringify({ reason: reason ?? "Cancelled by admin" }),
+        },
+    );

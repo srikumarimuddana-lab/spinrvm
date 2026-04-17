@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 try:
     from .. import db_supabase
-    from ..dependencies import generate_otp, get_current_user
+    from ..dependencies import generate_pickup_otp, get_current_user
     from ..features import calculate_airport_fee, calculate_all_fees, send_push_notification
     from ..geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
     from ..schemas import CreateRideRequest, Ride, RideRatingRequest
@@ -25,7 +25,7 @@ try:
     from ..validators import validate_ride_location
 except ImportError:
     import db_supabase
-    from dependencies import generate_otp, get_current_user
+    from dependencies import generate_pickup_otp, get_current_user
     from features import calculate_airport_fee, calculate_all_fees, send_push_notification
     from geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
     from schemas import CreateRideRequest, Ride, RideRatingRequest
@@ -625,7 +625,7 @@ async def create_ride(
         admin_earnings=_f(admin_earnings),
         payment_method=body.payment_method,
         status="searching",
-        pickup_otp=generate_otp(),
+        pickup_otp=generate_pickup_otp(),
         ride_requested_at=datetime.utcnow(),
     )
 

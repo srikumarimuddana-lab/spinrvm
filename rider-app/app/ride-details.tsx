@@ -119,8 +119,8 @@ export default function RideDetailsScreen() {
                   origin={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }}
                   destination={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
                   apikey={GOOGLE_MAPS_API_KEY}
-                  strokeWidth={4}
-                  strokeColor={colors.primary}
+                  strokeWidth={0}
+                  strokeColor="transparent"
                   onReady={(r: any) => {
                     setRouteCoords(r.coordinates);
                     mapRef.current?.fitToCoordinates(r.coordinates, {
@@ -129,13 +129,37 @@ export default function RideDetailsScreen() {
                   }}
                 />
               )}
+              {routeCoords.length > 1 && (() => {
+                const total = routeCoords.length;
+                const SEGS = 15;
+                const chunk = Math.max(1, Math.floor(total / SEGS));
+                const segments: { coords: any[]; color: string }[] = [];
+                for (let i = 0; i < total - 1; i += chunk) {
+                  const end = Math.min(i + chunk + 1, total);
+                  const t = i / Math.max(total - 1, 1);
+                  const r = Math.round(255 + (238 - 255) * t);
+                  const g = Math.round(149 + (43 - 149) * t);
+                  const b = Math.round(0 + (43 - 0) * t);
+                  segments.push({ coords: routeCoords.slice(i, end), color: `rgb(${r},${g},${b})` });
+                }
+                return segments.map((seg, idx) => (
+                  <Polyline
+                    key={`rd-seg-${idx}`}
+                    coordinates={seg.coords}
+                    strokeWidth={4}
+                    strokeColor={seg.color}
+                    lineCap="round"
+                    lineJoin="round"
+                  />
+                ));
+              })()}
               <Marker coordinate={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
                 <View style={[styles.pin, { backgroundColor: '#10B981' }]}>
                   <Ionicons name="location" size={14} color="#FFF" />
                 </View>
               </Marker>
               <Marker coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={[styles.pin, { backgroundColor: colors.primary }]}>
+                <View style={[styles.pin, { backgroundColor: '#EF4444' }]}>
                   <Ionicons name="flag" size={14} color="#FFF" />
                 </View>
               </Marker>

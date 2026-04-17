@@ -392,14 +392,14 @@ function createStyles(colors: ThemeColors) {
     },
     pickupPin: {
       width: 36, height: 36, borderRadius: 18,
-      backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center',
+      backgroundColor: '#10B981', justifyContent: 'center', alignItems: 'center',
       borderWidth: 3, borderColor: '#FFF',
       elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4,
     },
 
     dropoffPin: {
       width: 32, height: 32, borderRadius: 16,
-      backgroundColor: colors.primary, justifyContent: 'center', alignItems: 'center',
+      backgroundColor: '#EF4444', justifyContent: 'center', alignItems: 'center',
       borderWidth: 2, borderColor: '#FFF',
       elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 3,
     },

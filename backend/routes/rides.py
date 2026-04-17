@@ -600,7 +600,6 @@ async def create_ride(
 
     area_fees_total = fees_result.get("fees_total", 0)
     tax_amount = fees_result.get("tax_amount", 0)
-    grand_total = _f(_round(total_fare + _d(area_fees_total) + _d(tax_amount)))
 
     # Earnings split: Distance fare goes to driver, booking + airport fee goes to admin
     driver_earnings = _round(base_fare + distance_fare + time_fare)
@@ -646,11 +645,10 @@ async def create_ride(
         if airport_zone_name:
             ride_data["airport_zone_name"] = airport_zone_name
 
-    ride_data["area_fees"] = fees_result.get("fees", [])
+    ride_data["area_fees_breakdown"] = fees_result.get("fees", [])
     ride_data["area_fees_total"] = area_fees_total
     ride_data["tax_amount"] = tax_amount
     ride_data["tax_breakdown"] = fees_result.get("tax_breakdown", {})
-    ride_data["grand_total"] = grand_total
 
     # ``insert_ride`` returns the row Supabase just wrote — use it directly
     # instead of a follow-up ``get_ride`` round-trip. Fall back to the

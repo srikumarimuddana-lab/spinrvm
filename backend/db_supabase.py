@@ -1408,22 +1408,10 @@ async def list_wallet_transactions(
     return _rows_from_res(res)
 
 
-async def update_corporate_wallet_autotopup(
-    *,
-    wallet_id: str,
-    enabled: bool,
-    threshold: Optional[float],
-    amount: Optional[float],
-    daily_cap: Optional[float],
-) -> Dict[str, Any]:
-    """Persist a wallet's auto-topup configuration and return the refreshed row."""
-    patch = {
-        "auto_topup_enabled": enabled,
-        "auto_topup_threshold": threshold,
-        "auto_topup_amount": amount,
-        "auto_topup_daily_cap": daily_cap,
-    }
-
+async def update_corporate_wallet_config(
+    *, wallet_id: str, patch: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Patch one or more configuration columns on a corporate_wallets row."""
     def _fn():
         res = (
             supabase.table("corporate_wallets")
@@ -1433,5 +1421,4 @@ async def update_corporate_wallet_autotopup(
         )
         return _single_row_from_res(res)
 
-    row = await run_sync(_fn)
-    return row or {}
+    return await run_sync(_fn)

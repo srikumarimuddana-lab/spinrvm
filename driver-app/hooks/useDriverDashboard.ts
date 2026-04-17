@@ -429,9 +429,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       return;
     }
 
-    // Enforce secure WebSocket connection (wss://) in production
-    const isProduction = !__DEV__ && !API_URL.includes('localhost');
-    const wsUrl = `${API_URL.replace(/^https?/, isProduction ? 'wss' : 'ws')}/ws/driver/${currentUser.id}`;
+    // Match URL scheme: https backends (prod or DEV pointing at prod) use wss://,
+    // http backends (local dev) use ws://. Checking __DEV__ is wrong — Railway's
+    // edge proxy rejects plain ws:// with "Invalid Sec-WebSocket-Accept response".
+    const useSecure = API_URL.startsWith('https');
+    const wsUrl = `${API_URL.replace(/^https?/, useSecure ? 'wss' : 'ws')}/ws/driver/${currentUser.id}`;
     console.log('Connecting to WebSocket:', wsUrl);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;

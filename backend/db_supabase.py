@@ -17,16 +17,26 @@ T = TypeVar("T")
 
 async def run_sync(func: Callable[[], T]) -> T:
     """Run a synchronous Supabase call in a thread and retry once on transient
-    HTTP/2 connection errors (h2.ConnectionTerminated / GOAWAY) that Supabase
-    sends when the stream limit is reached on a long-lived connection."""
+    HTTP/2 connection errors. Two flavors show up in practice:
+      - h2.ConnectionTerminated / GOAWAY when the stream limit is reached on
+        a long-lived connection.
+      - httpx.RemoteProtocolError("Server disconnected") when Supabase's edge
+        drops the HTTP/2 connection mid-response (observed on Railway with
+        larger result sets — e.g. the 5000-row heatmap query)."""
     loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(None, func)  # type: ignore
     except Exception as exc:
         exc_name = type(exc).__name__
         exc_str = str(exc)
-        if "ConnectionTerminated" in exc_name or "ConnectionTerminated" in exc_str:
-            logger.warning(f"Supabase HTTP/2 ConnectionTerminated — retrying once: {exc}")
+        is_conn_terminated = "ConnectionTerminated" in exc_name or "ConnectionTerminated" in exc_str
+        is_remote_disconnect = (
+            "RemoteProtocolError" in exc_name
+            or "Server disconnected" in exc_str
+            or "ConnectionClosed" in exc_name
+        )
+        if is_conn_terminated or is_remote_disconnect:
+            logger.warning(f"Supabase transient HTTP/2 failure ({exc_name}) — retrying once: {exc}")
             await asyncio.sleep(0.25)
             return await loop.run_in_executor(None, func)  # type: ignore
         raise

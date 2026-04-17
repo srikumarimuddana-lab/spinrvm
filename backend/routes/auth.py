@@ -226,6 +226,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 await db_supabase.update_one("users", {"id": existing_user["id"]}, {"current_session_id": session_id})
                 existing_user["current_session_id"] = session_id
             except Exception as e:
+                logger.warning(f"Could not update session_id for existing user: {e}")
             user_id = existing_user["id"]
             token_version = int(existing_user.get("token_version") or 0)
             access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -243,6 +244,8 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 user_obj = UserProfile(**existing_user)
                 logger.info("UserProfile valid")
             except Exception as e:
+                logger.warning(f"UserProfile validation failed, falling back to raw dict: {e}")
+                user_obj = existing_user
             return _make_auth_response(
                 token,
                 refresh_raw,
@@ -267,6 +270,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             try:
                 await db_supabase.create_user(new_user)
             except Exception as e:
+                logger.warning(f"Could not persist new user to DB: {e}")
             access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
             token = create_jwt_token(user_id, phone, session_id=session_id, token_version=0)
             refresh_raw, _, refresh_expires_at = await issue_refresh_token(

@@ -46,7 +46,6 @@ security = HTTPBearer(auto_error=False)
 def generate_otp() -> str:
     """Generate a cryptographically secure numeric OTP.
 
-<<<<<<< HEAD
     Uses `secrets.choice` (not `random.choices`) so the OTP can't be
     predicted from wall-clock time / PID state — which matters because
     a predictable OTP lets anyone take over an account they can SMS.

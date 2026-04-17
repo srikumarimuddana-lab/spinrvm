@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 from pydantic import BaseModel
 
-<<<<<<< HEAD
 try:
     from .. import db_supabase
     from ..dependencies import generate_otp, get_current_user
@@ -51,7 +50,6 @@ def _d(v) -> Decimal:
     """Convert any numeric value to Decimal safely (avoids float precision loss)."""
     return Decimal(str(v))
 
-<<<<<<< HEAD
 
 def _round(v: Decimal) -> Decimal:
     return v.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
@@ -62,14 +60,6 @@ def _f(v: Decimal) -> float:
     return float(v)
 
 
-=======
-def _round(v: Decimal) -> Decimal:
-    return v.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
-
-def _f(v: Decimal) -> float:
-    """Convert Decimal back to float for Pydantic / JSON serialisation."""
-    return float(v)
->>>>>>> origin/sprint7/merge-sprint6-security
 api_router = APIRouter(prefix="/rides", tags=["Rides"])
 
 
@@ -562,7 +552,6 @@ async def create_ride(
     )
 
     if not fare_info:
-<<<<<<< HEAD
         raise HTTPException(status_code=400, detail="Invalid vehicle type")
 
     # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
@@ -611,9 +600,6 @@ async def create_ride(
     # Earnings split: Distance fare goes to driver, booking + airport fee goes to admin
     driver_earnings = _round(base_fare + distance_fare + time_fare)
     admin_earnings = _round(booking_fee + airport_fee)
-=======
-        raise HTTPException(status_code=400, detail='Invalid vehicle type')
-        
 
     ride = Ride(
         rider_id=current_user["id"],

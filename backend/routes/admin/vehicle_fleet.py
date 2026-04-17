@@ -8,8 +8,10 @@ from pydantic import BaseModel
 
 try:
     from ... import db_supabase
+    from ...routes.fares import invalidate_fare_cache
 except ImportError:
     import db_supabase
+    from routes.fares import invalidate_fare_cache
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,8 @@ async def admin_create_vehicle_type(vtype: Dict[str, Any]):
         "created_at": datetime.utcnow().isoformat(),
     }
     row = await db_supabase.insert_one("vehicle_types", doc)
+    # PERF-001: Invalidate fare cache
+    await invalidate_fare_cache()
     return {"type_id": str(row.get("id") if row and isinstance(row, dict) else "")}
 
 
@@ -63,6 +67,8 @@ async def admin_update_vehicle_type(type_id: str, vtype: Dict[str, Any]):
 
     if update_payload:
         await db_supabase.update_one("vehicle_types", {"id": type_id}, update_payload)
+        # PERF-001: Invalidate fare cache
+        await invalidate_fare_cache()
     return {"message": "Vehicle type updated"}
 
 
@@ -70,6 +76,8 @@ async def admin_update_vehicle_type(type_id: str, vtype: Dict[str, Any]):
 async def admin_delete_vehicle_type(type_id: str):
     """Delete vehicle type."""
     await db_supabase.delete_many("vehicle_types", {"id": type_id})
+    # PERF-001: Invalidate fare cache
+    await invalidate_fare_cache()
     return {"message": "Vehicle type deleted"}
 
 
@@ -99,6 +107,8 @@ async def admin_create_fare_config(config: Dict[str, Any]):
         "created_at": datetime.utcnow().isoformat(),
     }
     row = await db_supabase.insert_one("fare_configs", doc)
+    # PERF-001: Invalidate fare cache
+    await invalidate_fare_cache()
     return {"config_id": str(row.get("id") if row and isinstance(row, dict) else "")}
 
 
@@ -116,6 +126,8 @@ async def admin_update_fare_config(config_id: str, config: Dict[str, Any]):
     updates = {k: v for k, v in updates.items() if v is not None}
     if updates:
         await db_supabase.update_one("fare_configs", {"id": config_id}, updates)
+        # PERF-001: Invalidate fare cache
+        await invalidate_fare_cache()
     return {"message": "Fare configuration updated"}
 
 
@@ -123,6 +135,8 @@ async def admin_update_fare_config(config_id: str, config: Dict[str, Any]):
 async def admin_delete_fare_config(config_id: str):
     """Delete fare configuration."""
     await db_supabase.delete_many("fare_configs", {"id": config_id})
+    # PERF-001: Invalidate fare cache
+    await invalidate_fare_cache()
     return {"message": "Fare configuration deleted"}
 
 

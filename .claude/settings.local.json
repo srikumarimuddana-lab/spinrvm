@@ -36,7 +36,18 @@
       "Bash(python:*)",
       "Bash(git reset:*)",
       "Bash(git push:*)",
-      "Bash(git config:*)"
+      "Bash(git config:*)",
+      "Bash(awk 'NR>=498 && NR<=720 {print NR\": \"$0}' routes/rides.py)",
+      "Bash(awk 'NR>=390 && NR<=495 {print NR\": \"$0}' routes/rides.py)",
+      "Bash(npx tsc *)",
+      "Bash(npx --no-install tsc --noEmit)",
+      "Bash(railway --version)",
+      "Read(//c/Users/swarn/.claude/plugins/cache/claude-plugins-official/railway/d52f3741a6a3-8f16b123/**)",
+      "Read(//c/Users/swarn/.claude/plugins/cache/railway-skills/railway/1.1.1/**)",
+      "Bash(npx -y @railway/cli --version)",
+      "Bash(npx -y @railway/cli whoami)",
+      "Bash(npx -y @railway/cli status)",
+      "Bash(git rm *)"
     ]
   }
 }

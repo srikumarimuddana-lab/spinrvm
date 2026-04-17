@@ -62,6 +62,56 @@ logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
 api_router = APIRouter(prefix="/auth", tags=["Authentication"])
 
+# ── OTP brute-force lockout (SEC-008) ───────────────────────────────────
+# Redis key prefixes; falls back to in-process dict when REDIS_URL unset.
+_FAIL_KEY = "otp_fail:{}"
+_LOCK_KEY = "otp_lock:{}"
+
+
+async def _check_otp_lockout(phone: str) -> None:
+    """Raise 429 if phone is currently locked out. Never raises on Redis errors."""
+    try:
+        locked = await redis_get(_LOCK_KEY.format(phone))
+    except Exception as e:
+        logger.warning(f"_check_otp_lockout: redis_get failed: {e}")
+        return
+    if locked:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed attempts. Please try again later.",
+            headers={"Retry-After": str(settings.OTP_LOCKOUT_DURATION_SECONDS)},
+        )
+
+
+async def _record_otp_failure(phone: str) -> None:
+    """Increment failure counter; trigger lockout at threshold. Best-effort."""
+    fail_key = _FAIL_KEY.format(phone)
+    try:
+        count = await redis_incr(fail_key)
+        if count == 1:
+            await redis_expire(fail_key, settings.OTP_FAILURE_WINDOW_SECONDS)
+        if count >= settings.OTP_MAX_FAILURES:
+            await redis_set(
+                _LOCK_KEY.format(phone),
+                "1",
+                settings.OTP_LOCKOUT_DURATION_SECONDS,
+            )
+            logger.warning(
+                f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures"
+            )
+    except Exception as e:
+        logger.warning(f"_record_otp_failure: {e}")
+
+
+async def _clear_otp_failures(phone: str) -> None:
+    """Reset counter + lockout on successful verify. Best-effort."""
+    try:
+        await redis_delete(_FAIL_KEY.format(phone))
+        await redis_delete(_LOCK_KEY.format(phone))
+    except Exception as e:
+        logger.warning(f"_clear_otp_failures: {e}")
+
+
 # ── Helpers for Auth Responses ──────────────────────────────────────────
 def _make_auth_response(
     token: str,

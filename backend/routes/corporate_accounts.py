@@ -18,7 +18,9 @@ from db_supabase import (  # noqa: E402
     ensure_corporate_wallet,
     get_corporate_account_by_id,
     insert_corporate_account,
+    update_corporate_stripe_customer_id,
 )
+from settings_loader import get_app_settings  # noqa: E402
 from db_supabase import (  # noqa: E402
     update_corporate_account as db_update_corporate_account,
 )
@@ -163,6 +165,20 @@ async def kyb_review(
 
     if decision.approve:
         await ensure_corporate_wallet(company_id=normalized_id)
+        if not row.get("stripe_customer_id"):
+            settings = await get_app_settings()
+            stripe_secret = settings.get("stripe_secret_key", "")
+            if stripe_secret:
+                import stripe
+                customer = stripe.Customer.create(
+                    email=row.get("billing_email"),
+                    name=row.get("legal_name") or row.get("name"),
+                    metadata={"corporate_account_id": normalized_id},
+                    api_key=stripe_secret,
+                )
+                await update_corporate_stripe_customer_id(
+                    company_id=normalized_id, stripe_customer_id=customer.id
+                )
 
     return row
 

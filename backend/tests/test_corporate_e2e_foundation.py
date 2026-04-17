@@ -51,6 +51,9 @@ def test_create_approve_suspend_reactivate_flow(test_client, admin_override):
         "routes.corporate_accounts.ensure_corporate_wallet",
         AsyncMock(return_value={"id": "w1"}),
     ), patch(
+        "routes.corporate_accounts.get_app_settings",
+        AsyncMock(return_value={"stripe_secret_key": ""}),
+    ), patch(
         "routes.corporate_accounts.get_corporate_account_by_id",
         AsyncMock(side_effect=[active_row, suspended_row]),
     ), patch(

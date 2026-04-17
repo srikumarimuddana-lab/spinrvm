@@ -1,16 +1,16 @@
 {
   "label": "POST /api/v1/rides",
-  "samples": 300,
+  "samples": 100,
   "errors": 0,
   "status_codes": [
     200
   ],
-  "p50_ms": 2.6,
-  "p95_ms": 3.55,
-  "p99_ms": 7.24,
-  "mean_ms": 3.03,
-  "min_ms": 2.15,
-  "max_ms": 83.07,
+  "p50_ms": 2.55,
+  "p95_ms": 3.23,
+  "p99_ms": 3.95,
+  "mean_ms": 2.64,
+  "min_ms": 2.23,
+  "max_ms": 4.4,
   "db_calls_per_request": {
     "total_min": 10,
     "total_max": 10,

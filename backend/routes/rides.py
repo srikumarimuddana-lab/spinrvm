@@ -498,9 +498,14 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
 @api_router.post("")
 @ride_request_limit
 async def create_ride(
-    http_request: Request, request: CreateRideRequest, current_user: dict = Depends(get_current_user)
+    request: Request, body: CreateRideRequest, current_user: dict = Depends(get_current_user)
 ):
-    validate_ride_location(request.pickup_lat, request.pickup_lng, request.dropoff_lat, request.dropoff_lng)
+    # SlowAPI's @ride_request_limit needs a parameter literally named
+    # ``request`` that is a starlette Request; otherwise it raises
+    # "parameter `request` must be an instance of starlette.requests.Request"
+    # for every call. The Pydantic body is ``body`` — do not rename it
+    # back to ``request`` without also reworking the rate-limit decorator.
+    validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
 
     # Ban check + payment method validation share a single users-row read.
     # Previously this was two round-trips: ``find_one(users)`` (for card path)
@@ -511,11 +516,11 @@ async def create_ride(
         raise HTTPException(status_code=403, detail="Your account has been suspended due to policy violations.")
     if user_status == "suspended":
         raise HTTPException(status_code=403, detail="Your account is currently suspended. Please contact support.")
-    if request.payment_method == "card":
+    if body.payment_method == "card":
         if not rider_row or not rider_row.get("stripe_customer_id"):
             raise HTTPException(status_code=400, detail="No payment method on file. Please add a card first.")
 
-    distance_km = calculate_distance(request.pickup_lat, request.pickup_lng, request.dropoff_lat, request.dropoff_lng)
+    distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
     duration_minutes = int(distance_km / 30 * 60) + 5
 
     # Fetch service_areas ONCE for this request and share across:
@@ -532,7 +537,7 @@ async def create_ride(
     matched_area = None
     for area in all_areas:
         poly = get_service_area_polygon(area)
-        if poly and point_in_polygon(request.pickup_lat, request.pickup_lng, poly):
+        if poly and point_in_polygon(body.pickup_lat, body.pickup_lng, poly):
             matched_area = area
             break
     service_area_id = matched_area["id"] if matched_area else None
@@ -541,14 +546,14 @@ async def create_ride(
     vehicle_types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
 
     fares = await _fares_for_location_impl(
-        request.pickup_lat,
-        request.pickup_lng,
+        body.pickup_lat,
+        body.pickup_lng,
         all_areas=all_areas,
         vehicle_types=vehicle_types,
     )
 
     fare_info = next(
-        (f for f in fares if f["vehicle_type"]["id"] == request.vehicle_type_id), fares[0] if fares else None
+        (f for f in fares if f["vehicle_type"]["id"] == body.vehicle_type_id), fares[0] if fares else None
     )
 
     if not fare_info:
@@ -564,11 +569,11 @@ async def create_ride(
     # Airport surcharge (pickup, dropoff, or any stop in airport sub-region).
     # Reuses the same all_areas list — filters for is_airport locally.
     airport_result = await calculate_airport_fee(
-        request.pickup_lat,
-        request.pickup_lng,
-        request.dropoff_lat,
-        request.dropoff_lng,
-        stops=request.stops,
+        body.pickup_lat,
+        body.pickup_lng,
+        body.dropoff_lat,
+        body.dropoff_lng,
+        stops=body.stops,
         _all_areas=all_areas,
     )
     airport_fee = _d(airport_result.get("airport_fee", 0.0))
@@ -581,10 +586,10 @@ async def create_ride(
     fees_result = {}
     try:
         fees_result = await calculate_all_fees(
-            request.pickup_lat,
-            request.pickup_lng,
-            request.dropoff_lat,
-            request.dropoff_lng,
+            body.pickup_lat,
+            body.pickup_lng,
+            body.dropoff_lat,
+            body.dropoff_lng,
             distance_km,
             _f(total_fare),
             _all_areas=all_areas,
@@ -603,13 +608,13 @@ async def create_ride(
 
     ride = Ride(
         rider_id=current_user["id"],
-        vehicle_type_id=request.vehicle_type_id,
-        pickup_address=request.pickup_address,
-        pickup_lat=request.pickup_lat,
-        pickup_lng=request.pickup_lng,
-        dropoff_address=request.dropoff_address,
-        dropoff_lat=request.dropoff_lat,
-        dropoff_lng=request.dropoff_lng,
+        vehicle_type_id=body.vehicle_type_id,
+        pickup_address=body.pickup_address,
+        pickup_lat=body.pickup_lat,
+        pickup_lng=body.pickup_lng,
+        dropoff_address=body.dropoff_address,
+        dropoff_lat=body.dropoff_lat,
+        dropoff_lng=body.dropoff_lng,
         distance_km=round(distance_km, 2),
         duration_minutes=duration_minutes,
         base_fare=_f(base_fare),
@@ -618,12 +623,12 @@ async def create_ride(
         booking_fee=_f(booking_fee),
         surge_multiplier=_f(surge),
         total_fare=_f(total_fare),
-        stops=request.stops,
-        is_scheduled=request.is_scheduled,
-        scheduled_time=request.scheduled_time,
+        stops=body.stops,
+        is_scheduled=body.is_scheduled,
+        scheduled_time=body.scheduled_time,
         driver_earnings=_f(driver_earnings),
         admin_earnings=_f(admin_earnings),
-        payment_method=request.payment_method,
+        payment_method=body.payment_method,
         status="searching",
         pickup_otp=generate_otp(),
         ride_requested_at=datetime.utcnow(),

@@ -7,8 +7,10 @@ from fastapi import APIRouter
 
 try:
     from ... import db_supabase
+    from ...routes.fares import invalidate_fare_cache
 except ImportError:
     import db_supabase
+    from routes.fares import invalidate_fare_cache
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,8 @@ async def admin_create_service_area(area: Dict[str, Any]):
         "created_at": datetime.utcnow().isoformat(),
     }
     await db_supabase.insert_one("service_areas", doc)
+    # PERF-001: Invalidate fare cache
+    await invalidate_fare_cache()
     return {"area_id": doc["id"]}
 
 
@@ -114,6 +118,8 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
         # NOTE: service_areas table does not have an updated_at column in Supabase schema.
         # Adding it causes PGRST204 -> 500 error.
         await db_supabase.update_one("service_areas", {"id": area_id}, update_payload)
+        # PERF-001: Invalidate fare cache
+        await invalidate_fare_cache()
     return {"message": "Service area updated"}
 
 
@@ -121,6 +127,8 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
 async def admin_delete_service_area(area_id: str):
     """Delete service area."""
     await db_supabase.delete_many("service_areas", {"id": area_id})
+    # PERF-001: Invalidate fare cache
+    await invalidate_fare_cache()
     return {"message": "Service area deleted"}
 
 
@@ -150,6 +158,9 @@ async def admin_update_surge_pricing(area_id: str, surge: Dict[str, Any]):
         await db_supabase.update_one("surge_pricing", {"service_area_id": area_id}, surge_doc)
     else:
         await db_supabase.insert_one("surge_pricing", surge_doc)
+
+    # PERF-001: Invalidate fare cache
+    await invalidate_fare_cache()
 
     return {"message": "Surge pricing updated"}
 

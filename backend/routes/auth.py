@@ -1,5 +1,58 @@
+from datetime import datetime, timedelta, timezone
 import logging
 import uuid
+import os
+from typing import Dict, Any, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+try:
+    from .. import db_supabase
+    from ..core.config import settings
+    from ..dependencies import (
+        OTP_EXPIRY_MINUTES,
+        create_jwt_token,
+        generate_otp,
+        get_current_user,
+    )
+    from ..schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
+    from ..settings_loader import get_app_settings
+    from ..sms_service import send_otp_sms
+    from ..utils.refresh_tokens import (
+        issue_refresh_token,
+        lookup_refresh_token,
+        revoke_all_for_user,
+        revoke_refresh_token,
+    )
+    from ..validators import validate_phone
+    from ..utils.redis_client import (
+        redis_get, redis_set, redis_incr, redis_expire, redis_delete
+    )
+except ImportError:
+    import db_supabase
+    from core.config import settings
+    from dependencies import (
+        OTP_EXPIRY_MINUTES,
+        create_jwt_token,
+        generate_otp,
+        get_current_user,
+    )
+    from schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
+    from settings_loader import get_app_settings
+    from sms_service import send_otp_sms
+    from utils.refresh_tokens import (
+        issue_refresh_token,
+        lookup_refresh_token,
+        revoke_all_for_user,
+        revoke_refresh_token,
+    )
+    from validators import validate_phone
+    from utils.redis_client import (
+        redis_get, redis_set, redis_incr, redis_expire, redis_delete
+    )
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -54,6 +107,42 @@ logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
 api_router = APIRouter(prefix="/auth", tags=["Authentication"])
 
+# ── OTP brute-force lockout helpers (SEC-008) ─────────────────────────────────
+def _otp_failure_key(phone: str) -> str:
+    return f"otp_failures:{phone}"
+
+
+def _otp_lockout_key(phone: str) -> str:
+    return f"otp_lockout:{phone}"
+
+
+async def _check_otp_lockout(phone: str) -> None:
+    """Raise HTTP 429 if the phone is currently locked out."""
+    locked = await redis_get(_otp_lockout_key(phone))
+    if locked:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed attempts. Try again in 24 hours.",
+            headers={"Retry-After": str(settings.OTP_LOCKOUT_DURATION_SECONDS)},
+        )
+
+
+async def _record_otp_failure(phone: str) -> None:
+    """Increment failure counter; lock out if threshold reached."""
+    fail_key = _otp_failure_key(phone)
+    count = await redis_incr(fail_key)
+    if count == 1:
+        # First failure — set the sliding window TTL
+        await redis_expire(fail_key, settings.OTP_FAILURE_WINDOW_SECONDS)
+    if count >= settings.OTP_MAX_FAILURES:
+        await redis_set(_otp_lockout_key(phone), "1", settings.OTP_LOCKOUT_DURATION_SECONDS)
+        logger.warning(f"OTP lockout triggered for phone ending ...{phone[-4:]}")
+
+
+async def _clear_otp_failures(phone: str) -> None:
+    """Remove failure counter and lockout on successful verification."""
+    await redis_delete(_otp_failure_key(phone))
+    await redis_delete(_otp_lockout_key(phone))
 
 @api_router.post("/send-otp")
 @limiter.limit("5/minute")
@@ -122,10 +211,13 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
     phone = body.phone.strip()
     code = body.code.strip()
 
+    # SEC-008: Reject locked-out phones before touching the DB
+    await _check_otp_lockout(phone)
     otp_record = None
     try:
         otp_record = await db_supabase.get_otp_record(phone, code)
     except Exception as e:
+<<<<<<< HEAD
         logger.warning(f"Could not query OTP from DB: {e}")
 
     # Dev fallback: accept code 123456 when no OTP record found (Twilio not configured)
@@ -135,8 +227,9 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
         otp_record = {"id": "dev", "phone": phone, "code": code, "expires_at": datetime.utcnow() + timedelta(minutes=5)}
 
     if not otp_record:
+        # Wrong code — record the failure (may trigger lockout)
+        await _record_otp_failure(phone)
         raise HTTPException(status_code=400, detail="Invalid verification code")
-
     # Parse expires_at to datetime if it's a string (from Supabase)
     expires_at = otp_record.get("expires_at")
     if isinstance(expires_at, str):
@@ -168,6 +261,8 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
     except Exception:  # noqa: S110
         pass
 
+    # SEC-008: Clear failure counter + lockout on successful verification
+    await _clear_otp_failures(phone)
     try:
         # Find or create user
         existing_user = None

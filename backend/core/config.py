@@ -60,30 +60,24 @@ class Settings(BaseSettings):
 
     # Rate limiting
     RATE_LIMIT: str = "10/minute"
-    # Storage backend for the distributed rate limiter. When empty the
-    # limiter uses slowapi's in-process "memory://" backend, which is fine
-    # for local dev but wrong in production: each replica / worker
-    # keeps its own counters, so a 5/minute limit effectively becomes
-    # (5 × N_replicas)/minute and an attacker can sidestep OTP / login
-    # limits by riding LB stickiness. Production deploys must set this
-    # to a redis:// (or rediss://) URL (e.g. Railway Redis plugin or
-    # Upstash); _validate_production_config() enforces this at boot.
+    # Redis configuration
+    # Generic base URL (e.g. redis://localhost:6379/0). If specialized URLs below 
+    # are unset, they fall back to this.
+    REDIS_URL: str = ""
+
+    # Distributed rate limiter storage (audit P0-B3). Falls back to REDIS_URL.
     RATE_LIMIT_REDIS_URL: str = ""
 
-    # WebSocket pub/sub backend (audit P0-B3). The ConnectionManager keeps
-    # sockets in an in-process dict, so "send to rider_X" only reaches X
-    # if X is connected to the SAME replica that's doing the sending.
-    # With >1 replica, ride-dispatch events, driver-arrival pings and
-    # chat messages silently disappear whenever the LB puts the sender
-    # and receiver on different containers. Setting WS_REDIS_URL makes every
-    # replica publish outbound socket sends to a shared Redis channel
-    # and have every replica's subscriber deliver to its own locals —
-    # a leaked message costs one Redis round-trip; a lost dispatch costs
-    # a rider. If empty we fall back to RATE_LIMIT_REDIS_URL (the prod
-    # validator already ensures that's set) so operators don't have to
-    # configure two URLs; set to something else only if you want to
-    # isolate WS traffic onto a separate Redis.
+    # WebSocket pub/sub backend (audit P0-B3). Falls back to REDIS_URL.
     WS_REDIS_URL: str = ""
+
+    # OTP brute-force lockout (SEC-008)
+    OTP_MAX_FAILURES: int = 5                  # attempts before lockout
+    OTP_FAILURE_WINDOW_SECONDS: int = 3600     # sliding window (1 hr)
+    OTP_LOCKOUT_DURATION_SECONDS: int = 86400  # lockout duration (24 hr)
+
+    # Fare cache TTL (PERF-001)
+    FARE_CACHE_TTL_SECONDS: int = 300          # 5-minute cache per lat/lng grid cell
 
     # File storage
     STORAGE_BUCKET: str = "driver-documents"

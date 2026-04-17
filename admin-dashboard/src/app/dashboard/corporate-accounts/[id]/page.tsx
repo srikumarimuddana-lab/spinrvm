@@ -6,8 +6,12 @@ import { useParams } from "next/navigation";
 import {
     CorporateAccount,
     CompanyStatus,
+    CorporateWallet,
     changeCompanyStatus,
     getCorporateAccount,
+    getCorporateWallet,
+    updateWalletConfig,
+    walletAdjust,
 } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,6 +35,7 @@ import {
     FileText,
     PauseCircle,
     PlayCircle,
+    Wallet,
     XCircle,
 } from "lucide-react";
 
@@ -100,6 +105,8 @@ export default function CompanyDetailPage() {
     const [pendingTransition, setPendingTransition] = useState<TransitionKind | null>(null);
     const [reason, setReason] = useState("");
     const [transitioning, setTransitioning] = useState(false);
+    const [wallet, setWallet] = useState<CorporateWallet | null>(null);
+    const [walletBusy, setWalletBusy] = useState(false);
 
     const load = useCallback(async () => {
         if (!id) return;
@@ -114,9 +121,58 @@ export default function CompanyDetailPage() {
         }
     }, [id]);
 
+    const loadWallet = useCallback(async () => {
+        if (!id) return;
+        try {
+            setWallet(await getCorporateWallet(id));
+        } catch {
+            setWallet(null);
+        }
+    }, [id]);
+
     useEffect(() => {
         load();
     }, [load]);
+
+    useEffect(() => {
+        if (company?.status === "active" || company?.status === "suspended") {
+            loadWallet();
+        }
+    }, [company?.status, loadWallet]);
+
+    const handleAdjust = async () => {
+        if (!id) return;
+        const raw = window.prompt("Adjustment amount (signed CAD):");
+        if (!raw) return;
+        const amount = parseFloat(raw);
+        if (!Number.isFinite(amount) || amount === 0) return;
+        const notes = window.prompt("Reason (required):") ?? "";
+        if (!notes.trim()) return;
+        setWalletBusy(true);
+        try {
+            await walletAdjust(id, { amount, notes: notes.trim() });
+            await loadWallet();
+        } catch (e: any) {
+            alert(e?.message ?? "Adjustment failed");
+        } finally {
+            setWalletBusy(false);
+        }
+    };
+
+    const handleToggleAutotopup = async () => {
+        if (!id || !wallet) return;
+        setWalletBusy(true);
+        try {
+            await updateWalletConfig(id, {
+                auto_topup_enabled: !wallet.auto_topup_enabled,
+            });
+            await loadWallet();
+        } catch (e: any) {
+            alert(e?.message ?? "Failed to toggle auto top-up");
+        } finally {
+            setWalletBusy(false);
+        }
+    };
 
     const openTransition = (kind: TransitionKind) => {
         setPendingTransition(kind);
@@ -296,6 +352,126 @@ export default function CompanyDetailPage() {
                     </div>
                 </CardContent>
             </Card>
+
+            {wallet && (
+                <Card>
+                    <CardContent className="p-6 space-y-4">
+                        <header className="flex items-center justify-between gap-4">
+                            <h2 className="font-semibold flex items-center gap-2">
+                                <Wallet className="h-4 w-4 text-muted-foreground" />
+                                Master wallet
+                            </h2>
+                            <span className="text-2xl font-bold tabular-nums">
+                                ${parseFloat(wallet.balance).toFixed(2)}{" "}
+                                <span className="text-sm text-muted-foreground">
+                                    {wallet.currency}
+                                </span>
+                            </span>
+                        </header>
+
+                        <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
+                            <div>
+                                <Label className="text-xs uppercase text-muted-foreground">
+                                    Auto top-up
+                                </Label>
+                                <p>
+                                    <b>
+                                        {wallet.auto_topup_enabled ? "On" : "Off"}
+                                    </b>
+                                </p>
+                            </div>
+                            <div>
+                                <Label className="text-xs uppercase text-muted-foreground">
+                                    Threshold / Amount
+                                </Label>
+                                <p>
+                                    {wallet.auto_topup_threshold ?? "—"} /{" "}
+                                    {wallet.auto_topup_amount ?? "—"}
+                                </p>
+                            </div>
+                            <div>
+                                <Label className="text-xs uppercase text-muted-foreground">
+                                    Daily cap / Floor
+                                </Label>
+                                <p>
+                                    {wallet.auto_topup_daily_cap} /{" "}
+                                    {wallet.soft_negative_floor}
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                            <Button
+                                variant="outline"
+                                onClick={handleAdjust}
+                                disabled={walletBusy}
+                            >
+                                Adjust balance
+                            </Button>
+                            <Button
+                                variant="outline"
+                                onClick={handleToggleAutotopup}
+                                disabled={
+                                    walletBusy ||
+                                    (!wallet.auto_topup_enabled &&
+                                        (wallet.auto_topup_threshold == null ||
+                                            wallet.auto_topup_amount == null))
+                                }
+                                title={
+                                    !wallet.auto_topup_enabled &&
+                                    (wallet.auto_topup_threshold == null ||
+                                        wallet.auto_topup_amount == null)
+                                        ? "Set threshold and amount before enabling"
+                                        : undefined
+                                }
+                            >
+                                {wallet.auto_topup_enabled
+                                    ? "Disable auto top-up"
+                                    : "Enable auto top-up"}
+                            </Button>
+                        </div>
+
+                        <div>
+                            <h3 className="mt-2 font-semibold text-sm">
+                                Recent transactions
+                            </h3>
+                            {wallet.transactions.length === 0 ? (
+                                <p className="mt-2 text-sm text-muted-foreground">
+                                    No transactions yet.
+                                </p>
+                            ) : (
+                                <ul className="mt-2 divide-y text-sm">
+                                    {wallet.transactions.map((t) => (
+                                        <li
+                                            key={t.id}
+                                            className="flex items-center justify-between py-2"
+                                        >
+                                            <span className="flex items-center gap-3">
+                                                <span className="inline-block w-28 capitalize">
+                                                    {t.type}
+                                                </span>
+                                                <span className="text-muted-foreground">
+                                                    {formatDate(t.created_at)}
+                                                </span>
+                                            </span>
+                                            <span className="tabular-nums">
+                                                {parseFloat(t.amount) >= 0 ? "+" : ""}
+                                                ${parseFloat(t.amount).toFixed(2)}
+                                                <span className="text-muted-foreground ml-2">
+                                                    bal $
+                                                    {parseFloat(
+                                                        t.balance_after
+                                                    ).toFixed(2)}
+                                                </span>
+                                            </span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+                    </CardContent>
+                </Card>
+            )}
 
             <AlertDialog
                 open={pendingTransition !== null}

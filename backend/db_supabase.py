@@ -1294,3 +1294,64 @@ async def create_kyb_upload_url(
         "path": signed.get("path", path),
         "expires_at": expires_at,
     }
+
+
+async def list_wallets_needing_autotopup() -> List[Dict[str, Any]]:
+    """Return wallets where auto_topup_enabled and balance < threshold.
+
+    Threshold is filtered in Python because supabase-py doesn't support
+    cross-column comparisons in .filter().
+    """
+    def _fn():
+        return (
+            supabase.table("corporate_wallets")
+            .select("*")
+            .eq("auto_topup_enabled", True)
+            .execute()
+        )
+
+    res = await run_sync(_fn)
+    rows = _rows_from_res(res)
+    return [
+        r
+        for r in rows
+        if r.get("auto_topup_threshold") is not None
+        and float(r["balance"]) < float(r["auto_topup_threshold"])
+    ]
+
+
+async def sum_autotopups_today(wallet_id: str) -> float:
+    """Sum of today's successful top-ups for a wallet (for daily-cap enforcement)."""
+    today_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    def _fn():
+        return (
+            supabase.table("corporate_wallet_transactions")
+            .select("amount")
+            .eq("wallet_id", wallet_id)
+            .eq("type", "topup")
+            .gte("created_at", today_start.isoformat())
+            .execute()
+        )
+
+    res = await run_sync(_fn)
+    rows = _rows_from_res(res)
+    return sum(float(r["amount"]) for r in rows)
+
+
+async def get_default_payment_method(
+    stripe_customer_id: str, stripe_secret: str
+) -> Optional[str]:
+    """Return the Stripe customer's first card payment method, if any."""
+    import stripe
+
+    def _fn():
+        return stripe.PaymentMethod.list(
+            customer=stripe_customer_id, type="card", api_key=stripe_secret
+        )
+
+    methods = await run_sync(_fn)
+    data = getattr(methods, "data", None) or []
+    return data[0].id if data else None

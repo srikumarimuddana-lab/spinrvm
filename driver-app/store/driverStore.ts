@@ -525,13 +525,57 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             const res = await api.get('/drivers/rides/active');
             if (res.data && res.data.ride) {
                 const ride = res.data.ride;
+                const rider = res.data.rider;
+
+                // `driver_assigned` means the backend dispatched the offer to
+                // this driver but they have NOT clicked accept yet — resume
+                // the ride_offered countdown screen instead of jumping to the
+                // post-accept navigation panel.
+                if (ride.status === 'driver_assigned') {
+                    const countdown = get().configuredCountdownSeconds || FALLBACK_COUNTDOWN;
+                    const riderName = rider
+                        ? (rider.first_name || rider.name || undefined)
+                        : undefined;
+                    const riderRating = rider && rider.rating != null
+                        ? Number(rider.rating)
+                        : undefined;
+                    set({
+                        activeRide: res.data,
+                        rideState: 'ride_offered',
+                        incomingRide: {
+                            ride_id: ride.id,
+                            pickup_address: ride.pickup_address,
+                            dropoff_address: ride.dropoff_address,
+                            pickup_lat: ride.pickup_lat,
+                            pickup_lng: ride.pickup_lng,
+                            dropoff_lat: ride.dropoff_lat,
+                            dropoff_lng: ride.dropoff_lng,
+                            fare: ride.driver_earnings ?? ride.fare,
+                            distance_km: ride.distance_km,
+                            duration_minutes: ride.duration_minutes,
+                            rider_name: riderName,
+                            rider_rating: riderRating,
+                        },
+                        countdownSeconds: countdown,
+                    });
+                    // Intentionally do NOT persist ride_offered — the offer
+                    // is ephemeral and we want a fresh fetchActiveRide to
+                    // decide the state on next mount.
+                    AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
+                    return;
+                }
+
                 let rideState: RideState = 'idle';
-                if (ride.status === 'driver_assigned') rideState = 'navigating_to_pickup';
-                else if (ride.status === 'driver_accepted') rideState = 'navigating_to_pickup';
+                if (ride.status === 'driver_accepted') rideState = 'navigating_to_pickup';
                 else if (ride.status === 'driver_arrived') rideState = 'arrived_at_pickup';
                 else if (ride.status === 'in_progress') rideState = 'trip_in_progress';
 
-                set({ activeRide: res.data, rideState });
+                set({
+                    activeRide: res.data,
+                    rideState,
+                    incomingRide: null,
+                    countdownSeconds: 0,
+                });
                 _persistDriverState(rideState, res.data);
             } else {
                 // No active ride on the server — reset everything including

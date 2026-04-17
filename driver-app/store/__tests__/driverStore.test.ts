@@ -332,6 +332,61 @@ describe('driverStore — ride state machine', () => {
     expect(state.error).toBeNull();
   });
 
+  test('fetchActiveRide resumes ride_offered when backend status is driver_assigned', async () => {
+    mockApi.get.mockResolvedValueOnce({
+      data: {
+        ride: {
+          id: 'ride-999',
+          status: 'driver_assigned',
+          pickup_address: '1 Pickup St',
+          dropoff_address: '2 Dropoff Ave',
+          pickup_lat: 52.1,
+          pickup_lng: -106.6,
+          dropoff_lat: 52.2,
+          dropoff_lng: -106.7,
+          fare: 15.75,
+          distance_km: 4.1,
+          duration_minutes: 9,
+        },
+        rider: { id: 'user-1', first_name: 'Bob', rating: 4.9 },
+        vehicle_type: null,
+      },
+    } as any);
+
+    await act(async () => {
+      await useDriverStore.getState().fetchActiveRide();
+    });
+
+    const state = useDriverStore.getState();
+    expect(state.rideState).toBe('ride_offered');
+    expect(state.incomingRide).not.toBeNull();
+    expect(state.incomingRide?.ride_id).toBe('ride-999');
+    expect(state.incomingRide?.rider_name).toBe('Bob');
+    expect(state.incomingRide?.rider_rating).toBe(4.9);
+    expect(state.incomingRide?.fare).toBe(15.75);
+    expect(state.countdownSeconds).toBeGreaterThan(0);
+    expect(state.activeRide).not.toBeNull();
+  });
+
+  test('fetchActiveRide transitions to navigating_to_pickup when status is driver_accepted', async () => {
+    // Pre-seed a stale incomingRide — the fetch should clear it.
+    useDriverStore.setState({
+      rideState: 'ride_offered',
+      incomingRide: makeMockRide(),
+      countdownSeconds: 10,
+    });
+    mockApi.get.mockResolvedValueOnce(makeActiveRideResponse('driver_accepted') as any);
+
+    await act(async () => {
+      await useDriverStore.getState().fetchActiveRide();
+    });
+
+    const state = useDriverStore.getState();
+    expect(state.rideState).toBe('navigating_to_pickup');
+    expect(state.incomingRide).toBeNull();
+    expect(state.countdownSeconds).toBe(0);
+  });
+
   test('cancelRide resets to idle and clears active/incoming ride', async () => {
     useDriverStore.setState({
       rideState: 'navigating_to_pickup',

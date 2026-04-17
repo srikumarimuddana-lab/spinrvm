@@ -78,11 +78,16 @@ export default function DriverArrivingScreen() {
   useEffect(() => {
     if (rideId) {
       fetchRide(rideId);
-      // Fallback poll — WS delivers updates in real-time.
-      const interval = setInterval(() => fetchRide(rideId), 15000);
+      // Fallback poll — WS delivers updates in real-time. Fast poll (3s)
+      // while status is still negotiating (searching / driver_assigned)
+      // so a lost `driver_accepted` WS push doesn't leave the rider stuck.
+      const status = currentRide?.status;
+      const fastPoll =
+        !currentRide || status === 'searching' || status === 'driver_assigned';
+      const interval = setInterval(() => fetchRide(rideId), fastPoll ? 3000 : 15000);
       return () => clearInterval(interval);
     }
-  }, [rideId]);
+  }, [rideId, currentRide?.status]);
 
   useEffect(() => {
     // Check status changes
@@ -269,7 +274,11 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
 
           <View style={styles.etaPill}>
             <View style={styles.greenDot} />
-            <Text style={styles.etaText}>Arriving in {eta} min</Text>
+            <Text style={styles.etaText}>
+              {currentRide?.status === 'driver_assigned'
+                ? 'Confirming driver…'
+                : `Arriving in ${eta} min`}
+            </Text>
           </View>
 
           <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} />
@@ -317,15 +326,31 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                 }}
               />
             )}
-            {driverRouteCoords.length > 1 && (
-              <Polyline
-                coordinates={driverRouteCoords}
-                strokeWidth={4}
-                strokeColor="#3B82F6"
-                lineDashPattern={[8, 6]}
-                lineCap="round"
-              />
-            )}
+            {driverRouteCoords.length > 1 && (() => {
+              const total = driverRouteCoords.length;
+              const SEGS = 20;
+              const chunk = Math.max(1, Math.floor(total / SEGS));
+              const segments: { coords: any[]; color: string }[] = [];
+              for (let i = 0; i < total - 1; i += chunk) {
+                const end = Math.min(i + chunk + 1, total);
+                const t = i / Math.max(total - 1, 1);
+                const r = Math.round(255 + (238 - 255) * t);
+                const g = Math.round(149 + (43 - 149) * t);
+                const b = Math.round(0 + (43 - 0) * t);
+                segments.push({ coords: driverRouteCoords.slice(i, end), color: `rgb(${r},${g},${b})` });
+              }
+              return segments.map((seg, idx) => (
+                <Polyline
+                  key={`drv-seg-${idx}`}
+                  coordinates={seg.coords}
+                  strokeWidth={4}
+                  strokeColor={seg.color}
+                  lineDashPattern={[8, 6]}
+                  lineCap="round"
+                  lineJoin="round"
+                />
+              ));
+            })()}
 
             {/* Route from pickup to dropoff — orange to red gradient */}
             <MapViewDirections
@@ -371,7 +396,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
             {/* Dropoff Marker */}
             <Marker coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}>
               <View style={styles.pickupMarker}>
-                <View style={[styles.pickupDot, { backgroundColor: colors.primary }]} />
+                <View style={[styles.pickupDot, { backgroundColor: '#EF4444' }]} />
               </View>
             </Marker>
 

@@ -35,9 +35,11 @@ db = db_supabase  # legacy alias
 # `routes/admin/auth.py` and this module share the same source of truth.
 JWT_ALGORITHM = "HS256"
 OTP_EXPIRY_MINUTES = 5
-# 6 digits gives ~1/1,000,000 guessing odds per attempt. 4-digit OTPs
-# only give 1/10,000 and are considered insufficient for phone auth.
-OTP_LENGTH = 6
+# Product decision: 4-digit OTP across the whole app (login + ride pickup).
+# Trade-off: 1/10,000 guess odds per attempt vs 1/1,000,000 for 6 digits.
+# Mitigated by rate limiting + short expiry (OTP_EXPIRY_MINUTES).
+OTP_LENGTH = 4
+PICKUP_OTP_LENGTH = 4
 
 security = HTTPBearer(auto_error=False)
 
@@ -51,6 +53,11 @@ def generate_otp() -> str:
     a predictable OTP lets anyone take over an account they can SMS.
     """
     return "".join(secrets.choice(string.digits) for _ in range(OTP_LENGTH))
+
+
+def generate_pickup_otp() -> str:
+    """Generate a 4-digit OTP for ride pickup verification."""
+    return "".join(secrets.choice(string.digits) for _ in range(PICKUP_OTP_LENGTH))
 
 
 def hash_token(raw: str) -> str:

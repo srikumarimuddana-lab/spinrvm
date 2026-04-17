@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Radio, X } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
 
-import { getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTypes } from "@/lib/api";
+import { adminCancelRide, getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTypes } from "@/lib/api";
 import { useMonitoringSocket } from "@/hooks/use-monitoring-socket";
 
 import { MonitoringMap, MapHandles, MonitoringServiceArea } from "./monitoring-map";
@@ -459,13 +459,24 @@ export default function MonitoringPage() {
               <RidePanel
                 ride={selectedRide}
                 onDriverClick={handleSelectDriver}
-                onCancelRide={(id) => {
-                  // Optimistic remove
-                  ridesMapRef.current.delete(id);
-                  mapHandlesRef.current?.removeRideMarkers(id);
-                  refreshCounts();
-                  setSelected(null);
-                  setSelectedRide(null);
+                onCancelRide={async (id) => {
+                  const reason = window.prompt(
+                    "Cancellation reason (shown to rider + driver):",
+                    "Cancelled by admin",
+                  );
+                  if (reason === null) return; // user hit Cancel on the prompt
+                  try {
+                    await adminCancelRide(id, reason || "Cancelled by admin");
+                    ridesMapRef.current.delete(id);
+                    mapHandlesRef.current?.removeRideMarkers(id);
+                    refreshCounts();
+                    setSelected(null);
+                    setSelectedRide(null);
+                  } catch (err: any) {
+                    window.alert(
+                      `Failed to cancel ride: ${err?.message ?? "unknown error"}`,
+                    );
+                  }
                 }}
               />
             </div>

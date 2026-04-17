@@ -42,10 +42,23 @@ export default function RideStatusScreen() {
       // Poll as a fallback. The WebSocket client in
       // hooks/useRiderSocket.ts delivers ride-state updates in
       // real-time, so this only fires if the WS drops.
-      const interval = setInterval(() => fetchRide(rideId), 15000);
+      //
+      // Poll fast (3s) while the state is still being negotiated:
+      //   - no ride loaded yet
+      //   - `searching` (looking for a driver)
+      //   - `driver_assigned` (driver dispatched, waiting for accept — the
+      //     `driver_accepted` WS push can be silently lost if the rider's
+      //     socket is still connecting or was on a different VM when the
+      //     backend published)
+      // Drop to 15s once the driver has accepted — location updates then
+      // come over the WS exclusively and state changes are infrequent.
+      const status = currentRide?.status;
+      const fastPoll =
+        !currentRide || status === 'searching' || status === 'driver_assigned';
+      const interval = setInterval(() => fetchRide(rideId), fastPoll ? 3000 : 15000);
       return () => clearInterval(interval);
     }
-  }, [rideId]);
+  }, [rideId, currentRide?.status]);
 
   useEffect(() => {
     // Pulse animation for searching
@@ -181,11 +194,23 @@ export default function RideStatusScreen() {
       {/* Status Info */}
       <View style={styles.statusInfo}>
         <View style={styles.statusIcon}>
-          <Ionicons name="navigate" size={24} color={colors.primary} />
+          <Ionicons
+            name={currentRide?.status === 'driver_assigned' ? 'hourglass' : 'navigate'}
+            size={24}
+            color={colors.primary}
+          />
         </View>
         <View style={styles.statusTextContainer}>
-          <Text style={styles.statusLabel}>Driver is on the way</Text>
-          <Text style={styles.statusEta}>Arriving in ~5 min</Text>
+          <Text style={styles.statusLabel}>
+            {currentRide?.status === 'driver_assigned'
+              ? 'Driver found — confirming your ride'
+              : 'Driver accepted — on the way'}
+          </Text>
+          <Text style={styles.statusEta}>
+            {currentRide?.status === 'driver_assigned'
+              ? 'Hang tight, we\'ll update you as soon as they accept'
+              : 'Arriving in ~5 min'}
+          </Text>
         </View>
       </View>
 
@@ -257,7 +282,8 @@ export default function RideStatusScreen() {
         <Text style={styles.headerTitle}>
           {!currentRide && 'Loading...'}
           {currentRide?.status === 'searching' && 'Finding driver...'}
-          {(currentRide?.status === 'driver_assigned' || currentRide?.status === 'driver_accepted') && 'Driver on the way'}
+          {currentRide?.status === 'driver_assigned' && 'Driver confirming...'}
+          {currentRide?.status === 'driver_accepted' && 'Driver on the way'}
           {currentRide?.status === 'driver_arrived' && 'Driver arrived'}
         </Text>
         <View style={{ width: 44 }} />

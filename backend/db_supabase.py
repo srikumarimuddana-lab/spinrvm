@@ -1355,3 +1355,34 @@ async def get_default_payment_method(
     methods = await run_sync(_fn)
     data = getattr(methods, "data", None) or []
     return data[0].id if data else None
+
+
+async def list_wallets_low_balance_no_autotopup() -> List[Dict[str, Any]]:
+    """Wallets with auto-topup disabled whose balance has dipped below threshold."""
+    def _fn():
+        return (
+            supabase.table("corporate_wallets")
+            .select("*")
+            .eq("auto_topup_enabled", False)
+            .execute()
+        )
+
+    res = await run_sync(_fn)
+    rows = _rows_from_res(res)
+    return [
+        r
+        for r in rows
+        if r.get("auto_topup_threshold") is not None
+        and float(r["balance"]) < float(r["auto_topup_threshold"])
+    ]
+
+
+async def mark_low_balance_notified(*, wallet_id: str) -> None:
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    def _fn():
+        supabase.table("corporate_wallets").update(
+            {"low_balance_notified_at": now_iso}
+        ).eq("id", wallet_id).execute()
+
+    await run_sync(_fn)

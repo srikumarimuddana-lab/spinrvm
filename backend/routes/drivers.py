@@ -299,6 +299,7 @@ async def register_driver(
     rather than erroring.
     """
     user_id = current_user["id"]
+    user_phone = current_user.get("phone", "")
 
     # Build name/phone from user if not supplied
     first_name = body.get("first_name") or ""
@@ -308,6 +309,21 @@ async def register_driver(
     )
 
     existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1))
+
+    # Reject registration attempts that would collide with an existing
+    # driver record owned by someone else — prevents the phone-level
+    # duplicates we saw in migration 30_identity_audit. Only enforced when
+    # creating (no `existing` row for this user); updates of your own
+    # record aren't blocked.
+    if not existing and user_phone:
+        phone_match = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("drivers", {"phone": user_phone}, limit=1)
+        )
+        if phone_match and phone_match.get("user_id") != user_id:
+            raise HTTPException(
+                status_code=409,
+                detail="A driver account with this phone already exists. Log in to that account instead.",
+            )
 
     # Fields the client is allowed to set on register
     allowed = {
@@ -363,6 +379,23 @@ async def register_driver(
         **payload,
     }
     await db_supabase.insert_one("drivers", new_driver)
+
+    # Canonicalize the identity: if the user's role is still 'rider' flip
+    # it to 'driver' so admin lists, login resolution, and role-gated code
+    # all agree (see migration 31 for the one-shot backfill of legacy
+    # rows). Only updates when needed so we don't churn updated_at on
+    # users who are already tagged correctly.
+    if current_user.get("role") != "driver" or not current_user.get("is_driver"):
+        try:
+            # users table has no updated_at column (supabase_schema.sql).
+            await db_supabase.update_one(
+                "users",
+                {"id": user_id},
+                {"role": "driver", "is_driver": True},
+            )
+        except Exception as exc:
+            logger.warning(f"register_driver: failed to flip users.role for {user_id}: {exc}")
+
     return serialize_doc(new_driver)
 
 

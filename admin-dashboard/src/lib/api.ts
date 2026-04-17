@@ -554,9 +554,9 @@ export const getPromoStats = (range?: string) => {
     return request<any>(`/api/admin/promotions/stats?${sp.toString()}`);
 };
 
-/* ── Users (Riders) ─────────────────────────── */
-export const getUsers = () =>
-    request<any[]>("/api/admin/users");
+/* ── Users (Riders + Drivers + Admins) ───────── */
+export const getUsers = (role: "all" | "rider" | "driver" | "admin" = "all") =>
+    request<any[]>(`/api/admin/users?role=${role}`);
 
 export const getUserDetails = (id: string) =>
     request<any>(`/api/admin/users/${id}`);

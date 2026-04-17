@@ -12,6 +12,7 @@ try:
         get_corporate_account_by_id,
         get_corporate_wallet_by_company,
         list_wallet_transactions,
+        update_corporate_wallet_config,
     )
     from ..dependencies import get_admin_user  # type: ignore
     from ..services.corporate_wallet_service import apply_adjustment  # type: ignore
@@ -22,6 +23,7 @@ except ImportError:
         get_corporate_account_by_id,
         get_corporate_wallet_by_company,
         list_wallet_transactions,
+        update_corporate_wallet_config,
     )
     from dependencies import get_admin_user  # type: ignore
     from services.corporate_wallet_service import apply_adjustment  # type: ignore
@@ -135,3 +137,40 @@ async def manual_adjust(
         floor=float(wallet.get("soft_negative_floor", -50)),
     )
     return result
+
+
+class WalletConfigPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    auto_topup_enabled: Optional[bool] = None
+    auto_topup_threshold: Optional[float] = Field(None, ge=0)
+    auto_topup_amount: Optional[float] = Field(None, gt=0, le=10000)
+    auto_topup_daily_cap: Optional[float] = Field(None, gt=0, le=50000)
+
+
+@router.put("/{company_id}/wallet/config")
+async def update_wallet_config(
+    company_id: str,
+    body: WalletConfigPatch,
+    current_admin: dict = Depends(get_admin_user),
+):
+    _valid, normalized_id = validate_id(
+        company_id, "Corporate Account ID", raise_exception=True
+    )
+    wallet = await get_corporate_wallet_by_company(normalized_id)
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+    patch = body.model_dump(exclude_none=True)
+    if not patch:
+        return wallet
+    # Enabling auto-topup requires enough config to actually run a tick.
+    new_enabled = patch.get("auto_topup_enabled", wallet.get("auto_topup_enabled"))
+    if new_enabled:
+        threshold = patch.get("auto_topup_threshold", wallet.get("auto_topup_threshold"))
+        amount = patch.get("auto_topup_amount", wallet.get("auto_topup_amount"))
+        if threshold is None or amount is None:
+            raise HTTPException(
+                status_code=422,
+                detail="auto_topup_threshold and auto_topup_amount must be set before enabling",
+            )
+    updated = await update_corporate_wallet_config(wallet_id=wallet["id"], patch=patch)
+    return updated or {**wallet, **patch}

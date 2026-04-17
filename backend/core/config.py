@@ -28,23 +28,13 @@ class Settings(BaseSettings):
     # Security settings — no defaults; app refuses to start if unset in production
     JWT_SECRET: str
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    # Rider/driver access-token TTL in days. Default is 30 days to match
-    # the pre-refresh-token behaviour so mobile clients that haven't
-    # shipped refresh-flow support yet keep working; operators should
-    # drop this to 1-7 days once the mobile rollout lands. The audit
-    # finding P0-S3 is addressed by the token_version + refresh_tokens
-    # revocation primitives, not by shortening TTL — so the default
-    # here is about deployment compatibility, not security posture.
+    # Rider/driver access-token TTL in minutes. Short-lived for security (P0-S3).
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    # Legacy days TTL — preserved for mobile clients that haven't adopted rotation yet.
     ACCESS_TOKEN_TTL_DAYS: int = 30
-    # Admin-console access-token TTL in hours. Previously ∞ (no exp
-    # claim), which is unacceptable — anyone who captured an admin
-    # token had permanent access. Cap at 12h so at worst the attacker
-    # has until the next business-day login.
+    # Admin-console access-token TTL in hours. Cap at 12h for security.
     ADMIN_ACCESS_TOKEN_TTL_HOURS: int = 12
-    # Refresh-token TTL in days. 30 lines up with a reasonable "remember
-    # this device" window; anything longer turns refresh tokens into
-    # de-facto permanent credentials.
+    # Refresh-token TTL in days (30 days "remember this device").
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
     # CORS settings

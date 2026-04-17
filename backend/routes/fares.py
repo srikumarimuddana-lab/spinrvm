@@ -1,6 +1,8 @@
 import json
 import logging
+import os
 from typing import Optional
+from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import APIRouter, Query
 
@@ -20,7 +22,18 @@ logger = logging.getLogger(__name__)
 api_router = APIRouter(tags=["Fares"])
 
 # PERF-001: Fare cache TTL in seconds (default 5 min)
-_FARE_CACHE_TTL = int(os.environ.get('FARE_CACHE_TTL_SECONDS', '300'))
+_FARE_CACHE_TTL = int(os.environ.get("FARE_CACHE_TTL_SECONDS", "300"))
+
+# ── Decimal helpers (CQ-009) ──────────────────────────────────────────
+_TWO_PLACES = Decimal("0.01")
+
+
+def _fd(v) -> float:
+    """Round a raw DB float to 2 decimal places via Decimal to avoid float drift."""
+    try:
+        return float(Decimal(str(v)).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP))
+    except (TypeError, ValueError, decimal.InvalidOperation):
+        return 0.0
 
 def serialize_doc(doc):
     """Identity passthrough kept for legacy callers (Supabase dicts)."""
@@ -160,17 +173,24 @@ async def _compute_fares_for_location(lat: float, lng: float) -> list:
     if not vehicle_types:
         logger.warning("Fares: No active vehicle types found in database!")
         return []
+<<<<<<< HEAD
 
     # Default fares function (used when no service area or no fare_configs)
+=======
+    
+    # Default fares function (used when no service area or no fare_configs).
+    # Literal values are passed through _fd() so they are stored as exact
+    # 2-dp floats rather than raw IEEE 754 representations.
+>>>>>>> origin/sprint7/merge-sprint6-security
     def build_default_fares(vt_list, surge=1.0):
         return [serialize_doc({
             'vehicle_type': vt,
-            'base_fare': 3.50,
-            'per_km_rate': 1.50,
-            'per_minute_rate': 0.25,
-            'minimum_fare': 8.00,
-            'booking_fee': 2.00,
-            'surge_multiplier': surge
+            'base_fare': _fd(3.50),
+            'per_km_rate': _fd(1.50),
+            'per_minute_rate': _fd(0.25),
+            'minimum_fare': _fd(8.00),
+            'booking_fee': _fd(2.00),
+            'surge_multiplier': _fd(surge),
         }) for vt in vt_list]
 
     # Try to find matching service area
@@ -192,22 +212,13 @@ async def _compute_fares_for_location(lat: float, lng: float) -> list:
     # Try to get fare_configs for this service area
     fares = await db.fare_configs.find({
         'service_area_id': matching_area['id'],
-        'is_active': True
-    }).to_list(100)
-
-    if not fares:
-        # No fare configs for this area — fall back to defaults with area surge
-        logger.info(f"Fares: No fare_configs for area, using defaults with surge={surge}")
-        return build_default_fares(vehicle_types, surge)
-
-    vt_map = {vt['id']: serialize_doc(vt) for vt in vehicle_types}
->>>>>>> origin/sprint7/otp-lockout-redis
 
     result = []
     for fare in fares:
         vt = vt_map.get(fare["vehicle_type_id"])
         if vt:
-<<<<<<< HEAD
+            # Normalise all monetary values from DB through _fd() so downstream
+            # Decimal arithmetic in rides.py starts from clean 2-dp floats.
             result.append(
                 {
                     "vehicle_type": vt,
@@ -220,27 +231,12 @@ async def _compute_fares_for_location(lat: float, lng: float) -> list:
                 }
             )
 
-    if not result:
-        return _build_default_fares(vehicle_types, surge)
-
-=======
-            result.append({
-                'vehicle_type': vt,
-                'base_fare': fare['base_fare'],
-                'per_km_rate': fare['per_km_rate'],
-                'per_minute_rate': fare['per_minute_rate'],
-                'minimum_fare': fare['minimum_fare'],
-                'booking_fee': fare['booking_fee'],
-                'surge_multiplier': surge
-            })
-
     # If fare_configs exist but none matched vehicle types, fall back
     if not result:
         logger.info("Fares: fare_configs found but no matching vehicle types, using defaults")
-        return build_default_fares(vehicle_types, surge)
+        return _build_default_fares(vehicle_types, surge)
 
     logger.info(f"Fares: Returning {len(result)} fare estimates")
->>>>>>> origin/sprint7/otp-lockout-redis
     return result
 
 

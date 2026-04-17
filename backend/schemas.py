@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, validator
 
 # ============ Models ============
 
@@ -55,16 +55,16 @@ class OTPRecord(BaseModel):
     verified: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
 
 class AuthResponse(BaseModel):
     token: str
+    refresh_token: str
     user: UserProfile
     is_new_user: bool
-    # Refresh-token fields. Added in P0-S3 — existing mobile clients
-    # ignore unknown response fields, so this is additive. Clients that
-    # know about the refresh flow persist `refresh_token` and call
-    # /auth/refresh before the access token hits `access_expires_at`.
-    refresh_token: Optional[str] = None
+    # Token expiration fields (SEC-014)
+    expires_in: int  # access token lifetime in seconds
     access_expires_at: Optional[datetime] = None
     refresh_expires_at: Optional[datetime] = None
 
@@ -252,3 +252,26 @@ class CreateRideRequest(BaseModel):
     scheduled_time: Optional[datetime] = None
     corporate_account_id: Optional[str] = None
     payment_method: str = "card"
+
+    # ── Input validation (SEC-017) ──────────────────────────────────────── #
+
+    @validator('pickup_address', 'dropoff_address')
+    def validate_address(cls, v: str) -> str:
+        v = v.strip()
+        if len(v) < 3:
+            raise ValueError('Address must be at least 3 characters')
+        if len(v) > 500:
+            raise ValueError('Address must be 500 characters or fewer')
+        return v
+
+    @validator('pickup_lat', 'dropoff_lat')
+    def validate_lat(cls, v: float) -> float:
+        if not (-90.0 <= v <= 90.0):
+            raise ValueError('Latitude must be between -90 and 90')
+        return v
+
+    @validator('pickup_lng', 'dropoff_lng')
+    def validate_lng(cls, v: float) -> float:
+        if not (-180.0 <= v <= 180.0):
+            raise ValueError('Longitude must be between -180 and 180')
+        return v

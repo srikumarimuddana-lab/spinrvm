@@ -89,18 +89,20 @@ async def send_otp(request: Request, body: SendOTPRequest):
     _, normalized = validate_phone(phone)
     phone = normalized or phone
 
-    # Check if Twilio is configured via DB settings
-    settings = None
+    # Check if Twilio is configured via DB settings. Use a distinct name
+    # so the module-level `settings` config object (with .ENV etc.) isn't
+    # shadowed — that bug broke /send-otp with AttributeError on prod.
+    app_settings = None
     try:
-        settings = await get_app_settings()
+        app_settings = await get_app_settings()
     except Exception as e:
         logger.warning(f"Could not read app_settings from DB: {e}")
 
     twilio_configured = bool(
-        settings
-        and settings.get("twilio_account_sid")
-        and settings.get("twilio_auth_token")
-        and settings.get("twilio_from_number")
+        app_settings
+        and app_settings.get("twilio_account_sid")
+        and app_settings.get("twilio_auth_token")
+        and app_settings.get("twilio_from_number")
     )
 
     is_dev = settings.ENV.lower() in ("development", "test")

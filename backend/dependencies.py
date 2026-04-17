@@ -1,7 +1,8 @@
 import secrets
 import string
+import hashlib
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Dict, Any
 
 import jwt
 from fastapi import Depends, HTTPException
@@ -45,11 +46,22 @@ security = HTTPBearer(auto_error=False)
 def generate_otp() -> str:
     """Generate a cryptographically secure numeric OTP.
 
+<<<<<<< HEAD
     Uses `secrets.choice` (not `random.choices`) so the OTP can't be
     predicted from wall-clock time / PID state — which matters because
     a predictable OTP lets anyone take over an account they can SMS.
     """
     return "".join(secrets.choice(string.digits) for _ in range(OTP_LENGTH))
+
+
+def hash_token(raw: str) -> str:
+    """SHA-256 hash of a raw token — used to store refresh tokens safely."""
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def create_refresh_token() -> str:
+    """Generate a cryptographically random opaque refresh token."""
+    return secrets.token_urlsafe(32)
 
 
 def create_jwt_token(
@@ -64,23 +76,24 @@ def create_jwt_token(
     ``token_version`` is written into the payload so the middleware can
     compare it against ``users.token_version`` and reject tokens issued
     before a force-logout-all. TTL comes from
-    ``settings.ACCESS_TOKEN_TTL_DAYS``; admin tokens are minted in
-    ``routes/admin/auth.py`` directly because they carry a different
+    ``settings.ACCESS_TOKEN_EXPIRE_MINUTES`` (default 15m); admin tokens are
+    minted in ``routes/admin/auth.py`` directly because they carry a different
     claim set (role, modules, email).
     """
     now = datetime.now(timezone.utc)
+    # P0-S3: Short-lived access tokens (15 minutes).
+    ttl = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     payload: dict = {
         "user_id": user_id,
         "phone": phone,
         "iat": now,
-        "exp": now + timedelta(days=settings.ACCESS_TOKEN_TTL_DAYS),
+        "exp": now + ttl,
         "token_version": int(token_version or 0),
     }
     if session_id:
         payload["session_id"] = session_id
 
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=JWT_ALGORITHM)
-
 
 def verify_jwt_token(token: str) -> dict:
     try:

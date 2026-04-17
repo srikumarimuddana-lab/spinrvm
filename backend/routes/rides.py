@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
 from pydantic import BaseModel
 
+<<<<<<< HEAD
 try:
     from .. import db_supabase
     from ..dependencies import generate_otp, get_current_user
@@ -46,11 +47,11 @@ dispatch = DispatchService(db_supabase)  # module-level instance for legacy call
 # ── Decimal helpers for accurate currency arithmetic ──────────────────────────
 _TWO_PLACES = Decimal("0.01")
 
-
 def _d(v) -> Decimal:
     """Convert any numeric value to Decimal safely (avoids float precision loss)."""
     return Decimal(str(v))
 
+<<<<<<< HEAD
 
 def _round(v: Decimal) -> Decimal:
     return v.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
@@ -61,6 +62,14 @@ def _f(v: Decimal) -> float:
     return float(v)
 
 
+=======
+def _round(v: Decimal) -> Decimal:
+    return v.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
+
+def _f(v: Decimal) -> float:
+    """Convert Decimal back to float for Pydantic / JSON serialisation."""
+    return float(v)
+>>>>>>> origin/sprint7/merge-sprint6-security
 api_router = APIRouter(prefix="/rides", tags=["Rides"])
 
 
@@ -452,6 +461,7 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
     estimates = []
     for fare_info in fares:
         # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
+        # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
         surge = _d(fare_info.get("surge_multiplier", 1.0))
         distance_fare = _round(_d(fare_info["per_km_rate"]) * _d(distance_km) * surge)
         time_fare = _round(_d(fare_info["per_minute_rate"]) * _d(duration_minutes) * surge)
@@ -471,26 +481,22 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
             closest = min(nearby_for_type, key=lambda x: x["distance_km"])
             eta_minutes = max(2, int(closest["distance_km"] / 30 * 60) + 1)
 
-        est = {
-            "vehicle_type": fare_info["vehicle_type"],
-            "distance_km": round(distance_km, 2),
-            "duration_minutes": duration_minutes,
-            "base_fare": _f(_d(fare_info["base_fare"])),
-            "distance_fare": _f(distance_fare),
-            "time_fare": _f(time_fare),
-            "booking_fee": _f(booking_fee),
-            "surge_multiplier": _f(surge),
-            "total_fare": _f(total_fare),
-            "available": is_available,
-            "eta_minutes": eta_minutes,
-            "driver_count": driver_count,
-        }
-        # Only include airport fee fields when there's actually an airport surcharge
-        if airport_fee > 0:
-            est["airport_fee"] = round(airport_fee, 2)
-            est["airport_zone_name"] = airport_result.get("airport_zone_name")
-        estimates.append(est)
-
+        estimates.append(
+            {
+                "vehicle_type": fare_info["vehicle_type"],
+                "distance_km": round(distance_km, 2),
+                "duration_minutes": duration_minutes,
+                "base_fare": _f(_d(fare_info["base_fare"])),
+                "distance_fare": _f(distance_fare),
+                "time_fare": _f(time_fare),
+                "booking_fee": _f(booking_fee),
+                "surge_multiplier": _f(surge),
+                "total_fare": _f(total_fare),
+                "available": is_available,
+                "eta_minutes": eta_minutes,
+                "driver_count": driver_count,
+            }
+        )
     return estimates
 
 
@@ -556,6 +562,7 @@ async def create_ride(
     )
 
     if not fare_info:
+<<<<<<< HEAD
         raise HTTPException(status_code=400, detail="Invalid vehicle type")
 
     # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
@@ -604,6 +611,9 @@ async def create_ride(
     # Earnings split: Distance fare goes to driver, booking + airport fee goes to admin
     driver_earnings = _round(base_fare + distance_fare + time_fare)
     admin_earnings = _round(booking_fee + airport_fee)
+=======
+        raise HTTPException(status_code=400, detail='Invalid vehicle type')
+        
 
     ride = Ride(
         rider_id=current_user["id"],

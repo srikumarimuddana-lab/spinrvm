@@ -1,7 +1,7 @@
-from datetime import datetime, timedelta, timezone
 import logging
 import uuid
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -18,7 +18,7 @@ try:
         generate_otp,
         get_current_user,
     )
-    from ..schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
+    from ..schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest, RefreshTokenRequest
     from ..settings_loader import get_app_settings
     from ..sms_service import send_otp_sms
     from ..utils.refresh_tokens import (
@@ -31,6 +31,7 @@ try:
     from ..utils.redis_client import (
         redis_get, redis_set, redis_incr, redis_expire, redis_delete
     )
+    from ..utils.crypto import hash_otp
 except ImportError:
     import db_supabase
     from core.config import settings
@@ -40,7 +41,7 @@ except ImportError:
         generate_otp,
         get_current_user,
     )
-    from schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
+    from schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest, RefreshTokenRequest
     from settings_loader import get_app_settings
     from sms_service import send_otp_sms
     from utils.refresh_tokens import (
@@ -53,53 +54,7 @@ except ImportError:
     from utils.redis_client import (
         redis_get, redis_set, redis_incr, redis_expire, redis_delete
     )
-from datetime import datetime, timedelta, timezone
-
-from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-
-try:
-    from .. import db_supabase
-    from ..core.config import settings
-    from ..core.config import settings as _core_settings
-    from ..dependencies import (
-        OTP_EXPIRY_MINUTES,
-        create_jwt_token,
-        generate_otp,
-        get_current_user,
-    )
-    from ..schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
-    from ..settings_loader import get_app_settings
-    from ..sms_service import send_otp_sms
-    from ..utils.refresh_tokens import (
-        issue_refresh_token,
-        lookup_refresh_token,
-        revoke_all_for_user,
-        revoke_refresh_token,
-    )
-    from ..validators import validate_phone
-except ImportError:
-    import db_supabase
-    from core.config import settings
-    from core.config import settings as _core_settings
-    from dependencies import (
-        OTP_EXPIRY_MINUTES,
-        create_jwt_token,
-        generate_otp,
-        get_current_user,
-    )
-    from schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
-    from settings_loader import get_app_settings
-    from sms_service import send_otp_sms
-    from utils.refresh_tokens import (
-        issue_refresh_token,
-        lookup_refresh_token,
-        revoke_all_for_user,
-        revoke_refresh_token,
-    )
-    from validators import validate_phone
+    from utils.crypto import hash_otp
 
 db = db_supabase  # legacy alias
 
@@ -107,42 +62,24 @@ logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
 api_router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-# ── OTP brute-force lockout helpers (SEC-008) ─────────────────────────────────
-def _otp_failure_key(phone: str) -> str:
-    return f"otp_failures:{phone}"
-
-
-def _otp_lockout_key(phone: str) -> str:
-    return f"otp_lockout:{phone}"
-
-
-async def _check_otp_lockout(phone: str) -> None:
-    """Raise HTTP 429 if the phone is currently locked out."""
-    locked = await redis_get(_otp_lockout_key(phone))
-    if locked:
-        raise HTTPException(
-            status_code=429,
-            detail="Too many failed attempts. Try again in 24 hours.",
-            headers={"Retry-After": str(settings.OTP_LOCKOUT_DURATION_SECONDS)},
-        )
-
-
-async def _record_otp_failure(phone: str) -> None:
-    """Increment failure counter; lock out if threshold reached."""
-    fail_key = _otp_failure_key(phone)
-    count = await redis_incr(fail_key)
-    if count == 1:
-        # First failure — set the sliding window TTL
-        await redis_expire(fail_key, settings.OTP_FAILURE_WINDOW_SECONDS)
-    if count >= settings.OTP_MAX_FAILURES:
-        await redis_set(_otp_lockout_key(phone), "1", settings.OTP_LOCKOUT_DURATION_SECONDS)
-        logger.warning(f"OTP lockout triggered for phone ending ...{phone[-4:]}")
-
-
-async def _clear_otp_failures(phone: str) -> None:
-    """Remove failure counter and lockout on successful verification."""
-    await redis_delete(_otp_failure_key(phone))
-    await redis_delete(_otp_lockout_key(phone))
+# ── Helpers for Auth Responses ──────────────────────────────────────────
+def _make_auth_response(
+    token: str,
+    refresh_token: str,
+    user_obj: UserProfile,
+    is_new_user: bool,
+    access_expires_at: datetime,
+    refresh_expires_at: datetime,
+) -> AuthResponse:
+    return AuthResponse(
+        token=token,
+        refresh_token=refresh_token,
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        user=user_obj,
+        is_new_user=is_new_user,
+        access_expires_at=access_expires_at,
+        refresh_expires_at=refresh_expires_at,
+    )
 
 @api_router.post("/send-otp")
 @limiter.limit("5/minute")
@@ -166,7 +103,7 @@ async def send_otp(request: Request, body: SendOTPRequest):
         and settings.get("twilio_from_number")
     )
 
-    is_dev = _core_settings.ENV.lower() in ("development", "test")
+    is_dev = settings.ENV.lower() in ("development", "test")
 
     if not twilio_configured and not is_dev:
         # In production, refuse to silently fall back to a known OTP.
@@ -177,7 +114,9 @@ async def send_otp(request: Request, body: SendOTPRequest):
     otp_code = generate_otp() if twilio_configured else "123456"
 
     otp_record = OTPRecord(
-        phone=phone, code=otp_code, expires_at=datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES)
+        phone=phone,
+        code=hash_otp(otp_code),  # stored as SHA-256 hash (SEC-016)
+        expires_at=datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES),
     )
 
     try:
@@ -215,17 +154,21 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
     await _check_otp_lockout(phone)
     otp_record = None
     try:
-        otp_record = await db_supabase.get_otp_record(phone, code)
+        # compare hashes, never plain text (SEC-016)
+        otp_record = await db_supabase.get_otp_record(phone, hash_otp(code))
     except Exception as e:
-<<<<<<< HEAD
         logger.warning(f"Could not query OTP from DB: {e}")
 
     # Dev fallback: accept code 123456 when no OTP record found (Twilio not configured)
     # DISABLED IN PRODUCTION: only allow in development environment
     if not otp_record and code == "123456" and settings.ENV.lower() == "development":
         logger.info("Dev mode: accepting code 123456")
-        otp_record = {"id": "dev", "phone": phone, "code": code, "expires_at": datetime.utcnow() + timedelta(minutes=5)}
-
+        otp_record = {
+            "id": "dev",
+            "phone": phone,
+            "code": hash_otp(code),
+            "expires_at": datetime.utcnow() + timedelta(minutes=5),
+        }
     if not otp_record:
         # Wrong code — record the failure (may trigger lockout)
         await _record_otp_failure(phone)
@@ -283,11 +226,9 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 await db_supabase.update_one("users", {"id": existing_user["id"]}, {"current_session_id": session_id})
                 existing_user["current_session_id"] = session_id
             except Exception as e:
-                logger.warning(f"Could not update current_session_id in DB: {e}")
-
             user_id = existing_user["id"]
             token_version = int(existing_user.get("token_version") or 0)
-            access_expires_at = datetime.now(timezone.utc) + timedelta(days=_core_settings.ACCESS_TOKEN_TTL_DAYS)
+            access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
             token = create_jwt_token(
                 user_id,
                 phone,
@@ -302,15 +243,11 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 user_obj = UserProfile(**existing_user)
                 logger.info("UserProfile valid")
             except Exception as e:
-                logger.error("UserProfile validation failed")
-                # Fallback constructs if validation fails to inspect why
-                raise e
-
-            return AuthResponse(
-                token=token,
-                user=user_obj,
+            return _make_auth_response(
+                token,
+                refresh_raw,
+                user_obj,
                 is_new_user=False,
-                refresh_token=refresh_raw,
                 access_expires_at=access_expires_at,
                 refresh_expires_at=refresh_expires_at,
             )
@@ -330,17 +267,16 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             try:
                 await db_supabase.create_user(new_user)
             except Exception as e:
-                logger.warning(f"Could not create user in DB: {e}")
-            access_expires_at = datetime.now(timezone.utc) + timedelta(days=_core_settings.ACCESS_TOKEN_TTL_DAYS)
+            access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
             token = create_jwt_token(user_id, phone, session_id=session_id, token_version=0)
             refresh_raw, _, refresh_expires_at = await issue_refresh_token(
                 user_id, audience="rider", user_agent=user_agent, ip=client_ip
             )
-            return AuthResponse(
-                token=token,
-                user=UserProfile(**new_user),
+            return _make_auth_response(
+                token,
+                refresh_raw,
+                UserProfile(**new_user),
                 is_new_user=True,
-                refresh_token=refresh_raw,
                 access_expires_at=access_expires_at,
                 refresh_expires_at=refresh_expires_at,
             )
@@ -350,6 +286,63 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
 
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Internal Login Error: {str(e)}") from e
+
+
+@api_router.post("/refresh", response_model=AuthResponse)
+@limiter.limit("10/minute")
+async def refresh_token(request: Request, body: RefreshTokenRequest):
+    """Exchange a valid refresh token for a new access + refresh token pair (rotation)."""
+    token_hash = hash_token(body.refresh_token)
+
+    record = None
+    try:
+        record = await db.refresh_tokens.find_one({'token_hash': token_hash, 'revoked': False})
+    except Exception as e:
+        logger.warning(f'Could not query refresh_tokens: {e}')
+
+    if not record:
+        raise HTTPException(status_code=401, detail='Invalid or revoked refresh token')
+
+    # Check expiry
+    expires_at = record.get('expires_at')
+    if isinstance(expires_at, str):
+        expires_at = expires_at.replace('Z', '+00:00')
+        try:
+            expires_at = datetime.fromisoformat(expires_at)
+        except ValueError:
+            raise HTTPException(status_code=401, detail='Malformed token expiry')
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > expires_at:
+        raise HTTPException(status_code=401, detail='Refresh token has expired')
+
+    user_id = record['user_id']
+    user = None
+    try:
+        user = await db.users.find_one({'id': user_id})
+    except Exception as e:
+        logger.warning(f'Could not fetch user for token refresh: {e}')
+
+    if not user:
+        raise HTTPException(status_code=401, detail='User not found')
+
+    # Rotate: revoke old token, issue new pair
+    try:
+        await db.refresh_tokens.update_one({'token_hash': token_hash}, {'$set': {'revoked': True}})
+    except Exception as e:
+        logger.warning(f'Could not revoke old refresh token: {e}')
+
+    session_id = str(uuid.uuid4())
+    try:
+        await db.users.update_one({'id': user_id}, {'$set': {'current_session_id': session_id}})
+    except Exception as e:
+        logger.warning(f'Could not update session_id on refresh: {e}')
+
+    new_access = create_jwt_token(user_id, user.get('phone', ''), session_id=session_id)
+    new_refresh = create_refresh_token(user_id)
+    await _store_refresh_token(user_id, new_refresh)
+
+    return _make_auth_response(new_access, new_refresh, UserProfile(**user), is_new_user=False)
 
 
 @api_router.get("/me", response_model=UserProfile)

@@ -1190,6 +1190,61 @@ async def record_kyb_decision(
     return await run_sync(_fn)
 
 
+async def get_corporate_wallet_by_company(company_id: str) -> Optional[Dict[str, Any]]:
+    """Return the master wallet row for a company, or None."""
+    def _fn():
+        res = (
+            supabase.table("corporate_wallets")
+            .select("*")
+            .eq("company_id", company_id)
+            .limit(1)
+            .execute()
+        )
+        return _rows_from_res(res)
+
+    rows = await run_sync(_fn)
+    return rows[0] if rows else None
+
+
+async def update_corporate_stripe_customer_id(
+    *, company_id: str, stripe_customer_id: str
+) -> None:
+    """Persist the Stripe customer id for a corporate account."""
+    def _fn():
+        supabase.table("corporate_accounts").update(
+            {"stripe_customer_id": stripe_customer_id}
+        ).eq("id", company_id).execute()
+    await run_sync(_fn)
+
+
+async def ensure_corporate_wallet(*, company_id: str) -> Dict[str, Any]:
+    """Idempotently create the master wallet for a company. Returns the row."""
+    def _select():
+        res = (
+            supabase.table("corporate_wallets")
+            .select("*")
+            .eq("company_id", company_id)
+            .limit(1)
+            .execute()
+        )
+        return _rows_from_res(res)
+
+    existing = await run_sync(_select)
+    if existing:
+        return existing[0]
+
+    def _insert():
+        res = (
+            supabase.table("corporate_wallets")
+            .insert({"company_id": company_id, "balance": 0, "currency": "CAD"})
+            .execute()
+        )
+        return _single_row_from_res(res)
+
+    created = await run_sync(_insert)
+    return created or {}
+
+
 async def get_corporate_members_for_user(user_id: str) -> List[Dict[str, Any]]:
     """Return all corporate_members rows for a user where status='active'.
 
@@ -1239,3 +1294,131 @@ async def create_kyb_upload_url(
         "path": signed.get("path", path),
         "expires_at": expires_at,
     }
+
+
+async def list_wallets_needing_autotopup() -> List[Dict[str, Any]]:
+    """Return wallets where auto_topup_enabled and balance < threshold.
+
+    Threshold is filtered in Python because supabase-py doesn't support
+    cross-column comparisons in .filter().
+    """
+    def _fn():
+        return (
+            supabase.table("corporate_wallets")
+            .select("*")
+            .eq("auto_topup_enabled", True)
+            .execute()
+        )
+
+    res = await run_sync(_fn)
+    rows = _rows_from_res(res)
+    return [
+        r
+        for r in rows
+        if r.get("auto_topup_threshold") is not None
+        and float(r["balance"]) < float(r["auto_topup_threshold"])
+    ]
+
+
+async def sum_autotopups_today(wallet_id: str) -> float:
+    """Sum of today's successful top-ups for a wallet (for daily-cap enforcement)."""
+    today_start = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+
+    def _fn():
+        return (
+            supabase.table("corporate_wallet_transactions")
+            .select("amount")
+            .eq("wallet_id", wallet_id)
+            .eq("type", "topup")
+            .gte("created_at", today_start.isoformat())
+            .execute()
+        )
+
+    res = await run_sync(_fn)
+    rows = _rows_from_res(res)
+    return sum(float(r["amount"]) for r in rows)
+
+
+async def get_default_payment_method(
+    stripe_customer_id: str, stripe_secret: str
+) -> Optional[str]:
+    """Return the Stripe customer's first card payment method, if any."""
+    import stripe
+
+    def _fn():
+        return stripe.PaymentMethod.list(
+            customer=stripe_customer_id, type="card", api_key=stripe_secret
+        )
+
+    methods = await run_sync(_fn)
+    data = getattr(methods, "data", None) or []
+    return data[0].id if data else None
+
+
+async def list_wallets_low_balance_no_autotopup() -> List[Dict[str, Any]]:
+    """Wallets with auto-topup disabled whose balance has dipped below threshold."""
+    def _fn():
+        return (
+            supabase.table("corporate_wallets")
+            .select("*")
+            .eq("auto_topup_enabled", False)
+            .execute()
+        )
+
+    res = await run_sync(_fn)
+    rows = _rows_from_res(res)
+    return [
+        r
+        for r in rows
+        if r.get("auto_topup_threshold") is not None
+        and float(r["balance"]) < float(r["auto_topup_threshold"])
+    ]
+
+
+async def mark_low_balance_notified(*, wallet_id: str) -> None:
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    def _fn():
+        supabase.table("corporate_wallets").update(
+            {"low_balance_notified_at": now_iso}
+        ).eq("id", wallet_id).execute()
+
+    await run_sync(_fn)
+
+
+async def list_wallet_transactions(
+    *, wallet_id: str, skip: int = 0, limit: int = 50
+) -> List[Dict[str, Any]]:
+    """Return the most recent ledger entries for a wallet, newest first."""
+    upper = skip + max(limit, 1) - 1
+
+    def _fn():
+        return (
+            supabase.table("corporate_wallet_transactions")
+            .select("*")
+            .eq("wallet_id", wallet_id)
+            .order("created_at", desc=True)
+            .range(skip, upper)
+            .execute()
+        )
+
+    res = await run_sync(_fn)
+    return _rows_from_res(res)
+
+
+async def update_corporate_wallet_config(
+    *, wallet_id: str, patch: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Patch one or more configuration columns on a corporate_wallets row."""
+    def _fn():
+        res = (
+            supabase.table("corporate_wallets")
+            .update(patch)
+            .eq("id", wallet_id)
+            .execute()
+        )
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)

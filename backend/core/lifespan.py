@@ -124,6 +124,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import document expiry checker: {e}")
 
+    # Corporate wallet auto-top-up — kicks off off-session Stripe charges
+    # every 10 minutes for wallets that have dropped below their threshold.
+    try:
+        from utils.corporate_autotopup import corporate_autotopup_loop
+
+        _spawn("corporate_autotopup (10min)", corporate_autotopup_loop)
+    except Exception as e:
+        logger.warning(f"Failed to import corporate autotopup loop: {e}")
+
+    # Corporate wallet low-balance email — for accounts with auto-topup OFF,
+    # sends a reminder once every 12h while the balance stays below threshold.
+    try:
+        from utils.corporate_low_balance import corporate_low_balance_loop
+
+        _spawn("corporate_low_balance (1h)", corporate_low_balance_loop)
+    except Exception as e:
+        logger.warning(f"Failed to import corporate low-balance loop: {e}")
+
     app.state.background_tasks = background_tasks
 
     # WebSocket pub/sub (audit P0-B3): before this, socket sends were

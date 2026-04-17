@@ -13,7 +13,10 @@ def test_wallet_created_on_kyb_approval(test_client, admin_override):
     ) as m_kyb, patch(
         "routes.corporate_accounts.ensure_corporate_wallet",
         AsyncMock(return_value={"id": "w1", "company_id": "c1", "balance": 0}),
-    ) as m_wallet:
+    ) as m_wallet, patch(
+        "routes.corporate_accounts.get_app_settings",
+        AsyncMock(return_value={"stripe_secret_key": ""}),
+    ):
         resp = test_client.post(
             "/api/admin/corporate-accounts/c1/kyb-review",
             json={"approve": True},

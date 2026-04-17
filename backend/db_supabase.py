@@ -1190,6 +1190,17 @@ async def record_kyb_decision(
     return await run_sync(_fn)
 
 
+async def update_corporate_stripe_customer_id(
+    *, company_id: str, stripe_customer_id: str
+) -> None:
+    """Persist the Stripe customer id for a corporate account."""
+    def _fn():
+        supabase.table("corporate_accounts").update(
+            {"stripe_customer_id": stripe_customer_id}
+        ).eq("id", company_id).execute()
+    await run_sync(_fn)
+
+
 async def ensure_corporate_wallet(*, company_id: str) -> Dict[str, Any]:
     """Idempotently create the master wallet for a company. Returns the row."""
     def _select():

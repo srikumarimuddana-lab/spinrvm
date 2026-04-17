@@ -1190,6 +1190,22 @@ async def record_kyb_decision(
     return await run_sync(_fn)
 
 
+async def get_corporate_wallet_by_company(company_id: str) -> Optional[Dict[str, Any]]:
+    """Return the master wallet row for a company, or None."""
+    def _fn():
+        res = (
+            supabase.table("corporate_wallets")
+            .select("*")
+            .eq("company_id", company_id)
+            .limit(1)
+            .execute()
+        )
+        return _rows_from_res(res)
+
+    rows = await run_sync(_fn)
+    return rows[0] if rows else None
+
+
 async def update_corporate_stripe_customer_id(
     *, company_id: str, stripe_customer_id: str
 ) -> None:

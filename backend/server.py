@@ -18,6 +18,7 @@ from routes.admin import admin_router as admin_router
 from routes.admin.monitoring import router as monitoring_router
 from routes.auth import api_router as auth_router
 from routes.corporate_accounts import router as corporate_accounts_router
+from routes.corporate_wallet import router as corporate_wallet_router
 from routes.disputes import api_router as disputes_router
 from routes.drivers import api_router as drivers_router
 from routes.fare_split import api_router as fare_split_router
@@ -96,6 +97,7 @@ app.include_router(settings_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api")
 app.include_router(admin_auth_router, prefix="/api")
 app.include_router(corporate_accounts_router, prefix="/api")
+app.include_router(corporate_wallet_router, prefix="/api")
 # files_router serves document files at /api/documents/{id} (used by admin dashboard).
 # Also mounted under /api/v1 so legacy driver_documents rows whose document_url was
 # written as /api/v1/documents/{id} by the old base64-in-DB upload path keep resolving.

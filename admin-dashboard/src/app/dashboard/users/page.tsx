@@ -27,9 +27,9 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, ShieldAlert, Download, RefreshCw, ChevronLeft, ChevronRight, Ban, CheckCircle, AlertTriangle } from "lucide-react";
+import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, ShieldAlert, Download, RefreshCw, ChevronLeft, ChevronRight, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus } from "lucide-react";
 import { formatDate } from "@/lib/utils";
-import { getUsers, getUserDetails, updateUserStatus, getStats } from "@/lib/api";
+import { getUsers, getUserDetails, updateUserStatus, getStats, getUserWallet, creditUserWallet, debitUserWallet } from "@/lib/api";
 
 const PER_PAGE = 25;
 
@@ -42,6 +42,57 @@ export default function UsersPage() {
     const [verifiedFilter, setVerifiedFilter] = useState("all");
     const [selectedUser, setSelectedUser] = useState<any>(null);
     const [page, setPage] = useState(1);
+
+    // Wallet state for the user-details dialog
+    const [walletData, setWalletData] = useState<any>(null);
+    const [walletLoading, setWalletLoading] = useState(false);
+    const [walletError, setWalletError] = useState("");
+    const [walletAmount, setWalletAmount] = useState("");
+    const [walletReason, setWalletReason] = useState("");
+    const [walletSubmitting, setWalletSubmitting] = useState<"credit" | "debit" | null>(null);
+
+    useEffect(() => {
+        if (!selectedUser?.id) {
+            setWalletData(null);
+            setWalletError("");
+            setWalletAmount("");
+            setWalletReason("");
+            return;
+        }
+        setWalletLoading(true);
+        setWalletError("");
+        getUserWallet(selectedUser.id)
+            .then((d) => setWalletData(d))
+            .catch((e) => setWalletError(e?.message || "Failed to load wallet"))
+            .finally(() => setWalletLoading(false));
+    }, [selectedUser?.id]);
+
+    const handleWalletAction = async (action: "credit" | "debit") => {
+        const amt = parseFloat(walletAmount);
+        if (!selectedUser?.id || !walletAmount || isNaN(amt) || amt <= 0) {
+            setWalletError("Enter a positive amount");
+            return;
+        }
+        if (!walletReason.trim() || walletReason.trim().length < 3) {
+            setWalletError("Reason must be at least 3 characters");
+            return;
+        }
+        setWalletSubmitting(action);
+        setWalletError("");
+        try {
+            const fn = action === "credit" ? creditUserWallet : debitUserWallet;
+            await fn(selectedUser.id, amt, walletReason.trim());
+            // Refetch to pick up the new ledger entry
+            const refreshed = await getUserWallet(selectedUser.id);
+            setWalletData(refreshed);
+            setWalletAmount("");
+            setWalletReason("");
+        } catch (e: any) {
+            setWalletError(e?.message || `Failed to ${action}`);
+        } finally {
+            setWalletSubmitting(null);
+        }
+    };
 
     useEffect(() => {
         fetchUsers();
@@ -348,7 +399,7 @@ export default function UsersPage() {
 
             {/* User Details Dialog */}
             <Dialog open={!!selectedUser} onOpenChange={(open) => { if (!open) setSelectedUser(null); }}>
-                <DialogContent className="sm:max-w-lg">
+                <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2">
                             <Users className="h-5 w-5 text-sky-500" />
@@ -479,6 +530,132 @@ export default function UsersPage() {
                                         </Button>
                                     )}
                                 </div>
+                            </div>
+
+                            {/* Wallet Management */}
+                            <div className="border-t pt-4">
+                                <Label className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
+                                    <Wallet className="h-3 w-3" /> Wallet
+                                </Label>
+
+                                {walletLoading ? (
+                                    <div className="flex items-center justify-center py-6">
+                                        <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                                    </div>
+                                ) : walletData ? (
+                                    <div className="space-y-3">
+                                        <div className="rounded-lg bg-gradient-to-br from-sky-500/10 to-blue-600/10 border border-sky-500/20 p-4">
+                                            <p className="text-xs text-muted-foreground">Current Balance</p>
+                                            <p className="text-3xl font-bold">
+                                                {walletData.wallet.currency === "CAD" ? "$" : ""}
+                                                {Number(walletData.wallet.balance).toFixed(2)}
+                                                <span className="text-sm font-normal text-muted-foreground ml-1">{walletData.wallet.currency}</span>
+                                            </p>
+                                            {!walletData.wallet.is_active && (
+                                                <Badge variant="destructive" className="mt-1">Suspended</Badge>
+                                            )}
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <Input
+                                                type="number"
+                                                step="0.01"
+                                                min="0.01"
+                                                placeholder="Amount (CAD)"
+                                                value={walletAmount}
+                                                onChange={(e) => setWalletAmount(e.target.value)}
+                                                disabled={walletSubmitting !== null}
+                                            />
+                                            <Input
+                                                placeholder="Reason (min 3 chars)"
+                                                value={walletReason}
+                                                onChange={(e) => setWalletReason(e.target.value)}
+                                                disabled={walletSubmitting !== null}
+                                                maxLength={200}
+                                            />
+                                        </div>
+
+                                        <div className="flex gap-2">
+                                            <Button
+                                                className="flex-1 bg-emerald-600 hover:bg-emerald-700"
+                                                disabled={walletSubmitting !== null}
+                                                onClick={() => handleWalletAction("credit")}
+                                            >
+                                                <Plus className="h-4 w-4 mr-1" />
+                                                {walletSubmitting === "credit" ? "Crediting..." : "Credit"}
+                                            </Button>
+                                            <Button
+                                                className="flex-1"
+                                                variant="outline"
+                                                disabled={walletSubmitting !== null}
+                                                onClick={() => handleWalletAction("debit")}
+                                            >
+                                                <Minus className="h-4 w-4 mr-1" />
+                                                {walletSubmitting === "debit" ? "Debiting..." : "Debit"}
+                                            </Button>
+                                        </div>
+
+                                        {walletError && (
+                                            <p className="text-sm text-red-600 dark:text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2">
+                                                {walletError}
+                                            </p>
+                                        )}
+
+                                        <div>
+                                            <Label className="text-xs text-muted-foreground mb-2 block">
+                                                Transaction Ledger ({walletData.transactions?.length || 0})
+                                            </Label>
+                                            {(!walletData.transactions || walletData.transactions.length === 0) ? (
+                                                <p className="text-sm text-muted-foreground text-center py-4 bg-muted/30 rounded-md">
+                                                    No transactions yet
+                                                </p>
+                                            ) : (
+                                                <div className="space-y-1 max-h-64 overflow-y-auto border rounded-md">
+                                                    {walletData.transactions.map((t: any) => {
+                                                        const amt = Number(t.amount);
+                                                        const isCredit = amt >= 0;
+                                                        return (
+                                                            <div key={t.id} className="flex items-start justify-between gap-2 px-3 py-2 border-b last:border-b-0 hover:bg-muted/30">
+                                                                <div className="flex-1 min-w-0">
+                                                                    <div className="flex items-center gap-2">
+                                                                        <Badge variant="outline" className="text-[10px] font-mono">
+                                                                            {t.type}
+                                                                        </Badge>
+                                                                        <span className="text-xs text-muted-foreground">
+                                                                            {formatDate(t.created_at)}
+                                                                        </span>
+                                                                    </div>
+                                                                    {t.description && (
+                                                                        <p className="text-xs mt-1 truncate" title={t.description}>
+                                                                            {t.description}
+                                                                        </p>
+                                                                    )}
+                                                                    {t.metadata?.reason && (
+                                                                        <p className="text-[11px] text-muted-foreground mt-0.5">
+                                                                            Reason: {t.metadata.reason}
+                                                                        </p>
+                                                                    )}
+                                                                </div>
+                                                                <div className="text-right shrink-0">
+                                                                    <p className={`text-sm font-semibold ${isCredit ? "text-emerald-600" : "text-red-600"}`}>
+                                                                        {isCredit ? "+" : ""}${amt.toFixed(2)}
+                                                                    </p>
+                                                                    <p className="text-[10px] text-muted-foreground">
+                                                                        bal ${Number(t.balance_after).toFixed(2)}
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                ) : walletError ? (
+                                    <p className="text-sm text-red-600 dark:text-red-400">{walletError}</p>
+                                ) : (
+                                    <p className="text-sm text-muted-foreground">Loading wallet...</p>
+                                )}
                             </div>
                         </div>
                     )}

@@ -119,8 +119,10 @@ logger.add(
     serialize=True,  # This enables JSON formatting
 )
 
-# Add file logging for production
-logger.add("logs/app.log", rotation="500 MB", retention="7 days", level="INFO", serialize=True)
+# No file logging in production — Railway captures stdout/stderr and exposes
+# them in the dashboard + `railway logs`. Writing to a local file on the
+# container's ephemeral disk wastes memory, gets wiped on every redeploy, and
+# makes logs invisible to the platform's log aggregator.
 
 # Configure Sentry for error monitoring — imports are deferred inside the DSN
 # guard so that sentry_sdk's starlette integration is never imported in

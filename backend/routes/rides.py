@@ -182,12 +182,11 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         # Attempt to atomically claim the driver (only if still available)
         claim_result = await db_supabase.claim_driver_atomic(selected_driver["id"])
 
-        if claim_result.modified_count == 0:
+        if not claim_result:
             # Driver was taken by another process; try to find next candidate
             claimed = False
             for d, _ in drivers_with_distance:
-                res = await db_supabase.claim_driver_atomic(d["id"])
-                if res.modified_count > 0:
+                if await db_supabase.claim_driver_atomic(d["id"]):
                     selected_driver = d
                     claimed = True
                     break
@@ -981,7 +980,50 @@ async def process_payment(ride_id: str, request: Request, current_user: dict = D
 
     total_charge = (ride.get("total_fare", 0) or 0) + tip_amount
 
-    # TODO: Stripe charge — for now mark as paid
+    # Branch on payment method. Wallet is debited here against a real
+    # ledger; card is still a stub awaiting the Stripe charge wire-up.
+    payment_method = (ride.get("payment_method") or "card").lower()
+
+    if payment_method == "wallet":
+        from decimal import Decimal, ROUND_HALF_UP
+        from .wallet import _record_transaction, get_or_create_wallet
+
+        wallet = await get_or_create_wallet(current_user["id"])
+        if not wallet.get("is_active", True):
+            # Release the processing lock so a retry with a different
+            # method (e.g. card) isn't blocked by the atomic guard above.
+            await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
+            raise HTTPException(status_code=403, detail="Wallet is suspended")
+
+        def _q(v) -> Decimal:
+            return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        old_balance = _q(wallet.get("balance", 0))
+        debit = _q(total_charge)
+        if old_balance < debit:
+            await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
+            raise HTTPException(
+                status_code=400,
+                detail=f"Insufficient wallet balance. Need ${debit}, have ${old_balance}",
+            )
+
+        new_balance = old_balance - debit
+        await db.update_one(
+            "wallets",
+            {"id": wallet["id"]},
+            {"$set": {"balance": float(new_balance), "updated_at": datetime.utcnow().isoformat()}},
+        )
+        await _record_transaction(
+            wallet_id=wallet["id"],
+            user_id=current_user["id"],
+            txn_type="ride_payment",
+            amount=-float(debit),
+            balance_after=float(new_balance),
+            reference_id=ride_id,
+            description=f"Ride payment ${float(debit):.2f}",
+        )
+
+    # Card path is still a stub — Stripe charge to be wired separately.
     await db_supabase.update_ride(
         ride_id,
         {

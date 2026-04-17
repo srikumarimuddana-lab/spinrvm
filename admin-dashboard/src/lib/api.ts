@@ -567,6 +567,35 @@ export const updateUserStatus = (id: string, statusData: any) =>
         body: JSON.stringify(statusData),
     });
 
+/* ── Wallet (admin) ─────────────────────────── */
+export const getUserWallet = (userId: string, limit = 50) =>
+    request<{
+        user: { id: string; name: string; phone: string; email: string };
+        wallet: { id: string; balance: number; currency: string; is_active: boolean };
+        transactions: Array<{
+            id: string;
+            type: string;
+            amount: number;
+            balance_after: number;
+            description: string | null;
+            reference_id: string | null;
+            metadata: Record<string, any>;
+            created_at: string;
+        }>;
+    }>(`/api/admin/wallet/${userId}?limit=${limit}`);
+
+export const creditUserWallet = (userId: string, amount: number, reason: string) =>
+    request<{ balance: number; transaction_id: string }>(`/api/admin/wallet/credit`, {
+        method: "POST",
+        body: JSON.stringify({ user_id: userId, amount, reason }),
+    });
+
+export const debitUserWallet = (userId: string, amount: number, reason: string) =>
+    request<{ balance: number; transaction_id: string }>(`/api/admin/wallet/debit`, {
+        method: "POST",
+        body: JSON.stringify({ user_id: userId, amount, reason }),
+    });
+
 /* ── Promotions ─────────────────────────────── */
 export const getPromotions = () =>
     request<any[]>("/api/admin/promotions");

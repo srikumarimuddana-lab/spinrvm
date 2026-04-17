@@ -44,6 +44,7 @@ from .subscriptions import router as subscriptions_router
 from .support import router as support_router
 from .users import router as users_router
 from .vehicle_fleet import router as vehicle_fleet_router
+from .wallet import router as wallet_router
 
 # Router-level dependency: every request that lands on an admin_router
 # sub-route must carry a valid JWT whose payload resolves to a user
@@ -75,5 +76,6 @@ admin_router.include_router(subscriptions_router)
 admin_router.include_router(messaging_router)
 admin_router.include_router(maintenance_router)
 admin_router.include_router(analytics_router)
+admin_router.include_router(wallet_router)
 
 __all__ = ["admin_router", "admin_auth_router"]

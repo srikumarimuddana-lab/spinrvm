@@ -131,9 +131,9 @@ async def send_otp(request: Request, body: SendOTPRequest):
     sms_result = await send_otp_sms(
         phone,
         otp_code,
-        twilio_sid=settings.get("twilio_account_sid", "") if settings else "",
-        twilio_token=settings.get("twilio_auth_token", "") if settings else "",
-        twilio_from=settings.get("twilio_from_number", "") if settings else "",
+        twilio_sid=app_settings.get("twilio_account_sid", "") if app_settings else "",
+        twilio_token=app_settings.get("twilio_auth_token", "") if app_settings else "",
+        twilio_from=app_settings.get("twilio_from_number", "") if app_settings else "",
     )
     if not sms_result.get("success"):
         logger.error(f"Failed to send OTP SMS: {sms_result.get('error')}")

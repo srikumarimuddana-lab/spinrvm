@@ -11,6 +11,7 @@ try:
     from ..db_supabase import (  # type: ignore
         get_corporate_account_by_id,
         get_corporate_wallet_by_company,
+        list_wallet_transactions,
     )
     from ..dependencies import get_admin_user  # type: ignore
     from ..services.corporate_wallet_service import apply_adjustment  # type: ignore
@@ -20,6 +21,7 @@ except ImportError:
     from db_supabase import (  # type: ignore
         get_corporate_account_by_id,
         get_corporate_wallet_by_company,
+        list_wallet_transactions,
     )
     from dependencies import get_admin_user  # type: ignore
     from services.corporate_wallet_service import apply_adjustment  # type: ignore
@@ -28,6 +30,29 @@ except ImportError:
 
 
 router = APIRouter(prefix="/admin/corporate-accounts", tags=["Corporate Wallet"])
+
+_MAX_TXN_PAGE = 200
+
+
+@router.get("/{company_id}/wallet")
+async def get_wallet(
+    company_id: str,
+    skip: int = 0,
+    limit: int = 50,
+    current_admin: dict = Depends(get_admin_user),
+):
+    _valid, normalized_id = validate_id(
+        company_id, "Corporate Account ID", raise_exception=True
+    )
+    wallet = await get_corporate_wallet_by_company(normalized_id)
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+    txns = await list_wallet_transactions(
+        wallet_id=wallet["id"],
+        skip=max(skip, 0),
+        limit=min(max(limit, 1), _MAX_TXN_PAGE),
+    )
+    return {**wallet, "transactions": txns}
 
 
 class TopUpRequest(BaseModel):

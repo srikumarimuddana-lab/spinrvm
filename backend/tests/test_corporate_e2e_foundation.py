@@ -48,6 +48,9 @@ def test_create_approve_suspend_reactivate_flow(test_client, admin_override):
         "db_supabase.record_kyb_decision",
         AsyncMock(return_value=active_row),
     ), patch(
+        "routes.corporate_accounts.ensure_corporate_wallet",
+        AsyncMock(return_value={"id": "w1"}),
+    ), patch(
         "routes.corporate_accounts.get_corporate_account_by_id",
         AsyncMock(side_effect=[active_row, suspended_row]),
     ), patch(

@@ -1190,6 +1190,34 @@ async def record_kyb_decision(
     return await run_sync(_fn)
 
 
+async def ensure_corporate_wallet(*, company_id: str) -> Dict[str, Any]:
+    """Idempotently create the master wallet for a company. Returns the row."""
+    def _select():
+        res = (
+            supabase.table("corporate_wallets")
+            .select("*")
+            .eq("company_id", company_id)
+            .limit(1)
+            .execute()
+        )
+        return _rows_from_res(res)
+
+    existing = await run_sync(_select)
+    if existing:
+        return existing[0]
+
+    def _insert():
+        res = (
+            supabase.table("corporate_wallets")
+            .insert({"company_id": company_id, "balance": 0, "currency": "CAD"})
+            .execute()
+        )
+        return _single_row_from_res(res)
+
+    created = await run_sync(_insert)
+    return created or {}
+
+
 async def get_corporate_members_for_user(user_id: str) -> List[Dict[str, Any]]:
     """Return all corporate_members rows for a user where status='active'.
 

@@ -15,6 +15,7 @@ from db_supabase import (  # noqa: E402
     delete_corporate_account as db_delete_corporate_account,
 )
 from db_supabase import (  # noqa: E402
+    ensure_corporate_wallet,
     get_corporate_account_by_id,
     insert_corporate_account,
 )
@@ -159,6 +160,10 @@ async def kyb_review(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Corporate account not found")
+
+    if decision.approve:
+        await ensure_corporate_wallet(company_id=normalized_id)
+
     return row
 
 

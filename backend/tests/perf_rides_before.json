@@ -1,0 +1,33 @@
+{
+  "label": "POST /api/v1/rides",
+  "samples": 30,
+  "errors": 0,
+  "status_codes": [
+    200
+  ],
+  "p50_ms": 2.71,
+  "p95_ms": 3.23,
+  "p99_ms": 3.28,
+  "mean_ms": 2.75,
+  "min_ms": 2.37,
+  "max_ms": 3.3,
+  "db_calls_per_request": {
+    "total_min": 17,
+    "total_max": 17,
+    "get_rows_min": 13,
+    "get_rows_max": 13,
+    "direct_min": 4,
+    "direct_max": 4,
+    "by_table_last_sample": {
+      "get_user_status": 1,
+      "vehicle_types": 1,
+      "service_areas": 6,
+      "fare_configs": 1,
+      "area_fees": 1,
+      "insert_ride": 1,
+      "get_ride": 2,
+      "settings": 3,
+      "drivers": 1
+    }
+  }
+}

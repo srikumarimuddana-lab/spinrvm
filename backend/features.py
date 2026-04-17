@@ -65,6 +65,8 @@ async def calculate_airport_fee(
     dropoff_lat: float,
     dropoff_lng: float,
     stops: Optional[List[Dict[str, Any]]] = None,
+    *,
+    _all_areas: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Check if pickup, dropoff, or any stop falls in an airport zone.
 
@@ -72,10 +74,17 @@ async def calculate_airport_fee(
     airport_zone_name — these fields should be omitted from invoices/apps.
     For multi-stop rides, each stop is also checked.
 
+    ``_all_areas`` lets in-process callers pass a pre-fetched active
+    service_areas list; this function then filters locally instead of
+    issuing its own query. Omit it for standalone use.
+
     Returns {'airport_fee': float, 'airport_zone_name': str | None,
     'is_pickup': bool, 'is_dropoff': bool, 'is_stop': bool}
     """
-    areas = await db_supabase.get_rows("service_areas", {"is_airport": True}, limit=50)
+    if _all_areas is not None:
+        areas = [a for a in _all_areas if a.get("is_airport")]
+    else:
+        areas = await db_supabase.get_rows("service_areas", {"is_airport": True}, limit=50)
     result: Dict[str, Any] = {
         "airport_fee": 0.0,
         "airport_zone_name": None,
@@ -591,8 +600,18 @@ async def calculate_all_fees(
     distance_km: float,
     subtotal: float,
     ride_time_hour: Optional[int] = None,
+    *,
+    _all_areas: Optional[List[Dict[str, Any]]] = None,
+    _matched_area: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Calculate all area fees + taxes for a ride based on pickup/dropoff location.
+
+    ``_all_areas`` and ``_matched_area`` let in-process callers pass
+    pre-computed state from an earlier service_areas fetch / polygon
+    resolution so this function does not re-query or re-run the
+    point-in-polygon loop. When either is None the behaviour is
+    unchanged.
+
     Returns {'fees': [...], 'fees_total': float, 'tax_amount': float, 'tax_breakdown': {...}, 'grand_total': float}
     """
     from datetime import datetime as dt
@@ -600,14 +619,17 @@ async def calculate_all_fees(
     if ride_time_hour is None:
         ride_time_hour = dt.utcnow().hour
 
-    # Find which service area the pickup is in
-    all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
-    matched_area = None
-    for area in all_areas:
-        polygon = get_service_area_polygon(area)
-        if len(polygon) >= 3 and point_in_polygon(pickup_lat, pickup_lng, polygon):
-            matched_area = area
-            break
+    # Find which service area the pickup is in (unless caller already resolved it)
+    all_areas = _all_areas
+    if all_areas is None:
+        all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
+    matched_area = _matched_area
+    if matched_area is None:
+        for area in all_areas:
+            polygon = get_service_area_polygon(area)
+            if len(polygon) >= 3 and point_in_polygon(pickup_lat, pickup_lng, polygon):
+                matched_area = area
+                break
 
     result = {
         "fees": [],

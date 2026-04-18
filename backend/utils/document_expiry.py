@@ -2,6 +2,8 @@
 
 Checks every 12 hours for documents expiring within 7 days and sends push
 notifications so drivers can renew before being blocked from going online.
+Also suspends drivers whose documents have already expired and disconnects
+their active WebSocket session.
 """
 
 import asyncio
@@ -11,9 +13,11 @@ from datetime import datetime, timedelta
 try:
     from ..db import db
     from ..features import send_push_notification
+    from ..socket_manager import manager
 except ImportError:
     from db import db
     from features import send_push_notification
+    from socket_manager import manager
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +51,7 @@ async def check_expiring_documents():
             "work_eligibility_expiry_date": "Work Eligibility",
         }
 
+        expired_docs = []
         expiring_docs = []
         for field, label in expiry_fields.items():
             expiry_val = driver.get(field)
@@ -58,7 +63,9 @@ async def check_expiring_documents():
                 else:
                     expiry_dt = expiry_val
 
-                if now < expiry_dt <= warning_cutoff:
+                if expiry_dt <= now:
+                    expired_docs.append(label)
+                elif expiry_dt <= warning_cutoff:
                     days_left = (expiry_dt - now).days
                     expiring_docs.append({"label": label, "days_left": days_left})
             except (ValueError, TypeError):
@@ -80,14 +87,42 @@ async def check_expiring_documents():
                         exp_dt = datetime.fromisoformat(exp.replace("Z", "+00:00").replace("+00:00", ""))
                     else:
                         exp_dt = exp
-                    if now < exp_dt <= warning_cutoff:
+                    doc_name = doc.get("requirement_name") or doc.get("type") or "Document"
+                    if exp_dt <= now:
+                        expired_docs.append(doc_name)
+                    elif exp_dt <= warning_cutoff:
                         days_left = (exp_dt - now).days
-                        doc_name = doc.get("requirement_name") or doc.get("type") or "Document"
                         expiring_docs.append({"label": doc_name, "days_left": days_left})
                 except (ValueError, TypeError):
                     continue
         except Exception as e:
             logger.debug(f"Failed to check driver_documents: {e}")
+
+        # Suspend driver and disconnect WS when any document has already expired.
+        if expired_docs:
+            doc_list = ", ".join(expired_docs)
+            logger.warning(
+                f"Doc expiry: driver {driver['id']} has expired docs ({doc_list}) — suspending"
+            )
+            try:
+                await db.update_one(
+                    "drivers",
+                    {"id": driver["id"]},
+                    {"$set": {"is_online": False, "is_available": False, "status": "suspended"}},
+                )
+            except Exception as e:
+                logger.error(f"Doc expiry: failed to suspend driver {driver['id']}: {e}")
+            manager.disconnect(f"driver_{user_id}")
+            try:
+                await send_push_notification(
+                    user_id,
+                    "Account suspended — expired documents",
+                    f"Your account has been suspended: {doc_list}. Please renew to continue driving.",
+                    data={"type": "document_expired_suspension", "driver_id": driver["id"]},
+                )
+            except Exception as e:
+                logger.warning(f"Doc expiry: push failed for driver {driver['id']}: {e}")
+            continue
 
         if not expiring_docs:
             continue

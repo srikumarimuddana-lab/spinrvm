@@ -21,6 +21,7 @@ try:
     )
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
+    from ..utils.crypto import hash_otp
     from ..utils.rate_limiter import ride_request_limit
     from ..validators import validate_ride_location
 except ImportError:
@@ -35,6 +36,7 @@ except ImportError:
     )
     from settings_loader import get_app_settings
     from socket_manager import manager
+    from utils.crypto import hash_otp
     from utils.rate_limiter import ride_request_limit
     from validators import validate_ride_location
 
@@ -601,6 +603,7 @@ async def create_ride(
     driver_earnings = _round(base_fare + distance_fare + time_fare)
     admin_earnings = _round(booking_fee + airport_fee)
 
+    pickup_otp_plain = generate_pickup_otp()
     ride = Ride(
         rider_id=current_user["id"],
         vehicle_type_id=body.vehicle_type_id,
@@ -625,7 +628,7 @@ async def create_ride(
         admin_earnings=_f(admin_earnings),
         payment_method=body.payment_method,
         status="searching",
-        pickup_otp=generate_pickup_otp(),
+        pickup_otp=hash_otp(pickup_otp_plain),
         ride_requested_at=datetime.utcnow(),
     )
 
@@ -662,6 +665,10 @@ async def create_ride(
     # app sees "searching" even when a driver was already assigned in
     # the same request, so we keep this one round-trip on purpose.
     updated_ride = await db_supabase.get_ride(ride.id)
+    # The DB stores the SHA-256 hash; return the plain code to the rider
+    # so the app can display it. Only this one response carries the plain text.
+    if updated_ride:
+        updated_ride["pickup_otp"] = pickup_otp_plain
 
     # Small helper to ensure we return a clean dict
     def serialize_doc(doc):

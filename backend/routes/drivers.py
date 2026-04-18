@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
@@ -15,6 +16,7 @@ try:
     from ..logging_utils import diag_logger
     from ..schemas import Driver, RideRatingRequest
     from ..socket_manager import manager
+    from ..utils.crypto import hash_otp
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user, get_current_user
@@ -23,6 +25,7 @@ except ImportError:
     from logging_utils import diag_logger
     from schemas import Driver, RideRatingRequest
     from socket_manager import manager
+    from utils.crypto import hash_otp
 
 db = db_supabase  # legacy alias
 
@@ -1663,7 +1666,7 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    if ride.get("pickup_otp") != request.otp:
+    if not hmac.compare_digest(ride.get("pickup_otp", ""), hash_otp(request.otp)):
         raise HTTPException(status_code=400, detail="Invalid OTP")
 
     # OTP correct, start ride

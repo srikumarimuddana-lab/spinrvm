@@ -14,12 +14,15 @@ try:
     from ..db_supabase import (  # type: ignore
         add_allowed_domain,
         delete_allowed_domain,
+        get_allowance_request_by_id,
         get_corporate_member_by_id,
+        get_corporate_wallet_by_company,
         get_member_allowance,
         list_allowed_domains,
         list_company_allowance_requests,
         list_company_allowances,
         list_company_members,
+        update_allowance_request,
         update_corporate_member,
         upsert_member_allowance,
     )
@@ -28,22 +31,27 @@ try:
     )
     from ..schemas.corporate import (  # type: ignore
         AllowanceCreate,
+        AllowanceRequestDecision,
         AllowanceUpdate,
         AllowedDomainCreate,
         MemberInvite,
         MemberUpdate,
     )
+    from ..services.corporate_allowance_service import apply_grant  # type: ignore
     from ..services.corporate_membership_service import invite_member  # type: ignore
 except ImportError:
     from db_supabase import (  # type: ignore
         add_allowed_domain,
         delete_allowed_domain,
+        get_allowance_request_by_id,
         get_corporate_member_by_id,
+        get_corporate_wallet_by_company,
         get_member_allowance,
         list_allowed_domains,
         list_company_allowance_requests,
         list_company_allowances,
         list_company_members,
+        update_allowance_request,
         update_corporate_member,
         upsert_member_allowance,
     )
@@ -52,11 +60,13 @@ except ImportError:
     )
     from schemas.corporate import (  # type: ignore
         AllowanceCreate,
+        AllowanceRequestDecision,
         AllowanceUpdate,
         AllowedDomainCreate,
         MemberInvite,
         MemberUpdate,
     )
+    from services.corporate_allowance_service import apply_grant  # type: ignore
     from services.corporate_membership_service import invite_member  # type: ignore
 
 
@@ -213,3 +223,43 @@ async def remove_domain(
 ):
     await delete_allowed_domain(company_id=company_id, domain=domain.lower())
     return {"status": "ok"}
+
+
+# ---------- Allowance request decision (approve/deny) ----------
+@router.post("/allowance-requests/{request_id}/decide")
+async def decide_allowance_request(
+    company_id: str,
+    request_id: str,
+    body: AllowanceRequestDecision,
+    guard=Depends(require_company_admin),
+):
+    request = await get_allowance_request_by_id(request_id)
+    if not request:
+        raise HTTPException(status_code=404, detail="Request not found")
+    member = await get_corporate_member_by_id(request["member_id"])
+    if not member or member.get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Member not found")
+    if request.get("status") != "pending":
+        raise HTTPException(status_code=409, detail="Request already decided")
+
+    new_status = "approved" if body.approve else "denied"
+    if body.approve:
+        allowance = await get_member_allowance(request["member_id"])
+        wallet = await get_corporate_wallet_by_company(company_id)
+        if not allowance or not wallet:
+            raise HTTPException(status_code=409, detail="missing allowance or wallet")
+        await apply_grant(
+            wallet_id=wallet["id"],
+            allowance_id=allowance["id"],
+            member_id=request["member_id"],
+            amount=float(request["amount"]),
+            actor_user_id=guard["user"]["id"],
+            notes=f"approved request {request_id}",
+            floor=float(wallet.get("soft_negative_floor", -50)),
+        )
+    return await update_allowance_request(
+        request_id=request_id,
+        status=new_status,
+        reviewed_by=guard["user"]["id"],
+        decision_notes=body.note,
+    )

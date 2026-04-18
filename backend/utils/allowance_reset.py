@@ -1,0 +1,88 @@
+"""Monthly allowance reset — rolls fixed_recurring periods forward and
+zeroes `used` for non-rollover allowances.
+
+Runs as a scheduled loop (pattern: utils/scheduled_rides.py). Idempotent:
+`list_allowances_due_for_reset` short-circuits when `period_end >= today`.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from datetime import date
+from typing import Optional
+
+try:
+    from ..db_supabase import (  # type: ignore
+        get_corporate_member_by_id,
+        get_corporate_wallet_by_company,
+        list_allowances_due_for_reset,
+        reset_allowance_period,
+    )
+    from ..services.corporate_allowance_service import apply_reset  # type: ignore
+except ImportError:
+    from db_supabase import (  # type: ignore
+        get_corporate_member_by_id,
+        get_corporate_wallet_by_company,
+        list_allowances_due_for_reset,
+        reset_allowance_period,
+    )
+    from services.corporate_allowance_service import apply_reset  # type: ignore
+
+
+logger = logging.getLogger(__name__)
+
+
+def _add_one_month(d: date) -> date:
+    """Month-add: when the day doesn't exist next month (e.g. Jan 31 → Feb),
+    clamp down to the last valid day."""
+    year = d.year + (1 if d.month == 12 else 0)
+    month = 1 if d.month == 12 else d.month + 1
+    for day in range(d.day, 0, -1):
+        try:
+            return date(year, month, day)
+        except ValueError:
+            continue
+    return date(year, month, 28)
+
+
+async def run_allowance_reset_tick(now: Optional[date] = None) -> int:
+    today = now or date.today()
+    rows = await list_allowances_due_for_reset(as_of=today.isoformat())
+    processed = 0
+    for r in rows:
+        try:
+            old_end = date.fromisoformat(r["period_end"])
+            new_start = old_end
+            new_end = _add_one_month(old_end)
+            member = await get_corporate_member_by_id(r["member_id"])
+            if not member:
+                continue
+            wallet = await get_corporate_wallet_by_company(member["company_id"])
+            if not wallet:
+                continue
+            if not r.get("rollover"):
+                await apply_reset(
+                    wallet_id=wallet["id"],
+                    allowance_id=r["id"],
+                    member_id=r["member_id"],
+                    actor_user_id=None,
+                    notes=f"period reset {new_start} -> {new_end}",
+                )
+            await reset_allowance_period(
+                allowance_id=r["id"],
+                period_start=new_start.isoformat(),
+                period_end=new_end.isoformat(),
+            )
+            processed += 1
+        except Exception:
+            logger.exception("allowance reset failed for %s", r.get("id"))
+    return processed
+
+
+async def allowance_reset_loop(interval_seconds: int = 3600) -> None:
+    while True:
+        try:
+            await run_allowance_reset_tick()
+        except Exception:
+            logger.exception("allowance reset tick raised")
+        await asyncio.sleep(interval_seconds)

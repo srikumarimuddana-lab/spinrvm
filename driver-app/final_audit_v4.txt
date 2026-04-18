@@ -1239,3 +1239,67 @@ Fix: Map common Pydantic error types: "missing" → "This field is required",
 
 SUMMARY: CRITICAL:0 HIGH:2 MEDIUM:6 LOW:2 PASS:7 RECOMMENDATION:2
 
+================================================================================
+TASK 11 — SECURITY HEADERS, CORS & MIDDLEWARE
+================================================================================
+
+[11-1] HIGH | Rate Limiting Uses Direct Connection IP — Bypassed Behind Reverse Proxy
+File: backend/utils/rate_limiter.py:50, 85, 98
+Finding: slowapi's default get_remote_address() reads request.client.host — the direct
+TCP connection IP. Behind Cloudflare, Fly.io, or Railway, all requests come from the
+proxy's IP. Rate limits apply per-proxy, not per-user. An attacker can make unlimited
+OTP or login attempts as long as they share the proxy address with legitimate users.
+Fix: Configure slowapi key_func to extract the real client IP from X-Forwarded-For:
+    key_func=lambda r: (r.headers.get("x-forwarded-for","").split(",")[0].strip()
+                        or r.client.host)
+Only trust X-Forwarded-For when request.client.host matches a known proxy IP list.
+
+[11-2] MEDIUM | Firebase App Check Not Enforced — Jailbroken Devices Can Access API
+File: backend/core/config.py:25-26 and backend/dependencies/__init__.py:136
+Finding: Firebase ID tokens are verified (line 136) but Firebase App Check (device
+attestation) is not validated. Jailbroken iOS or rooted Android devices, or custom
+HTTP clients, can call the API without App Check tokens. This is the vector for
+automated account creation and ride-request spam.
+Fix: Require App Check token header (X-Firebase-AppCheck) on sensitive endpoints
+(OTP send, ride creation, payment). Verify via firebase_admin.app_check.verify_token().
+Return 403 if token missing or invalid.
+
+[11-3] LOW | OTP Lockout is Per-Instance in Dev (Acceptable in Production)
+File: backend/routes/auth.py:71-101
+Finding: Redis-backed lockout falls back silently when Redis unavailable. In dev this
+means lockout counters are per-process. Production requires Redis (enforced at startup).
+Fix: No action required — production guard in middleware.py:191-202 is sufficient.
+
+[11-4] PASS | CORS Wildcard Rejected in Production — Origin Allowlist Enforced
+File: backend/core/middleware.py:241-248
+[11-5] PASS | All Security Headers Present and Correct
+File: backend/core/middleware.py:22-64
+Finding: HSTS max-age=31536000 + includeSubDomains + preload; X-Content-Type-Options nosniff;
+X-Frame-Options DENY; CSP default-src 'none'; Referrer-Policy strict-origin-when-cross-origin;
+Permissions-Policy disables camera/mic/geolocation; COOP same-origin; CORP same-site.
+[11-6] PASS | Startup Credential Validation Rejects Weak JWT_SECRET, Placeholder URLs
+File: backend/core/middleware.py:112-221
+[11-7] PASS | Secrets Never Echoed in Startup Validation Logs
+File: backend/core/middleware.py:112-221
+[11-8] PASS | Rate Limits Correctly Configured (OTP 3/min, Login 5/min, Rides 10/min)
+File: backend/utils/rate_limiter.py:151-163
+[11-9] PASS | Redis Required in Production — In-Memory Fallback Clearly Flagged
+File: backend/utils/rate_limiter.py:36-46
+[11-10] PASS | TruffleHog Secrets Scanning on Every PR (--only-verified --fail)
+File: .github/workflows/ci.yml:395-416
+[11-11] PASS | Trivy CVE Scanning Blocks CRITICAL/HIGH on Docker Push
+File: .github/workflows/ci.yml:418-472
+[11-12] PASS | No Secrets Echoed in CI Logs
+File: .github/workflows/ci.yml
+[11-13] PASS | Duplicate Driver Constraints + Orphan Cleanup in Migrations
+File: backend/migrations/30_identity_audit.sql and 31_driver_dedup_and_constraints.sql
+Finding: UNIQUE constraints on drivers(phone) and drivers(user_id); role mismatch backfill;
+orphan/detached driver cleanup with safety abort if referenced by child tables.
+
+[11-14] RECOMMENDATION | Document X-Forwarded-For Proxy Trust in Deployment Guide
+Finding: Rate limiting behind a proxy is a footgun without explicit documentation.
+Fix: Add to deployment docs: "Configure your reverse proxy to set X-Forwarded-For with
+the real client IP. Rate limiting relies on this header in production."
+
+SUMMARY: CRITICAL:0 HIGH:1 MEDIUM:1 LOW:1 PASS:9 RECOMMENDATION:1
+

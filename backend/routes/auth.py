@@ -18,7 +18,7 @@ try:
         generate_otp,
         get_current_user,
     )
-    from ..schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest, RefreshTokenRequest
+    from ..schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
     from ..settings_loader import get_app_settings
     from ..sms_service import send_otp_sms
     from ..utils.refresh_tokens import (
@@ -41,7 +41,7 @@ except ImportError:
         generate_otp,
         get_current_user,
     )
-    from schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest, RefreshTokenRequest
+    from schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
     from settings_loader import get_app_settings
     from sms_service import send_otp_sms
     from utils.refresh_tokens import (
@@ -342,63 +342,6 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
 
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Internal Login Error: {str(e)}") from e
-
-
-@api_router.post("/refresh", response_model=AuthResponse)
-@limiter.limit("10/minute")
-async def refresh_token(request: Request, body: RefreshTokenRequest):
-    """Exchange a valid refresh token for a new access + refresh token pair (rotation)."""
-    token_hash = hash_token(body.refresh_token)
-
-    record = None
-    try:
-        record = await db.refresh_tokens.find_one({'token_hash': token_hash, 'revoked_at': None})
-    except Exception as e:
-        logger.warning(f'Could not query refresh_tokens: {e}')
-
-    if not record:
-        raise HTTPException(status_code=401, detail='Invalid or revoked refresh token')
-
-    # Check expiry
-    expires_at = record.get('expires_at')
-    if isinstance(expires_at, str):
-        expires_at = expires_at.replace('Z', '+00:00')
-        try:
-            expires_at = datetime.fromisoformat(expires_at)
-        except ValueError:
-            raise HTTPException(status_code=401, detail='Malformed token expiry')
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if datetime.now(timezone.utc) > expires_at:
-        raise HTTPException(status_code=401, detail='Refresh token has expired')
-
-    user_id = record['user_id']
-    user = None
-    try:
-        user = await db.users.find_one({'id': user_id})
-    except Exception as e:
-        logger.warning(f'Could not fetch user for token refresh: {e}')
-
-    if not user:
-        raise HTTPException(status_code=401, detail='User not found')
-
-    # Rotate: revoke old token, issue new pair
-    try:
-        await db.refresh_tokens.update_one({'token_hash': token_hash}, {'$set': {'revoked_at': datetime.utcnow().isoformat()}})
-    except Exception as e:
-        logger.warning(f'Could not revoke old refresh token: {e}')
-
-    session_id = str(uuid.uuid4())
-    try:
-        await db.users.update_one({'id': user_id}, {'$set': {'current_session_id': session_id}})
-    except Exception as e:
-        logger.warning(f'Could not update session_id on refresh: {e}')
-
-    new_access = create_jwt_token(user_id, user.get('phone', ''), session_id=session_id)
-    new_refresh = create_refresh_token(user_id)
-    await _store_refresh_token(user_id, new_refresh)
-
-    return _make_auth_response(new_access, new_refresh, UserProfile(**user), is_new_user=False)
 
 
 @api_router.get("/me", response_model=UserProfile)

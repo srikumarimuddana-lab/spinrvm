@@ -995,3 +995,127 @@ Fix: Add min_payout_amount: 10.0 to the balance response schema.
 
 SUMMARY: CRITICAL:0 HIGH:1 MEDIUM:3 LOW:2 PASS:6 RECOMMENDATION:2
 
+================================================================================
+TASK 9 — TEST COVERAGE AUDIT
+================================================================================
+
+[9-1] HIGH | Double-Accept Race Condition Has No Server-Side Test
+File: backend/tests/ (missing test)
+Finding: No backend test verifies that concurrent accept calls on the same ride result in
+exactly one 200 and one 409. The client store handles rejection (lines 88-129 of
+driverStore.config.test.ts) but the server-side atomic guard is untested.
+Fix: Add test_concurrent_accept_race_condition(): mock two simultaneous POST /drivers/rides/{id}/accept,
+verify first returns 200 and second returns 409 Conflict.
+
+[9-2] MEDIUM | Complete Ride from driver_assigned State Not Tested
+File: backend/tests/test_ride_state_machine.py:68-75
+Finding: State guard tests cover completing from already-completed/cancelled but not from
+driver_assigned — the most dangerous gap found in Task 7 (finding [7-7]).
+Fix: Add test_complete_ride_from_driver_assigned_returns_409().
+
+[9-3] MEDIUM | Full Ride Lifecycle Integration Test Missing
+File: backend/tests/test_rides.py:104-116
+Finding: Lifecycle transitions are tested in isolation. No single test covers the full chain:
+create → assign → accept → arrive → start (with OTP) → complete.
+Fix: Add TestRideFullLifecycle integration class that runs each state in sequence, validating
+the database state and response at each step.
+
+[9-4] MEDIUM | Auth Boundary Tests Accept Too-Broad Status Codes
+File: backend/tests/test_drivers.py:310-338 and test_rides.py:391-436
+Finding: Endpoint smoke tests accept [200, 401, 404, 405, 422] as "valid". Unauthenticated
+requests should explicitly return 401. No dedicated test confirms that missing/expired/invalid
+tokens are all rejected with 401.
+Fix: Add TestAuthBoundary: test_no_header → 401, test_invalid_token → 401, test_expired_token → 401.
+
+[9-5] MEDIUM | OTP Lockout Test Only Mocks Redis — Never Sends 5 Real Failures
+File: backend/tests/test_auth_send_otp.py:157-164
+Finding: Lockout test mocks redis_get("1") returning a count above threshold. No test
+actually calls verify_otp 5 times with wrong codes and confirms the 5th triggers a 429.
+Fix: Add test_verify_otp_lockout_after_5_failures(): call /auth/verify-otp with wrong code
+5 times, assert 429 with "account locked" message on the 5th.
+
+[9-6] MEDIUM | PII Stripping Test Only Checks 2 of 14 Forbidden Fields
+File: backend/tests/test_ride_pii.py:63-79, 224-226
+Finding: FORBIDDEN_FIELDS defines 14 sensitive fields but assertions only verify phone
+and license_number are absent. insurance_expiry_date, background_check_expiry_date,
+stripe_account_id, bank_account, fcm_token etc. are listed but not asserted.
+Fix: Parametrize: @pytest.mark.parametrize("field", FORBIDDEN_FIELDS)
+def test_pii_field_excluded(field): assert field not in driver_in_response
+
+[9-7] MEDIUM | Jest Coverage Threshold Not Enforced
+File: driver-app/jest.config.js:1-20
+Finding: collectCoverageFrom is set but coverageThreshold is absent. Coverage regressions
+accumulate silently.
+Fix: Add: coverageThreshold: { global: { lines: 70, functions: 60, branches: 55 } }
+
+[9-8] MEDIUM | Zero Component Tests — Only Store Logic is Unit-Tested
+File: driver-app/__tests__/store/driverStore.test.ts
+Finding: All driver-app tests are store unit tests. No @testing-library/react-native
+component tests exist. RideOfferPanel, OTP input, TripCompletedPanel, EarningsLineChart
+UI logic is completely untested.
+Fix: Add component tests: test_RideOfferPanel (renders details, Accept/Decline buttons work),
+test_OTPInput (rejects non-4-digit input), test_TripCompletedPanel (shows fare breakdown).
+
+[9-9] MEDIUM | Token Version Rotation Test Missing
+File: backend/tests/test_auth.py (not found)
+Finding: No test increments user's token_version and confirms the old JWT is rejected.
+This is the primary force-logout-all mechanism.
+Fix: Add test_verify_jwt_rejects_stale_token_version(): issue token at version=1,
+update DB to version=2, call protected endpoint — expect 401.
+
+[9-10] MEDIUM | Fixture Isolation: Global Patches May Bleed Between Test Classes
+File: backend/tests/conftest.py:256-274
+Finding: patch_external_dependencies() patches global modules without explicit reset between
+classes. Test ordering can cause mock bleed, leading to flaky tests.
+Fix: Use pytest.MonkeyPatch or scope="function" with explicit setup/teardown in the autouse
+fixture to guarantee clean state per test.
+
+[9-11] MEDIUM | Async Test Configuration Not Globally Enforced
+File: backend/tests/conftest.py:32-37
+Finding: event_loop fixture defined but asyncio_mode not set in pytest.ini. pytest-asyncio
+≥0.21 requires asyncio_mode = "auto" or per-test @pytest.mark.asyncio.
+Fix: Add to pytest.ini: [pytest] asyncio_mode = auto
+
+[9-12] MEDIUM | Ride State Machine Test Gaps (cancelled/completed → * not all tested)
+File: backend/tests/test_rides.py:63-132
+Finding: State guard tests don't cover all invalid source states. E.g., cancelled → in_progress
+should 409 but is not tested.
+Fix: Expand test_ride_state_machine.py: for each terminal state (cancelled, completed), test
+that ALL other transitions are rejected with 409.
+
+[9-13] LOW | Hardcoded Credentials in conftest.py
+File: backend/tests/conftest.py:24-29
+Finding: ADMIN_PASSWORD=TestAdminPass123! and JWT_SECRET=test-secret-key-for-ci-only-32chars!!
+are hardcoded in source. Low risk (test-only) but risks appearing in logs if .gitignore mis-set.
+Fix: Load from environment with defaults: os.getenv("TEST_JWT_SECRET", "test-secret-32-chars-minimum!!")
+Document required env vars in TESTING.md.
+
+[9-14] LOW | Hard-coded Dev OTP "1234" in Maestro Flows (Approved Design)
+File: .maestro/driver/01_login.yaml:24
+Finding: Per audit ground rules, 4-digit OTP and dev bypass are approved. Noted here for
+completeness only.
+Fix: No action required.
+
+[9-15] PASS | Store Test Suite Covers Core Actions (Online, Accept, Complete, Cancel)
+File: driver-app/__tests__/store/driverStore.test.ts
+Finding: goOnline, goOffline, acceptRide, completeRide, cancelRide all have positive +
+error path tests with API mock responses.
+
+[9-16] PASS | Maestro Login and Go-Online Flows Have assertVisible Assertions
+File: .maestro/driver/01_login.yaml and 02_go_online.yaml
+Finding: Flows verify UI elements present after each action — not just tap sequences.
+
+[9-17] RECOMMENDATION | Add Maestro Flows for Accept, OTP, Complete, Earnings, Payout
+File: .maestro/driver/ (missing files)
+Finding: Only login and go_online covered. All happy-path flows after going online are untested
+in E2E.
+Fix: Add accept_ride.yaml, verify_otp.yaml, complete_trip.yaml, earnings.yaml, payout.yaml.
+
+[9-18] RECOMMENDATION | Add TESTING.md Documenting Test Setup and Required Env Vars
+File: (missing)
+Finding: No documentation on how to run tests, required env vars, or test data setup.
+Fix: Create backend/TESTING.md with: pip install requirements-test.txt, env var list,
+how to seed test data, how to run pytest + maestro.
+
+SUMMARY: CRITICAL:0 HIGH:1 MEDIUM:10 LOW:2 PASS:2 RECOMMENDATION:2
+

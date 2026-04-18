@@ -1503,41 +1503,34 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             )
             raise HTTPException(status_code=400, detail="Ride not assigned to you")
 
-    await db_supabase.update_ride(
-        ride_id,
+    # Atomic conditional UPDATE — only succeeds if the ride is still in the
+    # expected pre-acceptance state. Prevents the double-accept race where two
+    # concurrent requests both pass the read-based check above and both write.
+    if ride.get("driver_id") == driver["id"]:
+        accept_filter = {"id": ride_id, "status": "driver_assigned", "driver_id": driver["id"]}
+    else:
+        # Broadcast/searching path: claim only if the ride is still unclaimed.
+        accept_filter = {"id": ride_id, "status": "searching"}
+
+    guard = await db.update_one(
+        "rides",
+        accept_filter,
         {
-            "status": "driver_accepted",
-            "driver_id": driver["id"],
-            "driver_accepted_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
+            "$set": {
+                "status": "driver_accepted",
+                "driver_id": driver["id"],
+                "driver_accepted_at": datetime.utcnow(),
+                "updated_at": datetime.utcnow(),
+            }
         },
     )
 
-    # Verify the update landed. The RideCollection.update_one wrapper routes
-    # to db_supabase.update_ride which returns None on zero-rows-affected
-    # silently, and this handler would otherwise return {success: true} while
-    # the ride is still in its previous state — causing /drivers/rides/active
-    # to still see 'driver_assigned' (or similar) and the driver-app to render
-    # the wrong state, OR worse if some column silently blocks the write.
-    try:
-        verify_ride = await db_supabase.get_ride(ride_id)
-    except Exception as e:
-        verify_ride = None
-        diag_logger.info(f"[ACCEPT] verify re-read failed: {e}")
-
-    diag_logger.info(
-        f"[ACCEPT] post-update ride_id={ride_id} "
-        f"post_status={verify_ride.get('status') if verify_ride else 'ROW_GONE'} "
-        f"post_driver_id={verify_ride.get('driver_id') if verify_ride else 'ROW_GONE'} "
-        f"post_driver_accepted_at={verify_ride.get('driver_accepted_at') if verify_ride else 'ROW_GONE'}"
-    )
-
-    if not verify_ride or verify_ride.get("status") != "driver_accepted":
+    if hasattr(guard, "modified_count") and guard.modified_count == 0:
         diag_logger.info(
             f"[ACCEPT] claim rejected ride_id={ride_id} "
             f"current_status={ride.get('status')} current_driver_id={ride.get('driver_id')}"
         )
-        raise HTTPException(status_code=400, detail="Ride already accepted by another driver")
+        raise HTTPException(status_code=409, detail="Ride already accepted by another driver")
 
     # Re-read the now-claimed ride so we can notify the rider with fresh data.
     ride = await db.find_one("rides", {"id": ride_id})

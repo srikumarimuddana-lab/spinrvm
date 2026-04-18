@@ -509,6 +509,104 @@ export const walletAdjust = (
         { method: "POST", body: JSON.stringify(body) }
     );
 
+/* ── Corporate members / allowances (Plan 3) ── */
+export type CorporateMemberRole = "owner" | "admin" | "member";
+export type CorporateMemberStatus = "invited" | "active" | "suspended" | "removed";
+export type AllowanceTypeValue = "fixed_recurring" | "one_time" | "unlimited";
+
+export interface CorporateMember {
+    id: string;
+    company_id: string;
+    user_id?: string | null;
+    role: CorporateMemberRole;
+    status: CorporateMemberStatus;
+    invited_email?: string | null;
+    created_at?: string;
+    updated_at?: string;
+}
+
+export interface CorporateAllowance {
+    id: string;
+    member_id: string;
+    type: AllowanceTypeValue;
+    amount?: number | null;
+    used: number;
+    period_start?: string | null;
+    period_end?: string | null;
+    rollover?: boolean;
+    auto_approve_topup_amount?: number | null;
+    auto_approve_monthly_count?: number | null;
+    status: "active" | "paused" | "expired";
+}
+
+export interface AllowanceRequestRow {
+    id: string;
+    member_id: string;
+    amount: number;
+    reason: string;
+    status: "pending" | "approved" | "denied" | "auto_approved";
+    reviewed_by?: string | null;
+    decision_notes?: string | null;
+    created_at?: string;
+}
+
+export const listCompanyMembers = (companyId: string, status?: string) =>
+    request<CorporateMember[]>(
+        `/company/${companyId}/members${status ? `?status=${encodeURIComponent(status)}` : ""}`
+    );
+
+export const inviteCompanyMember = (
+    companyId: string,
+    body: { email: string; role: CorporateMemberRole; policy_override?: boolean }
+) =>
+    request<{ member: CorporateMember; invite_url: string }>(
+        `/company/${companyId}/members/invite`,
+        { method: "POST", body: JSON.stringify(body) }
+    );
+
+export const removeCompanyMember = (companyId: string, memberId: string) =>
+    request<CorporateMember>(`/company/${companyId}/members/${memberId}`, {
+        method: "DELETE",
+    });
+
+export const getMemberAllowance = (companyId: string, memberId: string) =>
+    request<CorporateAllowance | Record<string, never>>(
+        `/company/${companyId}/members/${memberId}/allowance`
+    );
+
+export const putMemberAllowance = (
+    companyId: string,
+    memberId: string,
+    body: {
+        type: AllowanceTypeValue;
+        amount?: number | null;
+        period_start?: string | null;
+        period_end?: string | null;
+        rollover?: boolean;
+        auto_approve_topup_amount?: number | null;
+        auto_approve_monthly_count?: number | null;
+    }
+) =>
+    request<CorporateAllowance>(
+        `/company/${companyId}/members/${memberId}/allowance`,
+        { method: "PUT", body: JSON.stringify(body) }
+    );
+
+export const listCompanyAllowanceRequests = (companyId: string, status = "pending") =>
+    request<AllowanceRequestRow[]>(
+        `/company/${companyId}/allowance-requests?status=${encodeURIComponent(status)}`
+    );
+
+export const decideAllowanceRequest = (
+    companyId: string,
+    requestId: string,
+    body: { approve: boolean; note?: string }
+) =>
+    request<AllowanceRequestRow>(
+        `/company/${companyId}/allowance-requests/${requestId}/decide`,
+        { method: "POST", body: JSON.stringify(body) }
+    );
+
 /* ── Cloud Messaging (merged with Notifications) ── */
 export const getCloudMessages = (status?: string, audience?: string) => {
     const params = new URLSearchParams();

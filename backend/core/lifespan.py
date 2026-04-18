@@ -142,6 +142,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import corporate low-balance loop: {e}")
 
+    # Monthly allowance reset — rolls fixed_recurring periods forward and
+    # zeroes `used` for non-rollover employee allowances once per hour.
+    try:
+        from utils.allowance_reset import allowance_reset_loop
+
+        _spawn("allowance_reset (1h)", allowance_reset_loop)
+    except Exception as e:
+        logger.warning(f"Failed to import allowance reset loop: {e}")
+
     app.state.background_tasks = background_tasks
 
     # WebSocket pub/sub (audit P0-B3): before this, socket sends were

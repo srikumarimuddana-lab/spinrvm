@@ -1432,3 +1432,346 @@ async def update_corporate_wallet_config(
         return _single_row_from_res(res)
 
     return await run_sync(_fn)
+
+
+# ============================================================
+# Corporate B2B Plan 3 — members, allowances, requests, domains
+# ============================================================
+
+# ---------- Members ----------
+async def insert_corporate_member_invite(
+    *,
+    company_id: str,
+    email: str,
+    role: str,
+    invite_token: str,
+    invited_by: str,
+    policy_override: bool = False,
+) -> Dict[str, Any]:
+    def _fn():
+        res = (
+            supabase.table("corporate_members")
+            .insert({
+                "company_id": company_id,
+                "invited_email": email,
+                "role": role,
+                "invite_token": invite_token,
+                "invited_at": datetime.utcnow().isoformat(),
+                "invited_by": invited_by,
+                "policy_override": policy_override,
+                "status": "invited",
+            })
+            .execute()
+        )
+        return _single_row_from_res(res) or {}
+    return await run_sync(_fn)
+
+
+async def list_company_members(
+    *,
+    company_id: str,
+    statuses: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    def _fn():
+        q = supabase.table("corporate_members").select("*").eq("company_id", company_id)
+        if statuses:
+            q = q.in_("status", statuses)
+        res = q.order("created_at", desc=False).execute()
+        return _rows_from_res(res)
+    return await run_sync(_fn)
+
+
+async def get_corporate_member_by_id(member_id: str) -> Optional[Dict[str, Any]]:
+    def _fn():
+        res = (
+            supabase.table("corporate_members")
+            .select("*").eq("id", member_id).limit(1).execute()
+        )
+        return _single_row_from_res(res)
+    return await run_sync(_fn)
+
+
+async def get_member_by_invite_token(token: str) -> Optional[Dict[str, Any]]:
+    def _fn():
+        res = (
+            supabase.table("corporate_members")
+            .select("*").eq("invite_token", token).limit(1).execute()
+        )
+        return _single_row_from_res(res)
+    return await run_sync(_fn)
+
+
+async def list_active_memberships_for_user(user_id: str) -> List[Dict[str, Any]]:
+    def _fn():
+        res = (
+            supabase.table("corporate_members")
+            .select("*").eq("user_id", user_id).eq("status", "active").execute()
+        )
+        return _rows_from_res(res)
+    return await run_sync(_fn)
+
+
+async def update_corporate_member(
+    member_id: str, patch: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    if not patch:
+        return await get_corporate_member_by_id(member_id)
+    patch = {**patch, "updated_at": datetime.utcnow().isoformat()}
+    def _fn():
+        res = (
+            supabase.table("corporate_members")
+            .update(patch).eq("id", member_id).execute()
+        )
+        return _single_row_from_res(res)
+    return await run_sync(_fn)
+
+
+async def accept_member_invite(
+    *, member_id: str, user_id: str
+) -> Optional[Dict[str, Any]]:
+    """Atomically flip invited → active and stamp user_id + joined_at.
+
+    Guarded by `.eq("status", "invited")` so we only flip pending invites,
+    preventing replay against an already-consumed token.
+    """
+    patch = {
+        "status": "active",
+        "user_id": user_id,
+        "joined_at": datetime.utcnow().isoformat(),
+        "invite_token": None,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    def _fn():
+        res = (
+            supabase.table("corporate_members")
+            .update(patch)
+            .eq("id", member_id)
+            .eq("status", "invited")
+            .execute()
+        )
+        return _single_row_from_res(res)
+    return await run_sync(_fn)
+
+
+# ---------- Allowances ----------
+async def get_member_allowance(member_id: str) -> Optional[Dict[str, Any]]:
+    def _fn():
+        res = (
+            supabase.table("corporate_member_allowances")
+            .select("*").eq("member_id", member_id).limit(1).execute()
+        )
+        return _single_row_from_res(res)
+    return await run_sync(_fn)
+
+
+async def upsert_member_allowance(
+    *, member_id: str, patch: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Insert if no allowance row exists, else update. Returns the row."""
+    existing = await get_member_allowance(member_id)
+    if existing:
+        def _upd():
+            res = (
+                supabase.table("corporate_member_allowances")
+                .update({**patch, "updated_at": datetime.utcnow().isoformat()})
+                .eq("id", existing["id"])
+                .execute()
+            )
+            return _single_row_from_res(res) or existing
+        return await run_sync(_upd)
+
+    def _ins():
+        res = (
+            supabase.table("corporate_member_allowances")
+            .insert({"member_id": member_id, "used": 0, "status": "active", **patch})
+            .execute()
+        )
+        return _single_row_from_res(res) or {}
+    return await run_sync(_ins)
+
+
+async def list_company_allowances(company_id: str) -> List[Dict[str, Any]]:
+    """Join allowances with their members, scoped to one company."""
+    def _fn():
+        res = (
+            supabase.table("corporate_member_allowances")
+            .select(
+                "*, member:corporate_members!inner"
+                "(id,company_id,user_id,invited_email,status,role)"
+            )
+            .eq("member.company_id", company_id)
+            .execute()
+        )
+        return _rows_from_res(res)
+    return await run_sync(_fn)
+
+
+async def list_allowances_due_for_reset(as_of: str) -> List[Dict[str, Any]]:
+    """Active fixed_recurring allowances whose period_end < as_of (ISO date)."""
+    def _fn():
+        res = (
+            supabase.table("corporate_member_allowances")
+            .select("*")
+            .eq("type", "fixed_recurring")
+            .eq("status", "active")
+            .lt("period_end", as_of)
+            .execute()
+        )
+        return _rows_from_res(res)
+    return await run_sync(_fn)
+
+
+async def reset_allowance_period(
+    *, allowance_id: str, period_start: str, period_end: str
+) -> Optional[Dict[str, Any]]:
+    def _fn():
+        res = (
+            supabase.table("corporate_member_allowances")
+            .update({
+                "period_start": period_start,
+                "period_end": period_end,
+                "auto_approved_this_period": 0,
+                "updated_at": datetime.utcnow().isoformat(),
+            })
+            .eq("id", allowance_id)
+            .execute()
+        )
+        return _single_row_from_res(res)
+    return await run_sync(_fn)
+
+
+# ---------- Allowance requests ----------
+async def insert_allowance_request(
+    *, member_id: str, amount: float, reason: str, status: str = "pending"
+) -> Dict[str, Any]:
+    def _fn():
+        res = (
+            supabase.table("corporate_allowance_requests")
+            .insert({
+                "member_id": member_id,
+                "amount": amount,
+                "reason": reason,
+                "status": status,
+            })
+            .execute()
+        )
+        return _single_row_from_res(res) or {}
+    return await run_sync(_fn)
+
+
+async def list_pending_allowance_requests_for_member(
+    member_id: str,
+) -> List[Dict[str, Any]]:
+    def _fn():
+        res = (
+            supabase.table("corporate_allowance_requests")
+            .select("*")
+            .eq("member_id", member_id)
+            .eq("status", "pending")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return _rows_from_res(res)
+    return await run_sync(_fn)
+
+
+async def list_company_allowance_requests(
+    company_id: str, statuses: Optional[List[str]] = None
+) -> List[Dict[str, Any]]:
+    def _fn():
+        q = (
+            supabase.table("corporate_allowance_requests")
+            .select(
+                "*, member:corporate_members!inner"
+                "(id,company_id,invited_email,user_id)"
+            )
+            .eq("member.company_id", company_id)
+        )
+        if statuses:
+            q = q.in_("status", statuses)
+        res = q.order("created_at", desc=True).execute()
+        return _rows_from_res(res)
+    return await run_sync(_fn)
+
+
+async def get_allowance_request_by_id(
+    request_id: str,
+) -> Optional[Dict[str, Any]]:
+    def _fn():
+        res = (
+            supabase.table("corporate_allowance_requests")
+            .select("*").eq("id", request_id).limit(1).execute()
+        )
+        return _single_row_from_res(res)
+    return await run_sync(_fn)
+
+
+async def update_allowance_request(
+    *,
+    request_id: str,
+    status: str,
+    reviewed_by: Optional[str],
+    decision_notes: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    patch = {
+        "status": status,
+        "reviewed_by": reviewed_by,
+        "reviewed_at": datetime.utcnow().isoformat(),
+        "decision_notes": decision_notes,
+    }
+    def _fn():
+        res = (
+            supabase.table("corporate_allowance_requests")
+            .update(patch).eq("id", request_id).execute()
+        )
+        return _single_row_from_res(res)
+    return await run_sync(_fn)
+
+
+# ---------- Allowed domains ----------
+async def add_allowed_domain(
+    *, company_id: str, domain: str
+) -> Dict[str, Any]:
+    def _fn():
+        res = (
+            supabase.table("corporate_allowed_domains")
+            .insert({"company_id": company_id, "domain": domain})
+            .execute()
+        )
+        return _single_row_from_res(res) or {"company_id": company_id, "domain": domain}
+    return await run_sync(_fn)
+
+
+async def list_allowed_domains(company_id: str) -> List[Dict[str, Any]]:
+    def _fn():
+        res = (
+            supabase.table("corporate_allowed_domains")
+            .select("*").eq("company_id", company_id).execute()
+        )
+        return _rows_from_res(res)
+    return await run_sync(_fn)
+
+
+async def delete_allowed_domain(*, company_id: str, domain: str) -> None:
+    def _fn():
+        supabase.table("corporate_allowed_domains").delete().eq(
+            "company_id", company_id
+        ).eq("domain", domain).execute()
+    await run_sync(_fn)
+
+
+async def find_companies_by_email_domain(domain: str) -> List[Dict[str, Any]]:
+    """Active companies that whitelist this email domain for auto-match."""
+    def _fn():
+        res = (
+            supabase.table("corporate_allowed_domains")
+            .select(
+                "company_id, corporate_accounts:corporate_accounts!inner"
+                "(id,name,status)"
+            )
+            .eq("domain", domain)
+            .eq("corporate_accounts.status", "active")
+            .execute()
+        )
+        return _rows_from_res(res)
+    return await run_sync(_fn)

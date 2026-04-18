@@ -352,7 +352,7 @@ async def refresh_token(request: Request, body: RefreshTokenRequest):
 
     record = None
     try:
-        record = await db.refresh_tokens.find_one({'token_hash': token_hash, 'revoked': False})
+        record = await db.refresh_tokens.find_one({'token_hash': token_hash, 'revoked_at': None})
     except Exception as e:
         logger.warning(f'Could not query refresh_tokens: {e}')
 
@@ -384,7 +384,7 @@ async def refresh_token(request: Request, body: RefreshTokenRequest):
 
     # Rotate: revoke old token, issue new pair
     try:
-        await db.refresh_tokens.update_one({'token_hash': token_hash}, {'$set': {'revoked': True}})
+        await db.refresh_tokens.update_one({'token_hash': token_hash}, {'$set': {'revoked_at': datetime.utcnow().isoformat()}})
     except Exception as e:
         logger.warning(f'Could not revoke old refresh token: {e}')
 

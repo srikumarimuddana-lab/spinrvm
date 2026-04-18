@@ -1,148 +1,53 @@
 /**
- * Analytics — typed event catalog over Firebase Analytics (SPR-03/3c).
+ * Analytics — no-op stub.
  *
- * Web:    Firebase Web SDK analytics (firebase/analytics — already installed).
- * Native: @react-native-firebase/analytics when available (EAS builds);
- *         silently no-ops in Expo Go and test environments.
+ * Firebase Analytics has been removed from the rider and driver apps
+ * (user decision: reduce Firebase surface area, stop blank-screen / native-
+ * module issues in Expo Go / dev builds). All calls here are no-ops so
+ * existing call sites continue to compile without any runtime cost.
  *
- * All events follow Firebase's recommended naming convention (snake_case).
- * Add new events here; call sites import `Analytics` and call typed methods.
- *
- * Funnel instrumented:
- *   signup_started → otp_verified → profile_completed → login →
- *   ride_requested → driver_accepted → ride_started → ride_completed →
- *   payment_completed
+ * The exported `Analytics` object preserves the original method signatures
+ * so re-enabling (e.g. swapping to Segment, PostHog, or Sentry
+ * performance) is a drop-in change inside this module — no changes needed
+ * at the hundreds of call sites scattered across the apps.
  */
-import { Platform } from 'react-native';
 
-// ── Analytics instance resolution ────────────────────────────────────────────
-
-type AnalyticsInstance =
-  | { kind: 'web'; instance: import('firebase/analytics').Analytics }
-  | { kind: 'native'; instance: any };
-
-let _instance: AnalyticsInstance | null | 'pending' = 'pending';
-
-async function getInstance(): Promise<AnalyticsInstance | null> {
-  if (_instance !== 'pending') return _instance;
-
-  try {
-    if (Platform.OS === 'web') {
-      const [{ getAnalytics, isSupported }, { app: firebaseApp }] = await Promise.all([
-        import('firebase/analytics'),
-        import('../config/firebaseConfig'),
-      ]);
-      if (!firebaseApp || !(await isSupported())) {
-        _instance = null;
-        return null;
-      }
-      _instance = { kind: 'web', instance: getAnalytics(firebaseApp) };
-    } else {
-      // Native: @react-native-firebase/analytics (only in EAS builds)
-      // Use globalThis to grab require at runtime so Metro's static
-      // analysis cannot trace this call — the module only exists in
-      // EAS builds, not in Expo Go.
-      const dynamicRequire = (globalThis as any).require ?? require;
-      const rnAnalytics = dynamicRequire('@react-native-firebase/analytics').default;
-      _instance = { kind: 'native', instance: rnAnalytics() };
-    }
-  } catch {
-    // Firebase not configured, blocked by test env, or native module absent.
-    _instance = null;
-  }
-  return _instance;
-}
-
-async function track(eventName: string, params?: Record<string, unknown>): Promise<void> {
-  try {
-    const inst = await getInstance();
-    if (!inst) return;
-
-    if (inst.kind === 'web') {
-      const { logEvent } = await import('firebase/analytics');
-      logEvent(inst.instance, eventName, params as any);
-    } else {
-      await inst.instance.logEvent(eventName, params);
-    }
-  } catch {
-    // Analytics must never crash the app.
-  }
-}
-
-// ── Typed event catalog ───────────────────────────────────────────────────────
+const noop = async (..._args: unknown[]): Promise<void> => { /* removed */ };
 
 export const Analytics = {
   // ── Auth funnel ──────────────────────────────────────────────────────────
-  /** User tapped "Send Verification Code" on the login screen. */
-  signupStarted: () => track('signup_started'),
-
-  /** OTP was verified successfully; user now has a session token. */
-  otpVerified: () => track('otp_verified'),
-
-  /** User completed profile-setup and has a full profile. */
-  profileCompleted: () => track('profile_completed'),
-
-  /** User successfully authenticated (existing or new account). */
-  login: (method: 'otp' = 'otp') => track('login', { method }),
+  signupStarted: () => noop(),
+  otpVerified: () => noop(),
+  profileCompleted: () => noop(),
+  login: (_method: 'otp' = 'otp') => noop(),
 
   // ── Ride funnel ──────────────────────────────────────────────────────────
-  /** Rider submitted a ride request (after payment confirm). */
-  rideRequested: (params: { vehicle_type: string; estimated_fare: number }) =>
-    track('ride_requested', params),
-
-  /** A driver accepted the ride offer. */
-  driverAccepted: (params: { wait_seconds: number }) =>
-    track('driver_accepted', params),
-
-  /** Ride status became in_progress (driver picked up rider). */
-  rideStarted: () => track('ride_started'),
-
-  /** Ride status became completed. */
-  rideCompleted: (params: { fare: number; distance_km?: number; duration_min?: number }) =>
-    track('ride_completed', params),
-
-  /** Ride was cancelled by rider or driver. */
-  rideCancelled: (params: { reason?: string; stage: string }) =>
-    track('ride_cancelled', params),
+  rideRequested: (_params: { vehicle_type: string; estimated_fare: number }) => noop(),
+  driverAccepted: (_params: { wait_seconds: number }) => noop(),
+  rideStarted: () => noop(),
+  rideCompleted: (_params: { fare: number; distance_km?: number; duration_min?: number }) => noop(),
+  rideCancelled: (_params: { reason?: string; stage: string }) => noop(),
 
   // ── Payments ─────────────────────────────────────────────────────────────
-  /** User tapped pay on the payment confirm screen. */
-  paymentInitiated: (params: { method: string; amount: number }) =>
-    track('payment_initiated', params),
-
-  /** Payment settled (wallet deducted / charge succeeded). */
-  paymentCompleted: (params: { method: string; amount: number }) =>
-    track('payment_completed', params),
+  paymentInitiated: (_params: { method: string; amount: number }) => noop(),
+  paymentCompleted: (_params: { method: string; amount: number }) => noop(),
 
   // ── Fare split ───────────────────────────────────────────────────────────
-  fareSplitCreated: (params: { split_count: number; total_fare: number }) =>
-    track('fare_split_created', params),
-
-  fareSplitAccepted: () => track('fare_split_accepted'),
-
-  fareSplitPaid: (params: { amount: number }) => track('fare_split_paid', params),
+  fareSplitCreated: (_params: { split_count: number; total_fare: number }) => noop(),
+  fareSplitAccepted: () => noop(),
+  fareSplitPaid: (_params: { amount: number }) => noop(),
 
   // ── Quests / loyalty ─────────────────────────────────────────────────────
-  questJoined: (params: { quest_id: string; quest_type: string }) =>
-    track('quest_joined', params),
-
-  questRewardClaimed: (params: { reward_amount: number }) =>
-    track('quest_reward_claimed', params),
-
-  loyaltyPointsRedeemed: (params: { points: number; credit_amount: number }) =>
-    track('loyalty_points_redeemed', params),
+  questJoined: (_params: { quest_id: string; quest_type: string }) => noop(),
+  questRewardClaimed: (_params: { reward_amount: number }) => noop(),
+  loyaltyPointsRedeemed: (_params: { points: number; credit_amount: number }) => noop(),
 
   // ── Driver events (driver-app) ────────────────────────────────────────────
-  driverWentOnline: () => track('driver_went_online'),
-
-  driverWentOffline: () => track('driver_went_offline'),
-
-  driverAcceptedOffer: (params: { wait_seconds?: number } = {}) =>
-    track('driver_accepted_offer', params),
-
-  driverRejectedOffer: () => track('driver_rejected_offer'),
-
-  driverArrivedAtPickup: () => track('driver_arrived_at_pickup'),
+  driverWentOnline: () => noop(),
+  driverWentOffline: () => noop(),
+  driverAcceptedOffer: (_params: { wait_seconds?: number } = {}) => noop(),
+  driverRejectedOffer: () => noop(),
+  driverArrivedAtPickup: () => noop(),
 } as const;
 
 export default Analytics;

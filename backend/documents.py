@@ -218,9 +218,8 @@ async def save_upload(file: UploadFile) -> str:
             file=file_bytes, path=filename, file_options={"content-type": file.content_type}
         )
 
-        # Get public URL
-        url_res = supabase.storage.from_("driver-documents").get_public_url(filename)
-        return url_res
+        url_res = supabase.storage.from_("driver-documents").create_signed_url(filename, 3600)
+        return url_res.data.signed_url
     except Exception as e:
         logger.error(f"Failed to upload to Supabase Storage: {e}")
         raise HTTPException(status_code=500, detail=f"Could not save file: {e}") from e
@@ -767,7 +766,7 @@ async def upload_file(
                 path=storage_key,
                 file_options={"content-type": content_type},
             )
-            public_url = supabase.storage.from_("driver-documents").get_public_url(storage_key)
+            public_url = supabase.storage.from_("driver-documents").create_signed_url(storage_key, 3600).data.signed_url
         except Exception as e:
             logger.error(f"Supabase Storage upload failed: {e}")
             raise HTTPException(status_code=500, detail=f"Storage upload failed: {e}") from e

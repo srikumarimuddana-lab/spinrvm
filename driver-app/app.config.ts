@@ -91,6 +91,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         '@react-native-firebase/messaging',
         '@react-native-firebase/crashlytics',
         '@react-native-firebase/app-check',
+        // LogRocket native module needs Android minSdk 25.
+        ['expo-build-properties', { android: { minSdkVersion: 25 } }],
+        '@logrocket/react-native',
     ],
     experiments: {
         typedRoutes: true

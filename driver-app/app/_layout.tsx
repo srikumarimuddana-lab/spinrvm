@@ -13,6 +13,7 @@ import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
 import { captureMessage, setUser } from '@shared/services/errorReporting';
+import LogRocket from '@logrocket/react-native';
 import {
   initFirebaseServices,
   requestPushPermissionAndGetToken,
@@ -75,6 +76,19 @@ export default function RootLayout() {
   const [isOffline, setIsOffline] = useState(false);
   // Guard so we only register the FCM token once per auth session.
   const fcmRegisteredRef = useRef(false);
+
+  // ── LogRocket session recording ──
+  // Guard against Expo Go — @logrocket/react-native ships a native module
+  // that isn't linked there, so calling init would throw. Same gating
+  // pattern as @shared/services/firebase.
+  useEffect(() => {
+    if (isExpoGo) return;
+    try {
+      LogRocket.init('gfuign/spinr');
+    } catch (e) {
+      console.log('[LogRocket] init failed:', e);
+    }
+  }, []);
 
   // ── Cold-start init: auth, location, Firebase native modules, Android channel ──
   useEffect(() => {
@@ -164,7 +178,12 @@ export default function RootLayout() {
         });
         fcmRegisteredRef.current = true;
         const uid = useAuthStore.getState().user?.id;
-        if (uid) setUser(uid, { role: 'driver' });
+        if (uid) {
+          setUser(uid, { role: 'driver' });
+          if (!isExpoGo) {
+            try { LogRocket.identify(uid, { role: 'driver' }); } catch (e) { console.log('[LogRocket] identify failed:', e); }
+          }
+        }
         console.log('[Push] FCM token registered with backend');
       } catch (e) {
         console.log('[Push] FCM token registration failed:', e);

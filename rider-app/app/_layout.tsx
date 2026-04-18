@@ -18,6 +18,7 @@ import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
 import { captureMessage, setUser } from '@shared/services/errorReporting';
 import Analytics from '@shared/analytics';
+import LogRocket from '@logrocket/react-native';
 import {
   initFirebaseServices,
   requestPushPermissionAndGetToken,
@@ -100,6 +101,19 @@ export default function RootLayout() {
   // previously polled every 3s now poll every 15s as a fallback — the
   // WebSocket delivers the same updates in <100ms.
   const { connectionState: wsState } = useRiderSocket();
+
+  // ── LogRocket session recording ──
+  // Guard against Expo Go — @logrocket/react-native ships a native module
+  // that isn't linked there, so calling init would throw. Same gating
+  // pattern as @shared/services/firebase.
+  useEffect(() => {
+    if (isExpoGo) return;
+    try {
+      LogRocket.init('gfuign/spinr');
+    } catch (e) {
+      console.log('[LogRocket] init failed:', e);
+    }
+  }, []);
 
   // ── Fetch Stripe publishable key from backend /settings ──
   // Public endpoint — no auth required. Key comes from the admin
@@ -201,7 +215,12 @@ export default function RootLayout() {
         fcmRegisteredRef.current = true;
         // Tag error reports with user identity from this point on.
         const uid = useAuthStore.getState().user?.id;
-        if (uid) setUser(uid);
+        if (uid) {
+          setUser(uid);
+          if (!isExpoGo) {
+            try { LogRocket.identify(uid); } catch (e) { console.log('[LogRocket] identify failed:', e); }
+          }
+        }
         Analytics.login();
         console.log('[Push] Rider FCM token registered with backend');
       } catch (e) {

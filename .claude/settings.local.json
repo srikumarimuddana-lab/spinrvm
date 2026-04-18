@@ -50,7 +50,8 @@
       "Bash(git rm *)",
       "Bash(python3 *)",
       "Bash(py *)",
-      "Bash(npx jest *)"
+      "Bash(npx jest *)",
+      "Bash(npx --no tsc --noEmit)"
     ]
   }
 }

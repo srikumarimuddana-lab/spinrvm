@@ -1119,3 +1119,123 @@ how to seed test data, how to run pytest + maestro.
 
 SUMMARY: CRITICAL:0 HIGH:1 MEDIUM:10 LOW:2 PASS:2 RECOMMENDATION:2
 
+================================================================================
+TASK 10 — ERROR HANDLING & RESILIENCE
+================================================================================
+
+[10-1] HIGH | request_id Missing from SpinrException Handler — Cannot Trace Errors
+File: backend/utils/error_handling.py:368-376
+Finding: spinr_exception_handler doesn't inject request_id into error responses. The
+http_exception_handler (line 427) and general_exception_handler (line 509) both include it.
+Without request_id, customer support cannot correlate a driver's error screen with a backend
+log entry.
+Fix: Generate request_id in spinr_exception_handler, add to response body and X-Request-ID
+header. Also add _cors_headers_for(request) to allow cross-origin error inspection.
+
+[10-2] HIGH | run_sync() Does Not Retry on Network Timeouts
+File: backend/db_supabase.py:18-42
+Finding: run_sync() retries on HTTP/2 connection errors (ConnectionTerminated, RemoteProtocolError)
+but not on httpx.TimeoutException. Any transient network timeout (common on cloud infrastructure)
+fails immediately without retry, causing unnecessary 500 errors to drivers.
+Fix: Add httpx.TimeoutException to the except clause alongside the HTTP/2 errors, with the
+same backoff-and-retry logic (max 3 retries, 0.5s backoff).
+
+[10-3] MEDIUM | validation_exception_handler (422) Missing CORS Headers and request_id
+File: backend/utils/error_handling.py:379-414
+Finding: Pydantic validation errors return 422 responses without CORS headers. On cross-origin
+requests, the browser shows a generic CORS error instead of the validation details, making
+debugging impossible from the driver app.
+Fix: Add to JSONResponse constructor:
+    headers={**_cors_headers_for(request), "X-Request-ID": request_id}
+And include request_id in the response body.
+
+[10-4] MEDIUM | Inconsistent Error Response Format Across Four Handlers
+File: backend/utils/error_handling.py:89-99, 403-414, 428-444, 538-555
+Finding: SpinrException.to_dict() and validation_exception_handler omit request_id;
+http_exception_handler and general_exception_handler include it. Client code must handle
+four different error shapes.
+Fix: Standardize all handlers to emit: {"error": {"code":..., "detail":..., "request_id":...}}
+Update SpinrException.to_dict(request_id=None) to accept and embed the id.
+
+[10-5] MEDIUM | Supabase Connection Pool Has No Acquisition Timeout
+File: backend/supabase_client.py:23-32
+Finding: httpx.Client created with inherited default timeout — no explicit pool acquisition
+timeout. When all connections are busy, new requests block indefinitely.
+Fix: httpx.Client(timeout=httpx.Timeout(connect=10, read=30, write=10, pool=5))
+This surfaces pool exhaustion as a TimeoutException rather than a hang.
+
+[10-6] MEDIUM | Supabase Errors Not Wrapped into SpinrException Subclasses
+File: backend/db_supabase.py:142-148
+Finding: PostgrestAPI errors propagate as generic exceptions, bypassing the structured
+error system and emitting raw 500s. Client cannot distinguish "not found" from "conflict".
+Fix: Catch Supabase APIError and map: "duplicate key" → ResourceAlreadyExistsException,
+"no rows found" → ResourceNotFoundException, constraint violation → ValidationException.
+
+[10-7] MEDIUM | Error Boundary Scope Not Enforced — Major Screens May Be Unprotected
+File: shared/components/ErrorBoundary.tsx:57-115
+Finding: ErrorBoundary is well-implemented (getDerivedStateFromError + Sentry) but there's
+no convention ensuring it wraps every major screen section. An unprotected component throw
+propagates to the root and crashes the whole app.
+Fix: Document in CONTRIBUTING.md that every screen must be wrapped in ErrorBoundary.
+Wrap the app root in a top-level ErrorBoundary as the final safety net.
+
+[10-8] MEDIUM | API Client 401 Retry Has No Backoff — Risk of Cascading Refresh Timeouts
+File: shared/api/client.ts:154-172
+Finding: When an access token expires, the refresh is deduped correctly, but there's no
+exponential backoff before retry after a failed refresh. During a network congestion event,
+multiple failed refreshes pile up immediately.
+Fix: Add exponential backoff to the 401 path:
+    await new Promise(r => setTimeout(r, Math.min(1000 * 2 ** retryCount, 30000)));
+
+[10-9] MEDIUM | Offline Queue Silently Drops 4xx Errors After Max Retries
+File: shared/api/offlineQueue.ts:136-150
+Finding: Queued requests that receive 401/403 after reconnect are silently discarded after
+3 retries. An expired session while offline means the driver's queued actions (location updates,
+status changes) are lost with no notification.
+Fix: On 401/403 after retry exhaustion, call a registered error callback to notify the app:
+    this.onError?.({ type: 'session_expired', failedRequests: this.queue.length })
+
+[10-10] LOW | Offline Queue Error Checks Use Fragile String Matching
+File: shared/api/offlineQueue.ts:136-150
+Finding: Timeout detection: `error.message.includes("TimeoutError")` is fragile across
+environments and polyfills.
+Fix: Check `error.response === undefined` (no response = network/timeout) instead of
+string matching. Handles all network failure types uniformly.
+
+[10-11] LOW | Error Log Ring Buffer Entries May Contain Large Response Bodies
+File: shared/api/client.ts:139-152
+Finding: MAX_ERROR_LOG=50 entries capped by count, but each entry may contain full error
+response bodies. On verbose APIs, 50 × large-payload = memory pressure on low-end devices.
+Fix: Serialize each entry to JSON and truncate to 2KB:
+    const entry = JSON.stringify(errorData).slice(0, 2048);
+
+[10-12] PASS | CORS Headers Included on Error Responses (http + general handlers)
+File: backend/utils/error_handling.py:440-443, 551-554
+[10-13] PASS | Exception Hierarchy Correctly Mapped to HTTP Status Codes
+File: backend/utils/error_handling.py:17-365
+[10-14] PASS | Catch-All Handler Prevents Stack Trace Leakage in Production
+File: backend/utils/error_handling.py:529-555
+[10-15] PASS | Error Handler Logging Defensive Against Crashing (opt raw=True)
+File: backend/utils/error_handling.py:391-401, 519-527
+[10-16] PASS | Offline Queue Persists to AsyncStorage — Survives App Restarts
+File: shared/api/offlineQueue.ts:69-162
+[10-17] PASS | 15-Second Request Timeout via AbortController
+File: shared/api/client.ts:12
+[10-18] PASS | Sentry SDK Initialized for Backend Error Monitoring
+File: backend/server.py:136-164
+
+[10-19] RECOMMENDATION | Add Per-Request Timeout Override for File Uploads
+File: shared/api/client.ts
+Finding: 15s is too short for document uploads (driver license, vehicle photos). File uploads
+need 30-60s timeout.
+Fix: Allow client.post(url, body, { timeout: 60000 }) override in document upload calls.
+
+[10-20] RECOMMENDATION | Map Pydantic Error Types to Human-Readable Messages
+File: backend/utils/error_handling.py:379-389
+Finding: Raw Pydantic messages ("field required", "value is not a valid integer") are shown
+to drivers. Confusing for non-technical users.
+Fix: Map common Pydantic error types: "missing" → "This field is required",
+"string_too_short" → "Too short (minimum {min_length} characters)", etc.
+
+SUMMARY: CRITICAL:0 HIGH:2 MEDIUM:6 LOW:2 PASS:7 RECOMMENDATION:2
+

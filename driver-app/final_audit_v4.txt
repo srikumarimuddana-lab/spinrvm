@@ -387,3 +387,119 @@ Generate with: python -c "import bcrypt; print(bcrypt.hashpw(b'pw', bcrypt.gensa
 
 SUMMARY: CRITICAL:1 HIGH:2 MEDIUM:3 LOW:0 PASS:5 RECOMMENDATION:3
 
+================================================================================
+TASK 4 — INPUT VALIDATION & SANITIZATION
+================================================================================
+
+[4-1] HIGH | Phone Validation Accepts Any Country — Does Not Enforce Canada (+1)
+File: backend/validators.py:52-57
+Finding: validate_phone() prepends +1 to bare 10-digit numbers but never checks whether the
+area code belongs to Canada (NANP). A US, Caribbean, or other +1 number passes as valid.
+Service is Saskatchewan-only; a Washington DC number should be rejected at validation time.
+Fix: After normalization, verify area code belongs to Canadian NANP allocations, or require
+the user to supply an explicit +1 prefix and reject non-Canadian area codes.
+
+[4-2] HIGH | GPS Null Island (0,0) Detected but Not Rejected
+File: backend/validators.py:161-163
+Finding: validate_coordinates() logs a warning for (lat=0, lng=0) but returns True. These
+are default/error GPS values from a device that has no fix. Storing them creates phantom
+locations, wrong route calculations, and dispatch matches to the ocean.
+Fix: Change to raise HTTPException(400, "Invalid coordinates: null island") when lat == 0 and lng == 0.
+
+[4-3] HIGH | All Monetary Fields Are float — Floating-Point Precision Errors in Finance
+File: backend/schemas.py:123-127 (FareConfig), 204-210 (Ride)
+Finding: base_fare, per_km_rate, total_fare, tip_amount, driver_earnings etc. are typed as
+float. Float arithmetic causes precision errors: 0.1 + 0.2 = 0.30000000000000004 in Python.
+validate_monetary_amount() correctly uses Decimal internally, but schema enforces float at
+the API boundary, silently discarding precision.
+Fix: Change all monetary field types to Decimal with Field(max_digits=10, decimal_places=2).
+Use from decimal import Decimal and add model_config = ConfigDict(use_enum_values=True) for
+Pydantic v2 Decimal support.
+
+[4-4] MEDIUM | OTP Schema Fields Have No Length or Pattern Constraints
+File: backend/schemas.py:10-16
+Finding: VerifyOTPRequest.code is a plain str — no min_length, max_length, or digit-only
+pattern. Backend would accept a 100-char string as an OTP code. Client enforces 4 digits but
+a direct API call bypasses that.
+Fix: code=Field(..., min_length=4, max_length=4, pattern=r'^\d{4}$')
+    phone=Field(..., min_length=5, max_length=15, pattern=r'^\+[1-9]\d{6,14}$')
+
+[4-5] MEDIUM | CreateProfileRequest Has No Field Constraints
+File: backend/schemas.py:19-24
+Finding: first_name, last_name, email, gender accept any string length. Empty strings, 1000-char
+names, and arbitrary unicode all pass.
+Fix: first_name=Field(..., min_length=1, max_length=100)
+    last_name=Field(..., min_length=1, max_length=100)
+    gender=Field(..., pattern=r'^(Male|Female|Other|Prefer not to say)$')
+
+[4-6] MEDIUM | Driver & Ride Model Fields Missing Validators
+File: backend/schemas.py:151-184, 187-233
+Finding: Driver.phone, license_plate, vehicle_make, vehicle_model and Ride.pickup_address,
+dropoff_address are plain str with no sanitization calls or Field constraints. These skip
+the sanitize_string() / validate_phone() functions in validators.py.
+Fix: Annotate fields with max_length bounds and attach validators via @field_validator to
+call the existing sanitize_string() and validate_phone() functions.
+
+[4-7] MEDIUM | Suspicious Pattern Detection Logs Only — Does Not Block Injection
+File: backend/validators.py:342-352
+Finding: sanitize_string() detects "SELECT", "SCRIPT", "ALERT", onclick etc. but only logs
+a warning and returns True. Input like "SELECT * FROM users; --" is stored in the DB.
+Fix: Either (a) raise HTTPException(400, "Invalid input") for detected injection patterns,
+or (b) install bleach and use bleach.clean() for true HTML sanitization. SQL injection
+is already prevented by Supabase parameterized queries, but XSS via stored data is a real risk.
+
+[4-8] MEDIUM | Client Email Regex Too Permissive Compared to Backend
+File: driver-app/app/driver/profile.tsx:149
+Finding: Client regex /^[^\s@]+@[^\s@]+\.[^\s@]+$/ accepts "a@b.c" but backend uses
+Python's EmailStr (RFC 5322). Inconsistency means bad emails can produce confusing error
+messages that originate from the server rather than client-side UX.
+Fix: Use the same email pattern on both sides, or remove client-side email regex entirely
+and rely on backend validation with clear API error messages surfaced in the UI.
+
+[4-9] MEDIUM | OTP Code Not Validated at Backend Schema Level
+File: backend/schemas.py:10-16 (VerifyOTPRequest.code)
+Finding: See [4-4]. Client enforces 4 digits; direct API calls can send any string. Backend
+should reject non-4-digit codes before reaching business logic.
+Fix: Add pattern constraint per [4-4].
+
+[4-10] MEDIUM | Address Minimum Length Too Short (3–5 chars)
+File: backend/validators.py:463 and schemas.py:258-264
+Finding: Addresses as short as 3 characters pass validation. "123" is a valid address string.
+These won't geocode and cause silent routing failures.
+Fix: Raise minimum to 10 characters. Add regex requiring at least a number and a word:
+pattern=r'^\d+\s+\w+' for North American street addresses.
+
+[4-11] LOW | Coordinates Not Checked Against Saskatchewan/Canada Service Area
+File: backend/validators.py:122-165
+Finding: Any globally valid lat/lng passes. Ride request from Los Angeles passes validation
+and fails only at dispatch time, wasting compute and potentially confusing the user.
+Fix: Add bounding-box check: lat in [49.0, 60.0], lng in [-110.0, -101.5] for Saskatchewan.
+Return clear error: "Service not available in your location."
+
+[4-12] LOW | HTML Stripping Uses Naive Regex (Not bleach)
+File: backend/validators.py:340
+Finding: re.sub(r"<[^>]*>", "", value) does not handle HTML entities, nested tags, or
+attribute injection (onclick=). Docstring mentions bleach but it's not imported.
+Fix: pip install bleach, then: import bleach; return bleach.clean(value, tags=[], strip=True)
+
+[4-13] RECOMMENDATION | Add max_length to All Optional String Fields in Schemas
+File: backend/schemas.py:30-47 (UserProfile)
+Finding: Optional string fields (rejection_reason, driver_onboarding_detail etc.) have no
+length cap. Large payloads could bloat DB or cause rendering issues.
+Fix: Add Field(None, max_length=500) to all optional text fields.
+
+[4-14] RECOMMENDATION | Require E.164 Prefix Explicitly — Remove Bare Number Normalization
+File: backend/validators.py:52-57
+Finding: Bare number normalization with hardcoded +1 is fragile for future international
+expansion and silently accepts non-Canadian numbers.
+Fix: Require +1XXXXXXXXXX format; reject bare numbers with a clear user-facing error:
+"Please enter your phone number with country code (e.g. +1 306 555 0123)."
+
+[4-15] RECOMMENDATION | Add Rate Limiting to POST /rides
+File: backend/schemas.py and backend/routes/rides.py
+Finding: No rate limit on ride creation endpoint — a user could flood the system with ride
+requests to spam drivers or consume compute.
+Fix: Add @limiter.limit("10/minute") to the ride creation endpoint.
+
+SUMMARY: CRITICAL:0 HIGH:3 MEDIUM:6 LOW:2 PASS:0 RECOMMENDATION:3
+

@@ -1428,3 +1428,270 @@ Finding: Expired documents prevent going online — enforced at the route level.
 
 SUMMARY: CRITICAL:1 HIGH:4 MEDIUM:5 LOW:2 PASS:3 RECOMMENDATION:0
 
+================================================================================
+TASK 13 — NOTIFICATIONS, AI SUPPORT BOT & KNOWLEDGE BASE
+================================================================================
+
+[13-1] HIGH | Foreground Notification Handler Missing Critical Types
+File: driver-app/hooks/useDriverDashboard.ts:666-698
+Finding: onForegroundMessage only handles new_ride_assignment and ride_cancelled. Types like
+document_expiry_warning, subscription_expiring, payment_failed, ride_completed arrive
+silently — driver sees no in-app alert and no navigation occurs. App state doesn't update.
+Fix: Add handlers for all types:
+    else if (data?.type==='document_expiry_warning') navigateTo('/driver/profile#documents');
+    else if (data?.type==='subscription_expiring') navigateTo('/driver/subscription');
+    else if (data?.type==='ride_completed') showEarningsSummary(data.ride_id);
+
+[13-2] MEDIUM | Document Expiry: Only 7-Day Warning — Missing 1-Day, Day-Of, Post-Expiry
+File: backend/utils/document_expiry.py:24-130
+Finding: EXPIRY_WARNING_DAYS=7 sends one warning. No 1-day escalation, no day-of-expiry
+push, no post-expiry suspension notification. 24h cooldown may suppress the 1-day warning
+if the 7-day warning just ran.
+Fix: Add tiered warnings with distinct FCM payloads and urgency levels:
+    7d: "Expires in 7 days" (normal priority)
+    1d: "Expires tomorrow — renew today" (high priority)
+    0d: "Expired — you've been suspended" (MAX priority, MAX channel)
+Make cooldown per-tier: 7d cooldown for 7d warning, 20h for 1d warning.
+
+[13-3] MEDIUM | All Notification Payloads Missing deeplink Field
+File: backend/routes/rides.py:275-286 and backend/routes/drivers.py:1558-1563
+Finding: send_push_notification data dict includes type + ride_id but no deeplink URL.
+The app manually interprets type and navigates — tightly coupling backend and client.
+Fix: Add deeplink to every notification data payload:
+    new_ride_offer → deeplink: "spinr-driver://rides/{ride_id}/offer"
+    document_expiry_warning → deeplink: "spinr-driver://driver/profile?tab=documents"
+    subscription_expiring → deeplink: "spinr-driver://driver/subscription"
+
+[13-4] MEDIUM | Notification Preferences Stored Locally Only — Lost on App Reinstall
+File: driver-app/app/driver/settings.tsx:135-165 and backend/routes/notifications.py:164-210
+Finding: Backend has GET/PUT /notifications/preferences API but driver app never calls it.
+Toggles (pushNotifications, rideAlerts, earningsSummary) are local state only, reset on
+reinstall or logout.
+Fix: On Settings mount: call GET /notifications/preferences, populate state from response.
+On toggle change: call PUT /notifications/preferences. Add loading + optimistic UI.
+
+[13-5] MEDIUM | Notification Tap Does Not Navigate — Only Marks Read
+File: driver-app/app/driver/notifications.tsx:105-126
+Finding: renderNotification onPress calls markAsRead(item.id) but does nothing else.
+Tapping a "document expiring" notification goes nowhere. Standard UX is to route to
+the relevant screen.
+Fix: Add deeplink routing in onPress:
+    if (item.type==='document_expiry_warning') router.push('/driver/profile?tab=documents');
+    if (item.type==='ride_cancelled'||'ride_completed') router.push(`/driver/ride-detail?id=${item.data?.ride_id}`);
+    if (item.type==='subscription_expiring') router.push('/driver/subscription');
+
+[13-6] MEDIUM | Foreground Handler Missing subscription_expiring and document_expiry_warning
+File: driver-app/hooks/useDriverDashboard.ts:689-698
+Finding: When the app is foreground and these notification types arrive, no alert, banner,
+or navigation is triggered. Driver misses the expiry warning entirely if they're actively using the app.
+Fix: See [13-1] — add to the if/else chain in onForegroundMessage.
+
+[13-7] MEDIUM | No OTP Push Flow — Document-Based OTP Is App-Only, Not Communicated
+File: (all routes scanned)
+Finding: Pickup OTP is displayed in-app and verified in-app — no notification/SMS delivery
+path exists. If a rider's app is backgrounded, they may not see the OTP.
+Fix: Document the OTP delivery path explicitly. Consider displaying OTP as a high-priority
+notification on the rider's app when the driver marks "arrived".
+
+[13-8] LOW | ride_auto_cancelled vs. ride_cancelled — Inconsistent Naming Breaks App Routing
+File: backend/routes/rides.py:703
+Finding: Auto-cancel sends type="ride_auto_cancelled"; manual cancel sends type="ride_cancelled".
+The app's foreground handler only checks for "ride_cancelled" — auto-cancel is silently dropped.
+Fix: Unify to type="ride_cancelled" with a reason field:
+    {type: "ride_cancelled", reason: "no_drivers_available", ride_id: "x"}
+
+[13-9] LOW | Payment Retry Notifications Missing Intermediate Steps
+File: backend/utils/payment_retry.py:122-135
+Finding: Rider only notified after all 3 retries fail. No intermediate notification on retry #1
+or #2. Rider has no chance to update payment method before final failure.
+Fix: Notify on retry #1: "Payment issue — we're retrying", retry #3: "Last attempt".
+Use a boolean config flag NOTIFY_ON_INTERMEDIATE_RETRIES to control this behaviour.
+
+[13-10] LOW | Driver Not Notified When Their Ride Payment Fails
+File: backend/utils/payment_retry.py:127-132
+Finding: Payment failure notification goes to rider only. Driver learns of failed payment
+via earnings screen discrepancy, with no direct notification.
+Fix: Send driver notification: {type:"ride_payment_failed", ride_id:"x",
+detail:"Rider payment declined — earnings may be adjusted pending resolution"}
+
+[13-11] PASS | Notification Centre: Unread Badge, Read/Unread State, Pull-to-Refresh
+File: driver-app/app/driver/notifications.tsx:20-244
+[13-12] PASS | Android Notification Channels: ride-offers (MAX), default (HIGH)
+File: driver-app/app/_layout.tsx:126-141
+[13-13] PASS | Background Message Handler Registered at Module Level (App-Killed State)
+File: driver-app/app/_layout.tsx:62-64
+[13-14] PASS | FCM Token Registration Deferred to Auth Init — No 401 on Login
+File: driver-app/app/_layout.tsx:167-214
+
+[13-15] RECOMMENDATION | AI Support Bot Not Implemented — Gemini Architecture
+Finding: Zero evidence of AI support bot (no gemini, openai, llm, chatbot patterns).
+Backend has /admin/faqs CRUD but no conversational interface for drivers.
+Fix: Implement Gemini-based support bot:
+    Backend: POST /driver/support/chat
+    (1) Fetch relevant FAQs from DB matching user query (full-text search)
+    (2) Build prompt: "You are the Spinr driver support agent. FAQs: {faqs}. Question: {user_q}"
+    (3) Call google-generativeai: genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
+    (4) Return structured response with sources
+    Privacy: strip PII before sending to Gemini (redact license, email, phone from context)
+    Rate limit: 1 req/3s per driver; log queries for quality improvement
+    Fallback: return raw FAQ search results if Gemini fails
+
+[13-16] RECOMMENDATION | In-App FAQ Screen Not Implemented
+Finding: Backend admin can CRUD FAQs but /driver/faq.tsx does not exist. Driver has no
+self-service help centre. Error states (ride cancelled, doc expired) have no "Learn more" link.
+Fix: Create driver-app/app/driver/faq.tsx with:
+    - Categories: Earnings, Documents, Dispatch, Payouts, Safety
+    - Full-text search across question + answer
+    - Deeplink from error states: cancelled notification → FAQ?category=dispatch
+    - Weekly sync from GET /support/faqs
+
+[13-17] RECOMMENDATION | Help & Support Section Missing from Settings
+File: driver-app/app/driver/settings.tsx
+Finding: Settings has Emergency Assistance but no "Help & FAQ" or "Contact Support" section.
+Fix: Add section with: "View FAQs" → /driver/faq | "Contact Support" → support ticket form.
+
+SUMMARY: CRITICAL:0 HIGH:1 MEDIUM:6 LOW:4 PASS:4 RECOMMENDATION:3
+
+================================================================================
+FINAL TALLY — ALL 13 TASKS
+================================================================================
+
+| Task | CRIT | HIGH | MED | LOW | PASS | REC |
+|------|------|------|-----|-----|------|-----|
+| T01 Feature Completeness    |  0 |  0 |  0 |  0 | 15 |  4 |
+| T02 Authentication          |  3 |  2 |  4 |  2 | 12 |  3 |
+| T03 Encryption & Secrets    |  1 |  2 |  3 |  0 |  5 |  3 |
+| T04 Input Validation        |  0 |  3 |  6 |  2 |  0 |  3 |
+| T05 Android & iOS UX        |  1 |  4 | 13 |  1 |  5 |  2 |
+| T06 Real-Time WS & GPS      |  0 |  2 |  6 |  0 | 10 |  0 |
+| T07 Ride Dispatch           |  1 |  3 |  3 |  3 |  2 |  2 |
+| T08 Payments & Earnings     |  0 |  1 |  3 |  2 |  6 |  2 |
+| T09 Test Coverage           |  0 |  1 | 10 |  2 |  2 |  2 |
+| T10 Error Handling          |  0 |  2 |  6 |  2 |  7 |  2 |
+| T11 Security Headers/CORS   |  0 |  1 |  1 |  1 |  9 |  1 |
+| T12 Compliance              |  1 |  4 |  5 |  2 |  3 |  0 |
+| T13 Notifications/AI/FAQ    |  0 |  1 |  6 |  4 |  4 |  3 |
+|------|------|------|-----|-----|------|-----|
+| TOTAL                       |  7 | 26 | 66 | 21 | 80 | 27 |
+
+Total findings: 227  (80 PASS = 35% pass rate on first audit)
+
+================================================================================
+REMEDIATION PRIORITY LIST — ORDERED BY RISK & EFFORT
+================================================================================
+
+── P0: DO NOW (Before Any Production Traffic) ──────────────────────────────────
+
+P0-1  [3-1]  ROTATE Supabase service-role key in dashboard (30 seconds)
+              backend/.env.example has a real key — treat as compromised.
+
+P0-2  [2-1/2-2/2-3]  DELETE dead refresh_token() function at auth.py:347-401
+              It has MongoDB-style calls + call to undefined _store_refresh_token().
+              Will NameError crash if ever invoked directly.
+
+P0-3  [7-1]  Fix double-accept race condition on ride accept
+              Use atomic WHERE driver_id=X AND status='driver_assigned' UPDATE.
+
+P0-4  [7-2]  Hash pickup OTP before DB storage (SHA-256 + hmac.compare_digest)
+              Currently stored plaintext — DB breach exposes all active OTPs.
+
+P0-5  [12-1] Implement active driver suspension on document expiry
+              Add UPDATE status='suspended' + WS disconnect in document_expiry.py loop.
+
+P0-6  [12-2] Replace get_public_url() with create_signed_url(expiry=3600) for driver docs
+              Driver license scans/insurance photos may be unauthenticated-accessible.
+
+── P1: THIS SPRINT (Before Beta Launch) ─────────────────────────────────────────
+
+P1-1  [7-3]  Add CANCEL_RIDER_BLOCKED states to cancel_ride_rider endpoint
+              Riders can cancel after driver arrived — no cancellation fee charged.
+
+P1-2  [7-4]  Add DRIVER_CANCEL_ALLOWED states to driver cancel endpoint
+              Driver can cancel in-progress rides — inconsistent state, skipped payout.
+
+P1-3  [7-7]  Add state guard to complete_ride endpoint
+              Currently accepts complete from any state, bypassing pickup OTP.
+
+P1-4  [5-1/CritUX]  Fix OfflineBanner top:0 → top:insets.top (1-line fix)
+              Banner hidden behind status bar/notch on both platforms.
+
+P1-5  [5-5]  Request background location permission after foreground grant
+              GPS tracking stops when driver locks phone mid-trip.
+
+P1-6  [12-3] Stream file uploads in chunks — validate Content-Length before read()
+              Entire 10MB+ upload read into RAM before rejection — DoS vector.
+
+P1-7  [3-1/3-3]  Replace real credentials in backend/.env.example with placeholders
+              After rotating the key (P0-1), update the example file.
+
+P1-8  [2-6/2-7]  Tighten OTP rate limits: send 3/min (was 5), verify 5/min (was 10)
+              Current limits double the intended attack budget.
+
+P1-9  [8-1]  Expand PCI-DSS field guard with camelCase variants
+              ("cardNumber", "pan", "security_code" — current guard is bypassable)
+
+P1-10 [5-17] Add BackHandler to RideOfferPanel, ActiveRidePanel, TripCompletedPanel
+              Android back button exits active ride flows.
+
+── P2: NEXT SPRINT (Before Public Launch) ───────────────────────────────────────
+
+P2-1  [4-3]  Change all monetary schema fields from float → Decimal
+              Float arithmetic causes precision errors in fare calculations.
+
+P2-2  [4-2]  Reject null island GPS coordinates (0,0) with 400 — not just log
+              Phantom driver locations in the ocean cause dispatch errors.
+
+P2-3  [6-3]  Fix broadcast() race condition: list(self.active_connections.values())
+              concurrent disconnect → "dict changed size during iteration" crash.
+
+P2-4  [2-8]  Add in-process fallback rate limiter when Redis unavailable
+              OTP brute-force protection silently evaporates without Redis.
+
+P2-5  [12-5] Encrypt license_number and vehicle_vin using Supabase Vault
+              Currently plaintext — DB dump exposes all driver PII.
+
+P2-6  [12-4] Fix document_expiry.py to detect and act on past-expiry documents
+              Current loop condition skips expired docs — no suspension triggered.
+
+P2-7  [11-1] Configure slowapi X-Forwarded-For trust for rate limiting behind proxy
+              All rate limits bypass when deployed behind Cloudflare/Fly/Railway.
+
+P2-8  [8-2]  Add idempotency keys to PaymentIntent creation
+              Network retry → two PaymentIntents → double charge on rider.
+
+P2-9  [13-2] Add 1-day and day-of expiry notification tiers in document_expiry.py
+              Single 7-day warning insufficient for compliance enforcement.
+
+P2-10 [13-4] Wire notification preferences UI to GET/PUT /notifications/preferences
+              Settings toggles are local only — lost on reinstall.
+
+── P3: HARDENING (Before Scale) ──────────────────────────────────────────────────
+
+P3-1  [9-6]  Add parametrized PII test for all 14 FORBIDDEN_FIELDS
+              Currently only 2 of 14 fields are actually asserted.
+
+P3-2  [9-1]  Add double-accept race condition test (server-side)
+P3-3  [9-5]  Add OTP lockout integration test (5 real failures → 429)
+P3-4  [9-9]  Add Jest coverage threshold (lines: 70, functions: 60)
+P3-5  [10-1] Add request_id to spinr_exception_handler responses
+P3-6  [10-2] Add httpx.TimeoutException to run_sync() retry clause
+P3-7  [5-9]  Reduce SOS long-press from 2000ms → 1200ms
+P3-8  [12-10] Add soft-delete (deleted_at) columns to drivers, users, rides
+P3-9  [13-18] Add deeplink routing to notification tap handlers in notifications.tsx
+P3-10 [2-5]  Issue refresh_token for Firebase-authenticated users
+
+── P4: FUTURE FEATURES ───────────────────────────────────────────────────────────
+
+P4-1  [13-15] AI support bot using Gemini 1.5 Flash + FAQ context (backend + app)
+P4-2  [13-16] In-app FAQ screen with categories, search, deeplink from error states
+P4-3  [1-16/1-17/1-18/1-19]  Create missing screens:
+              payout-history.tsx, tax-documents.tsx, report-safety.tsx, legal.tsx
+P4-4  [11-2]  Enable Firebase App Check for production (device attestation)
+P4-5  [9-8]  Add Maestro E2E flows: accept_ride, verify_otp, complete_trip, payout
+P4-6  [12-14] Add GDPR-compliant data export endpoint for drivers
+P4-7  [8-14]  Wire T4A/earnings CSV download to payout.tsx UI
+
+================================================================================
+END OF AUDIT — spinr driver app v4
+Audit date: 2026-04-18 | Branch: claude/driver-app-audit-prompt-TFDbI
+================================================================================

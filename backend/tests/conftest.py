@@ -226,7 +226,7 @@ def sample_otp_data() -> Dict[str, Any]:
     return {
         "id": "otp_123",
         "phone": "+1234567890",
-        "code": "1234",
+        "code": "123456",
         "verified": False,
         "expires_at": "2024-01-01T00:10:00Z",
         "created_at": "2024-01-01T00:00:00Z",

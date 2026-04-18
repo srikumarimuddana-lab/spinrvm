@@ -49,7 +49,7 @@ export default function OtpScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const isBackendMode = mode === 'backend' || !verificationId;
-  const codeLength = 4;
+  const codeLength = 6;
 
   const [code, setCode] = useState('');
   const [verifying, setVerifying] = useState(false);

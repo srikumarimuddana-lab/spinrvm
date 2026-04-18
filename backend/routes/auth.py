@@ -162,8 +162,8 @@ async def send_otp(request: Request, body: SendOTPRequest):
         raise HTTPException(status_code=503, detail="SMS service not configured")
 
     # Dev fallback: fixed OTP so local testing doesn't need Twilio.
-    # The 4-digit length matches the real generated OTP so OTP screens accept it.
-    otp_code = generate_otp() if twilio_configured else "1234"
+    # The 6-digit length matches the real generated OTP so OTP screens accept it.
+    otp_code = generate_otp() if twilio_configured else "123456"
 
     otp_record = OTPRecord(
         phone=phone,

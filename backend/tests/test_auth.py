@@ -23,27 +23,26 @@ class TestOTPCreation:
         otp = generate_otp()
 
         assert otp is not None
-        assert len(otp) == 4
+        assert len(otp) == 6
         assert otp.isdigit()
 
     def test_generate_otp_randomness(self):
-        """Test that generated OTPs vary (4-digit space only has 10k values)."""
+        """Test that generated OTPs vary (6-digit space has 1M values)."""
         from backend.dependencies import generate_otp
 
         otps = [generate_otp() for _ in range(10)]
 
-        # Can't require all unique — 4-digit space has real collision odds.
-        # Just verify we're not always returning the same value.
+        # Collision probability is negligible in a 1M-value space.
         assert len(set(otps)) > 1
 
     def test_generate_otp_range(self):
-        """Test OTP is within valid 4-digit range."""
+        """Test OTP is within valid 6-digit range."""
         from backend.dependencies import generate_otp
 
         for _ in range(100):
             otp = generate_otp()
             otp_int = int(otp)
-            assert 0 <= otp_int <= 9999
+            assert 0 <= otp_int <= 999999
 
 
 class TestJWTTokenHandling:

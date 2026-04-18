@@ -46,7 +46,7 @@ export default function LoginScreen() {
           params: { verificationId, phoneNumber: formattedNumber, mode: 'firebase' }
         });
       } else {
-        // Backend OTP flow (dev mode — OTP is 1234)
+        // Backend OTP flow (dev mode — OTP is 123456)
         const response = await api.post('/auth/send-otp', { phone: formattedNumber });
 
         if (response.data.success) {
@@ -98,7 +98,7 @@ export default function LoginScreen() {
         </View>
 
         {!isFirebaseConfigured && (
-          <Text style={styles.devHint}>Dev mode — OTP is 1234</Text>
+          <Text style={styles.devHint}>Dev mode — OTP is 123456</Text>
         )}
 
         <TouchableOpacity

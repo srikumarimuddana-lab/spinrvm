@@ -31,9 +31,9 @@
   - File: `backend/server.py`
   - Action: Split into route modules
 
-- [ ] **Driver App: 4-digit OTP** - Should be 6-digit for production
-  - Files: `backend/server.py`, `driver-app/app/otp.tsx`
-  - Action: Increase to 6-digit minimum
+- [x] **Driver App: 4-digit OTP** - Should be 6-digit for production
+  - Files: `backend/dependencies.py`, `driver-app/app/otp.tsx`, `rider-app/app/otp.tsx`
+  - Action: Increased to 6-digit minimum
 
 - [ ] **Driver App: No geofence verification** - Arrival confirmation
   - File: `driver-app/store/driverStore.ts`

@@ -1797,7 +1797,7 @@ async def simulate_driver_arrival(ride_id: str, current_user: dict = Depends(get
         ride_id, {"status": "driver_arrived", "driver_arrived_at": datetime.utcnow(), "updated_at": datetime.utcnow()}
     )
     updated_ride = await db_supabase.get_ride(ride_id)
-    return {"success": True, "pickup_otp": updated_ride.get("pickup_otp", "0000")}
+    return {"success": True, "pickup_otp": updated_ride.get("pickup_otp", "000000")}
 
 
 @api_router.post("/{ride_id}/start")

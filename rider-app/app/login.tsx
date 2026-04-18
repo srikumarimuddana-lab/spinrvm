@@ -185,7 +185,7 @@ export default function LoginScreen() {
           {__DEV__ && (
             <View style={styles.devHintContainer}>
               <Ionicons name="information-circle" size={14} color={colors.primary} />
-              <Text style={styles.devHint}>Dev mode — OTP is 1234</Text>
+              <Text style={styles.devHint}>Dev mode — OTP is 123456</Text>
             </View>
           )}
         </View>

@@ -43,7 +43,7 @@ export default function OtpScreen() {
   const params = useLocalSearchParams<{ verificationId?: string; phoneNumber: string; mode?: string }>();
   const { phoneNumber, verificationId, mode } = params;
   const isBackendMode = mode === 'backend' || !verificationId;
-  const codeLength = 4;
+  const codeLength = 6;
 
   const [code, setCode] = useState('');
   const [verifying, setVerifying] = useState(false);

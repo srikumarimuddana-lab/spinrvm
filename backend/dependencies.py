@@ -35,11 +35,8 @@ db = db_supabase  # legacy alias
 # `routes/admin/auth.py` and this module share the same source of truth.
 JWT_ALGORITHM = "HS256"
 OTP_EXPIRY_MINUTES = 5
-# Product decision: 4-digit OTP across the whole app (login + ride pickup).
-# Trade-off: 1/10,000 guess odds per attempt vs 1/1,000,000 for 6 digits.
-# Mitigated by rate limiting + short expiry (OTP_EXPIRY_MINUTES).
-OTP_LENGTH = 4
-PICKUP_OTP_LENGTH = 4
+OTP_LENGTH = 6
+PICKUP_OTP_LENGTH = 6
 
 security = HTTPBearer(auto_error=False)
 
@@ -56,7 +53,7 @@ def generate_otp() -> str:
 
 
 def generate_pickup_otp() -> str:
-    """Generate a 4-digit OTP for ride pickup verification."""
+    """Generate a 6-digit OTP for ride pickup verification."""
     return "".join(secrets.choice(string.digits) for _ in range(PICKUP_OTP_LENGTH))
 
 

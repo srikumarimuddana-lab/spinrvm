@@ -1,0 +1,215 @@
+"""Company-admin endpoints (`/company/**`). Consumed by the company portal
+and used by the rider app for read paths (balances).
+
+Separation: writes requiring admin role use require_company_admin.
+Reads available to any active member use require_company_member.
+"""
+from __future__ import annotations
+
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+
+try:
+    from ..db_supabase import (  # type: ignore
+        add_allowed_domain,
+        delete_allowed_domain,
+        get_corporate_member_by_id,
+        get_member_allowance,
+        list_allowed_domains,
+        list_company_allowance_requests,
+        list_company_allowances,
+        list_company_members,
+        update_corporate_member,
+        upsert_member_allowance,
+    )
+    from ..dependencies.company_guard import (  # type: ignore
+        require_company_admin,
+    )
+    from ..schemas.corporate import (  # type: ignore
+        AllowanceCreate,
+        AllowanceUpdate,
+        AllowedDomainCreate,
+        MemberInvite,
+        MemberUpdate,
+    )
+    from ..services.corporate_membership_service import invite_member  # type: ignore
+except ImportError:
+    from db_supabase import (  # type: ignore
+        add_allowed_domain,
+        delete_allowed_domain,
+        get_corporate_member_by_id,
+        get_member_allowance,
+        list_allowed_domains,
+        list_company_allowance_requests,
+        list_company_allowances,
+        list_company_members,
+        update_corporate_member,
+        upsert_member_allowance,
+    )
+    from dependencies.company_guard import (  # type: ignore
+        require_company_admin,
+    )
+    from schemas.corporate import (  # type: ignore
+        AllowanceCreate,
+        AllowanceUpdate,
+        AllowedDomainCreate,
+        MemberInvite,
+        MemberUpdate,
+    )
+    from services.corporate_membership_service import invite_member  # type: ignore
+
+
+router = APIRouter(prefix="/company/{company_id}", tags=["Corporate Company"])
+
+
+# ---------- Members ----------
+@router.get("/members")
+async def list_members(
+    company_id: str,
+    status: Optional[str] = None,
+    guard=Depends(require_company_admin),
+):
+    statuses = None
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+    return await list_company_members(company_id=company_id, statuses=statuses)
+
+
+@router.post("/members/invite")
+async def invite(
+    company_id: str,
+    body: MemberInvite,
+    guard=Depends(require_company_admin),
+):
+    member, url = await invite_member(
+        company_id=company_id,
+        email=body.email,
+        role=body.role.value,
+        invited_by=guard["user"]["id"],
+        policy_override=body.policy_override,
+    )
+    return {"member": member, "invite_url": url}
+
+
+@router.patch("/members/{member_id}")
+async def update_member(
+    company_id: str,
+    member_id: str,
+    body: MemberUpdate,
+    guard=Depends(require_company_admin),
+):
+    existing = await get_corporate_member_by_id(member_id)
+    if not existing or existing.get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Member not found")
+    patch = body.model_dump(exclude_none=True)
+    if "role" in patch and hasattr(patch["role"], "value"):
+        patch["role"] = patch["role"].value
+    if "status" in patch and hasattr(patch["status"], "value"):
+        patch["status"] = patch["status"].value
+    return await update_corporate_member(member_id, patch) or existing
+
+
+@router.delete("/members/{member_id}")
+async def remove_member(
+    company_id: str,
+    member_id: str,
+    guard=Depends(require_company_admin),
+):
+    existing = await get_corporate_member_by_id(member_id)
+    if not existing or existing.get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return await update_corporate_member(member_id, {"status": "removed"}) or existing
+
+
+# ---------- Allowances ----------
+@router.get("/allowances")
+async def list_allowances(company_id: str, guard=Depends(require_company_admin)):
+    return await list_company_allowances(company_id)
+
+
+@router.get("/members/{member_id}/allowance")
+async def get_allowance(
+    company_id: str,
+    member_id: str,
+    guard=Depends(require_company_admin),
+):
+    existing = await get_corporate_member_by_id(member_id)
+    if not existing or existing.get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return await get_member_allowance(member_id) or {}
+
+
+@router.put("/members/{member_id}/allowance")
+async def set_allowance(
+    company_id: str,
+    member_id: str,
+    body: AllowanceCreate,
+    guard=Depends(require_company_admin),
+):
+    existing = await get_corporate_member_by_id(member_id)
+    if not existing or existing.get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Member not found")
+    patch = body.model_dump()
+    if hasattr(patch["type"], "value"):
+        patch["type"] = patch["type"].value
+    for k in ("period_start", "period_end"):
+        if patch.get(k) is not None:
+            patch[k] = patch[k].isoformat()
+    return await upsert_member_allowance(member_id=member_id, patch=patch)
+
+
+@router.patch("/members/{member_id}/allowance")
+async def patch_allowance(
+    company_id: str,
+    member_id: str,
+    body: AllowanceUpdate,
+    guard=Depends(require_company_admin),
+):
+    existing = await get_corporate_member_by_id(member_id)
+    if not existing or existing.get("company_id") != company_id:
+        raise HTTPException(status_code=404, detail="Member not found")
+    patch = body.model_dump(exclude_none=True)
+    if "status" in patch and hasattr(patch["status"], "value"):
+        patch["status"] = patch["status"].value
+    if not patch:
+        return await get_member_allowance(member_id) or {}
+    return await upsert_member_allowance(member_id=member_id, patch=patch)
+
+
+# ---------- Allowance requests (admin side) ----------
+@router.get("/allowance-requests")
+async def list_requests(
+    company_id: str,
+    status: Optional[str] = "pending",
+    guard=Depends(require_company_admin),
+):
+    statuses = None
+    if status:
+        statuses = [s.strip() for s in status.split(",") if s.strip()]
+    return await list_company_allowance_requests(company_id, statuses=statuses)
+
+
+# ---------- Allowed domains ----------
+@router.get("/allowed-domains")
+async def list_domains(company_id: str, guard=Depends(require_company_admin)):
+    return await list_allowed_domains(company_id)
+
+
+@router.post("/allowed-domains")
+async def add_domain(
+    company_id: str,
+    body: AllowedDomainCreate,
+    guard=Depends(require_company_admin),
+):
+    return await add_allowed_domain(company_id=company_id, domain=body.domain)
+
+
+@router.delete("/allowed-domains/{domain}")
+async def remove_domain(
+    company_id: str,
+    domain: str,
+    guard=Depends(require_company_admin),
+):
+    await delete_allowed_domain(company_id=company_id, domain=domain.lower())
+    return {"status": "ok"}

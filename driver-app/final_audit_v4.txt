@@ -139,3 +139,137 @@ Fix: Create driver-app/app/legal.tsx with query-param routing rendering ToS / Pr
 
 SUMMARY: CRITICAL:0 HIGH:0 MEDIUM:0 LOW:0 PASS:15 RECOMMENDATION:4
 
+================================================================================
+TASK 2 — AUTHENTICATION & SESSION MANAGEMENT
+================================================================================
+
+[2-1] CRITICAL | Duplicate /auth/refresh endpoint — old one will crash at runtime
+File: backend/routes/auth.py:347-401 and 475-534
+Finding: Two functions both register on POST /auth/refresh. The first (lines 347-401) is silently
+overwritten by the second (FastAPI only keeps the last registration). The dead first function
+calls _store_refresh_token() on line 399 — a function that doesn't exist anywhere in the codebase
+— so if it ever ran it would NameError crash immediately. The second (lines 475-534) is correct.
+Fix: Delete the old refresh_token() function at lines 347-401 entirely. Keep only
+refresh_access_token() at lines 475-534 which correctly uses issue_refresh_token().
+
+[2-2] CRITICAL | MongoDB-style DB calls will crash with AttributeError
+File: backend/routes/auth.py:355, 378, 387, 393
+Finding: The dead first endpoint uses db.refresh_tokens.find_one() and db.users.find_one()
+MongoDB attribute-access syntax. The actual db_supabase API exports plain functions:
+db.find_one(table, filters). Calling db.refresh_tokens.anything raises AttributeError.
+Fix: Remove the dead function (per [2-1]). If any similar calls exist elsewhere, replace with
+db.find_one('refresh_tokens', {'token_hash': hash}) pattern.
+
+[2-3] CRITICAL | Wrong DB field name in revocation check ('revoked' vs 'revoked_at')
+File: backend/routes/auth.py:355
+Finding: The dead endpoint queries {'revoked': False} but the DB schema (migration 25) defines
+revoked_at TIMESTAMPTZ — a timestamp, not a boolean. utils/refresh_tokens.py correctly checks
+row.get('revoked_at') is None. The mismatch would silently return wrong results.
+Fix: Removed by deleting the dead function per [2-1]. utils/refresh_tokens.py:131 is already correct.
+
+[2-4] HIGH | Undefined function _store_refresh_token called on line 399
+File: backend/routes/auth.py:399
+Finding: await _store_refresh_token(user_id, new_refresh) — this function is not imported or
+defined anywhere. Would crash with NameError if the dead endpoint were ever reached.
+Fix: Removed by deleting the dead function per [2-1].
+
+[2-5] HIGH | Firebase auth path never issues a refresh token
+File: backend/dependencies/__init__.py:128-172
+Finding: Users authenticated via Firebase ID token exchange get an access token issued but
+issue_refresh_token() is never called. They cannot refresh their session without re-authenticating
+via Firebase. Also, no audience or custom claim check validates driver vs. rider scope on the
+Firebase token.
+Fix: After line 165, call issue_refresh_token(user_id) and include the refresh token in the
+response. Validate a custom Firebase claim (e.g., role == 'driver') if drivers and riders use the
+same Firebase project.
+
+[2-6] MEDIUM | OTP send rate limit too lenient — 5/min instead of spec 3/min
+File: backend/routes/auth.py:135
+Finding: @limiter.limit("5/minute") — spec requires 3/min to limit phone enumeration.
+Fix: Change to @limiter.limit("3/minute").
+
+[2-7] MEDIUM | OTP verify rate limit too lenient — 10/min instead of spec 5/min
+File: backend/routes/auth.py:200
+Finding: @limiter.limit("10/minute") — attacker gets 10 guesses per minute before 5-failure
+lockout kicks in, doubling the intended attack budget.
+Fix: Change to @limiter.limit("5/minute").
+
+[2-8] MEDIUM | OTP lockout silently disabled when Redis is unavailable
+File: backend/routes/auth.py:72-112 and backend/core/config.py:56
+Finding: REDIS_URL can be empty string (optional). When Redis is absent, redis_get/redis_incr
+raise exceptions that are caught and return None, causing _check_otp_lockout() to skip the check.
+Brute-force protection silently evaporates without Redis.
+Fix: Add an in-process fallback (threading.Lock + dict with TTL) for OTP attempt tracking that
+activates when Redis is unavailable. Log a warning at startup when running without Redis.
+
+[2-9] MEDIUM | Firebase auth path does not validate audience (driver vs. rider)
+File: backend/dependencies/__init__.py:136-165
+Finding: Firebase token is verified but no custom claim (e.g., role) is checked. A rider Firebase
+token could be exchanged for a driver-scoped access token if the user_id happens to match.
+Fix: Add check: if decoded_firebase.get('role') not in ('driver', 'rider'): raise HTTPException(401).
+Or use separate Firebase projects for driver and rider apps.
+
+[2-10] LOW | Dev fallback OTP "1234" (approved — gated to non-production)
+File: backend/routes/auth.py:166
+Finding: OTP "1234" generated when Twilio not configured. Gated to dev environments. Approved design.
+Fix: No change required. Ensure staging always has Twilio configured.
+
+[2-11] LOW | Dev fallback also accepts "123456" (approved — gated to development env)
+File: backend/routes/auth.py:216
+Finding: An additional dev-mode bypass accepts "123456" when no OTP record exists. Gated to
+ENV == "development". Harmless in production.
+Fix: No change required. Consider consolidating both dev codes into one path for clarity.
+
+[2-12] PASS | JWT algorithm pinned to HS256 — no algorithm downgrade possible
+File: backend/dependencies/__init__.py:36, 106
+
+[2-13] PASS | Token version check enforced — force-logout-all works correctly
+File: backend/dependencies/__init__.py:114-124, 221-225
+
+[2-14] PASS | Error messages do not leak phone number existence
+File: backend/routes/auth.py:134-196
+
+[2-15] PASS | OTP expiry enforced at 5 minutes with timezone-aware comparison
+File: backend/routes/auth.py:247-252
+
+[2-16] PASS | Brute-force lockout: 5 failures → 24h block (Redis-backed)
+File: backend/core/config.py:65-67 and routes/auth.py:86-112
+
+[2-17] PASS | Refresh token rotation — new token on every use, old marked revoked_at
+File: backend/utils/refresh_tokens.py:58-107
+
+[2-18] PASS | Refresh token expiry 30 days — correctly enforced
+File: backend/core/config.py:38 and utils/refresh_tokens.py:79
+
+[2-19] PASS | Replay protection — revoked token rejected after rotation
+File: backend/utils/refresh_tokens.py:131-138
+
+[2-20] PASS | Mobile token storage uses expo-secure-store (not AsyncStorage)
+File: shared/store/authStore.ts:9-46
+
+[2-21] PASS | 401 retry queue — concurrent requests don't flood refresh endpoint
+File: shared/api/client.ts:154-173
+
+[2-22] PASS | In-memory token cleared on logout
+File: shared/store/authStore.ts:468-483
+
+[2-23] PASS | DB: UNIQUE constraint on token_hash
+File: backend/migrations/25_refresh_tokens_and_token_version.sql:40
+
+[2-24] PASS | DB: revoked_at TIMESTAMPTZ column present
+File: backend/migrations/25_refresh_tokens_and_token_version.sql:47
+
+[2-25] PASS | DB: token_version column on users table (force-logout support)
+File: backend/migrations/25_refresh_tokens_and_token_version.sql:72-73
+
+[2-26] RECOMMENDATION | Consolidate duplicate /auth/refresh into one handler
+File: backend/routes/auth.py:347-534
+
+[2-27] RECOMMENDATION | Tighten /logout rate limits (currently 10/min — too lenient)
+File: backend/routes/auth.py:538
+
+[2-28] RECOMMENDATION | Add pip-audit to CI for Python dependency CVE scanning
+File: .github/workflows/ci.yml
+
+SUMMARY: CRITICAL:3 HIGH:2 MEDIUM:4 LOW:2 PASS:12 RECOMMENDATION:3
+

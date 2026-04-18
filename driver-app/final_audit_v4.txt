@@ -775,3 +775,121 @@ File: backend/utils/ws_pubsub.py:73-108
 
 SUMMARY: CRITICAL:0 HIGH:2 MEDIUM:6 LOW:0 PASS:10 RECOMMENDATION:0
 
+================================================================================
+TASK 7 — RIDE DISPATCH & STATE MACHINE
+================================================================================
+
+[7-1] CRITICAL | Double-Accept Race Condition — Two Drivers Can Both Accept Same Ride
+File: backend/routes/drivers.py:1473-1565
+Finding: accept_ride reads the ride, checks driver_id matches, then updates status. Between
+the read and the write, a second driver can pass the same check and overwrite the first
+driver's acceptance. The post-update verification (line 1535) catches one case but not a
+true simultaneous write. Result: a rider could be matched to the wrong driver.
+Fix: Use atomic conditional UPDATE with WHERE guard:
+    UPDATE rides SET status='driver_accepted', ... 
+    WHERE id=ride_id AND driver_id=<this_driver_id> AND status='driver_assigned'
+    RETURNING id
+If the returned row is empty, another driver won — return 409 Conflict. This requires
+a single DB round-trip instead of read-then-write.
+
+[7-2] HIGH | Pickup OTP Stored as Plaintext — DB Breach Exposes All Active OTPs
+File: backend/routes/drivers.py:1673 and dependencies/__init__.py:58-60
+Finding: generate_pickup_otp() returns a 4-digit string that is stored directly in the
+rides.pickup_otp column (no hash). Verification at line 1673 compares raw strings.
+A DB breach exposes every active pickup OTP, allowing anyone to start rides they didn't
+request. hash_token() exists in dependencies/__init__.py:63-65 but is never used here.
+Fix: On OTP generation: store hashlib.sha256(otp.encode()).hexdigest()
+    On verification: compare hmac.compare_digest(
+        hashlib.sha256(request.otp.encode()).hexdigest(), ride.get("pickup_otp"))
+This gives constant-time comparison AND prevents plaintext recovery.
+
+[7-3] HIGH | Rider Can Cancel Ride After Driver Has Arrived or Trip Is In Progress
+File: backend/routes/rides.py:1283-1387
+Finding: cancel_ride_rider only rejects if status in ["completed", "cancelled"]. Statuses
+"driver_arrived" and "in_progress" are not blocked. Driver physically waiting at the pickup
+can be cancelled on, wasting their time with no guaranteed fee. This violates the expected
+business rule that cancellations should be restricted once the driver has arrived.
+Fix: Add to cancel guards:
+    CANCEL_RIDER_BLOCKED = ["driver_arrived", "in_progress", "completed", "cancelled"]
+    if ride["status"] in CANCEL_RIDER_BLOCKED:
+        raise HTTPException(400, "Cannot cancel — driver has already arrived")
+For "driver_arrived" state consider charging the full cancellation fee automatically.
+
+[7-4] HIGH | Driver Can Cancel a Ride That Is In Progress — No State Guard
+File: backend/routes/drivers.py:1882-1917
+Finding: Driver cancel endpoint has no status check. A driver can cancel a ride with status
+"in_progress" or "completed", leaving the system in an inconsistent state and potentially
+skipping payout.
+Fix: Add at line 1885:
+    DRIVER_CANCEL_ALLOWED = {"driver_assigned", "driver_accepted"}
+    if ride["status"] not in DRIVER_CANCEL_ALLOWED:
+        raise HTTPException(409, "Cannot cancel a ride that has already started")
+
+[7-5] MEDIUM | OTP Comparison Uses Plain String Equality — Timing Attack Possible
+File: backend/routes/drivers.py:1673
+Finding: ride.get("pickup_otp") != request.otp uses Python string equality which short-
+circuits on the first differing character. Millisecond-precision response time measurement
+could allow incremental OTP guessing. Resolved by fixing [7-2] (hash + hmac.compare_digest).
+Fix: See [7-2].
+
+[7-6] MEDIUM | Driver Going Offline Between Dispatch Read and Claim Has No Guard
+File: backend/services/dispatch_service.py:170-182
+Finding: Between reading candidate drivers (is_online=True) and claiming one atomically,
+a driver can go offline. The claimed driver receives a push notification to a potentially
+missing FCM token. Ride stays offered with no active driver watching it until timeout.
+Fix: In claim_driver_atomic(), add is_online=True to the conditional update's WHERE clause.
+If claim returns 0 rows, the driver went offline — move to the next candidate.
+
+[7-7] MEDIUM | complete_ride Endpoint Has No State Guard — Can Complete Unstarted Ride
+File: backend/routes/drivers.py:1719-1879
+Finding: complete_ride does not check that ride.status == "in_progress". A driver can call
+complete on a "driver_assigned" ride, skipping the pickup OTP verification step entirely
+and triggering earnings calculation on a ride that never happened.
+Fix: Add at line 1729:
+    if ride.get("status") != "in_progress":
+        raise HTTPException(409, "Ride must be in progress to complete")
+
+[7-8] MEDIUM | Re-Dispatch After Driver Decline Is Fire-and-Forget — Silent Failure Possible
+File: backend/routes/drivers.py:1568-1609
+Finding: After a decline, match_driver_to_ride is launched as a background task with no
+error handling. If it raises (DB down, no drivers found, exception), the ride stays in
+"searching" state indefinitely until the 5-minute auto-cancel fires. Driver/rider see
+nothing for 5 minutes.
+Fix: Await match_driver_to_ride synchronously (or add an except block that updates ride
+status to "no_drivers_available" and notifies rider immediately).
+
+[7-9] LOW | Cancellation Fee Payout to Driver Is Commented Out — Never Actually Charged
+File: backend/routes/rides.py:1340
+Finding: Comment: "# potentially log a payout" — the cancellation_fee_driver ($2.50 by
+default) is calculated but never actually transferred via Stripe. Drivers are not compensated
+for late cancellations.
+Fix: Call the Stripe payout API or insert a pending_payouts record to credit the driver.
+Document clearly if this is intentionally deferred.
+
+[7-10] LOW | Trip Earnings Endpoint: No Limit Cap or Offset Bounds
+File: backend/routes/drivers.py:704-745
+Finding: limit and offset query params have no max cap. A user requesting limit=1000000
+causes an expensive full-table scan.
+Fix: limit = min(limit, 500); if offset < 0: raise HTTPException(400)
+
+[7-11] PASS | State Guards on ARRIVE, START (ARRIVE_FROM_STATES, START_FROM_STATES)
+File: backend/routes/drivers.py:39-79
+Finding: Arrive and start transitions are guarded against invalid source states with 409.
+
+[7-12] PASS | 5-Minute Auto-Cancel on No Driver Found
+File: backend/routes/rides.py:670-710
+Finding: Background task fires after 5 minutes and cancels rides stuck in "searching".
+
+[7-13] RECOMMENDATION | Consolidate Inline Dispatch Algorithm with DispatchService
+File: backend/routes/rides.py:159-178
+Finding: Algorithm selection logic is duplicated inline in match_driver_to_ride AND in
+DispatchService.select_driver_by_algorithm. Active code is the inline version.
+Fix: Remove inline code; call dispatch.select_driver_by_algorithm() instead.
+
+[7-14] RECOMMENDATION | Add Cancellation Window Policy UI
+File: driver-app/app/driver/index.tsx (RideOfferPanel)
+Finding: No UI communicates to the rider that cancellation is blocked after driver arrival.
+Fix: Show "Cancellation locked — driver has arrived" UI state with countdown if applicable.
+
+SUMMARY: CRITICAL:1 HIGH:3 MEDIUM:3 LOW:3 PASS:2 RECOMMENDATION:2
+

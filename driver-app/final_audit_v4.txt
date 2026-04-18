@@ -680,3 +680,98 @@ for a clean Android UX experience in addition to the safety fix.
 
 SUMMARY: CRITICAL:1 HIGH:4 MEDIUM:13 LOW:1 PASS:5 RECOMMENDATION:2
 
+================================================================================
+TASK 6 — REAL-TIME FEATURES (WEBSOCKET & GPS)
+================================================================================
+
+[6-1] HIGH | Constant High-Accuracy GPS at 5s Interval Causes Severe Battery Drain on Long Shifts
+File: driver-app/hooks/useDriverDashboard.ts:308-314
+Finding: Location.Accuracy.High + timeInterval:5000ms + distanceInterval:10m runs even while
+the driver is idle waiting for a ride. High accuracy = GPS chip always on = ~20-30% extra
+battery per hour. On a 10-hour shift this is the difference between making it and dying at 2pm.
+Fix: Adaptive accuracy: Accuracy.BestForNavigation only during active trip; Accuracy.Balanced
+(cell+WiFi) during idle. Switch modes on state transition in useDriverDashboard.
+
+[6-2] HIGH | Location Subscription Stops When App Backgrounds — No Re-Subscribe on Foreground Return
+File: driver-app/hooks/useDriverDashboard.ts:298-364
+Finding: Only foreground permissions are requested. When the driver locks their phone mid-trip,
+expo-location stops delivering updates. The subscription object persists but emits nothing.
+The WebSocket receives stale coordinates. Backend ETA calculations drift. Driver appears to stop
+moving on the map.
+Fix: (1) Request background permissions (per Task 5 [5-5]).
+    (2) Add AppState listener to re-establish location subscription on 'active' state:
+    AppState.addEventListener('change', state => { if (state==='active') reSubscribeLocation(); })
+
+[6-3] MEDIUM | broadcast() Iterates Live Dict — Crashes on Concurrent Disconnect (Race Condition)
+File: backend/socket_manager.py:97-98
+Finding: broadcast() iterates self.active_connections.values() directly. If any WebSocket
+disconnects during the await send_json() call, Python raises
+"RuntimeError: dictionary changed size during iteration" — crashing the entire broadcast.
+This is the code path for admin alerts and system notifications.
+Fix: Snapshot before iteration: connections = list(self.active_connections.values())
+This pattern is already used correctly in broadcast_to_admins() (line 102) — apply it to broadcast() too.
+
+[6-4] MEDIUM | No Default Handler for Unknown WebSocket Message Types — Silent Drops
+File: driver-app/hooks/useDriverDashboard.ts:368-407
+Finding: Switch handles only: new_ride_assignment, ride_cancelled, ping, chat_message.
+Any new server message type (ride_updated, driver_alert, promo_notification) is silently
+dropped with no logging. Debugging protocol mismatches is impossible.
+Fix: Add: default: console.warn('[WS] Unhandled message type:', data.type, data);
+
+[6-5] MEDIUM | Server Error Messages Not Shown to Driver — Connection Appears Healthy When It Isn't
+File: driver-app/hooks/useDriverDashboard.ts:473-475
+Finding: When backend sends type='error' (rate limit hit, auth failure, message too large),
+client logs it but takes no UI action. Driver has no idea their connection is degraded.
+Fix: On type='error': set connectionState('error') and show a toast/banner:
+"Connection issue: " + data.message. For rate_limit_exceeded, add backoff before retrying.
+
+[6-6] MEDIUM | Redis Pub/Sub Single Channel — Message Order Not Guaranteed Across Instances
+File: backend/utils/ws_pubsub.py:137-179
+Finding: All messages flow through CHANNEL="spinr:ws:dispatch". With multiple backend
+instances publishing simultaneously (ride offer from instance A, chat from instance B),
+delivery order at the driver is undefined. Rare but possible for a driver to see a chat
+message before the ride offer that prompted it.
+Fix: For critical ordering (ride lifecycle events), use per-driver channels:
+CHANNEL = f"spinr:ws:{driver_id}". Document that chat messages have best-effort ordering.
+
+[6-7] MEDIUM | Location Batch Upload Has No Max Retry / Cleanup on Failure
+File: driver-app/hooks/useDriverDashboard.ts:247-272, 291-296
+Finding: Failed batches are re-queued to AsyncStorage indefinitely. If network stays down for
+hours, the buffer accumulates (capped at 500 points) but old failed batches are never discarded.
+On app restart the stale batch is re-attempted, wasting bandwidth and causing backend confusion
+(old timestamps replayed).
+Fix: Track retry count per batch. Discard after 5 failures. Clear persisted buffer on logout.
+Upload remaining buffer on app-background event (AppState 'background') before tracking stops.
+
+[6-8] MEDIUM | Chat Message Handler Calls Store Method Without Type Validation
+File: driver-app/hooks/useDriverDashboard.ts:402-405
+Finding: addChatMessage(data) is called without validating data.ride_id, data.text, or
+data.sender exist. If the server sends a malformed chat payload, the store may receive
+undefined fields, causing rendering errors or crashes in the chat UI.
+Fix: Validate before dispatch:
+if (data?.ride_id && data?.text) store.addChatMessage(data);
+else console.warn('[WS] Malformed chat_message payload', data);
+
+[6-9] PASS | Location Buffer Capped at 500 Entries — No Unbounded Memory Growth
+File: driver-app/hooks/useDriverDashboard.ts:350-351
+[6-10] PASS | WebSocket Cleaned Up on Unmount and Logout
+File: driver-app/hooks/useDriverDashboard.ts:508-538
+[6-11] PASS | WebSocket Opened Only After Auth Token Confirmed
+File: driver-app/hooks/useDriverDashboard.ts:422-430
+[6-12] PASS | 30-Second Ping-Pong Heartbeat Detects Silent Disconnections
+File: backend/routes/websocket.py:30-51
+[6-13] PASS | Auto-Reconnect with Exponential Backoff [1s, 2s, 5s, 10s, 30s] + ±500ms Jitter
+File: driver-app/hooks/useDriverDashboard.ts:17, 490-505
+[6-14] PASS | Backend Requires Auth as First Message — No Data Before Auth
+File: backend/routes/websocket.py:66-104
+[6-15] PASS | Per-Connection Rate Limit 30 msg/sec + 64KB Max Message Size
+File: backend/routes/websocket.py:33-35, 148-174
+[6-16] PASS | Connection Key = client_type + user_id — Impersonation Prevented
+File: backend/routes/websocket.py:122-124
+[6-17] PASS | Connection Removed from Dict on Disconnect — No Memory Leak
+File: backend/routes/websocket.py:400-425 and socket_manager.py:28-36
+[6-18] PASS | Redis Pub/Sub Falls Back to In-Process on Redis Unavailability
+File: backend/utils/ws_pubsub.py:73-108
+
+SUMMARY: CRITICAL:0 HIGH:2 MEDIUM:6 LOW:0 PASS:10 RECOMMENDATION:0
+

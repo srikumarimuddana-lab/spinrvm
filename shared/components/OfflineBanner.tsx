@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, Animated, Platform } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeColors } from '../theme/index';
 
@@ -32,7 +33,8 @@ export function OfflineBanner({
   onVisibilityChange
 }: OfflineBannerProps) {
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
+  const styles = useMemo(() => createStyles(colors, insets.top), [colors, insets.top]);
 
   const [isOffline, setIsOffline] = useState(false);
   const slideAnim = useState(new Animated.Value(-100))[0];
@@ -162,11 +164,11 @@ export function withOfflineDetection<P extends object>(
   };
 }
 
-function createStyles(colors: ThemeColors) {
+function createStyles(colors: ThemeColors, topInset: number) {
   return StyleSheet.create({
     container: {
       position: 'absolute',
-      top: 0,
+      top: topInset,
       left: 0,
       right: 0,
       backgroundColor: colors.error,

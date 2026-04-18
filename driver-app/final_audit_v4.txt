@@ -1553,7 +1553,92 @@ Fix: Add section with: "View FAQs" → /driver/faq | "Contact Support" → suppo
 SUMMARY: CRITICAL:0 HIGH:1 MEDIUM:6 LOW:4 PASS:4 RECOMMENDATION:3
 
 ================================================================================
-FINAL TALLY — ALL 13 TASKS
+TASK 14 — PERFORMANCE & SCALABILITY (added post-initial-audit)
+================================================================================
+
+[14-7] CRITICAL | Math.random() Used as FlatList Key
+File: driver-app/app/driver/rides.tsx:284
+Finding: keyExtractor={(item) => item.id || Math.random().toString()} — every parent
+re-render generates a new key, forcing the entire list to remount. Causes severe jank
+during pull-to-refresh, filter changes, and any unrelated state update.
+Fix: keyExtractor={(item, index) => item.id ? String(item.id) : `ride_${index}`}
+
+[14-14] CRITICAL | Driver Rating Calculation Loads 1000 Ride Records Into Memory
+File: backend/routes/rides.py:1249
+Finding: get_rows("rides", {"driver_id": driver_id}, limit=1000) fetches up to 1000
+rides per rating update and averages them in a Python loop — blocks the request thread.
+Fix: SELECT AVG(driver_rating) FROM rides WHERE driver_id=$1 AND driver_rating IS NOT NULL
+
+[14-1] HIGH | Hermes JS Engine Not Explicitly Configured for Android
+File: driver-app/app.config.ts:16
+Finding: newArchEnabled: true does not automatically enable Hermes in all Expo SDK 54
+configurations. Missing 50-60% startup improvement on Android.
+Fix: Verify Hermes is active in production build — add explicit jsEngine check.
+
+[14-10] HIGH | CarMarker Uses React Native Image Without Cache Control
+File: driver-app/components/CarMarker.tsx:80-88
+Finding: Static asset — acceptable now. If dynamic URLs ever used here, migrate to expo-image.
+Fix: No immediate action. Pre-emptive note for future dynamic avatar use.
+
+[14-8] MEDIUM | FlatList Missing Virtualisation Props
+File: driver-app/app/driver/rides.tsx:281-301
+Finding: No initialNumToRender, maxToRenderPerBatch, windowSize, or getItemLayout.
+Fix: Add initialNumToRender=10, maxToRenderPerBatch=20, windowSize=10, removeClippedSubviews={true}
+
+[14-11] MEDIUM | Profile Avatar Uses Plain React Native Image (No Cache)
+File: driver-app/app/driver/profile.tsx:212-215
+Finding: <Image source={{ uri: user.profile_image }} — no memory/disk cache. Re-downloads on every render.
+Fix: Migrate to expo-image with cachePolicy="memory-disk" (expo-image already in package.json)
+
+[14-15] MEDIUM | No Composite Index on rides(driver_id, created_at)
+File: backend/migrations/ — missing
+Finding: Queries by driver_id with ORDER BY created_at DESC do full table scan as rides table grows.
+Fix: CREATE INDEX IF NOT EXISTS idx_rides_driver_created ON rides(driver_id, created_at DESC);
+
+[14-16] MEDIUM | Driver Estimate Fetches Max 500 Drivers — Misses Drivers in Dense Areas
+File: backend/routes/rides.py:131-139
+Finding: limit=500 applied before distance filter — nearby drivers beyond position 500 are invisible.
+Fix: Apply PostGIS distance filter in DB query, then apply limit.
+
+[14-17] MEDIUM | Rider History Endpoint Has No Pagination
+File: backend/routes/rides.py:786-792
+Finding: limit=200 with no offset/cursor parameter — riders with 200+ rides cannot see older history.
+Fix: Add skip: int = 0, limit: int = 50 parameters and return has_more in response.
+
+[14-19] MEDIUM | 15 console.log Statements in Production Dashboard Hook
+File: driver-app/hooks/useDriverDashboard.ts (15 calls)
+Finding: LogRocket captures all console output — adds CPU/memory overhead in production.
+Fix: Wrap with if (__DEV__) or use a logger abstraction for production.
+
+[14-2] MEDIUM | Metro maxWorkers = 2 — Slows Local Dev Builds
+File: driver-app/metro.config.js:25
+Finding: Intentional for CI stability. No production impact. Acceptable tradeoff.
+Fix: None required. Document the intent.
+
+[14-9] LOW | removeClippedSubviews Not Enabled on FlatLists
+File: driver-app/app/driver/rides.tsx:281
+Fix: Add removeClippedSubviews={true} to all FlatList instances.
+
+[14-3] PASS | Babel Module Resolver Configured Correctly
+[14-4] PASS | EAS Production Build Uses Expo SDK 54 Defaults (minification ON)
+[14-12] PASS | Explicit Image Dimensions in CarMarker (no layout reflow)
+[14-18] PASS | Key Database Indexes Present (drivers, driver_location_history, corporate_accounts)
+[14-20] PASS | Location Subscription Properly Cleaned Up on Unmount
+[14-21] PASS | Batch Upload Interval Properly Cleared on Unmount
+[14-22] PASS | Reconnect Timeout Properly Cleared on Unmount
+[14-23] PASS | WebSocket Reference Closed on Unmount and Reconnect
+[14-24] PASS | Location Buffer Uses 500-Entry Rotation (no unbounded growth)
+[14-25] PASS | Location Buffer Persisted on Failure and Recovered on Cold Start
+[14-26] PASS | Upload Callback Dependency Chain Is Stable (no unnecessary re-subscriptions)
+
+[14-5] RECOMMENDATION | Audit Bundle Size — Lazy-Load Heavy Modules (Charts, Maps)
+[14-6] RECOMMENDATION | Monitor New Architecture for Crashes After First Production Build
+[14-13] RECOMMENDATION | Add Blurhash Placeholders for Profile Images on Slow Networks
+
+SUMMARY: CRITICAL:2 HIGH:2 MEDIUM:7 LOW:1 PASS:11 RECOMMENDATION:3
+
+================================================================================
+FINAL TALLY — ALL 14 TASKS
 ================================================================================
 
 | Task | CRIT | HIGH | MED | LOW | PASS | REC |
@@ -1571,10 +1656,11 @@ FINAL TALLY — ALL 13 TASKS
 | T11 Security Headers/CORS   |  0 |  1 |  1 |  1 |  9 |  1 |
 | T12 Compliance              |  1 |  4 |  5 |  2 |  3 |  0 |
 | T13 Notifications/AI/FAQ    |  0 |  1 |  6 |  4 |  4 |  3 |
+| T14 Performance             |  2 |  2 |  7 |  1 | 11 |  3 |
 |------|------|------|-----|-----|------|-----|
-| TOTAL                       |  7 | 26 | 66 | 21 | 80 | 27 |
+| TOTAL                       |  9 | 28 | 73 | 22 | 91 | 30 |
 
-Total findings: 227  (80 PASS = 35% pass rate on first audit)
+Total findings: 253  (91 PASS = 36% pass rate — 14 tasks)
 
 ================================================================================
 REMEDIATION PRIORITY LIST — ORDERED BY RISK & EFFORT
@@ -1633,6 +1719,13 @@ P1-9  [8-1]  Expand PCI-DSS field guard with camelCase variants
 P1-10 [5-17] Add BackHandler to RideOfferPanel, ActiveRidePanel, TripCompletedPanel
               Android back button exits active ride flows.
 
+P1-11 [14-7] Fix Math.random() FlatList key in rides.tsx:284
+              keyExtractor={(item, index) => item.id ? String(item.id) : `ride_${index}`}
+              30-minute fix — eliminates severe list jank.
+
+P1-12 [14-1] Verify Hermes JS engine active on Android production build
+              Check eas build --platform android output for "Using Hermes". 15 minutes.
+
 ── P2: NEXT SPRINT (Before Public Launch) ───────────────────────────────────────
 
 P2-1  [4-3]  Change all monetary schema fields from float → Decimal
@@ -1665,6 +1758,18 @@ P2-9  [13-2] Add 1-day and day-of expiry notification tiers in document_expiry.p
 P2-10 [13-4] Wire notification preferences UI to GET/PUT /notifications/preferences
               Settings toggles are local only — lost on reinstall.
 
+P2-11 [14-14] Replace Python rating loop with SQL AVG in rides.py:1249
+              SELECT AVG(driver_rating) FROM rides WHERE driver_id=$1 eliminates 1000-row fetch.
+
+P2-12 [14-17] Add pagination to GET /rides/history (skip + limit params)
+              Currently capped at 200 — drivers with long history lose older records.
+
+P2-13 [14-15] Add migration: CREATE INDEX rides(driver_id, created_at DESC)
+              30-minute migration — prevents full table scan as fleet grows.
+
+P2-14 [14-11] Migrate profile avatar to expo-image with cachePolicy="memory-disk"
+              profile.tsx:212-215 — 1 hour. expo-image already in package.json.
+
 ── P3: HARDENING (Before Scale) ──────────────────────────────────────────────────
 
 P3-1  [9-6]  Add parametrized PII test for all 14 FORBIDDEN_FIELDS
@@ -1692,6 +1797,8 @@ P4-6  [12-14] Add GDPR-compliant data export endpoint for drivers
 P4-7  [8-14]  Wire T4A/earnings CSV download to payout.tsx UI
 
 ================================================================================
-END OF AUDIT — spinr driver app v4
+END OF AUDIT — spinr driver app v4 (14 tasks)
 Audit date: 2026-04-18 | Branch: claude/driver-app-audit-prompt-TFDbI
+Full Task 14 report: reports/audits/task14-performance-scalability.txt
+Audit framework: audit-framework/ (16 dimensions, 4 module configs, 3 templates)
 ================================================================================

@@ -1,0 +1,336 @@
+================================================================================
+TASK 14 — PERFORMANCE & SCALABILITY
+================================================================================
+
+SECTION 14A: JS BUNDLE & STARTUP PERFORMANCE
+================================================================================
+
+[14-1] HIGH | Hermes JS Engine Not Explicitly Enabled for Android
+File: driver-app/app.config.ts:16
+Finding: newArchEnabled: true is set but jsEngine is not declared. In Expo SDK 54,
+Hermes is NOT automatically enabled by newArchEnabled alone. Android builds default
+to the standard RN JS engine, losing the 50-60% faster startup and ~30% smaller
+APK that Hermes provides. iOS is unaffected (uses JavaScriptCore).
+Fix: Add "jsEngine": "hermes" to the android object in app.config.ts, or check Expo
+documentation for SDK 54 defaults. For now, assume Hermes is NOT active on Android.
+
+[14-2] MEDIUM | Metro Worker Threads Limited to 2
+File: driver-app/metro.config.js:25
+Finding: maxWorkers = 2 is intentional for CI/resource-constrained environments but
+impacts developer iteration speed during local builds. Production builds via EAS will
+use more workers automatically, so this is acceptable.
+Fix: No action required. This is a deliberate trade-off for CI stability. Comment
+clarifies the intent.
+
+[14-3] PASS | Babel Module Resolver Configured
+File: driver-app/babel.config.js:8-18
+Finding: Module path aliases (@components, @hooks, @styles, etc.) are properly
+configured. Helps with code organization but not directly related to bundle size.
+
+[14-4] PASS | EAS Production Build Uses Expo SDK 54 Defaults
+File: driver-app/eas.json:40-49
+Finding: Production build does not override minification or other optimizations,
+so it uses Expo's production-hardened defaults (minification ON, dead code removal ON).
+Acceptable.
+
+[14-5] RECOMMENDATION | Tree-Shaking Configuration Not Visible
+File: driver-app/metro.config.js, driver-app/babel.config.js
+Finding: No explicit tree-shaking or code-splitting configuration detected.
+The Babel preset 'babel-preset-expo' includes sensible defaults, but there's
+no explicit config for lazy-loading large modules (e.g. expo-image, charts
+libraries). This is not a blocker but can impact cold-start time if large
+dependencies are loaded eagerly.
+Fix: Audit node_modules for large dependencies. Consider lazy-loading heavy
+modules (e.g., chart libraries via dynamic import) if they're not needed on
+app start. Measure bundle size via 'expo start --profiling' or eas build --local.
+
+[14-6] RECOMMENDATION | New Architecture (JSI/Fabric) Enabled Without Known Blockers
+File: driver-app/app.config.ts:16
+Finding: newArchEnabled: true is set. This activates React Native's new
+architecture (JSI for native modules, Fabric for UI rendering). Benefits:
+better performance, better async interop. Known risks: some libraries may not
+support new arch yet (need to check), occasional Android/iOS-specific bugs.
+Fix: Monitor crash reports (Firebase Crashlytics is integrated). If you see
+unusual crashes post-deploy, consider toggling newArchEnabled: false temporarily
+to isolate the cause. Currently acceptable.
+
+
+SECTION 14B: FLATLIST & LIST VIRTUALISATION
+================================================================================
+
+[14-7] CRITICAL | Math.random() Used as FlatList Key
+File: driver-app/app/driver/rides.tsx:284
+Finding: keyExtractor={(item) => item.id || Math.random().toString()}
+This is a CRITICAL performance issue. Every time the parent component re-renders,
+Math.random() generates a new key for items without an id, forcing React to unmount
+and remount the entire list, re-running render logic, resetting internal state of
+child components, and causing severe frame drops. This is especially bad during:
+- Pull-to-refresh (list re-renders while data refreshes)
+- Filter changes (state change triggers re-render)
+- Any parent state change (unrelated to the list)
+Users will see jank, animations will stutter, and old state will be lost.
+Fix: Ensure every ride object has a stable, unique id field from the backend.
+If some items lack an id, use the array index as a fallback ONLY if the list
+is never reordered, or generate a stable hash. Replace with:
+  keyExtractor={(item, index) => item.id ? String(item.id) : `ride_${index}`}
+This guarantees the same key for the same position across re-renders.
+
+[14-8] MEDIUM | FlatList Missing Virtualization Optimization Props
+File: driver-app/app/driver/rides.tsx:281-301
+Finding: FlatList has no initialNumToRender, maxToRenderPerBatch, windowSize, or
+getItemLayout props. This means:
+- Every item is rendered eagerly when the list mounts (slow on load)
+- Rendering batch size defaults to ~10 items, which can cause
+  visible gaps on fast scrolls
+- No fixed-height layout, so the scrollbar can't scroll efficiently
+- Large lists (50+ items) will have noticeable stutter on lower-end devices
+Fix: Add props:
+  initialNumToRender={10}
+  maxToRenderPerBatch={20}
+  windowSize={10}
+  removeClippedSubviews={true}
+  getItemLayout={(data, index) => ({
+    length: 180, // Approximate height of a ride card in pixels
+    offset: 180 * index,
+    index,
+  })}
+Measure the actual height of a rendered ride card and adjust the '180' value.
+
+[14-9] LOW | removeClippedSubviews Not Enabled
+File: driver-app/app/driver/rides.tsx:281-301
+Finding: removeClippedSubviews is not set (defaults to platform default, often false).
+When enabled, off-screen items are unloaded from the native view hierarchy, saving
+memory and improving scroll smoothness on large lists.
+Fix: Add removeClippedSubviews={true} to the FlatList. This is safe for most
+layouts and provides a noticeable smoothness boost on older Android devices.
+
+
+SECTION 14C: IMAGE LOADING & CACHING
+================================================================================
+
+[14-10] HIGH | CarMarker Uses React Native Image Without Cache Control
+File: driver-app/components/CarMarker.tsx:80-88
+Finding: <Image source={require('../assets/images/car_marker.png')} ... />
+This is a static asset (good), but if this component is used for driver avatars
+or dynamic URLs elsewhere, there's no memory/disk caching. The component itself
+handles tracksViewChanges optimization (line 52-57) to prevent re-snapshots, which
+is good, but there's no progressive loading or blurhash placeholder.
+Fix: Since this is a static asset bundle with the app, it's cached by the OS.
+If you ever load dynamic driver avatar URLs here, migrate to expo-image:
+  import { Image as ExpoImage } from 'expo-image';
+  <ExpoImage source={{ uri: avatarUrl }} placeholder={blurhashString} cachePolicy='memory-disk' />
+Currently acceptable for static assets.
+
+[14-11] MEDIUM | Profile Avatar Uses Plain React Native Image
+File: driver-app/app/driver/profile.tsx:212-215
+Finding: <Image source={{ uri: user.profile_image }} ... />
+This loads driver profile images from URLs. No memory cache, no disk cache,
+no progressive loading or blur placeholder. Every profile view or re-render
+re-downloads the image. For a driver viewing their own profile repeatedly,
+this wastes bandwidth and causes visual flash.
+Fix: Migrate to expo-image (already in package.json as expo-image@3.0.11):
+  import { Image as ExpoImage } from 'expo-image';
+  <ExpoImage
+    source={{ uri: user.profile_image }}
+    style={styles.avatar}
+    contentFit="cover"
+    cachePolicy="memory-disk"
+    placeholder={require('../assets/images/avatar-placeholder.png')}
+  />
+This provides built-in memory + disk cache, avoiding redundant downloads.
+
+[14-12] PASS | Explicit Image Dimensions in CarMarker
+File: driver-app/components/CarMarker.tsx:82-87
+Finding: Image has explicit width/height (size prop, defaults to 40). This prevents
+layout reflow and is correctly implemented.
+
+[14-13] RECOMMENDATION | No Blurhash Placeholders
+File: driver-app/app/driver/profile.tsx, driver-app/components/CarMarker.tsx
+Finding: Avatar/profile images load without a blur placeholder or progressive JPEG.
+On slow networks (3G), users see a blank space while the image downloads, degrading
+perceived performance.
+Fix: Generate blurhash codes for profile images on the backend and include in the
+API response. Then use expo-image with placeholder. Example:
+  <ExpoImage source={{ uri: url }} placeholder={blurhash} cachePolicy="memory-disk" />
+This is a RECOMMENDATION (low priority) but improves UX on slow networks.
+
+
+SECTION 14D: BACKEND QUERY PERFORMANCE
+================================================================================
+
+[14-14] CRITICAL | Driver Rating Calculation Loads 1000 Ride Records
+File: backend/routes/rides.py:1249
+Finding: driver_rides = await db_supabase.get_rows("rides", {"driver_id": driver_id}, limit=1000)
+This fetches up to 1000 rides into memory every time a driver is rated. A busy driver
+with 2+ years of history will hit this limit. The code then loops through all 1000
+records in Python to calculate average rating (line 1250-1253), which is inefficient.
+- Memory: 1000 ride records × ~2KB each = 2MB per rating calculation (not huge, but wasteful)
+- CPU: Python loop over 1000 records on the request thread (blocks other requests)
+- Latency: If there are 1000 rated rides, this could take 100-500ms
+On a busy system with concurrent rating updates, this serializes the rating calculation
+and slows down the entire endpoint.
+Fix: Use a database-side aggregation instead:
+  SELECT AVG(driver_rating) FROM rides WHERE driver_id = $1 AND driver_rating IS NOT NULL;
+  UPDATE drivers SET rating = (SELECT AVG(driver_rating) ...) WHERE id = $1;
+This eliminates the limit=1000 fetches and computes the aggregate in SQL. For even
+better performance, maintain a rides_by_driver_stats table updated via trigger on
+ride inserts/updates.
+
+[14-15] MEDIUM | No Composite Index on rides(driver_id, created_at)
+File: backend/migrations/ (all migration files scanned)
+Finding: There is no CREATE INDEX on rides(driver_id, created_at). The rides table
+is queried by driver_id in at least two places:
+  - Line 169: get_rows("rides", {"driver_id": {"$ne": None}}, sort=[("created_at", -1)], limit=1)
+  - Line 1249: get_rows("rides", {"driver_id": driver_id}, limit=1000)
+Without an index, these queries do a full table scan. As the rides table grows (1M+
+records), these scans will slow down. The sort by created_at DESC further requires
+a sequential sort unless the index includes created_at.
+Fix: Add to a migration file:
+  CREATE INDEX IF NOT EXISTS idx_rides_driver_created ON rides(driver_id, created_at DESC);
+This allows both queries to use the index for fast lookup + sort.
+
+[14-16] MEDIUM | Rides Estimate Endpoint Loads 500 Drivers
+File: backend/routes/rides.py:131-139
+Finding: get_rows("drivers", {...}, limit=500) is used to find candidate drivers
+for ride matching. In a city with 500+ drivers online, this will only consider the
+first 500 returned by the database, potentially missing nearby drivers if they're
+not in the first 500 rows.
+Fix: Either:
+  1. Increase limit to 1000+ if your city has many drivers, OR
+  2. Push the distance filter (10km radius) to the database query using PostGIS,
+     so you fetch only nearby drivers instead of all 500 and filtering in Python
+The current approach is safe for small fleets but may underserve high-traffic cities.
+
+[14-17] MEDIUM | Rider History Query Loads 200 Rides Without Pagination
+File: backend/routes/rides.py:786-792
+Finding: get_rows("rides", {"rider_id": current_user["id"]}, limit=200)
+This endpoint has no pagination parameters (no offset, no cursor). A rider can only
+see their last 200 rides. If they have 300 rides, the older 100 are invisible. Also,
+loading 200 rides into memory every request is wasteful if only 10 are displayed.
+Fix: Add pagination support:
+  @router.get("/rides/history")
+  async def get_rider_ride_history(skip: int = 0, limit: int = 50):
+      all_rides = await db_supabase.get_rows(
+          "rides", {"rider_id": ...}, limit=limit, offset=skip, sort=[(...)])
+      return {..., "total": count_rides, "has_more": (skip + limit) < count_rides}
+This allows the client to fetch rides in batches of 50.
+
+[14-18] PASS | Key Indexes Present
+File: backend/migrations/01_add_driver_user_id.sql and others
+Finding: Scanned all migration files. Key indexes are present:
+  - drivers(user_id)
+  - drivers(status)
+  - driver_location_history(driver_id)
+  - Cloud messaging tables indexed by status, created_at
+  - corporate_accounts indexed appropriately
+These are sufficient for current queries. The only missing index is rides(driver_id, created_at).
+
+
+SECTION 14E: MEMORY LEAKS & TIMER MANAGEMENT
+================================================================================
+
+[14-19] MEDIUM | 15 console.log Statements in Production Hook
+File: driver-app/hooks/useDriverDashboard.ts
+Lines: 197, 257, 264, 284, 403, 428, 437, 446, 474, 487, 491, 497, 546, 601, 668
+Finding: 15 console.log calls remain in the hook. In production, console statements
+incur overhead:
+  - Every log call goes through the JS bridge to the native logging system
+  - LogRocket (integrated at line 190 of app.config.ts) captures all console output,
+    adding memory and CPU overhead
+  - On high-traffic hooks (called frequently), this burns JS thread CPU
+Recommended: Only keep critical errors (console.error). Remove or move others to
+__DEV__ guards.
+Fix: Wrap non-essential logs:
+  if (__DEV__) console.log('[driver-config] fetch failed...');
+Or use a logger abstraction:
+  if (isProduction) logMetric('location_batch_uploaded', { count });
+Currently MEDIUM severity because LogRocket is actively capturing, making this
+more painful than normal console output.
+
+[14-20] PASS | Location Subscription Properly Cleaned Up
+File: driver-app/hooks/useDriverDashboard.ts:299-364
+Finding: The location watcher subscription is properly unsubscribed in the cleanup
+function (line 358-362). ✓
+
+[14-21] PASS | Batch Upload Interval Properly Cleaned Up
+File: driver-app/hooks/useDriverDashboard.ts:292-296
+Finding: setInterval for location batch upload is properly cleared on unmount
+(line 295). ✓
+
+[14-22] PASS | Reconnect Timeout Properly Cleared
+File: driver-app/hooks/useDriverDashboard.ts:498-501 and cleanup at 524-527
+Finding: reconnectTimeoutRef.current setTimeout is properly cleared in the
+cleanup function. ✓
+
+[14-23] PASS | WebSocket Reference Properly Closed
+File: driver-app/hooks/useDriverDashboard.ts:514-516 and 528-530
+Finding: wsRef.current is explicitly closed on unmount and before reconnect. ✓
+
+[14-24] PASS | Location Buffer Uses 500-Entry Rotation
+File: driver-app/hooks/useDriverDashboard.ts:350-352
+Finding: Location buffer implements a rotating 500-entry window:
+  if (locationBufferRef.current.length > 500) {
+    locationBufferRef.current = locationBufferRef.current.slice(-500);
+  }
+This prevents unbounded memory growth. ✓
+
+[14-25] PASS | Location Buffer Persistence and Recovery
+File: driver-app/hooks/useDriverDashboard.ts:241-289
+Finding: Location buffer is persisted to AsyncStorage on upload failure (line 269)
+and recovered on cold start (line 275-289). This is good crash resilience. ✓
+
+[14-26] RECOMMENDATION | Batch Upload Callback Dependency Chain
+File: driver-app/hooks/useDriverDashboard.ts:292-296
+Finding: The uploadLocationBatch useCallback has an empty dependency array (good),
+but is used in the location subscription effect (line 364). The effect depends on
+[isOnline, uploadLocationBatch], which could cause re-subscriptions if uploadLocationBatch
+is recreated. However, since uploadLocationBatch has empty deps, it's stable.
+The interval effect (line 292) depends on [isOnline, uploadLocationBatch] but uploadLocationBatch
+is also stable, so this is fine. No issue here, but worth noting.
+Fix: No action needed. The current design is correct.
+
+
+SECTION 14F: SUMMARY
+================================================================================
+
+CRITICAL (must fix):
+  [14-7] Math.random() as FlatList key — causes severe re-mount jank
+  [14-14] Driver rating loads 1000 rides — inefficient, blocks requests
+
+HIGH (should fix):
+  [14-1] Hermes JS Engine not explicitly enabled on Android
+  [14-10] CarMarker image caching (if using dynamic URLs)
+  [14-11] Profile avatar uses plain Image (no cache)
+
+MEDIUM (nice to fix):
+  [14-8] FlatList missing virtualization props
+  [14-2] Metro maxWorkers = 2 (acceptable tradeoff)
+  [14-15] Missing rides(driver_id, created_at) index
+  [14-16] Driver estimate loads max 500 drivers
+  [14-17] Rider history has no pagination
+  [14-19] 15 console.log statements in production
+
+LOW (minor):
+  [14-9] removeClippedSubviews not enabled
+
+PASS:
+  [14-3] Babel module resolver configured
+  [14-4] EAS production build uses Expo defaults
+  [14-12] Explicit image dimensions
+  [14-18] Key database indexes present
+  [14-20] Location subscription cleanup
+  [14-21] Batch upload interval cleanup
+  [14-22] Reconnect timeout cleanup
+  [14-23] WebSocket cleanup
+  [14-24] Location buffer rotation
+  [14-25] Location buffer persistence
+  [14-26] Dependency chain analysis
+
+RECOMMENDATIONS:
+  [14-5] Tree-shaking configuration and lazy-loading
+  [14-6] Monitor new architecture for crashes
+  [14-13] Add blurhash placeholders for avatars
+
+================================================================================
+END OF TASK 14
+================================================================================

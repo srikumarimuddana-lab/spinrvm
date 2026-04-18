@@ -503,3 +503,180 @@ Fix: Add @limiter.limit("10/minute") to the ride creation endpoint.
 
 SUMMARY: CRITICAL:0 HIGH:3 MEDIUM:6 LOW:2 PASS:0 RECOMMENDATION:3
 
+================================================================================
+TASK 5 — ANDROID & iOS UI/UX QUALITY
+================================================================================
+
+[5-1] CRITICAL | OfflineBanner Hidden Behind Status Bar / Notch on Both Platforms
+File: shared/components/OfflineBanner.tsx:166-179
+Finding: Container uses position:'absolute', top:0 with no safe area inset. On notched iPhones
+the banner slides behind the dynamic island. On Android it hides behind the status bar.
+Drivers won't see the "No internet" warning when they most need it.
+Fix: const insets = useSafeAreaInsets();
+     style={[styles.container, { top: insets.top }]}
+Also set the banner height to account for its own padding above insets.top.
+
+[5-2] HIGH | Hardcoded Pixel Padding Breaks Layout on Small (SE) & Large (Pro Max) Screens
+File: driver-app/components/panels/RideOfferPanel.tsx:160
+      driver-app/components/dashboard/ActiveRidePanel.tsx:489
+Finding: RideOfferPanel: paddingTop:60, paddingBottom:40, paddingHorizontal:20 are fixed px.
+ActiveRidePanel: paddingBottom: Platform.OS==='ios' ? 38 : 22. On SE (375px wide) content
+clips; on Pro Max (430px) panels have excessive whitespace.
+Fix: Replace with useSafeAreaInsets():
+     paddingTop: Math.max(insets.top, 20)
+     paddingBottom: Math.max(insets.bottom, 20)
+     paddingHorizontal: '5%'
+
+[5-3] HIGH | OTP Keypad Buttons Too Small on iPhone SE — Mis-Taps Likely
+File: driver-app/components/dashboard/ActiveRidePanel.tsx:586-595
+Finding: Keypad buttons: width:'28%', aspectRatio:1.4, gap:8. On SE (375px) = ~93px wide
+with no hitSlop. Material Design minimum tappable target is 48×48dp. Drivers verifying a
+pickup OTP under pressure will make mis-taps.
+Fix: Add hitSlop={{ top:12, bottom:12, left:12, right:12 }} to each keypad button.
+Increase gap to 12px. Minimum button size: minWidth:60, minHeight:60.
+
+[5-4] HIGH | SOS Button Positioned with Hardcoded Offset — Overlaps Notch on iPhones
+File: driver-app/app/driver/index.tsx:554
+Finding: top: Platform.OS==='ios' ? 100 : 80, right:16. On Face ID iPhones (notch/island
+height ~59px) the SOS button overlaps the top bar chrome. In an emergency, the button is
+obscured or triggers the wrong UI element.
+Fix: top: Math.max(insets.top + 10, Platform.OS==='ios' ? 100 : 80)
+Or position it dynamically below the DriverTopBar using a ref measurement.
+
+[5-5] HIGH | Background Location Permission Never Requested — GPS Lost When App Backgrounded
+File: driver-app/hooks/useDriverDashboard.ts:216
+Finding: Only requestForegroundPermissionsAsync() is called. For ride tracking to continue
+when the driver locks their phone or switches apps, background location is required.
+iOS requires a separate requestBackgroundPermissionsAsync() call after foreground grant.
+Without it, location tracking silently stops when the driver's screen locks mid-ride.
+Fix: After foreground grant:
+     if (Platform.OS === 'ios') await Location.requestBackgroundPermissionsAsync();
+     For Android: add ACCESS_BACKGROUND_LOCATION to AndroidManifest.xml and request
+     it separately (Android 11+ shows a system dialog).
+
+[5-6] MEDIUM | OTP Card in ActiveRidePanel Not in ScrollView — Cut Off by Keyboard on Small Screens
+File: driver-app/components/dashboard/ActiveRidePanel.tsx:309-349
+Finding: OTP card is in Animated.View with no ScrollView. On SE (667px screen) with keyboard
+open (~300px), the 4-digit display and confirm button may be pushed out of view.
+Fix: Wrap the OTP section in a KeyboardAvoidingView + ScrollView with
+keyboardShouldPersistTaps="handled".
+
+[5-7] MEDIUM | DriverTopBar: Android Status Bar Height Uses Hardcoded Fallback of 20
+File: driver-app/components/dashboard/DriverTopBar.tsx:45
+Finding: top: Math.max(insets.top, 20) — on Android insets.top is 0 unless the app renders
+behind the status bar. StatusBar.currentHeight (typically 24-28dp) is not consulted.
+Fix: import { StatusBar } from 'react-native';
+     const barHeight = Platform.OS==='android' ? (StatusBar.currentHeight || 24) : insets.top;
+     style={{ top: Math.max(barHeight, 20) }}
+
+[5-8] MEDIUM | MapControls Bottom Position (160px) Hardcoded — Overlaps Panels on Small Screens
+File: driver-app/components/dashboard/MapControls.tsx:90
+Finding: bottom:160 assumes idle panel height. On SE (667px) with a 140px panel + home
+indicator the controls overlap. No safe area applied.
+Fix: bottom: idlePanelHeight + insets.bottom + 16 — query panel height from a ref/context.
+
+[5-9] MEDIUM | SOS Long-Press Threshold 2000ms Is Too Long for Emergency Activation
+File: shared/components/SOSButton.tsx:39-41
+Finding: 2 seconds is the upper bound for emergency triggers. A driver in distress needs
+faster activation — 1000-1200ms is more appropriate per HIG emergency guidelines.
+Fix: Change setTimeout threshold to 1200ms. Add a countdown ring animation showing time
+remaining to provide confidence the press registered.
+
+[5-10] MEDIUM | DriverIdlePanel GO Button May Overlap Home Indicator (iOS) at bottom:0
+File: driver-app/components/dashboard/DriverIdlePanel.tsx:395-400
+Finding: goButtonOuterContainer uses bottom:0. On iPhone with home indicator (34px), this
+puts the 100×100 button behind the swipe-up gesture target.
+Fix: paddingBottom: Math.max(insets.bottom, 16) on the button container.
+
+[5-11] MEDIUM | Map Provider Has No Fallback When Google Maps API Key Is Missing on Android
+File: shared/components/AppMap.tsx:14 and driver-app/app/driver/index.tsx:27-28
+Finding: MAP_PROVIDER hardcodes PROVIDER_GOOGLE on Android with no fallback. If the API key
+is missing or quota exceeded, the map crashes silently.
+Fix: const MAP_PROVIDER = Platform.OS==='android'
+       ? (GOOGLE_MAPS_API_KEY ? PROVIDER_GOOGLE : PROVIDER_DEFAULT)
+       : undefined;
+Log a warning when API key is missing.
+
+[5-12] MEDIUM | MapView Container Missing pointerEvents="box-none" — Buttons May Not Receive Touches
+File: driver-app/app/driver/index.tsx:402-627
+Finding: MapView and overlay controls are siblings. If MapView consumes touch events, the
+zoom/my-location buttons may not respond. No explicit pointerEvents configured.
+Fix: Wrap MapView in a View with pointerEvents="box-none" to pass through touches to siblings.
+Test on both platforms after applying the fix.
+
+[5-13] MEDIUM | allowFontScaling Not Set on UI Chrome Text — System Accessibility Size Breaks Layout
+File: Multiple files (DriverTopBar, MapControls, buttons)
+Finding: Large system text size (Accessibility → Larger Text) scales button labels and status
+badges, breaking the fixed-height panel layouts.
+Fix: Add allowFontScaling={false} to UI chrome text (button labels, status badges, tile headers).
+Leave allowFontScaling={true} (default) for content text (names, addresses, descriptions).
+
+[5-14] MEDIUM | TripCompletedPanel Rating Stars Have Insufficient hitSlop (left/right: 4px)
+File: driver-app/components/dashboard/TripCompletedPanel.tsx:189
+Finding: hitSlop: { top:8, bottom:8, left:4, right:4 }. Material Design minimum is 10px
+on all sides. Post-trip rating is a key interaction; small hit area causes mis-ratings.
+Fix: hitSlop={{ top:12, bottom:12, left:10, right:10 }}
+
+[5-15] MEDIUM | TripCompletedPanel Comment Input Has Hardcoded minHeight/maxHeight
+File: driver-app/components/dashboard/TripCompletedPanel.tsx:357-358
+Finding: minHeight:60, maxHeight:100 do not adapt to user's system font scale.
+Fix: const { fontScale } = useWindowDimensions();
+     minHeight: 60 * fontScale, maxHeight: Math.min(200, 100 * fontScale)
+
+[5-16] MEDIUM | EarningsLineChart/EarningsBarChart Empty State Text Not Localized
+File: driver-app/components/charts/EarningsLineChart.tsx:27-32
+      driver-app/components/charts/EarningsBarChart.tsx:28-34
+Finding: Hardcoded "No data available" string — not routed through translation system.
+Fix: import { useLanguageStore } from stores; const { t } = useLanguageStore();
+     Replace with: {t('charts.noDataAvailable')}
+
+[5-17] MEDIUM | No BackHandler Registered in Modal Panels — Android Back Button Exits Ride Flow
+File: (Not found in any panel component)
+Finding: RideOfferPanel, ActiveRidePanel, TripCompletedPanel are full-screen overlays.
+Android hardware back button is not intercepted — pressing it could dismiss the panel and
+leave the app in an inconsistent state mid-ride.
+Fix: useEffect(() => {
+       const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+       return () => sub.remove();
+     }, []);
+Add to each panel component. For RideOfferPanel, map back press to "decline ride".
+
+[5-18] LOW | Countdown Circle in RideOfferPanel: Fixed 80×80 Size Looks Small on Pro Max
+File: driver-app/components/panels/RideOfferPanel.tsx:168-181
+Finding: Fixed width:80, fontSize:36. Functional but visually unbalanced on 430px wide screens.
+Fix: const scale = Math.min(Math.max(screenWidth / 375, 0.9), 1.3);
+     width: 80 * scale, height: 80 * scale, fontSize: 36 * scale
+
+[5-19] PASS | SOSButton: Pulse Animation + Haptic Vibration Pattern Excellent
+File: shared/components/SOSButton.tsx:31-36, 57
+Finding: SOS vibration pattern [0,200,100,200,100,200] is the international SOS morse-adjacent
+signal. Pulse animation provides clear feedback. Well implemented.
+Fix: None.
+
+[5-20] PASS | ErrorBoundary: Catches Errors, Renders Fallback, Reports to Sentry
+File: shared/components/ErrorBoundary.tsx:71-110
+Finding: getDerivedStateFromError + componentDidCatch + Sentry.captureException + retry button.
+Production-grade implementation.
+Fix: None.
+
+[5-21] PASS | MapControls Zoom/MyLocation Buttons: 48×48px Meets Tappable Target Minimum
+File: driver-app/components/dashboard/MapControls.tsx:107-128
+Fix: None.
+
+[5-22] PASS | Google Maps on Android / Apple Maps on iOS Selection is Correct
+File: driver-app/app/driver/index.tsx:27-28
+Fix: None. (Add fallback per [5-11].)
+
+[5-23] RECOMMENDATION | Add accessibilityLabel to SOS Button
+File: shared/components/SOSButton.tsx
+Finding: No explicit accessibilityLabel. TalkBack/VoiceOver users won't know it's an SOS trigger.
+Fix: accessibilityLabel="Emergency SOS. Hold for 2 seconds to alert authorities."
+     accessibilityRole="button"
+     accessibilityHint="Long press to trigger emergency alert"
+
+[5-24] RECOMMENDATION | Android BackHandler in All Modal Panels
+Finding: See [5-17]. BackHandler is a MEDIUM risk item but implementing it is a RECOMMENDATION
+for a clean Android UX experience in addition to the safety fix.
+
+SUMMARY: CRITICAL:1 HIGH:4 MEDIUM:13 LOW:1 PASS:5 RECOMMENDATION:2
+

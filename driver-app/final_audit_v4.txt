@@ -1303,3 +1303,128 @@ the real client IP. Rate limiting relies on this header in production."
 
 SUMMARY: CRITICAL:0 HIGH:1 MEDIUM:1 LOW:1 PASS:9 RECOMMENDATION:1
 
+================================================================================
+TASK 12 — COMPLIANCE: PII, PCI-DSS & DATA RETENTION
+================================================================================
+
+[12-1] CRITICAL | No Active Driver Suspension When Document Expires Mid-Shift
+File: backend/utils/document_expiry.py:24-130
+Finding: The 12-hour background loop notifies drivers before expiry but has NO mechanism
+to suspend drivers who are already online when their document expires. go-online check
+blocks a new login (routes/drivers.py:1045-1054) but an already-online driver continues
+taking rides indefinitely after expiry. Also: no admin alert on expiry, no post-expiry
+escalation (day-of / 1-hour warning), no email fallback if FCM fails, no grace period
+policy for mid-trip drivers.
+Fix: (1) In the expiry loop, for past-expiry docs, UPDATE driver.status='suspended' and
+    close their WebSocket connection (manager.disconnect).
+    (2) Send admin email alert on first expiry detection.
+    (3) Add tiered warnings: 7d, 1d, 12h, 1h before expiry.
+    (4) Add email fallback: if send_push_notification raises, queue email.
+    (5) Implement 2-hour grace period for mid-trip drivers (block new rides, finish current).
+
+[12-2] HIGH | Driver Documents Accessible via Public URL — No Auth Required
+File: backend/documents.py:222, 770
+Finding: Documents are stored in Supabase Storage. The endpoint calls get_public_url()
+which returns an unauthenticated URL. If the bucket is public (or even if accidentally
+mis-configured), driver's license scans, insurance docs, and vehicle photos are
+downloadable by anyone with the URL. No signed URL expiration enforced.
+Fix: (1) Verify in Supabase console that the driver-documents bucket is PRIVATE.
+    (2) Replace get_public_url() with create_signed_url(expiry=3600) for admin-only access.
+    (3) Implement a backend-authenticated serving endpoint:
+        GET /documents/{file_id} → verifies auth → fetches from storage → streams to client.
+    (4) Never return raw storage URLs to API clients.
+
+[12-3] HIGH | File Uploaded Entirely Into Memory Before Size Check — DoS Risk
+File: backend/documents.py:745-751
+Finding: content = await file.read() reads the entire upload into RAM before checking
+if len(content) > 10MB. A 100MB upload exhaust memory before rejection.
+Fix: Check Content-Length header first:
+    if int(request.headers.get("content-length", 0)) > 10 * 1024 * 1024:
+        raise HTTPException(413, "File too large")
+Then stream-read in 1MB chunks with a running total to enforce the limit.
+
+[12-4] HIGH | Document Expiry Loop Skips Past-Expiry Documents — No Post-Expiry Action
+File: backend/utils/document_expiry.py:51-66
+Finding: Condition `now < expiry_dt <= warning_cutoff` only matches future expirations.
+Once a document expires (expiry_dt < now), the loop never processes it again.
+No suspension, no escalation, no admin ticket is triggered for expired documents.
+Fix: Restructure into two branches:
+    if expiry_dt < now:  # already expired
+        await suspend_driver(driver_id)
+        await notify_admin(driver_id, expired_doc)
+    elif expiry_dt <= warning_cutoff:  # upcoming
+        await notify_driver(driver_id, days_remaining)
+
+[12-5] HIGH | Sensitive Data (license_number, VIN, bank_account) Stored in Plaintext
+File: backend/migrations/08_complete_schema.sql:43, 55
+Finding: license_number, vehicle_vin, and bank_account are plaintext columns in PostgreSQL.
+A DB dump or unauthorized access exposes all driver PII and financial data without any
+encryption. Supabase Vault (column-level encryption) is not used.
+Fix: Encrypt at-rest using Supabase Vault or application-layer KMS:
+    (1) Enable Supabase Vault: vault.create_secret(value, key_id).
+    (2) Store encrypted ciphertext; decrypt only in backend when needed.
+    (3) Add encryption_key_version column for key rotation tracking.
+    (4) Audit all decrypt operations to an access_log table.
+
+[12-6] MEDIUM | PII Test Assertions Check Only Subset of 14 Forbidden Fields
+File: backend/tests/test_ride_pii.py:63-79, 118-121
+Finding: FORBIDDEN_FIELDS has 14 entries but test assertions only verify a couple are absent.
+No assertion that the rider response contains ONLY allowed fields (a superset passes).
+Fix: assert set(driver_in_response.keys()).isdisjoint(FORBIDDEN_FIELDS)
+    assert set(driver_in_response.keys()).issubset(ALLOWED_FIELDS)
+
+[12-7] MEDIUM | stripe_account_id and bank_account Returned in Driver Self-Endpoint
+File: backend/routes/drivers.py:131-139
+Finding: GET /drivers/me returns the full driver object including stripe_account_id and
+bank_account via serialize_doc() without field filtering. These should be backend-only.
+Fix: Define DriverSelfResponse Pydantic model that whitelists safe fields. Apply as
+response_model to GET /drivers/me. Move stripe_account_id to a separate /drivers/payment-info
+endpoint gated to stripe-specific operations.
+
+[12-8] MEDIUM | Original Upload Filename Returned in API Response — PII Leakage
+File: backend/documents.py:779
+Finding: Response includes original_filename (e.g., "John_Smith_DL_Front.jpg") which may
+contain the driver's real name from their device filesystem.
+Fix: Return only file_id (UUID) and document_type in the response. Strip original_filename.
+
+[12-9] MEDIUM | WebP Magic Byte Check Accepts Non-WebP RIFF Files
+File: backend/documents.py:42-48
+Finding: WebP check only verifies b"RIFF" header — shared by AVI, WAV, and other RIFF formats.
+Fix: header[0:4] == b"RIFF" and header[8:12] == b"WEBP"
+
+[12-10] MEDIUM | No Soft-Delete Columns — Hard Deletes Prevent Audit Trail
+File: backend/migrations/*.sql
+Finding: No deleted_at column on drivers, users, rides, or driver_documents. Hard deletes
+are irreversible, preventing chargeback investigations, compliance audits, or driver re-appeal.
+Fix: Add deleted_at TIMESTAMPTZ DEFAULT NULL to core tables. Filter deleted_at IS NULL
+in all non-admin queries. Expose deleted records via admin-only endpoints.
+
+[12-11] LOW | File Extension Not Validated Against Allowlist
+File: backend/documents.py:761-762
+Finding: os.path.splitext() preserves original extension which could be ".php.jpg" or other
+double-extension. Extension is appended to UUID storage key.
+Fix: assert file_ext.lower() in {'.jpg','.jpeg','.png','.gif','.webp','.pdf'}
+
+[12-12] LOW | FCM Tokens Stored in Plaintext — Allows Phishing Notification Attacks
+File: backend/routes/drivers.py:407-438
+Finding: fcm_token stored as plaintext on users table. DB access → can replay tokens
+to send phishing push notifications to any driver.
+Fix: Hash FCM tokens (SHA-256) for storage. Add fcm_token_issued_at and rotate monthly.
+Log all push notifications to audit table.
+
+[12-13] PASS | Rider-Facing Driver PII Stripped at Route Level
+File: backend/routes/rides.py:847-865
+Finding: GET /rides/{id} explicitly strips license_number, VIN, insurance dates, stripe_account_id,
+fcm_token, user_id, bank_account, phone from driver object returned to rider. Allowlist approach.
+
+[12-14] PASS | Row-Level Security Enabled on Sensitive Tables
+File: backend/supabase_rls.sql:9-68
+Finding: RLS on users, drivers, rides, otp_records with role-based policies. otp_records
+deny all to non-service roles. Sound implementation.
+
+[12-15] PASS | go-online Blocked for Drivers with Expired Documents
+File: backend/routes/drivers.py:1040-1087
+Finding: Expired documents prevent going online — enforced at the route level.
+
+SUMMARY: CRITICAL:1 HIGH:4 MEDIUM:5 LOW:2 PASS:3 RECOMMENDATION:0
+

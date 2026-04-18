@@ -1,11 +1,11 @@
 """Pydantic v2 schemas for corporate accounts (B2B v1)."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 try:
     from ..validators import (
@@ -136,3 +136,174 @@ class CompanyStatusTransition(BaseModel):
 
     status: CompanyStatus
     reason: Optional[str] = Field(None, max_length=500)
+
+
+class MemberRole(str, Enum):
+    OWNER = "owner"
+    ADMIN = "admin"
+    MEMBER = "member"
+
+
+class MemberStatus(str, Enum):
+    INVITED = "invited"
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    REMOVED = "removed"
+
+
+class AllowanceType(str, Enum):
+    FIXED_RECURRING = "fixed_recurring"
+    ONE_TIME = "one_time"
+    UNLIMITED = "unlimited"
+
+
+class AllowanceStatus(str, Enum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    EXPIRED = "expired"
+
+
+class AllowanceRequestStatus(str, Enum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    DENIED = "denied"
+    AUTO_APPROVED = "auto_approved"
+
+
+class MemberInvite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: EmailStr
+    role: MemberRole = MemberRole.MEMBER
+    policy_override: bool = False
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def _normalize_email(cls, v: str) -> str:
+        return (v or "").strip().lower()
+
+
+class MemberResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+    id: str
+    company_id: str
+    user_id: Optional[str] = None
+    role: MemberRole
+    status: MemberStatus
+    invited_email: Optional[str] = None
+    invited_at: Optional[datetime] = None
+    joined_at: Optional[datetime] = None
+    policy_override: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class MemberUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Optional[MemberRole] = None
+    status: Optional[MemberStatus] = None
+    policy_override: Optional[bool] = None
+
+
+class AllowanceCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: AllowanceType
+    amount: Optional[float] = Field(None, gt=0, le=100000)
+    period_start: Optional[date] = None
+    period_end: Optional[date] = None
+    rollover: bool = False
+    auto_approve_topup_amount: Optional[float] = Field(None, gt=0, le=10000)
+    auto_approve_monthly_count: Optional[int] = Field(None, ge=0, le=50)
+
+    @model_validator(mode="after")
+    def _check_shape(self):
+        if self.type == AllowanceType.UNLIMITED:
+            if self.amount is not None:
+                raise ValueError("unlimited allowance cannot have amount")
+            if self.period_start is not None or self.period_end is not None:
+                raise ValueError("unlimited allowance cannot have period")
+        elif self.type == AllowanceType.FIXED_RECURRING:
+            if self.amount is None:
+                raise ValueError("fixed_recurring requires amount")
+            if self.period_start is None or self.period_end is None:
+                raise ValueError("fixed_recurring requires period_start and period_end")
+            if self.period_end <= self.period_start:
+                raise ValueError("period_end must be after period_start")
+        else:
+            if self.amount is None:
+                raise ValueError("one_time requires amount")
+        return self
+
+
+class AllowanceUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    amount: Optional[float] = Field(None, gt=0, le=100000)
+    rollover: Optional[bool] = None
+    auto_approve_topup_amount: Optional[float] = Field(None, gt=0, le=10000)
+    auto_approve_monthly_count: Optional[int] = Field(None, ge=0, le=50)
+    status: Optional[AllowanceStatus] = None
+
+
+class AllowanceResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+    id: str
+    member_id: str
+    type: AllowanceType
+    amount: Optional[float] = None
+    used: float = 0
+    period_start: Optional[date] = None
+    period_end: Optional[date] = None
+    rollover: bool = False
+    auto_approve_topup_amount: Optional[float] = None
+    auto_approve_monthly_count: Optional[int] = None
+    auto_approved_this_period: int = 0
+    status: AllowanceStatus
+
+
+class AllowanceRequestCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    amount: float = Field(..., gt=0, le=10000)
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
+class AllowanceRequestDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    approve: bool
+    note: Optional[str] = Field(None, max_length=500)
+
+
+class AllowanceRequestResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+    id: str
+    member_id: str
+    amount: float
+    reason: str
+    status: AllowanceRequestStatus
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+    decision_notes: Optional[str] = None
+    created_at: datetime
+
+
+class AllowedDomainCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    domain: str = Field(..., min_length=3, max_length=253)
+
+    @field_validator("domain", mode="before")
+    @classmethod
+    def _normalize(cls, v: str) -> str:
+        v = (v or "").strip().lower()
+        if v.startswith("@"):
+            raise ValueError("domain must not include '@'")
+        if not v or "." not in v:
+            raise ValueError("domain must contain a dot")
+        return v

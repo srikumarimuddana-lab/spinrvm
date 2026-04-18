@@ -893,3 +893,105 @@ Fix: Show "Cancellation locked — driver has arrived" UI state with countdown i
 
 SUMMARY: CRITICAL:1 HIGH:3 MEDIUM:3 LOW:3 PASS:2 RECOMMENDATION:2
 
+================================================================================
+TASK 8 — PAYMENTS & EARNINGS
+================================================================================
+
+[8-1] HIGH | PCI-DSS Field Guard Missing camelCase and Industry-Standard Variants
+File: backend/routes/payments.py:251-263
+Finding: _RAW_CARD_FIELDS blocks snake_case names (card_number, cvv, exp_month) but misses:
+"cardNumber" (camelCase), "card_no", "pan" (industry term for Primary Account Number),
+"security_code", "expiry_month", "expiry_year". An attacker can bypass the guard by
+submitting {"cardNumber": "4242424242424242"} — it passes the check and lands in logs.
+Fix: Expand _RAW_CARD_FIELDS:
+    _RAW_CARD_FIELDS = frozenset({
+        "card_number", "cardNumber", "card_no", "pan",
+        "cvv", "cvc", "security_code",
+        "exp_month", "exp_year", "expiry_month", "expiry_year",
+    })
+Update test_payments_pci_guard.py to parametrize all variants.
+
+[8-2] MEDIUM | Idempotency Keys Missing from PaymentIntent Creation
+File: backend/routes/payments.py:87
+Finding: stripe.PaymentIntent.create() has no idempotency_key. Network timeout + app retry =
+two PaymentIntents = two charges on the rider's card. Stripe documents this as a required
+best practice for any integration.
+Fix: intent_params["idempotency_key"] = f"pi_{user_id}_{ride_id}_{int(time.time())//60}"
+(minute-granularity makes it safe to retry within the same minute without duplicating charges).
+
+[8-3] MEDIUM | Payment Amount Not Cross-Checked Against Ride Fare
+File: backend/routes/payments.py:22-27, 69
+Finding: PaymentIntentRequest.amount is only validated as >0 and ≤100,000 CAD. When ride_id
+is provided, the backend should verify the amount matches the ride's final_amount or
+estimated_fare. A client can submit amount=50 for a $25 ride and it will be accepted.
+Fix: When ride_id is set, fetch ride, compare amount to ride["final_amount"] (or estimated fare).
+Raise 400 if amount > ride_fare * 1.05 (allow 5% tolerance for surge rounding).
+
+[8-4] MEDIUM | Payout Minimum ($10) Not Enforced at Backend Schema Level
+File: backend/routes/drivers.py:~1234-1237 (PayoutRequest)
+Finding: PayoutRequest.amount is a plain float with no minimum. UI enforces $10 but a direct
+API call can submit amount=0.01 which Stripe may also reject, causing an unhelpful 500 error
+rather than a clear 400 from the API.
+Fix: amount: float = Field(..., gt=0, ge=10.0, description="Minimum payout $10 CAD")
+Also add early guard: if body.amount < 10: raise HTTPException(400, "Minimum payout is $10")
+
+[8-5] MEDIUM | Stripe Transfer Failure Leaves Payout Record as "pending" Forever
+File: backend/routes/drivers.py:1281-1293
+Finding: Payout record is inserted before Stripe Transfer.create() is called. If the transfer
+fails (e.g., Stripe account not ready, insufficient balance), the exception causes a 500 but
+the pending record remains. It will never transition to "completed" or "failed" — ghost payout.
+Fix: Create the payout record AFTER successful transfer. On failure, either skip record or
+create it with status="failed", failure_reason=str(stripe_error).
+
+[8-6] LOW | Webhook Handler Has No Event Type Allowlist
+File: backend/routes/webhooks.py:94-192
+Finding: Unrecognized event types are silently ignored with an INFO log. A typo or new Stripe
+event type fails silently without alerting operators.
+Fix: Add ALLOWED_WEBHOOK_EVENTS = {"payment_intent.succeeded", "payment_intent.payment_failed",
+"checkout.session.completed", ...} and log.WARNING for anything outside it.
+
+[8-7] LOW | Demo-Mode Payout Creates "pending" Record That Never Resolves
+File: backend/routes/drivers.py:1278
+Finding: With stripe_secret not set (dev/demo), payout is created with status="pending" and
+no stripe_payout_id. These records accumulate and never resolve.
+Fix: Return 503 {"detail": "Payment processing not configured"} when stripe_secret is missing.
+
+[8-8] PASS | PCI-DSS Guard — Raw Card Fields Rejected at HTTP Boundary
+File: backend/routes/payments.py:267-306
+Finding: add_card endpoint rejects raw PAN/CVV before Pydantic parsing, preventing card data
+from appearing in logs or metrics. Strong control.
+Fix: Extend to cover camelCase variants per [8-1].
+
+[8-9] PASS | Stripe Webhook Signature Verification with construct_event()
+File: backend/routes/webhooks.py:46-55
+Finding: HMAC-SHA256 signature verified via Stripe SDK before any processing. 400 on failure.
+
+[8-10] PASS | Stripe Event Idempotency via stripe_events Dedup Table
+File: backend/routes/webhooks.py:67-88
+Finding: event_id PRIMARY KEY prevents duplicate processing. Returns 200 with duplicate:True
+on replay without reprocessing.
+
+[8-11] PASS | SetupIntent Customer ID Derived Server-Side — Not Client-Supplied
+File: backend/routes/payments.py:127-156
+Finding: customer_id is always derived from authenticated user, never from request body.
+
+[8-12] PASS | Balance Card Shows Available, Pending, and Paid Out Correctly
+File: driver-app/app/driver/payout.tsx:201-228
+
+[8-13] PASS | Payment Retry: 5-Min Interval, 3 Retries, 24h Max Age, Push on Exhaustion
+File: backend/utils/payment_retry.py
+Finding: Retry logic is complete with dead-letter handling.
+
+[8-14] RECOMMENDATION | T4A Download Not Exposed in Driver App UI
+File: backend/routes/drivers.py:1327-1362 and driver-app/app/driver/payout.tsx
+Finding: /drivers/t4a/{year} and /drivers/earnings/export endpoints exist but are not wired
+to any button in payout.tsx. Canadian drivers need T4A access.
+Fix: Add "Download Earnings CSV" and "View T4A Summary" buttons in payout.tsx tax section.
+
+[8-15] RECOMMENDATION | Document $10 Minimum in /drivers/balance API Response
+File: backend/routes/drivers.py (balance endpoint)
+Finding: Clients have no way to discover the minimum payout amount from the API contract.
+Fix: Add min_payout_amount: 10.0 to the balance response schema.
+
+SUMMARY: CRITICAL:0 HIGH:1 MEDIUM:3 LOW:2 PASS:6 RECOMMENDATION:2
+

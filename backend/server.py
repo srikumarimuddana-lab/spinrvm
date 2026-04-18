@@ -19,6 +19,7 @@ from routes.admin.monitoring import router as monitoring_router
 from routes.auth import api_router as auth_router
 from routes.corporate_accounts import router as corporate_accounts_router
 from routes.corporate_company import router as corporate_company_router
+from routes.corporate_rider import router as corporate_rider_router
 from routes.corporate_wallet import router as corporate_wallet_router
 from routes.disputes import api_router as disputes_router
 from routes.drivers import api_router as drivers_router
@@ -102,6 +103,7 @@ app.include_router(corporate_wallet_router, prefix="/api")
 # Corporate member/allowance/domain endpoints served at root (`/company/{id}/...`)
 # because the rider app hits them without the `/api` prefix.
 app.include_router(corporate_company_router)
+app.include_router(corporate_rider_router)
 # files_router serves document files at /api/documents/{id} (used by admin dashboard).
 # Also mounted under /api/v1 so legacy driver_documents rows whose document_url was
 # written as /api/v1/documents/{id} by the old base64-in-DB upload path keep resolving.

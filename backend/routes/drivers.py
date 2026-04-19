@@ -2,11 +2,12 @@ import asyncio
 import hmac
 import logging
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Union
 
 import stripe
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     from .. import db_supabase
@@ -1201,7 +1202,12 @@ class BankAccountCreate(BaseModel):
 
 
 class PayoutRequest(BaseModel):
-    amount: float
+    amount: Decimal = Field(
+        ...,
+        ge=Decimal('10.00'),
+        decimal_places=2,
+        description="Minimum payout is $10.00",
+    )
 
 
 @api_router.get("/bank-account")

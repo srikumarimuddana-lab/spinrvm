@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -66,6 +67,23 @@ async def create_payment_intent(body: PaymentIntentRequest, current_user: dict =
         )
 
     try:
+        # Cross-check requested amount against the stored ride fare (8-3).
+        # Decimal comparison avoids float equality pitfalls.
+        if body.ride_id:
+            ride = await db_supabase.get_ride(body.ride_id)
+            if not ride:
+                raise HTTPException(status_code=404, detail="Ride not found")
+            ride_fare = Decimal(str(ride.get("total_fare", 0)))
+            requested = Decimal(str(body.amount))
+            if requested != ride_fare:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Payment amount {requested} does not match "
+                        f"ride fare {ride_fare}"
+                    ),
+                )
+
         amount = int(body.amount * 100)  # Convert dollars → cents
 
         # Get or create customer for saved payments

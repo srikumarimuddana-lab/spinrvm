@@ -9,6 +9,8 @@ import {
   Linking,
   Platform,
   BackHandler,
+  KeyboardAvoidingView,
+  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import SpinrConfig from '@shared/config/spinr.config';
@@ -234,12 +236,17 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     <Animated.View
       style={[styles.container, { transform: [{ translateY: slideUpAnim }], opacity: fadeAnim }]}
     >
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1 }}
+      >
+        <ScrollView keyboardShouldPersistTaps="handled">
       {/* ── Status pill (floating) ──────────────────────────── */}
       <View style={styles.statusPill}>
         <View style={[styles.statusIconBg, { backgroundColor: `${status.color}15` }]}>
           <Ionicons name={status.icon} size={16} color={status.color} />
         </View>
-        <Text style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
+        <Text allowFontScaling={false} style={[styles.statusText, { color: status.color }]}>{status.label}</Text>
         <View style={{ flex: 1 }} />
         <Text style={styles.statusFare}>${earnings.toFixed(2)}</Text>
       </View>
@@ -251,7 +258,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         <View style={styles.tripInfoRow}>
           <View style={styles.tripInfoItem}>
             <Text style={styles.tripInfoValue}>${earnings.toFixed(2)}</Text>
-            <Text style={styles.tripInfoLabel}>{t('activeRide.yourEarnings')}</Text>
+            <Text allowFontScaling={false} style={styles.tripInfoLabel}>{t('activeRide.yourEarnings')}</Text>
           </View>
           <View style={styles.tripInfoDivider} />
           <View style={styles.tripInfoItem}>
@@ -260,14 +267,14 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                 ? `${liveDistanceKm.toFixed(1)} km`
                 : `${distKm.toFixed(1)} km`}
             </Text>
-            <Text style={styles.tripInfoLabel}>
+            <Text allowFontScaling={false} style={styles.tripInfoLabel}>
               {rideState === 'trip_in_progress' && hasLiveData ? t('activeRide.traveled') : t('activeRide.distance')}
             </Text>
           </View>
           <View style={styles.tripInfoDivider} />
           <View style={styles.tripInfoItem}>
             <Text style={styles.tripInfoValue}>{durMin} min</Text>
-            <Text style={styles.tripInfoLabel}>{t('activeRide.estTime')}</Text>
+            <Text allowFontScaling={false} style={styles.tripInfoLabel}>{t('activeRide.estTime')}</Text>
           </View>
         </View>
 
@@ -295,7 +302,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <View style={styles.routeRow}>
             <View style={[styles.dot, { backgroundColor: ACCENT }]} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.routeLabel}>{t('rideOffer.pickup')}</Text>
+              <Text allowFontScaling={false} style={styles.routeLabel}>{t('rideOffer.pickup')}</Text>
               <Text style={styles.routeAddress} numberOfLines={2}>{ride.pickup_address}</Text>
             </View>
           </View>
@@ -305,7 +312,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <View style={styles.routeRow}>
             <View style={[styles.dot, { backgroundColor: '#22C55E' }]} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.routeLabel}>{t('rideOffer.dropoff')}</Text>
+              <Text allowFontScaling={false} style={styles.routeLabel}>{t('rideOffer.dropoff')}</Text>
               <Text style={styles.routeAddress} numberOfLines={2}>{ride.dropoff_address}</Text>
             </View>
           </View>
@@ -316,9 +323,9 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <View style={styles.otpCard}>
             <View style={styles.otpHeader}>
               <Ionicons name="shield-checkmark" size={18} color={ACCENT} />
-              <Text style={styles.otpTitle}>{t('activeRide.verifyRiderPin')}</Text>
+              <Text allowFontScaling={false} style={styles.otpTitle}>{t('activeRide.verifyRiderPin')}</Text>
             </View>
-            <Text style={styles.otpSub}>Ask rider for their 4-digit code</Text>
+            <Text allowFontScaling={false} style={styles.otpSub}>Ask rider for their 4-digit code</Text>
             <View style={styles.otpBoxRow}>
               {[0, 1, 2, 3].map(i => (
                 <View key={i} style={[styles.otpBox, otpInput.length > i && styles.otpBoxFilled]}>
@@ -344,7 +351,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                   }}
                 >
                   {key === 'del' ? <Ionicons name="backspace-outline" size={20} color="#333" />
-                    : key !== null ? <Text style={styles.kpText}>{key}</Text>
+                    : key !== null ? <Text allowFontScaling={false} style={styles.kpText}>{key}</Text>
                     : null}
                 </TouchableOpacity>
               ))}
@@ -363,7 +370,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               onPress={() => openMapsNavigation(ride.pickup_lat, ride.pickup_lng, 'Pickup')}
             >
               <Ionicons name="navigate" size={20} color="#fff" />
-              <Text style={styles.actionPrimaryText}>{t('activeRide.navigateToPickup')}</Text>
+              <Text allowFontScaling={false} style={styles.actionPrimaryText}>{t('activeRide.navigateToPickup')}</Text>
             </TouchableOpacity>
             {(() => {
               const atPickup = distanceToPickup === null || distanceToPickup === undefined || distanceToPickup <= 150;
@@ -376,7 +383,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                   {isLoading ? <ActivityIndicator color={ACCENT} /> : (
                     <>
                       <Ionicons name="flag" size={18} color={ACCENT} />
-                      <Text style={[styles.actionSecondaryText, { color: ACCENT }]}>
+                      <Text allowFontScaling={false} style={[styles.actionSecondaryText, { color: ACCENT }]}>
                         {distanceToPickup !== null && distanceToPickup !== undefined && distanceToPickup > 150 ? `${distanceToPickup}m` : t('activeRide.arrivedAtPickup')}
                       </Text>
                     </>
@@ -394,7 +401,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               onPress={() => openMapsNavigation(ride.dropoff_lat, ride.dropoff_lng, 'Dropoff')}
             >
               <Ionicons name="navigate" size={20} color="#fff" />
-              <Text style={styles.actionPrimaryText}>{t('activeRide.navigateToDropoff')}</Text>
+              <Text allowFontScaling={false} style={styles.actionPrimaryText}>{t('activeRide.navigateToDropoff')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.actionPrimary, { backgroundColor: '#22C55E' }]}
@@ -412,7 +419,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               {isLoading ? <ActivityIndicator color="#fff" /> : (
                 <>
                   <Ionicons name="checkmark-circle" size={20} color="#fff" />
-                  <Text style={styles.actionPrimaryText}>{t('activeRide.completeTrip')}</Text>
+                  <Text allowFontScaling={false} style={styles.actionPrimaryText}>{t('activeRide.completeTrip')}</Text>
                 </>
               )}
             </TouchableOpacity>
@@ -433,10 +440,12 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               ],
             )}
           >
-            <Text style={styles.cancelText}>Cancel Ride</Text>
+            <Text allowFontScaling={false} style={styles.cancelText}>Cancel Ride</Text>
           </TouchableOpacity>
         ) : null}
       </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
 
       <CustomAlert
         visible={alertVisible}

@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from loguru import logger
 from pydantic import BaseModel
 
@@ -727,9 +727,17 @@ import base64  # noqa: E402
 
 from fastapi import Response  # noqa: E402
 
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
+
+class FileTooLargeError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(status_code=413, detail="File too large (max 10MB)")
+
 
 @upload_router.post("/upload")
 async def upload_file(
+    request: Request,
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user),
 ):
@@ -741,13 +749,17 @@ async def upload_file(
     2+ minute timeouts for large images.
     """
     try:
+        content_length = request.headers.get('content-length')
+        if content_length and int(content_length) > MAX_FILE_SIZE:
+            raise FileTooLargeError()
+
         content = await file.read()
         if not content:
             raise HTTPException(status_code=400, detail="Empty file")
 
         # 10 MB hard cap -- documents are usually photos/PDFs
-        if len(content) > 10 * 1024 * 1024:
-            raise HTTPException(status_code=413, detail="File too large (max 10MB)")
+        if len(content) > MAX_FILE_SIZE:
+            raise FileTooLargeError()
 
         size = len(content)
         original_filename = file.filename or "upload"

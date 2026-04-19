@@ -42,6 +42,11 @@ except ImportError:
 
 from .fares import _fares_for_location_impl, get_fares_for_location
 
+try:
+    from ..utils.error_handling import RideStateError
+except ImportError:
+    from utils.error_handling import RideStateError
+
 db = db_supabase  # legacy alias
 dispatch = DispatchService(db_supabase)  # module-level instance for legacy call sites
 
@@ -1313,6 +1318,9 @@ async def cancel_ride_rider(ride_id: str, current_user: dict = Depends(get_curre
 
     if ride.get("status") in ["completed", "cancelled"]:
         raise HTTPException(status_code=400, detail="Ride already completed or cancelled")
+
+    if ride.get("status") in ('driver_arrived', 'trip_in_progress'):
+        raise RideStateError("Cannot cancel after driver has arrived")
 
     # Calculate cancellation fee based on time since driver accepted
     driver_id = ride.get("driver_id")

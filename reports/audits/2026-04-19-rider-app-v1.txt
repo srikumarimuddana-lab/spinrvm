@@ -1,0 +1,105 @@
+================================================================================
+SPINR RIDER APP — PRODUCTION-READINESS AUDIT v1
+================================================================================
+Date        : 2026-04-19
+Branch      : claude/rider-app-audit-iVxpH
+Auditor     : Claude Code (claude-sonnet-4-6)
+Scope       : rider-app/  ·  shared/  ·  backend/routes/ (rider-side)
+Platform    : React Native · Expo SDK 54 · React 19 · Expo Router 6
+              Zustand 5 · Stripe · Firebase FCM · WebSocket
+
+AUDIT GROUND RULES
+──────────────────
+• OTP is 4 digits by design — compensating controls confirmed present, NOT flagged.
+• Hard-coded dev values (OTP "1234", sk_test_*, localhost) → LOW/RECOMMENDATION only.
+• Severity scale: CRITICAL | HIGH | MEDIUM | LOW | PASS | RECOMMENDATION
+• Canadian market: PIPEDA · AODA · Official Languages Act (French required) · PCI-DSS
+• See audit-framework/ground-rules.md for full rules.
+
+PRE-AUDIT CHECKS
+─────────────────
+npm audit (rider-app):    1 CRITICAL — protobufjs: Arbitrary code execution
+                          Fix available via `npm audit fix`
+pip-audit (backend):      Tool not installed in this environment — run manually
+TypeScript errors:        2,679 lines of tsc output (baseline — not all are errors)
+: any usage count:        80 instances across app/ store/ hooks/
+console.log count:        52 instances in production code paths
+Magic status strings:     78 scattered literals ('searching','driver_arrived', etc.)
+                          → Should be centralized in constants/rideStatus.ts
+
+SHARED COMPONENT STATUS (from driver audit — verified carried over)
+─────────────────────────────────────────────────────────────────────
+OfflineBanner insets.top fix:   PASS — top: topInset correctly applied (line 171)
+OfflineBanner console.log:      LOW  — line 60, fires on every network state change
+Auth P0 fixes (revoked_at etc): PASS — all 5 driver auth fixes confirmed in auth.py
+Pickup OTP hashing:             PASS — hash_otp() applied at ride creation (line 651)
+Decimal monetary arithmetic:    PASS — _d()/_round()/_f() helpers in rides.py
+Hermes JS engine (Android):     MISSING — no jsEngine key in app.config.ts → P3
+
+Dimensions run:           01 · 02 · 03 · 04 · 05 · 06 · 07 · 08 ·
+                          09 · 10 · 11 · 12 · 13 · 14 · 15 · 16
+
+================================================================================
+FINDINGS
+================================================================================
+
+================================================================================
+TASK [N] — [DIMENSION NAME]
+================================================================================
+
+[TASK-N-1] SEVERITY | Short Title
+File: path/to/file.ts:line_number
+Finding: What is wrong, with specific code reference.
+Fix: Concrete change with code snippet if helpful. Effort: [X hours/days].
+
+[TASK-N-2] PASS | What Works
+File: path/to/file.ts:line_number
+Finding: What is implemented correctly and why it's sufficient.
+Fix: None required.
+
+...repeat for all findings in this task...
+
+================================================================================
+TASK [N+1] — [NEXT DIMENSION NAME]
+================================================================================
+
+...
+
+================================================================================
+FINAL TALLY
+================================================================================
+
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     0 |
+| MEDIUM          |     0 |
+| LOW             |     0 |
+| PASS            |     0 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     0 |
+
+================================================================================
+REMEDIATION PRIORITY LIST
+================================================================================
+
+── P0: FIX NOW (Before Device Testing) ──────────────────────────────────────
+
+P0-1  [task-finding-ref]  Short description
+      One sentence on what to change and where.
+
+── P1: THIS SPRINT (Before Beta Launch) ──────────────────────────────────────
+
+P1-1  [task-finding-ref]  Short description
+      One sentence on what to change and where.
+
+── P2: NEXT SPRINT (Before Public Launch) ───────────────────────────────────
+
+── P3: HARDENING (Before Scale) ──────────────────────────────────────────────
+
+── P4: FUTURE FEATURES ───────────────────────────────────────────────────────
+
+================================================================================
+END OF AUDIT — rider-app v1
+Audit date: 2026-04-19 | Branch: claude/rider-app-audit-iVxpH
+================================================================================

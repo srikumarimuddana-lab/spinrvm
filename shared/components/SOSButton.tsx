@@ -19,6 +19,8 @@ interface SOSButtonProps {
  * 3. Prompts to call 911
  * 4. Shares GPS location
  */
+const SOS_HOLD_MS = 1200; // was 2000
+
 export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps) {
   const [triggered, setTriggered] = useState(false);
   const [pressing, setPressing] = useState(false);
@@ -35,10 +37,9 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
       ])
     ).start();
 
-    // Trigger after 2 second hold
     pressTimer.current = setTimeout(() => {
       triggerSOS();
-    }, 2000);
+    }, SOS_HOLD_MS);
   };
 
   const endPress = () => {
@@ -119,7 +120,7 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
       </TouchableOpacity>
       {pressing && (
         <View style={[styles.holdHint, isLarge && { bottom: -24 }]}>
-          <Text style={styles.holdHintText}>Hold for 2 seconds</Text>
+          <Text style={styles.holdHintText}>Hold for 1.2 seconds</Text>
         </View>
       )}
     </Animated.View>

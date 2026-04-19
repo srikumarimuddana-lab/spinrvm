@@ -378,13 +378,24 @@ class ExternalServiceException(SpinrException):
 # Error handling middleware
 async def spinr_exception_handler(request: Request, exc: SpinrException) -> JSONResponse:
     """Handle SpinrException and return formatted JSON response."""
+    import uuid as _uuid
+
+    request_id = _uuid.uuid4().hex[:12]
+
     if exc.should_log:
         logger.warning(
             f"SpinrException: {exc.error_code.name} - {exc.message}",
             extra={"path": request.url.path, "method": request.method, "error_code": exc.error_code.value},
         )
 
-    return JSONResponse(status_code=exc.status_code, content=exc.to_dict())
+    content = exc.to_dict()
+    if isinstance(content.get("error"), dict):
+        content["error"]["request_id"] = request_id
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=content,
+        headers={"X-Request-ID": request_id},
+    )
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -405,6 +416,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     # template parsing, matching the defensive pattern in
     # general_exception_handler below. Previously every 422 bubbled up as a
     # 500 because this handler crashed while handling the validation error.
+    import uuid as _uuid
+
+    request_id = _uuid.uuid4().hex[:12]
+
     try:
         logger.opt(raw=True).warning(f"Validation error at {request.method} {request.url.path}: {errors}\n")
     except Exception:  # noqa: S110
@@ -418,10 +433,12 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "error": {
                 "code": ErrorCode.VALIDATION_ERROR.value,
                 "message": "Validation error",
+                "request_id": request_id,
                 "details": {"errors": errors},
                 "timestamp": datetime.utcnow().isoformat(),
             },
         },
+        headers={"X-Request-ID": request_id},
     )
 
 

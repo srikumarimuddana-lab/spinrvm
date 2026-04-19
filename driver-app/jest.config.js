@@ -12,6 +12,13 @@ module.exports = {
     '!**/*.d.ts',
     '!**/node_modules/**',
   ],
+  coverageThreshold: {
+    global: {
+      lines: 70,
+      functions: 60,
+      statements: 70,
+    },
+  },
   moduleNameMapper: {
     '^@shared/api/client$': '<rootDir>/__mocks__/@shared/api/client.js',
     '^@shared/config/spinr\\.config$': '<rootDir>/__mocks__/@shared/config/spinr.config.js',

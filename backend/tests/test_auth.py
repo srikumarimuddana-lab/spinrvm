@@ -425,3 +425,27 @@ class TestTokenRefresh:
 
         refreshed_decoded = verify_jwt_token(refreshed_token)
         assert refreshed_decoded["session_id"] == "session_abc"
+
+
+# ── P3-3: OTP lockout integration test ───────────────────────────────────────
+
+
+@pytest.fixture
+def valid_phone():
+    return "+15550019999"
+
+
+def test_otp_lockout_after_5_failures(test_client, valid_phone):
+    # Clear any stale in-process Redis state for this phone so the test is
+    # isolated even when the full suite runs in a single process.
+    from backend.utils import redis_client as rc
+
+    keys_to_clear = [k for k in list(rc._local.keys()) if valid_phone in k]
+    for k in keys_to_clear:
+        rc._local.pop(k, None)
+
+    for _ in range(5):
+        test_client.post("/api/auth/verify-otp", json={"phone": valid_phone, "code": "0000"})
+
+    response = test_client.post("/api/auth/verify-otp", json={"phone": valid_phone, "code": "0000"})
+    assert response.status_code == 429

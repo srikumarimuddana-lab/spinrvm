@@ -4,6 +4,13 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 try:
+    import httpx as _httpx
+    _HTTPX_TIMEOUT_EXC = _httpx.TimeoutException
+except ImportError:  # pragma: no cover
+    _httpx = None  # type: ignore
+    _HTTPX_TIMEOUT_EXC = None  # type: ignore
+
+try:
     from .supabase_client import supabase  # type: ignore
 except ImportError:
     from supabase_client import supabase  # type: ignore
@@ -35,8 +42,9 @@ async def run_sync(func: Callable[[], T]) -> T:
             or "Server disconnected" in exc_str
             or "ConnectionClosed" in exc_name
         )
-        if is_conn_terminated or is_remote_disconnect:
-            logger.warning(f"Supabase transient HTTP/2 failure ({exc_name}) — retrying once: {exc}")
+        is_timeout = _HTTPX_TIMEOUT_EXC is not None and isinstance(exc, _HTTPX_TIMEOUT_EXC)
+        if is_conn_terminated or is_remote_disconnect or is_timeout:
+            logger.warning(f"Supabase transient failure ({exc_name}) — retrying once: {exc}")
             await asyncio.sleep(0.25)
             return await loop.run_in_executor(None, func)  # type: ignore
         raise
@@ -222,14 +230,18 @@ async def delete_corporate_account(account_id: str) -> bool:
 async def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
-    return await run_sync(lambda: _single_row_from_res(supabase.table("users").select("*").eq("id", user_id).execute()))
+    return await run_sync(lambda: _single_row_from_res(
+        supabase.table("users").select("*").eq("id", user_id).is_("deleted_at", "null").execute()
+    ))
 
 
 async def get_user_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
     return await run_sync(
-        lambda: _single_row_from_res(supabase.table("users").select("*").eq("phone", phone).execute())
+        lambda: _single_row_from_res(
+            supabase.table("users").select("*").eq("phone", phone).is_("deleted_at", "null").execute()
+        )
     )
 
 
@@ -247,7 +259,9 @@ async def get_driver_by_id(driver_id: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
     return await run_sync(
-        lambda: _single_row_from_res(supabase.table("drivers").select("*").eq("id", driver_id).execute())
+        lambda: _single_row_from_res(
+            supabase.table("drivers").select("*").eq("id", driver_id).is_("deleted_at", "null").execute()
+        )
     )
 
 
@@ -389,7 +403,9 @@ async def claim_ride_atomic(ride_id: str, driver_id: str) -> bool:
 async def get_ride(ride_id: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
-    return await run_sync(lambda: _single_row_from_res(supabase.table("rides").select("*").eq("id", ride_id).execute()))
+    return await run_sync(lambda: _single_row_from_res(
+        supabase.table("rides").select("*").eq("id", ride_id).is_("deleted_at", "null").execute()
+    ))
 
 
 async def insert_ride(payload: Dict[str, Any]):

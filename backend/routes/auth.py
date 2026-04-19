@@ -563,7 +563,7 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
 
 
 @api_router.post("/logout")
-@limiter.limit("10/minute")
+@limiter.limit("3/minute")
 async def logout(request: Request, body: LogoutRequest, current_user: dict = Depends(get_current_user)):
     """Revoke the presented refresh token.
 

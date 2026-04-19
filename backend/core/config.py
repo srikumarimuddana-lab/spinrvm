@@ -19,6 +19,7 @@ class Settings(BaseSettings):
 
     # Database settings
     SUPABASE_URL: str = ""
+    # IMPORTANT: Rotate this key before deploying — see docs/key-rotation.md
     SUPABASE_SERVICE_ROLE_KEY: str = ""
     USE_SUPABASE: bool = True  # Supabase is now the default database
 

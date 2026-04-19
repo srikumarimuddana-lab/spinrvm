@@ -330,6 +330,32 @@ if not record or not hmac.compare_digest(record["otp_hash"], hash_otp(code)):
 
 ---
 
+## R-P1-15 · Backend Phone Schema Accepts Any Country Code
+
+**Audit finding [04-1 HIGH].** `SendOTPRequest` and `VerifyOTPRequest` in
+`backend/schemas.py:17, 21` use `pattern=r'^\+\d+$'` which accepts any E.164
+phone number (UK, France, etc.). The Canada/US +1 enforcement only exists in
+the login.tsx UI (line 77). A direct POST to `/auth/send-otp` with a non-Canadian
+number bypasses the market restriction entirely.
+
+**File to fix:** `backend/schemas.py:17, 21`
+
+**How to fix:**
+```python
+# Change both SendOTPRequest and VerifyOTPRequest:
+phone: str = Field(
+    ...,
+    min_length=12,
+    max_length=12,
+    pattern=r'^\+1\d{10}$',
+    description="Canadian/US phone in E.164 format: +1XXXXXXXXXX"
+)
+```
+
+**Effort:** 30 minutes
+
+---
+
 ## Checklist
 
 - [ ] R-P1-1 Cancellation fee enforced after driver_arrived; Cancel button disabled
@@ -346,3 +372,4 @@ if not record or not hmac.compare_digest(record["otp_hash"], hash_otp(code)):
 - [ ] R-P1-12 Firebase audience check added to rider dependency (FIREBASE_RIDER_APP_ID)
 - [ ] R-P1-13 Firebase-authed users subject to token_version + session_id revocation checks
 - [ ] R-P1-14 OTP comparison uses hmac.compare_digest instead of DB equality lookup
+- [ ] R-P1-15 Backend OTP phone schema restricted to +1XXXXXXXXXX (Canada/US only)

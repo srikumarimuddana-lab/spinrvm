@@ -544,5 +544,220 @@ TASK 03 TALLY
 | TOTAL           |    17 |
 
 ================================================================================
-[AUDIT IN PROGRESS — TASKS 04–16 PENDING]
+TASK 04 — INPUT VALIDATION
+================================================================================
+Scope    : rider-app/app/ forms · backend/routes/ validation layer ·
+           backend/schemas.py · backend/validators.py
+Framework: audit-framework/dimensions/04-input-validation.md
+Checks   : Phone/identity format · monetary bounds · coordinate validation ·
+           scheduled time · fare split phones · saved addresses · Zod client-side
+
+────────────────────────────────────────────────────────────────────────────────
+
+[04-1] HIGH | Backend Phone Schema Accepts Any International Code
+File: backend/schemas.py:17, 21
+Finding: SendOTPRequest and VerifyOTPRequest both declare:
+  phone: str = Field(..., min_length=10, max_length=15, pattern=r'^\+\d+$')
+  The regex `^\+\d+$` accepts any E.164 number (e.g. "+447911123456", "+33612345678").
+  The Canada/US enforcement (+1 followed by exactly 10 digits) exists only in the
+  login.tsx UI layer (handlePhoneChange limits to 10 digits; "+1" prepended at
+  login.tsx:77). A direct POST to /auth/send-otp with a UK or French mobile number
+  bypasses this restriction entirely, allowing OTP provisioning for out-of-market
+  numbers and potentially violating the Canadian-market-only assumption embedded
+  in other flows.
+  Per ground rules: "Phone accepts any country code → HIGH finding."
+Recommendation: Change pattern to r'^\+1\d{10}$' in SendOTPRequest and
+  VerifyOTPRequest; document the +1 constraint in the API schema.
+
+[04-2] MEDIUM | Tip Endpoints Use Raw request.json() — NaN Bypasses All Guards
+File: backend/routes/rides.py:946, 973
+Finding: Two tip-handling endpoints read amount outside of Pydantic:
+  add_tip (line 946):
+    tip_amount = float(data.get("amount", 0))
+    if tip_amount <= 0: ...          # NaN → False, not blocked
+    if tip_amount > 500: ...         # NaN → False, not blocked
+  process_payment (line 973):
+    tip_amount = float(data.get("tip_amount", 0))   # same issue
+  In Python, both `float("nan") <= 0` and `float("nan") > 500` evaluate to
+  False, so NaN passes every guard and is forwarded to payment/database logic.
+  Downstream Decimal() conversion raises an unexpected InvalidOperation exception
+  that may surface as a 500 error or be swallowed depending on the error handler.
+  Additionally, neither endpoint uses a Pydantic model — raw dict access bypasses
+  the full schema-validation pipeline.
+Recommendation: Introduce a Pydantic model (e.g. TipRequest) with
+  `amount: Decimal = Field(..., gt=0, le=500)`. Replace float() parsing with
+  model validation. Add `math.isfinite()` check as defence-in-depth if raw
+  float is retained.
+
+[04-3] MEDIUM | stops Array — No Maximum Count and No Coordinate Validation
+File: backend/schemas.py:273 (CreateRideRequest)
+Finding: `stops: Optional[List[Dict[str, Any]]] = []`
+  The stops list has no max_items constraint. An attacker can send an arbitrarily
+  long stops array, potentially causing O(n) processing on every route-calculation
+  path. Individual stop dicts are Dict[str, Any] — no lat/lng range validators
+  are applied to stop coordinates, unlike pickup/dropoff which have explicit
+  validate_lat / validate_lng validators (lines 290–300). A stop with lat=999,
+  lng=999 is accepted silently.
+Recommendation: Add `max_length=5` to the stops field; add a @validator that
+  checks each stop dict for lat ∈ [−90, 90] and lng ∈ [−180, 180].
+
+[04-4] MEDIUM | scheduled_time — No Past-Timestamp Rejection at Schema Level
+File: backend/schemas.py:275 (CreateRideRequest)
+Finding: `scheduled_time: Optional[datetime] = None`
+  No @validator checks that the provided datetime is in the future. A client
+  can submit a scheduled_time in the past (or a unix epoch date such as
+  "1970-01-01T00:00:00") and the ride is accepted. This causes undefined
+  dispatch behaviour: the scheduler may attempt to match a driver for a ride
+  that was due minutes or years ago.
+Recommendation: Add a validator that raises ValueError if
+  scheduled_time < datetime.utcnow() + timedelta(minutes=5).
+
+[04-5] MEDIUM | Fare Split Phone List — Individual Phone Strings Unconstrained
+File: backend/routes/fare_split.py (CreateFareSplitRequest)
+          rider-app/app/fare-split.tsx (validPhones filter)
+Finding: The backend CreateFareSplitRequest enforces the list count
+  (max_length=5, PASS) but imposes no format constraint on individual phone
+  strings. Any string, including empty string, single character, or arbitrary
+  text, passes as a valid participant phone. The fare-split.tsx client filters
+  phones by `p.trim().length >= 10` — this rejects very short strings but
+  accepts non-numeric text 10+ chars long and does not require a +1 prefix,
+  format, or digit-only constraint.
+Recommendation: Add pattern=r'^\+1\d{10}$' or similar E.164 constraint to
+  each phone string in the list validator; mirror the constraint client-side.
+
+[04-6] MEDIUM | SavedAddressCreate — No Length Limit or HTML Sanitization
+File: backend/schemas.py:150–155 (SavedAddressCreate)
+          backend/routes/addresses.py (create_saved_address handler)
+Finding: SavedAddressCreate.name and SavedAddressCreate.address have no
+  max_length or min_length constraints. More critically, backend/validators.py
+  defines sanitize_string() which strips HTML tags — but addresses.py does not
+  call it on either field before storing. When saved address names are rendered
+  in the UI (map labels, autocomplete lists), an unsanitized string containing
+  HTML/script fragments could cause display corruption. Note: the project uses
+  React Native which does not execute injected HTML in Text components, limiting
+  practical XSS; the primary risk is display corruption and future web dashboard
+  rendering.
+Recommendation: Add max_length=100 to name, max_length=300 to address;
+  apply sanitize_string() in the create_saved_address handler (or via a
+  @validator). Longer term, replace the naive regex stripper with bleach.
+
+[04-7] MEDIUM | WalletPayRequest.amount — No Maximum Cap
+File: backend/routes/wallet.py:89–91
+Finding: `WalletPayRequest: amount: float = Field(..., gt=0)`
+  There is no upper bound. While the balance check prevents spending more than
+  the current balance, there is no server-side ceiling on the requested payment
+  amount. A race condition or client bug could trigger a wallet debit for an
+  implausibly large amount (e.g. $99,999) if the balance ever exceeds that figure.
+  Compare: TopUpRequest correctly has le=500.
+Recommendation: Add `le=500` or a configurable max payment cap consistent with
+  the wallet top-up ceiling.
+
+[04-8] MEDIUM | Wallet Monetary Amounts Use float, Not Decimal
+File: backend/routes/wallet.py:86, 91, 96
+Finding: TopUpRequest.amount and WalletPayRequest.amount are typed as `float`.
+  The wallet handler internally converts via `_d(req.amount)` (Decimal with
+  ROUND_HALF_UP), which mitigates most precision issues. However, the Pydantic
+  model accepts the raw float, so JSON values like 9.99 are subject to IEEE 754
+  representation errors before reaching _d(). For a financial service, monetary
+  inputs should be typed as Decimal at the Pydantic boundary.
+  Contrast: CreateRideRequest fares are Decimal throughout (PASS).
+Recommendation: Change `amount: float` to `amount: Decimal` in both wallet
+  request models; remove the intermediate _d() conversion where no longer needed.
+
+[04-9] LOW | pickup/dropoff Address Minimum Length Too Permissive (3 chars)
+File: backend/schemas.py:282–285 (CreateRideRequest.validate_address)
+Finding: `if len(v) < 3: raise ValueError('Address must be at least 3 characters')`
+  Three characters is too short to represent any meaningful address. A single
+  letter + digit + space passes. This provides no useful data-quality guard and
+  could allow nonsense pickup/dropoff strings into the dispatch system.
+Recommendation: Raise minimum to 10 characters (or better: require the address
+  to be geocoded/resolved server-side before ride creation).
+
+[04-10] RECOMMENDATION | No Zod Runtime Validation on API Responses (Client-Side)
+File: rider-app/store/rideStore.ts, rider-app/hooks/useRiderSocket.ts, all screens
+Finding: Zero Zod imports exist anywhere in rider-app/ or shared/. API responses
+  and WebSocket messages are consumed as `any` (TypeScript) without runtime shape
+  validation. A backend contract change (renamed field, type change, null where
+  not expected) will cause silent misbehaviour rather than a caught parse error.
+  This is the root cause of the broad `: any` typing noted in R-P2-4.
+Recommendation: Add Zod (or equivalent) for at minimum the ride object, driver
+  location update, and auth response shapes. Use safeParse() on WS messages so
+  malformed payloads are discarded before reaching store state.
+
+────────────────────────────────────────────────────────────────────────────────
+PASSES
+────────────────────────────────────────────────────────────────────────────────
+
+[04-11] PASS | +1 Prefix Enforced in Login UI
+File: rider-app/app/login.tsx:60, 66, 77
+Finding: handlePhoneChange strips non-digits and limits to 10 chars (line 60);
+  handleSendCode rejects length < 10 (line 66); "+1" prepended before API call
+  (line 77). Client enforces Canada/US format before reaching backend.
+
+[04-12] PASS | Pickup and Dropoff Lat/Lng Range Validated
+File: backend/schemas.py:290–300 (CreateRideRequest validators)
+Finding: validate_lat enforces [−90, 90]; validate_lng enforces [−180, 180].
+  Both applied to pickup and dropoff coordinates at the Pydantic boundary.
+
+[04-13] PASS | Ride Creation Uses Decimal for All Monetary Fields
+File: backend/schemas.py:226–236 (Ride model); backend/routes/rides.py
+Finding: base_fare, distance_fare, time_fare, booking_fee, platform_fee,
+  tip_amount all typed as Decimal. No float-precision risk in fare calculation.
+
+[04-14] PASS | RideRatingRequest tip_amount Uses Decimal with Non-Negative Guard
+File: backend/schemas.py:262
+Finding: `tip_amount: Decimal = Field(default=Decimal("0.0"), ge=0)`
+  Decimal type and lower bound enforced at schema level for the rating endpoint.
+  (Upper bound absent — partially mitigated by 04-2 note; the add_tip endpoint
+  is the primary concern there.)
+
+[04-15] PASS | Fare Split Participant Count Capped at 5
+File: backend/routes/fare_split.py (CreateFareSplitRequest)
+Finding: `participant_phones: List[str] = Field(..., min_length=1, max_length=5)`
+  Backend hard-caps fare splits at 5 participants; matches UI guard in fare-split.tsx.
+
+[04-16] PASS | Wallet Top-Up Enforces Min and Max Bounds
+File: backend/routes/wallet.py:86
+Finding: `amount: float = Field(..., gt=0, le=500)`
+  Minimum (>0) and maximum ($500) enforced at Pydantic level. See 04-8 for the
+  float-vs-Decimal type concern.
+
+[04-17] PASS | sanitize_string() Utility Exists in validators.py
+File: backend/validators.py
+Finding: sanitize_string() uses re.sub(r"<[^>]*>", "", value) to strip HTML
+  tags. It is already called in corporate_accounts.py. The gap (not called for
+  saved addresses) is tracked in 04-6; the utility itself is available.
+
+[04-18] PASS | validate_ride_location Called at Ride Creation (Null Island Rejected)
+File: backend/routes/rides.py:424, 525
+Finding: validate_ride_location() is called for both pickup and dropoff at ride
+  creation, rejecting (0.0, 0.0) null-island coordinates and other clearly
+  invalid GPS inputs.
+
+[04-19] PASS | Promo Discount Cap Exists for Percentage-Based Promos
+File: backend/routes/promotions.py
+Finding: Percentage promo codes apply max_discount from the promo record.
+  Absolute-amount promos are bounded by the promo's discount_value field.
+  (The server-side vs. client-supplied fare issue is separately tracked in R-P1-8.)
+
+[04-20] PASS | Rating Bounded 1–5 Stars
+File: backend/schemas.py:260 (RideRatingRequest)
+Finding: `rating: int = Field(ge=1, le=5)` — out-of-range ratings rejected
+  at schema level.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 04 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     7 |
+| LOW             |     1 |
+| PASS            |    10 |
+| RECOMMENDATION  |     1 |
+| TOTAL           |    20 |
+
+================================================================================
+[AUDIT IN PROGRESS — TASKS 05–16 PENDING]
 ================================================================================

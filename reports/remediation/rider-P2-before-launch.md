@@ -343,6 +343,165 @@ exclude `play-service-account.json` referenced in `eas.json`.
 
 ---
 
+## R-P2-17 · Tip Endpoints Use Raw request.json() — NaN Bypasses Guards
+
+**Audit finding [04-2 MEDIUM].** `add_tip` (rides.py:946) and `process_payment`
+(rides.py:973) both read tip amount via `float(data.get(..., 0))` outside Pydantic.
+In Python `float("nan") <= 0` and `float("nan") > 500` both evaluate to False, so
+NaN bypasses every guard and reaches payment/database logic.
+
+**File to fix:** `backend/routes/rides.py:946, 973`
+
+**How to fix:**
+```python
+class TipRequest(BaseModel):
+    amount: Decimal = Field(..., gt=0, le=500)
+
+# In add_tip:
+req = TipRequest(**await request.json())
+tip_amount = req.amount
+```
+
+**Effort:** 1 hour
+
+---
+
+## R-P2-18 · stops Array — No Maximum Count or Coordinate Validation
+
+**Audit finding [04-3 MEDIUM].** `CreateRideRequest.stops` (backend/schemas.py:273)
+is `Optional[List[Dict[str, Any]]]` with no `max_length` and no lat/lng validators
+on stop entries. An attacker can submit an arbitrarily long stops list or stops
+with out-of-range coordinates (lat=999) that pass silently.
+
+**File to fix:** `backend/schemas.py:273` (CreateRideRequest)
+
+**How to fix:**
+```python
+stops: Optional[List[Dict[str, Any]]] = Field(default=[], max_length=5)
+
+@validator('stops')
+def validate_stops(cls, stops):
+    for stop in stops:
+        lat, lng = stop.get('lat'), stop.get('lng')
+        if lat is None or lng is None:
+            raise ValueError('Each stop must have lat and lng')
+        if not (-90 <= lat <= 90) or not (-180 <= lng <= 180):
+            raise ValueError(f'Stop coordinates out of range: {lat}, {lng}')
+    return stops
+```
+
+**Effort:** 1 hour
+
+---
+
+## R-P2-19 · scheduled_time Accepts Past Timestamps
+
+**Audit finding [04-4 MEDIUM].** `CreateRideRequest.scheduled_time` (schemas.py:275)
+has no validator to reject past datetimes. A scheduled ride submitted with a
+timestamp in the past (or epoch date) is accepted, causing undefined dispatch
+behaviour.
+
+**File to fix:** `backend/schemas.py:275` (CreateRideRequest)
+
+**How to fix:**
+```python
+from datetime import datetime, timedelta
+
+@validator('scheduled_time')
+def validate_scheduled_time(cls, v):
+    if v is not None and v < datetime.utcnow() + timedelta(minutes=5):
+        raise ValueError('Scheduled time must be at least 5 minutes in the future')
+    return v
+```
+
+**Effort:** 30 minutes
+
+---
+
+## R-P2-20 · Fare Split Phone Strings Have No Format Validation
+
+**Audit finding [04-5 MEDIUM].** `CreateFareSplitRequest` enforces a max of 5
+participants (PASS) but individual phone strings are unconstrained — any string
+passes. The client-side filter (`p.trim().length >= 10`) is insufficient.
+
+**File to fix:** `backend/routes/fare_split.py` (CreateFareSplitRequest)
+
+**How to fix:**
+```python
+from pydantic import validator
+import re
+
+@validator('participant_phones', each_item=True)
+def validate_phone(cls, v):
+    if not re.match(r'^\+1\d{10}$', v):
+        raise ValueError(f'Invalid phone number: {v}')
+    return v
+```
+
+**Effort:** 30 minutes
+
+---
+
+## R-P2-21 · SavedAddressCreate — No Length Limit or Sanitization
+
+**Audit finding [04-6 MEDIUM].** `SavedAddressCreate.name` and `.address`
+(schemas.py:150–155) have no max_length. The existing `sanitize_string()` in
+validators.py is not called by the create_saved_address handler in addresses.py.
+
+**File to fix:** `backend/schemas.py:150–155` + `backend/routes/addresses.py`
+
+**How to fix:**
+```python
+class SavedAddressCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    address: str = Field(..., min_length=5, max_length=300)
+    lat: float
+    lng: float
+    icon: str = "location"
+```
+And in addresses.py handler: apply `sanitize_string()` to name and address
+before creating the record.
+
+**Effort:** 1 hour
+
+---
+
+## R-P2-22 · WalletPayRequest Has No Maximum Cap
+
+**Audit finding [04-7 MEDIUM].** `WalletPayRequest.amount: float = Field(..., gt=0)`
+has no upper bound (contrast: TopUpRequest correctly has `le=500`).
+
+**File to fix:** `backend/routes/wallet.py:89–91`
+
+**How to fix:** Add `le=500` or a configurable ceiling consistent with the
+top-up limit.
+
+**Effort:** 30 minutes
+
+---
+
+## R-P2-23 · Wallet Request Models Use float Instead of Decimal
+
+**Audit finding [04-8 MEDIUM].** `TopUpRequest.amount` and `WalletPayRequest.amount`
+are typed as `float`. While the handler wraps with `_d()` (Decimal rounding),
+IEEE 754 representation errors occur before that conversion.
+
+**File to fix:** `backend/routes/wallet.py:86, 91`
+
+**How to fix:**
+```python
+from decimal import Decimal
+class TopUpRequest(BaseModel):
+    amount: Decimal = Field(..., gt=0, le=500)
+
+class WalletPayRequest(BaseModel):
+    amount: Decimal = Field(..., gt=0, le=500)
+```
+
+**Effort:** 30 minutes
+
+---
+
 ## Checklist
 
 - [ ] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
@@ -361,3 +520,10 @@ exclude `play-service-account.json` referenced in `eas.json`.
 - [ ] R-P2-14 eas.json test/preview profiles point to staging URL, not production
 - [ ] R-P2-15 TruffleHog CI scans full PR diff; --only-verified removed
 - [ ] R-P2-16 Rider-app CI adds EXPO_PUBLIC_ private-variable check; play-service-account.json added to .gitignore
+- [ ] R-P2-17 Tip endpoints use Pydantic model; NaN bypass closed
+- [ ] R-P2-18 stops array capped at 5; stop coordinates range-validated
+- [ ] R-P2-19 scheduled_time validator rejects past timestamps
+- [ ] R-P2-20 Fare split phone strings validated to +1XXXXXXXXXX format
+- [ ] R-P2-21 SavedAddressCreate adds max_length; sanitize_string() called in handler
+- [ ] R-P2-22 WalletPayRequest.amount gets maximum cap (le=500)
+- [ ] R-P2-23 Wallet request models use Decimal instead of float

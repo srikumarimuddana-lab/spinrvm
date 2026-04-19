@@ -202,6 +202,9 @@ def serialize_doc(doc):
     return doc
 
 
+_STRIP_FROM_SELF_RESPONSE = {'stripe_account_id', 'bank_account', 'fcm_token'}
+
+
 @api_router.get("/me")
 async def get_my_driver(current_user: dict = Depends(get_current_user)):
     """Get the current user's driver profile."""
@@ -210,7 +213,10 @@ async def get_my_driver(current_user: dict = Depends(get_current_user)):
     )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
-    return serialize_doc(await _decrypt_driver_pii(driver))
+    response_data = serialize_doc(await _decrypt_driver_pii(driver))
+    for field in _STRIP_FROM_SELF_RESPONSE:
+        response_data.pop(field, None)
+    return response_data
 
 
 class UpdateDriverProfileRequest(BaseModel):

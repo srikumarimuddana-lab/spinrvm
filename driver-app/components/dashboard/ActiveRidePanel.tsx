@@ -8,6 +8,7 @@ import {
   Animated,
   Linking,
   Platform,
+  BackHandler,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import SpinrConfig from '@shared/config/spinr.config';
@@ -155,6 +156,11 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
       waitTimerRef.current = null;
     }
   }, [rideState]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => sub.remove();
+  }, []);
 
   if (!ride) return null;
 
@@ -327,6 +333,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                   style={[styles.kpBtn, key === null && { backgroundColor: 'transparent', elevation: 0 }]}
                   disabled={key === null}
                   activeOpacity={0.6}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   onPress={() => {
                     if (key === 'del') setOtpInput(otpInput.slice(0, -1));
                     else if (key !== null && otpInput.length < 4) {
@@ -586,6 +593,8 @@ const styles = StyleSheet.create({
   kpBtn: {
     width: '28%',
     aspectRatio: 1.4,
+    minWidth: 64,
+    minHeight: 64,
     backgroundColor: '#fff',
     borderRadius: 12,
     justifyContent: 'center',

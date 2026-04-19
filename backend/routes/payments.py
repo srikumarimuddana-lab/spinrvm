@@ -248,19 +248,11 @@ class AddCardRequest(BaseModel):
 # If ANY of these are present in the request body, we refuse to process
 # the request at all — before any logging, before JSON parsing by pydantic,
 # before touching Stripe. This is the PCI-DSS perimeter.
-_RAW_CARD_FIELDS = frozenset(
-    {
-        "card_number",
-        "number",
-        "cvc",
-        "cvv",
-        "cvv2",
-        "exp_month",
-        "exp_year",
-        "expiry",
-        "expiration",
-    }
-)
+_RAW_CARD_FIELDS = {
+    'card_number', 'cardNumber', 'card_no', 'number', 'pan', 'primary_account_number',
+    'cvv', 'cvv2', 'cvc', 'cvc2', 'security_code', 'card_security_code',
+    'expiry', 'expiration', 'expiration_date', 'exp_month', 'exp_year',
+}
 
 
 @api_router.post("/cards")

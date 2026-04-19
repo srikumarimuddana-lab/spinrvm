@@ -253,6 +253,17 @@ class RideInvalidStatusException(SpinrException):
         )
 
 
+class RideStateError(SpinrException):
+    """Ride is in an invalid state for the requested operation."""
+
+    def __init__(self, message: str):
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.RIDE_INVALID_STATUS,
+            status_code=422,
+        )
+
+
 class RideNoDriversAvailableException(SpinrException):
     """No drivers available for ride."""
 

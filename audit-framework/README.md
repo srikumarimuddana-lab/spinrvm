@@ -110,3 +110,4 @@ See `templates/run-audit.md` for the full step-by-step.
 |---|---|---|---|---|
 | 2026-04-18 | Driver App | v4 | 227 (7 CRIT, 26 HIGH, 66 MED) | `reports/audits/2026-04-18-driver-app-production-readiness-v4.txt` |
 | 2026-04-18 | Driver App | v4 | Task 14: Performance (supplement) | `reports/audits/task14-performance-scalability.txt` |
+| 2026-04-19 | Rider App | v1 | Plan only — execution pending | `reports/audits/2026-04-19-rider-app-audit-plan-v1.md` |

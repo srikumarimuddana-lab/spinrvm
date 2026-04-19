@@ -759,5 +759,229 @@ TASK 04 TALLY
 | TOTAL           |    20 |
 
 ================================================================================
-[AUDIT IN PROGRESS — TASKS 05–16 PENDING]
+TASK 05 — ANDROID & iOS UI/UX QUALITY
+================================================================================
+Scope    : rider-app/app/ (all 36 screens) · rider-app/components/ ·
+           shared/components/
+Framework: audit-framework/dimensions/05-ui-ux-android-ios.md
+Checks   : Safe area insets · BackHandler · KeyboardAvoidingView · touch targets ·
+           map provider · empty states · error states · font scaling
+
+────────────────────────────────────────────────────────────────────────────────
+
+[05-1] HIGH | ride-in-progress.tsx — BackHandler Missing, Exits Active Ride on Android
+File: rider-app/app/ride-in-progress.tsx (no BackHandler anywhere in file)
+Finding: The hardware back button on Android exits an active ride with no
+  confirmation dialog. driver-arriving.tsx (line 192–198) and driver-arrived.tsx
+  (line 67–70) both correctly intercept the hardware back press and show a
+  cancellation-fee dialog. ride-in-progress.tsx has no BackHandler import and no
+  addEventListener call — pressing back takes the rider to the home screen while
+  the ride is live. Note: this is the unresolved portion of R-P0-4 (the other two
+  screens were fixed; ride-in-progress was missed).
+Recommendation: Add BackHandler to ride-in-progress.tsx matching the pattern
+  in driver-arriving.tsx: intercept back, show "End ride early? Full fare applies"
+  confirmation dialog before allowing navigation away.
+
+[05-2] MEDIUM | search-destination.tsx — No KeyboardAvoidingView; Submit Button Hidden
+File: rider-app/app/search-destination.tsx (no KAV import or use)
+Finding: The "Search Ride" primary action button is at the bottom of the screen
+  (line 615–625), below the predictions FlatList. No KeyboardAvoidingView wraps
+  the screen. When the keyboard is open, the button is hidden behind it. While
+  tapping a prediction dismisses the keyboard, users who manually enter both
+  addresses without using autocomplete cannot see or tap "Search Ride" until they
+  manually dismiss the keyboard (or scroll, which is blocked by the FlatList).
+  On iPhone SE (375×667pt) with 2+ stops this issue is more pronounced.
+  Compare: login.tsx, otp.tsx, profile-setup.tsx all correctly use KAV.
+Recommendation: Wrap the screen in KeyboardAvoidingView with
+  behavior={Platform.OS === 'ios' ? 'padding' : 'height'} so the content shifts
+  above the keyboard and the Search Ride button remains visible.
+
+[05-3] MEDIUM | activity.tsx — API Error Shows Misleading "No rides yet" Empty State
+File: rider-app/app/(tabs)/activity.tsx:46–64
+Finding: fetchData() wraps both API calls with individual .catch(() => ({ data: [] }))
+  (lines 48–49). When the network is unavailable or /rides/history returns an
+  error, rides is set to [] and the "No rides yet" empty state (line 204–212) is
+  displayed. A rider who has completed 20 rides will see "Your ride history will
+  appear here once you complete your first trip." after a network error — a false
+  statement that can confuse and erode trust. No error state is differentiated
+  from a genuinely empty list.
+Recommendation: Track API error separately (useState for error); when error is
+  true, show "Could not load rides. Pull to refresh." instead of the empty state.
+  Note: R-P2-6 already calls for this fix.
+
+[05-4] MEDIUM | ride-options.tsx — fetchEstimates Failure Shows Empty List, No Error/Retry
+File: rider-app/app/ride-options.tsx:74, 406–411
+Finding: If fetchEstimates() fails (network error, backend down), estimates stays
+  empty. The isLoading spinner correctly disappears, and allUnavailable is false
+  (because that check requires estimates.length > 0). The vehicle options list
+  renders nothing — no error message, no retry button. The user sees a blank
+  vehicle options area with no indication that anything went wrong.
+Recommendation: Track fetch error state; when estimates.length === 0 && !isLoading
+  && error, show "Could not load fares. Tap to retry." with a retry button.
+  This is the fix called for in R-P2-6.
+
+[05-5] MEDIUM | wallet.tsx — Balance Load Failure Shows $0.00 Instead of Error
+File: rider-app/app/wallet.tsx:119–124
+Finding: The balance card renders `${(wallet?.balance ?? 0).toFixed(2)}` — when
+  fetchWallet() fails and wallet is null, the balance shows "$0.00". The rider
+  cannot distinguish between a genuine zero balance and a load failure. No error
+  indicator or "Balance unavailable" label is shown.
+Recommendation: Show "Balance unavailable" and a retry button when wallet is
+  null after loading completes. This is tracked in R-P2-6.
+
+[05-6] MEDIUM | ride-in-progress.tsx — No Error State When Ride Fails to Load
+File: rider-app/app/ride-in-progress.tsx:306–309
+Finding: When currentRide is null (fetchRide failed or returned null), the screen
+  shows:
+    <View style={styles.mapPlaceholder}>
+      <Text>Loading Map...</Text>
+    </View>
+  This text is shown indefinitely if the API is unavailable — not just during
+  loading. There is no error state, no retry button, and no way for the rider
+  to recover. Compare: driver-arriving.tsx has a proper error state with a retry
+  button (line 295–302).
+Recommendation: Track isLoading and error separately; when error and no
+  currentRide, show an error state with retry. Use the pattern from
+  driver-arriving.tsx (lines 291–303).
+
+[05-7] MEDIUM | driver-arrived.tsx — Blank Screen When currentRide is Null
+File: rider-app/app/driver-arrived.tsx:126–206
+Finding: The full-screen map is rendered as `{currentRide ? (<MapView ...>) : null}`.
+  When currentRide is null (API error or store not hydrated), the map area is
+  completely blank — no loading indicator, no error message, no retry. The
+  bottom sheet still renders (with placeholder addresses) but the rider has no
+  way to know what happened or recover. The header is shown but the core
+  screen content is invisible.
+Recommendation: Add an else clause that renders an error/loading view with a
+  retry button, consistent with the driver-arriving error state.
+
+[05-8] MEDIUM | allowFontScaling Not Set on Text Components (All 36 Screens)
+File: rider-app/app/ (all screens) · shared/components/
+Finding: Zero usages of `allowFontScaling` found in rider-app/app/ or
+  shared/components/. React Native's default is `allowFontScaling={true}`,
+  meaning system accessibility font sizes (up to 200%+ on iOS) automatically
+  scale all Text. Fixed-height containers (status pills, bottom sheet handle,
+  map buttons, driver card rows) will overflow or clip text at large font sizes.
+  Critical safety-relevant labels (ETA, driver name, SOS) are affected.
+  Per D05 severity guide: "allowFontScaling not set — layout breaks at 200% font → MEDIUM."
+Recommendation: Audit fixed-height containers and set
+  `allowFontScaling={false}` on Text inside them. For free-flow content,
+  ensure sufficient flex or minHeight to handle scaled text.
+
+[05-9] MEDIUM | Home Screen Map Zoom Buttons Below 44pt Touch Target (40×40pt)
+File: rider-app/app/(tabs)/index.tsx — mapControlButton style (line 509–513)
+Finding:
+  mapControlButton: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' }
+  The zoom-in (+) and zoom-out (−) buttons are 40×40pt with no `hitSlop`. iOS
+  HIG mandates a minimum 44×44pt touch target. At 40pt these buttons are
+  tappable but unreliable, especially with gloves or cold fingers (relevant for
+  Saskatchewan winters).
+Recommendation: Increase to `width: 44, height: 44` or add
+  `hitSlop={{ top: 2, bottom: 2, left: 2, right: 2 }}`.
+
+────────────────────────────────────────────────────────────────────────────────
+PASSES
+────────────────────────────────────────────────────────────────────────────────
+
+[05-10] PASS | OfflineBanner Uses useSafeAreaInsets — Correctly Above Notch (R-P0-2)
+File: shared/components/OfflineBanner.tsx:36–37, 170–171
+Finding: `const insets = useSafeAreaInsets()` and
+  `container: { top: topInset, ... }` confirmed. The banner is rendered at the
+  safe area top, never behind the notch or Dynamic Island. P0-2 fix verified
+  as already applied.
+
+[05-11] PASS | driver-arriving.tsx BackHandler Blocks Hardware Back with Cancel Dialog
+File: rider-app/app/driver-arriving.tsx:192–198
+Finding: BackHandler.addEventListener('hardwareBackPress', () => { handleBack(); return true; })
+  The handler shows a status-aware dialog (free cancel vs. fee vs. in-progress
+  full fare). Correctly returns true to prevent default back navigation.
+
+[05-12] PASS | driver-arrived.tsx BackHandler Blocks Hardware Back
+File: rider-app/app/driver-arrived.tsx:67–70
+Finding: BackHandler.addEventListener with handleCancelPress shows cancellation
+  fee warning. Returns true to block default navigation. Dep on
+  currentRide?.total_fare keeps the dialog accurate.
+
+[05-13] PASS | ride-completed.tsx BackHandler Blocks Back (Cannot Exit Before Rating)
+File: rider-app/app/ride-completed.tsx:65–68
+Finding: BackHandler.addEventListener returns true unconditionally, preventing
+  the rider from leaving the completion screen without rating and paying.
+
+[05-14] PASS | ride-completed.tsx and payment-confirm.tsx Use KeyboardAvoidingView
+File: rider-app/app/ride-completed.tsx:161; rider-app/app/payment-confirm.tsx:104
+Finding: Both screens use `behavior={Platform.OS === 'ios' ? 'padding' : 'height'}`
+  — submit buttons remain visible when keyboard is open.
+
+[05-15] PASS | login.tsx / otp.tsx / profile-setup.tsx Use KeyboardAvoidingView
+File: rider-app/app/login.tsx:109; otp.tsx:202; profile-setup.tsx:100
+Finding: All three auth screens correctly wrap content in KAV with
+  platform-specific behavior. Phone input and OTP fields remain visible above
+  keyboard.
+
+[05-16] PASS | Platform-Specific Map Provider (Android: Google, iOS: Default)
+File: rider-app/app/driver-arriving.tsx:306; driver-arrived.tsx:21;
+       ride-in-progress.tsx:211; shared/components/AppMap.tsx:9
+Finding: All map screens use `PROVIDER_GOOGLE` on Android and `undefined` on iOS,
+  matching the "Google Maps on Android, Apple Maps on iOS" checklist requirement.
+
+[05-17] PASS | edgeToEdgeEnabled: true in app.config.ts
+File: rider-app/app.config.ts:46
+Finding: Android edge-to-edge display is explicitly enabled.
+
+[05-18] PASS | SafeAreaView edges={['top']} Guards Header Overlays on Map Screens
+File: rider-app/app/driver-arriving.tsx:269; ride-in-progress.tsx:195, 203;
+       driver-arrived.tsx:209; (tabs)/index.tsx:141
+Finding: All map screen header overlays use SafeAreaView with edges={['top']}.
+  Content is never rendered behind the notch, Dynamic Island, or status bar.
+
+[05-19] PASS | activity.tsx Has "No rides yet" Empty State
+File: rider-app/app/(tabs)/activity.tsx:203–212
+Finding: Empty state renders when rides.length === 0 && !loading, with icon,
+  title, and explanatory text. Pull-to-refresh is also wired (RefreshControl).
+
+[05-20] PASS | saved-places.tsx Has "No saved places yet" Empty State
+File: rider-app/app/saved-places.tsx:182–186
+Finding: FlatList ListEmptyComponent renders icon, title, and subtitle with
+  call to action.
+
+[05-21] PASS | notifications.tsx Has "No notifications" Empty State
+File: rider-app/app/notifications.tsx:183–187
+Finding: ListEmptyComponent shows notifications-off icon with "No notifications"
+  and "You're all caught up!" message.
+
+[05-22] PASS | driver-arriving.tsx Has Error State with Retry for Map Load Failure
+File: rider-app/app/driver-arriving.tsx:295–302
+Finding: When error is truthy: shows alert icon, error text, and a "Retry"
+  TouchableOpacity that calls fetchRide(). This is the most complete error state
+  of all ride-flow screens.
+
+────────────────────────────────────────────────────────────────────────────────
+LOW
+────────────────────────────────────────────────────────────────────────────────
+
+[05-23] LOW | Star Rating Buttons at iOS HIG Minimum (44pt) — Below Android 48dp
+File: rider-app/app/ride-completed.tsx — starBtn style (line 514)
+Finding: `starBtn: { padding: 4 }` with 36pt icon = 44×44pt touch target.
+  This meets the iOS HIG 44pt minimum exactly. Android Material Design requires
+  48×48dp minimum. No hitSlop is set to extend the touch area further.
+  On a device running at 3× density (Pixel 7), 44pt ≈ 132dp — well above 48dp,
+  so in practice this passes on Android too. The risk is low but worth a note.
+Recommendation: Add `hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}` for
+  comfortable tapping. Already tracked for accessibility in R-P1-9.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 05 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     8 |
+| LOW             |     1 |
+| PASS            |    13 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    23 |
+
+================================================================================
+[AUDIT IN PROGRESS — TASKS 06–16 PENDING]
 ================================================================================

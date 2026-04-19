@@ -502,6 +502,100 @@ class WalletPayRequest(BaseModel):
 
 ---
 
+## R-P2-24 · search-destination.tsx — No KeyboardAvoidingView
+
+**Audit finding [05-2 MEDIUM].** The "Search Ride" primary action button
+(search-destination.tsx:615) sits below the FlatList and is hidden behind the
+keyboard when any text input is focused. No KeyboardAvoidingView wraps the screen.
+Users who type both addresses manually without selecting autocomplete predictions
+cannot see or tap the button without manually dismissing the keyboard.
+
+**File to fix:** `rider-app/app/search-destination.tsx`
+
+**How to fix:**
+```tsx
+import { KeyboardAvoidingView, Platform } from 'react-native';
+
+return (
+  <SafeAreaView style={styles.container} edges={['top']}>
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      {/* existing content */}
+    </KeyboardAvoidingView>
+  </SafeAreaView>
+);
+```
+
+**Effort:** 30 minutes
+
+---
+
+## R-P2-25 · allowFontScaling Not Set — Layout Breaks at Large System Font Sizes
+
+**Audit finding [05-8 MEDIUM].** Zero usages of `allowFontScaling` found across
+all 36 rider-app screens and shared components. Fixed-height containers (status
+pills, bottom sheet rows, map overlay buttons, driver card) will overflow or clip
+text when system font size is set to 200%+ (iOS Accessibility → Larger Text).
+Safety-critical labels (ETA countdown, driver name, SOS) are directly affected.
+
+**File to fix:** All screens with fixed-height Text containers — priority screens:
+`driver-arriving.tsx`, `ride-in-progress.tsx`, `driver-arrived.tsx`
+
+**How to fix:** Add `allowFontScaling={false}` to Text inside fixed-height
+containers (buttons, pills, badges). Allow scaling on free-flow content.
+
+**Effort:** 2–3 hours (audit all fixed-height containers across active ride screens)
+
+---
+
+## R-P2-26 · ride-in-progress.tsx — No Error State for Ride Load Failure
+
+**Audit finding [05-6 MEDIUM].** When `currentRide` is null (fetchRide failed),
+the screen shows "Loading Map..." indefinitely with no error recovery path.
+Compare: driver-arriving.tsx has a full error state with retry (lines 295–302).
+
+**File to fix:** `rider-app/app/ride-in-progress.tsx`
+
+**How to fix:** Add `isLoading` / `error` state tracking to the mapContainer
+conditional; when error, show alert icon + "Could not load ride" + retry button.
+
+**Effort:** 1 hour
+
+---
+
+## R-P2-27 · driver-arrived.tsx — Blank Screen When Ride Data Unavailable
+
+**Audit finding [05-7 MEDIUM].** `{currentRide ? (<MapView ...>) : null}` at
+driver-arrived.tsx:126 renders a blank white area when currentRide is null.
+The screen shows the bottom sheet shell but no map content, no error, no retry.
+
+**File to fix:** `rider-app/app/driver-arrived.tsx`
+
+**How to fix:** Replace `null` with an error/loading view + retry button.
+
+**Effort:** 30 minutes
+
+---
+
+## R-P2-28 · Home Screen Zoom Buttons Below 44pt Touch Target
+
+**Audit finding [05-9 MEDIUM].** `mapControlButton: { width: 40, height: 40 }` in
+index.tsx. Both zoom-in and zoom-out buttons are 40×40pt with no `hitSlop`,
+4pt below the iOS HIG 44pt minimum. Difficult to tap reliably in cold weather.
+
+**File to fix:** `rider-app/app/(tabs)/index.tsx` — mapControlButton style
+
+**How to fix:**
+```tsx
+mapControlButton: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' }
+```
+
+**Effort:** 15 minutes
+
+---
+
 ## Checklist
 
 - [ ] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
@@ -527,3 +621,8 @@ class WalletPayRequest(BaseModel):
 - [ ] R-P2-21 SavedAddressCreate adds max_length; sanitize_string() called in handler
 - [ ] R-P2-22 WalletPayRequest.amount gets maximum cap (le=500)
 - [ ] R-P2-23 Wallet request models use Decimal instead of float
+- [ ] R-P2-24 search-destination.tsx wrapped in KeyboardAvoidingView
+- [ ] R-P2-25 allowFontScaling=false applied to fixed-height Text containers in ride screens
+- [ ] R-P2-26 ride-in-progress.tsx adds error state with retry for ride load failure
+- [ ] R-P2-27 driver-arrived.tsx replaces null map render with error/loading state
+- [ ] R-P2-28 Home screen zoom buttons increased to 44×44pt

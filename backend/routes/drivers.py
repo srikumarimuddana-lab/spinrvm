@@ -5,13 +5,13 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Union
 
 import stripe
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 try:
     from .. import db_supabase
     from ..dependencies import get_admin_user, get_current_user
-    from ..features import send_push_notification
+    from ..features import send_email, send_push_notification
     from ..geo_utils import calculate_distance
     from ..logging_utils import diag_logger
     from ..schemas import Driver, RideRatingRequest
@@ -21,7 +21,7 @@ try:
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user, get_current_user
-    from features import send_push_notification
+    from features import send_email, send_push_notification
     from geo_utils import calculate_distance
     from logging_utils import diag_logger
     from schemas import Driver, RideRatingRequest
@@ -1433,6 +1433,100 @@ async def export_earnings(year: int = Query(None), current_user: dict = Depends(
     filename = f"earnings_export_{year}.csv"
 
     return {"data": csv_data, "filename": filename}
+
+
+@api_router.post("/me/export-data")
+async def export_driver_data(
+    background_tasks: BackgroundTasks,
+    current_user: dict = Depends(get_current_user),
+):
+    """GDPR/PIPEDA: export all personal data for the authenticated driver.
+
+    Immediately returns a confirmation message. The actual data collection,
+    JSON generation, and email delivery happen in a background task so the
+    driver does not wait.
+    """
+    user_id = current_user["id"]
+    email = current_user.get("email") or current_user.get("phone", "")
+    if not email:
+        raise HTTPException(status_code=400, detail="No email address on file to send the export to.")
+
+    background_tasks.add_task(_build_and_email_data_export, user_id, email)
+    return {"message": "Your data export is being prepared. Check your email."}
+
+
+async def _build_and_email_data_export(user_id: str, email: str) -> None:
+    """Background task: collect all driver data and email a JSON export."""
+    import json  # noqa: PLC0415
+
+    try:
+        # 1. Driver profile
+        driver_rows = await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1)
+        driver = driver_rows[0] if driver_rows else {}
+        driver_id = driver.get("id", "")
+
+        # 2. User account record
+        user_rows = await db_supabase.get_rows("users", {"id": user_id}, limit=1)
+        user = user_rows[0] if user_rows else {}
+
+        # 3. Ride history (last 500 trips)
+        rides: list = []
+        if driver_id:
+            rides = await db_supabase.get_rows(
+                "rides", {"driver_id": driver_id}, limit=500, order="created_at", desc=True
+            )
+
+        # 4. Payout history
+        payouts: list = []
+        if driver_id:
+            payouts = await db_supabase.get_rows(
+                "driver_payouts", {"driver_id": driver_id}, limit=200, order="created_at", desc=True
+            )
+
+        # 5. Uploaded documents
+        documents: list = []
+        if driver_id:
+            documents = await db_supabase.get_rows(
+                "driver_documents", {"driver_id": driver_id}, limit=50
+            )
+
+        # 6. Notification preferences
+        notification_prefs: list = []
+        notification_prefs = await db_supabase.get_rows(
+            "notification_preferences", {"user_id": user_id}, limit=1
+        )
+
+        export_payload = {
+            "export_generated_at": datetime.utcnow().isoformat() + "Z",
+            "account": {k: v for k, v in user.items() if k not in ("password_hash",)},
+            "driver_profile": {k: v for k, v in driver.items() if k not in ("password_hash",)},
+            "rides": rides,
+            "payouts": payouts,
+            "documents": [
+                {k: v for k, v in doc.items() if k != "document_url"} for doc in documents
+            ],
+            "notification_preferences": notification_prefs,
+        }
+
+        export_json = json.dumps(export_payload, indent=2, default=str)
+
+        subject = "Your Spinr Data Export"
+        body = (
+            "Hi,\n\n"
+            "As requested, here is a full export of your personal data held by Spinr.\n\n"
+            "Your data export is attached below as JSON.\n\n"
+            "If you have any questions about your data or would like to request deletion, "
+            "please contact privacy@spinr.ca.\n\n"
+            "— The Spinr Team\n\n"
+            "---\n\n"
+            + export_json
+        )
+
+        await send_email(to=email, subject=subject, body=body)
+        logger.info("Data export emailed to %s for user %s", email, user_id)
+
+    except Exception as exc:
+        logger.error("Data export failed for user %s: %s", user_id, exc)
 
 
 # ==========================================

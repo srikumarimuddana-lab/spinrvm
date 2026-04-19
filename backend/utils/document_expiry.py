@@ -141,29 +141,59 @@ async def check_expiring_documents():
         if not expiring_docs:
             continue
 
-        # Check if we already warned recently (avoid spam)
-        last_warned = driver.get("doc_expiry_warned_at")
-        if last_warned:
-            try:
-                if isinstance(last_warned, str):
-                    warned_dt = datetime.fromisoformat(last_warned.replace("Z", "+00:00").replace("+00:00", ""))
-                else:
-                    warned_dt = last_warned
-                if (now - warned_dt).total_seconds() < 86400:  # Don't re-warn within 24h
-                    continue
-            except (ValueError, TypeError):
-                pass
-
-        # Send notification
+        # P2-9: Classify the soonest-expiring document into an urgency tier
+        # and compose a tier-appropriate message.
         soonest = min(expiring_docs, key=lambda d: d["days_left"])
+        days_left = soonest["days_left"]
         doc_list = ", ".join(d["label"] for d in expiring_docs)
+
+        if days_left == 0:
+            notif_title = f"{soonest['label']} expires today"
+            notif_body = (
+                f"Your {soonest['label']} expires today. "
+                "Renew now to avoid account suspension."
+            )
+            notif_type = "document_expiry_today"
+        elif days_left == 1:
+            notif_title = f"{soonest['label']} expires tomorrow"
+            notif_body = (
+                f"Your {soonest['label']} expires tomorrow — "
+                "renew now or you'll be suspended."
+            )
+            notif_type = "document_expiry_1day"
+        else:
+            notif_title = f"Document expiring in {days_left} days"
+            notif_body = (
+                f"Please renew: {doc_list}. "
+                "You won't be able to go online with expired documents."
+            )
+            notif_type = "document_expiry_warning"
+
+        # Spam-guard: apply 24 h throttle only for the 7-day tier.
+        # 1-day and day-of warnings bypass the guard — these are urgent enough
+        # that they must reach the driver even if a 7-day reminder was sent
+        # within the past 24 h.
+        if days_left >= 2:
+            last_warned = driver.get("doc_expiry_warned_at")
+            if last_warned:
+                try:
+                    if isinstance(last_warned, str):
+                        warned_dt = datetime.fromisoformat(
+                            last_warned.replace("Z", "+00:00").replace("+00:00", "")
+                        )
+                    else:
+                        warned_dt = last_warned
+                    if (now - warned_dt).total_seconds() < 86400:
+                        continue
+                except (ValueError, TypeError):
+                    pass
 
         try:
             await send_push_notification(
                 user_id,
-                f"Document expiring in {soonest['days_left']} days",
-                f"Please renew: {doc_list}. You won't be able to go online with expired documents.",
-                data={"type": "document_expiry_warning", "driver_id": driver["id"]},
+                notif_title,
+                notif_body,
+                data={"type": notif_type, "driver_id": driver["id"]},
             )
             await db.update_one(
                 "drivers",

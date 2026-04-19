@@ -431,6 +431,48 @@ class TestTokenRefresh:
         assert refreshed_decoded["session_id"] == "session_abc"
 
 
+# ── 9-9: Token version rotation test ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_old_token_rejected_after_version_rotation():
+    """JWT minted with token_version=1 must be rejected 401 after DB rotates to 2."""
+    from fastapi import HTTPException
+    from fastapi.security import HTTPAuthorizationCredentials
+    from backend.dependencies import create_jwt_token, get_current_user
+
+    user_id = "driver_rotation_test_001"
+    phone = "+15550020001"
+
+    # Step 1: issue a token that was valid at version 1
+    old_token = create_jwt_token(user_id=user_id, phone=phone, token_version=1)
+
+    # Step 2: DB now reflects version=2 (logout-all was called, version bumped)
+    user_with_rotated_version = {
+        "id": user_id,
+        "phone": phone,
+        "token_version": 2,
+        "role": "rider",
+        "current_session_id": None,
+    }
+
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=old_token)
+
+    # Step 3: attempt to use the old token — Firebase rejects it (it's a JWT,
+    # not a Firebase ID token), falling through to the JWT path which checks
+    # token_version against the DB value.
+    with (
+        patch("backend.dependencies.firebase_auth.verify_id_token", side_effect=ValueError("not a firebase token")),
+        patch("backend.dependencies.db_supabase.get_user_by_id", AsyncMock(return_value=user_with_rotated_version)),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await get_current_user(credentials)
+
+    # Step 4: must be 401 — "Session revoked"
+    assert exc_info.value.status_code == 401
+    assert "revoked" in exc_info.value.detail.lower()
+
+
 # ── P3-3: OTP lockout integration test ───────────────────────────────────────
 
 
@@ -439,15 +481,9 @@ def valid_phone():
     return "+15550019999"
 
 
-def test_otp_lockout_after_5_failures(test_client, valid_phone):
-    # Clear any stale in-process Redis state for this phone so the test is
-    # isolated even when the full suite runs in a single process.
-    from backend.utils import redis_client as rc
-
-    keys_to_clear = [k for k in list(rc._local.keys()) if valid_phone in k]
-    for k in keys_to_clear:
-        rc._local.pop(k, None)
-
+def test_otp_lockout_after_5_failures(test_client, mock_redis, valid_phone):
+    # mock_redis fixture (conftest) provides a clean _local dict so stale
+    # counters from other tests never bleed in; no manual cleanup needed.
     for _ in range(5):
         test_client.post("/api/auth/verify-otp", json={"phone": valid_phone, "code": "0000"})
 

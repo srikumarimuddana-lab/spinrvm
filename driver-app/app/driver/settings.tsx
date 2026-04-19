@@ -53,6 +53,27 @@ export default function SettingsScreen() {
     const [promotions, setPromotions] = useState(false);
     const [soundEffects, setSoundEffects] = useState(true);
     const [vibration, setVibration] = useState(true);
+
+    useEffect(() => {
+        api.get('/notifications/preferences').then((prefs: any) => {
+            if (prefs == null) return;
+            if (prefs.push_notifications != null) setPushNotifications(Boolean(prefs.push_notifications));
+            if (prefs.ride_alerts != null) setRideAlerts(Boolean(prefs.ride_alerts));
+            if (prefs.earnings_summary != null) setEarningsSummary(Boolean(prefs.earnings_summary));
+            if (prefs.promotions != null) setPromotions(Boolean(prefs.promotions));
+            if (prefs.sound_effects != null) setSoundEffects(Boolean(prefs.sound_effects));
+            if (prefs.vibration != null) setVibration(Boolean(prefs.vibration));
+        }).catch(() => {/* keep defaults on network failure */});
+    }, []);
+
+    const savePreference = (key: string, value: boolean) => {
+        api.put('/notifications/preferences', { [key]: value }).catch(() => {/* fire-and-forget */});
+    };
+
+    const handleToggle = (key: string, setter: (v: boolean) => void) => (value: boolean) => {
+        setter(value);
+        savePreference(key, value);
+    };
     const [navApp, setNavApp] = useState<'default' | 'google' | 'waze'>('default');
 
     const isDarkOn = colorScheme === 'dark';
@@ -136,13 +157,13 @@ export default function SettingsScreen() {
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>Notifications</Text>
                     <View style={styles.card}>
-                        {renderToggle('Push Notifications', 'Receive real-time notifications', pushNotifications, setPushNotifications, 'notifications', colors.primary)}
+                        {renderToggle('Push Notifications', 'Receive real-time notifications', pushNotifications, handleToggle('push_notifications', setPushNotifications), 'notifications', colors.primary)}
                         <View style={styles.cardDivider} />
-                        {renderToggle('Ride Alerts', 'Sound and vibration for new rides', rideAlerts, setRideAlerts, 'car', colors.orange)}
+                        {renderToggle('Ride Alerts', 'Sound and vibration for new rides', rideAlerts, handleToggle('ride_alerts', setRideAlerts), 'car', colors.orange)}
                         <View style={styles.cardDivider} />
-                        {renderToggle('Daily Earnings Summary', 'Get notified about daily earnings', earningsSummary, setEarningsSummary, 'wallet', colors.gold)}
+                        {renderToggle('Daily Earnings Summary', 'Get notified about daily earnings', earningsSummary, handleToggle('earnings_summary', setEarningsSummary), 'wallet', colors.gold)}
                         <View style={styles.cardDivider} />
-                        {renderToggle('Promotions & Offers', 'Special offers and promotions', promotions, setPromotions, 'gift', colors.primaryDark)}
+                        {renderToggle('Promotions & Offers', 'Special offers and promotions', promotions, handleToggle('promotions', setPromotions), 'gift', colors.primaryDark)}
                     </View>
                 </View>
 
@@ -150,9 +171,9 @@ export default function SettingsScreen() {
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>Sound & Haptics</Text>
                     <View style={styles.card}>
-                        {renderToggle('Sound Effects', 'Play sounds for ride events', soundEffects, setSoundEffects, 'volume-high', colors.primary)}
+                        {renderToggle('Sound Effects', 'Play sounds for ride events', soundEffects, handleToggle('sound_effects', setSoundEffects), 'volume-high', colors.primary)}
                         <View style={styles.cardDivider} />
-                        {renderToggle('Vibration', 'Haptic feedback for new rides', vibration, setVibration, 'phone-portrait', colors.orange)}
+                        {renderToggle('Vibration', 'Haptic feedback for new rides', vibration, handleToggle('vibration', setVibration), 'phone-portrait', colors.orange)}
                     </View>
                 </View>
 

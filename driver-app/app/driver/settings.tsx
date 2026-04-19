@@ -231,6 +231,17 @@ export default function SettingsScreen() {
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                         </TouchableOpacity>
                         <View style={styles.cardDivider} />
+                        <TouchableOpacity
+                            style={styles.actionRow}
+                            onPress={() => router.push('/driver/faq' as any)}
+                        >
+                            <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
+                                <Ionicons name="help-circle" size={18} color={colors.primary} />
+                            </View>
+                            <Text style={styles.settingLabel}>Help Center & FAQ</Text>
+                            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                        </TouchableOpacity>
+                        <View style={styles.cardDivider} />
                         <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/legal?type=tos' as any)}>
                             <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
                                 <Ionicons name="document-text" size={18} color={colors.primary} />

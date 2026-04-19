@@ -99,20 +99,20 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
         {/* Fare breakdown */}
         <View style={styles.fareBreakdown}>
           <View style={styles.fareRow}>
-            <Text style={styles.fareItemLabel}>{t('tripCompleted.baseFare')}</Text>
+            <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.baseFare')}</Text>
             <Text style={styles.fareItemValue}>${(completedRide.base_fare || 0).toFixed(2)}</Text>
           </View>
           <View style={styles.fareRow}>
-            <Text style={styles.fareItemLabel}>{t('tripCompleted.distanceFare')}</Text>
+            <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.distanceFare')}</Text>
             <Text style={styles.fareItemValue}>${(completedRide.distance_fare || 0).toFixed(2)}</Text>
           </View>
           <View style={styles.fareRow}>
-            <Text style={styles.fareItemLabel}>{t('tripCompleted.timeFare')}</Text>
+            <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.timeFare')}</Text>
             <Text style={styles.fareItemValue}>${(completedRide.time_fare || 0).toFixed(2)}</Text>
           </View>
           <View style={styles.fareDivider} />
           <View style={styles.fareRow}>
-            <Text style={styles.fareEarningsLabel}>{t('tripCompleted.yourEarnings')}</Text>
+            <Text allowFontScaling={false} style={styles.fareEarningsLabel}>{t('tripCompleted.yourEarnings')}</Text>
             <Text style={styles.fareEarningsValue}>
               ${(completedRide.driver_earnings || 0).toFixed(2)}
             </Text>
@@ -184,14 +184,14 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
         {/* Rate your rider */}
         {!submitted && (
           <View style={styles.ratingSection}>
-            <Text style={styles.ratingLabel}>{t('tripCompleted.howWasRider')}</Text>
+            <Text allowFontScaling={false} style={styles.ratingLabel}>{t('tripCompleted.howWasRider')}</Text>
             <View style={styles.starsRow}>
               {[1, 2, 3, 4, 5].map((star) => (
                 <TouchableOpacity
                   key={star}
                   onPress={() => setRating(star)}
                   activeOpacity={0.7}
-                  hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                 >
                   <Ionicons
                     name={star <= rating ? 'star' : 'star-outline'}
@@ -203,12 +203,13 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
             </View>
             {rating > 0 && (
               <TextInput
-                style={styles.commentInput}
+                style={[styles.commentInput, { minHeight: undefined, maxHeight: undefined, flex: 1 }]}
                 placeholder={t('tripCompleted.anyComments')}
                 placeholderTextColor={COLORS.textDim}
                 value={comment}
                 onChangeText={setComment}
                 multiline
+                numberOfLines={3}
                 maxLength={200}
                 textAlignVertical="top"
               />
@@ -234,7 +235,7 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
           disabled={submitting}
         >
           <LinearGradient colors={[COLORS.accent, COLORS.accentDim]} style={styles.actionGradient}>
-            <Text style={styles.actionBtnText}>
+            <Text allowFontScaling={false} style={styles.actionBtnText}>
               {submitting ? t('tripCompleted.submitting') : rating > 0 ? t('tripCompleted.rateDone') : t('tripCompleted.skipRating')}
             </Text>
           </LinearGradient>

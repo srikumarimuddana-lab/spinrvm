@@ -200,7 +200,7 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
               }}
               activeOpacity={0.85}
             >
-              <Text style={styles.actionCardButtonText}>{banner.button}</Text>
+              <Text allowFontScaling={false} style={styles.actionCardButtonText}>{banner.button}</Text>
               <Ionicons name="arrow-forward" size={16} color="#FFF" />
             </TouchableOpacity>
           </View>
@@ -212,12 +212,12 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
             {isOnline ? (
                 <View style={styles.statusPillOnline}>
                     <Ionicons name="pulse" size={14} color="#059669" />
-                    <Text style={styles.statusPillTextOnline}>{t('dashboard.findingRides')}</Text>
+                    <Text allowFontScaling={false} style={styles.statusPillTextOnline}>{t('dashboard.findingRides')}</Text>
                 </View>
             ) : (
                 <View style={styles.statusPillOffline}>
                     <View style={styles.offlineDot} />
-                    <Text style={styles.statusPillTextOffline}>{t('home.offline')}</Text>
+                    <Text allowFontScaling={false} style={styles.statusPillTextOffline}>{t('home.offline')}</Text>
                 </View>
             )}
         </View>
@@ -247,7 +247,7 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
               }
               style={styles.goButtonInner}
             >
-              <Text style={[styles.goButtonText, !canGoOnline && styles.goButtonTextDisabled]}>
+              <Text allowFontScaling={false} style={[styles.goButtonText, !canGoOnline && styles.goButtonTextDisabled]}>
                 {isOnline ? t('home.stop') : t('home.go')}
               </Text>
             </LinearGradient>

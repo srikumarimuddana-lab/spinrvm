@@ -404,6 +404,7 @@ export default function DriverDashboard() {
       <OfflineBanner />
 
       {/* Map */}
+      <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
       <MapView
         key={mapKey}
         ref={mapRef}
@@ -545,6 +546,7 @@ export default function DriverDashboard() {
           />
         )}
       </MapView>
+      </View>
 
       {/* Top Bar */}
       <DriverTopBar driverData={driverData} user={user} isOnline={isOnline} connectionState={connectionState} />

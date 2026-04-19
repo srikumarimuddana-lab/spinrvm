@@ -33,6 +33,16 @@ let _isOnline = true;
 let _isProcessing = false;
 let _initialized = false;
 
+// ── Error callback ──
+// Screens register here to receive a notification when a queued request
+// fails with a 4xx error after replay, so they can show a toast.
+type QueueErrorFn = (request: QueuedRequest, error: any) => void;
+let _onQueueError: QueueErrorFn | null = null;
+
+export function setQueueErrorCallback(fn: QueueErrorFn): void {
+  _onQueueError = fn;
+}
+
 // ── Public API ──
 
 export function isOnline(): boolean {
@@ -139,7 +149,17 @@ async function processQueue(): Promise<void> {
           console.log('[OfflineQueue] Still offline — pausing replay');
           break;
         }
-        // Other errors (4xx, 5xx) — drop the request to avoid infinite retry
+        // 4xx errors — the request is logically invalid; drop and surface to UI
+        const status: number | undefined = error?.response?.status;
+        const is4xx = status !== undefined && status >= 400 && status < 500;
+        if (is4xx) {
+          console.log(`[OfflineQueue] 4xx (${status}) on ${request.method} ${request.url} — dropping and notifying`);
+          _queue.shift();
+          await _persist();
+          _onQueueError?.(request, error);
+          continue;
+        }
+        // 5xx / other — retry up to 3 times then drop silently
         request.retries += 1;
         if (request.retries >= 3) {
           console.log(`[OfflineQueue] Dropping ${request.method} ${request.url} after 3 retries`);

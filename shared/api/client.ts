@@ -58,7 +58,6 @@ export function setInMemoryToken(token: string | null) {
 // request is retried with the newly-stored in-memory token.
 type RefreshFn = () => Promise<boolean>;
 let _refreshCallback: RefreshFn | null = null;
-let _isRefreshing = false;
 let _refreshPromise: Promise<boolean> | null = null;
 
 export function setRefreshCallback(fn: RefreshFn): void {
@@ -156,14 +155,12 @@ const handleApiError = async (response: Response, method: string, url: string, r
   if (response.status === 401 && _refreshCallback && retryFn && url !== '/auth/refresh') {
     try {
       // Deduplicate concurrent refresh calls — only one in-flight at a time.
-      if (!_isRefreshing) {
-        _isRefreshing = true;
+      if (!_refreshPromise) {
         _refreshPromise = _refreshCallback().finally(() => {
-          _isRefreshing = false;
           _refreshPromise = null;
         });
       }
-      const refreshed = await _refreshPromise!;
+      const refreshed = await _refreshPromise;
       if (refreshed) {
         return retryFn() as any; // retry with the new token now in _inMemoryToken
       }

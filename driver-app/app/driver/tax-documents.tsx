@@ -17,6 +17,7 @@ import { useRouter } from 'expo-router';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 
 interface TaxDocument {
     id: string;
@@ -26,7 +27,7 @@ interface TaxDocument {
     generated_at: string | null;
 }
 
-export default function TaxDocumentsScreen() {
+function TaxDocumentsScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const { colors } = useTheme();
@@ -309,4 +310,12 @@ function createStyles(colors: ThemeColors) {
             lineHeight: 20,
         },
     });
+}
+
+export default function TaxDocumentsScreenWithBoundary() {
+  return (
+    <ErrorBoundary>
+      <TaxDocumentsScreen />
+    </ErrorBoundary>
+  );
 }

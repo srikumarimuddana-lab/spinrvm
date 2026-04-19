@@ -64,6 +64,8 @@ class ErrorCode(Enum):
     SERVICE_UNAVAILABLE = 9002
     RATE_LIMIT_EXCEEDED = 9003
     EXTERNAL_SERVICE_ERROR = 9004
+    DATABASE_ERROR = 9005
+    DUPLICATE_RECORD = 9006
 
 
 class SpinrException(Exception):
@@ -375,6 +377,30 @@ class ExternalServiceException(SpinrException):
         )
 
 
+class DatabaseError(SpinrException):
+    """Database operation failed (transient or permanent)."""
+
+    def __init__(self, message: str = "Database operation failed", details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            details=details or {},
+        )
+
+
+class DuplicateRecordError(SpinrException):
+    """Unique constraint violation — record already exists."""
+
+    def __init__(self, message: str = "Record already exists", details: Optional[Dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.DUPLICATE_RECORD,
+            status_code=409,
+            details=details or {},
+        )
+
+
 # Error handling middleware
 async def spinr_exception_handler(request: Request, exc: SpinrException) -> JSONResponse:
     """Handle SpinrException and return formatted JSON response."""
@@ -394,7 +420,10 @@ async def spinr_exception_handler(request: Request, exc: SpinrException) -> JSON
     return JSONResponse(
         status_code=exc.status_code,
         content=content,
-        headers={"X-Request-ID": request_id},
+        headers={
+            **_cors_headers_for(request),
+            "X-Request-ID": request_id,
+        },
     )
 
 
@@ -438,7 +467,10 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
                 "timestamp": datetime.utcnow().isoformat(),
             },
         },
-        headers={"X-Request-ID": request_id},
+        headers={
+            **_cors_headers_for(request),
+            "X-Request-ID": request_id,
+        },
     )
 
 

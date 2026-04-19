@@ -74,6 +74,138 @@ async def test_no_double_accept(client, ride_id, driver_1_headers, driver_2_head
     assert statuses == [200, 409]
 
 
+# ── 9-2: Guard against completing a ride that hasn't started ─────────────────
+
+
+@pytest.mark.asyncio
+async def test_cannot_complete_from_driver_assigned(ride_id):
+    """complete_ride must reject a ride that is still in driver_assigned state (422)."""
+    from backend.routes import drivers as drv_mod
+
+    driver = {"id": "driver_001", "user_id": "user_driver_001"}
+    ride = {
+        "id": ride_id,
+        "status": "driver_assigned",
+        "driver_id": "driver_001",
+        "rider_id": "rider_001",
+    }
+
+    with patch(
+        "backend.routes.drivers.db_supabase.get_rows",
+        AsyncMock(side_effect=[[driver], [ride]]),
+    ):
+        [exc] = await asyncio.gather(
+            drv_mod.complete_ride(ride_id=ride_id, current_user={"id": "user_driver_001"}),
+            return_exceptions=True,
+        )
+
+    assert getattr(exc, "status_code", None) == 422
+    assert "in_progress" in getattr(exc, "message", str(exc)).lower()
+
+
+# ── 9-3: Full ride lifecycle integration test ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_full_ride_lifecycle():
+    """Walk the complete ride state machine: accept → arrive → verify-otp → complete."""
+    from backend.routes import drivers as drv_mod
+
+    try:
+        from backend.utils.crypto import hash_otp
+    except ImportError:
+        from utils.crypto import hash_otp
+
+    ride_id = "lifecycle_test_001"
+    driver_id = "driver_lifecycle"
+    user_driver_id = "user_driver_lifecycle"
+    rider_id = "rider_lifecycle"
+    otp_plain = "1234"
+
+    # Mutable ride dict – mock DB calls mutate it to track state.
+    ride = {
+        "id": ride_id,
+        "status": "driver_assigned",
+        "driver_id": driver_id,
+        "rider_id": rider_id,
+        "pickup_lat": 52.1333,
+        "pickup_lng": -106.6667,
+        "dropoff_lat": 52.1500,
+        "dropoff_lng": -106.6500,
+        "distance_km": 2.5,
+        "planned_distance_km": 2.5,
+        "base_fare": 3.0,
+        "distance_fare": 3.75,
+        "time_fare": 2.5,
+        "booking_fee": 0.5,
+        "total_fare": 15.0,
+        "pickup_otp": hash_otp(otp_plain),
+    }
+    driver = {
+        "id": driver_id,
+        "user_id": user_driver_id,
+        "lat": 52.1333,  # Same coords as pickup – passes 200 m geofence check.
+        "lng": -106.6667,
+    }
+
+    async def fake_get_rows(table, filters=None, **kw):
+        if table == "drivers":
+            return [driver]
+        if table == "rides":
+            return [ride]
+        return []  # driver_location_history → empty → no GPS recalculation
+
+    async def fake_update_ride(rid, updates):
+        ride.update(updates)
+        return ride
+
+    guard_ok = MagicMock()
+    guard_ok.modified_count = 1
+
+    # drivers.py: db = db_supabase (alias). Patching both separately would
+    # conflict because they reference the same module object – the second patch
+    # would overwrite the first. Use one unified fake that handles both callers:
+    #   • accept_ride uses db.update_one with {"$set": {...}} and checks modified_count
+    #   • complete_ride uses db_supabase.update_one with a plain dict (no "$set")
+    async def fake_update_one(table, filter_, updates):
+        if table == "rides":
+            actual = updates.get("$set", updates)
+            ride.update(actual)
+        return guard_ok  # accept_ride checks guard.modified_count == 0
+
+    with (
+        patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=fake_get_rows)),
+        patch("backend.routes.drivers.db_supabase.update_ride", AsyncMock(side_effect=fake_update_ride)),
+        patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=fake_update_one)),
+        patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.drivers.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+        patch("backend.routes.drivers.db_supabase.find_one", AsyncMock(return_value=ride)),
+        patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
+        patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+    ):
+        # Step 1: Accept ride – driver_assigned → driver_accepted
+        await drv_mod.accept_ride(ride_id=ride_id, current_user={"id": user_driver_id})
+        assert ride["status"] == "driver_accepted"
+
+        # Step 2: Arrive at pickup – driver_accepted → driver_arrived
+        await drv_mod.arrive_at_pickup(ride_id=ride_id, current_user={"id": user_driver_id})
+        assert ride["status"] == "driver_arrived"
+
+        # Step 3: Verify OTP – driver_arrived → in_progress
+        from backend.routes.drivers import RideOTPRequest
+
+        otp_req = RideOTPRequest(otp=otp_plain)
+        await drv_mod.verify_pickup_otp(
+            ride_id=ride_id, request=otp_req, current_user={"id": user_driver_id}
+        )
+        assert ride["status"] == "in_progress"
+
+        # Step 4: Complete ride – in_progress → completed
+        await drv_mod.complete_ride(ride_id=ride_id, current_user={"id": user_driver_id})
+        assert ride["status"] == "completed"
+        assert ride.get("payment_status") == "completed"
+
+
 class TestRideCreation:
     """Tests for ride creation functionality."""
 

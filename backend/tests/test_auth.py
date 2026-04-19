@@ -289,12 +289,17 @@ class TestAuthEndpoints:
 
     @pytest.fixture
     def test_client(self):
-        """Create test client with mocked dependencies."""
+        """Create test client with App Check bypassed for unit testing."""
+        import sys
         from fastapi.testclient import TestClient
-
         from backend.server import app
 
-        return TestClient(app)
+        mock_app_check = MagicMock()
+        mock_app_check.verify_token = MagicMock(return_value=None)
+
+        with patch.dict(sys.modules, {"firebase_admin.app_check": mock_app_check}):
+            with TestClient(app, headers={"X-Firebase-AppCheck": "test-token"}) as client:
+                yield client
 
     def test_send_otp_success(self, test_client, mock_supabase_client, mock_sms_service):
         """Test sending OTP successfully."""
@@ -305,8 +310,7 @@ class TestAuthEndpoints:
 
         response = test_client.post("/api/auth/send-otp", json={"phone": "+1234567890"})
 
-        # Should either succeed or be rate limited
-        assert response.status_code in [200, 429]
+        assert response.status_code == 200
 
     def test_send_otp_missing_phone(self, test_client):
         """Test sending OTP with missing phone number."""
@@ -330,10 +334,10 @@ class TestAuthEndpoints:
             return_value=mock_response
         )
 
-        response = test_client.post("/api/auth/verify-otp", json={"phone": "+1234567890", "code": "123456"})
+        response = test_client.post("/api/auth/verify-otp", json={"phone": "+1234567890", "code": "1234"})
 
-        # Should succeed or fail with appropriate error
-        assert response.status_code in [200, 400, 401]
+        # OTP lookup returns None via mock chain → invalid code → 400
+        assert response.status_code == 400
 
     def test_verify_otp_missing_fields(self, test_client):
         """Test verifying OTP with missing fields."""

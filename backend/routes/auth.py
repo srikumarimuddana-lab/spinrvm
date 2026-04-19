@@ -112,6 +112,12 @@ async def _clear_otp_failures(phone: str) -> None:
         logger.warning(f"_clear_otp_failures: {e}")
 
 
+def _is_dev_otp_bypass(otp: str) -> bool:
+    if settings.ENV.lower() != "development":
+        return False
+    return otp in ("1234", "123456")
+
+
 # ── Helpers for Auth Responses ──────────────────────────────────────────
 def _make_auth_response(
     token: str,
@@ -211,10 +217,8 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
     except Exception as e:
         logger.warning(f"Could not query OTP from DB: {e}")
 
-    # Dev fallback: accept code 123456 when no OTP record found (Twilio not configured)
-    # DISABLED IN PRODUCTION: only allow in development environment
-    if not otp_record and code == "123456" and settings.ENV.lower() == "development":
-        logger.info("Dev mode: accepting code 123456")
+    if not otp_record and _is_dev_otp_bypass(code):
+        logger.info("Dev mode: accepting bypass OTP")
         otp_record = {
             "id": "dev",
             "phone": phone,
@@ -362,6 +366,10 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
         payload = _firebase_auth.verify_id_token(body.firebase_token)
     except Exception as e:
         raise HTTPException(status_code=401, detail="Invalid Firebase token") from e
+
+    driver_app_id = settings.FIREBASE_DRIVER_APP_ID
+    if driver_app_id and payload.get("aud") != driver_app_id:
+        raise HTTPException(status_code=401, detail="Token not issued for driver app")
 
     uid: str = payload.get("uid") or payload.get("user_id") or ""
     phone: str = payload.get("phone_number") or ""
@@ -555,7 +563,7 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
 
 
 @api_router.post("/logout")
-@limiter.limit("10/minute")
+@limiter.limit("3/minute")
 async def logout(request: Request, body: LogoutRequest, current_user: dict = Depends(get_current_user)):
     """Revoke the presented refresh token.
 

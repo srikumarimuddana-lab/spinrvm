@@ -14,6 +14,15 @@ from typing import Any, Optional, Tuple, Union
 from fastapi import HTTPException
 from loguru import logger
 
+# Compiled once at import time for efficiency. Combines SQL injection markers,
+# SQL comment sequences, and common XSS keywords.
+_SUSPICIOUS_PATTERN = re.compile(
+    r"(\b(SELECT|INSERT|UPDATE|DELETE|DROP|UNION|ALTER)\b.*\b(FROM|INTO|TABLE|DATABASE)\b)"
+    r"|(--|\#|\/\*)"
+    r"|(\b(SCRIPT|ALERT|EVAL)\b)",
+    re.IGNORECASE,
+)
+
 # ============================================================================
 # Phone Number Validation (E.164 Format)
 # ============================================================================
@@ -341,17 +350,10 @@ def sanitize_string(
         # Simple HTML tag removal (for more robust sanitization, use bleach library)
         value = re.sub(r"<[^>]*>", "", value)
 
-    # Check for suspicious patterns (basic SQL injection prevention)
-    suspicious_patterns = [
-        r"(\b(SELECT|INSERT|UPDATE|DELETE|DROP|UNION|ALTER)\b.*\b(FROM|INTO|TABLE|DATABASE)\b)",
-        r"(--|\#|\/\*)",  # SQL comment markers
-        r"(\b(SCRIPT|ALERT|EVAL)\b)",  # Common XSS patterns
-    ]
-
-    for pattern in suspicious_patterns:
-        if re.search(pattern, value, re.IGNORECASE):
-            logger.warning(f"Suspicious pattern detected in input: {pattern}")
-            # Don't raise exception, just log for monitoring
+    if _SUSPICIOUS_PATTERN.search(value):
+        if raise_exception:
+            raise HTTPException(status_code=400, detail="Invalid input: suspicious content detected")
+        return False, None
 
     return True, value
 
@@ -462,9 +464,9 @@ def validate_address(address: str, raise_exception: bool = True) -> Tuple[bool, 
         return False, None
 
     # Basic validation - should contain some alphanumeric characters
-    if len(address.strip()) < 5:
+    if len(address.strip()) < 10:
         if raise_exception:
-            raise HTTPException(status_code=400, detail="Address appears too short")
+            raise HTTPException(status_code=400, detail="Address must be at least 10 characters")
         return False, None
 
     # Must contain at least some letters or numbers
@@ -581,6 +583,39 @@ def validate_canadian_tax_region(region: str) -> str:
     if region not in _CA_TAX_REGIONS:
         raise ValueError(f"unknown Canadian tax region: {region!r}")
     return region
+
+
+# ============================================================================
+# Vehicle Field Validation
+# ============================================================================
+
+
+def validate_license_plate(plate: str) -> str:
+    """Validate vehicle licence plate: 2–8 uppercase alphanumeric characters."""
+    if not isinstance(plate, str):
+        raise ValueError("Licence plate must be a string")
+    normalized = plate.strip().upper()
+    if not re.match(r'^[A-Z0-9]{2,8}$', normalized):
+        raise ValueError("Licence plate must be 2–8 uppercase alphanumeric characters")
+    return normalized
+
+
+def validate_vin(vin: str) -> str:
+    """Validate VIN: exactly 17 alphanumeric characters (I, O, Q excluded per ISO 3779)."""
+    if not isinstance(vin, str):
+        raise ValueError("VIN must be a string")
+    normalized = vin.strip().upper()
+    if not re.match(r'^[A-HJ-NPR-Z0-9]{17}$', normalized):
+        raise ValueError("VIN must be exactly 17 valid VIN characters (I, O, Q not allowed)")
+    return normalized
+
+
+def validate_vehicle_year(year: int) -> int:
+    """Validate vehicle year: between 1990 and current year + 1."""
+    current_year = datetime.now().year
+    if not (1990 <= year <= current_year + 1):
+        raise ValueError(f"Vehicle year must be between 1990 and {current_year + 1}")
+    return year
 
 
 def validate_email_domain(domain: str) -> str:

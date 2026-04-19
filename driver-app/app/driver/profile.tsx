@@ -27,6 +27,8 @@ import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -146,8 +148,7 @@ export default function ProfileScreen() {
     if (!editFirstName.trim() || !editLastName.trim() || !editEmail.trim() || !editGender) {
       return showFeedback('Missing Info', 'Please fill in all fields', 'warning');
     }
-    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!re.test(editEmail)) return showFeedback('Invalid Email', 'Please enter a valid email address', 'warning');
+    if (!EMAIL_REGEX.test(editEmail)) return showFeedback('Invalid Email', 'Please enter a valid email address', 'warning');
 
     Keyboard.dismiss();
     setIsSaving(true);

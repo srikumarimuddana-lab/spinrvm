@@ -19,11 +19,13 @@ class Settings(BaseSettings):
 
     # Database settings
     SUPABASE_URL: str = ""
+    # IMPORTANT: Rotate this key before deploying — see docs/key-rotation.md
     SUPABASE_SERVICE_ROLE_KEY: str = ""
     USE_SUPABASE: bool = True  # Supabase is now the default database
 
     # Firebase settings
     FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None
+    FIREBASE_DRIVER_APP_ID: str = ""
 
     # Security settings — no defaults; app refuses to start if unset in production
     JWT_SECRET: str

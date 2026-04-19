@@ -53,6 +53,11 @@ jobs:
           pip install -r requirements.txt
           pip install pytest-cov pytest-asyncio pytest-mock
 
+      - name: Python dependency CVE scan
+        run: |
+          pip install pip-audit
+          pip-audit -r backend/requirements.txt --fail-on-vuln
+
       - name: Install ruff
         run: pip install ruff
 
@@ -144,6 +149,14 @@ jobs:
       - name: Install dependencies
         working-directory: driver-app
         run: yarn install --frozen-lockfile
+
+      - name: Check for exposed secrets in EXPO_PUBLIC vars
+        run: |
+          if grep -r "EXPO_PUBLIC_.*SECRET\|EXPO_PUBLIC_.*PRIVATE\|EXPO_PUBLIC_.*KEY" \
+            driver-app/.env* driver-app/app.config.ts; then
+            echo "ERROR: Private key found in EXPO_PUBLIC_ variable"
+            exit 1
+          fi
 
       - name: Run driver app tests
         working-directory: driver-app

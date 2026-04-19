@@ -10,6 +10,80 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from core.config import settings
 from utils.rate_limiter import default_limiter, rate_limit_exceeded_handler
 
+# ── Firebase App Check Middleware ─────────────────────────────────────
+# When enforcement_enabled=True the middleware rejects any request to a
+# protected path that is missing a valid X-Firebase-AppCheck token with
+# HTTP 401. Set to False during development or before Firebase Console
+# registration is complete (see IMPORTANT note below).
+#
+# IMPORTANT — manual steps required before enabling enforcement:
+#   iOS  : register bundle ID with Apple DeviceCheck in
+#          Firebase Console → App Check → Apps
+#   Android: register package name with Play Integrity in
+#          Firebase Console → App Check → Apps
+# Until those steps are done, real devices will be rejected. During local
+# development you can add your debug token in Firebase Console → App Check
+# → Apps → overflow menu → "Manage debug tokens".
+_APP_CHECK_ENFORCEMENT = True
+
+# Paths that must never require App Check:
+#   - WebSocket connections (no HTTP headers)
+#   - OpenAPI docs served by FastAPI
+#   - Health / readiness probes
+_APP_CHECK_EXEMPT_PREFIXES = ("/ws/", "/docs", "/redoc", "/openapi.json", "/health")
+
+
+class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
+    """Enforce Firebase App Check on every API request.
+
+    Reads the ``X-Firebase-AppCheck`` header and verifies the token using the
+    Firebase Admin SDK. Returns 401 when enforcement is enabled and the token
+    is absent or invalid.
+    """
+
+    def __init__(self, app, enforcement_enabled: bool = True):
+        super().__init__(app)
+        self._enforce = enforcement_enabled
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+
+        # Exempt WebSockets, docs, and health probes.
+        if any(path.startswith(p) for p in _APP_CHECK_EXEMPT_PREFIXES):
+            return await call_next(request)
+
+        # Only apply to /api/* routes.
+        if not path.startswith("/api"):
+            return await call_next(request)
+
+        token = request.headers.get("X-Firebase-AppCheck")
+
+        if not token:
+            if self._enforce:
+                logger.warning("App Check: missing token for %s", path)
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "App Check token required"},
+                )
+            # Enforcement off — let the request through but log it.
+            logger.debug("App Check: token absent (enforcement disabled) for %s", path)
+            return await call_next(request)
+
+        # Verify the token with the Firebase Admin SDK.
+        try:
+            import firebase_admin.app_check as app_check  # noqa: PLC0415
+            app_check.verify_token(token)
+        except Exception as exc:
+            if self._enforce:
+                logger.warning("App Check: invalid token for %s — %s", path, exc)
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Invalid App Check token"},
+                )
+            logger.debug("App Check: token verification failed (enforcement disabled): %s", exc)
+
+        return await call_next(request)
+
 # ── Security response headers ─────────────────────────────────────────
 # Baseline for an API backend. Critical protections: X-Frame-Options
 # (clickjacking), X-Content-Type-Options (MIME sniffing), HSTS (TLS
@@ -270,6 +344,11 @@ def init_middleware(app):
     # HSTS is only enabled in production because emitting it over
     # plain-HTTP dev would cause browsers to pin the dev host to HTTPS.
     app.add_middleware(SecurityHeadersMiddleware, enable_hsts=is_production)
+
+    # Firebase App Check — verify that requests originate from genuine
+    # Spinr builds. Enforcement is enabled; see _APP_CHECK_ENFORCEMENT above
+    # and the IMPORTANT comment for the manual Firebase Console steps needed.
+    app.add_middleware(FirebaseAppCheckMiddleware, enforcement_enabled=_APP_CHECK_ENFORCEMENT)
 
     # FIX: Add CORS headers to exception responses (FastAPI bug fix)
     @app.exception_handler(Exception)

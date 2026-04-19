@@ -33,6 +33,7 @@ from routes.promotions import api_router as promotions_router
 from routes.quests import api_router as quests_router
 from routes.rides import api_router as rides_router
 from routes.settings import api_router as settings_router
+from routes.support import api_router as support_chat_router
 from routes.users import api_router as users_router
 from routes.wallet import api_router as wallet_router
 from routes.webhooks import api_router as webhooks_router
@@ -79,6 +80,7 @@ v1_api_router.include_router(webhooks_router)
 v1_api_router.include_router(upload_router)
 v1_api_router.include_router(support_router)
 v1_api_router.include_router(admin_support_router)
+v1_api_router.include_router(support_chat_router)
 v1_api_router.include_router(pricing_router)
 
 # Include API routers

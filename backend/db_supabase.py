@@ -4,6 +4,13 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
 
 try:
+    import httpx as _httpx
+    _HTTPX_TIMEOUT_EXC = _httpx.TimeoutException
+except ImportError:  # pragma: no cover
+    _httpx = None  # type: ignore
+    _HTTPX_TIMEOUT_EXC = None  # type: ignore
+
+try:
     from .supabase_client import supabase  # type: ignore
 except ImportError:
     from supabase_client import supabase  # type: ignore
@@ -35,8 +42,9 @@ async def run_sync(func: Callable[[], T]) -> T:
             or "Server disconnected" in exc_str
             or "ConnectionClosed" in exc_name
         )
-        if is_conn_terminated or is_remote_disconnect:
-            logger.warning(f"Supabase transient HTTP/2 failure ({exc_name}) — retrying once: {exc}")
+        is_timeout = _HTTPX_TIMEOUT_EXC is not None and isinstance(exc, _HTTPX_TIMEOUT_EXC)
+        if is_conn_terminated or is_remote_disconnect or is_timeout:
+            logger.warning(f"Supabase transient failure ({exc_name}) — retrying once: {exc}")
             await asyncio.sleep(0.25)
             return await loop.run_in_executor(None, func)  # type: ignore
         raise

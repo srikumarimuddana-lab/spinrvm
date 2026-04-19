@@ -260,6 +260,76 @@ setAlertState({
 
 ---
 
+## R-P1-12 · Firebase Token Does Not Enforce Rider App Audience
+
+**Audit finding [02-2 MEDIUM].** `get_current_user()` in `backend/dependencies/__init__.py`
+calls `firebase_auth.verify_id_token(token)` with no rider app audience check. The driver
+auth path enforces `FIREBASE_DRIVER_APP_ID`; the rider dependency has no equivalent. A valid
+Firebase token from the driver app can authenticate to rider endpoints and trigger auto-creation
+of a rider account without phone OTP.
+
+**File to fix:** `backend/dependencies/__init__.py`
+
+**How to fix:**
+```python
+# After verify_id_token(token) succeeds:
+rider_app_id = getattr(settings, 'FIREBASE_RIDER_APP_ID', None)
+if rider_app_id and payload.get('aud') != rider_app_id:
+    raise HTTPException(status_code=401, detail="Invalid token audience")
+```
+Add `FIREBASE_RIDER_APP_ID` to `core/config.py` settings.
+
+**Effort:** 1 hour
+
+---
+
+## R-P1-13 · Firebase-Authenticated Users Bypass Force-Logout-All
+
+**Audit finding [02-3 MEDIUM].** The Firebase auth path in `get_current_user()` returns the
+user without checking `token_version` or `session_id`. JWT-authenticated users are immediately
+kicked out when `/auth/logout-all` bumps `token_version`. Firebase-authenticated users are not
+— their sessions remain valid for up to 1 hour after a force-logout event.
+
+**File to fix:** `backend/dependencies/__init__.py:167–172`
+
+**How to fix:**
+```python
+if user:
+    # Apply same revocation checks as JWT path
+    if _token_version_mismatch({}, user):  # Firebase tokens have no token_version claim → treat as 0
+        raise HTTPException(status_code=401, detail="Session revoked — please log in again.")
+    token_session = payload.get("session_id")
+    db_session = user.get("current_session_id")
+    if db_session and token_session and token_session != db_session:
+        raise HTTPException(status_code=401, detail="Session expired.")
+```
+Also call `firebase_auth.revoke_refresh_tokens(uid)` from the `/auth/logout-all` handler.
+
+**Effort:** 2 hours
+
+---
+
+## R-P1-14 · OTP Comparison Not Constant-Time
+
+**Audit finding [02-4 MEDIUM].** OTP verification queries `(phone, hash_otp(code))` — the
+database does the equality check. Timing variations in a B-tree lookup can leak hash prefix
+information under repeated timing measurements. Should use `hmac.compare_digest`.
+
+**File to fix:** `backend/routes/auth.py` — OTP verify path
+
+**How to fix:**
+```python
+import hmac
+record = await get_otp_record_by_phone(phone)  # fetch by phone only
+if not record or not hmac.compare_digest(record["otp_hash"], hash_otp(code)):
+    await _record_otp_failure(phone)
+    raise HTTPException(400, "Invalid OTP")
+```
+
+**Effort:** 30 minutes
+
+---
+
 ## Checklist
 
 - [ ] R-P1-1 Cancellation fee enforced after driver_arrived; Cancel button disabled
@@ -273,3 +343,6 @@ setAlertState({
 - [ ] R-P1-9 SOS and star rating accessibility labels
 - [ ] R-P1-10 i18n library installed; French (fr-CA) translation prepared
 - [ ] R-P1-11 become-driver.tsx post-submit routes to /(tabs) + driver app store link
+- [ ] R-P1-12 Firebase audience check added to rider dependency (FIREBASE_RIDER_APP_ID)
+- [ ] R-P1-13 Firebase-authed users subject to token_version + session_id revocation checks
+- [ ] R-P1-14 OTP comparison uses hmac.compare_digest instead of DB equality lookup

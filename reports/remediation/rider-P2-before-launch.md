@@ -251,6 +251,26 @@ installed, then deep-link vs App Store.
 
 ---
 
+## R-P2-13 · Access Token Persisted to SecureStore — Memory-Only Pattern Not Followed
+
+**Audit finding [02-5 LOW].** `setTokens()` in `shared/store/authStore.ts:154` writes the
+access token to `expo-secure-store` in addition to the in-memory `_inMemoryToken`. The standard
+pattern is memory-only for access tokens (wiped on restart) with only the refresh token
+persisted. SecureStore is hardware-backed (iOS Keychain / Android Keystore) so the risk is low,
+but the access token survives app restarts, extending the effective session window beyond the
+15-minute JWT TTL.
+
+**File to fix:** `shared/store/authStore.ts` — `setTokens()`
+
+**How to fix:**
+Remove `storage.setItem('auth_token', token)` from `setTokens()`. In `initialize()`, if no
+in-memory token is present, call `refreshTokens()` to obtain a new access token from the
+persisted refresh token rather than reading the access token from disk.
+
+**Effort:** 1 hour
+
+---
+
 ## Checklist
 
 - [ ] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
@@ -265,3 +285,4 @@ installed, then deep-link vs App Store.
 - [ ] R-P2-10 Corporate account billing selectable in payment-confirm
 - [ ] R-P2-11 ToS acceptance step added to onboarding flow (App Store + PIPEDA)
 - [ ] R-P2-12 become-driver.tsx deep-links to driver app if installed
+- [ ] R-P2-13 Access token removed from SecureStore persistence (memory-only pattern)

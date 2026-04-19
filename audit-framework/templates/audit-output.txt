@@ -1,0 +1,86 @@
+================================================================================
+SPINR [MODULE NAME] — PRODUCTION-READINESS AUDIT v[N]
+================================================================================
+Date        : YYYY-MM-DD
+Branch      : [branch name]
+Auditor     : [name / tool]
+Scope       : [folder paths]
+Platform    : [tech stack]
+
+AUDIT GROUND RULES
+──────────────────
+• OTP is 4 digits by design — compensating controls documented, NOT flagged.
+• Hard-coded dev values (OTP "1234", test keys) → severity LOW/RECOMMENDATION only.
+• Severity scale: CRITICAL | HIGH | MEDIUM | LOW | PASS | RECOMMENDATION
+• See audit-framework/ground-rules.md for full list.
+
+PRE-AUDIT CHECKS
+─────────────────
+npm audit (driver-app):   [result]
+pip-audit (backend):      [result]
+Dimensions run:           [list dimension numbers]
+
+================================================================================
+FINDINGS
+================================================================================
+
+================================================================================
+TASK [N] — [DIMENSION NAME]
+================================================================================
+
+[TASK-N-1] SEVERITY | Short Title
+File: path/to/file.ts:line_number
+Finding: What is wrong, with specific code reference.
+Fix: Concrete change with code snippet if helpful. Effort: [X hours/days].
+
+[TASK-N-2] PASS | What Works
+File: path/to/file.ts:line_number
+Finding: What is implemented correctly and why it's sufficient.
+Fix: None required.
+
+...repeat for all findings in this task...
+
+================================================================================
+TASK [N+1] — [NEXT DIMENSION NAME]
+================================================================================
+
+...
+
+================================================================================
+FINAL TALLY
+================================================================================
+
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     0 |
+| MEDIUM          |     0 |
+| LOW             |     0 |
+| PASS            |     0 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     0 |
+
+================================================================================
+REMEDIATION PRIORITY LIST
+================================================================================
+
+── P0: FIX NOW (Before Device Testing) ──────────────────────────────────────
+
+P0-1  [task-finding-ref]  Short description
+      One sentence on what to change and where.
+
+── P1: THIS SPRINT (Before Beta Launch) ──────────────────────────────────────
+
+P1-1  [task-finding-ref]  Short description
+      One sentence on what to change and where.
+
+── P2: NEXT SPRINT (Before Public Launch) ───────────────────────────────────
+
+── P3: HARDENING (Before Scale) ──────────────────────────────────────────────
+
+── P4: FUTURE FEATURES ───────────────────────────────────────────────────────
+
+================================================================================
+END OF AUDIT — [module] v[N]
+Audit date: YYYY-MM-DD | Branch: [branch]
+================================================================================

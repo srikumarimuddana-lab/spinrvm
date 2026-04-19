@@ -1,0 +1,1804 @@
+================================================================================
+SPINR DRIVER APP — PRODUCTION-READINESS AUDIT v4
+================================================================================
+Date        : 2026-04-18
+Branch      : claude/driver-app-audit-prompt-TFDbI
+Auditor     : Claude (senior architect + mobile security engineer + QA + UX specialist)
+Scope       : driver-app/ · backend/ · shared/
+Platform    : React Native + Expo SDK 54 (Android + iOS) | FastAPI Python 3.12
+
+AUDIT GROUND RULES
+──────────────────
+• OTP is 4 digits by design — compensating controls documented, NOT flagged.
+• Hard-coded dev values (OTP "1234", test keys) → severity LOW/RECOMMENDATION only.
+• Severity scale: CRITICAL | HIGH | MEDIUM | LOW | PASS | RECOMMENDATION
+
+PRE-AUDIT DEPENDENCY SCAN
+──────────────────────────
+npm audit (driver-app):  critical=0  high=0  moderate=0  low=0  ✅ CLEAN
+pip-audit (backend):     pip_audit not installed — RECOMMENDATION: add to CI pipeline
+                         (pip install pip-audit && pip-audit in .github/workflows/ci.yml)
+
+ADDITIONAL SCREENS/ROUTES DISCOVERED (beyond original plan scope)
+──────────────────────────────────────────────────────────────────
+Driver app screens: emergency-contacts.tsx, referral.tsx, ride-detail.tsx,
+                    payout-history.tsx, tax-documents.tsx
+Backend routes:     disputes.py, fare_split.py, fares.py, favorites.py,
+                    loyalty.py, promotions.py, corporate_*.py (4 files), wallet.py
+→ These are audited where encountered in the 13 tasks below.
+
+WHAT WAS ADDED TO THE PLAN (vs. prior versions)
+─────────────────────────────────────────────────
+• Task 5 expanded to Android/iOS UX: responsive layout, keyboard handling,
+  button placement, maps/GPS, accessibility, platform-specific behavior
+• Task 13 added: all notification cases + AI support bot + knowledge base/FAQ
+• Audit ground rules added (OTP 4-digit approved design, hard-coded = RECOMMENDATION)
+
+================================================================================
+FINDINGS
+================================================================================
+
+================================================================================
+TASK 1 — FEATURE COMPLETENESS & USER STORIES
+================================================================================
+
+[1-1] PASS | Ride State Machine Fully Implemented
+File: driver-app/app/driver/index.tsx:40-617
+Finding: All states handled: idle → ride_offered → navigating_to_pickup → arrived_at_pickup → trip_in_progress → trip_completed. Route visualization updates per state. Map remounts between rides to clear artifacts.
+Fix: None required.
+
+[1-2] PASS | Earnings Display Complete (Daily/Weekly/Monthly)
+File: driver-app/app/driver/earnings.tsx:1-376
+Finding: Period filtering (today/week/month/all), trip list with breakdown, chart toggle, comparison banner with prior-period delta, payout navigation link. Complete.
+Fix: None required.
+
+[1-3] PASS | Payout Flow Complete with Stripe Connect
+File: driver-app/app/driver/payout.tsx:1-739
+Finding: Balance card, Stripe Connect onboarding link + status, GST/BN collection, min $10 payout validation, payout history header link, clear CTA when Stripe not set up.
+Fix: None required.
+
+[1-4] PASS | Subscription / Spinr Pass Complete
+File: driver-app/app/driver/subscription.tsx:1-374
+Finding: Plan selection with pricing + limits, current plan badge + rides-remaining + expiry, switch + cancel flows, Stripe Checkout deep-link with 3-retry webhook activation, free-mode celebration card.
+Fix: None required.
+
+[1-5] PASS | Quest Progress & Reward Redemption
+File: driver-app/app/driver/quests.tsx:1-399
+Finding: Two-tab (Available / My Quests), progress bar with %, claim button on completion, all quest types mapped (ride_count, earnings_target, online_hours, peak_rides, consecutive_days, rating_maintained).
+Fix: None required.
+
+[1-6] PASS | Trip History with Filtering
+File: driver-app/app/driver/rides.tsx:1-587
+Finding: Period + status dual-filter, ride cards with status badge / booking ID / timeline / distance / earnings, summary stats.
+Fix: None required.
+
+[1-7] PASS | Trip Detail Screen Complete
+File: driver-app/app/driver/ride-detail.tsx:1-437
+Finding: Map with markers + polyline, fare breakdown (base, distance, time, surge, area fee, tax, platform fee, tip, driver earnings), trip timeline events.
+Fix: None required.
+
+[1-8] PASS | In-Ride Chat Messaging
+File: driver-app/app/driver/chat.tsx:1-381
+Finding: Rider name + ride status in header, call button, bubble UI, 6 quick replies, AsyncStorage persistence + backend sync, real-time WebSocket incoming support.
+Fix: None required.
+
+[1-9] PASS | Notification Centre
+File: driver-app/app/driver/notifications.tsx:1-243
+Finding: Icon + color per type (ride/earnings/promotion/safety/system/general), unread count, mark-all-read, individual mark-read on tap, pull-to-refresh, empty state.
+Fix: None required.
+
+[1-10] PASS | Onboarding — 5-Step Flow
+File: driver-app/app/become-driver.tsx:1-806
+Finding: Intro → Personal Info → Vehicle Info → Documents → Review & Submit. Draft saved to AsyncStorage. Service area selector with backend fetch + hardcoded fallback.
+Fix: None required.
+
+[1-11] PASS | Client-Side State Machine Matches Backend
+File: backend/routes/drivers.py:39-79
+Finding: Backend defines ARRIVE_FROM_STATES, START_FROM_STATES, COMPLETE_FROM_STATES with 409 Conflict guards. Frontend implements all states correctly. No mismatch.
+Fix: None required.
+
+[1-12] PASS | Emergency Contacts (Add/Remove Up to 3)
+File: driver-app/app/driver/emergency-contacts.tsx:1-552
+Finding: Up to 3 contacts with name, phone, relationship. DELETE with confirmation. Fetch/POST/DELETE via /users/emergency-contacts. Phone formatting applied.
+Fix: None required.
+
+[1-13] PASS | SOS Button in Active Ride
+File: driver-app/app/driver/index.tsx:552-562
+Finding: SOSButton visible during navigating_to_pickup / arrived_at_pickup / trip_in_progress states. Posts GPS coords to /rides/{rideId}/emergency. Top-right placement, non-blocking.
+Fix: None required.
+
+[1-14] PASS | Referral Program
+File: driver-app/app/driver/referral.tsx:1-573
+Finding: Referral code + copy button, shareable link, stats (total referrals + earnings), referred drivers list (name/trips/status), apply-code modal with validation, T&C section.
+Fix: None required.
+
+[1-15] PASS | Settings & Account Management
+File: driver-app/app/driver/settings.tsx:1-552
+Finding: Notification toggles, sound/haptics, dark mode, navigation app picker, language selector (EN/FR), ToS/Privacy links, tax docs link, emergency assistance (911 + report safety + contacts), account deletion with "DELETE" confirmation.
+Fix: None required.
+
+[1-16] RECOMMENDATION | payout-history.tsx Screen Not Found
+File: driver-app/app/driver/payout.tsx:191
+Finding: Header navigates to /driver/payout-history but the screen file was not found. Link is wired but destination is missing — tapping it will crash or show 404.
+Fix: Create driver-app/app/driver/payout-history.tsx listing past payout requests (date, amount, status: pending/paid/failed).
+
+[1-17] RECOMMENDATION | tax-documents.tsx Screen Not Found
+File: driver-app/app/driver/settings.tsx:231-238
+Finding: Settings links to /driver/tax-documents for T4A forms but file not found.
+Fix: Create driver-app/app/driver/tax-documents.tsx with T4A download links per tax year.
+
+[1-18] RECOMMENDATION | report-safety.tsx Screen Not Found
+File: driver-app/app/driver/settings.tsx:257
+Finding: Settings links to /report-safety for incident reporting but screen not found.
+Fix: Create driver-app/app/report-safety.tsx with incident type selector, description, optional photo, submit to backend.
+
+[1-19] RECOMMENDATION | legal.tsx Screen Not Found
+File: driver-app/app/driver/settings.tsx:213-227
+Finding: Settings links to /legal?type=tos and /legal?type=privacy but legal.tsx not found.
+Fix: Create driver-app/app/legal.tsx with query-param routing rendering ToS / Privacy Policy text or web view.
+
+SUMMARY: CRITICAL:0 HIGH:0 MEDIUM:0 LOW:0 PASS:15 RECOMMENDATION:4
+
+================================================================================
+TASK 2 — AUTHENTICATION & SESSION MANAGEMENT
+================================================================================
+
+[2-1] CRITICAL | Duplicate /auth/refresh endpoint — old one will crash at runtime
+File: backend/routes/auth.py:347-401 and 475-534
+Finding: Two functions both register on POST /auth/refresh. The first (lines 347-401) is silently
+overwritten by the second (FastAPI only keeps the last registration). The dead first function
+calls _store_refresh_token() on line 399 — a function that doesn't exist anywhere in the codebase
+— so if it ever ran it would NameError crash immediately. The second (lines 475-534) is correct.
+Fix: Delete the old refresh_token() function at lines 347-401 entirely. Keep only
+refresh_access_token() at lines 475-534 which correctly uses issue_refresh_token().
+
+[2-2] CRITICAL | MongoDB-style DB calls will crash with AttributeError
+File: backend/routes/auth.py:355, 378, 387, 393
+Finding: The dead first endpoint uses db.refresh_tokens.find_one() and db.users.find_one()
+MongoDB attribute-access syntax. The actual db_supabase API exports plain functions:
+db.find_one(table, filters). Calling db.refresh_tokens.anything raises AttributeError.
+Fix: Remove the dead function (per [2-1]). If any similar calls exist elsewhere, replace with
+db.find_one('refresh_tokens', {'token_hash': hash}) pattern.
+
+[2-3] CRITICAL | Wrong DB field name in revocation check ('revoked' vs 'revoked_at')
+File: backend/routes/auth.py:355
+Finding: The dead endpoint queries {'revoked': False} but the DB schema (migration 25) defines
+revoked_at TIMESTAMPTZ — a timestamp, not a boolean. utils/refresh_tokens.py correctly checks
+row.get('revoked_at') is None. The mismatch would silently return wrong results.
+Fix: Removed by deleting the dead function per [2-1]. utils/refresh_tokens.py:131 is already correct.
+
+[2-4] HIGH | Undefined function _store_refresh_token called on line 399
+File: backend/routes/auth.py:399
+Finding: await _store_refresh_token(user_id, new_refresh) — this function is not imported or
+defined anywhere. Would crash with NameError if the dead endpoint were ever reached.
+Fix: Removed by deleting the dead function per [2-1].
+
+[2-5] HIGH | Firebase auth path never issues a refresh token
+File: backend/dependencies/__init__.py:128-172
+Finding: Users authenticated via Firebase ID token exchange get an access token issued but
+issue_refresh_token() is never called. They cannot refresh their session without re-authenticating
+via Firebase. Also, no audience or custom claim check validates driver vs. rider scope on the
+Firebase token.
+Fix: After line 165, call issue_refresh_token(user_id) and include the refresh token in the
+response. Validate a custom Firebase claim (e.g., role == 'driver') if drivers and riders use the
+same Firebase project.
+
+[2-6] MEDIUM | OTP send rate limit too lenient — 5/min instead of spec 3/min
+File: backend/routes/auth.py:135
+Finding: @limiter.limit("5/minute") — spec requires 3/min to limit phone enumeration.
+Fix: Change to @limiter.limit("3/minute").
+
+[2-7] MEDIUM | OTP verify rate limit too lenient — 10/min instead of spec 5/min
+File: backend/routes/auth.py:200
+Finding: @limiter.limit("10/minute") — attacker gets 10 guesses per minute before 5-failure
+lockout kicks in, doubling the intended attack budget.
+Fix: Change to @limiter.limit("5/minute").
+
+[2-8] MEDIUM | OTP lockout silently disabled when Redis is unavailable
+File: backend/routes/auth.py:72-112 and backend/core/config.py:56
+Finding: REDIS_URL can be empty string (optional). When Redis is absent, redis_get/redis_incr
+raise exceptions that are caught and return None, causing _check_otp_lockout() to skip the check.
+Brute-force protection silently evaporates without Redis.
+Fix: Add an in-process fallback (threading.Lock + dict with TTL) for OTP attempt tracking that
+activates when Redis is unavailable. Log a warning at startup when running without Redis.
+
+[2-9] MEDIUM | Firebase auth path does not validate audience (driver vs. rider)
+File: backend/dependencies/__init__.py:136-165
+Finding: Firebase token is verified but no custom claim (e.g., role) is checked. A rider Firebase
+token could be exchanged for a driver-scoped access token if the user_id happens to match.
+Fix: Add check: if decoded_firebase.get('role') not in ('driver', 'rider'): raise HTTPException(401).
+Or use separate Firebase projects for driver and rider apps.
+
+[2-10] LOW | Dev fallback OTP "1234" (approved — gated to non-production)
+File: backend/routes/auth.py:166
+Finding: OTP "1234" generated when Twilio not configured. Gated to dev environments. Approved design.
+Fix: No change required. Ensure staging always has Twilio configured.
+
+[2-11] LOW | Dev fallback also accepts "123456" (approved — gated to development env)
+File: backend/routes/auth.py:216
+Finding: An additional dev-mode bypass accepts "123456" when no OTP record exists. Gated to
+ENV == "development". Harmless in production.
+Fix: No change required. Consider consolidating both dev codes into one path for clarity.
+
+[2-12] PASS | JWT algorithm pinned to HS256 — no algorithm downgrade possible
+File: backend/dependencies/__init__.py:36, 106
+
+[2-13] PASS | Token version check enforced — force-logout-all works correctly
+File: backend/dependencies/__init__.py:114-124, 221-225
+
+[2-14] PASS | Error messages do not leak phone number existence
+File: backend/routes/auth.py:134-196
+
+[2-15] PASS | OTP expiry enforced at 5 minutes with timezone-aware comparison
+File: backend/routes/auth.py:247-252
+
+[2-16] PASS | Brute-force lockout: 5 failures → 24h block (Redis-backed)
+File: backend/core/config.py:65-67 and routes/auth.py:86-112
+
+[2-17] PASS | Refresh token rotation — new token on every use, old marked revoked_at
+File: backend/utils/refresh_tokens.py:58-107
+
+[2-18] PASS | Refresh token expiry 30 days — correctly enforced
+File: backend/core/config.py:38 and utils/refresh_tokens.py:79
+
+[2-19] PASS | Replay protection — revoked token rejected after rotation
+File: backend/utils/refresh_tokens.py:131-138
+
+[2-20] PASS | Mobile token storage uses expo-secure-store (not AsyncStorage)
+File: shared/store/authStore.ts:9-46
+
+[2-21] PASS | 401 retry queue — concurrent requests don't flood refresh endpoint
+File: shared/api/client.ts:154-173
+
+[2-22] PASS | In-memory token cleared on logout
+File: shared/store/authStore.ts:468-483
+
+[2-23] PASS | DB: UNIQUE constraint on token_hash
+File: backend/migrations/25_refresh_tokens_and_token_version.sql:40
+
+[2-24] PASS | DB: revoked_at TIMESTAMPTZ column present
+File: backend/migrations/25_refresh_tokens_and_token_version.sql:47
+
+[2-25] PASS | DB: token_version column on users table (force-logout support)
+File: backend/migrations/25_refresh_tokens_and_token_version.sql:72-73
+
+[2-26] RECOMMENDATION | Consolidate duplicate /auth/refresh into one handler
+File: backend/routes/auth.py:347-534
+
+[2-27] RECOMMENDATION | Tighten /logout rate limits (currently 10/min — too lenient)
+File: backend/routes/auth.py:538
+
+[2-28] RECOMMENDATION | Add pip-audit to CI for Python dependency CVE scanning
+File: .github/workflows/ci.yml
+
+SUMMARY: CRITICAL:3 HIGH:2 MEDIUM:4 LOW:2 PASS:12 RECOMMENDATION:3
+
+================================================================================
+TASK 3 — ENCRYPTION & SECRETS MANAGEMENT
+================================================================================
+
+[3-1] CRITICAL | Real Supabase Service-Role Key Committed in .env.example
+File: backend/.env.example:3
+Finding: .env.example contains a real, functional Supabase service-role JWT (project ref:
+dbbadhihiwztmnqnbdke). This key bypasses ALL Row-Level Security policies. Anyone who reads
+this file (GitHub public view, contributors, CI logs) can perform unrestricted DB operations —
+read all user records, PII, payment data, delete rows — without any auth.
+Fix: (1) ROTATE the key NOW in Supabase Dashboard → Settings → API → Roll service_role key.
+(2) Replace all values in .env.example with placeholders:
+    SUPABASE_URL=https://your-project-ref.supabase.co
+    SUPABASE_KEY=replace-with-anon-key
+    SUPABASE_SERVICE_ROLE_KEY=replace-with-service-role-key
+
+[3-2] HIGH | JWT_SECRET Minimum Length Not Enforced at Config Load Time
+File: backend/core/config.py:81-97 and backend/core/middleware.py:133
+Finding: The Settings class accepts any string for JWT_SECRET without a length check.
+Minimum-length validation (≥ 32 chars) only runs in middleware._validate_production_config,
+which is called AFTER Settings is instantiated. A 3-character JWT_SECRET would be accepted
+by pydantic and only caught later. Cryptographically, a short secret is trivially brute-forced.
+Fix: Add to the @model_validator in config.py:
+    if self.ENV.lower() == "production" and len(self.JWT_SECRET) < 32:
+        raise ValueError("JWT_SECRET must be at least 32 characters in production")
+
+[3-3] HIGH | Real Supabase Project URL in .env.example
+File: backend/.env.example:2
+Finding: The real project URL (https://dbbadhihiwztmnqnbdke.supabase.co) combined with the
+service-role key (finding [3-1]) gives full database access to anyone who reads the file.
+Fix: Replace with placeholder: SUPABASE_URL=https://your-project-ref.supabase.co
+Rotate the key (see [3-1]).
+
+[3-4] MEDIUM | Dev OTP Bypass "123456" Lives in Main Route File (Not Test Module)
+File: backend/routes/auth.py:214-223
+Finding: The ENV=development bypass accepting "123456" for any phone is embedded in the
+production route handler. If ENV is accidentally set to "development" on a staging server,
+any attacker can log in as any user with a known code. Per audit rules this is LOW for a
+correctly-gated dev bypass, but placement in main code is a MEDIUM risk.
+Fix: Extract dev-mode auth shortcuts to a separate backend/testing/auth_helpers.py that is
+excluded from production builds. Validate in CI that ENV != "development" in staging/prod.
+
+[3-5] MEDIUM | ADMIN_PASSWORD Length Check Is 12 Chars — Too Permissive
+File: backend/core/middleware.py:184
+Finding: Minimum 12-char admin password allows dictionary-phrase attacks. Current blocklist
+(line 95) only rejects a handful of hardcoded common strings.
+Fix: Raise minimum to 16 characters. Add entropy check (at least 1 uppercase + 1 digit +
+1 special char) or enforce a secret-manager-sourced credential.
+
+[3-6] MEDIUM | Supabase Placeholder Values Still Present in Mobile Config
+File: shared/config/supabase.ts
+Finding: File contains literal placeholders "YOUR_SUPABASE_URL" and "YOUR_SUPABASE_ANON_KEY"
+rather than environment variable references. This means the mobile app currently cannot connect
+to Supabase at all — these will silently fail at runtime. Anon key (not service-role key) should
+be injected via EXPO_PUBLIC_SUPABASE_ANON_KEY at build time.
+Fix: Replace placeholder strings with:
+    const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL ?? ''
+    const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? ''
+Add these to driver-app/.env.example as EXPO_PUBLIC_ prefixed variables.
+
+[3-7] PASS | OTP Hashing — SHA-256 Without Salt Is Acceptable for Short-Lived 4-Digit OTPs
+File: backend/utils/crypto.py:8-21
+Finding: SHA-256 no-salt design is documented with rationale (5-min expiry + 5-failure lockout).
+Search space is 10,000; attacker needs 5 guesses to trigger 24h lockout per phone. Acceptable.
+Fix: None required.
+
+[3-8] PASS | Password Hashing — bcrypt Cost Factor 12 (~250ms)
+File: backend/utils/password.py:54
+Finding: Correct for 2026. Legacy SHA-256 transparent upgrade path implemented correctly.
+Fix: None required.
+
+[3-9] PASS | Password Verification Uses Constant-Time Comparison
+File: backend/utils/password.py:117-126
+Finding: Custom XOR/bitwise OR constant-time compare prevents timing attacks on legacy hashes.
+bcrypt.checkpw() used for bcrypt (timing-safe by design).
+Fix: None required.
+
+[3-10] PASS | JWT Secret Required at Startup — App Won't Start Without It
+File: backend/core/config.py:29, 108
+Finding: JWT_SECRET has no default value; missing → ValueError at module import. Correct.
+Fix: None required. (Length gap addressed in [3-2].)
+
+[3-11] PASS | Supabase Credentials Validated Against Placeholder Values at Startup
+File: backend/core/middleware.py:112-168
+Finding: Rejects "your-project-ref", "example.supabase.co", requires key starting with "eyJ",
+≥ 40 chars. Prevents misconfigured deployments from silently starting.
+Fix: None required.
+
+[3-12] PASS | Firebase Config Uses EXPO_PUBLIC_* Variables — No Private Keys in Bundle
+File: shared/config/firebaseConfig.ts
+Finding: All Firebase values are public-tier (apiKey, projectId etc.) — intentionally public
+per Firebase architecture. Admin SDK credentials not present in mobile bundle.
+Fix: None required.
+
+[3-13] RECOMMENDATION | Rotate the Compromised Supabase Service-Role Key Immediately
+Finding: See [3-1]. Even if .env.example is in a private repo, it is safest to treat any
+committed key as compromised. Rotation takes 30 seconds in the Supabase dashboard.
+Fix: Supabase Dashboard → Settings → API → Roll service_role key → update all environments.
+
+[3-14] RECOMMENDATION | Add EXPO_PUBLIC_* Lint Rule to CI to Prevent Private Key Leakage
+File: .github/workflows/ci.yml
+Finding: No automated check prevents a developer from accidentally adding
+EXPO_PUBLIC_STRIPE_SECRET_KEY or EXPO_PUBLIC_SUPABASE_SERVICE_KEY to .env files.
+Fix: Add a grep-based CI step:
+    grep -r "EXPO_PUBLIC_STRIPE_SECRET\|EXPO_PUBLIC_SUPABASE_SERVICE_ROLE" . && exit 1 || exit 0
+
+[3-15] RECOMMENDATION | Accept ADMIN_PASSWORD_HASH Instead of Plaintext
+File: backend/core/config.py:48-49
+Finding: Plaintext admin password lives in memory and could appear in exception dumps.
+Fix: Accept a pre-hashed bcrypt value (ADMIN_PASSWORD_HASH) and compare hashes at login.
+Generate with: python -c "import bcrypt; print(bcrypt.hashpw(b'pw', bcrypt.gensalt(12)).decode())"
+
+SUMMARY: CRITICAL:1 HIGH:2 MEDIUM:3 LOW:0 PASS:5 RECOMMENDATION:3
+
+================================================================================
+TASK 4 — INPUT VALIDATION & SANITIZATION
+================================================================================
+
+[4-1] HIGH | Phone Validation Accepts Any Country — Does Not Enforce Canada (+1)
+File: backend/validators.py:52-57
+Finding: validate_phone() prepends +1 to bare 10-digit numbers but never checks whether the
+area code belongs to Canada (NANP). A US, Caribbean, or other +1 number passes as valid.
+Service is Saskatchewan-only; a Washington DC number should be rejected at validation time.
+Fix: After normalization, verify area code belongs to Canadian NANP allocations, or require
+the user to supply an explicit +1 prefix and reject non-Canadian area codes.
+
+[4-2] HIGH | GPS Null Island (0,0) Detected but Not Rejected
+File: backend/validators.py:161-163
+Finding: validate_coordinates() logs a warning for (lat=0, lng=0) but returns True. These
+are default/error GPS values from a device that has no fix. Storing them creates phantom
+locations, wrong route calculations, and dispatch matches to the ocean.
+Fix: Change to raise HTTPException(400, "Invalid coordinates: null island") when lat == 0 and lng == 0.
+
+[4-3] HIGH | All Monetary Fields Are float — Floating-Point Precision Errors in Finance
+File: backend/schemas.py:123-127 (FareConfig), 204-210 (Ride)
+Finding: base_fare, per_km_rate, total_fare, tip_amount, driver_earnings etc. are typed as
+float. Float arithmetic causes precision errors: 0.1 + 0.2 = 0.30000000000000004 in Python.
+validate_monetary_amount() correctly uses Decimal internally, but schema enforces float at
+the API boundary, silently discarding precision.
+Fix: Change all monetary field types to Decimal with Field(max_digits=10, decimal_places=2).
+Use from decimal import Decimal and add model_config = ConfigDict(use_enum_values=True) for
+Pydantic v2 Decimal support.
+
+[4-4] MEDIUM | OTP Schema Fields Have No Length or Pattern Constraints
+File: backend/schemas.py:10-16
+Finding: VerifyOTPRequest.code is a plain str — no min_length, max_length, or digit-only
+pattern. Backend would accept a 100-char string as an OTP code. Client enforces 4 digits but
+a direct API call bypasses that.
+Fix: code=Field(..., min_length=4, max_length=4, pattern=r'^\d{4}$')
+    phone=Field(..., min_length=5, max_length=15, pattern=r'^\+[1-9]\d{6,14}$')
+
+[4-5] MEDIUM | CreateProfileRequest Has No Field Constraints
+File: backend/schemas.py:19-24
+Finding: first_name, last_name, email, gender accept any string length. Empty strings, 1000-char
+names, and arbitrary unicode all pass.
+Fix: first_name=Field(..., min_length=1, max_length=100)
+    last_name=Field(..., min_length=1, max_length=100)
+    gender=Field(..., pattern=r'^(Male|Female|Other|Prefer not to say)$')
+
+[4-6] MEDIUM | Driver & Ride Model Fields Missing Validators
+File: backend/schemas.py:151-184, 187-233
+Finding: Driver.phone, license_plate, vehicle_make, vehicle_model and Ride.pickup_address,
+dropoff_address are plain str with no sanitization calls or Field constraints. These skip
+the sanitize_string() / validate_phone() functions in validators.py.
+Fix: Annotate fields with max_length bounds and attach validators via @field_validator to
+call the existing sanitize_string() and validate_phone() functions.
+
+[4-7] MEDIUM | Suspicious Pattern Detection Logs Only — Does Not Block Injection
+File: backend/validators.py:342-352
+Finding: sanitize_string() detects "SELECT", "SCRIPT", "ALERT", onclick etc. but only logs
+a warning and returns True. Input like "SELECT * FROM users; --" is stored in the DB.
+Fix: Either (a) raise HTTPException(400, "Invalid input") for detected injection patterns,
+or (b) install bleach and use bleach.clean() for true HTML sanitization. SQL injection
+is already prevented by Supabase parameterized queries, but XSS via stored data is a real risk.
+
+[4-8] MEDIUM | Client Email Regex Too Permissive Compared to Backend
+File: driver-app/app/driver/profile.tsx:149
+Finding: Client regex /^[^\s@]+@[^\s@]+\.[^\s@]+$/ accepts "a@b.c" but backend uses
+Python's EmailStr (RFC 5322). Inconsistency means bad emails can produce confusing error
+messages that originate from the server rather than client-side UX.
+Fix: Use the same email pattern on both sides, or remove client-side email regex entirely
+and rely on backend validation with clear API error messages surfaced in the UI.
+
+[4-9] MEDIUM | OTP Code Not Validated at Backend Schema Level
+File: backend/schemas.py:10-16 (VerifyOTPRequest.code)
+Finding: See [4-4]. Client enforces 4 digits; direct API calls can send any string. Backend
+should reject non-4-digit codes before reaching business logic.
+Fix: Add pattern constraint per [4-4].
+
+[4-10] MEDIUM | Address Minimum Length Too Short (3–5 chars)
+File: backend/validators.py:463 and schemas.py:258-264
+Finding: Addresses as short as 3 characters pass validation. "123" is a valid address string.
+These won't geocode and cause silent routing failures.
+Fix: Raise minimum to 10 characters. Add regex requiring at least a number and a word:
+pattern=r'^\d+\s+\w+' for North American street addresses.
+
+[4-11] LOW | Coordinates Not Checked Against Saskatchewan/Canada Service Area
+File: backend/validators.py:122-165
+Finding: Any globally valid lat/lng passes. Ride request from Los Angeles passes validation
+and fails only at dispatch time, wasting compute and potentially confusing the user.
+Fix: Add bounding-box check: lat in [49.0, 60.0], lng in [-110.0, -101.5] for Saskatchewan.
+Return clear error: "Service not available in your location."
+
+[4-12] LOW | HTML Stripping Uses Naive Regex (Not bleach)
+File: backend/validators.py:340
+Finding: re.sub(r"<[^>]*>", "", value) does not handle HTML entities, nested tags, or
+attribute injection (onclick=). Docstring mentions bleach but it's not imported.
+Fix: pip install bleach, then: import bleach; return bleach.clean(value, tags=[], strip=True)
+
+[4-13] RECOMMENDATION | Add max_length to All Optional String Fields in Schemas
+File: backend/schemas.py:30-47 (UserProfile)
+Finding: Optional string fields (rejection_reason, driver_onboarding_detail etc.) have no
+length cap. Large payloads could bloat DB or cause rendering issues.
+Fix: Add Field(None, max_length=500) to all optional text fields.
+
+[4-14] RECOMMENDATION | Require E.164 Prefix Explicitly — Remove Bare Number Normalization
+File: backend/validators.py:52-57
+Finding: Bare number normalization with hardcoded +1 is fragile for future international
+expansion and silently accepts non-Canadian numbers.
+Fix: Require +1XXXXXXXXXX format; reject bare numbers with a clear user-facing error:
+"Please enter your phone number with country code (e.g. +1 306 555 0123)."
+
+[4-15] RECOMMENDATION | Add Rate Limiting to POST /rides
+File: backend/schemas.py and backend/routes/rides.py
+Finding: No rate limit on ride creation endpoint — a user could flood the system with ride
+requests to spam drivers or consume compute.
+Fix: Add @limiter.limit("10/minute") to the ride creation endpoint.
+
+SUMMARY: CRITICAL:0 HIGH:3 MEDIUM:6 LOW:2 PASS:0 RECOMMENDATION:3
+
+================================================================================
+TASK 5 — ANDROID & iOS UI/UX QUALITY
+================================================================================
+
+[5-1] CRITICAL | OfflineBanner Hidden Behind Status Bar / Notch on Both Platforms
+File: shared/components/OfflineBanner.tsx:166-179
+Finding: Container uses position:'absolute', top:0 with no safe area inset. On notched iPhones
+the banner slides behind the dynamic island. On Android it hides behind the status bar.
+Drivers won't see the "No internet" warning when they most need it.
+Fix: const insets = useSafeAreaInsets();
+     style={[styles.container, { top: insets.top }]}
+Also set the banner height to account for its own padding above insets.top.
+
+[5-2] HIGH | Hardcoded Pixel Padding Breaks Layout on Small (SE) & Large (Pro Max) Screens
+File: driver-app/components/panels/RideOfferPanel.tsx:160
+      driver-app/components/dashboard/ActiveRidePanel.tsx:489
+Finding: RideOfferPanel: paddingTop:60, paddingBottom:40, paddingHorizontal:20 are fixed px.
+ActiveRidePanel: paddingBottom: Platform.OS==='ios' ? 38 : 22. On SE (375px wide) content
+clips; on Pro Max (430px) panels have excessive whitespace.
+Fix: Replace with useSafeAreaInsets():
+     paddingTop: Math.max(insets.top, 20)
+     paddingBottom: Math.max(insets.bottom, 20)
+     paddingHorizontal: '5%'
+
+[5-3] HIGH | OTP Keypad Buttons Too Small on iPhone SE — Mis-Taps Likely
+File: driver-app/components/dashboard/ActiveRidePanel.tsx:586-595
+Finding: Keypad buttons: width:'28%', aspectRatio:1.4, gap:8. On SE (375px) = ~93px wide
+with no hitSlop. Material Design minimum tappable target is 48×48dp. Drivers verifying a
+pickup OTP under pressure will make mis-taps.
+Fix: Add hitSlop={{ top:12, bottom:12, left:12, right:12 }} to each keypad button.
+Increase gap to 12px. Minimum button size: minWidth:60, minHeight:60.
+
+[5-4] HIGH | SOS Button Positioned with Hardcoded Offset — Overlaps Notch on iPhones
+File: driver-app/app/driver/index.tsx:554
+Finding: top: Platform.OS==='ios' ? 100 : 80, right:16. On Face ID iPhones (notch/island
+height ~59px) the SOS button overlaps the top bar chrome. In an emergency, the button is
+obscured or triggers the wrong UI element.
+Fix: top: Math.max(insets.top + 10, Platform.OS==='ios' ? 100 : 80)
+Or position it dynamically below the DriverTopBar using a ref measurement.
+
+[5-5] HIGH | Background Location Permission Never Requested — GPS Lost When App Backgrounded
+File: driver-app/hooks/useDriverDashboard.ts:216
+Finding: Only requestForegroundPermissionsAsync() is called. For ride tracking to continue
+when the driver locks their phone or switches apps, background location is required.
+iOS requires a separate requestBackgroundPermissionsAsync() call after foreground grant.
+Without it, location tracking silently stops when the driver's screen locks mid-ride.
+Fix: After foreground grant:
+     if (Platform.OS === 'ios') await Location.requestBackgroundPermissionsAsync();
+     For Android: add ACCESS_BACKGROUND_LOCATION to AndroidManifest.xml and request
+     it separately (Android 11+ shows a system dialog).
+
+[5-6] MEDIUM | OTP Card in ActiveRidePanel Not in ScrollView — Cut Off by Keyboard on Small Screens
+File: driver-app/components/dashboard/ActiveRidePanel.tsx:309-349
+Finding: OTP card is in Animated.View with no ScrollView. On SE (667px screen) with keyboard
+open (~300px), the 4-digit display and confirm button may be pushed out of view.
+Fix: Wrap the OTP section in a KeyboardAvoidingView + ScrollView with
+keyboardShouldPersistTaps="handled".
+
+[5-7] MEDIUM | DriverTopBar: Android Status Bar Height Uses Hardcoded Fallback of 20
+File: driver-app/components/dashboard/DriverTopBar.tsx:45
+Finding: top: Math.max(insets.top, 20) — on Android insets.top is 0 unless the app renders
+behind the status bar. StatusBar.currentHeight (typically 24-28dp) is not consulted.
+Fix: import { StatusBar } from 'react-native';
+     const barHeight = Platform.OS==='android' ? (StatusBar.currentHeight || 24) : insets.top;
+     style={{ top: Math.max(barHeight, 20) }}
+
+[5-8] MEDIUM | MapControls Bottom Position (160px) Hardcoded — Overlaps Panels on Small Screens
+File: driver-app/components/dashboard/MapControls.tsx:90
+Finding: bottom:160 assumes idle panel height. On SE (667px) with a 140px panel + home
+indicator the controls overlap. No safe area applied.
+Fix: bottom: idlePanelHeight + insets.bottom + 16 — query panel height from a ref/context.
+
+[5-9] MEDIUM | SOS Long-Press Threshold 2000ms Is Too Long for Emergency Activation
+File: shared/components/SOSButton.tsx:39-41
+Finding: 2 seconds is the upper bound for emergency triggers. A driver in distress needs
+faster activation — 1000-1200ms is more appropriate per HIG emergency guidelines.
+Fix: Change setTimeout threshold to 1200ms. Add a countdown ring animation showing time
+remaining to provide confidence the press registered.
+
+[5-10] MEDIUM | DriverIdlePanel GO Button May Overlap Home Indicator (iOS) at bottom:0
+File: driver-app/components/dashboard/DriverIdlePanel.tsx:395-400
+Finding: goButtonOuterContainer uses bottom:0. On iPhone with home indicator (34px), this
+puts the 100×100 button behind the swipe-up gesture target.
+Fix: paddingBottom: Math.max(insets.bottom, 16) on the button container.
+
+[5-11] MEDIUM | Map Provider Has No Fallback When Google Maps API Key Is Missing on Android
+File: shared/components/AppMap.tsx:14 and driver-app/app/driver/index.tsx:27-28
+Finding: MAP_PROVIDER hardcodes PROVIDER_GOOGLE on Android with no fallback. If the API key
+is missing or quota exceeded, the map crashes silently.
+Fix: const MAP_PROVIDER = Platform.OS==='android'
+       ? (GOOGLE_MAPS_API_KEY ? PROVIDER_GOOGLE : PROVIDER_DEFAULT)
+       : undefined;
+Log a warning when API key is missing.
+
+[5-12] MEDIUM | MapView Container Missing pointerEvents="box-none" — Buttons May Not Receive Touches
+File: driver-app/app/driver/index.tsx:402-627
+Finding: MapView and overlay controls are siblings. If MapView consumes touch events, the
+zoom/my-location buttons may not respond. No explicit pointerEvents configured.
+Fix: Wrap MapView in a View with pointerEvents="box-none" to pass through touches to siblings.
+Test on both platforms after applying the fix.
+
+[5-13] MEDIUM | allowFontScaling Not Set on UI Chrome Text — System Accessibility Size Breaks Layout
+File: Multiple files (DriverTopBar, MapControls, buttons)
+Finding: Large system text size (Accessibility → Larger Text) scales button labels and status
+badges, breaking the fixed-height panel layouts.
+Fix: Add allowFontScaling={false} to UI chrome text (button labels, status badges, tile headers).
+Leave allowFontScaling={true} (default) for content text (names, addresses, descriptions).
+
+[5-14] MEDIUM | TripCompletedPanel Rating Stars Have Insufficient hitSlop (left/right: 4px)
+File: driver-app/components/dashboard/TripCompletedPanel.tsx:189
+Finding: hitSlop: { top:8, bottom:8, left:4, right:4 }. Material Design minimum is 10px
+on all sides. Post-trip rating is a key interaction; small hit area causes mis-ratings.
+Fix: hitSlop={{ top:12, bottom:12, left:10, right:10 }}
+
+[5-15] MEDIUM | TripCompletedPanel Comment Input Has Hardcoded minHeight/maxHeight
+File: driver-app/components/dashboard/TripCompletedPanel.tsx:357-358
+Finding: minHeight:60, maxHeight:100 do not adapt to user's system font scale.
+Fix: const { fontScale } = useWindowDimensions();
+     minHeight: 60 * fontScale, maxHeight: Math.min(200, 100 * fontScale)
+
+[5-16] MEDIUM | EarningsLineChart/EarningsBarChart Empty State Text Not Localized
+File: driver-app/components/charts/EarningsLineChart.tsx:27-32
+      driver-app/components/charts/EarningsBarChart.tsx:28-34
+Finding: Hardcoded "No data available" string — not routed through translation system.
+Fix: import { useLanguageStore } from stores; const { t } = useLanguageStore();
+     Replace with: {t('charts.noDataAvailable')}
+
+[5-17] MEDIUM | No BackHandler Registered in Modal Panels — Android Back Button Exits Ride Flow
+File: (Not found in any panel component)
+Finding: RideOfferPanel, ActiveRidePanel, TripCompletedPanel are full-screen overlays.
+Android hardware back button is not intercepted — pressing it could dismiss the panel and
+leave the app in an inconsistent state mid-ride.
+Fix: useEffect(() => {
+       const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+       return () => sub.remove();
+     }, []);
+Add to each panel component. For RideOfferPanel, map back press to "decline ride".
+
+[5-18] LOW | Countdown Circle in RideOfferPanel: Fixed 80×80 Size Looks Small on Pro Max
+File: driver-app/components/panels/RideOfferPanel.tsx:168-181
+Finding: Fixed width:80, fontSize:36. Functional but visually unbalanced on 430px wide screens.
+Fix: const scale = Math.min(Math.max(screenWidth / 375, 0.9), 1.3);
+     width: 80 * scale, height: 80 * scale, fontSize: 36 * scale
+
+[5-19] PASS | SOSButton: Pulse Animation + Haptic Vibration Pattern Excellent
+File: shared/components/SOSButton.tsx:31-36, 57
+Finding: SOS vibration pattern [0,200,100,200,100,200] is the international SOS morse-adjacent
+signal. Pulse animation provides clear feedback. Well implemented.
+Fix: None.
+
+[5-20] PASS | ErrorBoundary: Catches Errors, Renders Fallback, Reports to Sentry
+File: shared/components/ErrorBoundary.tsx:71-110
+Finding: getDerivedStateFromError + componentDidCatch + Sentry.captureException + retry button.
+Production-grade implementation.
+Fix: None.
+
+[5-21] PASS | MapControls Zoom/MyLocation Buttons: 48×48px Meets Tappable Target Minimum
+File: driver-app/components/dashboard/MapControls.tsx:107-128
+Fix: None.
+
+[5-22] PASS | Google Maps on Android / Apple Maps on iOS Selection is Correct
+File: driver-app/app/driver/index.tsx:27-28
+Fix: None. (Add fallback per [5-11].)
+
+[5-23] RECOMMENDATION | Add accessibilityLabel to SOS Button
+File: shared/components/SOSButton.tsx
+Finding: No explicit accessibilityLabel. TalkBack/VoiceOver users won't know it's an SOS trigger.
+Fix: accessibilityLabel="Emergency SOS. Hold for 2 seconds to alert authorities."
+     accessibilityRole="button"
+     accessibilityHint="Long press to trigger emergency alert"
+
+[5-24] RECOMMENDATION | Android BackHandler in All Modal Panels
+Finding: See [5-17]. BackHandler is a MEDIUM risk item but implementing it is a RECOMMENDATION
+for a clean Android UX experience in addition to the safety fix.
+
+SUMMARY: CRITICAL:1 HIGH:4 MEDIUM:13 LOW:1 PASS:5 RECOMMENDATION:2
+
+================================================================================
+TASK 6 — REAL-TIME FEATURES (WEBSOCKET & GPS)
+================================================================================
+
+[6-1] HIGH | Constant High-Accuracy GPS at 5s Interval Causes Severe Battery Drain on Long Shifts
+File: driver-app/hooks/useDriverDashboard.ts:308-314
+Finding: Location.Accuracy.High + timeInterval:5000ms + distanceInterval:10m runs even while
+the driver is idle waiting for a ride. High accuracy = GPS chip always on = ~20-30% extra
+battery per hour. On a 10-hour shift this is the difference between making it and dying at 2pm.
+Fix: Adaptive accuracy: Accuracy.BestForNavigation only during active trip; Accuracy.Balanced
+(cell+WiFi) during idle. Switch modes on state transition in useDriverDashboard.
+
+[6-2] HIGH | Location Subscription Stops When App Backgrounds — No Re-Subscribe on Foreground Return
+File: driver-app/hooks/useDriverDashboard.ts:298-364
+Finding: Only foreground permissions are requested. When the driver locks their phone mid-trip,
+expo-location stops delivering updates. The subscription object persists but emits nothing.
+The WebSocket receives stale coordinates. Backend ETA calculations drift. Driver appears to stop
+moving on the map.
+Fix: (1) Request background permissions (per Task 5 [5-5]).
+    (2) Add AppState listener to re-establish location subscription on 'active' state:
+    AppState.addEventListener('change', state => { if (state==='active') reSubscribeLocation(); })
+
+[6-3] MEDIUM | broadcast() Iterates Live Dict — Crashes on Concurrent Disconnect (Race Condition)
+File: backend/socket_manager.py:97-98
+Finding: broadcast() iterates self.active_connections.values() directly. If any WebSocket
+disconnects during the await send_json() call, Python raises
+"RuntimeError: dictionary changed size during iteration" — crashing the entire broadcast.
+This is the code path for admin alerts and system notifications.
+Fix: Snapshot before iteration: connections = list(self.active_connections.values())
+This pattern is already used correctly in broadcast_to_admins() (line 102) — apply it to broadcast() too.
+
+[6-4] MEDIUM | No Default Handler for Unknown WebSocket Message Types — Silent Drops
+File: driver-app/hooks/useDriverDashboard.ts:368-407
+Finding: Switch handles only: new_ride_assignment, ride_cancelled, ping, chat_message.
+Any new server message type (ride_updated, driver_alert, promo_notification) is silently
+dropped with no logging. Debugging protocol mismatches is impossible.
+Fix: Add: default: console.warn('[WS] Unhandled message type:', data.type, data);
+
+[6-5] MEDIUM | Server Error Messages Not Shown to Driver — Connection Appears Healthy When It Isn't
+File: driver-app/hooks/useDriverDashboard.ts:473-475
+Finding: When backend sends type='error' (rate limit hit, auth failure, message too large),
+client logs it but takes no UI action. Driver has no idea their connection is degraded.
+Fix: On type='error': set connectionState('error') and show a toast/banner:
+"Connection issue: " + data.message. For rate_limit_exceeded, add backoff before retrying.
+
+[6-6] MEDIUM | Redis Pub/Sub Single Channel — Message Order Not Guaranteed Across Instances
+File: backend/utils/ws_pubsub.py:137-179
+Finding: All messages flow through CHANNEL="spinr:ws:dispatch". With multiple backend
+instances publishing simultaneously (ride offer from instance A, chat from instance B),
+delivery order at the driver is undefined. Rare but possible for a driver to see a chat
+message before the ride offer that prompted it.
+Fix: For critical ordering (ride lifecycle events), use per-driver channels:
+CHANNEL = f"spinr:ws:{driver_id}". Document that chat messages have best-effort ordering.
+
+[6-7] MEDIUM | Location Batch Upload Has No Max Retry / Cleanup on Failure
+File: driver-app/hooks/useDriverDashboard.ts:247-272, 291-296
+Finding: Failed batches are re-queued to AsyncStorage indefinitely. If network stays down for
+hours, the buffer accumulates (capped at 500 points) but old failed batches are never discarded.
+On app restart the stale batch is re-attempted, wasting bandwidth and causing backend confusion
+(old timestamps replayed).
+Fix: Track retry count per batch. Discard after 5 failures. Clear persisted buffer on logout.
+Upload remaining buffer on app-background event (AppState 'background') before tracking stops.
+
+[6-8] MEDIUM | Chat Message Handler Calls Store Method Without Type Validation
+File: driver-app/hooks/useDriverDashboard.ts:402-405
+Finding: addChatMessage(data) is called without validating data.ride_id, data.text, or
+data.sender exist. If the server sends a malformed chat payload, the store may receive
+undefined fields, causing rendering errors or crashes in the chat UI.
+Fix: Validate before dispatch:
+if (data?.ride_id && data?.text) store.addChatMessage(data);
+else console.warn('[WS] Malformed chat_message payload', data);
+
+[6-9] PASS | Location Buffer Capped at 500 Entries — No Unbounded Memory Growth
+File: driver-app/hooks/useDriverDashboard.ts:350-351
+[6-10] PASS | WebSocket Cleaned Up on Unmount and Logout
+File: driver-app/hooks/useDriverDashboard.ts:508-538
+[6-11] PASS | WebSocket Opened Only After Auth Token Confirmed
+File: driver-app/hooks/useDriverDashboard.ts:422-430
+[6-12] PASS | 30-Second Ping-Pong Heartbeat Detects Silent Disconnections
+File: backend/routes/websocket.py:30-51
+[6-13] PASS | Auto-Reconnect with Exponential Backoff [1s, 2s, 5s, 10s, 30s] + ±500ms Jitter
+File: driver-app/hooks/useDriverDashboard.ts:17, 490-505
+[6-14] PASS | Backend Requires Auth as First Message — No Data Before Auth
+File: backend/routes/websocket.py:66-104
+[6-15] PASS | Per-Connection Rate Limit 30 msg/sec + 64KB Max Message Size
+File: backend/routes/websocket.py:33-35, 148-174
+[6-16] PASS | Connection Key = client_type + user_id — Impersonation Prevented
+File: backend/routes/websocket.py:122-124
+[6-17] PASS | Connection Removed from Dict on Disconnect — No Memory Leak
+File: backend/routes/websocket.py:400-425 and socket_manager.py:28-36
+[6-18] PASS | Redis Pub/Sub Falls Back to In-Process on Redis Unavailability
+File: backend/utils/ws_pubsub.py:73-108
+
+SUMMARY: CRITICAL:0 HIGH:2 MEDIUM:6 LOW:0 PASS:10 RECOMMENDATION:0
+
+================================================================================
+TASK 7 — RIDE DISPATCH & STATE MACHINE
+================================================================================
+
+[7-1] CRITICAL | Double-Accept Race Condition — Two Drivers Can Both Accept Same Ride
+File: backend/routes/drivers.py:1473-1565
+Finding: accept_ride reads the ride, checks driver_id matches, then updates status. Between
+the read and the write, a second driver can pass the same check and overwrite the first
+driver's acceptance. The post-update verification (line 1535) catches one case but not a
+true simultaneous write. Result: a rider could be matched to the wrong driver.
+Fix: Use atomic conditional UPDATE with WHERE guard:
+    UPDATE rides SET status='driver_accepted', ... 
+    WHERE id=ride_id AND driver_id=<this_driver_id> AND status='driver_assigned'
+    RETURNING id
+If the returned row is empty, another driver won — return 409 Conflict. This requires
+a single DB round-trip instead of read-then-write.
+
+[7-2] HIGH | Pickup OTP Stored as Plaintext — DB Breach Exposes All Active OTPs
+File: backend/routes/drivers.py:1673 and dependencies/__init__.py:58-60
+Finding: generate_pickup_otp() returns a 4-digit string that is stored directly in the
+rides.pickup_otp column (no hash). Verification at line 1673 compares raw strings.
+A DB breach exposes every active pickup OTP, allowing anyone to start rides they didn't
+request. hash_token() exists in dependencies/__init__.py:63-65 but is never used here.
+Fix: On OTP generation: store hashlib.sha256(otp.encode()).hexdigest()
+    On verification: compare hmac.compare_digest(
+        hashlib.sha256(request.otp.encode()).hexdigest(), ride.get("pickup_otp"))
+This gives constant-time comparison AND prevents plaintext recovery.
+
+[7-3] HIGH | Rider Can Cancel Ride After Driver Has Arrived or Trip Is In Progress
+File: backend/routes/rides.py:1283-1387
+Finding: cancel_ride_rider only rejects if status in ["completed", "cancelled"]. Statuses
+"driver_arrived" and "in_progress" are not blocked. Driver physically waiting at the pickup
+can be cancelled on, wasting their time with no guaranteed fee. This violates the expected
+business rule that cancellations should be restricted once the driver has arrived.
+Fix: Add to cancel guards:
+    CANCEL_RIDER_BLOCKED = ["driver_arrived", "in_progress", "completed", "cancelled"]
+    if ride["status"] in CANCEL_RIDER_BLOCKED:
+        raise HTTPException(400, "Cannot cancel — driver has already arrived")
+For "driver_arrived" state consider charging the full cancellation fee automatically.
+
+[7-4] HIGH | Driver Can Cancel a Ride That Is In Progress — No State Guard
+File: backend/routes/drivers.py:1882-1917
+Finding: Driver cancel endpoint has no status check. A driver can cancel a ride with status
+"in_progress" or "completed", leaving the system in an inconsistent state and potentially
+skipping payout.
+Fix: Add at line 1885:
+    DRIVER_CANCEL_ALLOWED = {"driver_assigned", "driver_accepted"}
+    if ride["status"] not in DRIVER_CANCEL_ALLOWED:
+        raise HTTPException(409, "Cannot cancel a ride that has already started")
+
+[7-5] MEDIUM | OTP Comparison Uses Plain String Equality — Timing Attack Possible
+File: backend/routes/drivers.py:1673
+Finding: ride.get("pickup_otp") != request.otp uses Python string equality which short-
+circuits on the first differing character. Millisecond-precision response time measurement
+could allow incremental OTP guessing. Resolved by fixing [7-2] (hash + hmac.compare_digest).
+Fix: See [7-2].
+
+[7-6] MEDIUM | Driver Going Offline Between Dispatch Read and Claim Has No Guard
+File: backend/services/dispatch_service.py:170-182
+Finding: Between reading candidate drivers (is_online=True) and claiming one atomically,
+a driver can go offline. The claimed driver receives a push notification to a potentially
+missing FCM token. Ride stays offered with no active driver watching it until timeout.
+Fix: In claim_driver_atomic(), add is_online=True to the conditional update's WHERE clause.
+If claim returns 0 rows, the driver went offline — move to the next candidate.
+
+[7-7] MEDIUM | complete_ride Endpoint Has No State Guard — Can Complete Unstarted Ride
+File: backend/routes/drivers.py:1719-1879
+Finding: complete_ride does not check that ride.status == "in_progress". A driver can call
+complete on a "driver_assigned" ride, skipping the pickup OTP verification step entirely
+and triggering earnings calculation on a ride that never happened.
+Fix: Add at line 1729:
+    if ride.get("status") != "in_progress":
+        raise HTTPException(409, "Ride must be in progress to complete")
+
+[7-8] MEDIUM | Re-Dispatch After Driver Decline Is Fire-and-Forget — Silent Failure Possible
+File: backend/routes/drivers.py:1568-1609
+Finding: After a decline, match_driver_to_ride is launched as a background task with no
+error handling. If it raises (DB down, no drivers found, exception), the ride stays in
+"searching" state indefinitely until the 5-minute auto-cancel fires. Driver/rider see
+nothing for 5 minutes.
+Fix: Await match_driver_to_ride synchronously (or add an except block that updates ride
+status to "no_drivers_available" and notifies rider immediately).
+
+[7-9] LOW | Cancellation Fee Payout to Driver Is Commented Out — Never Actually Charged
+File: backend/routes/rides.py:1340
+Finding: Comment: "# potentially log a payout" — the cancellation_fee_driver ($2.50 by
+default) is calculated but never actually transferred via Stripe. Drivers are not compensated
+for late cancellations.
+Fix: Call the Stripe payout API or insert a pending_payouts record to credit the driver.
+Document clearly if this is intentionally deferred.
+
+[7-10] LOW | Trip Earnings Endpoint: No Limit Cap or Offset Bounds
+File: backend/routes/drivers.py:704-745
+Finding: limit and offset query params have no max cap. A user requesting limit=1000000
+causes an expensive full-table scan.
+Fix: limit = min(limit, 500); if offset < 0: raise HTTPException(400)
+
+[7-11] PASS | State Guards on ARRIVE, START (ARRIVE_FROM_STATES, START_FROM_STATES)
+File: backend/routes/drivers.py:39-79
+Finding: Arrive and start transitions are guarded against invalid source states with 409.
+
+[7-12] PASS | 5-Minute Auto-Cancel on No Driver Found
+File: backend/routes/rides.py:670-710
+Finding: Background task fires after 5 minutes and cancels rides stuck in "searching".
+
+[7-13] RECOMMENDATION | Consolidate Inline Dispatch Algorithm with DispatchService
+File: backend/routes/rides.py:159-178
+Finding: Algorithm selection logic is duplicated inline in match_driver_to_ride AND in
+DispatchService.select_driver_by_algorithm. Active code is the inline version.
+Fix: Remove inline code; call dispatch.select_driver_by_algorithm() instead.
+
+[7-14] RECOMMENDATION | Add Cancellation Window Policy UI
+File: driver-app/app/driver/index.tsx (RideOfferPanel)
+Finding: No UI communicates to the rider that cancellation is blocked after driver arrival.
+Fix: Show "Cancellation locked — driver has arrived" UI state with countdown if applicable.
+
+SUMMARY: CRITICAL:1 HIGH:3 MEDIUM:3 LOW:3 PASS:2 RECOMMENDATION:2
+
+================================================================================
+TASK 8 — PAYMENTS & EARNINGS
+================================================================================
+
+[8-1] HIGH | PCI-DSS Field Guard Missing camelCase and Industry-Standard Variants
+File: backend/routes/payments.py:251-263
+Finding: _RAW_CARD_FIELDS blocks snake_case names (card_number, cvv, exp_month) but misses:
+"cardNumber" (camelCase), "card_no", "pan" (industry term for Primary Account Number),
+"security_code", "expiry_month", "expiry_year". An attacker can bypass the guard by
+submitting {"cardNumber": "4242424242424242"} — it passes the check and lands in logs.
+Fix: Expand _RAW_CARD_FIELDS:
+    _RAW_CARD_FIELDS = frozenset({
+        "card_number", "cardNumber", "card_no", "pan",
+        "cvv", "cvc", "security_code",
+        "exp_month", "exp_year", "expiry_month", "expiry_year",
+    })
+Update test_payments_pci_guard.py to parametrize all variants.
+
+[8-2] MEDIUM | Idempotency Keys Missing from PaymentIntent Creation
+File: backend/routes/payments.py:87
+Finding: stripe.PaymentIntent.create() has no idempotency_key. Network timeout + app retry =
+two PaymentIntents = two charges on the rider's card. Stripe documents this as a required
+best practice for any integration.
+Fix: intent_params["idempotency_key"] = f"pi_{user_id}_{ride_id}_{int(time.time())//60}"
+(minute-granularity makes it safe to retry within the same minute without duplicating charges).
+
+[8-3] MEDIUM | Payment Amount Not Cross-Checked Against Ride Fare
+File: backend/routes/payments.py:22-27, 69
+Finding: PaymentIntentRequest.amount is only validated as >0 and ≤100,000 CAD. When ride_id
+is provided, the backend should verify the amount matches the ride's final_amount or
+estimated_fare. A client can submit amount=50 for a $25 ride and it will be accepted.
+Fix: When ride_id is set, fetch ride, compare amount to ride["final_amount"] (or estimated fare).
+Raise 400 if amount > ride_fare * 1.05 (allow 5% tolerance for surge rounding).
+
+[8-4] MEDIUM | Payout Minimum ($10) Not Enforced at Backend Schema Level
+File: backend/routes/drivers.py:~1234-1237 (PayoutRequest)
+Finding: PayoutRequest.amount is a plain float with no minimum. UI enforces $10 but a direct
+API call can submit amount=0.01 which Stripe may also reject, causing an unhelpful 500 error
+rather than a clear 400 from the API.
+Fix: amount: float = Field(..., gt=0, ge=10.0, description="Minimum payout $10 CAD")
+Also add early guard: if body.amount < 10: raise HTTPException(400, "Minimum payout is $10")
+
+[8-5] MEDIUM | Stripe Transfer Failure Leaves Payout Record as "pending" Forever
+File: backend/routes/drivers.py:1281-1293
+Finding: Payout record is inserted before Stripe Transfer.create() is called. If the transfer
+fails (e.g., Stripe account not ready, insufficient balance), the exception causes a 500 but
+the pending record remains. It will never transition to "completed" or "failed" — ghost payout.
+Fix: Create the payout record AFTER successful transfer. On failure, either skip record or
+create it with status="failed", failure_reason=str(stripe_error).
+
+[8-6] LOW | Webhook Handler Has No Event Type Allowlist
+File: backend/routes/webhooks.py:94-192
+Finding: Unrecognized event types are silently ignored with an INFO log. A typo or new Stripe
+event type fails silently without alerting operators.
+Fix: Add ALLOWED_WEBHOOK_EVENTS = {"payment_intent.succeeded", "payment_intent.payment_failed",
+"checkout.session.completed", ...} and log.WARNING for anything outside it.
+
+[8-7] LOW | Demo-Mode Payout Creates "pending" Record That Never Resolves
+File: backend/routes/drivers.py:1278
+Finding: With stripe_secret not set (dev/demo), payout is created with status="pending" and
+no stripe_payout_id. These records accumulate and never resolve.
+Fix: Return 503 {"detail": "Payment processing not configured"} when stripe_secret is missing.
+
+[8-8] PASS | PCI-DSS Guard — Raw Card Fields Rejected at HTTP Boundary
+File: backend/routes/payments.py:267-306
+Finding: add_card endpoint rejects raw PAN/CVV before Pydantic parsing, preventing card data
+from appearing in logs or metrics. Strong control.
+Fix: Extend to cover camelCase variants per [8-1].
+
+[8-9] PASS | Stripe Webhook Signature Verification with construct_event()
+File: backend/routes/webhooks.py:46-55
+Finding: HMAC-SHA256 signature verified via Stripe SDK before any processing. 400 on failure.
+
+[8-10] PASS | Stripe Event Idempotency via stripe_events Dedup Table
+File: backend/routes/webhooks.py:67-88
+Finding: event_id PRIMARY KEY prevents duplicate processing. Returns 200 with duplicate:True
+on replay without reprocessing.
+
+[8-11] PASS | SetupIntent Customer ID Derived Server-Side — Not Client-Supplied
+File: backend/routes/payments.py:127-156
+Finding: customer_id is always derived from authenticated user, never from request body.
+
+[8-12] PASS | Balance Card Shows Available, Pending, and Paid Out Correctly
+File: driver-app/app/driver/payout.tsx:201-228
+
+[8-13] PASS | Payment Retry: 5-Min Interval, 3 Retries, 24h Max Age, Push on Exhaustion
+File: backend/utils/payment_retry.py
+Finding: Retry logic is complete with dead-letter handling.
+
+[8-14] RECOMMENDATION | T4A Download Not Exposed in Driver App UI
+File: backend/routes/drivers.py:1327-1362 and driver-app/app/driver/payout.tsx
+Finding: /drivers/t4a/{year} and /drivers/earnings/export endpoints exist but are not wired
+to any button in payout.tsx. Canadian drivers need T4A access.
+Fix: Add "Download Earnings CSV" and "View T4A Summary" buttons in payout.tsx tax section.
+
+[8-15] RECOMMENDATION | Document $10 Minimum in /drivers/balance API Response
+File: backend/routes/drivers.py (balance endpoint)
+Finding: Clients have no way to discover the minimum payout amount from the API contract.
+Fix: Add min_payout_amount: 10.0 to the balance response schema.
+
+SUMMARY: CRITICAL:0 HIGH:1 MEDIUM:3 LOW:2 PASS:6 RECOMMENDATION:2
+
+================================================================================
+TASK 9 — TEST COVERAGE AUDIT
+================================================================================
+
+[9-1] HIGH | Double-Accept Race Condition Has No Server-Side Test
+File: backend/tests/ (missing test)
+Finding: No backend test verifies that concurrent accept calls on the same ride result in
+exactly one 200 and one 409. The client store handles rejection (lines 88-129 of
+driverStore.config.test.ts) but the server-side atomic guard is untested.
+Fix: Add test_concurrent_accept_race_condition(): mock two simultaneous POST /drivers/rides/{id}/accept,
+verify first returns 200 and second returns 409 Conflict.
+
+[9-2] MEDIUM | Complete Ride from driver_assigned State Not Tested
+File: backend/tests/test_ride_state_machine.py:68-75
+Finding: State guard tests cover completing from already-completed/cancelled but not from
+driver_assigned — the most dangerous gap found in Task 7 (finding [7-7]).
+Fix: Add test_complete_ride_from_driver_assigned_returns_409().
+
+[9-3] MEDIUM | Full Ride Lifecycle Integration Test Missing
+File: backend/tests/test_rides.py:104-116
+Finding: Lifecycle transitions are tested in isolation. No single test covers the full chain:
+create → assign → accept → arrive → start (with OTP) → complete.
+Fix: Add TestRideFullLifecycle integration class that runs each state in sequence, validating
+the database state and response at each step.
+
+[9-4] MEDIUM | Auth Boundary Tests Accept Too-Broad Status Codes
+File: backend/tests/test_drivers.py:310-338 and test_rides.py:391-436
+Finding: Endpoint smoke tests accept [200, 401, 404, 405, 422] as "valid". Unauthenticated
+requests should explicitly return 401. No dedicated test confirms that missing/expired/invalid
+tokens are all rejected with 401.
+Fix: Add TestAuthBoundary: test_no_header → 401, test_invalid_token → 401, test_expired_token → 401.
+
+[9-5] MEDIUM | OTP Lockout Test Only Mocks Redis — Never Sends 5 Real Failures
+File: backend/tests/test_auth_send_otp.py:157-164
+Finding: Lockout test mocks redis_get("1") returning a count above threshold. No test
+actually calls verify_otp 5 times with wrong codes and confirms the 5th triggers a 429.
+Fix: Add test_verify_otp_lockout_after_5_failures(): call /auth/verify-otp with wrong code
+5 times, assert 429 with "account locked" message on the 5th.
+
+[9-6] MEDIUM | PII Stripping Test Only Checks 2 of 14 Forbidden Fields
+File: backend/tests/test_ride_pii.py:63-79, 224-226
+Finding: FORBIDDEN_FIELDS defines 14 sensitive fields but assertions only verify phone
+and license_number are absent. insurance_expiry_date, background_check_expiry_date,
+stripe_account_id, bank_account, fcm_token etc. are listed but not asserted.
+Fix: Parametrize: @pytest.mark.parametrize("field", FORBIDDEN_FIELDS)
+def test_pii_field_excluded(field): assert field not in driver_in_response
+
+[9-7] MEDIUM | Jest Coverage Threshold Not Enforced
+File: driver-app/jest.config.js:1-20
+Finding: collectCoverageFrom is set but coverageThreshold is absent. Coverage regressions
+accumulate silently.
+Fix: Add: coverageThreshold: { global: { lines: 70, functions: 60, branches: 55 } }
+
+[9-8] MEDIUM | Zero Component Tests — Only Store Logic is Unit-Tested
+File: driver-app/__tests__/store/driverStore.test.ts
+Finding: All driver-app tests are store unit tests. No @testing-library/react-native
+component tests exist. RideOfferPanel, OTP input, TripCompletedPanel, EarningsLineChart
+UI logic is completely untested.
+Fix: Add component tests: test_RideOfferPanel (renders details, Accept/Decline buttons work),
+test_OTPInput (rejects non-4-digit input), test_TripCompletedPanel (shows fare breakdown).
+
+[9-9] MEDIUM | Token Version Rotation Test Missing
+File: backend/tests/test_auth.py (not found)
+Finding: No test increments user's token_version and confirms the old JWT is rejected.
+This is the primary force-logout-all mechanism.
+Fix: Add test_verify_jwt_rejects_stale_token_version(): issue token at version=1,
+update DB to version=2, call protected endpoint — expect 401.
+
+[9-10] MEDIUM | Fixture Isolation: Global Patches May Bleed Between Test Classes
+File: backend/tests/conftest.py:256-274
+Finding: patch_external_dependencies() patches global modules without explicit reset between
+classes. Test ordering can cause mock bleed, leading to flaky tests.
+Fix: Use pytest.MonkeyPatch or scope="function" with explicit setup/teardown in the autouse
+fixture to guarantee clean state per test.
+
+[9-11] MEDIUM | Async Test Configuration Not Globally Enforced
+File: backend/tests/conftest.py:32-37
+Finding: event_loop fixture defined but asyncio_mode not set in pytest.ini. pytest-asyncio
+≥0.21 requires asyncio_mode = "auto" or per-test @pytest.mark.asyncio.
+Fix: Add to pytest.ini: [pytest] asyncio_mode = auto
+
+[9-12] MEDIUM | Ride State Machine Test Gaps (cancelled/completed → * not all tested)
+File: backend/tests/test_rides.py:63-132
+Finding: State guard tests don't cover all invalid source states. E.g., cancelled → in_progress
+should 409 but is not tested.
+Fix: Expand test_ride_state_machine.py: for each terminal state (cancelled, completed), test
+that ALL other transitions are rejected with 409.
+
+[9-13] LOW | Hardcoded Credentials in conftest.py
+File: backend/tests/conftest.py:24-29
+Finding: ADMIN_PASSWORD=TestAdminPass123! and JWT_SECRET=test-secret-key-for-ci-only-32chars!!
+are hardcoded in source. Low risk (test-only) but risks appearing in logs if .gitignore mis-set.
+Fix: Load from environment with defaults: os.getenv("TEST_JWT_SECRET", "test-secret-32-chars-minimum!!")
+Document required env vars in TESTING.md.
+
+[9-14] LOW | Hard-coded Dev OTP "1234" in Maestro Flows (Approved Design)
+File: .maestro/driver/01_login.yaml:24
+Finding: Per audit ground rules, 4-digit OTP and dev bypass are approved. Noted here for
+completeness only.
+Fix: No action required.
+
+[9-15] PASS | Store Test Suite Covers Core Actions (Online, Accept, Complete, Cancel)
+File: driver-app/__tests__/store/driverStore.test.ts
+Finding: goOnline, goOffline, acceptRide, completeRide, cancelRide all have positive +
+error path tests with API mock responses.
+
+[9-16] PASS | Maestro Login and Go-Online Flows Have assertVisible Assertions
+File: .maestro/driver/01_login.yaml and 02_go_online.yaml
+Finding: Flows verify UI elements present after each action — not just tap sequences.
+
+[9-17] RECOMMENDATION | Add Maestro Flows for Accept, OTP, Complete, Earnings, Payout
+File: .maestro/driver/ (missing files)
+Finding: Only login and go_online covered. All happy-path flows after going online are untested
+in E2E.
+Fix: Add accept_ride.yaml, verify_otp.yaml, complete_trip.yaml, earnings.yaml, payout.yaml.
+
+[9-18] RECOMMENDATION | Add TESTING.md Documenting Test Setup and Required Env Vars
+File: (missing)
+Finding: No documentation on how to run tests, required env vars, or test data setup.
+Fix: Create backend/TESTING.md with: pip install requirements-test.txt, env var list,
+how to seed test data, how to run pytest + maestro.
+
+SUMMARY: CRITICAL:0 HIGH:1 MEDIUM:10 LOW:2 PASS:2 RECOMMENDATION:2
+
+================================================================================
+TASK 10 — ERROR HANDLING & RESILIENCE
+================================================================================
+
+[10-1] HIGH | request_id Missing from SpinrException Handler — Cannot Trace Errors
+File: backend/utils/error_handling.py:368-376
+Finding: spinr_exception_handler doesn't inject request_id into error responses. The
+http_exception_handler (line 427) and general_exception_handler (line 509) both include it.
+Without request_id, customer support cannot correlate a driver's error screen with a backend
+log entry.
+Fix: Generate request_id in spinr_exception_handler, add to response body and X-Request-ID
+header. Also add _cors_headers_for(request) to allow cross-origin error inspection.
+
+[10-2] HIGH | run_sync() Does Not Retry on Network Timeouts
+File: backend/db_supabase.py:18-42
+Finding: run_sync() retries on HTTP/2 connection errors (ConnectionTerminated, RemoteProtocolError)
+but not on httpx.TimeoutException. Any transient network timeout (common on cloud infrastructure)
+fails immediately without retry, causing unnecessary 500 errors to drivers.
+Fix: Add httpx.TimeoutException to the except clause alongside the HTTP/2 errors, with the
+same backoff-and-retry logic (max 3 retries, 0.5s backoff).
+
+[10-3] MEDIUM | validation_exception_handler (422) Missing CORS Headers and request_id
+File: backend/utils/error_handling.py:379-414
+Finding: Pydantic validation errors return 422 responses without CORS headers. On cross-origin
+requests, the browser shows a generic CORS error instead of the validation details, making
+debugging impossible from the driver app.
+Fix: Add to JSONResponse constructor:
+    headers={**_cors_headers_for(request), "X-Request-ID": request_id}
+And include request_id in the response body.
+
+[10-4] MEDIUM | Inconsistent Error Response Format Across Four Handlers
+File: backend/utils/error_handling.py:89-99, 403-414, 428-444, 538-555
+Finding: SpinrException.to_dict() and validation_exception_handler omit request_id;
+http_exception_handler and general_exception_handler include it. Client code must handle
+four different error shapes.
+Fix: Standardize all handlers to emit: {"error": {"code":..., "detail":..., "request_id":...}}
+Update SpinrException.to_dict(request_id=None) to accept and embed the id.
+
+[10-5] MEDIUM | Supabase Connection Pool Has No Acquisition Timeout
+File: backend/supabase_client.py:23-32
+Finding: httpx.Client created with inherited default timeout — no explicit pool acquisition
+timeout. When all connections are busy, new requests block indefinitely.
+Fix: httpx.Client(timeout=httpx.Timeout(connect=10, read=30, write=10, pool=5))
+This surfaces pool exhaustion as a TimeoutException rather than a hang.
+
+[10-6] MEDIUM | Supabase Errors Not Wrapped into SpinrException Subclasses
+File: backend/db_supabase.py:142-148
+Finding: PostgrestAPI errors propagate as generic exceptions, bypassing the structured
+error system and emitting raw 500s. Client cannot distinguish "not found" from "conflict".
+Fix: Catch Supabase APIError and map: "duplicate key" → ResourceAlreadyExistsException,
+"no rows found" → ResourceNotFoundException, constraint violation → ValidationException.
+
+[10-7] MEDIUM | Error Boundary Scope Not Enforced — Major Screens May Be Unprotected
+File: shared/components/ErrorBoundary.tsx:57-115
+Finding: ErrorBoundary is well-implemented (getDerivedStateFromError + Sentry) but there's
+no convention ensuring it wraps every major screen section. An unprotected component throw
+propagates to the root and crashes the whole app.
+Fix: Document in CONTRIBUTING.md that every screen must be wrapped in ErrorBoundary.
+Wrap the app root in a top-level ErrorBoundary as the final safety net.
+
+[10-8] MEDIUM | API Client 401 Retry Has No Backoff — Risk of Cascading Refresh Timeouts
+File: shared/api/client.ts:154-172
+Finding: When an access token expires, the refresh is deduped correctly, but there's no
+exponential backoff before retry after a failed refresh. During a network congestion event,
+multiple failed refreshes pile up immediately.
+Fix: Add exponential backoff to the 401 path:
+    await new Promise(r => setTimeout(r, Math.min(1000 * 2 ** retryCount, 30000)));
+
+[10-9] MEDIUM | Offline Queue Silently Drops 4xx Errors After Max Retries
+File: shared/api/offlineQueue.ts:136-150
+Finding: Queued requests that receive 401/403 after reconnect are silently discarded after
+3 retries. An expired session while offline means the driver's queued actions (location updates,
+status changes) are lost with no notification.
+Fix: On 401/403 after retry exhaustion, call a registered error callback to notify the app:
+    this.onError?.({ type: 'session_expired', failedRequests: this.queue.length })
+
+[10-10] LOW | Offline Queue Error Checks Use Fragile String Matching
+File: shared/api/offlineQueue.ts:136-150
+Finding: Timeout detection: `error.message.includes("TimeoutError")` is fragile across
+environments and polyfills.
+Fix: Check `error.response === undefined` (no response = network/timeout) instead of
+string matching. Handles all network failure types uniformly.
+
+[10-11] LOW | Error Log Ring Buffer Entries May Contain Large Response Bodies
+File: shared/api/client.ts:139-152
+Finding: MAX_ERROR_LOG=50 entries capped by count, but each entry may contain full error
+response bodies. On verbose APIs, 50 × large-payload = memory pressure on low-end devices.
+Fix: Serialize each entry to JSON and truncate to 2KB:
+    const entry = JSON.stringify(errorData).slice(0, 2048);
+
+[10-12] PASS | CORS Headers Included on Error Responses (http + general handlers)
+File: backend/utils/error_handling.py:440-443, 551-554
+[10-13] PASS | Exception Hierarchy Correctly Mapped to HTTP Status Codes
+File: backend/utils/error_handling.py:17-365
+[10-14] PASS | Catch-All Handler Prevents Stack Trace Leakage in Production
+File: backend/utils/error_handling.py:529-555
+[10-15] PASS | Error Handler Logging Defensive Against Crashing (opt raw=True)
+File: backend/utils/error_handling.py:391-401, 519-527
+[10-16] PASS | Offline Queue Persists to AsyncStorage — Survives App Restarts
+File: shared/api/offlineQueue.ts:69-162
+[10-17] PASS | 15-Second Request Timeout via AbortController
+File: shared/api/client.ts:12
+[10-18] PASS | Sentry SDK Initialized for Backend Error Monitoring
+File: backend/server.py:136-164
+
+[10-19] RECOMMENDATION | Add Per-Request Timeout Override for File Uploads
+File: shared/api/client.ts
+Finding: 15s is too short for document uploads (driver license, vehicle photos). File uploads
+need 30-60s timeout.
+Fix: Allow client.post(url, body, { timeout: 60000 }) override in document upload calls.
+
+[10-20] RECOMMENDATION | Map Pydantic Error Types to Human-Readable Messages
+File: backend/utils/error_handling.py:379-389
+Finding: Raw Pydantic messages ("field required", "value is not a valid integer") are shown
+to drivers. Confusing for non-technical users.
+Fix: Map common Pydantic error types: "missing" → "This field is required",
+"string_too_short" → "Too short (minimum {min_length} characters)", etc.
+
+SUMMARY: CRITICAL:0 HIGH:2 MEDIUM:6 LOW:2 PASS:7 RECOMMENDATION:2
+
+================================================================================
+TASK 11 — SECURITY HEADERS, CORS & MIDDLEWARE
+================================================================================
+
+[11-1] HIGH | Rate Limiting Uses Direct Connection IP — Bypassed Behind Reverse Proxy
+File: backend/utils/rate_limiter.py:50, 85, 98
+Finding: slowapi's default get_remote_address() reads request.client.host — the direct
+TCP connection IP. Behind Cloudflare, Fly.io, or Railway, all requests come from the
+proxy's IP. Rate limits apply per-proxy, not per-user. An attacker can make unlimited
+OTP or login attempts as long as they share the proxy address with legitimate users.
+Fix: Configure slowapi key_func to extract the real client IP from X-Forwarded-For:
+    key_func=lambda r: (r.headers.get("x-forwarded-for","").split(",")[0].strip()
+                        or r.client.host)
+Only trust X-Forwarded-For when request.client.host matches a known proxy IP list.
+
+[11-2] MEDIUM | Firebase App Check Not Enforced — Jailbroken Devices Can Access API
+File: backend/core/config.py:25-26 and backend/dependencies/__init__.py:136
+Finding: Firebase ID tokens are verified (line 136) but Firebase App Check (device
+attestation) is not validated. Jailbroken iOS or rooted Android devices, or custom
+HTTP clients, can call the API without App Check tokens. This is the vector for
+automated account creation and ride-request spam.
+Fix: Require App Check token header (X-Firebase-AppCheck) on sensitive endpoints
+(OTP send, ride creation, payment). Verify via firebase_admin.app_check.verify_token().
+Return 403 if token missing or invalid.
+
+[11-3] LOW | OTP Lockout is Per-Instance in Dev (Acceptable in Production)
+File: backend/routes/auth.py:71-101
+Finding: Redis-backed lockout falls back silently when Redis unavailable. In dev this
+means lockout counters are per-process. Production requires Redis (enforced at startup).
+Fix: No action required — production guard in middleware.py:191-202 is sufficient.
+
+[11-4] PASS | CORS Wildcard Rejected in Production — Origin Allowlist Enforced
+File: backend/core/middleware.py:241-248
+[11-5] PASS | All Security Headers Present and Correct
+File: backend/core/middleware.py:22-64
+Finding: HSTS max-age=31536000 + includeSubDomains + preload; X-Content-Type-Options nosniff;
+X-Frame-Options DENY; CSP default-src 'none'; Referrer-Policy strict-origin-when-cross-origin;
+Permissions-Policy disables camera/mic/geolocation; COOP same-origin; CORP same-site.
+[11-6] PASS | Startup Credential Validation Rejects Weak JWT_SECRET, Placeholder URLs
+File: backend/core/middleware.py:112-221
+[11-7] PASS | Secrets Never Echoed in Startup Validation Logs
+File: backend/core/middleware.py:112-221
+[11-8] PASS | Rate Limits Correctly Configured (OTP 3/min, Login 5/min, Rides 10/min)
+File: backend/utils/rate_limiter.py:151-163
+[11-9] PASS | Redis Required in Production — In-Memory Fallback Clearly Flagged
+File: backend/utils/rate_limiter.py:36-46
+[11-10] PASS | TruffleHog Secrets Scanning on Every PR (--only-verified --fail)
+File: .github/workflows/ci.yml:395-416
+[11-11] PASS | Trivy CVE Scanning Blocks CRITICAL/HIGH on Docker Push
+File: .github/workflows/ci.yml:418-472
+[11-12] PASS | No Secrets Echoed in CI Logs
+File: .github/workflows/ci.yml
+[11-13] PASS | Duplicate Driver Constraints + Orphan Cleanup in Migrations
+File: backend/migrations/30_identity_audit.sql and 31_driver_dedup_and_constraints.sql
+Finding: UNIQUE constraints on drivers(phone) and drivers(user_id); role mismatch backfill;
+orphan/detached driver cleanup with safety abort if referenced by child tables.
+
+[11-14] RECOMMENDATION | Document X-Forwarded-For Proxy Trust in Deployment Guide
+Finding: Rate limiting behind a proxy is a footgun without explicit documentation.
+Fix: Add to deployment docs: "Configure your reverse proxy to set X-Forwarded-For with
+the real client IP. Rate limiting relies on this header in production."
+
+SUMMARY: CRITICAL:0 HIGH:1 MEDIUM:1 LOW:1 PASS:9 RECOMMENDATION:1
+
+================================================================================
+TASK 12 — COMPLIANCE: PII, PCI-DSS & DATA RETENTION
+================================================================================
+
+[12-1] CRITICAL | No Active Driver Suspension When Document Expires Mid-Shift
+File: backend/utils/document_expiry.py:24-130
+Finding: The 12-hour background loop notifies drivers before expiry but has NO mechanism
+to suspend drivers who are already online when their document expires. go-online check
+blocks a new login (routes/drivers.py:1045-1054) but an already-online driver continues
+taking rides indefinitely after expiry. Also: no admin alert on expiry, no post-expiry
+escalation (day-of / 1-hour warning), no email fallback if FCM fails, no grace period
+policy for mid-trip drivers.
+Fix: (1) In the expiry loop, for past-expiry docs, UPDATE driver.status='suspended' and
+    close their WebSocket connection (manager.disconnect).
+    (2) Send admin email alert on first expiry detection.
+    (3) Add tiered warnings: 7d, 1d, 12h, 1h before expiry.
+    (4) Add email fallback: if send_push_notification raises, queue email.
+    (5) Implement 2-hour grace period for mid-trip drivers (block new rides, finish current).
+
+[12-2] HIGH | Driver Documents Accessible via Public URL — No Auth Required
+File: backend/documents.py:222, 770
+Finding: Documents are stored in Supabase Storage. The endpoint calls get_public_url()
+which returns an unauthenticated URL. If the bucket is public (or even if accidentally
+mis-configured), driver's license scans, insurance docs, and vehicle photos are
+downloadable by anyone with the URL. No signed URL expiration enforced.
+Fix: (1) Verify in Supabase console that the driver-documents bucket is PRIVATE.
+    (2) Replace get_public_url() with create_signed_url(expiry=3600) for admin-only access.
+    (3) Implement a backend-authenticated serving endpoint:
+        GET /documents/{file_id} → verifies auth → fetches from storage → streams to client.
+    (4) Never return raw storage URLs to API clients.
+
+[12-3] HIGH | File Uploaded Entirely Into Memory Before Size Check — DoS Risk
+File: backend/documents.py:745-751
+Finding: content = await file.read() reads the entire upload into RAM before checking
+if len(content) > 10MB. A 100MB upload exhaust memory before rejection.
+Fix: Check Content-Length header first:
+    if int(request.headers.get("content-length", 0)) > 10 * 1024 * 1024:
+        raise HTTPException(413, "File too large")
+Then stream-read in 1MB chunks with a running total to enforce the limit.
+
+[12-4] HIGH | Document Expiry Loop Skips Past-Expiry Documents — No Post-Expiry Action
+File: backend/utils/document_expiry.py:51-66
+Finding: Condition `now < expiry_dt <= warning_cutoff` only matches future expirations.
+Once a document expires (expiry_dt < now), the loop never processes it again.
+No suspension, no escalation, no admin ticket is triggered for expired documents.
+Fix: Restructure into two branches:
+    if expiry_dt < now:  # already expired
+        await suspend_driver(driver_id)
+        await notify_admin(driver_id, expired_doc)
+    elif expiry_dt <= warning_cutoff:  # upcoming
+        await notify_driver(driver_id, days_remaining)
+
+[12-5] HIGH | Sensitive Data (license_number, VIN, bank_account) Stored in Plaintext
+File: backend/migrations/08_complete_schema.sql:43, 55
+Finding: license_number, vehicle_vin, and bank_account are plaintext columns in PostgreSQL.
+A DB dump or unauthorized access exposes all driver PII and financial data without any
+encryption. Supabase Vault (column-level encryption) is not used.
+Fix: Encrypt at-rest using Supabase Vault or application-layer KMS:
+    (1) Enable Supabase Vault: vault.create_secret(value, key_id).
+    (2) Store encrypted ciphertext; decrypt only in backend when needed.
+    (3) Add encryption_key_version column for key rotation tracking.
+    (4) Audit all decrypt operations to an access_log table.
+
+[12-6] MEDIUM | PII Test Assertions Check Only Subset of 14 Forbidden Fields
+File: backend/tests/test_ride_pii.py:63-79, 118-121
+Finding: FORBIDDEN_FIELDS has 14 entries but test assertions only verify a couple are absent.
+No assertion that the rider response contains ONLY allowed fields (a superset passes).
+Fix: assert set(driver_in_response.keys()).isdisjoint(FORBIDDEN_FIELDS)
+    assert set(driver_in_response.keys()).issubset(ALLOWED_FIELDS)
+
+[12-7] MEDIUM | stripe_account_id and bank_account Returned in Driver Self-Endpoint
+File: backend/routes/drivers.py:131-139
+Finding: GET /drivers/me returns the full driver object including stripe_account_id and
+bank_account via serialize_doc() without field filtering. These should be backend-only.
+Fix: Define DriverSelfResponse Pydantic model that whitelists safe fields. Apply as
+response_model to GET /drivers/me. Move stripe_account_id to a separate /drivers/payment-info
+endpoint gated to stripe-specific operations.
+
+[12-8] MEDIUM | Original Upload Filename Returned in API Response — PII Leakage
+File: backend/documents.py:779
+Finding: Response includes original_filename (e.g., "John_Smith_DL_Front.jpg") which may
+contain the driver's real name from their device filesystem.
+Fix: Return only file_id (UUID) and document_type in the response. Strip original_filename.
+
+[12-9] MEDIUM | WebP Magic Byte Check Accepts Non-WebP RIFF Files
+File: backend/documents.py:42-48
+Finding: WebP check only verifies b"RIFF" header — shared by AVI, WAV, and other RIFF formats.
+Fix: header[0:4] == b"RIFF" and header[8:12] == b"WEBP"
+
+[12-10] MEDIUM | No Soft-Delete Columns — Hard Deletes Prevent Audit Trail
+File: backend/migrations/*.sql
+Finding: No deleted_at column on drivers, users, rides, or driver_documents. Hard deletes
+are irreversible, preventing chargeback investigations, compliance audits, or driver re-appeal.
+Fix: Add deleted_at TIMESTAMPTZ DEFAULT NULL to core tables. Filter deleted_at IS NULL
+in all non-admin queries. Expose deleted records via admin-only endpoints.
+
+[12-11] LOW | File Extension Not Validated Against Allowlist
+File: backend/documents.py:761-762
+Finding: os.path.splitext() preserves original extension which could be ".php.jpg" or other
+double-extension. Extension is appended to UUID storage key.
+Fix: assert file_ext.lower() in {'.jpg','.jpeg','.png','.gif','.webp','.pdf'}
+
+[12-12] LOW | FCM Tokens Stored in Plaintext — Allows Phishing Notification Attacks
+File: backend/routes/drivers.py:407-438
+Finding: fcm_token stored as plaintext on users table. DB access → can replay tokens
+to send phishing push notifications to any driver.
+Fix: Hash FCM tokens (SHA-256) for storage. Add fcm_token_issued_at and rotate monthly.
+Log all push notifications to audit table.
+
+[12-13] PASS | Rider-Facing Driver PII Stripped at Route Level
+File: backend/routes/rides.py:847-865
+Finding: GET /rides/{id} explicitly strips license_number, VIN, insurance dates, stripe_account_id,
+fcm_token, user_id, bank_account, phone from driver object returned to rider. Allowlist approach.
+
+[12-14] PASS | Row-Level Security Enabled on Sensitive Tables
+File: backend/supabase_rls.sql:9-68
+Finding: RLS on users, drivers, rides, otp_records with role-based policies. otp_records
+deny all to non-service roles. Sound implementation.
+
+[12-15] PASS | go-online Blocked for Drivers with Expired Documents
+File: backend/routes/drivers.py:1040-1087
+Finding: Expired documents prevent going online — enforced at the route level.
+
+SUMMARY: CRITICAL:1 HIGH:4 MEDIUM:5 LOW:2 PASS:3 RECOMMENDATION:0
+
+================================================================================
+TASK 13 — NOTIFICATIONS, AI SUPPORT BOT & KNOWLEDGE BASE
+================================================================================
+
+[13-1] HIGH | Foreground Notification Handler Missing Critical Types
+File: driver-app/hooks/useDriverDashboard.ts:666-698
+Finding: onForegroundMessage only handles new_ride_assignment and ride_cancelled. Types like
+document_expiry_warning, subscription_expiring, payment_failed, ride_completed arrive
+silently — driver sees no in-app alert and no navigation occurs. App state doesn't update.
+Fix: Add handlers for all types:
+    else if (data?.type==='document_expiry_warning') navigateTo('/driver/profile#documents');
+    else if (data?.type==='subscription_expiring') navigateTo('/driver/subscription');
+    else if (data?.type==='ride_completed') showEarningsSummary(data.ride_id);
+
+[13-2] MEDIUM | Document Expiry: Only 7-Day Warning — Missing 1-Day, Day-Of, Post-Expiry
+File: backend/utils/document_expiry.py:24-130
+Finding: EXPIRY_WARNING_DAYS=7 sends one warning. No 1-day escalation, no day-of-expiry
+push, no post-expiry suspension notification. 24h cooldown may suppress the 1-day warning
+if the 7-day warning just ran.
+Fix: Add tiered warnings with distinct FCM payloads and urgency levels:
+    7d: "Expires in 7 days" (normal priority)
+    1d: "Expires tomorrow — renew today" (high priority)
+    0d: "Expired — you've been suspended" (MAX priority, MAX channel)
+Make cooldown per-tier: 7d cooldown for 7d warning, 20h for 1d warning.
+
+[13-3] MEDIUM | All Notification Payloads Missing deeplink Field
+File: backend/routes/rides.py:275-286 and backend/routes/drivers.py:1558-1563
+Finding: send_push_notification data dict includes type + ride_id but no deeplink URL.
+The app manually interprets type and navigates — tightly coupling backend and client.
+Fix: Add deeplink to every notification data payload:
+    new_ride_offer → deeplink: "spinr-driver://rides/{ride_id}/offer"
+    document_expiry_warning → deeplink: "spinr-driver://driver/profile?tab=documents"
+    subscription_expiring → deeplink: "spinr-driver://driver/subscription"
+
+[13-4] MEDIUM | Notification Preferences Stored Locally Only — Lost on App Reinstall
+File: driver-app/app/driver/settings.tsx:135-165 and backend/routes/notifications.py:164-210
+Finding: Backend has GET/PUT /notifications/preferences API but driver app never calls it.
+Toggles (pushNotifications, rideAlerts, earningsSummary) are local state only, reset on
+reinstall or logout.
+Fix: On Settings mount: call GET /notifications/preferences, populate state from response.
+On toggle change: call PUT /notifications/preferences. Add loading + optimistic UI.
+
+[13-5] MEDIUM | Notification Tap Does Not Navigate — Only Marks Read
+File: driver-app/app/driver/notifications.tsx:105-126
+Finding: renderNotification onPress calls markAsRead(item.id) but does nothing else.
+Tapping a "document expiring" notification goes nowhere. Standard UX is to route to
+the relevant screen.
+Fix: Add deeplink routing in onPress:
+    if (item.type==='document_expiry_warning') router.push('/driver/profile?tab=documents');
+    if (item.type==='ride_cancelled'||'ride_completed') router.push(`/driver/ride-detail?id=${item.data?.ride_id}`);
+    if (item.type==='subscription_expiring') router.push('/driver/subscription');
+
+[13-6] MEDIUM | Foreground Handler Missing subscription_expiring and document_expiry_warning
+File: driver-app/hooks/useDriverDashboard.ts:689-698
+Finding: When the app is foreground and these notification types arrive, no alert, banner,
+or navigation is triggered. Driver misses the expiry warning entirely if they're actively using the app.
+Fix: See [13-1] — add to the if/else chain in onForegroundMessage.
+
+[13-7] MEDIUM | No OTP Push Flow — Document-Based OTP Is App-Only, Not Communicated
+File: (all routes scanned)
+Finding: Pickup OTP is displayed in-app and verified in-app — no notification/SMS delivery
+path exists. If a rider's app is backgrounded, they may not see the OTP.
+Fix: Document the OTP delivery path explicitly. Consider displaying OTP as a high-priority
+notification on the rider's app when the driver marks "arrived".
+
+[13-8] LOW | ride_auto_cancelled vs. ride_cancelled — Inconsistent Naming Breaks App Routing
+File: backend/routes/rides.py:703
+Finding: Auto-cancel sends type="ride_auto_cancelled"; manual cancel sends type="ride_cancelled".
+The app's foreground handler only checks for "ride_cancelled" — auto-cancel is silently dropped.
+Fix: Unify to type="ride_cancelled" with a reason field:
+    {type: "ride_cancelled", reason: "no_drivers_available", ride_id: "x"}
+
+[13-9] LOW | Payment Retry Notifications Missing Intermediate Steps
+File: backend/utils/payment_retry.py:122-135
+Finding: Rider only notified after all 3 retries fail. No intermediate notification on retry #1
+or #2. Rider has no chance to update payment method before final failure.
+Fix: Notify on retry #1: "Payment issue — we're retrying", retry #3: "Last attempt".
+Use a boolean config flag NOTIFY_ON_INTERMEDIATE_RETRIES to control this behaviour.
+
+[13-10] LOW | Driver Not Notified When Their Ride Payment Fails
+File: backend/utils/payment_retry.py:127-132
+Finding: Payment failure notification goes to rider only. Driver learns of failed payment
+via earnings screen discrepancy, with no direct notification.
+Fix: Send driver notification: {type:"ride_payment_failed", ride_id:"x",
+detail:"Rider payment declined — earnings may be adjusted pending resolution"}
+
+[13-11] PASS | Notification Centre: Unread Badge, Read/Unread State, Pull-to-Refresh
+File: driver-app/app/driver/notifications.tsx:20-244
+[13-12] PASS | Android Notification Channels: ride-offers (MAX), default (HIGH)
+File: driver-app/app/_layout.tsx:126-141
+[13-13] PASS | Background Message Handler Registered at Module Level (App-Killed State)
+File: driver-app/app/_layout.tsx:62-64
+[13-14] PASS | FCM Token Registration Deferred to Auth Init — No 401 on Login
+File: driver-app/app/_layout.tsx:167-214
+
+[13-15] RECOMMENDATION | AI Support Bot Not Implemented — Gemini Architecture
+Finding: Zero evidence of AI support bot (no gemini, openai, llm, chatbot patterns).
+Backend has /admin/faqs CRUD but no conversational interface for drivers.
+Fix: Implement Gemini-based support bot:
+    Backend: POST /driver/support/chat
+    (1) Fetch relevant FAQs from DB matching user query (full-text search)
+    (2) Build prompt: "You are the Spinr driver support agent. FAQs: {faqs}. Question: {user_q}"
+    (3) Call google-generativeai: genai.GenerativeModel('gemini-1.5-flash').generate_content(prompt)
+    (4) Return structured response with sources
+    Privacy: strip PII before sending to Gemini (redact license, email, phone from context)
+    Rate limit: 1 req/3s per driver; log queries for quality improvement
+    Fallback: return raw FAQ search results if Gemini fails
+
+[13-16] RECOMMENDATION | In-App FAQ Screen Not Implemented
+Finding: Backend admin can CRUD FAQs but /driver/faq.tsx does not exist. Driver has no
+self-service help centre. Error states (ride cancelled, doc expired) have no "Learn more" link.
+Fix: Create driver-app/app/driver/faq.tsx with:
+    - Categories: Earnings, Documents, Dispatch, Payouts, Safety
+    - Full-text search across question + answer
+    - Deeplink from error states: cancelled notification → FAQ?category=dispatch
+    - Weekly sync from GET /support/faqs
+
+[13-17] RECOMMENDATION | Help & Support Section Missing from Settings
+File: driver-app/app/driver/settings.tsx
+Finding: Settings has Emergency Assistance but no "Help & FAQ" or "Contact Support" section.
+Fix: Add section with: "View FAQs" → /driver/faq | "Contact Support" → support ticket form.
+
+SUMMARY: CRITICAL:0 HIGH:1 MEDIUM:6 LOW:4 PASS:4 RECOMMENDATION:3
+
+================================================================================
+TASK 14 — PERFORMANCE & SCALABILITY (added post-initial-audit)
+================================================================================
+
+[14-7] CRITICAL | Math.random() Used as FlatList Key
+File: driver-app/app/driver/rides.tsx:284
+Finding: keyExtractor={(item) => item.id || Math.random().toString()} — every parent
+re-render generates a new key, forcing the entire list to remount. Causes severe jank
+during pull-to-refresh, filter changes, and any unrelated state update.
+Fix: keyExtractor={(item, index) => item.id ? String(item.id) : `ride_${index}`}
+
+[14-14] CRITICAL | Driver Rating Calculation Loads 1000 Ride Records Into Memory
+File: backend/routes/rides.py:1249
+Finding: get_rows("rides", {"driver_id": driver_id}, limit=1000) fetches up to 1000
+rides per rating update and averages them in a Python loop — blocks the request thread.
+Fix: SELECT AVG(driver_rating) FROM rides WHERE driver_id=$1 AND driver_rating IS NOT NULL
+
+[14-1] HIGH | Hermes JS Engine Not Explicitly Configured for Android
+File: driver-app/app.config.ts:16
+Finding: newArchEnabled: true does not automatically enable Hermes in all Expo SDK 54
+configurations. Missing 50-60% startup improvement on Android.
+Fix: Verify Hermes is active in production build — add explicit jsEngine check.
+
+[14-10] HIGH | CarMarker Uses React Native Image Without Cache Control
+File: driver-app/components/CarMarker.tsx:80-88
+Finding: Static asset — acceptable now. If dynamic URLs ever used here, migrate to expo-image.
+Fix: No immediate action. Pre-emptive note for future dynamic avatar use.
+
+[14-8] MEDIUM | FlatList Missing Virtualisation Props
+File: driver-app/app/driver/rides.tsx:281-301
+Finding: No initialNumToRender, maxToRenderPerBatch, windowSize, or getItemLayout.
+Fix: Add initialNumToRender=10, maxToRenderPerBatch=20, windowSize=10, removeClippedSubviews={true}
+
+[14-11] MEDIUM | Profile Avatar Uses Plain React Native Image (No Cache)
+File: driver-app/app/driver/profile.tsx:212-215
+Finding: <Image source={{ uri: user.profile_image }} — no memory/disk cache. Re-downloads on every render.
+Fix: Migrate to expo-image with cachePolicy="memory-disk" (expo-image already in package.json)
+
+[14-15] MEDIUM | No Composite Index on rides(driver_id, created_at)
+File: backend/migrations/ — missing
+Finding: Queries by driver_id with ORDER BY created_at DESC do full table scan as rides table grows.
+Fix: CREATE INDEX IF NOT EXISTS idx_rides_driver_created ON rides(driver_id, created_at DESC);
+
+[14-16] MEDIUM | Driver Estimate Fetches Max 500 Drivers — Misses Drivers in Dense Areas
+File: backend/routes/rides.py:131-139
+Finding: limit=500 applied before distance filter — nearby drivers beyond position 500 are invisible.
+Fix: Apply PostGIS distance filter in DB query, then apply limit.
+
+[14-17] MEDIUM | Rider History Endpoint Has No Pagination
+File: backend/routes/rides.py:786-792
+Finding: limit=200 with no offset/cursor parameter — riders with 200+ rides cannot see older history.
+Fix: Add skip: int = 0, limit: int = 50 parameters and return has_more in response.
+
+[14-19] MEDIUM | 15 console.log Statements in Production Dashboard Hook
+File: driver-app/hooks/useDriverDashboard.ts (15 calls)
+Finding: LogRocket captures all console output — adds CPU/memory overhead in production.
+Fix: Wrap with if (__DEV__) or use a logger abstraction for production.
+
+[14-2] MEDIUM | Metro maxWorkers = 2 — Slows Local Dev Builds
+File: driver-app/metro.config.js:25
+Finding: Intentional for CI stability. No production impact. Acceptable tradeoff.
+Fix: None required. Document the intent.
+
+[14-9] LOW | removeClippedSubviews Not Enabled on FlatLists
+File: driver-app/app/driver/rides.tsx:281
+Fix: Add removeClippedSubviews={true} to all FlatList instances.
+
+[14-3] PASS | Babel Module Resolver Configured Correctly
+[14-4] PASS | EAS Production Build Uses Expo SDK 54 Defaults (minification ON)
+[14-12] PASS | Explicit Image Dimensions in CarMarker (no layout reflow)
+[14-18] PASS | Key Database Indexes Present (drivers, driver_location_history, corporate_accounts)
+[14-20] PASS | Location Subscription Properly Cleaned Up on Unmount
+[14-21] PASS | Batch Upload Interval Properly Cleared on Unmount
+[14-22] PASS | Reconnect Timeout Properly Cleared on Unmount
+[14-23] PASS | WebSocket Reference Closed on Unmount and Reconnect
+[14-24] PASS | Location Buffer Uses 500-Entry Rotation (no unbounded growth)
+[14-25] PASS | Location Buffer Persisted on Failure and Recovered on Cold Start
+[14-26] PASS | Upload Callback Dependency Chain Is Stable (no unnecessary re-subscriptions)
+
+[14-5] RECOMMENDATION | Audit Bundle Size — Lazy-Load Heavy Modules (Charts, Maps)
+[14-6] RECOMMENDATION | Monitor New Architecture for Crashes After First Production Build
+[14-13] RECOMMENDATION | Add Blurhash Placeholders for Profile Images on Slow Networks
+
+SUMMARY: CRITICAL:2 HIGH:2 MEDIUM:7 LOW:1 PASS:11 RECOMMENDATION:3
+
+================================================================================
+FINAL TALLY — ALL 14 TASKS
+================================================================================
+
+| Task | CRIT | HIGH | MED | LOW | PASS | REC |
+|------|------|------|-----|-----|------|-----|
+| T01 Feature Completeness    |  0 |  0 |  0 |  0 | 15 |  4 |
+| T02 Authentication          |  3 |  2 |  4 |  2 | 12 |  3 |
+| T03 Encryption & Secrets    |  1 |  2 |  3 |  0 |  5 |  3 |
+| T04 Input Validation        |  0 |  3 |  6 |  2 |  0 |  3 |
+| T05 Android & iOS UX        |  1 |  4 | 13 |  1 |  5 |  2 |
+| T06 Real-Time WS & GPS      |  0 |  2 |  6 |  0 | 10 |  0 |
+| T07 Ride Dispatch           |  1 |  3 |  3 |  3 |  2 |  2 |
+| T08 Payments & Earnings     |  0 |  1 |  3 |  2 |  6 |  2 |
+| T09 Test Coverage           |  0 |  1 | 10 |  2 |  2 |  2 |
+| T10 Error Handling          |  0 |  2 |  6 |  2 |  7 |  2 |
+| T11 Security Headers/CORS   |  0 |  1 |  1 |  1 |  9 |  1 |
+| T12 Compliance              |  1 |  4 |  5 |  2 |  3 |  0 |
+| T13 Notifications/AI/FAQ    |  0 |  1 |  6 |  4 |  4 |  3 |
+| T14 Performance             |  2 |  2 |  7 |  1 | 11 |  3 |
+|------|------|------|-----|-----|------|-----|
+| TOTAL                       |  9 | 28 | 73 | 22 | 91 | 30 |
+
+Total findings: 253  (91 PASS = 36% pass rate — 14 tasks)
+
+================================================================================
+REMEDIATION PRIORITY LIST — ORDERED BY RISK & EFFORT
+================================================================================
+
+── P0: DO NOW (Before Any Production Traffic) ──────────────────────────────────
+
+P0-1  [3-1]  ROTATE Supabase service-role key in dashboard (30 seconds)
+              backend/.env.example has a real key — treat as compromised.
+
+P0-2  [2-1/2-2/2-3]  DELETE dead refresh_token() function at auth.py:347-401
+              It has MongoDB-style calls + call to undefined _store_refresh_token().
+              Will NameError crash if ever invoked directly.
+
+P0-3  [7-1]  Fix double-accept race condition on ride accept
+              Use atomic WHERE driver_id=X AND status='driver_assigned' UPDATE.
+
+P0-4  [7-2]  Hash pickup OTP before DB storage (SHA-256 + hmac.compare_digest)
+              Currently stored plaintext — DB breach exposes all active OTPs.
+
+P0-5  [12-1] Implement active driver suspension on document expiry
+              Add UPDATE status='suspended' + WS disconnect in document_expiry.py loop.
+
+P0-6  [12-2] Replace get_public_url() with create_signed_url(expiry=3600) for driver docs
+              Driver license scans/insurance photos may be unauthenticated-accessible.
+
+── P1: THIS SPRINT (Before Beta Launch) ─────────────────────────────────────────
+
+P1-1  [7-3]  Add CANCEL_RIDER_BLOCKED states to cancel_ride_rider endpoint
+              Riders can cancel after driver arrived — no cancellation fee charged.
+
+P1-2  [7-4]  Add DRIVER_CANCEL_ALLOWED states to driver cancel endpoint
+              Driver can cancel in-progress rides — inconsistent state, skipped payout.
+
+P1-3  [7-7]  Add state guard to complete_ride endpoint
+              Currently accepts complete from any state, bypassing pickup OTP.
+
+P1-4  [5-1/CritUX]  Fix OfflineBanner top:0 → top:insets.top (1-line fix)
+              Banner hidden behind status bar/notch on both platforms.
+
+P1-5  [5-5]  Request background location permission after foreground grant
+              GPS tracking stops when driver locks phone mid-trip.
+
+P1-6  [12-3] Stream file uploads in chunks — validate Content-Length before read()
+              Entire 10MB+ upload read into RAM before rejection — DoS vector.
+
+P1-7  [3-1/3-3]  Replace real credentials in backend/.env.example with placeholders
+              After rotating the key (P0-1), update the example file.
+
+P1-8  [2-6/2-7]  Tighten OTP rate limits: send 3/min (was 5), verify 5/min (was 10)
+              Current limits double the intended attack budget.
+
+P1-9  [8-1]  Expand PCI-DSS field guard with camelCase variants
+              ("cardNumber", "pan", "security_code" — current guard is bypassable)
+
+P1-10 [5-17] Add BackHandler to RideOfferPanel, ActiveRidePanel, TripCompletedPanel
+              Android back button exits active ride flows.
+
+P1-11 [14-7] Fix Math.random() FlatList key in rides.tsx:284
+              keyExtractor={(item, index) => item.id ? String(item.id) : `ride_${index}`}
+              30-minute fix — eliminates severe list jank.
+
+P1-12 [14-1] Verify Hermes JS engine active on Android production build
+              Check eas build --platform android output for "Using Hermes". 15 minutes.
+
+── P2: NEXT SPRINT (Before Public Launch) ───────────────────────────────────────
+
+P2-1  [4-3]  Change all monetary schema fields from float → Decimal
+              Float arithmetic causes precision errors in fare calculations.
+
+P2-2  [4-2]  Reject null island GPS coordinates (0,0) with 400 — not just log
+              Phantom driver locations in the ocean cause dispatch errors.
+
+P2-3  [6-3]  Fix broadcast() race condition: list(self.active_connections.values())
+              concurrent disconnect → "dict changed size during iteration" crash.
+
+P2-4  [2-8]  Add in-process fallback rate limiter when Redis unavailable
+              OTP brute-force protection silently evaporates without Redis.
+
+P2-5  [12-5] Encrypt license_number and vehicle_vin using Supabase Vault
+              Currently plaintext — DB dump exposes all driver PII.
+
+P2-6  [12-4] Fix document_expiry.py to detect and act on past-expiry documents
+              Current loop condition skips expired docs — no suspension triggered.
+
+P2-7  [11-1] Configure slowapi X-Forwarded-For trust for rate limiting behind proxy
+              All rate limits bypass when deployed behind Cloudflare/Fly/Railway.
+
+P2-8  [8-2]  Add idempotency keys to PaymentIntent creation
+              Network retry → two PaymentIntents → double charge on rider.
+
+P2-9  [13-2] Add 1-day and day-of expiry notification tiers in document_expiry.py
+              Single 7-day warning insufficient for compliance enforcement.
+
+P2-10 [13-4] Wire notification preferences UI to GET/PUT /notifications/preferences
+              Settings toggles are local only — lost on reinstall.
+
+P2-11 [14-14] Replace Python rating loop with SQL AVG in rides.py:1249
+              SELECT AVG(driver_rating) FROM rides WHERE driver_id=$1 eliminates 1000-row fetch.
+
+P2-12 [14-17] Add pagination to GET /rides/history (skip + limit params)
+              Currently capped at 200 — drivers with long history lose older records.
+
+P2-13 [14-15] Add migration: CREATE INDEX rides(driver_id, created_at DESC)
+              30-minute migration — prevents full table scan as fleet grows.
+
+P2-14 [14-11] Migrate profile avatar to expo-image with cachePolicy="memory-disk"
+              profile.tsx:212-215 — 1 hour. expo-image already in package.json.
+
+── P3: HARDENING (Before Scale) ──────────────────────────────────────────────────
+
+P3-1  [9-6]  Add parametrized PII test for all 14 FORBIDDEN_FIELDS
+              Currently only 2 of 14 fields are actually asserted.
+
+P3-2  [9-1]  Add double-accept race condition test (server-side)
+P3-3  [9-5]  Add OTP lockout integration test (5 real failures → 429)
+P3-4  [9-9]  Add Jest coverage threshold (lines: 70, functions: 60)
+P3-5  [10-1] Add request_id to spinr_exception_handler responses
+P3-6  [10-2] Add httpx.TimeoutException to run_sync() retry clause
+P3-7  [5-9]  Reduce SOS long-press from 2000ms → 1200ms
+P3-8  [12-10] Add soft-delete (deleted_at) columns to drivers, users, rides
+P3-9  [13-18] Add deeplink routing to notification tap handlers in notifications.tsx
+P3-10 [2-5]  Issue refresh_token for Firebase-authenticated users
+
+── P4: FUTURE FEATURES ───────────────────────────────────────────────────────────
+
+P4-1  [13-15] AI support bot using Gemini 1.5 Flash + FAQ context (backend + app)
+P4-2  [13-16] In-app FAQ screen with categories, search, deeplink from error states
+P4-3  [1-16/1-17/1-18/1-19]  Create missing screens:
+              payout-history.tsx, tax-documents.tsx, report-safety.tsx, legal.tsx
+P4-4  [11-2]  Enable Firebase App Check for production (device attestation)
+P4-5  [9-8]  Add Maestro E2E flows: accept_ride, verify_otp, complete_trip, payout
+P4-6  [12-14] Add GDPR-compliant data export endpoint for drivers
+P4-7  [8-14]  Wire T4A/earnings CSV download to payout.tsx UI
+
+================================================================================
+END OF AUDIT — spinr driver app v4 (14 tasks)
+Audit date: 2026-04-18 | Branch: claude/driver-app-audit-prompt-TFDbI
+Full Task 14 report: reports/audits/task14-performance-scalability.txt
+Audit framework: audit-framework/ (16 dimensions, 4 module configs, 3 templates)
+================================================================================

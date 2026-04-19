@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, Platform } from 'react-native';
+import { View, Text, StyleSheet, Platform, StatusBar } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
@@ -38,11 +38,12 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
 }) => {
   const { t } = useLanguageStore();
   const insets = useSafeAreaInsets();
+  const statusBarHeight = StatusBar.currentHeight ?? 0;
   const showBanner = isOnline && connectionState && connectionState !== 'connected';
   const isReconnecting = connectionState === 'reconnecting';
 
   return (
-    <View style={[styles.topBarContainer, { top: Math.max(insets.top, 20) }]}>
+    <View style={[styles.topBarContainer, { top: Math.max(insets.top, statusBarHeight) }]}>
       <BlurView intensity={Platform.OS === 'ios' ? 60 : 100} tint="light" style={styles.blurContainer}>
         {showBanner && (
           <View style={[styles.connectionBanner, isReconnecting ? styles.bannerReconnecting : styles.bannerDisconnected]}>
@@ -51,7 +52,7 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
               size={13}
               color={isReconnecting ? '#92400E' : '#991B1B'}
             />
-            <Text style={[styles.bannerText, isReconnecting ? styles.bannerTextReconnecting : styles.bannerTextDisconnected]}>
+            <Text allowFontScaling={false} style={[styles.bannerText, isReconnecting ? styles.bannerTextReconnecting : styles.bannerTextDisconnected]}>
               {isReconnecting ? t('dashboard.reconnecting') : t('dashboard.connectionLost')}
             </Text>
           </View>
@@ -69,16 +70,16 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
               )}
             </View>
             <View>
-              <Text style={styles.driverName}>
+              <Text allowFontScaling={false} style={styles.driverName}>
                 {driverData?.name || user?.first_name || t('dashboard.driver')}
               </Text>
-              <Text style={styles.vehicleInfo}>
-                {driverData?.vehicle_make || t('dashboard.vehicle')} {driverData?.vehicle_model || t('dashboard.info')} • <Text style={styles.plate}>{driverData?.license_plate || t('dashboard.plate')}</Text>
+              <Text allowFontScaling={false} style={styles.vehicleInfo}>
+                {driverData?.vehicle_make || t('dashboard.vehicle')} {driverData?.vehicle_model || t('dashboard.info')} • <Text allowFontScaling={false} style={styles.plate}>{driverData?.license_plate || t('dashboard.plate')}</Text>
               </Text>
             </View>
           </View>
           <View style={[styles.onlineBadge, isOnline ? styles.onlineBadgeActive : styles.onlineBadgeInactive]}>
-            <Text style={[styles.onlineBadgeText, isOnline ? styles.onlineBadgeTextActive : styles.onlineBadgeTextInactive]}>
+            <Text allowFontScaling={false} style={[styles.onlineBadgeText, isOnline ? styles.onlineBadgeTextActive : styles.onlineBadgeTextInactive]}>
               {isOnline ? t('dashboard.statusOnline') : t('dashboard.statusOffline')}
             </Text>
           </View>

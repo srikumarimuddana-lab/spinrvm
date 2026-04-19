@@ -1,17 +1,17 @@
 import React from 'react';
-import MapView, { PROVIDER_DEFAULT, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { PROVIDER_GOOGLE } from 'react-native-maps';
 import { StyleSheet, Platform } from 'react-native';
 
-// Use Google Maps on Android always, and on iOS if configured/preferred (but defaulting to Apple Maps on Expo Go)
-// Actually, let's just use default provider which handles platform specifics well
-// Unless we want custom styles, then Google is needed.
-// Spinr uses simple map for now.
+const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
 
 const AppMap = React.forwardRef((props: any, ref: any) => {
+    const provider = Platform.OS === 'android'
+        ? (GOOGLE_MAPS_API_KEY ? PROVIDER_GOOGLE : undefined)
+        : undefined;
     return (
         <MapView
             ref={ref}
-            provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : PROVIDER_DEFAULT}
+            provider={provider}
             {...props}
         />
     );

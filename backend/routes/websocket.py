@@ -397,6 +397,9 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                             msg_data["type"] = "chat_message"
                             await manager.send_personal_message(msg_data, target)
 
+            else:
+                logger.warning(f"Unknown WS message type: {data.get('type')}")
+
     except WebSocketDisconnect:
         if connection_key and connection_key.startswith("driver_"):
             # Notify admins the driver went offline

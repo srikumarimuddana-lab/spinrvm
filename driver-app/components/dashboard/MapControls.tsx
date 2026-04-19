@@ -3,6 +3,7 @@ import { View, StyleSheet, TouchableOpacity, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import MapView from 'react-native-maps';
 import { BlurView } from 'expo-blur';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import SpinrConfig from '@shared/config/spinr.config';
 
 const COLORS = {
@@ -23,6 +24,7 @@ export const MapControls: React.FC<MapControlsProps> = ({
   location,
   currentRegionRef,
 }) => {
+  const insets = useSafeAreaInsets();
   const handleZoomIn = () => {
     if (mapRef.current) {
       mapRef.current.animateToRegion({
@@ -57,7 +59,7 @@ export const MapControls: React.FC<MapControlsProps> = ({
   };
 
   return (
-    <View style={styles.controlsContainer}>
+    <View style={[styles.controlsContainer, { bottom: insets.bottom + 120 }]}>
       {/* Zoom Controls */}
       <View style={styles.shadowWrapper}>
         <BlurView intensity={Platform.OS === 'ios' ? 40 : 100} tint="light" style={styles.blurContainer}>
@@ -87,7 +89,7 @@ const styles = StyleSheet.create({
   controlsContainer: {
     position: 'absolute',
     right: 16,
-    bottom: 160, // Relocated lower since idle panel is now transparent HUD
+    bottom: 120,
     alignItems: 'flex-end',
   },
   shadowWrapper: {

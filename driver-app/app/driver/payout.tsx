@@ -41,6 +41,8 @@ export default function PayoutScreen() {
 
     const [payoutAmount, setPayoutAmount] = useState('');
     const [stripeOnboarding, setStripeOnboarding] = useState(false);
+    const [downloadingT4A, setDownloadingT4A] = useState(false);
+    const [downloadingCSV, setDownloadingCSV] = useState(false);
     const [gstNumber, setGstNumber] = useState('');
     const [showGstForm, setShowGstForm] = useState(false);
     const [savingGst, setSavingGst] = useState(false);
@@ -164,6 +166,40 @@ export default function PayoutScreen() {
         if (result.success) {
             setPayoutAmount('');
             showAlert('Success', 'Payout request submitted. Funds will arrive in 2-3 business days.', 'success');
+        }
+    };
+
+    const handleDownloadT4A = async () => {
+        setDownloadingT4A(true);
+        try {
+            const res = await api.get('/payouts/t4a');
+            const url = res.data?.url || res.data?.file_url;
+            if (url) {
+                await Linking.openURL(url);
+            } else {
+                showAlert('Unavailable', 'T4A document is not yet available. Please try again later.', 'warning');
+            }
+        } catch (err: any) {
+            showAlert('Error', err.response?.data?.detail || 'Failed to generate T4A download link.', 'danger');
+        } finally {
+            setDownloadingT4A(false);
+        }
+    };
+
+    const handleDownloadCSV = async () => {
+        setDownloadingCSV(true);
+        try {
+            const res = await api.get('/payouts/csv');
+            const url = res.data?.url || res.data?.file_url;
+            if (url) {
+                await Linking.openURL(url);
+            } else {
+                showAlert('Unavailable', 'Earnings CSV is not yet available. Please try again later.', 'warning');
+            }
+        } catch (err: any) {
+            showAlert('Error', err.response?.data?.detail || 'Failed to generate earnings CSV download link.', 'danger');
+        } finally {
+            setDownloadingCSV(false);
         }
     };
 
@@ -417,6 +453,52 @@ export default function PayoutScreen() {
                         </View>
                     </View>
                 )}
+
+                {/* Tax Documents */}
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Tax Documents</Text>
+                    <View style={styles.payoutCard}>
+                        <TouchableOpacity
+                            style={[styles.docRow, downloadingT4A && styles.docRowDisabled]}
+                            onPress={handleDownloadT4A}
+                            disabled={downloadingT4A}
+                        >
+                            <View style={styles.docRowLeft}>
+                                <Ionicons name="document-text-outline" size={22} color={colors.primary} />
+                                <View style={{ marginLeft: 12 }}>
+                                    <Text style={styles.docRowTitle}>Download T4A</Text>
+                                    <Text style={styles.docRowSub}>Annual earnings slip for tax filing</Text>
+                                </View>
+                            </View>
+                            {downloadingT4A ? (
+                                <ActivityIndicator size="small" color={colors.primary} />
+                            ) : (
+                                <Ionicons name="download-outline" size={20} color={colors.primary} />
+                            )}
+                        </TouchableOpacity>
+
+                        <View style={styles.docDivider} />
+
+                        <TouchableOpacity
+                            style={[styles.docRow, downloadingCSV && styles.docRowDisabled]}
+                            onPress={handleDownloadCSV}
+                            disabled={downloadingCSV}
+                        >
+                            <View style={styles.docRowLeft}>
+                                <Ionicons name="grid-outline" size={22} color={colors.primary} />
+                                <View style={{ marginLeft: 12 }}>
+                                    <Text style={styles.docRowTitle}>Download Earnings CSV</Text>
+                                    <Text style={styles.docRowSub}>Detailed trip-by-trip earnings export</Text>
+                                </View>
+                            </View>
+                            {downloadingCSV ? (
+                                <ActivityIndicator size="small" color={colors.primary} />
+                            ) : (
+                                <Ionicons name="download-outline" size={20} color={colors.primary} />
+                            )}
+                        </TouchableOpacity>
+                    </View>
+                </View>
 
                 {/* Info Note */}
                 <View style={styles.infoNote}>
@@ -733,6 +815,33 @@ function createStyles(colors: ThemeColors) {
             color: colors.textDim,
             fontSize: 13,
             lineHeight: 18,
+        },
+
+        docRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingVertical: 14,
+        },
+        docRowDisabled: { opacity: 0.6 },
+        docRowLeft: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            flex: 1,
+        },
+        docRowTitle: {
+            color: colors.text,
+            fontSize: 15,
+            fontWeight: '600',
+        },
+        docRowSub: {
+            color: colors.textDim,
+            fontSize: 12,
+            marginTop: 2,
+        },
+        docDivider: {
+            height: 1,
+            backgroundColor: colors.border,
         },
     });
 }

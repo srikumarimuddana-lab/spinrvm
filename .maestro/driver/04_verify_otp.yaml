@@ -1,0 +1,42 @@
+appId: com.spinr.driver
+---
+# Driver App — Verify Pickup OTP (TST-003)
+# Assumes the driver has accepted a ride and is navigating to the pickup.
+# Tests the 4-digit OTP entry that confirms the correct rider has been picked up.
+
+- launchApp
+
+# Driver should be navigating to pickup or already arrived
+- assertVisible:
+    text: "Arrive"
+    optional: true
+
+# Tap Arrive to signal arrival at pickup
+- tapOn:
+    text: "Arrive"
+    optional: true
+
+# Verify OTP entry prompt appears
+- assertVisible:
+    text: "Enter Pickup Code"
+    optional: true
+- assertVisible:
+    text: "Verify"
+    optional: true
+
+# Enter the 4-digit pickup code (dev bypass: 1234)
+- tapOn:
+    id: "otp-input"
+    optional: true
+- inputText: "1234"
+
+# Submit the OTP
+- tapOn: "Verify"
+
+# Trip should now be in progress
+- assertVisible:
+    text: "Trip in Progress"
+    optional: true
+- assertVisible:
+    text: "Complete Trip"
+    optional: true

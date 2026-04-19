@@ -79,7 +79,18 @@ export default function DriverLayout() {
         }}
       />
 
+      <Tabs.Screen
+        name="help"
+        options={{
+          title: 'Help',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="chatbubble-ellipses" size={24} color={color} />
+          ),
+        }}
+      />
+
       {/* Hidden Screens - use href: null to completely remove from tab bar */}
+      <Tabs.Screen name="faq" options={{ href: null }} />
       <Tabs.Screen name="ride-detail" options={{ href: null }} />
       <Tabs.Screen name="chat" options={{ href: null }} />
       <Tabs.Screen name="settings" options={{ href: null }} />

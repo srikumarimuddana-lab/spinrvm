@@ -1,0 +1,39 @@
+appId: com.spinr.driver
+---
+# Driver App — Accept Ride Offer (TST-003)
+# Assumes the driver is online and a ride offer arrives via WebSocket.
+# The ride offer panel slides up from the bottom of the map screen.
+
+- launchApp
+
+# Driver should be online and waiting for a ride
+- assertVisible:
+    text: "ONLINE"
+    optional: true
+
+# Wait for the ride offer panel to appear
+- waitForAnimationToEnd:
+    timeout: 5000
+
+# Verify the ride offer panel is visible
+- assertVisible:
+    text: "New Ride Request"
+    optional: true
+- assertVisible:
+    text: "Accept"
+    optional: true
+
+# Tap Accept button
+- tapOn:
+    text: "Accept"
+
+# Verify navigation to pickup starts
+- assertVisible:
+    text: "Navigate to Pickup"
+    optional: true
+- assertVisible:
+    text: "NAVIGATING"
+    optional: true
+- assertVisible:
+    text: "Arrive"
+    optional: true

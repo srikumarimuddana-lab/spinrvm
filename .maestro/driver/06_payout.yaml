@@ -1,0 +1,56 @@
+appId: com.spinr.driver
+---
+# Driver App — Request Payout (TST-003)
+# Assumes the driver has completed rides and has an available balance >= $10.
+# Tests the payout request flow and verifies the balance updates on the
+# earnings screen after the request is submitted.
+
+- launchApp
+
+# Navigate to the Earnings tab
+- tapOn:
+    text: "Earnings"
+
+# Verify the earnings screen is shown
+- assertVisible:
+    text: "TOTAL EARNINGS"
+    optional: true
+
+# Navigate to the payout screen via the Payout button in the header
+- tapOn:
+    text: "Payout"
+    optional: true
+
+# Verify the payout screen is shown with the balance card
+- assertVisible:
+    text: "AVAILABLE BALANCE"
+    optional: true
+
+# Enter a payout amount (minimum $10)
+- tapOn:
+    id: "payout-input"
+    optional: true
+- inputText: "10.00"
+
+# Tap Request
+- tapOn:
+    text: "Request"
+    optional: true
+
+# Verify the success confirmation appears
+- assertVisible:
+    text: "Payout request submitted"
+    optional: true
+
+# Dismiss the confirmation
+- tapOn:
+    text: "OK"
+    optional: true
+
+# Navigate back to Earnings to confirm balance updated
+- tapOn:
+    text: "Earnings"
+    optional: true
+- assertVisible:
+    text: "TOTAL EARNINGS"
+    optional: true

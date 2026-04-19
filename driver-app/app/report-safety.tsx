@@ -19,10 +19,27 @@ import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
 import { useLocationStore } from '@shared/store/locationStore';
 import useDriverStore from '../store/driverStore';
 
+type SafetyCategory = 'Road Hazard' | 'Passenger Behaviour' | 'Vehicle Issue' | 'Other';
+
+const CATEGORIES: SafetyCategory[] = [
+    'Road Hazard',
+    'Passenger Behaviour',
+    'Vehicle Issue',
+    'Other',
+];
+
+const CATEGORY_ICONS: Record<SafetyCategory, string> = {
+    'Road Hazard': 'warning',
+    'Passenger Behaviour': 'person',
+    'Vehicle Issue': 'car',
+    'Other': 'ellipsis-horizontal-circle',
+};
+
 export default function ReportSafetyScreen() {
     const router = useRouter();
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
+    const [category, setCategory] = useState<SafetyCategory | null>(null);
     const [issue, setIssue] = useState('');
     const [submitting, setSubmitting] = useState(false);
     const [alert, setAlert] = useState<{
@@ -39,42 +56,42 @@ export default function ReportSafetyScreen() {
     const activeRide = useDriverStore(state => state.activeRide);
 
     const handleSubmit = async () => {
+        if (!category) {
+            showAlert('Category Required', 'Please select a category for your safety report.', 'warning');
+            return;
+        }
         if (!issue.trim()) {
-            showAlert('Error', 'Please describe the safety issue before submitting.', 'warning');
+            showAlert('Description Required', 'Please describe the safety issue before submitting.', 'warning');
             return;
         }
 
         setSubmitting(true);
 
-        // Include location and ride context for investigation
         const reportData = {
+            category,
             description: issue,
             location: location ? {
                 latitude: location.latitude,
                 longitude: location.longitude,
                 accuracy: location.accuracy,
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
             } : null,
             ride_context: activeRide ? {
                 ride_id: activeRide.id,
                 pickup_location: activeRide.pickup_location,
                 dropoff_location: activeRide.dropoff_location,
-                rider_id: activeRide.rider_id
+                rider_id: activeRide.rider_id,
             } : null,
-            reported_at: new Date().toISOString()
+            reported_at: new Date().toISOString(),
         };
 
-        // Submit to the safety-report endpoint
         try {
-            // G22: Use the shared API client which attaches the auth token.
-            // Previously used raw fetch without Authorization header.
-            await api.post('/support/tickets/safety-report', reportData);
-
+            await api.post('/safety/report', reportData);
             showAlert(
                 'Report Submitted',
-                'Your safety report has been submitted. Our trust and safety team will review it immediately.',
+                'Your safety report has been submitted. Our trust and safety team will review it promptly.',
                 'success',
-                [{ text: 'OK', style: 'default', onPress: () => router.back() }]
+                [{ text: 'OK', style: 'default', onPress: () => router.back() }],
             );
         } catch (e) {
             showAlert('Error', 'Failed to submit report. Please try again.', 'danger');
@@ -86,10 +103,7 @@ export default function ReportSafetyScreen() {
         <SafeAreaView style={styles.safeArea}>
             {/* Header */}
             <View style={styles.header}>
-                <TouchableOpacity
-                    style={styles.backButton}
-                    onPress={() => router.back()}
-                >
+                <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
                     <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
                 <Text style={styles.headerTitle}>Report Safety Issue</Text>
@@ -113,11 +127,42 @@ export default function ReportSafetyScreen() {
                         </Text>
                     </View>
 
-                    <Text style={styles.label}>Please describe what happened:</Text>
+                    {/* Category Picker */}
+                    <Text style={styles.label}>Category</Text>
+                    <View style={styles.categoryGrid}>
+                        {CATEGORIES.map((cat) => (
+                            <TouchableOpacity
+                                key={cat}
+                                style={[
+                                    styles.categoryChip,
+                                    category === cat && styles.categoryChipActive,
+                                ]}
+                                onPress={() => setCategory(cat)}
+                                disabled={submitting}
+                            >
+                                <Ionicons
+                                    name={CATEGORY_ICONS[cat] as any}
+                                    size={18}
+                                    color={category === cat ? '#fff' : colors.textDim}
+                                />
+                                <Text
+                                    style={[
+                                        styles.categoryChipText,
+                                        category === cat && styles.categoryChipTextActive,
+                                    ]}
+                                >
+                                    {cat}
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+
+                    {/* Description */}
+                    <Text style={[styles.label, { marginTop: 20 }]}>Describe what happened</Text>
                     <TextInput
                         style={styles.input}
-                        placeholder="Type your description here..."
-                        placeholderTextColor="#9CA3AF"
+                        placeholder="Please provide as much detail as possible..."
+                        placeholderTextColor={colors.textDim}
                         multiline
                         numberOfLines={8}
                         textAlignVertical="top"
@@ -137,6 +182,7 @@ export default function ReportSafetyScreen() {
                     </TouchableOpacity>
                 </ScrollView>
             </KeyboardAvoidingView>
+
             <CustomAlert
                 visible={alert.visible}
                 title={alert.title}
@@ -183,7 +229,7 @@ function createStyles(colors: ThemeColors) {
         },
         content: {
             padding: 24,
-            flex: 1,
+            paddingBottom: 40,
         },
         warningBox: {
             flexDirection: 'row',
@@ -192,19 +238,47 @@ function createStyles(colors: ThemeColors) {
             borderRadius: 12,
             marginBottom: 24,
             alignItems: 'flex-start',
+            gap: 12,
         },
         warningText: {
             flex: 1,
-            marginLeft: 12,
             fontSize: 14,
             color: '#D97706',
             lineHeight: 20,
         },
         label: {
-            fontSize: 16,
-            fontWeight: '500',
+            fontSize: 15,
+            fontWeight: '600',
             color: colors.text,
             marginBottom: 12,
+        },
+        categoryGrid: {
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            gap: 10,
+        },
+        categoryChip: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            paddingHorizontal: 16,
+            paddingVertical: 10,
+            borderRadius: 24,
+            backgroundColor: colors.surfaceLight,
+            borderWidth: 1.5,
+            borderColor: colors.border,
+        },
+        categoryChipActive: {
+            backgroundColor: colors.primary,
+            borderColor: colors.primary,
+        },
+        categoryChipText: {
+            fontSize: 14,
+            fontWeight: '600',
+            color: colors.textDim,
+        },
+        categoryChipTextActive: {
+            color: '#fff',
         },
         input: {
             backgroundColor: colors.surfaceLight,
@@ -212,7 +286,7 @@ function createStyles(colors: ThemeColors) {
             borderColor: colors.border,
             borderRadius: 12,
             padding: 16,
-            fontSize: 16,
+            fontSize: 15,
             color: colors.text,
             minHeight: 160,
             marginBottom: 24,
@@ -222,7 +296,6 @@ function createStyles(colors: ThemeColors) {
             borderRadius: 12,
             paddingVertical: 16,
             alignItems: 'center',
-            marginTop: 'auto',
         },
         submitButtonDisabled: {
             opacity: 0.7,

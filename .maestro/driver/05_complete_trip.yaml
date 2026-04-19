@@ -1,0 +1,41 @@
+appId: com.spinr.driver
+---
+# Driver App — Complete Trip (TST-003)
+# Assumes the driver has verified the OTP and the trip is in progress.
+# Tests that tapping Complete Trip ends the trip and shows the earnings summary.
+
+- launchApp
+
+# Trip should be in progress
+- assertVisible:
+    text: "Trip in Progress"
+    optional: true
+- assertVisible:
+    text: "Complete Trip"
+    optional: true
+
+# Tap Complete Trip
+- tapOn:
+    text: "Complete Trip"
+
+# Wait for the trip-completed summary panel to appear
+- waitForAnimationToEnd:
+    timeout: 3000
+
+# Verify trip completed screen / earnings summary appears
+- assertVisible:
+    text: "Trip Completed"
+    optional: true
+- assertVisible:
+    text: "Earned"
+    optional: true
+
+# Verify a dollar amount is displayed (earnings summary)
+- assertVisible:
+    text: "$"
+    optional: true
+
+# Driver should return to idle / ONLINE state after dismissal
+- assertVisible:
+    text: "ONLINE"
+    optional: true

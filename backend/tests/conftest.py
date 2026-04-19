@@ -13,6 +13,10 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+# TASK 9-11: explicitly load anyio plugin so @pytest.mark.anyio is available
+# alongside the asyncio_mode=auto setting in pytest.ini.
+pytest_plugins = ["anyio"]
+
 # Add backend dir and project root to path.
 # backend/ on sys.path enables bare imports (e.g. `from routes.drivers import …`).
 # project root on sys.path enables package imports (e.g. `from backend.routes import …`)
@@ -258,6 +262,22 @@ def mock_rate_limiter() -> MagicMock:
     mock_limiter = MagicMock()
     mock_limiter._rate_limit_exceeded_handler = MagicMock()
     return mock_limiter
+
+
+@pytest.fixture
+def mock_redis(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Provide a fresh, isolated in-process Redis store for each test.
+
+    Replaces backend.utils.redis_client._local with an empty dict so that
+    rate-limit counters, OTP records, and any other redis_client state written
+    by one test never bleed into the next.  monkeypatch restores the original
+    dict automatically after the test finishes.
+    """
+    from backend.utils import redis_client as rc
+
+    clean: dict = {}
+    monkeypatch.setattr(rc, "_local", clean)
+    return clean
 
 
 @pytest.fixture(autouse=True)

@@ -151,6 +151,54 @@ if existing:
 
 ---
 
+## R-P0-6 · Home Screen SOS Button Shows False Confirmation — No Backend Call Made
+
+**What's wrong:** The SOS button on the home/map screen (`rider-app/app/(tabs)/index.tsx:236–252`)
+is a plain `TouchableOpacity` whose `onPress` fires only `setAlertState()` with the
+message **"Emergency services have been alerted. Stay calm and stay where you are."**
+This message is factually false — no API call is made, no emergency contact is notified,
+no 911 prompt appears.
+
+The shared `SOSButton` component (`shared/components/SOSButton.tsx`), which calls the
+backend AND prompts the rider to dial 911, is used correctly during active rides
+(`ride-in-progress.tsx:204`) but is never used on the home screen.
+
+A rider who taps SOS **outside of an active ride** (e.g. after a drop-off in an unsafe
+area, or before a ride starts) receives a false "help is coming" message while nothing
+actually happens.
+
+**Why it matters:** This is a safety-critical false positive. A rider may believe help
+has been sent and delay calling 911 themselves.
+
+**File to fix:** `rider-app/app/(tabs)/index.tsx` — replace custom SOS button
+
+**How to fix:**
+```tsx
+import { SOSButton } from '@shared/components/SOSButton';
+import { Linking } from 'react-native';
+
+// Replace the home-screen TouchableOpacity SOS with:
+<SOSButton
+  rideId={currentRide?.id}  // may be undefined pre-ride
+  onTrigger={async (rideId, lat, lng) => {
+    if (rideId) {
+      await triggerEmergency(rideId, lat, lng);
+    } else {
+      // No active ride — open 911 directly
+      Linking.openURL('tel:911');
+    }
+  }}
+  size="small"
+/>
+```
+
+**Note:** `triggerEmergency` still needs the fix from R-P0-1 (surface error to user).
+Both fixes should land together.
+
+**Effort:** 1.5 hours
+
+---
+
 ## Checklist
 
 - [ ] R-P0-1 Emergency SOS alerts user on network failure; offers 911 fallback
@@ -158,3 +206,4 @@ if existing:
 - [ ] R-P0-3 Pickup OTP hashing covers rider-created rides (not just driver verify path)
 - [ ] R-P0-4 Android BackHandler added to driver-arriving, driver-arrived, ride-in-progress
 - [ ] R-P0-5 Double booking blocked: button disable + store guard + backend 409
+- [ ] R-P0-6 Home screen SOS replaced with real SOSButton; 911 fallback when no active ride

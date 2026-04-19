@@ -33,89 +33,101 @@ Also update `driver-arriving.tsx` UI: FreeCancelTimer must disable the Cancel bu
 
 ---
 
-## R-P1-2 · Chat Messages Delivered by Polling Only — Can Be Missed
+## R-P1-2 · Chat Messages Already on WebSocket — Verify Driver-Side Delivery
 
-**What's wrong:** `chat-driver.tsx` polls for messages at a fixed interval. Messages
-sent while the app is backgrounded or between poll intervals are delayed or missed.
-The WebSocket connection at `useRiderSocket` already exists — chat messages should
-be delivered through it.
+**Audit finding [01-9 PASS]:** `chat-driver.tsx` does NOT poll. Messages arrive via
+`chatMessages` in rideStore populated by `useRiderSocket`. History is loaded once on
+mount via `GET /rides/{id}/messages`.
 
-**File to fix:** `rider-app/hooks/useRiderSocket.ts` + `rider-app/app/chat-driver.tsx`
+**Remaining risk:** Confirm that `useRiderSocket.ts` actually dispatches incoming
+`chat_message` WS events to `addChatMessage()` — if the WS handler for chat messages
+is missing, new driver messages will not render in real time.
 
-**How to fix:**
-Add `chat_message` handling to useRiderSocket (it may already be in the message type
-list — verify it actually updates the store):
+**File to verify:** `rider-app/hooks/useRiderSocket.ts`
+
+**How to fix if missing:**
 ```typescript
 case 'chat_message':
   useRideStore.getState().addChatMessage(data.message);
   break;
 ```
-In chat-driver.tsx: remove the polling interval when WebSocket is connected.
 
-**Effort:** 2–3 hours
-
----
-
-## R-P1-3 · Fare Split Has No Entry Point from Any Screen
-
-**What's wrong:** `walletStore.ts` has complete fare split actions (`createFareSplit`,
-`fetchFareSplitForRide`, etc.) and `fare-split.tsx` screen exists, but there is no
-button or navigation path from any existing screen that opens fare split. The feature
-is unreachable.
-
-**File to fix:** `rider-app/app/ride-in-progress.tsx` or `rider-app/app/driver-arriving.tsx`
-— add a "Split fare" button that navigates to `fare-split.tsx` with the current ride ID.
-
-**Effort:** 2 hours
+**Effort:** 1 hour (verify + patch if handler is absent)
 
 ---
 
-## R-P1-4 · Rate-Ride Flow Not Confirmed Wired to ride-completed.tsx
+## R-P1-3 · Fare Split Entry Point Confirmed — Only Accessible Pre-Ride, Not During Ride
 
-**What's wrong:** `rate-ride.tsx` exists as a screen but it is unclear whether
-`ride-completed.tsx` navigates to it or contains its own inline rating UI. If both
-exist independently, ratings could be submitted twice or the flow could deadlock.
+**Audit finding [01-8 PASS]:** `fare-split.tsx` IS reachable — from `payment-confirm.tsx:278`
+(`router.push('/fare-split')`). The screen works correctly pre-booking.
 
-**File to fix:** `rider-app/app/ride-completed.tsx` — verify it either:
-(a) contains inline rating that calls `rateRide(rideId, rating, comment, tip)` directly, OR
-(b) navigates to `rate-ride.tsx` after payment confirmation
+**Remaining gap:** fare-split can only be initiated at payment-confirm time, before the ride
+starts. A rider who decides mid-ride to split the fare has no path to `fare-split.tsx`
+from `ride-in-progress.tsx`.
 
-Whichever is correct: make the other a dead file and delete it, or consolidate.
+**File to fix:** `rider-app/app/ride-in-progress.tsx`
+Add a "Split Fare" menu option in the ride in-progress screen that pushes to `/fare-split`.
 
-**Effort:** 1–2 hours
+**Effort:** 1 hour
+
+---
+
+## R-P1-4 · rate-ride.tsx Is Orphaned — ride-completed.tsx Handles Rating Inline
+
+**Audit finding [01-6 LOW]:** `ride-completed.tsx` has its own inline rating section
+(lines 323–397) and calls `rateRide()` directly on submit (line 127). It then navigates
+to `/(tabs)`. No screen navigates to `rate-ride.tsx` — it is dead code.
+
+Both screens call `rateRide()` with different tip option sets ($2/$5/$10 vs $1/$3/$5).
+
+**File to remove:** `rider-app/app/rate-ride.tsx`
+Also remove the `<Stack.Screen name="rate-ride" />` entry in `_layout.tsx:370`.
+
+**Effort:** 30 minutes (file deletion + cleanup)
 
 ---
 
 ## R-P1-5 · Scheduled Rides Not Listed in Activity Tab
 
-**What's wrong:** `activity.tsx` only shows completed and cancelled ride history.
-Upcoming scheduled rides (`fetchScheduledRides()`) are accessible at `scheduled-rides.tsx`
-but not surfaced in the activity tab. Users cannot see their upcoming bookings from
-the main tab bar.
+**Audit finding [01-4 MEDIUM] — confirmed.** `activity.tsx` calls only `GET /rides/history`
+(completed/cancelled). Scheduled rides are accessible via Account → Scheduled Rides
+(account.tsx:183) but not from the Activity tab.
 
-**File to fix:** `rider-app/app/(tabs)/activity.tsx` — add a "Upcoming" filter tab
-alongside "All / Personal / Business" that calls `fetchScheduledRides()`.
+**File to fix:** `rider-app/app/(tabs)/activity.tsx`
+Add an "Upcoming" tab using the existing `scheduledRides` store state and
+`fetchScheduledRides()` — no new API endpoints needed.
 
 **Effort:** 2–3 hours
 
 ---
 
-## R-P1-6 · PIPEDA: No Data Export or Account Deletion in App
+## R-P1-6 · PIPEDA: Data Export and Account Deletion Are UI Stubs — No API Call
 
-**What's wrong:** Canadian law (PIPEDA) requires that users can request a copy of their
-personal data and request account deletion. Neither option exists in `account.tsx` or
-`privacy-settings.tsx`.
+**Audit finding [01-2 HIGH] — confirmed.** Both buttons exist in `privacy-settings.tsx`
+but neither makes an API call:
+- "Download My Data" (line 104): shows a success alert only — no POST to backend.
+- "Delete Account" (lines 29–47): confirmation → success alert only — no DELETE to backend.
 
-**File to fix:** `rider-app/app/(tabs)/account.tsx` or `rider-app/app/privacy-settings.tsx`
+PIPEDA requires data subjects the right to access and erasure. Presenting stubs that
+falsely confirm these actions is a legal compliance violation.
+
+**File to fix:** `rider-app/app/privacy-settings.tsx`
 
 **How to fix:**
-Add two options:
-1. "Export my data" → sends a backend request that emails the user a JSON/CSV of their account data
-2. "Delete my account" → confirmation dialog → soft-delete with 30-day grace period
+```typescript
+// Download My Data (line 106 — replace setAlertState with API call):
+const res = await api.post('/user/data-export');
+// then show success alert
+
+// Delete Account (lines 39–42 — replace setAlertState with API call):
+await api.delete('/user/account');
+await logout();
+router.replace('/login');
+```
 
 Backend endpoints needed:
-- `POST /auth/request-data-export`
-- `DELETE /auth/account`
+- `POST /user/data-export` — queue email with signed download link
+- `DELETE /user/account` — soft-delete, 30-day grace period per PIPEDA
 
 **Effort:** 4–6 hours (frontend + backend)
 
@@ -215,15 +227,49 @@ This is the largest single item in the P1 sprint.
 
 ---
 
+## R-P1-11 · become-driver.tsx Navigates to `/(driver)` — Route Does Not Exist
+
+**Audit finding [01-3 HIGH].** After `registerDriver()` succeeds, the screen calls:
+```typescript
+router.replace('/(driver)' as any)   // become-driver.tsx:257
+```
+The rider app has no `(driver)` route group. Expo Router throws an Unmatched Route
+error. The rider successfully completes a 5-step form and is then shown nothing.
+
+**File to fix:** `rider-app/app/become-driver.tsx:257`
+
+**How to fix:**
+```typescript
+// Replace:
+router.replace('/(driver)' as any)
+
+// With:
+setAlertState({
+  visible: true,
+  title: 'Application Submitted!',
+  message: 'Waiting for approval. To start driving, download the Spinr Driver app.',
+  variant: 'success',
+  buttons: [
+    { text: 'Download Driver App', onPress: () => Linking.openURL('https://spinr.ca/driver-app') },
+    { text: 'OK', onPress: () => router.replace('/(tabs)') },
+  ],
+});
+```
+
+**Effort:** 1 hour
+
+---
+
 ## Checklist
 
 - [ ] R-P1-1 Cancellation fee enforced after driver_arrived; Cancel button disabled
-- [ ] R-P1-2 Chat messages delivered via WebSocket, not polling
-- [ ] R-P1-3 Fare split reachable from ride-in-progress screen
-- [ ] R-P1-4 Rate-ride flow consolidated — one path, no duplicate submission
+- [ ] R-P1-2 Verify useRiderSocket dispatches chat_message events to addChatMessage
+- [ ] R-P1-3 Fare split accessible from ride-in-progress screen (mid-ride split)
+- [ ] R-P1-4 rate-ride.tsx deleted; _layout.tsx Stack.Screen entry removed
 - [ ] R-P1-5 Upcoming scheduled rides visible in activity tab
-- [ ] R-P1-6 Data export + account deletion in app (PIPEDA)
+- [ ] R-P1-6 Data export + account deletion call real API endpoints (PIPEDA)
 - [ ] R-P1-7 Idempotency key on ride creation (no double charge)
 - [ ] R-P1-8 Promo discount validated against server fare, not client fare
 - [ ] R-P1-9 SOS and star rating accessibility labels
 - [ ] R-P1-10 i18n library installed; French (fr-CA) translation prepared
+- [ ] R-P1-11 become-driver.tsx post-submit routes to /(tabs) + driver app store link

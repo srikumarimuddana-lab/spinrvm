@@ -1,0 +1,196 @@
+================================================================================
+SPINR RIDER APP — PRODUCTION-READINESS AUDIT v1
+================================================================================
+Date        : 2026-04-19
+Branch      : claude/rider-app-audit-iVxpH (audit findings — read-only)
+Auditor     : Claude (claude-sonnet-4-6) via automated audit framework
+Scope       : rider-app/ · shared/ · backend/routes/ (rider side)
+Platform    : Expo 54 · React Native · Zustand · WebSocket · Stripe Connect
+
+AUDIT GROUND RULES
+──────────────────
+• OTP is 4 digits by design — compensating controls documented, NOT flagged.
+• Hard-coded dev values (OTP "1234", test keys) → severity LOW/RECOMMENDATION only.
+• Severity scale: CRITICAL | HIGH | MEDIUM | LOW | PASS | RECOMMENDATION
+• See audit-framework/ground-rules.md for full list.
+
+PRE-AUDIT CHECKS (baseline)
+─────────────────────────────
+npm audit (rider-app):    1 CRITICAL vuln — protobufjs (npm audit fix needed) — P1
+TypeScript errors:        317 real errors (mostly implicit :any params) — P2
+Explicit :any usages:     80 — P2
+console.log in prod:      40 — P3
+Magic ride-status strings: 78 — P2
+Hermes JS engine:         NOT configured on Android — P3
+
+SHARED FIXES CONFIRMED (from driver audit — verified carry-over):
+  OfflineBanner insets.top   → PASS
+  Auth revoked_at / refresh  → PASS
+  OTP hashing on ride create → PASS (backend/routes/rides.py imports hash_otp)
+  Decimal monetary math      → PASS
+
+Dimensions run: D01 (Feature Completeness)
+
+================================================================================
+FINDINGS
+================================================================================
+
+================================================================================
+TASK 01 — FEATURE COMPLETENESS (Dimension 01)
+================================================================================
+
+[01-1] HIGH | Home Screen SOS Button Shows False "Alert Sent" — No API Call Made
+File: rider-app/app/(tabs)/index.tsx:236–252
+Finding: The SOS button on the home/map screen is a custom TouchableOpacity whose
+  onPress fires only setAlertState() with title "SOS Triggered" and message
+  "Emergency services have been alerted. Stay calm and stay where you are."
+  No API call is made, no emergency contact is notified, no 911 prompt is shown.
+  The message is factually false — nothing has been sent.
+  The shared SOSButton component (shared/components/SOSButton.tsx), which calls
+  the backend AND prompts the rider to call 911, is used correctly in
+  ride-in-progress.tsx but is absent from the home screen.
+  A rider who taps SOS outside of an active ride (e.g. after being dropped off in
+  an unsafe area, or before their ride starts) receives a false confirmation and
+  no real help.
+Fix: Replace the home-screen SOS implementation with the SOSButton component from
+  @shared/components/SOSButton. Because no rideId is available pre-ride, provide
+  a fallback that skips the backend call and opens tel:911 directly, plus shows
+  the rider's current GPS coordinates in the prompt.
+  Effort: 2 hours.
+
+[01-2] HIGH | PIPEDA Data Export and Account Deletion Are UI Stubs — No API Called
+File: rider-app/app/privacy-settings.tsx:104–107 (export), 29–47 (delete)
+Finding: "Download My Data" shows a success alert reading "Your data export has
+  been requested. You will receive an email with a download link." without making
+  any API call. "Delete Account" shows a confirmation flow that resolves to
+  "Your account deletion request has been submitted." — again, no API call.
+  PIPEDA (Canadian federal privacy law, analogous to GDPR) gives data subjects the
+  right to access and delete their personal information. Presenting stub UI that
+  falsely confirms these actions is both a legal compliance gap and a trust
+  violation.
+Fix:
+  • Wire "Download My Data" to POST /user/data-export (backend must queue an email
+    with a signed download link).
+  • Wire "Delete Account" to DELETE /user/account (with server-side 30-day
+    deactivation window per PIPEDA breach-notification rules).
+  Effort: 4 hours (frontend) + backend endpoint implementation.
+
+[01-3] HIGH | become-driver.tsx Navigates to `/(driver)` After Submit — Route Does Not Exist
+File: rider-app/app/become-driver.tsx:257
+Finding: After a successful registerDriver() call, the screen calls:
+    router.replace('/(driver)' as any)
+  The rider app has no (driver) route group. Expo Router will throw an "Unmatched
+  Route" error and render a blank screen (or crash in production builds), meaning
+  the user successfully completes a 5-step driver registration form and is then
+  shown nothing. This is the main CTA of the become-driver flow.
+Fix: Replace with router.replace('/(tabs)') and show a modal/alert telling the
+  rider: "Application submitted! Download the Spinr Driver app to start driving."
+  Include an App Store / Play Store deep link.
+  Effort: 1 hour.
+
+[01-4] MEDIUM | Activity Tab Shows Only Ride History — Scheduled (Upcoming) Rides Not Visible
+File: rider-app/app/(tabs)/activity.tsx:47
+Finding: The activity tab calls GET /rides/history which returns only completed
+  and cancelled rides. Scheduled rides are only accessible via Account →
+  Scheduled Rides (account.tsx:183). Users naturally look in "Activity" for
+  upcoming bookings — there is no "Upcoming" section, no tab, and no banner
+  linking to scheduled-rides.tsx. A rider with a scheduled trip tomorrow has no
+  obvious way to find it from the Activity tab.
+Fix: Add an "Upcoming" filter tab or a sticky banner at the top of the activity
+  screen when scheduledRides.length > 0. The store already exposes
+  scheduledRides + fetchScheduledRides — no new API work needed.
+  Effort: 3 hours.
+
+[01-5] MEDIUM | Corporate Ride Booking Has No UI Entry Point
+File: rider-app/store/rideStore.ts:319–352
+Finding: createRide() does not include a corporate_account_id field in its
+  payload. activity.tsx exposes a "Business" filter (line 151) that can filter
+  rides by corporate_account_id — implying corporate rides are expected — but
+  there is no booking path that sets this field. The backend schema
+  (rides table) supports corporate_account_id. Riders who have a corporate
+  account linked cannot book rides against it.
+Fix: Add a corporate account selector in ride-options.tsx or payment-confirm.tsx.
+  When a corporate card/account is selected, pass corporate_account_id in the
+  createRide payload.
+  Effort: 1 day (requires corporate account listing endpoint from backend).
+
+[01-6] LOW | rate-ride.tsx Is an Orphaned Screen — No Navigation Entry Point Exists
+File: rider-app/app/rate-ride.tsx
+Finding: rate-ride.tsx is a fully functional rating + tip screen, registered in
+  _layout.tsx (line 370). However, no screen in the rider app calls
+  router.push('/rate-ride'). Ride-completed.tsx implements its own inline rating
+  section (lines 323–397) and calls rateRide() directly on submit — the standalone
+  rate-ride.tsx screen is never reached.
+  This is dead code: safe but creates a maintenance burden (two divergent rating
+  implementations). The tip options also differ ($2/$5/$10 in ride-completed vs
+  $1/$3/$5 in rate-ride).
+Fix: Remove rate-ride.tsx and ensure ride-completed.tsx is the single rating
+  implementation. Or consolidate: have ride-completed.tsx navigate to rate-ride
+  and delete the inline rating section.
+  Effort: 2 hours (cleanup only).
+
+[01-7] RECOMMENDATION | Legal Screen Not Presented During Onboarding
+File: rider-app/app/profile-setup.tsx (missing ToS acceptance)
+Finding: legal.tsx exists and fetches live ToS and Privacy Policy from the
+  backend. It is accessible from Account → Legal. However, new riders completing
+  sign-up are never shown or asked to accept the Terms of Service. App Store
+  Review Guideline 4.0 requires apps to obtain user acceptance of ToS before the
+  user commits to a service. This is also a PIPEDA consent requirement — processing
+  personal data requires informed, explicit consent.
+Fix: Add a "By continuing you agree to our Terms of Service and Privacy Policy"
+  link in profile-setup.tsx or otp.tsx, with a required checkbox or explicit
+  tap-to-agree CTA before the profile can be submitted.
+  Effort: 2 hours.
+
+[01-8] PASS | fare-split.tsx Has a Reachable Entry Point
+File: rider-app/app/payment-confirm.tsx:278
+Finding: router.push('/fare-split' as any) is called from the payment confirmation
+  screen. fare-split.tsx is functional: up to 5 participants, live fare
+  calculation, store integration via walletStore.createFareSplit(). The screen
+  correctly guards against no-active-ride state (lines 60–68).
+
+[01-9] PASS | chat-driver.tsx Delivers Messages via WebSocket
+File: rider-app/app/chat-driver.tsx:39–57
+Finding: On mount, the screen loads history once via GET /rides/{id}/messages.
+  Subsequent messages arrive through chatMessages in rideStore, which is
+  populated in real-time by the useRiderSocket WebSocket hook (addChatMessage).
+  No polling interval is present. Messages from the driver are delivered in
+  <100 ms via WebSocket, not on a polling cycle.
+
+[01-10] PASS | scheduled-rides.tsx Is Accessible from Account Tab
+File: rider-app/app/(tabs)/account.tsx:183
+Finding: router.push('/scheduled-rides') is wired under Account → Scheduled
+  Rides. The screen shows countdown timers, route cards, and per-ride cancel
+  actions. Imminent rides (< 15 min) are highlighted in amber.
+
+[01-11] PASS | legal.tsx Exists and Surfaces Dynamic Backend Content
+File: rider-app/app/legal.tsx:34–48
+Finding: Legal screen fetches ToS and Privacy Policy from GET /settings/legal.
+  Falls back to "No Terms of Service have been added yet." when backend is empty.
+  Accessible from Account → Legal (account.tsx:240). Both tos and privacy
+  document types are supported via the ?type= param.
+
+[01-12] PASS | become-driver.tsx Multi-Step Form Is Feature-Complete
+File: rider-app/app/become-driver.tsx
+Finding: All 5 steps present (Intro, Personal, Vehicle, Documents, Review).
+  Vehicle age validation enforces the 9-year rule (line 146). Document
+  requirements are fetched dynamically from /drivers/requirements. Mandatory
+  docs are enforced before step advance. Post-submit routing has a bug (see
+  01-3) but the form itself correctly collects and submits all required data.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 01 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     3 |
+| MEDIUM          |     2 |
+| LOW             |     1 |
+| PASS            |     5 |
+| RECOMMENDATION  |     1 |
+| TOTAL           |    12 |
+
+================================================================================
+[AUDIT IN PROGRESS — TASKS 02–16 PENDING]
+================================================================================

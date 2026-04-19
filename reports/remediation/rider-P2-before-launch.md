@@ -205,16 +205,49 @@ are likely below the iOS Human Interface Guideline minimum of 44×44pt.
 
 ## R-P2-10 · Corporate Ride Flow Has No UI Entry Point
 
-**What's wrong:** The backend has `corporate_rider.py` and `corporate_wallet.py`
-routes, and the `Ride` type includes `corporate_account_id`. But no screen in
-the rider app allows selecting a corporate account for billing.
+**Audit finding [01-5 MEDIUM] — confirmed.** `rideStore.createRide()` does not include
+`corporate_account_id` in its payload (rideStore.ts:319–352). `activity.tsx` has a
+"Business" filter (line 151) implying corporate rides are expected, but there is no
+booking path that sets this field.
 
-**File to fix:** `rider-app/app/payment-confirm.tsx`
+**File to fix:** `rider-app/app/payment-confirm.tsx` + `rider-app/store/rideStore.ts`
 
 **How to fix:** Add a "Bill to [Company Name]" toggle when rider has a corporate
 account on their profile. Pass `corporate_account_id` in the ride creation payload.
 
 **Effort:** 3–4 hours (frontend + backend integration)
+
+---
+
+## R-P2-11 · Legal/ToS Not Presented During Onboarding
+
+**Audit finding [01-7 RECOMMENDATION].** `legal.tsx` exists and is accessible from
+Account → Legal. New riders completing sign-up are never asked to accept the Terms of
+Service. App Store Review Guideline 4.0 requires ToS acceptance before a user commits
+to the service. PIPEDA also requires informed, explicit consent for data processing.
+
+**File to fix:** `rider-app/app/profile-setup.tsx`
+
+**How to fix:**
+Add a "By continuing you agree to our Terms of Service and Privacy Policy" row
+with a tap-to-view link before the submit button. Log acceptance with a timestamp
+server-side.
+
+**Effort:** 2 hours
+
+---
+
+## R-P2-12 · become-driver.tsx — Incomplete Handoff Description (Pre-P1-11)
+
+**Note:** The routing crash was elevated to P1-11. This item tracks the UX polish
+follow-up: deep-link to the Spinr Driver app if already installed on device.
+
+**File to fix:** `rider-app/app/become-driver.tsx` (after P1-11 is resolved)
+
+**How to fix:** Use `Linking.canOpenURL('spinr-driver://')` to check if driver app is
+installed, then deep-link vs App Store.
+
+**Effort:** 1 hour
 
 ---
 
@@ -227,6 +260,8 @@ account on their profile. Pass `corporate_account_id` in the ride creation paylo
 - [ ] R-P2-5 Polling suspended when WebSocket is connected
 - [ ] R-P2-6 Error states with retry actions on all key screens
 - [ ] R-P2-7 Rider PII stripped from driver-facing API responses
-- [ ] R-P2-8 become-driver.tsx completes handoff with store links
+- [ ] R-P2-8 become-driver.tsx completes handoff with store links [see P1-11 first]
 - [ ] R-P2-9 Touch targets ≥ 44pt for stars and tip buttons
 - [ ] R-P2-10 Corporate account billing selectable in payment-confirm
+- [ ] R-P2-11 ToS acceptance step added to onboarding flow (App Store + PIPEDA)
+- [ ] R-P2-12 become-driver.tsx deep-links to driver app if installed

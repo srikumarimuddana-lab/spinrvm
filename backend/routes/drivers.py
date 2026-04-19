@@ -31,6 +31,74 @@ db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
 
+# ── Vault encryption for driver PII (P2-5) ───────────────────────────────────
+# licence_number and vehicle_vin are stored as vault.encrypted_text in the DB.
+# The application passes plaintext to encrypt_driver_pii() before writing and
+# calls decrypt_driver_pii() after reading.  Both are Postgres functions created
+# by migration 32_encrypt_sensitive_fields.sql and exposed via Supabase RPC.
+# If vault is not yet configured the helpers fail open (plaintext is stored/
+# returned) so onboarding is never blocked in development environments.
+
+_VAULT_PII_FIELDS: frozenset = frozenset({"license_number", "vehicle_vin"})
+
+
+async def _vault_encrypt(value: str, hint: str = "") -> str:
+    """Encrypt a PII string via Supabase Vault (encrypt_driver_pii RPC)."""
+    if not value:
+        return value
+    try:
+        from supabase_client import supabase as _sb  # type: ignore[import]
+    except ImportError:
+        return value
+    if not _sb:
+        return value
+    try:
+        res = await db_supabase.run_sync(
+            lambda: _sb.rpc("encrypt_driver_pii", {"plaintext": value}).execute()
+        )
+        return str(res.data) if res.data else value
+    except Exception as exc:
+        logger.warning("vault encrypt unavailable for %s: %s — storing plaintext", hint, exc)
+        return value
+
+
+async def _vault_decrypt(value: str, hint: str = "") -> str:
+    """Decrypt a Vault-encrypted PII token via Supabase RPC (decrypt_driver_pii)."""
+    if not value:
+        return value
+    try:
+        from supabase_client import supabase as _sb  # type: ignore[import]
+    except ImportError:
+        return value
+    if not _sb:
+        return value
+    try:
+        res = await db_supabase.run_sync(
+            lambda: _sb.rpc("decrypt_driver_pii", {"secret_id": value}).execute()
+        )
+        return str(res.data) if res.data else value
+    except Exception as exc:
+        logger.warning("vault decrypt unavailable for %s: %s — returning raw value", hint, exc)
+        return value
+
+
+async def _encrypt_driver_pii(payload: dict) -> dict:
+    """Encrypt vault PII fields in a write payload before sending to the DB."""
+    out = dict(payload)
+    for field in _VAULT_PII_FIELDS:
+        if field in out and out[field]:
+            out[field] = await _vault_encrypt(str(out[field]), field)
+    return out
+
+
+async def _decrypt_driver_pii(driver: dict) -> dict:
+    """Decrypt vault PII fields in a driver record returned from the DB."""
+    out = dict(driver)
+    for field in _VAULT_PII_FIELDS:
+        if field in out and out[field]:
+            out[field] = await _vault_decrypt(str(out[field]), field)
+    return out
+
 
 class RideOTPRequest(BaseModel):
     otp: str
@@ -139,7 +207,7 @@ async def get_my_driver(current_user: dict = Depends(get_current_user)):
     )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
-    return serialize_doc(driver)
+    return serialize_doc(await _decrypt_driver_pii(driver))
 
 
 class UpdateDriverProfileRequest(BaseModel):
@@ -242,9 +310,9 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
         logger.info(f"[DRIVER] Driver {driver['id']} updated vehicle info → status set to needs_review")
 
     updates["updated_at"] = datetime.utcnow().isoformat()
-    await db_supabase.update_one("drivers", {"id": driver["id"]}, updates)
+    await db_supabase.update_one("drivers", {"id": driver["id"]}, await _encrypt_driver_pii(updates))
     updated = await db_supabase.get_driver_by_id(driver["id"])
-    return serialize_doc(updated)
+    return serialize_doc(await _decrypt_driver_pii(updated))
 
 
 @api_router.get("/demand-heatmap")
@@ -357,9 +425,9 @@ async def register_driver(
     if existing:
         payload["updated_at"] = datetime.utcnow().isoformat()
         payload["submitted_at"] = datetime.utcnow().isoformat()
-        await db_supabase.update_one("drivers", {"id": existing["id"]}, payload)
+        await db_supabase.update_one("drivers", {"id": existing["id"]}, await _encrypt_driver_pii(payload))
         driver = await db_supabase.get_driver_by_id(existing["id"])
-        return serialize_doc(driver)
+        return serialize_doc(await _decrypt_driver_pii(driver))
 
     # Create new row
     import uuid as _uuid
@@ -381,7 +449,7 @@ async def register_driver(
         "submitted_at": datetime.utcnow().isoformat(),
         **payload,
     }
-    await db_supabase.insert_one("drivers", new_driver)
+    await db_supabase.insert_one("drivers", await _encrypt_driver_pii(new_driver))
 
     # Canonicalize the identity: if the user's role is still 'rider' flip
     # it to 'driver' so admin lists, login resolution, and role-gated code
@@ -2164,7 +2232,7 @@ async def get_driver(driver_id: str, current_user: dict = Depends(get_current_us
     driver = await db_supabase.get_driver_by_id(driver_id)
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
-    return serialize_doc(driver)
+    return serialize_doc(await _decrypt_driver_pii(driver))
 
 
 @api_router.put("/{driver_id}/status")

@@ -289,6 +289,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                     {
                         "type": "new_ride_offer",
                         "ride_id": ride_id,
+                        "deeplink": "/driver/",
                     },
                 )
                 logger.info(f"[DISPATCH] push new_ride_offer sent to user_id={selected_driver['user_id']}")
@@ -712,7 +713,7 @@ async def create_ride(
                     current_ride["rider_id"],
                     "Ride Cancelled ❌",
                     "No nearby drivers were found. Your ride has been automatically cancelled. Please try again.",
-                    {"type": "ride_auto_cancelled", "ride_id": r_id},
+                    {"type": "ride_cancelled", "ride_id": r_id, "is_auto": True},
                 )
                 logger.info(f"Ride {r_id} auto-cancelled after {timeout_seconds}s - no driver found")
         except Exception as e:

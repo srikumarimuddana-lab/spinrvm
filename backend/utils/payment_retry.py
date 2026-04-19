@@ -134,18 +134,37 @@ async def retry_failed_payments():
             elif intent.status in ("requires_payment_method", "requires_confirmation"):
                 # Try to confirm again
                 stripe.PaymentIntent.confirm(payment_intent_id, api_key=stripe_secret)
+                attempt = retry_count + 1
                 await db.update_one(
                     "rides",
                     {"id": ride_id},
                     {
                         "$set": {
                             "payment_status": "processing",
-                            "payment_retry_count": retry_count + 1,
+                            "payment_retry_count": attempt,
                             "updated_at": datetime.utcnow().isoformat(),
                         }
                     },
                 )
-                logger.info(f"Payment retry: ride {ride_id} retry #{retry_count + 1} submitted")
+                logger.info(f"Payment retry: ride {ride_id} retry #{attempt} submitted")
+                # Notify the driver so they know a retry is in progress (13-9)
+                driver_id = ride.get("driver_id")
+                if driver_id:
+                    try:
+                        await send_push_notification(
+                            driver_id,
+                            "Payment retry in progress",
+                            f"Payment retry {attempt} of {MAX_RETRIES} in progress",
+                            {
+                                "type": "payment_retry",
+                                "ride_id": ride_id,
+                                "attempt": str(attempt),
+                                "max_retries": str(MAX_RETRIES),
+                                "deeplink": "/driver/earnings",
+                            },
+                        )
+                    except Exception as push_err:
+                        logger.debug(f"Payment retry push to driver failed: {push_err}")
 
             elif intent.status == "canceled":
                 # Cannot retry a cancelled intent

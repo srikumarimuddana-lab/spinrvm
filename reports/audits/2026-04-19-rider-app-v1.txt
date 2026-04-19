@@ -360,5 +360,189 @@ TASK 02 TALLY
 | TOTAL           |    17 |
 
 ================================================================================
-[AUDIT IN PROGRESS — TASKS 03–16 PENDING]
+TASK 03 — ENCRYPTION & SECRETS MANAGEMENT (Dimension 03)
+================================================================================
+
+[03-1] CRITICAL | Real Supabase Service-Role Key Committed in backend/.env.example
+File: backend/.env.example:3
+Finding: backend/.env.example contains:
+    SUPABASE_URL=https://dbbadhihiwztmnqnbdke.supabase.co
+    SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzd…
+  Decoding the JWT payload:
+    {"iss":"supabase","ref":"dbbadhihiwztmnqnbdke","role":"service_role",
+     "iat":1770836564,"exp":2086412564}
+  The role is "service_role" — this key bypasses Supabase Row Level Security
+  entirely and grants unrestricted read/write access to every table in the
+  project. The .env.example is committed to the repository and visible to
+  everyone with repo access (or if the repo is ever made public).
+  An .env.example file should contain only placeholder text, not real credentials.
+  The backend/core/middleware.py comment (line 171) even warns "NEVER commit
+  this value — it bypasses RLS." — but the .env.example was committed anyway.
+Fix:
+  IMMEDIATE: Rotate the key in the Supabase dashboard (Settings → API → Rotate
+  service-role key). The committed key will no longer function.
+  Then replace .env.example line 3 with a placeholder:
+    SUPABASE_SERVICE_ROLE_KEY=replace-with-service-role-key-from-supabase-dashboard
+  Verify git history does not contain the real key in prior commits by running:
+    trufflehog git file://. --only-verified
+  If found in history, use git-filter-repo to expunge and force-push.
+  Effort: 30 minutes (rotate key) + 1 hour (history audit).
+
+[03-2] MEDIUM | Test/Preview EAS Build Profiles Hardcode Production Backend URL
+File: rider-app/eas.json:23, 32
+Finding: Both "test" and "preview" build profiles set:
+    "EXPO_PUBLIC_BACKEND_URL": "https://spinr-backend-production.up.railway.app"
+  Internal testers who install test/preview builds will read from and write to
+  the live production database. A tester completing the driver registration flow,
+  cancelling rides, or testing payment flows will mutate production data.
+  The "development" profile uses a placeholder ("http://your-local-ip:8000")
+  while the production profile correctly uses "$EXPO_PUBLIC_BACKEND_URL".
+Fix: Add a dedicated staging environment and set test/preview to the staging URL.
+  If staging is not yet set up, use EAS environment variables (not hardcoded inline
+  in eas.json) so the URL can be swapped without a code change:
+    "env": { "EXPO_PUBLIC_BACKEND_URL": "$SPINR_TEST_BACKEND_URL" }
+  Effort: 2 hours (staging env setup or EAS secret wiring).
+
+[03-3] MEDIUM | TruffleHog Scans Only Last Commit and Requires Verification
+File: .github/workflows/ci.yml:428–429
+Finding: The TruffleHog step uses:
+    trufflehog git file://. --only-verified --since-commit HEAD~1 --fail
+  Two weaknesses:
+  (a) --since-commit HEAD~1: only the most recent commit is scanned. A secret
+    committed 2 commits ago will never be caught by CI. The committed Supabase
+    service-role key (finding 03-1) exists in history and would not be caught.
+  (b) --only-verified: TruffleHog verifies secrets by making live API calls.
+    A rotated or expired key — or one from a project TruffleHog can't reach —
+    passes through silently without blocking the PR.
+Fix:
+  (a) Remove --since-commit HEAD~1 for PR scans; keep it for push events to
+    reduce scan time, but use --since-commit origin/$BASE_BRANCH for PRs.
+  (b) Remove --only-verified to report unverified matches too. Treat them as
+    a manual review gate (mark as exception or rotate) rather than auto-passing.
+  Effort: 1 hour.
+
+[03-4] LOW | Rider-App CI Job Missing EXPO_PUBLIC_ Secrets Scan
+File: .github/workflows/ci.yml:176–209 (rider-app-test job)
+Finding: The driver-app-test CI job (lines 153–159) runs a grep check for:
+    EXPO_PUBLIC_.*SECRET | EXPO_PUBLIC_.*PRIVATE | EXPO_PUBLIC_.*KEY
+  to prevent private keys being accidentally placed in EXPO_PUBLIC_ variables.
+  The rider-app-test job (lines 176–209) has no equivalent check. A developer
+  could add an EXPO_PUBLIC_SOME_PRIVATE_KEY to rider-app/.env or app.config.ts
+  without CI catching it.
+  Note: the driver-app check's regex also matches GOOGLE_MAPS_API_KEY (which
+  is intentionally EXPO_PUBLIC_) — both apps should use a refined pattern
+  that targets truly private values like SERVICE_ACCOUNT, JWT_SECRET, etc.
+Fix: Add a parallel check to rider-app-test. Refine the pattern to exclude known-
+  public keys (Maps, Firebase config):
+    grep -r "EXPO_PUBLIC_.*(SECRET|PRIVATE|SERVICE_ACCOUNT|JWT)" \
+      rider-app/.env* rider-app/app.config.ts
+  Effort: 30 minutes.
+
+[03-5] LOW | play-service-account.json Not in .gitignore
+File: rider-app/eas.json:54; rider-app/.gitignore
+Finding: eas.json references ./play-service-account.json for the Android
+  production submit track. The file does not currently exist in the repo
+  (confirmed by filesystem scan — PASS on the file itself). However,
+  rider-app/.gitignore only excludes bugreport-*.zip. If a developer creates
+  play-service-account.json in rider-app/ for a local submit, git will stage
+  it without warning and it could be committed in the next commit.
+Fix: Add to rider-app/.gitignore:
+    play-service-account.json
+  Effort: 5 minutes.
+
+[03-6] PASS | Pickup OTP Hashed (SHA-256) Before Database Storage
+File: backend/routes/rides.py:651
+Finding: pickup_otp=hash_otp(pickup_otp_plain) — the plain OTP is generated
+  by generate_pickup_otp(), the hash is stored in the DB, and the plain text
+  is returned to the rider only in the single ride-creation response (line 691).
+  Database dump or query does not yield usable OTP codes. Confirmed for the
+  rider-created ride path (addressing P0-3 from the pre-populated checklist).
+
+[03-7] PASS | Stripe Publishable Key Fetched at Runtime — Not Bundled
+File: rider-app/app/_layout.tsx:126
+Finding: GET /settings returns the stripe_publishable_key at boot. The key is
+  not in eas.json, app.config.ts, or any .env.example. Operators can rotate
+  the Stripe publishable key without an app release. The key is a publishable
+  key (pk_test_* / pk_live_*) which is designed to be client-visible.
+
+[03-8] PASS | bcrypt Cost Factor 12 for Admin Passwords
+File: backend/utils/password.py:54
+Finding: _BCRYPT_ROUNDS = 12 — roughly 250 ms per hash on a modern CPU.
+  Meets the D03 minimum of ≥ 12. Legacy SHA256 rows are auto-upgraded on
+  next login with constant-time compare for the SHA256 comparison path.
+
+[03-9] PASS | JWT_SECRET Minimum Length and Placeholder Check at Production Boot
+File: backend/core/middleware.py:207–208
+Finding: _validate_production_config() enforces:
+  (a) JWT_SECRET must not equal known placeholder strings (middleware.py:157–161)
+  (b) len(JWT_SECRET) ≥ _MIN_JWT_SECRET_LENGTH (32 chars)
+  Server refuses to start in ENV=production with a weak or missing JWT_SECRET.
+
+[03-10] PASS | HSTS Set with 1-Year Max-Age, includeSubDomains, preload
+File: backend/core/middleware.py:133
+Finding: Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+  applied via SecurityHeadersMiddleware when ENV=production. Skipped in dev to
+  avoid browser HSTS caching on plain-HTTP local servers.
+
+[03-11] PASS | Firebase App Check Enforced on All API Endpoints
+File: backend/core/middleware.py:27, 351
+Finding: _APP_CHECK_ENFORCEMENT = True and FirebaseAppCheckMiddleware is
+  registered with enforcement_enabled=True. Every /api/* request must carry a
+  valid X-Firebase-AppCheck token. WebSockets, health probes, and docs are
+  correctly exempted (line 33). The app.config.ts registers
+  @react-native-firebase/app-check (line 93) on the client side.
+
+[03-12] PASS | Firebase Config Files Are Not Secrets (Per Ground Rules)
+File: rider-app/google-services.json; rider-app/GoogleService-Info.plist
+Finding: Both files contain standard Firebase project identifiers and API keys.
+  Per Firebase documentation and audit ground rules, these values are public by
+  design — security is enforced by Firebase Security Rules, not key secrecy.
+  No private credentials or service account JSON are present in these files.
+
+[03-13] PASS | No Supabase Service-Role Key or Private Keys in Mobile Bundle
+File: rider-app/app.config.ts; shared/config/
+Finding: EXPO_PUBLIC_ variables in app.config.ts are: BACKEND_URL and
+  GOOGLE_MAPS_API_KEY — both appropriate for client exposure.
+  shared/config/supabase.ts contains only placeholder strings
+  ('YOUR_SUPABASE_URL', 'YOUR_SUPABASE_ANON_KEY'). No service-role key,
+  Firebase service account JSON, or Stripe secret key is in any mobile config.
+
+[03-14] PASS | eas.json Production Profile Uses $VAR References, Not Inline Values
+File: rider-app/eas.json:39–40
+Finding: The production build profile uses "$EXPO_PUBLIC_BACKEND_URL" and
+  "$EXPO_PUBLIC_GOOGLE_MAPS_API_KEY" — resolved from EAS Secrets at build time,
+  not committed inline.
+
+[03-15] PASS | Play Store Service Account Not Committed
+File: rider-app/eas.json:54; filesystem scan
+Finding: eas.json references ./play-service-account.json but the file does not
+  exist in the repository. The file would need to be created locally for a
+  manual submit. See 03-5 for the .gitignore gap.
+
+[03-16] PASS | CI Secrets Stored as GitHub Actions Secrets
+File: .github/workflows/ci.yml:74–75
+Finding: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the CI job are read
+  from ${{ secrets.* }} references, not hardcoded in the workflow YAML.
+  Render, Railway, EAS, Vercel tokens likewise use secrets.
+
+[03-17] PASS | No Stripe Live Keys (sk_live_*) Anywhere in Codebase
+Finding: Full grep for sk_live_ across all source, config, and example files
+  found zero matches. Only the @stripe/stripe-react-native plugin declaration
+  (app.config.ts:75) is present.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 03 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     1 |
+| HIGH            |     0 |
+| MEDIUM          |     2 |
+| LOW             |     2 |
+| PASS            |    12 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    17 |
+
+================================================================================
+[AUDIT IN PROGRESS — TASKS 04–16 PENDING]
 ================================================================================

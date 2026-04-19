@@ -271,6 +271,78 @@ persisted refresh token rather than reading the access token from disk.
 
 ---
 
+## R-P2-14 · EAS Test/Preview Builds Point to Production Backend
+
+**Audit finding [03-2 MEDIUM].** `rider-app/eas.json` test and preview build profiles
+hardcode `"https://spinr-backend-production.up.railway.app"` as `EXPO_PUBLIC_BACKEND_URL`.
+Internal testers running these builds read and write to the production database.
+
+**File to fix:** `rider-app/eas.json:23, 32`
+
+**How to fix:**
+```json
+"test": {
+  "env": { "EXPO_PUBLIC_BACKEND_URL": "$SPINR_STAGING_BACKEND_URL" }
+},
+"preview": {
+  "env": { "EXPO_PUBLIC_BACKEND_URL": "$SPINR_STAGING_BACKEND_URL" }
+}
+```
+Set `SPINR_STAGING_BACKEND_URL` as an EAS secret once a staging environment exists.
+
+**Effort:** 2 hours (staging env setup)
+
+---
+
+## R-P2-15 · TruffleHog CI Scans Only Last Commit with --only-verified
+
+**Audit finding [03-3 MEDIUM].** The `security-scan` CI job uses
+`trufflehog --only-verified --since-commit HEAD~1`. Only one commit is scanned per run,
+and unverifiable secrets (rotated/expired keys) pass silently.
+
+**File to fix:** `.github/workflows/ci.yml:428–429`
+
+**How to fix:**
+```yaml
+- name: Secrets scan (all)
+  run: |
+    trufflehog git file://. \
+      --since-commit origin/${{ github.base_ref }} \
+      --fail
+```
+Remove `--only-verified` to catch unverified patterns too.
+
+**Effort:** 30 minutes
+
+---
+
+## R-P2-16 · Rider-App CI Missing EXPO_PUBLIC_ Scan; play-service-account.json Not in .gitignore
+
+**Audit finding [03-4 LOW + 03-5 LOW].** The rider-app CI job has no check for private
+variables accidentally placed in `EXPO_PUBLIC_` namespace. The `rider-app/.gitignore` does not
+exclude `play-service-account.json` referenced in `eas.json`.
+
+**Files to fix:** `.github/workflows/ci.yml` (rider-app-test job); `rider-app/.gitignore`
+
+**How to fix:**
+1. Add to `rider-app/.gitignore`:
+   ```
+   play-service-account.json
+   ```
+2. Add a step to `rider-app-test` CI job:
+   ```yaml
+   - name: Check for private vars in EXPO_PUBLIC_
+     run: |
+       if grep -r "EXPO_PUBLIC_.*(SECRET|PRIVATE|SERVICE_ACCOUNT)" \
+         rider-app/.env* rider-app/app.config.ts 2>/dev/null; then
+         echo "ERROR: Private credential in EXPO_PUBLIC_ variable"; exit 1
+       fi
+   ```
+
+**Effort:** 30 minutes
+
+---
+
 ## Checklist
 
 - [ ] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
@@ -286,3 +358,6 @@ persisted refresh token rather than reading the access token from disk.
 - [ ] R-P2-11 ToS acceptance step added to onboarding flow (App Store + PIPEDA)
 - [ ] R-P2-12 become-driver.tsx deep-links to driver app if installed
 - [ ] R-P2-13 Access token removed from SecureStore persistence (memory-only pattern)
+- [ ] R-P2-14 eas.json test/preview profiles point to staging URL, not production
+- [ ] R-P2-15 TruffleHog CI scans full PR diff; --only-verified removed
+- [ ] R-P2-16 Rider-app CI adds EXPO_PUBLIC_ private-variable check; play-service-account.json added to .gitignore

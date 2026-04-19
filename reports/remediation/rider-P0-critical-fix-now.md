@@ -233,6 +233,31 @@ async def _check_otp_lockout(phone: str) -> None:
 
 ---
 
+## R-P0-8 · Real Supabase Service-Role Key Committed in backend/.env.example
+
+**Audit finding [03-1 CRITICAL].** `backend/.env.example` contains a live Supabase
+service-role JWT (`eyJhbGci…`) pointing at project `dbbadhihiwztmnqnbdke.supabase.co`.
+The `role: "service_role"` claim in the JWT payload bypasses all Row Level Security.
+Anyone with repository access can use this key to read/write every table.
+
+**Why it matters:** Immediate database compromise risk. All rider PII, ride history, payment
+records, and driver data are accessible. The key expires 2036.
+
+**File to fix:** `backend/.env.example:3`
+
+**How to fix:**
+1. **IMMEDIATE** — Rotate the key in Supabase Dashboard → Settings → API → Rotate service-role key.
+2. Replace `.env.example` line with placeholder:
+   ```
+   SUPABASE_SERVICE_ROLE_KEY=replace-with-service-role-key-from-supabase-dashboard
+   ```
+3. Audit git history for the committed key: `trufflehog git file://. --no-verification`
+4. If the key appears in prior commits, expunge with `git-filter-repo` and force-push after coordinating with the team.
+
+**Effort:** 30 minutes (key rotation) + 1 hour (history audit/expunge if needed)
+
+---
+
 ## Checklist
 
 - [ ] R-P0-1 Emergency SOS alerts user on network failure; offers 911 fallback
@@ -242,3 +267,4 @@ async def _check_otp_lockout(phone: str) -> None:
 - [ ] R-P0-5 Double booking blocked: button disable + store guard + backend 409
 - [ ] R-P0-6 Home screen SOS replaced with real SOSButton; 911 fallback when no active ride
 - [ ] R-P0-7 OTP lockout fails closed on Redis error (not silently bypassed)
+- [ ] R-P0-8 Supabase service-role key rotated; backend/.env.example placeholder replaced

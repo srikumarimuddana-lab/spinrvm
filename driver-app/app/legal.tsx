@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import {
     View,
     Text,
@@ -6,7 +6,7 @@ import {
     ScrollView,
     TouchableOpacity,
     ActivityIndicator,
-    SafeAreaView
+    SafeAreaView,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,34 +14,92 @@ import { SpinrConfig } from '@shared/config/spinr.config';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
+const STATIC_PRIVACY_POLICY = `Spinr Technologies Inc. ("Spinr", "we", "us") is committed to protecting your privacy.
+
+Information We Collect
+We collect information you provide when creating an account (name, email, phone number), location data while the app is in use, device identifiers, and usage information to improve our services.
+
+How We Use Your Information
+Your information is used to facilitate ridesharing services, process payments, communicate with you, ensure safety, comply with legal obligations, and improve the platform.
+
+Information Sharing
+We share information with riders as necessary to complete trips, with payment processors for payouts, and with authorities when required by law. We do not sell your personal information.
+
+Data Retention
+We retain your information for as long as your account is active and as required by law. You may request deletion of your account and associated data at any time.
+
+Your Rights
+You have the right to access, correct, or delete your personal data. Contact us at privacy@spinr.ca for any privacy-related requests.
+
+Contact Us
+For privacy inquiries, contact: privacy@spinr.ca`;
+
+const STATIC_TERMS_OF_SERVICE = `By using the Spinr driver application, you agree to these Terms of Service.
+
+Independent Contractor Status
+You are an independent contractor, not an employee of Spinr. You are responsible for your own taxes, insurance, and compliance with applicable laws.
+
+Eligibility
+You must be at least 21 years old, hold a valid driver's licence, maintain valid vehicle insurance, and have a vehicle that meets Spinr's requirements.
+
+Conduct
+You agree to treat riders with respect, maintain a safe and clean vehicle, follow all traffic laws, and complete trips as accepted. Discrimination or harassment of any kind is grounds for immediate deactivation.
+
+Earnings and Payouts
+Earnings are calculated based on completed trips minus the platform service fee. Payouts are processed via Stripe and transferred to your bank account within 2–3 business days.
+
+Deactivation
+Spinr may deactivate your account for violations of these Terms, low ratings, fraud, or safety incidents. You may appeal deactivation decisions through our support process.
+
+Limitation of Liability
+Spinr's liability to you is limited to the amounts paid to you in the 30 days prior to the claim. We are not liable for indirect, incidental, or consequential damages.
+
+Governing Law
+These Terms are governed by the laws of the Province of Ontario, Canada.
+
+Contact Us
+For questions: support@spinr.ca`;
+
 export default function LegalScreen() {
     const router = useRouter();
     const params = useLocalSearchParams();
-    const type = params.type as 'tos' | 'privacy';
+    const type = params.type as 'tos' | 'privacy' | undefined;
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
+    const scrollRef = useRef<ScrollView>(null);
+    const privacyY = useRef(0);
+    const tosY = useRef(0);
 
-    const [content, setContent] = useState<string>('');
+    const [privacyText, setPrivacyText] = useState('');
+    const [tosText, setTosText] = useState('');
     const [loading, setLoading] = useState(true);
 
-    const title = type === 'tos' ? 'Terms of Service' : 'Privacy Policy';
+    useEffect(() => {
+        fetchLegalContent();
+    }, []);
 
     useEffect(() => {
-        fetchLegalText();
-    }, [type]);
+        if (!loading && type && scrollRef.current) {
+            const delay = setTimeout(() => {
+                if (type === 'privacy') {
+                    scrollRef.current?.scrollTo({ y: privacyY.current, animated: true });
+                } else if (type === 'tos') {
+                    scrollRef.current?.scrollTo({ y: tosY.current, animated: true });
+                }
+            }, 150);
+            return () => clearTimeout(delay);
+        }
+    }, [loading, type]);
 
-    const fetchLegalText = async () => {
+    const fetchLegalContent = async () => {
         try {
-            const response = await fetch(`${SpinrConfig.backendUrl}/settings/legal`);
+            const response = await fetch(`${SpinrConfig.backendUrl}/legal/content`);
             const data = await response.json();
-            if (type === 'tos') {
-                setContent(data.terms_of_service_text || 'No Terms of Service have been added yet.');
-            } else {
-                setContent(data.privacy_policy_text || 'No Privacy Policy has been added yet.');
-            }
+            setPrivacyText(data.privacy_policy_text || STATIC_PRIVACY_POLICY);
+            setTosText(data.terms_of_service_text || STATIC_TERMS_OF_SERVICE);
         } catch (e) {
-            console.error(e);
-            setContent('Failed to load document. Please check your connection.');
+            setPrivacyText(STATIC_PRIVACY_POLICY);
+            setTosText(STATIC_TERMS_OF_SERVICE);
         } finally {
             setLoading(false);
         }
@@ -51,26 +109,49 @@ export default function LegalScreen() {
         <SafeAreaView style={styles.safeArea}>
             {/* Header */}
             <View style={styles.header}>
-                <TouchableOpacity
-                    style={styles.backButton}
-                    onPress={() => router.back()}
-                >
+                <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
                     <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
-                <Text style={styles.headerTitle}>{title}</Text>
+                <Text style={styles.headerTitle}>Legal</Text>
                 <View style={styles.headerRight} />
             </View>
 
-            {/* Content */}
-            <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
-                {loading ? (
-                    <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color={colors.primary} />
+            {loading ? (
+                <View style={styles.loadingContainer}>
+                    <ActivityIndicator size="large" color={colors.primary} />
+                </View>
+            ) : (
+                <ScrollView
+                    ref={scrollRef}
+                    style={styles.container}
+                    contentContainerStyle={styles.contentContainer}
+                    showsVerticalScrollIndicator={false}
+                >
+                    {/* Privacy Policy Section */}
+                    <View
+                        onLayout={(e) => { privacyY.current = e.nativeEvent.layout.y; }}
+                    >
+                        <View style={styles.sectionHeader}>
+                            <Ionicons name="shield-checkmark" size={20} color={colors.primary} />
+                            <Text style={styles.sectionTitle}>Privacy Policy</Text>
+                        </View>
+                        <Text style={styles.textContent}>{privacyText}</Text>
                     </View>
-                ) : (
-                    <Text style={styles.textContent}>{content}</Text>
-                )}
-            </ScrollView>
+
+                    <View style={styles.divider} />
+
+                    {/* Terms of Service Section */}
+                    <View
+                        onLayout={(e) => { tosY.current = e.nativeEvent.layout.y; }}
+                    >
+                        <View style={styles.sectionHeader}>
+                            <Ionicons name="document-text" size={20} color={colors.primary} />
+                            <Text style={styles.sectionTitle}>Terms of Service</Text>
+                        </View>
+                        <Text style={styles.textContent}>{tosText}</Text>
+                    </View>
+                </ScrollView>
+            )}
         </SafeAreaView>
     );
 }
@@ -103,22 +184,39 @@ function createStyles(colors: ThemeColors) {
         headerRight: {
             width: 40,
         },
+        loadingContainer: {
+            flex: 1,
+            justifyContent: 'center',
+            alignItems: 'center',
+        },
         container: {
             flex: 1,
             backgroundColor: colors.surface,
         },
         contentContainer: {
             padding: 24,
-            paddingBottom: 40,
+            paddingBottom: 60,
         },
-        loadingContainer: {
-            paddingTop: 100,
+        sectionHeader: {
+            flexDirection: 'row',
             alignItems: 'center',
+            gap: 10,
+            marginBottom: 16,
+        },
+        sectionTitle: {
+            fontSize: 20,
+            fontWeight: '700',
+            color: colors.text,
         },
         textContent: {
             fontSize: 15,
             lineHeight: 24,
             color: colors.text,
+        },
+        divider: {
+            height: 1,
+            backgroundColor: colors.border,
+            marginVertical: 32,
         },
     });
 }

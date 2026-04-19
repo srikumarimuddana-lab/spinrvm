@@ -181,6 +181,7 @@ export default function HelpScreen() {
                         { paddingBottom: insets.bottom + 90 },
                     ]}
                     showsVerticalScrollIndicator={false}
+                    removeClippedSubviews={true}
                     onContentSizeChange={scrollToBottom}
                 />
 

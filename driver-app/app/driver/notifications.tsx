@@ -17,6 +17,8 @@ import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
+const NOTIFICATION_ITEM_HEIGHT = 80;
+
 interface Notification {
     id: string;
     title: string;
@@ -161,6 +163,15 @@ export default function NotificationsScreen() {
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: insets.bottom + 40 }}
                 showsVerticalScrollIndicator={false}
+                initialNumToRender={10}
+                maxToRenderPerBatch={10}
+                windowSize={5}
+                removeClippedSubviews={true}
+                getItemLayout={(_, index) => ({
+                    length: NOTIFICATION_ITEM_HEIGHT,
+                    offset: NOTIFICATION_ITEM_HEIGHT * index,
+                    index,
+                })}
                 refreshControl={
                     <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
                 }

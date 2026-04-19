@@ -186,6 +186,7 @@ export default function ChatScreen() {
                 keyExtractor={(item) => item.id}
                 contentContainerStyle={styles.messageList}
                 showsVerticalScrollIndicator={false}
+                removeClippedSubviews={true}
                 ListEmptyComponent={
                     <View style={styles.emptyChat}>
                         <Ionicons name="chatbubbles-outline" size={48} color={colors.surfaceLight} />
@@ -211,6 +212,7 @@ export default function ChatScreen() {
                         )}
                         keyExtractor={(item) => item}
                         showsHorizontalScrollIndicator={false}
+                        removeClippedSubviews={true}
                         contentContainerStyle={{ paddingHorizontal: 12, gap: 8 }}
                     />
                 </View>

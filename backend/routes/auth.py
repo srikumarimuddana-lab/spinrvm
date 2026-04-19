@@ -132,7 +132,7 @@ def _make_auth_response(
     )
 
 @api_router.post("/send-otp")
-@limiter.limit("5/minute")
+@limiter.limit("3/minute")
 async def send_otp(request: Request, body: SendOTPRequest):
     phone = body.phone.strip()
     # Validate phone using E.164 format validator (raises HTTPException on failure)
@@ -197,7 +197,7 @@ async def send_otp(request: Request, body: SendOTPRequest):
 
 
 @api_router.post("/verify-otp", response_model=AuthResponse)
-@limiter.limit("10/minute")
+@limiter.limit("5/minute")
 async def verify_otp(request: Request, body: VerifyOTPRequest):
     phone = body.phone.strip()
     code = body.code.strip()

@@ -1,5 +1,6 @@
 // metro.config.js
 const { getDefaultConfig } = require("expo/metro-config");
+const os = require('os');
 const path = require('path');
 const { FileStore } = require('metro-cache');
 
@@ -21,8 +22,7 @@ config.watchFolders = [
   path.resolve(__dirname, '../shared')
 ];
 
-// Reduce the number of workers to decrease resource usage
-config.maxWorkers = 2;
+config.maxWorkers = Math.max(2, os.cpus().length - 1);
 
 // Watch the shared directory
 config.watchFolders = [

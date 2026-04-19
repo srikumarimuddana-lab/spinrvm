@@ -198,7 +198,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         if (cancelled) return;
         applyDriverConfig(res.data || {});
       } catch (e) {
-        console.log('[driver-config] fetch failed, using fallbacks:', e);
+        console.warn('[driver-config] fetch failed, using fallbacks:', e);
       }
     })();
     return () => { cancelled = true; };
@@ -258,7 +258,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       await api.post('/drivers/location-batch', {
         points: pointsToUpload,
       });
-      console.log(`Uploaded ${pointsToUpload.length} location points`);
       locationRetryCountRef.current = 0;
       // Clear persisted buffer on success
       try {
@@ -276,7 +275,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           await AsyncStorage.removeItem(LOCATION_BUFFER_KEY);
         } catch {}
       } else {
-        console.log(`Location batch upload failed (attempt ${locationRetryCountRef.current}/${MAX_LOCATION_RETRIES}):`, err);
         locationBufferRef.current = [...pointsToUpload, ...locationBufferRef.current];
         // Persist to AsyncStorage so crash doesn't lose them
         try {
@@ -297,7 +295,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           const points = JSON.parse(saved);
           if (Array.isArray(points) && points.length > 0) {
             locationBufferRef.current = [...points, ...locationBufferRef.current];
-            console.log(`[Location] Recovered ${points.length} persisted GPS points`);
           }
         }
       } catch {}
@@ -427,7 +424,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           typeof data.text === 'string' &&
           typeof data.sender === 'string'
         ) {
-          console.log('[WS] Chat from rider:', data.text.slice(0, 40));
           useDriverStore.getState().addChatMessage(data);
           Vibration.vibrate(100);
         } else {
@@ -459,7 +455,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
     const token = useAuthStore.getState().token;
     if (!token) {
-      console.log('Cannot connect WebSocket: No auth token');
       return;
     }
 
@@ -468,7 +463,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // edge proxy rejects plain ws:// with "Invalid Sec-WebSocket-Accept response".
     const useSecure = API_URL.startsWith('https');
     const wsUrl = `${API_URL.replace(/^https?/, useSecure ? 'wss' : 'ws')}/ws/driver/${currentUser.id}`;
-    console.log('Connecting to WebSocket:', wsUrl);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -477,7 +471,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // 'connected' on the first non-error server message, which proves auth
     // passed. Until then, stay in 'reconnecting' (or initial 'disconnected').
     ws.onopen = () => {
-      console.log('WebSocket open, sending auth...');
       const currentToken = useAuthStore.getState().token;
       ws.send(JSON.stringify({
         type: 'auth',
@@ -505,7 +498,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'error') {
-          console.log('WebSocket server error:', data.message);
           setWsError(data.message || 'Connection error');
           return;
         }
@@ -519,18 +511,15 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       } catch { }
     };
 
-    ws.onerror = (error) => {
-      console.log('WebSocket error:', error);
+    ws.onerror = (_error) => {
     };
 
     ws.onclose = (event) => {
-      console.log('WebSocket closed:', event.code, event.reason);
       if (isOnlineRef.current && userRef.current) {
         setConnectionState('reconnecting');
         const baseDelay = RECONNECT_DELAYS[Math.min(reconnectAttemptRef.current, RECONNECT_DELAYS.length - 1)];
         const jitter = Math.random() * 1000 - 500; // ±500 ms
         const delay = Math.max(500, baseDelay + jitter);
-        console.log(`Reconnecting in ${Math.round(delay)}ms (attempt ${reconnectAttemptRef.current + 1})`);
         reconnectTimeoutRef.current = setTimeout(() => {
           reconnectAttemptRef.current++;
           connectWebSocket();
@@ -579,7 +568,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       if (nextState === 'active' && isOnlineRef.current && userRef.current) {
         const ws = wsRef.current;
         if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-          console.log('App foregrounded — reconnecting WebSocket');
           if (reconnectTimeoutRef.current) {
             clearTimeout(reconnectTimeoutRef.current);
             reconnectTimeoutRef.current = null;
@@ -637,7 +625,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         await Location.requestBackgroundPermissionsAsync();
       }
     } catch (err: any) {
-      console.log('Toggle online error:', err);
       setIsOnline(!next);
 
       // 402 = no subscription
@@ -704,8 +691,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
     const unsubscribe = onForegroundMessage((remoteMessage: any) => {
       const data = remoteMessage?.data || {};
-      console.log('[Push] Driver foreground FCM:', data?.type || remoteMessage?.notification?.title);
-
       if (data?.type === 'new_ride_assignment' && data?.ride_id) {
         Vibration.vibrate([0, 500, 200, 500]);
         // Hydrate an incoming ride offer from the FCM payload. Backend

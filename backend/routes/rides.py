@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 from pydantic import BaseModel
 
@@ -793,7 +793,11 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.get("/history")
-async def get_ride_history(current_user: dict = Depends(get_current_user)):
+async def get_ride_history(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    current_user: dict = Depends(get_current_user),
+):
     """Get rider's past rides for the activity tab. Only completed or cancelled rides.
     Any stale rides (searching/assigned but old) are auto-cancelled."""
     all_rides = await db_supabase.get_rows(
@@ -820,10 +824,10 @@ async def get_ride_history(current_user: dict = Depends(get_current_user)):
 
     result.sort(key=lambda r: str(r.get("created_at", "")), reverse=True)
 
-    def serialize_doc(doc):
-        return doc
+    total_count = len(result)
+    rides = result[offset : offset + limit]
 
-    return [serialize_doc(r) for r in result]
+    return {"rides": rides, "total": total_count, "limit": limit, "offset": offset}
 
 
 @api_router.get("/{ride_id}")

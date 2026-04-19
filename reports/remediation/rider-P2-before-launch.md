@@ -218,6 +218,82 @@ account on their profile. Pass `corporate_account_id` in the ride creation paylo
 
 ---
 
+## R-P2-11 · Surge Pricing Not Clearly Shown Before Booking
+
+**What's wrong:** The `RideEstimate` type includes `surge_multiplier` but there is
+no confirmed UI element in `ride-options.tsx` that prominently displays an active
+surge (e.g. "1.8x surge pricing in effect" banner). Riders must be clearly informed
+of surge before committing — this is an informed-consent requirement.
+
+**File to fix:** `rider-app/app/ride-options.tsx`
+
+**How to fix:**
+```tsx
+{estimate.surge_multiplier > 1 && (
+  <View style={styles.surgeBanner}>
+    <Text style={styles.surgeText}>
+      {estimate.surge_multiplier}x surge pricing in effect
+    </Text>
+  </View>
+)}
+```
+
+**Effort:** 1 hour
+
+---
+
+## R-P2-12 · Masked Phone Call — Rider's Real Number Exposed to Driver
+
+**What's wrong:** When a rider contacts the driver during an active ride, the app
+likely opens a standard phone call with the rider's real number visible to the driver.
+This is a safety and privacy risk — riders' personal numbers should never be exposed.
+
+**File to fix:** `rider-app/app/driver-arriving.tsx` and `rider-app/app/driver-arrived.tsx`
+
+**How to fix:** Use a telephony proxy service (Twilio, Vonage) that provides a
+temporary masked number for the duration of the trip. On tap: call the masked number,
+not the driver's real number. Backend endpoint: `POST /rides/{id}/call-driver` returns
+a short-lived proxy number.
+
+**Effort:** 4–6 hours (requires backend + telephony service setup)
+
+---
+
+## R-P2-13 · FlatList Keys Using Math.random() — Full Re-render on Every Update
+
+**What's wrong:** If any FlatList in the rider app uses `Math.random()` as the
+`keyExtractor` return value (same CRITICAL bug found in driver audit [14-7]), the
+entire list re-renders on every state update. This causes visible flicker in the
+activity list, saved places, and notifications.
+
+**File to fix:** `rider-app/app/(tabs)/activity.tsx`, `rider-app/app/saved-places.tsx`,
+`rider-app/app/notifications.tsx`
+
+**How to fix:**
+```tsx
+// Wrong:
+keyExtractor={() => Math.random().toString()}
+// Correct:
+keyExtractor={(item) => item.id}
+```
+
+**Effort:** 30 minutes per file
+
+---
+
+## R-P2-14 · Notification Preferences Lost on App Reinstall
+
+**What's wrong:** Notification preferences (which ride events to receive push for)
+are stored in local AsyncStorage only. When a user reinstalls the app, all preferences
+reset to defaults. [Driver audit 13-4]
+
+**File to fix:** Backend: `GET/PUT /notifications/preferences` endpoint.
+Rider app: `settings.tsx` → sync preferences to backend on change.
+
+**Effort:** 2–3 hours
+
+---
+
 ## Checklist
 
 - [ ] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
@@ -230,3 +306,7 @@ account on their profile. Pass `corporate_account_id` in the ride creation paylo
 - [ ] R-P2-8 become-driver.tsx completes handoff with store links
 - [ ] R-P2-9 Touch targets ≥ 44pt for stars and tip buttons
 - [ ] R-P2-10 Corporate account billing selectable in payment-confirm
+- [ ] R-P2-11 Surge multiplier displayed prominently before booking
+- [ ] R-P2-12 Masked phone proxy for rider-to-driver calls
+- [ ] R-P2-13 FlatList keyExtractor uses stable ride.id (not Math.random)
+- [ ] R-P2-14 Notification preferences synced to backend (not local-only)

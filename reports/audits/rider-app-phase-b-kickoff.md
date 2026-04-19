@@ -11,6 +11,9 @@ touch targets, BackHandler on Android, empty/error states everywhere.
 
 ### Rider-specific risks
 - `driver-arriving.tsx`: FreeCancelTimer overlapping with map buttons on small screens
+- `otp.tsx`: OTP keypad digit buttons may be too small on iPhone SE (375pt) — [Driver audit 5-3]
+- `otp.tsx`: SOS button positioned with hardcoded offset may overlap notch — [Driver audit 5-4]
+- Surge pricing: is `surge_multiplier` displayed prominently on `ride-options.tsx` before booking?
 - `ride-in-progress.tsx`: map + driver overlay + ETA card — z-index stacking on Android
 - `payment-confirm.tsx`: keyboard pushes up form; card selection and submit button visible?
 - `search-destination.tsx`: autocomplete list hidden behind keyboard on small phones
@@ -54,6 +57,11 @@ Your task: Work through every checklist item in dimension 05. Specific checks:
 4. Touch targets: star rating buttons and tip amount buttons in ride-completed.tsx — are
    they ≥ 44×44pt?
 5. FreeCancelTimer: does it overlap map controls on iPhone SE (375pt wide)?
+5a. OTP screen (otp.tsx): are the digit buttons at least 44×44pt on iPhone SE?
+    [Driver audit 5-3 found OTP buttons too small — verify same issue on rider]
+5b. Surge pricing: does ride-options.tsx display surge_multiplier prominently
+    (e.g. "1.8x surge in effect") before the rider commits to booking?
+    This is a legal informed-consent requirement before charging a premium.
 6. Empty states: what does activity.tsx show when there are 0 rides? saved-places.tsx
    when 0 saved? notifications.tsx when 0 notifications?
 7. Map buttons z-index: on ride-in-progress and driver-arriving, can the user tap the
@@ -174,6 +182,12 @@ Your task: Work through every checklist item in dimension 07. Specific checks:
 5. FreeCancelTimer: when timer hits 0, does it auto-cancel the ride or just show expired?
 6. driver_timeout: does applyRideStatusFromWS() reset UI back to "searching" state?
 7. Are ride status strings centralized as constants or scattered as magic strings?
+8. Rating manipulation: can a rider call POST /rides/{id}/rate more than once for the
+   same ride? Backend must have a UNIQUE(ride_id, rater_id) constraint or equivalent guard.
+9. Mutual rating blind: can a driver query their own star rating BEFORE they submit
+   a rating for the rider? The blind should be enforced server-side.
+10. Masked phone call: if a rider calls the driver during an active ride, does the app
+    use a proxy/masked number, or does it reveal the rider's real phone number?
 
 Write findings to: reports/audits/2026-04-19-rider-app-v1.txt under TASK 07.
 ```

@@ -46,6 +46,16 @@ Your task: Work through every checklist item in dimension 13. Specific checks:
 2. Ride lifecycle notifications: are ALL of these cases handled:
    driver_accepted, driver_arrived, ride_started, ride_completed, ride_cancelled,
    driver_timeout (still searching)?
+   Also verify: ride_auto_cancelled vs ride_cancelled naming — inconsistency breaks routing.
+   [Driver audit 13-1 and 13-8 — same foreground handler gap likely exists on rider]
+3a. Notification deep link field: does every FCM payload include a `deeplink` field
+    that the app can use to navigate to the correct screen? [Driver audit 13-3: missing]
+3b. Notification tap navigation: when a rider taps a notification, does the app navigate
+    to the relevant screen (e.g. driver_arrived → driver-arrived.tsx)?
+    Or does it only mark the notification as read? [Driver audit 13-5: tap did nothing]
+3c. Notification preferences: are notification preferences (which types to receive)
+    synced to the backend or stored only in local AsyncStorage?
+    [Driver audit 13-4: local only — lost on app reinstall → HIGH]
 3. Deep link from killed state: when a user taps a push notification and the app is
    closed, does it open to the correct ride screen with the correct state loaded?
 4. Notification center (notifications.tsx): is there an unread badge count on the tab?
@@ -103,6 +113,8 @@ Your task: Work through every checklist item in dimension 14. Specific checks:
 2. ride-options.tsx: does fetchEstimates + fetchNearbyDrivers + fetchAvailablePromos
    all fire on mount? Is there debouncing if the user navigates back and forward?
 3. Activity tab FlatList: is it using FlatList with keyExtractor and getItemLayout?
+   CRITICAL CHECK: Is keyExtractor returning a stable unique ID (ride.id) or
+   Math.random()? [Driver audit 14-7: Math.random() was CRITICAL — full re-render every tick]
    Is ride history paginated or does it load all records at once?
 4. Driver location updates: when WS sends driver_location_update every ~1s, does the
    map CarMarker re-render on every update? Is it wrapped in React.memo?

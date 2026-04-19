@@ -115,6 +115,11 @@ Rider-specific extras to verify beyond the standard checklist:
 - Profile-complete gate: does _layout.tsx correctly redirect first-time riders?
 - Token version: is it checked on every authenticated request?
 
+DRIVER AUDIT CARRYOVER — verify these backend fixes are in place (same backend):
+- [2-1] Duplicate /auth/refresh endpoint removed (old one crashes at runtime)
+- [2-3] revoked → revoked_at field name fixed in auth.py
+- [2-5] Firebase auth path now issues a refresh token
+
 Write findings to: reports/audits/2026-04-19-rider-app-v1.txt under TASK 02.
 ```
 
@@ -220,6 +225,12 @@ Your task: Work through every checklist item in dimension 04. Specific checks:
 7. Wallet top-up amount — min/max enforced at backend schema level?
 8. Saved address name — free text field — is it sanitised before display (XSS)?
 9. Is there any Zod or runtime schema validation on API responses client-side?
+10. GPS Null Island: does ride creation reject coordinates of (0,0)?
+    A failed GPS fix could submit a ride with bogus location. Check rideStore.ts
+    createRide() AND backend/routes/rides.py. [Driver audit 4-2 — verify fix covers rider]
+11. Monetary fields: are fare amounts stored as Decimal/integer cents — NOT float?
+    float causes rounding errors in fare display and tip calculations.
+    [Driver audit 4-3 — verify fix covers rider-side monetary fields too]
 
 Write findings to: reports/audits/2026-04-19-rider-app-v1.txt under TASK 04.
 ```

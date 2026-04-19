@@ -8,6 +8,7 @@ import {
   Animated,
   Linking,
   Platform,
+  BackHandler,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import SpinrConfig from '@shared/config/spinr.config';
@@ -155,6 +156,11 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
       waitTimerRef.current = null;
     }
   }, [rideState]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => sub.remove();
+  }, []);
 
   if (!ride) return null;
 

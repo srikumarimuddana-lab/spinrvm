@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import React, { useEffect } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, BackHandler } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import SpinrConfig from '@shared/config/spinr.config';
@@ -36,6 +36,11 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     onAccept,
     onDecline,
 }) => {
+    useEffect(() => {
+        const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+        return () => sub.remove();
+    }, []);
+
     if (!incomingRide) return null;
 
     const progress = countdownSeconds / 15;

@@ -230,14 +230,18 @@ async def delete_corporate_account(account_id: str) -> bool:
 async def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
-    return await run_sync(lambda: _single_row_from_res(supabase.table("users").select("*").eq("id", user_id).execute()))
+    return await run_sync(lambda: _single_row_from_res(
+        supabase.table("users").select("*").eq("id", user_id).is_("deleted_at", "null").execute()
+    ))
 
 
 async def get_user_by_phone(phone: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
     return await run_sync(
-        lambda: _single_row_from_res(supabase.table("users").select("*").eq("phone", phone).execute())
+        lambda: _single_row_from_res(
+            supabase.table("users").select("*").eq("phone", phone).is_("deleted_at", "null").execute()
+        )
     )
 
 
@@ -255,7 +259,9 @@ async def get_driver_by_id(driver_id: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
     return await run_sync(
-        lambda: _single_row_from_res(supabase.table("drivers").select("*").eq("id", driver_id).execute())
+        lambda: _single_row_from_res(
+            supabase.table("drivers").select("*").eq("id", driver_id).is_("deleted_at", "null").execute()
+        )
     )
 
 
@@ -397,7 +403,9 @@ async def claim_ride_atomic(ride_id: str, driver_id: str) -> bool:
 async def get_ride(ride_id: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
-    return await run_sync(lambda: _single_row_from_res(supabase.table("rides").select("*").eq("id", ride_id).execute()))
+    return await run_sync(lambda: _single_row_from_res(
+        supabase.table("rides").select("*").eq("id", ride_id).is_("deleted_at", "null").execute()
+    ))
 
 
 async def insert_ride(payload: Dict[str, Any]):

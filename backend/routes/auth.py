@@ -344,6 +344,83 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
         raise HTTPException(status_code=500, detail=f"Internal Login Error: {str(e)}") from e
 
 
+class FirebaseAuthRequest(BaseModel):
+    firebase_token: str
+
+
+@api_router.post("/firebase", response_model=AuthResponse)
+@limiter.limit("10/minute")
+async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
+    """Exchange a Firebase ID token for Spinr access + refresh tokens.
+
+    Mirrors the OTP verify flow: verify identity, find-or-create the user
+    record, create a session, and issue both a short-lived JWT and a
+    long-lived opaque refresh token.
+    """
+    try:
+        from firebase_admin import auth as _firebase_auth  # type: ignore
+        payload = _firebase_auth.verify_id_token(body.firebase_token)
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid Firebase token") from e
+
+    uid: str = payload.get("uid") or payload.get("user_id") or ""
+    phone: str = payload.get("phone_number") or ""
+
+    user_agent = request.headers.get("user-agent", "")
+    client_ip = get_remote_address(request)
+
+    user = await db_supabase.get_user_by_id(uid)
+    if not user and phone:
+        user = await db_supabase.get_user_by_phone(phone)
+
+    is_new_user = False
+    session_id = str(uuid.uuid4())
+    if not user:
+        is_new_user = True
+        new_user: Dict[str, Any] = {
+            "id": uid,
+            "phone": phone,
+            "role": "rider",
+            "created_at": datetime.utcnow().isoformat(),
+            "profile_complete": False,
+            "current_session_id": session_id,
+            "token_version": 0,
+        }
+        try:
+            await db_supabase.create_user(new_user)
+        except Exception as e:
+            logger.warning(f"firebase_auth: could not persist user {uid}: {e}")
+        user = new_user
+    else:
+        try:
+            await db_supabase.update_one("users", {"id": uid}, {"current_session_id": session_id})
+        except Exception as e:
+            logger.warning(f"firebase_auth: could not update session_id for {uid}: {e}")
+        user["current_session_id"] = session_id
+
+    user_id = user["id"]
+    token_version = int(user.get("token_version") or 0)
+    access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    token = create_jwt_token(user_id, phone, session_id=session_id, token_version=token_version)
+    refresh_raw, _, refresh_expires_at = await issue_refresh_token(
+        user_id, audience="rider", user_agent=user_agent, ip=client_ip
+    )
+
+    try:
+        user_obj = UserProfile(**user)
+    except Exception:
+        user_obj = user  # type: ignore[assignment]
+
+    return _make_auth_response(
+        token,
+        refresh_raw,
+        user_obj,
+        is_new_user=is_new_user,
+        access_expires_at=access_expires_at,
+        refresh_expires_at=refresh_expires_at,
+    )
+
+
 @api_router.get("/me", response_model=UserProfile)
 async def get_me(current_user: dict = Depends(get_current_user)):
     """

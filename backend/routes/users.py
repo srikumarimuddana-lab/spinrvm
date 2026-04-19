@@ -11,6 +11,7 @@ except ImportError:
 import base64
 import logging
 import uuid
+from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -70,17 +71,16 @@ async def delete_account(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     logger.info(f"Account deletion requested for user {user_id}")
 
+    now = datetime.utcnow().isoformat()
     try:
-        # Delete associated driver record
-        await db_supabase.delete_many("drivers", {"user_id": user_id})
-        # Delete driver documents
+        # Soft-delete driver record (preserves audit trail)
+        await db_supabase.update_one("drivers", {"user_id": user_id}, {"deleted_at": now})
+        # Hard-delete non-sensitive ancillary data (no soft-delete column)
         await db_supabase.delete_many("driver_documents", {"driver_id": user_id})
-        # Delete emergency contacts
         await db_supabase.delete_many("emergency_contacts", {"user_id": user_id})
-        # Delete saved addresses
         await db_supabase.delete_many("saved_addresses", {"user_id": user_id})
-        # Delete the user record
-        await db_supabase.delete_one("users", {"id": user_id})
+        # Soft-delete the user record
+        await db_supabase.update_one("users", {"id": user_id}, {"deleted_at": now})
 
         logger.info(f"Account deleted successfully for user {user_id}")
         return {"success": True, "message": "Account permanently deleted"}

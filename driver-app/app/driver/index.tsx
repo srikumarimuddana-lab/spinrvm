@@ -21,13 +21,14 @@ import { useLanguageStore } from '../../store/languageStore';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
 
 // Use Google Maps on Android, Apple Maps (native) on iOS
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
-export default function DriverDashboard() {
+function DriverDashboard() {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -849,4 +850,12 @@ function createStyles(colors: ThemeColors) {
       color: '#fff',
     },
   });
+}
+
+export default function DriverDashboardScreen() {
+  return (
+    <ErrorBoundary>
+      <DriverDashboard />
+    </ErrorBoundary>
+  );
 }

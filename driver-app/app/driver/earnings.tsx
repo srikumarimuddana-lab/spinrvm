@@ -21,13 +21,14 @@ import EarningsLineChart from '../../components/charts/EarningsLineChart';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useLanguageStore } from '../../store/languageStore';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 
 const { width } = Dimensions.get('window');
 
 type Period = 'today' | 'week' | 'month' | 'all';
 type ChartMode = 'daily' | 'weekly' | 'monthly';
 
-export default function EarningsScreen() {
+function EarningsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
@@ -798,4 +799,12 @@ function createStyles(colors: ThemeColors) {
       marginTop: 2,
     },
   });
+}
+
+export default function EarningsScreenWithBoundary() {
+  return (
+    <ErrorBoundary>
+      <EarningsScreen />
+    </ErrorBoundary>
+  );
 }

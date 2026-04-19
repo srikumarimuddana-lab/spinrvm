@@ -255,8 +255,8 @@ def _validate_production_config():
             "ADMIN_PASSWORD is set to a well-known default. Set a strong "
             "password in the environment before exposing the dashboard."
         )
-    elif len(admin_password) < 12:
-        errors.append("ADMIN_PASSWORD is shorter than 12 characters. Use a stronger password.")
+    elif len(admin_password) < 20:
+        errors.append("ADMIN_PASSWORD is shorter than 20 characters. Use a stronger password.")
 
     # 4. Rate limiter storage — a multi-machine Fly deploy with
     #    "memory://" slowapi storage means each machine keeps its own

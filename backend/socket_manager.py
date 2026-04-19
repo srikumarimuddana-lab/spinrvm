@@ -94,7 +94,8 @@ class ConnectionManager:
         a real use for. When we do, add a ``pubsub.publish_broadcast``
         helper rather than changing this method's semantics.
         """
-        for connection in self.active_connections.values():
+        connections = list(self.active_connections.values())  # snapshot to avoid mutation during iteration
+        for connection in connections:
             await connection.send_json(message)
 
     async def broadcast_to_admins(self, message: dict):

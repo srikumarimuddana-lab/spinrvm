@@ -158,9 +158,11 @@ def validate_coordinates(
             raise HTTPException(status_code=400, detail=f"Longitude must be between -180 and 180 (got {lng})")
         return False, None
 
-    # Check for null island (0, 0) which is often a default/error value
+    # Reject null island (0, 0) — a default/error value that places drivers in the ocean
     if lat == 0 and lng == 0:
-        logger.warning("Null Island coordinates detected (0, 0)")
+        if raise_exception:
+            raise HTTPException(status_code=400, detail="Invalid GPS coordinates: null island (0, 0) rejected")
+        return False, None
 
     return True, (lat, lng)
 

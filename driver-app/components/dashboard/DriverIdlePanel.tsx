@@ -168,7 +168,7 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   }, [onboardingStatus]);
 
   return (
-    <View style={[styles.idlePanelContainer, { paddingBottom: Math.max(insets.bottom, 20) }]} pointerEvents="box-none">
+    <View style={[styles.idlePanelContainer, { paddingBottom: insets.bottom + 16 }]} pointerEvents="box-none">
       
       {/* HUD Info Area */}
       <View style={styles.hudArea} pointerEvents="box-none">

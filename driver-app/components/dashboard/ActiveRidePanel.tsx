@@ -9,6 +9,8 @@ import {
   Linking,
   Platform,
   BackHandler,
+  KeyboardAvoidingView,
+  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import SpinrConfig from '@shared/config/spinr.config';
@@ -234,6 +236,11 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     <Animated.View
       style={[styles.container, { transform: [{ translateY: slideUpAnim }], opacity: fadeAnim }]}
     >
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1 }}
+      >
+        <ScrollView keyboardShouldPersistTaps="handled">
       {/* ── Status pill (floating) ──────────────────────────── */}
       <View style={styles.statusPill}>
         <View style={[styles.statusIconBg, { backgroundColor: `${status.color}15` }]}>
@@ -437,6 +444,8 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           </TouchableOpacity>
         ) : null}
       </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
 
       <CustomAlert
         visible={alertVisible}

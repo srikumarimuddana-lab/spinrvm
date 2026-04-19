@@ -14,6 +14,15 @@ from typing import Any, Optional, Tuple, Union
 from fastapi import HTTPException
 from loguru import logger
 
+# Compiled once at import time for efficiency. Combines SQL injection markers,
+# SQL comment sequences, and common XSS keywords.
+_SUSPICIOUS_PATTERN = re.compile(
+    r"(\b(SELECT|INSERT|UPDATE|DELETE|DROP|UNION|ALTER)\b.*\b(FROM|INTO|TABLE|DATABASE)\b)"
+    r"|(--|\#|\/\*)"
+    r"|(\b(SCRIPT|ALERT|EVAL)\b)",
+    re.IGNORECASE,
+)
+
 # ============================================================================
 # Phone Number Validation (E.164 Format)
 # ============================================================================
@@ -341,17 +350,10 @@ def sanitize_string(
         # Simple HTML tag removal (for more robust sanitization, use bleach library)
         value = re.sub(r"<[^>]*>", "", value)
 
-    # Check for suspicious patterns (basic SQL injection prevention)
-    suspicious_patterns = [
-        r"(\b(SELECT|INSERT|UPDATE|DELETE|DROP|UNION|ALTER)\b.*\b(FROM|INTO|TABLE|DATABASE)\b)",
-        r"(--|\#|\/\*)",  # SQL comment markers
-        r"(\b(SCRIPT|ALERT|EVAL)\b)",  # Common XSS patterns
-    ]
-
-    for pattern in suspicious_patterns:
-        if re.search(pattern, value, re.IGNORECASE):
-            logger.warning(f"Suspicious pattern detected in input: {pattern}")
-            # Don't raise exception, just log for monitoring
+    if _SUSPICIOUS_PATTERN.search(value):
+        if raise_exception:
+            raise HTTPException(status_code=400, detail="Invalid input: suspicious content detected")
+        return False, None
 
     return True, value
 
@@ -462,9 +464,9 @@ def validate_address(address: str, raise_exception: bool = True) -> Tuple[bool, 
         return False, None
 
     # Basic validation - should contain some alphanumeric characters
-    if len(address.strip()) < 5:
+    if len(address.strip()) < 10:
         if raise_exception:
-            raise HTTPException(status_code=400, detail="Address appears too short")
+            raise HTTPException(status_code=400, detail="Address must be at least 10 characters")
         return False, None
 
     # Must contain at least some letters or numbers

@@ -597,6 +597,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     setIsOnline(next);
     try {
       await updateDriverStatus(next);
+      if (next) {
+        await Location.requestBackgroundPermissionsAsync();
+      }
     } catch (err: any) {
       console.log('Toggle online error:', err);
       setIsOnline(!next);

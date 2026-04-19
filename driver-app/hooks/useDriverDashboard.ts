@@ -23,6 +23,7 @@ interface UseDriverDashboardReturn {
   location: Location.LocationObject | null;
   otpInput: string;
   setOtpInput: (value: string) => void;
+  wsError: string | null;
 
   // Alert state
   dashAlert: {
@@ -79,6 +80,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [otpInput, setOtpInput] = useState('');
+  const [wsError, setWsError] = useState<string | null>(null);
 
   // Alert state (replaces Alert.alert() so consumers can render <CustomAlert>)
   const [dashAlert, setDashAlert] = useState<{
@@ -105,6 +107,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const reconnectAttemptRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const locationBufferRef = useRef<any[]>([]);
+  const locationRetryCountRef = useRef(0);
+  const MAX_LOCATION_RETRIES = 3;
   // Refs used inside WebSocket callbacks to avoid stale closure values.
   // Also used to stabilize the connectWebSocket useCallback — if we closed
   // over `user` / `handleWSMessage` directly, any store state change would
@@ -255,19 +259,31 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         points: pointsToUpload,
       });
       console.log(`Uploaded ${pointsToUpload.length} location points`);
+      locationRetryCountRef.current = 0;
       // Clear persisted buffer on success
       try {
         const AsyncStorage = require('@react-native-async-storage/async-storage').default;
         await AsyncStorage.removeItem(LOCATION_BUFFER_KEY);
       } catch {}
     } catch (err) {
-      console.log('Location batch upload failed:', err);
-      locationBufferRef.current = [...pointsToUpload, ...locationBufferRef.current];
-      // Persist to AsyncStorage so crash doesn't lose them
-      try {
-        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-        await AsyncStorage.setItem(LOCATION_BUFFER_KEY, JSON.stringify(locationBufferRef.current.slice(-500)));
-      } catch {}
+      locationRetryCountRef.current += 1;
+      if (locationRetryCountRef.current >= MAX_LOCATION_RETRIES) {
+        console.warn(`[Location] Batch upload failed after ${MAX_LOCATION_RETRIES} retries — clearing buffer`);
+        locationRetryCountRef.current = 0;
+        locationBufferRef.current = [];
+        try {
+          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+          await AsyncStorage.removeItem(LOCATION_BUFFER_KEY);
+        } catch {}
+      } else {
+        console.log(`Location batch upload failed (attempt ${locationRetryCountRef.current}/${MAX_LOCATION_RETRIES}):`, err);
+        locationBufferRef.current = [...pointsToUpload, ...locationBufferRef.current];
+        // Persist to AsyncStorage so crash doesn't lose them
+        try {
+          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+          await AsyncStorage.setItem(LOCATION_BUFFER_KEY, JSON.stringify(locationBufferRef.current.slice(-500)));
+        } catch {}
+      }
     }
   }, []);
 
@@ -400,9 +416,21 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       // chat_message to `driver_{user_id}`. Push into driverStore so
       // chat.tsx updates in real-time without polling. [SPR-01]
       case 'chat_message':
-        console.log('[WS] Chat from rider:', data.text?.slice(0, 40));
-        useDriverStore.getState().addChatMessage(data);
-        Vibration.vibrate(100);
+        if (
+          data.text !== undefined &&
+          typeof data.text === 'string' &&
+          typeof data.sender === 'string'
+        ) {
+          console.log('[WS] Chat from rider:', data.text.slice(0, 40));
+          useDriverStore.getState().addChatMessage(data);
+          Vibration.vibrate(100);
+        } else {
+          console.warn('[WS] Malformed chat message payload:', data);
+        }
+        break;
+
+      default:
+        console.warn('[WS] Unknown message type received:', data.type);
         break;
     }
   }, [setIncomingRide, resetRideState]);
@@ -471,13 +499,15 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'error') {
-          console.log('WebSocket auth error:', data.message);
+          console.log('WebSocket server error:', data.message);
+          setWsError(data.message || 'Connection error');
           return;
         }
-        // First valid (non-error) server message = auth accepted.
+        // First valid (non-error) server message = auth accepted; clear any previous error.
         if (wsRef.current === ws) {
           reconnectAttemptRef.current = 0;
           setConnectionState('connected');
+          setWsError(null);
         }
         handleWSMessageRef.current(data);
       } catch { }
@@ -707,6 +737,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     location,
     otpInput,
     setOtpInput,
+    wsError,
 
     // Alert state
     dashAlert,

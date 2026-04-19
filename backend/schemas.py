@@ -5,22 +5,28 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, EmailStr, Field, validator
 
+try:
+    from .validators import validate_license_plate, validate_vehicle_year, validate_vin
+except ImportError:
+    from validators import validate_license_plate, validate_vehicle_year, validate_vin
+
 # ============ Models ============
 
 
 class SendOTPRequest(BaseModel):
-    phone: str
+    phone: str = Field(..., min_length=10, max_length=15, pattern=r'^\+\d+$')
 
 
 class VerifyOTPRequest(BaseModel):
-    phone: str
-    code: str
+    phone: str = Field(..., min_length=10, max_length=15, pattern=r'^\+\d+$')
+    code: str = Field(..., min_length=4, max_length=4, pattern=r'^\d{4}$')
 
 
 class CreateProfileRequest(BaseModel):
-    first_name: str
-    last_name: str
+    first_name: str = Field(..., min_length=1, max_length=50)
+    last_name: str = Field(..., min_length=1, max_length=50)
     email: EmailStr
+    address: str = Field(..., min_length=10, max_length=200)
     gender: str
     role: Optional[str] = None  # 'driver' when coming from driver app
 
@@ -183,6 +189,22 @@ class Driver(BaseModel):
     is_online: bool = True
     is_available: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    @validator('license_plate')
+    def _check_license_plate(cls, v: str) -> str:
+        return validate_license_plate(v)
+
+    @validator('vehicle_vin', pre=True, always=True)
+    def _check_vin(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        return validate_vin(v)
+
+    @validator('vehicle_year', pre=True, always=True)
+    def _check_vehicle_year(cls, v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return v
+        return validate_vehicle_year(v)
 
 
 class Ride(BaseModel):

@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
+from slowapi.util import get_ipaddr, get_remote_address
 
 try:
     from core.config import settings
@@ -34,6 +34,7 @@ except ImportError:  # pragma: no cover — package-relative fallback for tests
 # is blocked by _validate_production_config() so we never silently fall
 # back to memory across a multi-machine deploy.
 _rate_limit_storage_uri = settings.RATE_LIMIT_REDIS_URL or "memory://"
+
 if _rate_limit_storage_uri == "memory://":
     logger.warning(
         "Rate limiter using in-process 'memory://' storage — counters are "
@@ -41,13 +42,26 @@ if _rate_limit_storage_uri == "memory://":
         "replicas. Set RATE_LIMIT_REDIS_URL for production deployments."
     )
 else:
-    # Don't log the full URL; it contains the Redis password.
-    scheme = _rate_limit_storage_uri.split("://", 1)[0]
-    logger.info(f"Rate limiter using distributed storage backend: {scheme}://…")
+    # Verify Redis is reachable at startup; fall back to memory if not (P2-4).
+    # This prevents the rate limiter from becoming a hard failure when Redis
+    # is misconfigured or temporarily unavailable during a cold start.
+    try:
+        import redis as _redis_sync
+        _probe = _redis_sync.from_url(_rate_limit_storage_uri, socket_connect_timeout=2)
+        _probe.ping()
+        _probe.close()
+        scheme = _rate_limit_storage_uri.split("://", 1)[0]
+        logger.info(f"Rate limiter using distributed storage backend: {scheme}://…")
+    except Exception as _redis_err:
+        logger.warning(
+            f"Redis unavailable — rate limiter using in-memory fallback ({_redis_err})"
+        )
+        _rate_limit_storage_uri = "memory://"
 
-# Default limiter using IP address
+# Default limiter — reads the real client IP from X-Forwarded-For when the
+# app sits behind a load balancer or CDN (Cloudflare, Fly.io, Railway). (P2-7)
 default_limiter = Limiter(
-    key_func=get_remote_address,
+    key_func=get_ipaddr,
     default_limits=["100/minute", "1000/hour"],
     storage_uri=_rate_limit_storage_uri,
 )
@@ -81,8 +95,8 @@ def get_client_identifier(request: Request) -> str:
     except Exception:  # noqa: S110
         pass
 
-    # Fallback to IP
-    return f"ip:{get_remote_address(request)}"
+    # Fallback to real IP (respects X-Forwarded-For behind proxies)
+    return f"ip:{get_ipaddr(request)}"
 
 
 def get_phone_based_key(request: Request) -> str:
@@ -94,8 +108,8 @@ def get_phone_based_key(request: Request) -> str:
         phone_hash = hashlib.sha256(phone.encode()).hexdigest()[:16]
         return f"phone:{phone_hash}"
 
-    # Fallback to IP
-    return f"ip:{get_remote_address(request)}"
+    # Fallback to real IP (respects X-Forwarded-For behind proxies)
+    return f"ip:{get_ipaddr(request)}"
 
 
 # ============================================================================
@@ -278,7 +292,14 @@ class RedisRateLimiter:
         # Set expiry
         pipe.expire(key, window)
 
-        results = await pipe.execute()
+        try:
+            results = await pipe.execute()
+        except Exception as e:
+            # Redis went down mid-operation — reset connection and use in-memory fallback
+            logger.warning(f"Redis unavailable — rate limiter using in-memory fallback ({e})")
+            self._redis = None
+            return self._memory_check(key.replace("ratelimit:", ""), limit, window)
+
         current_count = results[2]
 
         if current_count > limit:

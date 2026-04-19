@@ -84,7 +84,18 @@ async def create_payment_intent(body: PaymentIntentRequest, current_user: dict =
         if body.payment_method_id:
             intent_params["payment_method"] = body.payment_method_id
 
-        intent = stripe.PaymentIntent.create(**intent_params, api_key=stripe_secret)
+        # Idempotency key ties this PaymentIntent to a specific ride + user so
+        # a network retry after a timeout cannot create a second charge. (P2-8)
+        idempotency_key = (
+            f"ride-{body.ride_id}-{current_user['id']}"
+            if body.ride_id
+            else f"intent-{current_user['id']}-{amount}"
+        )
+        intent = stripe.PaymentIntent.create(
+            **intent_params,
+            api_key=stripe_secret,
+            idempotency_key=idempotency_key,
+        )
 
         return {"client_secret": intent.client_secret, "payment_intent_id": intent.id, "mock": False}
     except Exception as e:

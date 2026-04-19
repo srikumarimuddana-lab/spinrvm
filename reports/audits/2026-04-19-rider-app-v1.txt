@@ -1,0 +1,987 @@
+================================================================================
+SPINR RIDER APP — PRODUCTION-READINESS AUDIT v1
+================================================================================
+Date        : 2026-04-19
+Branch      : claude/rider-app-audit-iVxpH (audit findings — read-only)
+Auditor     : Claude (claude-sonnet-4-6) via automated audit framework
+Scope       : rider-app/ · shared/ · backend/routes/ (rider side)
+Platform    : Expo 54 · React Native · Zustand · WebSocket · Stripe Connect
+
+AUDIT GROUND RULES
+──────────────────
+• OTP is 4 digits by design — compensating controls documented, NOT flagged.
+• Hard-coded dev values (OTP "1234", test keys) → severity LOW/RECOMMENDATION only.
+• Severity scale: CRITICAL | HIGH | MEDIUM | LOW | PASS | RECOMMENDATION
+• See audit-framework/ground-rules.md for full list.
+
+PRE-AUDIT CHECKS (baseline)
+─────────────────────────────
+npm audit (rider-app):    1 CRITICAL vuln — protobufjs (npm audit fix needed) — P1
+TypeScript errors:        317 real errors (mostly implicit :any params) — P2
+Explicit :any usages:     80 — P2
+console.log in prod:      40 — P3
+Magic ride-status strings: 78 — P2
+Hermes JS engine:         NOT configured on Android — P3
+
+SHARED FIXES CONFIRMED (from driver audit — verified carry-over):
+  OfflineBanner insets.top   → PASS
+  Auth revoked_at / refresh  → PASS
+  OTP hashing on ride create → PASS (backend/routes/rides.py imports hash_otp)
+  Decimal monetary math      → PASS
+
+Dimensions run: D01 (Feature Completeness)
+
+================================================================================
+FINDINGS
+================================================================================
+
+================================================================================
+TASK 01 — FEATURE COMPLETENESS (Dimension 01)
+================================================================================
+
+[01-1] HIGH | Home Screen SOS Button Shows False "Alert Sent" — No API Call Made
+File: rider-app/app/(tabs)/index.tsx:236–252
+Finding: The SOS button on the home/map screen is a custom TouchableOpacity whose
+  onPress fires only setAlertState() with title "SOS Triggered" and message
+  "Emergency services have been alerted. Stay calm and stay where you are."
+  No API call is made, no emergency contact is notified, no 911 prompt is shown.
+  The message is factually false — nothing has been sent.
+  The shared SOSButton component (shared/components/SOSButton.tsx), which calls
+  the backend AND prompts the rider to call 911, is used correctly in
+  ride-in-progress.tsx but is absent from the home screen.
+  A rider who taps SOS outside of an active ride (e.g. after being dropped off in
+  an unsafe area, or before their ride starts) receives a false confirmation and
+  no real help.
+Fix: Replace the home-screen SOS implementation with the SOSButton component from
+  @shared/components/SOSButton. Because no rideId is available pre-ride, provide
+  a fallback that skips the backend call and opens tel:911 directly, plus shows
+  the rider's current GPS coordinates in the prompt.
+  Effort: 2 hours.
+
+[01-2] HIGH | PIPEDA Data Export and Account Deletion Are UI Stubs — No API Called
+File: rider-app/app/privacy-settings.tsx:104–107 (export), 29–47 (delete)
+Finding: "Download My Data" shows a success alert reading "Your data export has
+  been requested. You will receive an email with a download link." without making
+  any API call. "Delete Account" shows a confirmation flow that resolves to
+  "Your account deletion request has been submitted." — again, no API call.
+  PIPEDA (Canadian federal privacy law, analogous to GDPR) gives data subjects the
+  right to access and delete their personal information. Presenting stub UI that
+  falsely confirms these actions is both a legal compliance gap and a trust
+  violation.
+Fix:
+  • Wire "Download My Data" to POST /user/data-export (backend must queue an email
+    with a signed download link).
+  • Wire "Delete Account" to DELETE /user/account (with server-side 30-day
+    deactivation window per PIPEDA breach-notification rules).
+  Effort: 4 hours (frontend) + backend endpoint implementation.
+
+[01-3] HIGH | become-driver.tsx Navigates to `/(driver)` After Submit — Route Does Not Exist
+File: rider-app/app/become-driver.tsx:257
+Finding: After a successful registerDriver() call, the screen calls:
+    router.replace('/(driver)' as any)
+  The rider app has no (driver) route group. Expo Router will throw an "Unmatched
+  Route" error and render a blank screen (or crash in production builds), meaning
+  the user successfully completes a 5-step driver registration form and is then
+  shown nothing. This is the main CTA of the become-driver flow.
+Fix: Replace with router.replace('/(tabs)') and show a modal/alert telling the
+  rider: "Application submitted! Download the Spinr Driver app to start driving."
+  Include an App Store / Play Store deep link.
+  Effort: 1 hour.
+
+[01-4] MEDIUM | Activity Tab Shows Only Ride History — Scheduled (Upcoming) Rides Not Visible
+File: rider-app/app/(tabs)/activity.tsx:47
+Finding: The activity tab calls GET /rides/history which returns only completed
+  and cancelled rides. Scheduled rides are only accessible via Account →
+  Scheduled Rides (account.tsx:183). Users naturally look in "Activity" for
+  upcoming bookings — there is no "Upcoming" section, no tab, and no banner
+  linking to scheduled-rides.tsx. A rider with a scheduled trip tomorrow has no
+  obvious way to find it from the Activity tab.
+Fix: Add an "Upcoming" filter tab or a sticky banner at the top of the activity
+  screen when scheduledRides.length > 0. The store already exposes
+  scheduledRides + fetchScheduledRides — no new API work needed.
+  Effort: 3 hours.
+
+[01-5] MEDIUM | Corporate Ride Booking Has No UI Entry Point
+File: rider-app/store/rideStore.ts:319–352
+Finding: createRide() does not include a corporate_account_id field in its
+  payload. activity.tsx exposes a "Business" filter (line 151) that can filter
+  rides by corporate_account_id — implying corporate rides are expected — but
+  there is no booking path that sets this field. The backend schema
+  (rides table) supports corporate_account_id. Riders who have a corporate
+  account linked cannot book rides against it.
+Fix: Add a corporate account selector in ride-options.tsx or payment-confirm.tsx.
+  When a corporate card/account is selected, pass corporate_account_id in the
+  createRide payload.
+  Effort: 1 day (requires corporate account listing endpoint from backend).
+
+[01-6] LOW | rate-ride.tsx Is an Orphaned Screen — No Navigation Entry Point Exists
+File: rider-app/app/rate-ride.tsx
+Finding: rate-ride.tsx is a fully functional rating + tip screen, registered in
+  _layout.tsx (line 370). However, no screen in the rider app calls
+  router.push('/rate-ride'). Ride-completed.tsx implements its own inline rating
+  section (lines 323–397) and calls rateRide() directly on submit — the standalone
+  rate-ride.tsx screen is never reached.
+  This is dead code: safe but creates a maintenance burden (two divergent rating
+  implementations). The tip options also differ ($2/$5/$10 in ride-completed vs
+  $1/$3/$5 in rate-ride).
+Fix: Remove rate-ride.tsx and ensure ride-completed.tsx is the single rating
+  implementation. Or consolidate: have ride-completed.tsx navigate to rate-ride
+  and delete the inline rating section.
+  Effort: 2 hours (cleanup only).
+
+[01-7] RECOMMENDATION | Legal Screen Not Presented During Onboarding
+File: rider-app/app/profile-setup.tsx (missing ToS acceptance)
+Finding: legal.tsx exists and fetches live ToS and Privacy Policy from the
+  backend. It is accessible from Account → Legal. However, new riders completing
+  sign-up are never shown or asked to accept the Terms of Service. App Store
+  Review Guideline 4.0 requires apps to obtain user acceptance of ToS before the
+  user commits to a service. This is also a PIPEDA consent requirement — processing
+  personal data requires informed, explicit consent.
+Fix: Add a "By continuing you agree to our Terms of Service and Privacy Policy"
+  link in profile-setup.tsx or otp.tsx, with a required checkbox or explicit
+  tap-to-agree CTA before the profile can be submitted.
+  Effort: 2 hours.
+
+[01-8] PASS | fare-split.tsx Has a Reachable Entry Point
+File: rider-app/app/payment-confirm.tsx:278
+Finding: router.push('/fare-split' as any) is called from the payment confirmation
+  screen. fare-split.tsx is functional: up to 5 participants, live fare
+  calculation, store integration via walletStore.createFareSplit(). The screen
+  correctly guards against no-active-ride state (lines 60–68).
+
+[01-9] PASS | chat-driver.tsx Delivers Messages via WebSocket
+File: rider-app/app/chat-driver.tsx:39–57
+Finding: On mount, the screen loads history once via GET /rides/{id}/messages.
+  Subsequent messages arrive through chatMessages in rideStore, which is
+  populated in real-time by the useRiderSocket WebSocket hook (addChatMessage).
+  No polling interval is present. Messages from the driver are delivered in
+  <100 ms via WebSocket, not on a polling cycle.
+
+[01-10] PASS | scheduled-rides.tsx Is Accessible from Account Tab
+File: rider-app/app/(tabs)/account.tsx:183
+Finding: router.push('/scheduled-rides') is wired under Account → Scheduled
+  Rides. The screen shows countdown timers, route cards, and per-ride cancel
+  actions. Imminent rides (< 15 min) are highlighted in amber.
+
+[01-11] PASS | legal.tsx Exists and Surfaces Dynamic Backend Content
+File: rider-app/app/legal.tsx:34–48
+Finding: Legal screen fetches ToS and Privacy Policy from GET /settings/legal.
+  Falls back to "No Terms of Service have been added yet." when backend is empty.
+  Accessible from Account → Legal (account.tsx:240). Both tos and privacy
+  document types are supported via the ?type= param.
+
+[01-12] PASS | become-driver.tsx Multi-Step Form Is Feature-Complete
+File: rider-app/app/become-driver.tsx
+Finding: All 5 steps present (Intro, Personal, Vehicle, Documents, Review).
+  Vehicle age validation enforces the 9-year rule (line 146). Document
+  requirements are fetched dynamically from /drivers/requirements. Mandatory
+  docs are enforced before step advance. Post-submit routing has a bug (see
+  01-3) but the form itself correctly collects and submits all required data.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 01 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     3 |
+| MEDIUM          |     2 |
+| LOW             |     1 |
+| PASS            |     5 |
+| RECOMMENDATION  |     1 |
+| TOTAL           |    12 |
+
+================================================================================
+TASK 02 — AUTHENTICATION & SESSION MANAGEMENT (Dimension 02)
+================================================================================
+
+[02-1] HIGH | OTP Brute-Force Lockout Silently Bypassed When Redis Is Unavailable
+File: backend/routes/auth.py:75–77
+Finding: _check_otp_lockout() wraps its Redis call in a bare except that returns
+  silently on any exception. When Redis is unavailable (network partition, OOM,
+  restart), the brute-force lockout is skipped entirely — the function returns as
+  if the account is not locked. The SlowAPI rate limit (5 attempts/min on
+  /verify-otp) remains, but 5 guesses/min * 33 min = 10,000 attempts exhausts
+  the full 4-digit OTP keyspace while Redis is down. This removes the compensating
+  control required for the 4-digit OTP design decision.
+  Per audit ground rules: compensating controls must be confirmed present.
+  If any compensating control is MISSING or can be bypassed → HIGH.
+Fix: On Redis failure, _check_otp_lockout should fail closed — either raise a
+  503 ("Service temporarily unavailable") or block the attempt and log the error.
+  Do not silently return a no-lock result. Increment a Prometheus/Datadog counter
+  on Redis errors so ops is alerted before an attack window opens.
+  Effort: 1 hour.
+
+[02-2] MEDIUM | Firebase Token Does Not Enforce Rider App Audience — Cross-App Auth Possible
+File: backend/dependencies/__init__.py:134–172
+Finding: get_current_user() calls firebase_auth.verify_id_token(token) without
+  validating a rider-specific audience or app ID. The driver-facing auth path in
+  routes/auth.py checks FIREBASE_DRIVER_APP_ID; the rider dependency has no
+  equivalent check. A valid Firebase ID token issued by the driver app (or any
+  other app sharing the same Firebase project) passes the rider API's
+  authentication check. If the UID is not found in the users table, a new rider
+  account is auto-created (lines 157–165). A driver with a valid Firebase token
+  can bootstrap a rider identity without going through phone OTP.
+Fix: Add an audience/app-ID check analogous to the driver path. Store
+  FIREBASE_RIDER_APP_ID in settings and reject Firebase tokens whose app_id does
+  not match.
+  Effort: 1 hour.
+
+[02-3] MEDIUM | Firebase-Authenticated Users Bypass Token Version and Session Revocation
+File: backend/dependencies/__init__.py:134–172
+Finding: The Firebase authentication path (lines 134–172) returns the user
+  directly without checking token_version or session_id. The JWT path enforces
+  both (token_version mismatch check at line 221, session_id check at line 213).
+  Calling /auth/logout-all bumps token_version in the DB, which immediately
+  invalidates all JWT sessions — but Firebase-authenticated sessions are not
+  affected. An admin force-logout-all (e.g., suspected account compromise) does
+  not invalidate active Firebase tokens. Firebase tokens are valid for up to 1
+  hour and cannot be revoked server-side from the Spinr backend.
+Fix: After the Firebase token is verified, perform the same token_version and
+  session_id checks against the resolved user row. If a force-logout event must
+  cover Firebase users, additionally call firebase_auth.revoke_refresh_tokens(uid)
+  from the /auth/logout-all handler.
+  Effort: 2 hours.
+
+[02-4] MEDIUM | OTP Comparison Not Constant-Time
+File: backend/routes/auth.py (verify-otp path)
+Finding: OTP verification issues a database query keyed on (phone, hash_otp(code)).
+  While hashing protects the raw value, the path-length timing of a B-tree index
+  lookup on the 64-char hex hash can leak prefix-matching information under
+  repeated timing measurements. Per D02 checklist, OTP comparison should use
+  hmac.compare_digest on the locally re-computed hash vs the stored hash, keeping
+  the database lookup keyed only on phone/expiry and performing the constant-time
+  comparison in application code.
+Fix:
+    stored_hash = record["otp_hash"]
+    submitted_hash = hash_otp(code)
+    if not hmac.compare_digest(stored_hash, submitted_hash):
+        _record_otp_failure(phone)
+        raise HTTPException(400, "Invalid OTP")
+  Effort: 30 minutes.
+
+[02-5] LOW | Access Token Persisted to SecureStore — Memory-Only Pattern Not Followed
+File: shared/store/authStore.ts:154
+Finding: setTokens() writes the access token to expo-secure-store (line 154:
+  storage.setItem('auth_token', token)) as well as holding it in _inMemoryToken.
+  The standard security pattern for short-lived access tokens is memory-only:
+  persist only the refresh token to disk so the access token is destroyed on app
+  restart. SecureStore is hardware-backed (iOS Keychain / Android Keystore) and
+  encrypted, so this is low-risk — but the access token now survives app restarts,
+  extending the effective session window beyond the intended 15-minute JWT TTL.
+  Severity: LOW (SecureStore is a secure enclave; risk is theoretical).
+Fix: Remove the storage.setItem call for 'auth_token'. On cold start, exchange
+  the persisted refresh token for a new access token via refreshTokens() rather
+  than reading the access token from disk.
+  Effort: 1 hour.
+
+[02-6] PASS | JWT Algorithm Pinned to HS256 — Algorithm Confusion Not Possible
+File: backend/dependencies/__init__.py:36, 106
+Finding: JWT_ALGORITHM = "HS256" is declared as a named constant (line 36).
+  jwt.decode() is called with algorithms=[JWT_ALGORITHM] (line 106). Passing a
+  list of exactly one algorithm prevents the "alg:none" and RSA→HMAC confusion
+  attacks. create_jwt_token also specifies algorithm=JWT_ALGORITHM explicitly.
+
+[02-7] PASS | Token Version Enforced on Every JWT-Authenticated Request
+File: backend/dependencies/__init__.py:114–124, 221
+Finding: _token_version_mismatch() compares the token's token_version claim
+  against the users table on every request. Force-logout-all increments the DB
+  value; pre-bump tokens are immediately rejected with 401. Missing claim
+  treated as 0 (backwards-compatible for pre-migration tokens).
+
+[02-8] PASS | OTP Hashed SHA-256 — Not Stored Plaintext
+File: backend/dependencies/__init__.py:63–65 (hash_otp); backend/routes/auth.py
+Finding: hash_otp() (hashlib.sha256) is applied before OTP storage and on the
+  submitted value before verification. Raw OTP never written to the database.
+
+[02-9] PASS | OTP Expiry 5 Minutes — Timezone-Aware
+File: backend/dependencies/__init__.py:37 (OTP_EXPIRY_MINUTES = 5)
+Finding: OTP records carry an expires_at field set to now + 5 minutes using
+  timezone-aware datetimes. Expired OTPs are rejected at verification time.
+
+[02-10] PASS | OTP Rate Limiting Present (3/min send, 5/min verify)
+File: backend/routes/auth.py:141, 206
+Finding: SlowAPI decorators apply: 3 requests/minute on /auth/send-otp and
+  5 requests/minute on /auth/verify-otp. Independent of the Redis lockout
+  mechanism — even if Redis is down (see 02-1) rate limiting provides a
+  floor of protection.
+
+[02-11] PASS | Refresh Token Rotation with Revoked_at Column
+File: backend/routes/auth.py (refresh endpoint)
+Finding: Each refresh issues a new token and marks the previous one with
+  revoked_at. Refresh token replay is blocked. The replaces chain provides
+  audit history.
+
+[02-12] PASS | Refresh Token Audience Validated as "rider"
+File: backend/routes/auth.py:519
+Finding: Refresh endpoint verifies audience == "rider" before accepting the token.
+  Driver refresh tokens cannot be used against rider endpoints.
+
+[02-13] PASS | Concurrent 401 Deduplication — Single Refresh Promise
+File: shared/api/client.ts:158–163
+Finding: _refreshPromise singleton ensures that when N inflight requests all
+  receive 401, only one refresh attempt is made. All other callers await the
+  same promise. No refresh flood, no double-invalidation.
+
+[02-14] PASS | Profile-Complete Gate Enforced at Login and Cold Start
+File: rider-app/app/otp.tsx:91–100; rider-app/app/index.tsx:33–76
+Finding: Post-OTP routing checks profile_complete || hasProfileData before
+  routing to /(tabs). Splash screen repeats the check on cold start. First-time
+  riders cannot bypass profile setup.
+
+[02-15] PASS | Logout Clears All Token State
+File: shared/store/authStore.ts:468–483
+Finding: logout() removes 'auth_token' from SecureStore, clears _inMemoryToken,
+  and resets Zustand state. No token artifact survives a clean logout.
+
+[02-16] PASS | +1 Canadian Phone Number Enforced at Entry
+File: rider-app/app/login.tsx:60, 77
+Finding: Phone field limited to 10 digits (line 60). "+1" prepended before API
+  submission (line 77). Non-North-American numbers cannot reach the OTP flow.
+
+[02-17] PASS | OTP Dev Bypass Gated to Development Environment Only
+File: backend/routes/auth.py:116
+Finding: The "1234" OTP bypass is guarded by ENV == "development". Production
+  deployments cannot use the bypass. Per ground rules: hard-coded dev values in
+  __DEV__/__DEV__ / development ENV blocks → LOW/RECOMMENDATION. This meets the
+  bar for PASS given the gate.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 02 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     3 |
+| LOW             |     1 |
+| PASS            |    12 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    17 |
+
+================================================================================
+TASK 03 — ENCRYPTION & SECRETS MANAGEMENT (Dimension 03)
+================================================================================
+
+[03-1] CRITICAL | Real Supabase Service-Role Key Committed in backend/.env.example
+File: backend/.env.example:3
+Finding: backend/.env.example contains:
+    SUPABASE_URL=https://dbbadhihiwztmnqnbdke.supabase.co
+    SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzd…
+  Decoding the JWT payload:
+    {"iss":"supabase","ref":"dbbadhihiwztmnqnbdke","role":"service_role",
+     "iat":1770836564,"exp":2086412564}
+  The role is "service_role" — this key bypasses Supabase Row Level Security
+  entirely and grants unrestricted read/write access to every table in the
+  project. The .env.example is committed to the repository and visible to
+  everyone with repo access (or if the repo is ever made public).
+  An .env.example file should contain only placeholder text, not real credentials.
+  The backend/core/middleware.py comment (line 171) even warns "NEVER commit
+  this value — it bypasses RLS." — but the .env.example was committed anyway.
+Fix:
+  IMMEDIATE: Rotate the key in the Supabase dashboard (Settings → API → Rotate
+  service-role key). The committed key will no longer function.
+  Then replace .env.example line 3 with a placeholder:
+    SUPABASE_SERVICE_ROLE_KEY=replace-with-service-role-key-from-supabase-dashboard
+  Verify git history does not contain the real key in prior commits by running:
+    trufflehog git file://. --only-verified
+  If found in history, use git-filter-repo to expunge and force-push.
+  Effort: 30 minutes (rotate key) + 1 hour (history audit).
+
+[03-2] MEDIUM | Test/Preview EAS Build Profiles Hardcode Production Backend URL
+File: rider-app/eas.json:23, 32
+Finding: Both "test" and "preview" build profiles set:
+    "EXPO_PUBLIC_BACKEND_URL": "https://spinr-backend-production.up.railway.app"
+  Internal testers who install test/preview builds will read from and write to
+  the live production database. A tester completing the driver registration flow,
+  cancelling rides, or testing payment flows will mutate production data.
+  The "development" profile uses a placeholder ("http://your-local-ip:8000")
+  while the production profile correctly uses "$EXPO_PUBLIC_BACKEND_URL".
+Fix: Add a dedicated staging environment and set test/preview to the staging URL.
+  If staging is not yet set up, use EAS environment variables (not hardcoded inline
+  in eas.json) so the URL can be swapped without a code change:
+    "env": { "EXPO_PUBLIC_BACKEND_URL": "$SPINR_TEST_BACKEND_URL" }
+  Effort: 2 hours (staging env setup or EAS secret wiring).
+
+[03-3] MEDIUM | TruffleHog Scans Only Last Commit and Requires Verification
+File: .github/workflows/ci.yml:428–429
+Finding: The TruffleHog step uses:
+    trufflehog git file://. --only-verified --since-commit HEAD~1 --fail
+  Two weaknesses:
+  (a) --since-commit HEAD~1: only the most recent commit is scanned. A secret
+    committed 2 commits ago will never be caught by CI. The committed Supabase
+    service-role key (finding 03-1) exists in history and would not be caught.
+  (b) --only-verified: TruffleHog verifies secrets by making live API calls.
+    A rotated or expired key — or one from a project TruffleHog can't reach —
+    passes through silently without blocking the PR.
+Fix:
+  (a) Remove --since-commit HEAD~1 for PR scans; keep it for push events to
+    reduce scan time, but use --since-commit origin/$BASE_BRANCH for PRs.
+  (b) Remove --only-verified to report unverified matches too. Treat them as
+    a manual review gate (mark as exception or rotate) rather than auto-passing.
+  Effort: 1 hour.
+
+[03-4] LOW | Rider-App CI Job Missing EXPO_PUBLIC_ Secrets Scan
+File: .github/workflows/ci.yml:176–209 (rider-app-test job)
+Finding: The driver-app-test CI job (lines 153–159) runs a grep check for:
+    EXPO_PUBLIC_.*SECRET | EXPO_PUBLIC_.*PRIVATE | EXPO_PUBLIC_.*KEY
+  to prevent private keys being accidentally placed in EXPO_PUBLIC_ variables.
+  The rider-app-test job (lines 176–209) has no equivalent check. A developer
+  could add an EXPO_PUBLIC_SOME_PRIVATE_KEY to rider-app/.env or app.config.ts
+  without CI catching it.
+  Note: the driver-app check's regex also matches GOOGLE_MAPS_API_KEY (which
+  is intentionally EXPO_PUBLIC_) — both apps should use a refined pattern
+  that targets truly private values like SERVICE_ACCOUNT, JWT_SECRET, etc.
+Fix: Add a parallel check to rider-app-test. Refine the pattern to exclude known-
+  public keys (Maps, Firebase config):
+    grep -r "EXPO_PUBLIC_.*(SECRET|PRIVATE|SERVICE_ACCOUNT|JWT)" \
+      rider-app/.env* rider-app/app.config.ts
+  Effort: 30 minutes.
+
+[03-5] LOW | play-service-account.json Not in .gitignore
+File: rider-app/eas.json:54; rider-app/.gitignore
+Finding: eas.json references ./play-service-account.json for the Android
+  production submit track. The file does not currently exist in the repo
+  (confirmed by filesystem scan — PASS on the file itself). However,
+  rider-app/.gitignore only excludes bugreport-*.zip. If a developer creates
+  play-service-account.json in rider-app/ for a local submit, git will stage
+  it without warning and it could be committed in the next commit.
+Fix: Add to rider-app/.gitignore:
+    play-service-account.json
+  Effort: 5 minutes.
+
+[03-6] PASS | Pickup OTP Hashed (SHA-256) Before Database Storage
+File: backend/routes/rides.py:651
+Finding: pickup_otp=hash_otp(pickup_otp_plain) — the plain OTP is generated
+  by generate_pickup_otp(), the hash is stored in the DB, and the plain text
+  is returned to the rider only in the single ride-creation response (line 691).
+  Database dump or query does not yield usable OTP codes. Confirmed for the
+  rider-created ride path (addressing P0-3 from the pre-populated checklist).
+
+[03-7] PASS | Stripe Publishable Key Fetched at Runtime — Not Bundled
+File: rider-app/app/_layout.tsx:126
+Finding: GET /settings returns the stripe_publishable_key at boot. The key is
+  not in eas.json, app.config.ts, or any .env.example. Operators can rotate
+  the Stripe publishable key without an app release. The key is a publishable
+  key (pk_test_* / pk_live_*) which is designed to be client-visible.
+
+[03-8] PASS | bcrypt Cost Factor 12 for Admin Passwords
+File: backend/utils/password.py:54
+Finding: _BCRYPT_ROUNDS = 12 — roughly 250 ms per hash on a modern CPU.
+  Meets the D03 minimum of ≥ 12. Legacy SHA256 rows are auto-upgraded on
+  next login with constant-time compare for the SHA256 comparison path.
+
+[03-9] PASS | JWT_SECRET Minimum Length and Placeholder Check at Production Boot
+File: backend/core/middleware.py:207–208
+Finding: _validate_production_config() enforces:
+  (a) JWT_SECRET must not equal known placeholder strings (middleware.py:157–161)
+  (b) len(JWT_SECRET) ≥ _MIN_JWT_SECRET_LENGTH (32 chars)
+  Server refuses to start in ENV=production with a weak or missing JWT_SECRET.
+
+[03-10] PASS | HSTS Set with 1-Year Max-Age, includeSubDomains, preload
+File: backend/core/middleware.py:133
+Finding: Strict-Transport-Security: max-age=31536000; includeSubDomains; preload
+  applied via SecurityHeadersMiddleware when ENV=production. Skipped in dev to
+  avoid browser HSTS caching on plain-HTTP local servers.
+
+[03-11] PASS | Firebase App Check Enforced on All API Endpoints
+File: backend/core/middleware.py:27, 351
+Finding: _APP_CHECK_ENFORCEMENT = True and FirebaseAppCheckMiddleware is
+  registered with enforcement_enabled=True. Every /api/* request must carry a
+  valid X-Firebase-AppCheck token. WebSockets, health probes, and docs are
+  correctly exempted (line 33). The app.config.ts registers
+  @react-native-firebase/app-check (line 93) on the client side.
+
+[03-12] PASS | Firebase Config Files Are Not Secrets (Per Ground Rules)
+File: rider-app/google-services.json; rider-app/GoogleService-Info.plist
+Finding: Both files contain standard Firebase project identifiers and API keys.
+  Per Firebase documentation and audit ground rules, these values are public by
+  design — security is enforced by Firebase Security Rules, not key secrecy.
+  No private credentials or service account JSON are present in these files.
+
+[03-13] PASS | No Supabase Service-Role Key or Private Keys in Mobile Bundle
+File: rider-app/app.config.ts; shared/config/
+Finding: EXPO_PUBLIC_ variables in app.config.ts are: BACKEND_URL and
+  GOOGLE_MAPS_API_KEY — both appropriate for client exposure.
+  shared/config/supabase.ts contains only placeholder strings
+  ('YOUR_SUPABASE_URL', 'YOUR_SUPABASE_ANON_KEY'). No service-role key,
+  Firebase service account JSON, or Stripe secret key is in any mobile config.
+
+[03-14] PASS | eas.json Production Profile Uses $VAR References, Not Inline Values
+File: rider-app/eas.json:39–40
+Finding: The production build profile uses "$EXPO_PUBLIC_BACKEND_URL" and
+  "$EXPO_PUBLIC_GOOGLE_MAPS_API_KEY" — resolved from EAS Secrets at build time,
+  not committed inline.
+
+[03-15] PASS | Play Store Service Account Not Committed
+File: rider-app/eas.json:54; filesystem scan
+Finding: eas.json references ./play-service-account.json but the file does not
+  exist in the repository. The file would need to be created locally for a
+  manual submit. See 03-5 for the .gitignore gap.
+
+[03-16] PASS | CI Secrets Stored as GitHub Actions Secrets
+File: .github/workflows/ci.yml:74–75
+Finding: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the CI job are read
+  from ${{ secrets.* }} references, not hardcoded in the workflow YAML.
+  Render, Railway, EAS, Vercel tokens likewise use secrets.
+
+[03-17] PASS | No Stripe Live Keys (sk_live_*) Anywhere in Codebase
+Finding: Full grep for sk_live_ across all source, config, and example files
+  found zero matches. Only the @stripe/stripe-react-native plugin declaration
+  (app.config.ts:75) is present.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 03 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     1 |
+| HIGH            |     0 |
+| MEDIUM          |     2 |
+| LOW             |     2 |
+| PASS            |    12 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    17 |
+
+================================================================================
+TASK 04 — INPUT VALIDATION
+================================================================================
+Scope    : rider-app/app/ forms · backend/routes/ validation layer ·
+           backend/schemas.py · backend/validators.py
+Framework: audit-framework/dimensions/04-input-validation.md
+Checks   : Phone/identity format · monetary bounds · coordinate validation ·
+           scheduled time · fare split phones · saved addresses · Zod client-side
+
+────────────────────────────────────────────────────────────────────────────────
+
+[04-1] HIGH | Backend Phone Schema Accepts Any International Code
+File: backend/schemas.py:17, 21
+Finding: SendOTPRequest and VerifyOTPRequest both declare:
+  phone: str = Field(..., min_length=10, max_length=15, pattern=r'^\+\d+$')
+  The regex `^\+\d+$` accepts any E.164 number (e.g. "+447911123456", "+33612345678").
+  The Canada/US enforcement (+1 followed by exactly 10 digits) exists only in the
+  login.tsx UI layer (handlePhoneChange limits to 10 digits; "+1" prepended at
+  login.tsx:77). A direct POST to /auth/send-otp with a UK or French mobile number
+  bypasses this restriction entirely, allowing OTP provisioning for out-of-market
+  numbers and potentially violating the Canadian-market-only assumption embedded
+  in other flows.
+  Per ground rules: "Phone accepts any country code → HIGH finding."
+Recommendation: Change pattern to r'^\+1\d{10}$' in SendOTPRequest and
+  VerifyOTPRequest; document the +1 constraint in the API schema.
+
+[04-2] MEDIUM | Tip Endpoints Use Raw request.json() — NaN Bypasses All Guards
+File: backend/routes/rides.py:946, 973
+Finding: Two tip-handling endpoints read amount outside of Pydantic:
+  add_tip (line 946):
+    tip_amount = float(data.get("amount", 0))
+    if tip_amount <= 0: ...          # NaN → False, not blocked
+    if tip_amount > 500: ...         # NaN → False, not blocked
+  process_payment (line 973):
+    tip_amount = float(data.get("tip_amount", 0))   # same issue
+  In Python, both `float("nan") <= 0` and `float("nan") > 500` evaluate to
+  False, so NaN passes every guard and is forwarded to payment/database logic.
+  Downstream Decimal() conversion raises an unexpected InvalidOperation exception
+  that may surface as a 500 error or be swallowed depending on the error handler.
+  Additionally, neither endpoint uses a Pydantic model — raw dict access bypasses
+  the full schema-validation pipeline.
+Recommendation: Introduce a Pydantic model (e.g. TipRequest) with
+  `amount: Decimal = Field(..., gt=0, le=500)`. Replace float() parsing with
+  model validation. Add `math.isfinite()` check as defence-in-depth if raw
+  float is retained.
+
+[04-3] MEDIUM | stops Array — No Maximum Count and No Coordinate Validation
+File: backend/schemas.py:273 (CreateRideRequest)
+Finding: `stops: Optional[List[Dict[str, Any]]] = []`
+  The stops list has no max_items constraint. An attacker can send an arbitrarily
+  long stops array, potentially causing O(n) processing on every route-calculation
+  path. Individual stop dicts are Dict[str, Any] — no lat/lng range validators
+  are applied to stop coordinates, unlike pickup/dropoff which have explicit
+  validate_lat / validate_lng validators (lines 290–300). A stop with lat=999,
+  lng=999 is accepted silently.
+Recommendation: Add `max_length=5` to the stops field; add a @validator that
+  checks each stop dict for lat ∈ [−90, 90] and lng ∈ [−180, 180].
+
+[04-4] MEDIUM | scheduled_time — No Past-Timestamp Rejection at Schema Level
+File: backend/schemas.py:275 (CreateRideRequest)
+Finding: `scheduled_time: Optional[datetime] = None`
+  No @validator checks that the provided datetime is in the future. A client
+  can submit a scheduled_time in the past (or a unix epoch date such as
+  "1970-01-01T00:00:00") and the ride is accepted. This causes undefined
+  dispatch behaviour: the scheduler may attempt to match a driver for a ride
+  that was due minutes or years ago.
+Recommendation: Add a validator that raises ValueError if
+  scheduled_time < datetime.utcnow() + timedelta(minutes=5).
+
+[04-5] MEDIUM | Fare Split Phone List — Individual Phone Strings Unconstrained
+File: backend/routes/fare_split.py (CreateFareSplitRequest)
+          rider-app/app/fare-split.tsx (validPhones filter)
+Finding: The backend CreateFareSplitRequest enforces the list count
+  (max_length=5, PASS) but imposes no format constraint on individual phone
+  strings. Any string, including empty string, single character, or arbitrary
+  text, passes as a valid participant phone. The fare-split.tsx client filters
+  phones by `p.trim().length >= 10` — this rejects very short strings but
+  accepts non-numeric text 10+ chars long and does not require a +1 prefix,
+  format, or digit-only constraint.
+Recommendation: Add pattern=r'^\+1\d{10}$' or similar E.164 constraint to
+  each phone string in the list validator; mirror the constraint client-side.
+
+[04-6] MEDIUM | SavedAddressCreate — No Length Limit or HTML Sanitization
+File: backend/schemas.py:150–155 (SavedAddressCreate)
+          backend/routes/addresses.py (create_saved_address handler)
+Finding: SavedAddressCreate.name and SavedAddressCreate.address have no
+  max_length or min_length constraints. More critically, backend/validators.py
+  defines sanitize_string() which strips HTML tags — but addresses.py does not
+  call it on either field before storing. When saved address names are rendered
+  in the UI (map labels, autocomplete lists), an unsanitized string containing
+  HTML/script fragments could cause display corruption. Note: the project uses
+  React Native which does not execute injected HTML in Text components, limiting
+  practical XSS; the primary risk is display corruption and future web dashboard
+  rendering.
+Recommendation: Add max_length=100 to name, max_length=300 to address;
+  apply sanitize_string() in the create_saved_address handler (or via a
+  @validator). Longer term, replace the naive regex stripper with bleach.
+
+[04-7] MEDIUM | WalletPayRequest.amount — No Maximum Cap
+File: backend/routes/wallet.py:89–91
+Finding: `WalletPayRequest: amount: float = Field(..., gt=0)`
+  There is no upper bound. While the balance check prevents spending more than
+  the current balance, there is no server-side ceiling on the requested payment
+  amount. A race condition or client bug could trigger a wallet debit for an
+  implausibly large amount (e.g. $99,999) if the balance ever exceeds that figure.
+  Compare: TopUpRequest correctly has le=500.
+Recommendation: Add `le=500` or a configurable max payment cap consistent with
+  the wallet top-up ceiling.
+
+[04-8] MEDIUM | Wallet Monetary Amounts Use float, Not Decimal
+File: backend/routes/wallet.py:86, 91, 96
+Finding: TopUpRequest.amount and WalletPayRequest.amount are typed as `float`.
+  The wallet handler internally converts via `_d(req.amount)` (Decimal with
+  ROUND_HALF_UP), which mitigates most precision issues. However, the Pydantic
+  model accepts the raw float, so JSON values like 9.99 are subject to IEEE 754
+  representation errors before reaching _d(). For a financial service, monetary
+  inputs should be typed as Decimal at the Pydantic boundary.
+  Contrast: CreateRideRequest fares are Decimal throughout (PASS).
+Recommendation: Change `amount: float` to `amount: Decimal` in both wallet
+  request models; remove the intermediate _d() conversion where no longer needed.
+
+[04-9] LOW | pickup/dropoff Address Minimum Length Too Permissive (3 chars)
+File: backend/schemas.py:282–285 (CreateRideRequest.validate_address)
+Finding: `if len(v) < 3: raise ValueError('Address must be at least 3 characters')`
+  Three characters is too short to represent any meaningful address. A single
+  letter + digit + space passes. This provides no useful data-quality guard and
+  could allow nonsense pickup/dropoff strings into the dispatch system.
+Recommendation: Raise minimum to 10 characters (or better: require the address
+  to be geocoded/resolved server-side before ride creation).
+
+[04-10] RECOMMENDATION | No Zod Runtime Validation on API Responses (Client-Side)
+File: rider-app/store/rideStore.ts, rider-app/hooks/useRiderSocket.ts, all screens
+Finding: Zero Zod imports exist anywhere in rider-app/ or shared/. API responses
+  and WebSocket messages are consumed as `any` (TypeScript) without runtime shape
+  validation. A backend contract change (renamed field, type change, null where
+  not expected) will cause silent misbehaviour rather than a caught parse error.
+  This is the root cause of the broad `: any` typing noted in R-P2-4.
+Recommendation: Add Zod (or equivalent) for at minimum the ride object, driver
+  location update, and auth response shapes. Use safeParse() on WS messages so
+  malformed payloads are discarded before reaching store state.
+
+────────────────────────────────────────────────────────────────────────────────
+PASSES
+────────────────────────────────────────────────────────────────────────────────
+
+[04-11] PASS | +1 Prefix Enforced in Login UI
+File: rider-app/app/login.tsx:60, 66, 77
+Finding: handlePhoneChange strips non-digits and limits to 10 chars (line 60);
+  handleSendCode rejects length < 10 (line 66); "+1" prepended before API call
+  (line 77). Client enforces Canada/US format before reaching backend.
+
+[04-12] PASS | Pickup and Dropoff Lat/Lng Range Validated
+File: backend/schemas.py:290–300 (CreateRideRequest validators)
+Finding: validate_lat enforces [−90, 90]; validate_lng enforces [−180, 180].
+  Both applied to pickup and dropoff coordinates at the Pydantic boundary.
+
+[04-13] PASS | Ride Creation Uses Decimal for All Monetary Fields
+File: backend/schemas.py:226–236 (Ride model); backend/routes/rides.py
+Finding: base_fare, distance_fare, time_fare, booking_fee, platform_fee,
+  tip_amount all typed as Decimal. No float-precision risk in fare calculation.
+
+[04-14] PASS | RideRatingRequest tip_amount Uses Decimal with Non-Negative Guard
+File: backend/schemas.py:262
+Finding: `tip_amount: Decimal = Field(default=Decimal("0.0"), ge=0)`
+  Decimal type and lower bound enforced at schema level for the rating endpoint.
+  (Upper bound absent — partially mitigated by 04-2 note; the add_tip endpoint
+  is the primary concern there.)
+
+[04-15] PASS | Fare Split Participant Count Capped at 5
+File: backend/routes/fare_split.py (CreateFareSplitRequest)
+Finding: `participant_phones: List[str] = Field(..., min_length=1, max_length=5)`
+  Backend hard-caps fare splits at 5 participants; matches UI guard in fare-split.tsx.
+
+[04-16] PASS | Wallet Top-Up Enforces Min and Max Bounds
+File: backend/routes/wallet.py:86
+Finding: `amount: float = Field(..., gt=0, le=500)`
+  Minimum (>0) and maximum ($500) enforced at Pydantic level. See 04-8 for the
+  float-vs-Decimal type concern.
+
+[04-17] PASS | sanitize_string() Utility Exists in validators.py
+File: backend/validators.py
+Finding: sanitize_string() uses re.sub(r"<[^>]*>", "", value) to strip HTML
+  tags. It is already called in corporate_accounts.py. The gap (not called for
+  saved addresses) is tracked in 04-6; the utility itself is available.
+
+[04-18] PASS | validate_ride_location Called at Ride Creation (Null Island Rejected)
+File: backend/routes/rides.py:424, 525
+Finding: validate_ride_location() is called for both pickup and dropoff at ride
+  creation, rejecting (0.0, 0.0) null-island coordinates and other clearly
+  invalid GPS inputs.
+
+[04-19] PASS | Promo Discount Cap Exists for Percentage-Based Promos
+File: backend/routes/promotions.py
+Finding: Percentage promo codes apply max_discount from the promo record.
+  Absolute-amount promos are bounded by the promo's discount_value field.
+  (The server-side vs. client-supplied fare issue is separately tracked in R-P1-8.)
+
+[04-20] PASS | Rating Bounded 1–5 Stars
+File: backend/schemas.py:260 (RideRatingRequest)
+Finding: `rating: int = Field(ge=1, le=5)` — out-of-range ratings rejected
+  at schema level.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 04 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     7 |
+| LOW             |     1 |
+| PASS            |    10 |
+| RECOMMENDATION  |     1 |
+| TOTAL           |    20 |
+
+================================================================================
+TASK 05 — ANDROID & iOS UI/UX QUALITY
+================================================================================
+Scope    : rider-app/app/ (all 36 screens) · rider-app/components/ ·
+           shared/components/
+Framework: audit-framework/dimensions/05-ui-ux-android-ios.md
+Checks   : Safe area insets · BackHandler · KeyboardAvoidingView · touch targets ·
+           map provider · empty states · error states · font scaling
+
+────────────────────────────────────────────────────────────────────────────────
+
+[05-1] HIGH | ride-in-progress.tsx — BackHandler Missing, Exits Active Ride on Android
+File: rider-app/app/ride-in-progress.tsx (no BackHandler anywhere in file)
+Finding: The hardware back button on Android exits an active ride with no
+  confirmation dialog. driver-arriving.tsx (line 192–198) and driver-arrived.tsx
+  (line 67–70) both correctly intercept the hardware back press and show a
+  cancellation-fee dialog. ride-in-progress.tsx has no BackHandler import and no
+  addEventListener call — pressing back takes the rider to the home screen while
+  the ride is live. Note: this is the unresolved portion of R-P0-4 (the other two
+  screens were fixed; ride-in-progress was missed).
+Recommendation: Add BackHandler to ride-in-progress.tsx matching the pattern
+  in driver-arriving.tsx: intercept back, show "End ride early? Full fare applies"
+  confirmation dialog before allowing navigation away.
+
+[05-2] MEDIUM | search-destination.tsx — No KeyboardAvoidingView; Submit Button Hidden
+File: rider-app/app/search-destination.tsx (no KAV import or use)
+Finding: The "Search Ride" primary action button is at the bottom of the screen
+  (line 615–625), below the predictions FlatList. No KeyboardAvoidingView wraps
+  the screen. When the keyboard is open, the button is hidden behind it. While
+  tapping a prediction dismisses the keyboard, users who manually enter both
+  addresses without using autocomplete cannot see or tap "Search Ride" until they
+  manually dismiss the keyboard (or scroll, which is blocked by the FlatList).
+  On iPhone SE (375×667pt) with 2+ stops this issue is more pronounced.
+  Compare: login.tsx, otp.tsx, profile-setup.tsx all correctly use KAV.
+Recommendation: Wrap the screen in KeyboardAvoidingView with
+  behavior={Platform.OS === 'ios' ? 'padding' : 'height'} so the content shifts
+  above the keyboard and the Search Ride button remains visible.
+
+[05-3] MEDIUM | activity.tsx — API Error Shows Misleading "No rides yet" Empty State
+File: rider-app/app/(tabs)/activity.tsx:46–64
+Finding: fetchData() wraps both API calls with individual .catch(() => ({ data: [] }))
+  (lines 48–49). When the network is unavailable or /rides/history returns an
+  error, rides is set to [] and the "No rides yet" empty state (line 204–212) is
+  displayed. A rider who has completed 20 rides will see "Your ride history will
+  appear here once you complete your first trip." after a network error — a false
+  statement that can confuse and erode trust. No error state is differentiated
+  from a genuinely empty list.
+Recommendation: Track API error separately (useState for error); when error is
+  true, show "Could not load rides. Pull to refresh." instead of the empty state.
+  Note: R-P2-6 already calls for this fix.
+
+[05-4] MEDIUM | ride-options.tsx — fetchEstimates Failure Shows Empty List, No Error/Retry
+File: rider-app/app/ride-options.tsx:74, 406–411
+Finding: If fetchEstimates() fails (network error, backend down), estimates stays
+  empty. The isLoading spinner correctly disappears, and allUnavailable is false
+  (because that check requires estimates.length > 0). The vehicle options list
+  renders nothing — no error message, no retry button. The user sees a blank
+  vehicle options area with no indication that anything went wrong.
+Recommendation: Track fetch error state; when estimates.length === 0 && !isLoading
+  && error, show "Could not load fares. Tap to retry." with a retry button.
+  This is the fix called for in R-P2-6.
+
+[05-5] MEDIUM | wallet.tsx — Balance Load Failure Shows $0.00 Instead of Error
+File: rider-app/app/wallet.tsx:119–124
+Finding: The balance card renders `${(wallet?.balance ?? 0).toFixed(2)}` — when
+  fetchWallet() fails and wallet is null, the balance shows "$0.00". The rider
+  cannot distinguish between a genuine zero balance and a load failure. No error
+  indicator or "Balance unavailable" label is shown.
+Recommendation: Show "Balance unavailable" and a retry button when wallet is
+  null after loading completes. This is tracked in R-P2-6.
+
+[05-6] MEDIUM | ride-in-progress.tsx — No Error State When Ride Fails to Load
+File: rider-app/app/ride-in-progress.tsx:306–309
+Finding: When currentRide is null (fetchRide failed or returned null), the screen
+  shows:
+    <View style={styles.mapPlaceholder}>
+      <Text>Loading Map...</Text>
+    </View>
+  This text is shown indefinitely if the API is unavailable — not just during
+  loading. There is no error state, no retry button, and no way for the rider
+  to recover. Compare: driver-arriving.tsx has a proper error state with a retry
+  button (line 295–302).
+Recommendation: Track isLoading and error separately; when error and no
+  currentRide, show an error state with retry. Use the pattern from
+  driver-arriving.tsx (lines 291–303).
+
+[05-7] MEDIUM | driver-arrived.tsx — Blank Screen When currentRide is Null
+File: rider-app/app/driver-arrived.tsx:126–206
+Finding: The full-screen map is rendered as `{currentRide ? (<MapView ...>) : null}`.
+  When currentRide is null (API error or store not hydrated), the map area is
+  completely blank — no loading indicator, no error message, no retry. The
+  bottom sheet still renders (with placeholder addresses) but the rider has no
+  way to know what happened or recover. The header is shown but the core
+  screen content is invisible.
+Recommendation: Add an else clause that renders an error/loading view with a
+  retry button, consistent with the driver-arriving error state.
+
+[05-8] MEDIUM | allowFontScaling Not Set on Text Components (All 36 Screens)
+File: rider-app/app/ (all screens) · shared/components/
+Finding: Zero usages of `allowFontScaling` found in rider-app/app/ or
+  shared/components/. React Native's default is `allowFontScaling={true}`,
+  meaning system accessibility font sizes (up to 200%+ on iOS) automatically
+  scale all Text. Fixed-height containers (status pills, bottom sheet handle,
+  map buttons, driver card rows) will overflow or clip text at large font sizes.
+  Critical safety-relevant labels (ETA, driver name, SOS) are affected.
+  Per D05 severity guide: "allowFontScaling not set — layout breaks at 200% font → MEDIUM."
+Recommendation: Audit fixed-height containers and set
+  `allowFontScaling={false}` on Text inside them. For free-flow content,
+  ensure sufficient flex or minHeight to handle scaled text.
+
+[05-9] MEDIUM | Home Screen Map Zoom Buttons Below 44pt Touch Target (40×40pt)
+File: rider-app/app/(tabs)/index.tsx — mapControlButton style (line 509–513)
+Finding:
+  mapControlButton: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' }
+  The zoom-in (+) and zoom-out (−) buttons are 40×40pt with no `hitSlop`. iOS
+  HIG mandates a minimum 44×44pt touch target. At 40pt these buttons are
+  tappable but unreliable, especially with gloves or cold fingers (relevant for
+  Saskatchewan winters).
+Recommendation: Increase to `width: 44, height: 44` or add
+  `hitSlop={{ top: 2, bottom: 2, left: 2, right: 2 }}`.
+
+────────────────────────────────────────────────────────────────────────────────
+PASSES
+────────────────────────────────────────────────────────────────────────────────
+
+[05-10] PASS | OfflineBanner Uses useSafeAreaInsets — Correctly Above Notch (R-P0-2)
+File: shared/components/OfflineBanner.tsx:36–37, 170–171
+Finding: `const insets = useSafeAreaInsets()` and
+  `container: { top: topInset, ... }` confirmed. The banner is rendered at the
+  safe area top, never behind the notch or Dynamic Island. P0-2 fix verified
+  as already applied.
+
+[05-11] PASS | driver-arriving.tsx BackHandler Blocks Hardware Back with Cancel Dialog
+File: rider-app/app/driver-arriving.tsx:192–198
+Finding: BackHandler.addEventListener('hardwareBackPress', () => { handleBack(); return true; })
+  The handler shows a status-aware dialog (free cancel vs. fee vs. in-progress
+  full fare). Correctly returns true to prevent default back navigation.
+
+[05-12] PASS | driver-arrived.tsx BackHandler Blocks Hardware Back
+File: rider-app/app/driver-arrived.tsx:67–70
+Finding: BackHandler.addEventListener with handleCancelPress shows cancellation
+  fee warning. Returns true to block default navigation. Dep on
+  currentRide?.total_fare keeps the dialog accurate.
+
+[05-13] PASS | ride-completed.tsx BackHandler Blocks Back (Cannot Exit Before Rating)
+File: rider-app/app/ride-completed.tsx:65–68
+Finding: BackHandler.addEventListener returns true unconditionally, preventing
+  the rider from leaving the completion screen without rating and paying.
+
+[05-14] PASS | ride-completed.tsx and payment-confirm.tsx Use KeyboardAvoidingView
+File: rider-app/app/ride-completed.tsx:161; rider-app/app/payment-confirm.tsx:104
+Finding: Both screens use `behavior={Platform.OS === 'ios' ? 'padding' : 'height'}`
+  — submit buttons remain visible when keyboard is open.
+
+[05-15] PASS | login.tsx / otp.tsx / profile-setup.tsx Use KeyboardAvoidingView
+File: rider-app/app/login.tsx:109; otp.tsx:202; profile-setup.tsx:100
+Finding: All three auth screens correctly wrap content in KAV with
+  platform-specific behavior. Phone input and OTP fields remain visible above
+  keyboard.
+
+[05-16] PASS | Platform-Specific Map Provider (Android: Google, iOS: Default)
+File: rider-app/app/driver-arriving.tsx:306; driver-arrived.tsx:21;
+       ride-in-progress.tsx:211; shared/components/AppMap.tsx:9
+Finding: All map screens use `PROVIDER_GOOGLE` on Android and `undefined` on iOS,
+  matching the "Google Maps on Android, Apple Maps on iOS" checklist requirement.
+
+[05-17] PASS | edgeToEdgeEnabled: true in app.config.ts
+File: rider-app/app.config.ts:46
+Finding: Android edge-to-edge display is explicitly enabled.
+
+[05-18] PASS | SafeAreaView edges={['top']} Guards Header Overlays on Map Screens
+File: rider-app/app/driver-arriving.tsx:269; ride-in-progress.tsx:195, 203;
+       driver-arrived.tsx:209; (tabs)/index.tsx:141
+Finding: All map screen header overlays use SafeAreaView with edges={['top']}.
+  Content is never rendered behind the notch, Dynamic Island, or status bar.
+
+[05-19] PASS | activity.tsx Has "No rides yet" Empty State
+File: rider-app/app/(tabs)/activity.tsx:203–212
+Finding: Empty state renders when rides.length === 0 && !loading, with icon,
+  title, and explanatory text. Pull-to-refresh is also wired (RefreshControl).
+
+[05-20] PASS | saved-places.tsx Has "No saved places yet" Empty State
+File: rider-app/app/saved-places.tsx:182–186
+Finding: FlatList ListEmptyComponent renders icon, title, and subtitle with
+  call to action.
+
+[05-21] PASS | notifications.tsx Has "No notifications" Empty State
+File: rider-app/app/notifications.tsx:183–187
+Finding: ListEmptyComponent shows notifications-off icon with "No notifications"
+  and "You're all caught up!" message.
+
+[05-22] PASS | driver-arriving.tsx Has Error State with Retry for Map Load Failure
+File: rider-app/app/driver-arriving.tsx:295–302
+Finding: When error is truthy: shows alert icon, error text, and a "Retry"
+  TouchableOpacity that calls fetchRide(). This is the most complete error state
+  of all ride-flow screens.
+
+────────────────────────────────────────────────────────────────────────────────
+LOW
+────────────────────────────────────────────────────────────────────────────────
+
+[05-23] LOW | Star Rating Buttons at iOS HIG Minimum (44pt) — Below Android 48dp
+File: rider-app/app/ride-completed.tsx — starBtn style (line 514)
+Finding: `starBtn: { padding: 4 }` with 36pt icon = 44×44pt touch target.
+  This meets the iOS HIG 44pt minimum exactly. Android Material Design requires
+  48×48dp minimum. No hitSlop is set to extend the touch area further.
+  On a device running at 3× density (Pixel 7), 44pt ≈ 132dp — well above 48dp,
+  so in practice this passes on Android too. The risk is low but worth a note.
+Recommendation: Add `hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}` for
+  comfortable tapping. Already tracked for accessibility in R-P1-9.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 05 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     8 |
+| LOW             |     1 |
+| PASS            |    13 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    23 |
+
+================================================================================
+[AUDIT IN PROGRESS — TASKS 06–16 PENDING]
+================================================================================

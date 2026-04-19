@@ -384,7 +384,13 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         });
         break;
       case 'ride_cancelled':
-        showDashAlert('Ride Cancelled', 'The rider has cancelled this ride.', 'warning');
+        showDashAlert(
+          'Ride Cancelled',
+          data.is_auto
+            ? 'No driver was available — the ride was automatically cancelled.'
+            : 'The rider has cancelled this ride.',
+          'warning'
+        );
         resetRideState();
         break;
 
@@ -692,6 +698,26 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       } else if (data?.type === 'ride_cancelled') {
         showDashAlert('Ride Cancelled', 'The rider has cancelled this ride.', 'warning');
         resetRideState();
+      } else if (data?.type === 'subscription_expiring') {
+        showDashAlert(
+          'Spinr Pass Expiring',
+          'Your Spinr Pass expires soon — renew to keep earning',
+          'warning',
+          [
+            { text: 'Renew Now', onPress: () => router.push('/driver/subscription' as any) },
+            { text: 'Later', style: 'cancel' },
+          ]
+        );
+      } else if (data?.type === 'document_expiry_warning') {
+        showDashAlert(
+          'Document Expiring',
+          'A document is expiring — tap to update it',
+          'warning',
+          [
+            { text: 'Update Now', onPress: () => router.push('/driver/documents' as any) },
+            { text: 'Later', style: 'cancel' },
+          ]
+        );
       }
     });
 

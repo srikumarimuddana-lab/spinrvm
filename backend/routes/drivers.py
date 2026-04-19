@@ -781,22 +781,34 @@ async def get_driver_daily_earnings(days: int = Query(7), current_user: dict = D
 
 @api_router.get("/earnings/trips")
 async def get_driver_trip_earnings(
-    limit: int = Query(20), offset: int = Query(0), current_user: dict = Depends(get_current_user)
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    days: Optional[int] = Query(default=None, ge=1, le=365),
+    current_user: dict = Depends(get_current_user),
 ):
-    """Get driver's individual trip earnings."""
+    """Get driver's individual trip earnings.
+
+    ``days`` restricts results to the past N days (max 365).  Omit for no
+    date restriction (capped by ``limit``).
+    """
+    if days is not None and days > 365:
+        raise HTTPException(status_code=422, detail="Date range cannot exceed 12 months (365 days)")
+
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
     )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
+    filters: Dict[str, Any] = {"driver_id": driver["id"], "status": "completed"}
+    if days is not None:
+        since = datetime.utcnow() - timedelta(days=days)
+        filters["ride_completed_at"] = {"$gte": since.isoformat()}
+
     try:
         rides = await db_supabase.get_rows(
             "rides",
-            {
-                "driver_id": driver["id"],
-                "status": "completed",
-            },
+            filters,
             order="ride_completed_at",
             desc=True,
             limit=limit,
@@ -806,23 +818,27 @@ async def get_driver_trip_earnings(
         logger.error(f"Error fetching trip earnings: {e}")
         rides = []
 
-    return [
-        {
-            "ride_id": r["id"],
-            "pickup_address": r.get("pickup_address", ""),
-            "dropoff_address": r.get("dropoff_address", ""),
-            "distance_km": r.get("distance_km", 0),
-            "duration_minutes": r.get("duration_minutes", 0),
-            "base_fare": r.get("base_fare", 0),
-            "distance_fare": r.get("distance_fare", 0),
-            "time_fare": r.get("time_fare", 0),
-            "driver_earnings": r.get("driver_earnings", 0),
-            "tip_amount": r.get("tip_amount", 0),
-            "rider_rating": r.get("rider_rating"),
-            "completed_at": r.get("ride_completed_at") if r.get("ride_completed_at") else None,
-        }
-        for r in rides
-    ]
+    return {
+        "trips": [
+            {
+                "ride_id": r["id"],
+                "pickup_address": r.get("pickup_address", ""),
+                "dropoff_address": r.get("dropoff_address", ""),
+                "distance_km": r.get("distance_km", 0),
+                "duration_minutes": r.get("duration_minutes", 0),
+                "base_fare": r.get("base_fare", 0),
+                "distance_fare": r.get("distance_fare", 0),
+                "time_fare": r.get("time_fare", 0),
+                "driver_earnings": r.get("driver_earnings", 0),
+                "tip_amount": r.get("tip_amount", 0),
+                "rider_rating": r.get("rider_rating"),
+                "completed_at": r.get("ride_completed_at") if r.get("ride_completed_at") else None,
+            }
+            for r in rides
+        ],
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @api_router.get("/earnings/weekly")

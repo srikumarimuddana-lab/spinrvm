@@ -18,6 +18,8 @@ import { useDriverStore } from '../../store/driverStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
+const RIDE_CARD_HEIGHT = 228;
+
 type Filter = 'all' | 'completed' | 'cancelled' | 'scheduled';
 type PeriodFilter = 'today' | 'week' | 'month' | 'all';
 
@@ -239,6 +241,7 @@ export default function RidesScreen() {
           data={['today', 'week', 'month', 'all'] as PeriodFilter[]}
           contentContainerStyle={[styles.filterListContent, { marginBottom: 12 }]}
           keyExtractor={(item) => item}
+          removeClippedSubviews={true}
           renderItem={({ item }) => (
             <TouchableOpacity
               style={[styles.filterPill, period === item && styles.filterPillActive]}
@@ -257,6 +260,7 @@ export default function RidesScreen() {
           data={['all', 'completed', 'scheduled', 'cancelled'] as Filter[]}
           contentContainerStyle={styles.filterListContent}
           keyExtractor={(item) => item}
+          removeClippedSubviews={true}
           renderItem={({ item }) => (
             <TouchableOpacity
               style={[styles.filterPill, filter === item && styles.filterPillActive]}
@@ -284,6 +288,15 @@ export default function RidesScreen() {
           keyExtractor={(item) => item.id || Math.random().toString()}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          initialNumToRender={10}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          removeClippedSubviews={true}
+          getItemLayout={(_, index) => ({
+            length: RIDE_CARD_HEIGHT,
+            offset: RIDE_CARD_HEIGHT * index + 8,
+            index,
+          })}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
           }

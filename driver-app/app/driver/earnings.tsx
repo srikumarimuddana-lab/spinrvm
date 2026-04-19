@@ -106,6 +106,7 @@ export default function EarningsScreen() {
         data={['today', 'week', 'month', 'all'] as Period[]}
         contentContainerStyle={styles.filterListContent}
         keyExtractor={(item) => item}
+        removeClippedSubviews={true}
         renderItem={({ item }) => (
           <TouchableOpacity
             style={[styles.filterPill, period === item && styles.filterPillActive]}

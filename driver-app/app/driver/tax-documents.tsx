@@ -168,6 +168,7 @@ export default function TaxDocumentsScreen() {
                         { paddingBottom: insets.bottom + 40 },
                     ]}
                     showsVerticalScrollIndicator={false}
+                    removeClippedSubviews={true}
                     ListHeaderComponent={
                         <View style={styles.infoCard}>
                             <Ionicons name="information-circle" size={20} color={colors.primary} />

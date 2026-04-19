@@ -39,6 +39,100 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         associatedDomains: [
             'applinks:spinr.app',
         ],
+        // Required by Apple for any app using required-reason APIs (enforced from May 2024).
+        // Missing this causes App Store / TestFlight rejection at upload time.
+        privacyManifests: {
+            NSPrivacyTracking: false,
+            NSPrivacyAccessedAPITypes: [
+                // File timestamps — Crashlytics reads .crash file timestamps
+                {
+                    NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryFileTimestamp',
+                    NSPrivacyAccessedAPITypeReasons: [
+                        'C617.1', // third-party crash reporter (Firebase Crashlytics)
+                        '0A2A.1', // timestamps of files the app itself created
+                    ],
+                },
+                // NSUserDefaults — expo-secure-store, React Native bridge, Firebase SDK
+                {
+                    NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryUserDefaults',
+                    NSPrivacyAccessedAPITypeReasons: [
+                        'CA92.1', // first-party app reading its own defaults
+                    ],
+                },
+                // System boot time — Firebase Crashlytics, LogRocket uptime metrics
+                {
+                    NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategorySystemBootTime',
+                    NSPrivacyAccessedAPITypeReasons: [
+                        '35F9.1', // crash reporter / diagnostic tool
+                    ],
+                },
+                // Disk space — writing app-specific cached files; Crashlytics log rotation
+                {
+                    NSPrivacyAccessedAPIType: 'NSPrivacyAccessedAPICategoryDiskSpace',
+                    NSPrivacyAccessedAPITypeReasons: [
+                        'E174.1', // write files to disk for app functionality
+                    ],
+                },
+            ],
+            NSPrivacyCollectedDataTypes: [
+                // Precise GPS location — required for ride dispatch and navigation
+                {
+                    NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypePreciseLocation',
+                    NSPrivacyCollectedDataTypeLinked: true,
+                    NSPrivacyCollectedDataTypeTracking: false,
+                    NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+                },
+                // Name — driver profile display
+                {
+                    NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeName',
+                    NSPrivacyCollectedDataTypeLinked: true,
+                    NSPrivacyCollectedDataTypeTracking: false,
+                    NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+                },
+                // Phone number — OTP authentication
+                {
+                    NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypePhoneNumber',
+                    NSPrivacyCollectedDataTypeLinked: true,
+                    NSPrivacyCollectedDataTypeTracking: false,
+                    NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+                },
+                // Email — driver account / receipts
+                {
+                    NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeEmailAddress',
+                    NSPrivacyCollectedDataTypeLinked: true,
+                    NSPrivacyCollectedDataTypeTracking: false,
+                    NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+                },
+                // Payment info — Stripe Connect payout details (no raw card data stored)
+                {
+                    NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypePaymentInfo',
+                    NSPrivacyCollectedDataTypeLinked: true,
+                    NSPrivacyCollectedDataTypeTracking: false,
+                    NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+                },
+                // Device ID — Firebase instance ID for push notifications
+                {
+                    NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeDeviceID',
+                    NSPrivacyCollectedDataTypeLinked: true,
+                    NSPrivacyCollectedDataTypeTracking: false,
+                    NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAppFunctionality'],
+                },
+                // Crash data — Firebase Crashlytics
+                {
+                    NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypeCrashData',
+                    NSPrivacyCollectedDataTypeLinked: false,
+                    NSPrivacyCollectedDataTypeTracking: false,
+                    NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAnalytics'],
+                },
+                // Performance data — LogRocket session replay metrics
+                {
+                    NSPrivacyCollectedDataType: 'NSPrivacyCollectedDataTypePerformanceData',
+                    NSPrivacyCollectedDataTypeLinked: false,
+                    NSPrivacyCollectedDataTypeTracking: false,
+                    NSPrivacyCollectedDataTypePurposes: ['NSPrivacyCollectedDataTypePurposeAnalytics'],
+                },
+            ],
+        },
     },
     android: {
         adaptiveIcon: {

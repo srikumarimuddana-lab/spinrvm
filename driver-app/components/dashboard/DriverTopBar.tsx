@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, Platform } from 'react-native';
+import { View, Text, StyleSheet, Platform, StatusBar } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
@@ -38,11 +38,12 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
 }) => {
   const { t } = useLanguageStore();
   const insets = useSafeAreaInsets();
+  const statusBarHeight = StatusBar.currentHeight ?? 0;
   const showBanner = isOnline && connectionState && connectionState !== 'connected';
   const isReconnecting = connectionState === 'reconnecting';
 
   return (
-    <View style={[styles.topBarContainer, { top: Math.max(insets.top, 20) }]}>
+    <View style={[styles.topBarContainer, { top: Math.max(insets.top, statusBarHeight) }]}>
       <BlurView intensity={Platform.OS === 'ios' ? 60 : 100} tint="light" style={styles.blurContainer}>
         {showBanner && (
           <View style={[styles.connectionBanner, isReconnecting ? styles.bannerReconnecting : styles.bannerDisconnected]}>

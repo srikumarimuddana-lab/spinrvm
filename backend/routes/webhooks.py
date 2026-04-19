@@ -160,6 +160,33 @@ async def stripe_webhook(request: Request):
                 {"type": "payment_failed", "ride_id": ride_id or ""},
             )
 
+        # Notify the driver so they know the rider's payment failed (13-10)
+        if ride_id:
+            try:
+                ride_row = await db_supabase.get_ride(ride_id)
+                driver_user_id = None
+                if ride_row:
+                    driver_id = ride_row.get("driver_id")
+                    if driver_id:
+                        driver_rows = await db_supabase.get_rows(
+                            "drivers", {"id": driver_id}, limit=1
+                        )
+                        if driver_rows:
+                            driver_user_id = driver_rows[0].get("user_id")
+                if driver_user_id:
+                    await send_push_notification(
+                        driver_user_id,
+                        "Rider payment failed",
+                        "The payment for your last ride could not be collected.",
+                        {
+                            "type": "payment_failed",
+                            "ride_id": ride_id,
+                            "deeplink": "/driver/earnings",
+                        },
+                    )
+            except Exception as notify_err:
+                logger.warning(f"Driver payment-failed notification error: {notify_err}")
+
     elif event_type == "checkout.session.completed":
         # ── Spinr Pass subscription payment confirmed ──────────
         # The /drivers/subscription/subscribe endpoint creates a pending

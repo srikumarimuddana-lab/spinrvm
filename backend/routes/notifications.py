@@ -211,6 +211,21 @@ async def update_preferences(req: PreferencesUpdate, current_user: dict = Depend
 
 # ============ Helper function for sending notifications ============
 
+# Deeplink routes for each notification type (13-3)
+NOTIFICATION_DEEPLINKS: Dict[str, str] = {
+    "ride_offer": "/driver/",
+    "new_ride_offer": "/driver/",
+    "document_expiry": "/driver/documents",
+    "document_expiry_warning": "/driver/documents",
+    "document_expiry_1day": "/driver/documents",
+    "document_expiry_today": "/driver/documents",
+    "payout_processed": "/driver/earnings",
+    "payout_failed": "/driver/earnings",
+    "quest_earned": "/driver/quests",
+    "subscription_expiry": "/driver/subscription",
+    "subscription_expiring": "/driver/subscription",
+}
+
 
 async def create_notification(
     user_id: str,
@@ -220,13 +235,17 @@ async def create_notification(
     data: Optional[Dict[str, Any]] = None,
 ):
     """Create and optionally push a notification to a user."""
+    payload = dict(data or {})
+    # Inject deeplink so the app can navigate on tap (13-3)
+    if "deeplink" not in payload and notification_type in NOTIFICATION_DEEPLINKS:
+        payload["deeplink"] = NOTIFICATION_DEEPLINKS[notification_type]
     notification = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
         "title": title,
         "body": body,
         "type": notification_type,
-        "data": data or {},
+        "data": payload,
         "is_read": False,
         "created_at": datetime.utcnow().isoformat(),
     }

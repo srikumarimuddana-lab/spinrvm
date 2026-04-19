@@ -2,6 +2,7 @@
 
 Runs as a background task every 5 minutes. Finds rides with payment_status
 'failed' or 'requires_action' and retries via Stripe up to 3 times.
+Also resolves driver payouts stuck as 'pending' after transfer failures.
 """
 
 import asyncio
@@ -21,6 +22,54 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 RETRY_INTERVAL_SECONDS = 300  # 5 minutes
+
+
+async def update_payout_status(payout_id: str, status: str) -> None:
+    await db.update_one(
+        "payouts",
+        {"id": payout_id},
+        {"$set": {"status": status, "updated_at": datetime.utcnow().isoformat()}},
+    )
+
+
+async def notify_driver_payout_failed(driver_id: str, payout_id: str) -> None:
+    try:
+        await send_push_notification(
+            driver_id,
+            "Payout failed",
+            "We couldn't process your payout. Please contact support.",
+            data={"type": "payout_failed", "payout_id": payout_id},
+        )
+    except Exception as err:
+        logger.debug(f"Payout failure push notification failed: {err}")
+
+
+async def retry_stuck_payouts() -> None:
+    """Mark driver payouts that exceeded retry attempts as failed (8-5)."""
+    try:
+        stuck_payouts = await db.get_rows(
+            "payouts",
+            {"status": "pending"},
+            limit=50,
+            order="created_at",
+        )
+    except Exception as e:
+        logger.error(f"Payout retry: failed to fetch payouts: {e}")
+        return
+
+    for payout in stuck_payouts:
+        payout_id = payout["id"]
+        driver_id = payout.get("driver_id", "")
+        retry_count = payout.get("retry_count", 0)
+
+        if retry_count >= MAX_RETRIES:
+            await update_payout_status(payout_id, "failed")
+            await notify_driver_payout_failed(driver_id, payout_id)
+            logger.error(f"Payout {payout_id} failed after {MAX_RETRIES} attempts")
+            logger.error(
+                f"ADMIN ALERT: Payout {payout_id} for driver {driver_id} "
+                f"permanently failed after {MAX_RETRIES} retry attempts — manual review required"
+            )
 
 
 async def retry_failed_payments():
@@ -85,18 +134,37 @@ async def retry_failed_payments():
             elif intent.status in ("requires_payment_method", "requires_confirmation"):
                 # Try to confirm again
                 stripe.PaymentIntent.confirm(payment_intent_id, api_key=stripe_secret)
+                attempt = retry_count + 1
                 await db.update_one(
                     "rides",
                     {"id": ride_id},
                     {
                         "$set": {
                             "payment_status": "processing",
-                            "payment_retry_count": retry_count + 1,
+                            "payment_retry_count": attempt,
                             "updated_at": datetime.utcnow().isoformat(),
                         }
                     },
                 )
-                logger.info(f"Payment retry: ride {ride_id} retry #{retry_count + 1} submitted")
+                logger.info(f"Payment retry: ride {ride_id} retry #{attempt} submitted")
+                # Notify the driver so they know a retry is in progress (13-9)
+                driver_id = ride.get("driver_id")
+                if driver_id:
+                    try:
+                        await send_push_notification(
+                            driver_id,
+                            "Payment retry in progress",
+                            f"Payment retry {attempt} of {MAX_RETRIES} in progress",
+                            {
+                                "type": "payment_retry",
+                                "ride_id": ride_id,
+                                "attempt": str(attempt),
+                                "max_retries": str(MAX_RETRIES),
+                                "deeplink": "/driver/earnings",
+                            },
+                        )
+                    except Exception as push_err:
+                        logger.debug(f"Payment retry push to driver failed: {push_err}")
 
             elif intent.status == "canceled":
                 # Cannot retry a cancelled intent
@@ -142,4 +210,8 @@ async def payment_retry_loop():
             await retry_failed_payments()
         except Exception as e:
             logger.error(f"Payment retry loop error: {e}")
+        try:
+            await retry_stuck_payouts()
+        except Exception as e:
+            logger.error(f"Payout retry loop error: {e}")
         await asyncio.sleep(RETRY_INTERVAL_SECONDS)

@@ -1890,9 +1890,10 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    COMPLETE_FROM_STATES = {'trip_in_progress'}
     if ride.get("status") not in COMPLETE_FROM_STATES:
-        raise RideStateError(f"Cannot complete from state: {ride.get('status')}")
+        raise RideStateError(
+            f"Cannot complete ride from state '{ride.get('status')}'; ride must be in_progress"
+        )
 
     # ── Aggregate all GPS breadcrumbs for this ride ──
     # On completion we compute everything once and store it on the ride row.

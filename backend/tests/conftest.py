@@ -13,8 +13,15 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-# Add backend to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add backend dir and project root to path.
+# backend/ on sys.path enables bare imports (e.g. `from routes.drivers import …`).
+# project root on sys.path enables package imports (e.g. `from backend.routes import …`)
+# which are required for mock.patch targets such as "backend.db_supabase.supabase".
+_backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_project_root = os.path.dirname(_backend_dir)
+sys.path.insert(0, _backend_dir)
+if _project_root not in sys.path:
+    sys.path.insert(1, _project_root)
 
 # pytest.ini has an `env = …` block but that's pytest-env syntax and we don't
 # install pytest-env. CI sets these via the job-level env: block; to make
@@ -257,16 +264,38 @@ def mock_rate_limiter() -> MagicMock:
 def patch_external_dependencies(
     mock_supabase_client: MagicMock, mock_firebase_admin: MagicMock, mock_sms_service: MagicMock
 ) -> None:
-    """Automatically patch external dependencies for all tests."""
-    patches = [
-        patch("backend.db_supabase.supabase", mock_supabase_client),
-        patch("backend.core.security.firebase_admin", mock_firebase_admin),
-        patch("backend.sms_service.send_sms", mock_sms_service.send),
-        patch("backend.sms_service.send_otp_sms", mock_sms_service.send_otp),
+    """Automatically patch external dependencies for all tests.
+
+    The patch targets are attempted with both the fully-qualified package path
+    (``backend.*``, required when the project root is on sys.path, e.g. in CI)
+    and the bare module path (required when pytest runs from inside backend/ so
+    that backend/ itself is the sys.path root). importlib is used to import the
+    module before patching so mock.patch can resolve submodule attributes even
+    when the parent package has not yet loaded them via getattr.
+    """
+    import importlib
+
+    _specs = [
+        ("backend.db_supabase", "db_supabase", "supabase", mock_supabase_client),
+        ("backend.core.security", "core.security", "firebase_admin", mock_firebase_admin),
+        ("backend.sms_service", "sms_service", "send_sms", mock_sms_service.send),
+        ("backend.sms_service", "sms_service", "send_otp_sms", mock_sms_service.send_otp),
     ]
 
-    for p in patches:
+    patches = []
+    for qualified_mod, bare_mod, attr, mock_obj in _specs:
+        mod = None
+        for mod_path in (qualified_mod, bare_mod):
+            try:
+                mod = importlib.import_module(mod_path)
+                break
+            except (ImportError, ModuleNotFoundError):
+                continue
+        if mod is None:
+            continue
+        p = patch.object(mod, attr, mock_obj)
         p.start()
+        patches.append(p)
 
     yield
 

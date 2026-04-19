@@ -102,12 +102,20 @@ export default function NotificationsScreen() {
         return `${days}d ago`;
     };
 
+    const handleNotificationPress = (item: Notification) => {
+        markAsRead(item.id);
+        if (item.type === 'document_expiry') router.push('/driver/documents');
+        else if (item.type === 'payout_processed') router.push('/driver/earnings');
+        else if (item.type === 'ride_offer') router.push('/driver/');
+        else if (item.type === 'quest_earned') router.push('/driver/quests');
+    };
+
     const renderNotification = ({ item }: { item: Notification }) => {
         const icon = iconMap[item.type] || iconMap.system;
         return (
             <TouchableOpacity
                 style={[styles.notifCard, !item.is_read && styles.notifUnread]}
-                onPress={() => markAsRead(item.id)}
+                onPress={() => handleNotificationPress(item)}
                 activeOpacity={0.7}
             >
                 <View style={[styles.notifIcon, { backgroundColor: `${icon.color}12` }]}>

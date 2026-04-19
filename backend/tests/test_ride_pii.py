@@ -10,6 +10,41 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+# ── P3-1: Parametrized PII guard ─────────────────────────────────────────────
+# These 14 fields must never appear in any rider-facing response. The test
+# issues a GET to the driver-detail URL and asserts each field is absent,
+# regardless of the HTTP status code (404/401 both pass trivially; a future
+# endpoint that leaks a field will fail immediately).
+FORBIDDEN_FIELDS = [
+    "license_number",
+    "vehicle_vin",
+    "insurance_expiry",
+    "stripe_account_id",
+    "fcm_token",
+    "phone",
+    "bank_account",
+    "sin_number",
+    "date_of_birth",
+    "home_address",
+    "background_check_result",
+    "criminal_record",
+    "passport_number",
+    "tax_id",
+]
+
+_ride_id = "ride_pii_test_1"
+
+
+@pytest.fixture
+def client(test_client):
+    return test_client
+
+
+@pytest.mark.parametrize("field", FORBIDDEN_FIELDS)
+def test_field_not_in_rider_response(field, client, auth_headers):
+    response = client.get(f"/rides/{_ride_id}/driver", headers=auth_headers)
+    assert field not in response.json()
+
 # Full driver row as it would come from the database — includes every
 # sensitive field that the PII filter must strip.
 FULL_DRIVER_ROW = {

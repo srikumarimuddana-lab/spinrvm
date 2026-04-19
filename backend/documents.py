@@ -1,6 +1,7 @@
 import os
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -38,14 +39,20 @@ ALLOWED_MIME_TYPES = {
     "application/pdf",
 }
 
-# Magic byte signatures for content-type verification
+# Magic byte signatures for content-type verification (non-RIFF types only)
 _MAGIC_BYTES = {
     b"\xff\xd8\xff": "image/jpeg",
     b"\x89PNG": "image/png",
     b"GIF8": "image/gif",
-    b"RIFF": "image/webp",  # WebP starts with RIFF
     b"%PDF": "application/pdf",
 }
+
+ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf'}
+
+
+def _is_valid_webp(data: bytes) -> bool:
+    """Return True only if data has both the RIFF container and WEBP marker."""
+    return data[:4] == b'RIFF' and data[8:12] == b'WEBP'
 
 
 def _validate_file_type(content: bytes, declared_type: str) -> None:
@@ -61,6 +68,16 @@ def _validate_file_type(content: bytes, declared_type: str) -> None:
     # Only reject if we can positively identify a DIFFERENT type from the bytes —
     # unknown headers (e.g. HEIC, camera raw) pass through.
     if content:
+        # WebP requires both the RIFF container header AND the WEBP marker at
+        # bytes 8-11; plain RIFF (WAV, AVI, etc.) must not be accepted as WebP.
+        if normalised == "image/webp":
+            if len(content) >= 12 and not _is_valid_webp(content):
+                raise HTTPException(
+                    status_code=400,
+                    detail="File content does not match declared type",
+                )
+            return
+
         header = content[:4]
         detected_type: str | None = None
         for magic, magic_mime in _MAGIC_BYTES.items():
@@ -767,10 +784,18 @@ async def upload_file(
 
         _validate_file_type(content, content_type)
 
+        # Validate file extension against allowlist (12-11)
+        ext = Path(original_filename).suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            raise HTTPException(status_code=400, detail=f"File type {ext} not allowed")
+
         # Preserve extension so Supabase serves the object with a sensible
         # content-type when the browser fetches the public URL.
-        file_ext = os.path.splitext(original_filename)[1]
-        storage_key = f"{uuid.uuid4()}{file_ext}"
+        storage_key = f"{uuid.uuid4()}{ext}"
+        # Generate a safe display name from doc type and timestamp — never
+        # echo the original filename back to the caller (12-8).
+        upload_ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        safe_name = f"document_{upload_ts}{ext}"
 
         try:
             supabase.storage.from_("driver-documents").upload(
@@ -787,7 +812,7 @@ async def upload_file(
             "success": True,
             "url": public_url,
             "file_id": storage_key,
-            "filename": original_filename,
+            "filename": safe_name,
             "content_type": content_type,
             "size": size,
         }

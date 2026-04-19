@@ -583,6 +583,39 @@ def validate_canadian_tax_region(region: str) -> str:
     return region
 
 
+# ============================================================================
+# Vehicle Field Validation
+# ============================================================================
+
+
+def validate_license_plate(plate: str) -> str:
+    """Validate vehicle licence plate: 2–8 uppercase alphanumeric characters."""
+    if not isinstance(plate, str):
+        raise ValueError("Licence plate must be a string")
+    normalized = plate.strip().upper()
+    if not re.match(r'^[A-Z0-9]{2,8}$', normalized):
+        raise ValueError("Licence plate must be 2–8 uppercase alphanumeric characters")
+    return normalized
+
+
+def validate_vin(vin: str) -> str:
+    """Validate VIN: exactly 17 alphanumeric characters (I, O, Q excluded per ISO 3779)."""
+    if not isinstance(vin, str):
+        raise ValueError("VIN must be a string")
+    normalized = vin.strip().upper()
+    if not re.match(r'^[A-HJ-NPR-Z0-9]{17}$', normalized):
+        raise ValueError("VIN must be exactly 17 valid VIN characters (I, O, Q not allowed)")
+    return normalized
+
+
+def validate_vehicle_year(year: int) -> int:
+    """Validate vehicle year: between 1990 and current year + 1."""
+    current_year = datetime.now().year
+    if not (1990 <= year <= current_year + 1):
+        raise ValueError(f"Vehicle year must be between 1990 and {current_year + 1}")
+    return year
+
+
 def validate_email_domain(domain: str) -> str:
     """Normalize and validate an email domain for allowlist use.
 

@@ -24,6 +24,8 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export default function ProfileSetupScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -167,8 +169,7 @@ export default function ProfileSetupScreen() {
   };
 
   const validateEmail = (email: string): boolean => {
-    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return re.test(email);
+    return EMAIL_REGEX.test(email);
   };
 
   const isEmailValid = email.length > 0 && validateEmail(email);

@@ -15,6 +15,11 @@ try:
 except ImportError:
     from supabase_client import supabase  # type: ignore
 
+try:
+    from .utils.error_handling import DatabaseError, DuplicateRecordError  # type: ignore
+except ImportError:
+    from utils.error_handling import DatabaseError, DuplicateRecordError  # type: ignore
+
 from typing import Callable, TypeVar
 
 from loguru import logger
@@ -47,7 +52,10 @@ async def run_sync(func: Callable[[], T]) -> T:
             logger.warning(f"Supabase transient failure ({exc_name}) — retrying once: {exc}")
             await asyncio.sleep(0.25)
             return await loop.run_in_executor(None, func)  # type: ignore
-        raise
+        exc_str_lower = exc_str.lower()
+        if "duplicate key" in exc_str_lower or "unique constraint" in exc_str_lower or "23505" in exc_str:
+            raise DuplicateRecordError(details={"original": exc_str}) from exc
+        raise DatabaseError(details={"original": exc_str}) from exc
 
 
 def _serialize_for_api(data: Any) -> Any:

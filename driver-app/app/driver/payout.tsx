@@ -21,8 +21,9 @@ import { useAuthStore } from '@shared/store/authStore';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 
-export default function PayoutScreen() {
+function PayoutScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const { colors } = useTheme();
@@ -844,4 +845,12 @@ function createStyles(colors: ThemeColors) {
             backgroundColor: colors.border,
         },
     });
+}
+
+export default function PayoutScreenWithBoundary() {
+  return (
+    <ErrorBoundary>
+      <PayoutScreen />
+    </ErrorBoundary>
+  );
 }

@@ -27,7 +27,7 @@ if SUPABASE_URL and SUPABASE_KEY:
             base_url=str(_old.base_url),
             headers=dict(_old.headers),
             http2=False,
-            timeout=_old.timeout,
+            timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
             verify=True,
         )
     except Exception:  # noqa: S110

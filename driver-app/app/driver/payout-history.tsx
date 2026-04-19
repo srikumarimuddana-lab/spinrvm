@@ -4,7 +4,7 @@ import {
     Text,
     StyleSheet,
     FlatList,
-    Platform,
+    TouchableOpacity,
     RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -128,9 +128,13 @@ export default function PayoutHistoryScreen() {
         <View style={styles.container}>
             <LinearGradient colors={[colors.surface, colors.background]} style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <View style={styles.headerRow}>
-                    <View style={styles.backBtn} />
+                    <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+                        <Ionicons name="arrow-back" size={22} color={colors.text} />
+                    </TouchableOpacity>
                     <Text style={styles.headerTitle}>Payout History</Text>
-                    <View style={styles.backBtn} />
+                    <TouchableOpacity onPress={() => router.push('/driver/tax-documents' as any)} style={styles.taxDocsBtn}>
+                        <Ionicons name="document-text-outline" size={22} color={colors.primary} />
+                    </TouchableOpacity>
                 </View>
             </LinearGradient>
 
@@ -165,7 +169,20 @@ function createStyles(colors: ThemeColors) {
             alignItems: 'center',
             justifyContent: 'space-between',
         },
-        backBtn: { width: 40 },
+        backBtn: {
+            width: 40,
+            height: 40,
+            borderRadius: 20,
+            backgroundColor: colors.surfaceLight,
+            justifyContent: 'center',
+            alignItems: 'center',
+        },
+        taxDocsBtn: {
+            width: 40,
+            height: 40,
+            justifyContent: 'center',
+            alignItems: 'center',
+        },
         headerTitle: { color: colors.text, fontSize: 20, fontWeight: '700' },
 
         payoutCard: {

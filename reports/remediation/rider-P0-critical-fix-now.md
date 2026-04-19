@@ -199,6 +199,40 @@ Both fixes should land together.
 
 ---
 
+## R-P0-7 · OTP Brute-Force Lockout Silently Bypassed When Redis Is Down
+
+**Audit finding [02-1 HIGH].** The 4-digit OTP design (approved) relies on three compensating
+controls: rate limit, brute-force lockout, and 5-minute expiry. If Redis is unavailable,
+`_check_otp_lockout()` in `backend/routes/auth.py:75–77` silently returns without blocking — the
+lockout control disappears. With only the SlowAPI rate limit remaining (5/min), the full 10,000
+4-digit OTP keyspace is exhausted in ~33 minutes.
+
+**Why it matters:** Removes a required compensating control for the 4-digit OTP scheme. During
+a Redis outage (planned maintenance, OOM, failover) accounts are fully susceptible to
+brute-force attack.
+
+**File to fix:** `backend/routes/auth.py` — `_check_otp_lockout`
+
+**How to fix:**
+```python
+async def _check_otp_lockout(phone: str) -> None:
+    try:
+        key = f"otp_lockout:{phone}"
+        count = await redis_client.get(key)
+        if count and int(count) >= MAX_OTP_ATTEMPTS:
+            raise HTTPException(429, "Too many attempts — try again later")
+    except HTTPException:
+        raise  # re-raise our own 429
+    except Exception as e:
+        # Redis is down — fail closed: block the attempt
+        logger.error(f"Redis unavailable in OTP lockout check: {e}")
+        raise HTTPException(503, "Authentication service temporarily unavailable")
+```
+
+**Effort:** 1 hour
+
+---
+
 ## Checklist
 
 - [ ] R-P0-1 Emergency SOS alerts user on network failure; offers 911 fallback
@@ -207,3 +241,4 @@ Both fixes should land together.
 - [ ] R-P0-4 Android BackHandler added to driver-arriving, driver-arrived, ride-in-progress
 - [ ] R-P0-5 Double booking blocked: button disable + store guard + backend 409
 - [ ] R-P0-6 Home screen SOS replaced with real SOSButton; 911 fallback when no active ride
+- [ ] R-P0-7 OTP lockout fails closed on Redis error (not silently bypassed)

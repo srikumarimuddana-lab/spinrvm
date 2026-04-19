@@ -75,6 +75,7 @@ export default function DriverDashboard() {
     dashAlert,
     showDashAlert,
     closeDashAlert,
+    wsError,
   } = useDriverDashboard();
 
   // Route polyline coordinates for active rides
@@ -403,6 +404,13 @@ export default function DriverDashboard() {
       {/* Offline indicator — slides in from the top when network drops */}
       <OfflineBanner />
 
+      {/* WS server error banner — non-blocking, clears on next good message */}
+      {wsError && (
+        <View style={styles.wsErrorBanner}>
+          <Text style={styles.wsErrorText} allowFontScaling={false}>{wsError}</Text>
+        </View>
+      )}
+
       {/* Map */}
       <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
       <MapView
@@ -638,6 +646,22 @@ function createStyles(colors: ThemeColors) {
     },
     map: {
       ...StyleSheet.absoluteFillObject,
+    },
+    wsErrorBanner: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      backgroundColor: 'rgba(239,68,68,0.92)',
+      paddingVertical: 6,
+      paddingHorizontal: 16,
+      zIndex: 200,
+      alignItems: 'center',
+    },
+    wsErrorText: {
+      color: '#fff',
+      fontSize: 12,
+      fontWeight: '600',
     },
     markerContainer: {
       alignItems: 'center',

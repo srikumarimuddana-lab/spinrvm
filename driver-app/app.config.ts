@@ -184,7 +184,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         '@react-native-firebase/app',
         '@react-native-firebase/messaging',
         '@react-native-firebase/crashlytics',
-        '@react-native-firebase/app-check',
+        // IMPORTANT: Before enabling App Check enforcement you must manually
+        // register each platform in Firebase Console → App Check → Apps:
+        //   iOS    : register bundle ID using Apple DeviceCheck
+        //   Android: register package name using Play Integrity
+        // Add debug tokens for local builds via Firebase Console → App Check
+        // → Apps → overflow menu → "Manage debug tokens".
+        ['@react-native-firebase/app-check', {
+            ios: { appCheckProviderFactory: 'DeviceCheck' },
+            android: { appCheckProviderFactory: 'playIntegrity' },
+        }],
         // LogRocket native module needs Android minSdk 25.
         ['expo-build-properties', { android: { minSdkVersion: 25 } }],
         '@logrocket/react-native',

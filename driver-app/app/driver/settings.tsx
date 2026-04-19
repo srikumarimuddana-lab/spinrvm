@@ -9,6 +9,7 @@ import {
     Switch,
     Modal,
     Pressable,
+    ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -37,6 +38,7 @@ export default function SettingsScreen() {
     const [showDeleteStep2, setShowDeleteStep2] = useState(false);
     const [deleteInput, setDeleteInput] = useState('');
     const [showEmergencyAlert, setShowEmergencyAlert] = useState(false);
+    const [exportingData, setExportingData] = useState(false);
     const [feedbackAlert, setFeedbackAlert] = useState<{
         visible: boolean; title: string; message?: string;
         variant: 'info' | 'success' | 'danger' | 'warning';
@@ -77,6 +79,28 @@ export default function SettingsScreen() {
     const [navApp, setNavApp] = useState<'default' | 'google' | 'waze'>('default');
 
     const isDarkOn = colorScheme === 'dark';
+
+    const handleExportData = async () => {
+        setExportingData(true);
+        try {
+            await api.post('/drivers/me/export-data');
+            setFeedbackAlert({
+                visible: true,
+                title: 'Export Requested',
+                message: 'Your data export is on its way — check your email.',
+                variant: 'success',
+            });
+        } catch {
+            setFeedbackAlert({
+                visible: true,
+                title: 'Error',
+                message: 'Failed to request data export. Please try again.',
+                variant: 'danger',
+            });
+        } finally {
+            setExportingData(false);
+        }
+    };
 
     const handleDeleteAccount = () => {
         setShowDeleteStep1(true);
@@ -300,6 +324,28 @@ export default function SettingsScreen() {
                             </View>
                             <Text style={styles.settingLabel}>Emergency Contacts</Text>
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                        </TouchableOpacity>
+                    </View>
+                </View>
+
+                {/* Privacy */}
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Privacy</Text>
+                    <View style={styles.card}>
+                        <TouchableOpacity
+                            style={styles.actionRow}
+                            onPress={handleExportData}
+                            disabled={exportingData}
+                        >
+                            <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
+                                <Ionicons name="download-outline" size={18} color={colors.primary} />
+                            </View>
+                            <Text style={styles.settingLabel}>Download My Data</Text>
+                            {exportingData ? (
+                                <ActivityIndicator size="small" color={colors.primary} />
+                            ) : (
+                                <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+                            )}
                         </TouchableOpacity>
                     </View>
                 </View>

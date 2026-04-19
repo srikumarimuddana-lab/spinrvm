@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   ScrollView,
   Platform,
-  Image,
   StatusBar,
   ActivityIndicator,
   Modal,
@@ -14,6 +13,9 @@ import {
   KeyboardAvoidingView,
   Keyboard,
 } from 'react-native';
+import { Image } from 'expo-image';
+
+const BLURHASH_PLACEHOLDER = 'LGF5]+Yk^6#M@-5c,1J5@[or[Q6.';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -210,10 +212,16 @@ export default function ProfileScreen() {
                 <ActivityIndicator size="large" color="#fff" />
               </View>
             ) : user?.profile_image ? (
-              <Image source={{ uri: user.profile_image }} style={[
-                styles.avatar,
-                user.profile_image_status === 'pending_review' && { opacity: 0.7 },
-              ]} />
+              <Image
+                source={{ uri: user.profile_image }}
+                style={[
+                  styles.avatar,
+                  user.profile_image_status === 'pending_review' && { opacity: 0.7 },
+                ]}
+                placeholder={BLURHASH_PLACEHOLDER}
+                contentFit="cover"
+                transition={200}
+              />
             ) : (
               <View style={[styles.avatarPlaceholder, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
                 <Ionicons name="person" size={40} color="#fff" />

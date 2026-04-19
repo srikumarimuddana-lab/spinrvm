@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
 from pydantic import BaseModel
 
@@ -199,6 +199,20 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             if not claimed:
                 # No drivers could be claimed
                 return
+
+        # Guard: re-verify the claimed driver is still online. A driver can
+        # toggle offline between the candidate read and the atomic claim write,
+        # which would leave a ride silently assigned to a driver who will never
+        # see it (ghost assignment).
+        fresh_driver = await db_supabase.get_driver_by_id(selected_driver["id"])
+        if not fresh_driver or not fresh_driver.get("is_online"):
+            logger.warning(
+                f"[DISPATCH] Driver {selected_driver['id']} went offline before "
+                f"claim — releasing and re-dispatching ride {ride_id}"
+            )
+            await db_supabase.set_driver_available(selected_driver["id"], True)
+            await match_driver_to_ride(ride_id)
+            return
 
         # Update ride with selected driver. Do NOT pre-populate
         # driver_accepted_at here — that field is set by the
@@ -793,7 +807,11 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.get("/history")
-async def get_ride_history(current_user: dict = Depends(get_current_user)):
+async def get_ride_history(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    current_user: dict = Depends(get_current_user),
+):
     """Get rider's past rides for the activity tab. Only completed or cancelled rides.
     Any stale rides (searching/assigned but old) are auto-cancelled."""
     all_rides = await db_supabase.get_rows(
@@ -820,10 +838,10 @@ async def get_ride_history(current_user: dict = Depends(get_current_user)):
 
     result.sort(key=lambda r: str(r.get("created_at", "")), reverse=True)
 
-    def serialize_doc(doc):
-        return doc
+    total_count = len(result)
+    rides = result[offset : offset + limit]
 
-    return [serialize_doc(r) for r in result]
+    return {"rides": rides, "total": total_count, "limit": limit, "offset": offset}
 
 
 @api_router.get("/{ride_id}")
@@ -1320,8 +1338,8 @@ async def cancel_ride_rider(ride_id: str, current_user: dict = Depends(get_curre
     if ride.get("status") in ["completed", "cancelled"]:
         raise HTTPException(status_code=400, detail="Ride already completed or cancelled")
 
-    if ride.get("status") in ('driver_arrived', 'trip_in_progress'):
-        raise RideStateError("Cannot cancel after driver has arrived")
+    if ride.get("status") == 'trip_in_progress':
+        raise RideStateError("Cannot cancel after trip has started")
 
     # Calculate cancellation fee based on time since driver accepted
     driver_id = ride.get("driver_id")
@@ -1332,8 +1350,15 @@ async def cancel_ride_rider(ride_id: str, current_user: dict = Depends(get_curre
     charged_admin = 0.0
     charged_driver = 0.0
 
+    # Flat $5.00 fee when the driver has already arrived — overrides the
+    # time-based check below because the driver has made the full trip to
+    # the pickup and the wait is no longer relevant.
+    if ride.get("status") == "driver_arrived" and driver_id:
+        charged_admin = cancellation_fee_admin
+        charged_driver = Decimal("5.00")
+
     # Calculate fee if driver was already assigned and some time passed (e.g. 2 mins)
-    if driver_id and ride.get("driver_accepted_at"):
+    elif driver_id and ride.get("driver_accepted_at"):
         accepted_at = ride["driver_accepted_at"]
         if isinstance(accepted_at, str):
             try:
@@ -1348,12 +1373,44 @@ async def cancel_ride_rider(ride_id: str, current_user: dict = Depends(get_curre
             charged_admin = cancellation_fee_admin
             charged_driver = cancellation_fee_driver
 
-            # Here we would charge the user's stripe card using stripe API for the fee
-            # ... (omitted for brevity, assume successful)
-
-            # Add to driver balance
-            if charged_driver > 0:
-                pass  # We would potentially log a payout or add to pending earnings
+    # Pay out charged_driver to the driver's wallet and push-notify them.
+    if driver_id and charged_driver > 0:
+        try:
+            fee_amount = float(charged_driver)
+            driver_for_fee = await db_supabase.get_driver_by_id(driver_id)
+            driver_user_id = driver_for_fee.get("user_id") if driver_for_fee else None
+            if driver_user_id:
+                wallet = await db.find_one("wallets", {"user_id": driver_user_id})
+                if wallet:
+                    new_balance = round(float(wallet.get("balance", 0)) + fee_amount, 2)
+                    await db.update_one(
+                        "wallets",
+                        {"id": wallet["id"]},
+                        {"$set": {"balance": new_balance, "updated_at": datetime.utcnow().isoformat()}},
+                    )
+                    await db.insert_one(
+                        "wallet_transactions",
+                        {
+                            "id": str(uuid.uuid4()),
+                            "wallet_id": wallet["id"],
+                            "user_id": driver_user_id,
+                            "type": "cancellation_fee",
+                            "amount": fee_amount,
+                            "balance_after": new_balance,
+                            "reference_id": ride_id,
+                            "description": f"Cancellation fee for ride {ride_id}",
+                            "metadata": {"ride_id": ride_id, "status_at_cancel": ride.get("status")},
+                            "created_at": datetime.utcnow().isoformat(),
+                        },
+                    )
+                await send_push_notification(
+                    driver_user_id,
+                    title="Cancellation fee earned",
+                    body=f"${fee_amount:.2f} cancellation fee added to your earnings.",
+                    data={"type": "cancellation_fee_paid", "ride_id": ride_id},
+                )
+        except Exception as fee_err:
+            logger.warning(f"[CANCEL] cancellation fee payout failed for driver {driver_id}: {fee_err}")
 
     await db_supabase.update_ride(
         ride_id,

@@ -95,21 +95,27 @@ app state is now out of sync with the backend.
 **Why it matters:** Rider loses visibility of their active ride. Driver shows up but
 rider can't see them or contact them. Critical UX failure.
 
+**Audit update (D05):** `driver-arriving.tsx` (lines 192–198) and `driver-arrived.tsx`
+(lines 67–70) already have BackHandler implemented correctly with cancel dialogs.
+**Only `ride-in-progress.tsx` is still missing it.**
+
 **File to fix:**
-- `rider-app/app/driver-arriving.tsx`
-- `rider-app/app/driver-arrived.tsx`
-- `rider-app/app/ride-in-progress.tsx`
+- `rider-app/app/ride-in-progress.tsx` ← remaining file (the other two are fixed)
 
 **How to fix:**
 ```tsx
 import { BackHandler } from 'react-native';
 useEffect(() => {
-  const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+  const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+    // Show "End ride early? Full fare applies" confirmation dialog
+    setAlertState({ visible: true, title: 'End ride early?', ... });
+    return true;
+  });
   return () => sub.remove();
-}, []);
+}, [currentRide?.status]);
 ```
 
-**Effort:** 1 hour (3 files)
+**Effort:** 30 minutes (1 file remaining)
 
 ---
 

@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, EmailStr, Field, validator
@@ -81,9 +82,9 @@ class AppSettings(BaseModel):
     driver_matching_algorithm: str = "nearest"
     min_driver_rating: float = 4.0
     search_radius_km: float = 10.0
-    cancellation_fee_admin: float = 0.50  # Admin gets 50 cents
-    cancellation_fee_driver: float = 2.50  # Default driver gets $2.50 (rest of $3 total)
-    platform_fee_percent: float = 0.0  # 0% commission - driver keeps all fare
+    cancellation_fee_admin: Decimal = Decimal("0.50")  # Admin gets 50 cents
+    cancellation_fee_driver: Decimal = Decimal("2.50")  # Default driver gets $2.50 (rest of $3 total)
+    platform_fee_percent: Decimal = Decimal("0.0")  # 0% commission - driver keeps all fare
     # When false, drivers can go online without an active Spinr Pass. Set
     # this to true to enforce the subscription gate at the "go online" call.
     # Defaults to false so the product works out of the box pre-launch.
@@ -100,7 +101,7 @@ class ServiceArea(BaseModel):
     polygon: List[Dict[str, float]]
     is_active: bool = True
     is_airport: bool = False
-    airport_fee: float = 0.0
+    airport_fee: Decimal = Decimal("0.0")
     surge_multiplier: float = 1.0
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -120,11 +121,11 @@ class FareConfig(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     service_area_id: str
     vehicle_type_id: str
-    base_fare: float
-    per_km_rate: float
-    per_minute_rate: float
-    minimum_fare: float
-    booking_fee: float = 2.0
+    base_fare: Decimal
+    per_km_rate: Decimal
+    per_minute_rate: Decimal
+    minimum_fare: Decimal
+    booking_fee: Decimal = Decimal("2.0")
     is_active: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -201,13 +202,13 @@ class Ride(BaseModel):
     corporate_account_id: Optional[str] = None
     distance_km: float
     duration_minutes: int
-    base_fare: float
-    distance_fare: float = 0.0
-    time_fare: float = 0.0
-    booking_fee: float = 2.0
+    base_fare: Decimal
+    distance_fare: Decimal = Decimal("0.0")
+    time_fare: Decimal = Decimal("0.0")
+    booking_fee: Decimal = Decimal("2.0")
     surge_multiplier: float = 1.0
-    total_fare: float
-    tip_amount: float = 0.0
+    total_fare: Decimal
+    tip_amount: Decimal = Decimal("0.0")
     payment_method: str = "card"
     payment_intent_id: Optional[str] = None
     payment_status: str = "pending"
@@ -222,10 +223,10 @@ class Ride(BaseModel):
     ride_completed_at: Optional[datetime] = None
     cancelled_at: Optional[datetime] = None
     # Earnings split
-    driver_earnings: float = 0.0  # Distance fare goes to driver
-    admin_earnings: float = 0.0  # Booking fee goes to admin
-    cancellation_fee_driver: float = 0.0
-    cancellation_fee_admin: float = 0.0
+    driver_earnings: Decimal = Decimal("0.0")  # Distance fare goes to driver
+    admin_earnings: Decimal = Decimal("0.0")  # Booking fee goes to admin
+    cancellation_fee_driver: Decimal = Decimal("0.0")
+    cancellation_fee_admin: Decimal = Decimal("0.0")
     # Rating
     rider_rating: Optional[int] = None
     rider_comment: Optional[str] = None
@@ -236,7 +237,7 @@ class Ride(BaseModel):
 class RideRatingRequest(BaseModel):
     rating: int = Field(ge=1, le=5, description="Rating must be between 1 and 5")
     comment: Optional[str] = None
-    tip_amount: float = Field(default=0.0, ge=0, description="Tip amount must be non-negative")
+    tip_amount: Decimal = Field(default=Decimal("0.0"), ge=0, description="Tip amount must be non-negative")
 
 
 class CreateRideRequest(BaseModel):

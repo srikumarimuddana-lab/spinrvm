@@ -63,9 +63,15 @@ async def check_expiring_documents():
                 else:
                     expiry_dt = expiry_val
 
+                # P2-6: process docs that have already expired OR expire within the
+                # warning window.  Without this gate the original code only processed
+                # future expiries (now < expiry_dt), silently skipping expired docs.
+                if not (expiry_dt < now or expiry_dt < warning_cutoff):
+                    continue
+
                 if expiry_dt <= now:
                     expired_docs.append(label)
-                elif expiry_dt <= warning_cutoff:
+                else:
                     days_left = (expiry_dt - now).days
                     expiring_docs.append({"label": label, "days_left": days_left})
             except (ValueError, TypeError):
@@ -88,9 +94,12 @@ async def check_expiring_documents():
                     else:
                         exp_dt = exp
                     doc_name = doc.get("requirement_name") or doc.get("type") or "Document"
+                    # P2-6: same gate — process expired OR expiring within warning window
+                    if not (exp_dt < now or exp_dt < warning_cutoff):
+                        continue
                     if exp_dt <= now:
                         expired_docs.append(doc_name)
-                    elif exp_dt <= warning_cutoff:
+                    else:
                         days_left = (exp_dt - now).days
                         expiring_docs.append({"label": doc_name, "days_left": days_left})
                 except (ValueError, TypeError):
@@ -98,12 +107,16 @@ async def check_expiring_documents():
         except Exception as e:
             logger.debug(f"Failed to check driver_documents: {e}")
 
-        # Suspend driver and disconnect WS when any document has already expired.
+        # P2-6: Expired documents trigger BOTH suspension AND a push notification.
+        # The suspension runs first so the driver cannot accept new rides even if
+        # the notification fails.  The `continue` at the end bypasses the 24 h
+        # spam-guard below — expiry events must always trigger a new notification.
         if expired_docs:
             doc_list = ", ".join(expired_docs)
             logger.warning(
                 f"Doc expiry: driver {driver['id']} has expired docs ({doc_list}) — suspending"
             )
+            # 1. Suspension
             try:
                 await db.update_one(
                     "drivers",
@@ -113,6 +126,7 @@ async def check_expiring_documents():
             except Exception as e:
                 logger.error(f"Doc expiry: failed to suspend driver {driver['id']}: {e}")
             manager.disconnect(f"driver_{user_id}")
+            # 2. Notification
             try:
                 await send_push_notification(
                     user_id,

@@ -3,13 +3,75 @@ Unit tests for rides API and related functionality.
 Tests cover ride creation, updates, fare calculation, and ride lifecycle.
 """
 
+import asyncio
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from fastapi import HTTPException
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# ── P3-2: Concurrent double-accept guard ─────────────────────────────────────
+
+
+@pytest.fixture
+def ride_id():
+    return "ride_double_accept_001"
+
+
+@pytest.fixture
+def driver_1_headers():
+    return {"Authorization": "Bearer driver1_token"}
+
+
+@pytest.fixture
+def driver_2_headers():
+    return {"Authorization": "Bearer driver2_token"}
+
+
+@pytest.fixture
+def client(test_client):
+    return test_client
+
+
+@pytest.mark.asyncio
+async def test_no_double_accept(client, ride_id, driver_1_headers, driver_2_headers):
+    """Two simultaneous accept calls for the same ride: one wins (200), one is rejected (409)."""
+    from backend.routes import drivers as drv_mod
+
+    driver = {"id": "driver_001", "user_id": "user_driver_001"}
+    ride = {"id": ride_id, "status": "searching", "driver_id": None, "rider_id": "rider_001"}
+    accepted_ride = {**ride, "status": "driver_accepted", "driver_id": "driver_001"}
+
+    guard_ok = MagicMock()
+    guard_ok.modified_count = 1
+    guard_fail = MagicMock()
+    guard_fail.modified_count = 0
+
+    with (
+        patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+        patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=ride)),
+        patch("backend.routes.drivers.db.update_one", AsyncMock(side_effect=[guard_ok, guard_fail])),
+        patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=accepted_ride)),
+        patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
+        patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+    ):
+        # Call the handler directly (same pattern as test_ride_accept_flow.py)
+        # so patches on the module-level DB functions are reliably applied.
+        results = await asyncio.gather(
+            drv_mod.accept_ride(ride_id=ride_id, current_user={"id": "user_driver_001"}),
+            drv_mod.accept_ride(ride_id=ride_id, current_user={"id": "user_driver_002"}),
+            return_exceptions=True,
+        )
+
+    statuses = sorted([
+        200 if isinstance(r, dict) else r.status_code
+        for r in results
+    ])
+    assert statuses == [200, 409]
 
 
 class TestRideCreation:

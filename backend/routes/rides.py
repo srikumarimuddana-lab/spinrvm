@@ -65,6 +65,13 @@ except ImportError:
     from services import corporate_allowance_service, corporate_wallet_service  # type: ignore
     from services.corporate_policy_service import evaluate_policy  # type: ignore
 
+# Lift to module scope so tests can patch backend.routes.rides.charge_ride
+# directly; the handler's card branch references this bound name.
+try:
+    from ..utils.stripe_charge import charge_ride
+except ImportError:
+    from utils.stripe_charge import charge_ride
+
 db = db_supabase  # legacy alias
 dispatch = DispatchService(db_supabase)  # module-level instance for legacy call sites
 

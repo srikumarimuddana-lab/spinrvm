@@ -31,7 +31,14 @@ Replay each on reconnect; clear after 3 failed retries with a user notification.
 and immediately routes to a ride screen. If the ride completed or was cancelled while
 the app was closed, the rider sees a ghost active-ride UI.
 
-**File to fix:** `rider-app/store/rideStore.ts` — `hydrateActiveRide`
+**Audit finding [10-5 MEDIUM] — confirmed with additional detail:** `fetchActiveRide()`
+returns `null` when `/rides/active` returns 404, but it does NOT call `clearRide()` on a
+null result. This means the state populated by `hydrateActiveRide()` is never cleared on a
+404 — the stale ride persists in the store indefinitely until a screen-level status
+transition occurs. The fix must also include clearing hydrated state when fetchActiveRide
+returns null.
+
+**File to fix:** `rider-app/store/rideStore.ts` — `hydrateActiveRide` and `fetchActiveRide`
 
 **How to fix:**
 ```typescript
@@ -833,6 +840,87 @@ would be invisible until a manual E2E run or production failure.
 
 ---
 
+## R-P2-37 · ride-options.tsx Shows Blank Screen on fetchEstimates() Failure — No Retry UI
+
+**Audit finding [10-1 MEDIUM].** When `fetchEstimates()` fails, the store sets
+`isLoading=false` and `error=error.message` but `ride-options.tsx` never reads
+the `error` field. The screen renders an empty ScrollView with no vehicle cards,
+no error message, and no retry button. The "Confirm" footer is hidden because
+`estimates.length === 0`. The rider sees a blank options area with no explanation
+and no recovery path except pressing back and restarting the flow.
+
+**File to fix:** `rider-app/app/ride-options.tsx` (vehicle options render, lines 406–495)
+
+**How to fix:**
+```tsx
+// Add error + clearError to the store destructure:
+const { ..., error, clearError } = useRideStore();
+
+// Clear error on mount:
+useEffect(() => { clearError(); }, []);
+
+// In the vehicle options render area, after the isLoading check:
+{!isLoading && estimates.length === 0 && error && (
+  <View style={styles.errorContainer}>
+    <Ionicons name="cloud-offline-outline" size={40} color={colors.textDim} />
+    <Text style={styles.errorText}>Could not load ride options</Text>
+    <Text style={styles.errorSubtext}>{error}</Text>
+    <TouchableOpacity style={styles.retryButton} onPress={() => fetchEstimates()}>
+      <Text style={styles.retryText}>Retry</Text>
+    </TouchableOpacity>
+  </View>
+)}
+```
+
+**Effort:** 1 hour
+
+---
+
+## R-P2-38 · ErrorBoundary at Root Only — driver-arriving, ride-in-progress, ride-completed Unprotected
+
+**Audit finding [10-7 MEDIUM].** `ErrorBoundary` is applied only at the root layout
+level (`_layout.tsx:329`). No individual active-ride screen wraps its content in
+`ErrorBoundary`. A JavaScript render error inside `driver-arriving.tsx` or
+`ride-in-progress.tsx` (e.g. null driver coordinates causing a map crash) triggers
+the root boundary, which replaces the entire navigation stack with "Something went
+wrong" — the rider loses all navigation context mid-trip.
+
+The root boundary's "Try Again" resets boundary state but re-mounts the full app,
+which may lose in-progress UI state (animation refs, bottom sheet position, etc.).
+
+**Files to fix:**
+- `rider-app/app/driver-arriving.tsx` — wrap screen body in `<ErrorBoundary>`
+- `rider-app/app/ride-in-progress.tsx` — wrap screen body in `<ErrorBoundary>`
+- `rider-app/app/ride-completed.tsx` — wrap screen body in `<ErrorBoundary>`
+- `rider-app/app/driver-arrived.tsx` — wrap screen body in `<ErrorBoundary>`
+
+**How to fix:**
+```tsx
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
+
+export default function DriverArrivingScreen() {
+  return (
+    <ErrorBoundary
+      fallback={
+        <RideScreenErrorFallback
+          title="Map Error"
+          message="The map failed to load. Your ride is still active."
+          onGoHome={() => { clearRide(); router.replace('/(tabs)'); }}
+        />
+      }
+    >
+      {/* existing screen content */}
+    </ErrorBoundary>
+  );
+}
+```
+Create a shared `RideScreenErrorFallback` component that always includes a
+"Go Home" button that calls `clearRide()` + `router.replace('/(tabs)')`.
+
+**Effort:** 2 hours
+
+---
+
 ## Checklist
 
 - [ ] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
@@ -871,3 +959,5 @@ would be invisible until a manual E2E run or production failure.
 - [ ] R-P2-34 Fare-split pay endpoint uses atomic status guard to prevent TOCTOU double-deduction
 - [ ] R-P2-35 Store tests added for scheduled rides, promo, offline queue, fare-split payment confirmation
 - [ ] R-P2-36 useRiderSocket hook test added; component tests for ride panel UI components added
+- [ ] R-P2-37 ride-options.tsx shows error message + retry button when fetchEstimates() fails
+- [ ] R-P2-38 ErrorBoundary added to driver-arriving, ride-in-progress, ride-completed, driver-arrived screens

@@ -2066,5 +2066,228 @@ TASK 09 TALLY
 | TOTAL           |    10 |
 
 ================================================================================
-[AUDIT IN PROGRESS — TASKS 10–16 PENDING]
+TASK 10 — ERROR HANDLING & RESILIENCE (Dimension 10)
+================================================================================
+
+[10-1] MEDIUM | fetchEstimates() Failure: Empty Screen, No Retry UI
+File: rider-app/app/ride-options.tsx:71–84, 406–495
+      rider-app/store/rideStore.ts:222–242
+Finding: When fetchEstimates() fails, rideStore sets isLoading=false and
+  error=error.message (rideStore.ts:240–241) but the ride-options.tsx screen
+  never reads the error field from the store. The render logic is:
+    • isLoading=true  → ActivityIndicator + "Finding best rides..."
+    • isLoading=false, estimates=[]  → empty ScrollView (nothing rendered)
+  The estimates array stays empty, the footer "Confirm" button is hidden
+  (line 498: !isLoading && !allUnavailable && estimates.length > 0), and no
+  error message or retry button is shown. The user sees a blank white panel
+  with no explanation and no way to recover except pressing the back button
+  and trying again from scratch.
+  The error state in the store (rideStore.error) is also never cleared between
+  navigations, so a second fetch on the same mount doesn't reset it either.
+Fix: Read useRideStore().error and, when estimates.length===0 && !isLoading &&
+  error, render an error card with message and a "Retry" button that calls
+  fetchEstimates(). Clear the error on mount with clearError().
+  Effort: 1 hour.
+
+[10-2] PASS | createRide() Network Failure: Button Disables and Error Displays
+File: rider-app/app/payment-confirm.tsx:51–68, 319–336
+Finding: payment-confirm.tsx uses an isSubmitting ref (line 51) as a guard —
+  handleBookRide() returns immediately if isSubmitting.current is true.
+  On success the flow navigates away; on error the catch block (line 63–65)
+  calls setAlertState({ variant: 'danger', ... }) which renders a CustomAlert
+  with the error message. The finally block (line 65–67) clears the ref so the
+  button becomes active again.
+  The book button shows an ActivityIndicator when isLoading=true (line 325) and
+  the button is disabled={isLoading} (line 321). This means: (a) spinner shows
+  during the in-flight request, (b) error message appears after failure, and
+  (c) the button re-enables so the user can retry.
+  One gap: the button uses disabled={isLoading} (store-level flag) rather than
+  disabled={isSubmitting.current}. The isSubmitting ref prevents re-entry but
+  the button is not visually disabled while isSubmitting is true and isLoading
+  is still false (store sets isLoading before the API call, so this is usually
+  fine, but there is a brief window between the guard check and set({isLoading:
+  true}) where a rapid double-tap could slip through). This exact gap was
+  already flagged as R-P2-32. No new finding raised here.
+  Overall verdict: PASS — error is shown and button re-enables after failure.
+
+[10-3] HIGH | triggerEmergency() Swallows Errors — Rider Not Notified on Failure
+File: rider-app/store/rideStore.ts:442–453
+Finding: The triggerEmergency action catches all errors and logs them to the
+  console but deliberately does not notify the user (the comment reads "Even if
+  API fails, we don't throw to not block the local 911 UI flow"). This design
+  choice means a rider whose SOS call fails — due to a network outage, timeout,
+  or backend error — receives no indication that emergency services were NOT
+  notified through the app.
+  The caller in ride-in-progress.tsx (line 111) calls triggerEmergency() then
+  Linking.openURL('tel:911') immediately, so the phone-dial path does work
+  independently. However, the backend emergency path also sends push
+  notifications to emergency contacts, records the GPS coordinates, and flags
+  the ride for live monitoring. All of that silently fails if the API call
+  fails, and the rider is not told that only the direct 911 call went through.
+  This is exactly the pre-populated finding R-P0-1 in rider-P0-critical-fix-
+  now.md — confirming it is still present and unfixed.
+  The correct fix (as documented in R-P0-1) is to add an Alert in the catch
+  block: "Emergency alert may not have reached our team — please call 911
+  directly" with a tel:911 button. The throw should then re-raise so the caller
+  can clean up if needed.
+Fix: Catch block must show Alert.alert() with 911 fallback link. See R-P0-1
+  for the full code prescription.
+  Effort: 1 hour.
+
+[10-4] MEDIUM | Offline Queue Handles Only create_ride — cancel, rate, tip Silently Dropped
+File: rider-app/store/rideStore.ts:280–317
+Finding: syncOfflineRequests() only processes entries where request.type ===
+  'create_ride' (line 294). All other types fall into the implicit else branch
+  and do nothing. This was already identified in R-P2-1.
+  Confirming with code inspection:
+  • cancelRide() (line 373): calls api.post directly — no offline queue write
+  • rateRide() (line 429): calls api.post directly — no offline queue write
+  • completeRide() (line 415): calls api.post directly — no offline queue write
+  • triggerEmergency() (line 442): calls api.post directly — no offline queue write
+  None of these actions write to the 'offline_queue' AsyncStorage key before
+  attempting the API call. They simply fail silently if the request throws
+  (cancelRide sets error, rateRide re-throws but the caller in ride-completed
+  catches and shows an alert, completeRide just sets error). So the queue
+  restriction to create_ride is moot in practice — the other actions never
+  get queued in the first place, making them silently lost when offline.
+  A rider who taps "Cancel", "Rate", or "Submit Tip" while offline gets either
+  an error alert (rateRide) or nothing (cancelRide, completeRide). The queue
+  defined in the spec comment ("Add other request types here as needed") is
+  a dead stub.
+  Severity: MEDIUM (confirmed prior finding R-P2-1; not raising a new P2).
+Fix: See R-P2-1 for the full fix prescription. Effort: 3–4 hours.
+
+[10-5] MEDIUM | Cold-Start Stale Ride: hydrateActiveRide() Does Not Validate Against Backend
+File: rider-app/store/rideStore.ts:584–602
+      rider-app/app/_layout.tsx (cold-start flow)
+Finding: hydrateActiveRide() (rideStore.ts:584) reads the cached ride from
+  AsyncStorage and restores it to the store IF the status is not in
+  TERMINAL_STATUSES (completed, cancelled, failed). It does NOT make an API
+  call to validate that the ride is still active on the backend.
+  If the backend has moved the ride to a terminal state while the app was
+  closed (e.g. ride was cancelled by the driver, or timed out), the stale
+  non-terminal status in AsyncStorage will cause the store to restore the
+  phantom ride. The layout's route-guard or individual screens (driver-arriving,
+  ride-in-progress) then render with stale data until the next poll interval
+  (15 seconds) corrects the state. During that window the rider sees a ghost
+  active-ride screen.
+  There is no 404 handling either: _layout.tsx calls hydrateActiveRide() and
+  fetchActiveRide() in sequence. fetchActiveRide() calls GET /rides/active and
+  will correct the state if the ride is gone — but only after the layout has
+  already rendered. The issue is the initial flash of the wrong screen, not a
+  permanent stuck state.
+  Note: this is confirmed prior finding R-P2-2. However the specific question
+  was: "if /rides/active returns 404, does hydrateActiveRide() clear the stale
+  state and route to home?" — the answer is that hydrateActiveRide() itself
+  never calls the backend, so it cannot detect the 404. The correction only
+  happens in the subsequent fetchActiveRide() call which returns null on any
+  error. That null return does not explicitly clear the store state that was
+  just populated by hydrateActiveRide() — the store retains currentRide until
+  fetchActiveRide()'s success path overwrites it. So a 404 from /rides/active
+  leaves currentRide set to the stale hydrated data indefinitely (there is no
+  "clear if null returned" logic in fetchActiveRide).
+  This is worse than previously documented: the stale ride persists until a
+  screen-level status check transitions the UI.
+Fix: In fetchActiveRide(), when the response indicates no active ride (or on
+  404), explicitly call clearRide() to remove the stale hydrated state.
+  Or add an API call inside hydrateActiveRide() before restoring state. See
+  R-P2-2 for the prescribed fix.
+  Effort: 2 hours.
+
+[10-6] PASS | completeRide() Idempotency: Backend Handles Duplicate Gracefully
+File: rider-app/store/rideStore.ts:415–427
+      backend/routes/rides.py:1893–1902
+Finding: POST /{ride_id}/complete is a read-only endpoint — it fetches and
+  returns the current ride state (line 1901: "Return the current ride state").
+  It does NOT perform a state mutation. The driver-side endpoint performs the
+  actual status transition to 'completed'; the rider /complete path only reads
+  the result. Repeated calls from the rider client will simply return the ride
+  object each time without any side effects, duplicate charges, or conflicts.
+  The client-side completeRide() action (rideStore.ts:415) calls this endpoint
+  then calls AsyncStorage.removeItem(ACTIVE_RIDE_KEY). Multiple calls will each
+  attempt the removeItem (idempotent) and set currentRide to the returned data.
+  No spinner-forever risk: the catch block (line 424) sets isLoading to false
+  via the error path... wait — there is no isLoading toggle in completeRide()
+  at all. The action does not call set({isLoading: true}) before the request or
+  set({isLoading: false}) after. The absence of isLoading management means the
+  book button on payment-confirm (disabled={isLoading}) is not affected here.
+  Idempotency verdict: PASS — the endpoint is safe to call multiple times.
+  Minor note: completeRide() has no isLoading guard, so the calling screen
+  must handle its own button-disable state. This is tracked separately.
+
+[10-7] MEDIUM | ErrorBoundary at Root Only — Major Ride Screens Unprotected
+File: rider-app/app/_layout.tsx:302, 329
+      rider-app/app/driver-arriving.tsx (no ErrorBoundary)
+      rider-app/app/ride-in-progress.tsx (no ErrorBoundary)
+      rider-app/app/ride-completed.tsx (no ErrorBoundary assumed)
+Finding: ErrorBoundary is applied only at the root layout level — once in the
+  loading state shell (line 302) and once wrapping the full Stack in
+  RootLayoutInner (line 329). No individual screen in the ride flow is wrapped
+  in its own ErrorBoundary.
+  The dimension checklist requires: "Every major screen is wrapped in an
+  ErrorBoundary (not just root)." The driver-arriving and ride-in-progress
+  screens are explicitly named in the audit brief.
+  The root ErrorBoundary shows "Something went wrong" with a "Try Again" button
+  (shared/components/ErrorBoundary.tsx:39) — this is a full-screen takeover
+  that replaces the entire navigation stack, not just the failing screen. A
+  JavaScript error thrown inside driver-arriving (e.g. from a failed map
+  render, bad data from WS event, or null driver coordinates) will kill the
+  entire app UI rather than showing a screen-level fallback that preserves
+  navigation to other tabs.
+  During an active ride, this means a single render error on the map puts the
+  rider in a dead app state with no navigation to the home screen. The "Try
+  Again" button resets the ErrorBoundary state which re-mounts the entire app
+  — potentially losing ride context (though the store persists via Zustand).
+  The ErrorBoundary does call captureException() (line 84), so crashes are
+  logged to the error reporting service — that part is PASS.
+Fix: Wrap driver-arriving, ride-in-progress, ride-completed, and driver-arrived
+  individually with <ErrorBoundary> using a screen-specific fallback that shows
+  a retry button AND a "Go Home" navigation option that calls clearRide() so
+  the rider is not trapped in a stale ride state.
+  Effort: 2 hours.
+
+[10-8] PASS | 401 During Active Ride: Silent Token Refresh via Queued Refresh Deduplication
+File: shared/api/client.ts:153–218
+Finding: The API client implements a full token refresh flow with concurrent-
+  request deduplication. On a 401 response, handleApiError() (line 153):
+  1. Checks that _refreshCallback is registered and that a retry function is
+     available (line 155).
+  2. Deduplicates concurrent refresh calls via _refreshPromise (line 159–163)
+     — multiple simultaneous requests that all hit 401 will share a single
+     refresh attempt rather than flooding the auth server.
+  3. If the refresh succeeds, the original request is retried automatically
+     with the new in-memory token (line 165).
+  4. Only if the refresh fails does the client fall through to log the 401 and
+     call authStore.logout() which redirects to /login (lines 194–213).
+  The 15-second request timeout is configured globally (REQUEST_TIMEOUT=15000,
+  line 12), satisfying the dimension requirement.
+  The error log ring buffer is bounded at 50 entries (MAX_ERROR_LOG=50, line
+  139), satisfying the accumulation requirement. Entries store only message,
+  status, method, url, request_id, and exception_type — not full response
+  bodies (line 176–185). PASS on log contents.
+  The 401 retry queue correctly avoids recursion: it checks url !== '/auth/
+  refresh' (line 155) to prevent infinite retry loops on the refresh endpoint
+  itself.
+  4xx errors are not automatically retried — only 401 triggers the one-time
+  refresh+retry pattern. Other 4xx errors throw immediately.
+  Overall: the live ride map screen is not disrupted during a silent token
+  refresh because the client retries the original request transparently. The
+  rider sees no error UI unless the refresh itself fails (which triggers logout
+  — the correct behavior for a fully expired session).
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 10 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     4 |
+| LOW             |     0 |
+| PASS            |     3 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     8 |
+
+================================================================================
+[AUDIT IN PROGRESS — TASKS 11–16 PENDING]
 ================================================================================

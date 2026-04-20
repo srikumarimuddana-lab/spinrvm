@@ -511,7 +511,7 @@ function createStyles(colors: ThemeColors) {
     driverMeta: { fontSize: 12, color: colors.textDim, marginTop: 2 },
     rateLabel: { fontSize: 15, fontWeight: '600', color: colors.text, textAlign: 'center', marginBottom: 12 },
     starsRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 6 },
-    starBtn: { padding: 4 },
+    starBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
     ratingText: { fontSize: 13, color: colors.textDim, textAlign: 'center', marginBottom: 14 },
     commentInput: {
       backgroundColor: colors.surface, borderRadius: 14, padding: 14, fontSize: 14, color: colors.text,
@@ -527,6 +527,7 @@ function createStyles(colors: ThemeColors) {
     tipBtn: {
       paddingHorizontal: 20, paddingVertical: 12, borderRadius: 14,
       backgroundColor: colors.surface, borderWidth: 1.5, borderColor: colors.border,
+      minHeight: 44, justifyContent: 'center', alignItems: 'center',
     },
     tipBtnActive: { backgroundColor: `${colors.primary}15`, borderColor: colors.primary },
     tipBtnText: { fontSize: 16, fontWeight: '700', color: colors.text },

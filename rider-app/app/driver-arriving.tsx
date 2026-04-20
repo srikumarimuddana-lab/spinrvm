@@ -19,6 +19,8 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import BottomSheet, { BottomSheetScrollView, BottomSheetView } from '@gorhom/bottom-sheet';
 import { useRideStore } from '../store/rideStore';
+import { useRiderSocket } from '../hooks/useRiderSocket';
+import { RideStatus } from '../constants/rideStatus';
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -35,6 +37,7 @@ export default function DriverArrivingScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const { currentRide, currentDriver, fetchRide, simulateDriverArrival, triggerEmergency, isLoading, error } = useRideStore();
+  const { wsConnected } = useRiderSocket();
   const [eta, setEta] = useState(4);
   const [mapError, setMapError] = useState<string | null>(null);
   const [driverRouteCoords, setDriverRouteCoords] = useState<any[]>([]);
@@ -76,24 +79,23 @@ export default function DriverArrivingScreen() {
   }, [currentRide?.pickup_lat, currentRide?.pickup_lng, currentDriver?.lat, currentDriver?.lng]);
 
   useEffect(() => {
-    if (rideId) {
-      fetchRide(rideId);
-      // Fallback poll — WS delivers updates in real-time. Fast poll (3s)
-      // while status is still negotiating (searching / driver_assigned)
-      // so a lost `driver_accepted` WS push doesn't leave the rider stuck.
-      const status = currentRide?.status;
-      const fastPoll =
-        !currentRide || status === 'searching' || status === 'driver_assigned';
-      const interval = setInterval(() => fetchRide(rideId), fastPoll ? 3000 : 15000);
-      return () => clearInterval(interval);
-    }
-  }, [rideId, currentRide?.status]);
+    if (!rideId) return;
+    fetchRide(rideId);
+    // Suspend fallback poll when WebSocket is healthy — saves battery/bandwidth.
+    // Keep a fast 3 s poll during driver assignment negotiation in case a
+    // driver_accepted WS push is missed; fall back to 15 s otherwise.
+    if (wsConnected) return;
+    const status = currentRide?.status;
+    const fastPoll =
+      !currentRide || status === RideStatus.SEARCHING || status === RideStatus.DRIVER_ASSIGNED;
+    const interval = setInterval(() => fetchRide(rideId), fastPoll ? 3000 : 15000);
+    return () => clearInterval(interval);
+  }, [rideId, currentRide?.status, wsConnected]);
 
   useEffect(() => {
-    // Check status changes
-    if (currentRide?.status === 'driver_arrived') {
+    if (currentRide?.status === RideStatus.DRIVER_ARRIVED) {
       router.replace({ pathname: '/driver-arrived', params: { rideId } });
-    } else if (currentRide?.status === 'in_progress') {
+    } else if (currentRide?.status === RideStatus.IN_PROGRESS) {
       router.replace({ pathname: '/ride-in-progress', params: { rideId } });
     }
   }, [currentRide?.status]);
@@ -109,7 +111,7 @@ export default function DriverArrivingScreen() {
     const status = currentRide?.status;
     const fare = currentRide?.total_fare || 0;
 
-    if (status === 'in_progress') {
+    if (status === RideStatus.IN_PROGRESS) {
       // Ride started — full fare
       setAlertState({
         visible: true,
@@ -128,7 +130,7 @@ export default function DriverArrivingScreen() {
           },
         ],
       });
-    } else if (status === 'driver_arrived') {
+    } else if (status === RideStatus.DRIVER_ARRIVED) {
       // Driver at pickup — cancellation fee
       setAlertState({
         visible: true,
@@ -147,7 +149,7 @@ export default function DriverArrivingScreen() {
           },
         ],
       });
-    } else if (status === 'driver_assigned' || status === 'driver_accepted') {
+    } else if (status === RideStatus.DRIVER_ASSIGNED || status === RideStatus.DRIVER_ACCEPTED) {
       // Driver on the way — free cancel
       setAlertState({
         visible: true,
@@ -274,8 +276,8 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
 
           <View style={styles.etaPill}>
             <View style={styles.greenDot} />
-            <Text style={styles.etaText}>
-              {currentRide?.status === 'driver_assigned'
+            <Text style={styles.etaText} allowFontScaling={false}>
+              {currentRide?.status === RideStatus.DRIVER_ASSIGNED
                 ? 'Confirming driver…'
                 : `Arriving in ${eta} min`}
             </Text>
@@ -447,9 +449,9 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                 is still deciding. The backend sets status='driver_assigned'
                 on dispatch and flips to 'driver_accepted' only when the
                 driver taps Accept in the driver-app. */}
-            {(currentRide?.status === 'driver_accepted' ||
-              currentRide?.status === 'driver_arrived' ||
-              currentRide?.status === 'in_progress') ? (
+            {(currentRide?.status === RideStatus.DRIVER_ACCEPTED ||
+              currentRide?.status === RideStatus.DRIVER_ARRIVED ||
+              currentRide?.status === RideStatus.IN_PROGRESS) ? (
               <>
                 <View style={styles.driverDetailsCard}>
                   <View style={styles.driverCardHeader}>
@@ -493,7 +495,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                       </View>
                       <View style={styles.vehicleTextContainer}>
                         <Text style={styles.vehicleLabel}>LICENSE PLATE</Text>
-                        <Text style={styles.plateValue}>{currentDriver?.license_plate || 'Pending'}</Text>
+                        <Text style={styles.plateValue} allowFontScaling={false}>{currentDriver?.license_plate || 'Pending'}</Text>
                       </View>
                     </View>
                   </View>
@@ -509,7 +511,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                     <View style={styles.pinBoxes}>
                       {[0, 1, 2, 3].map((i) => (
                         <View key={i} style={styles.pinBox}>
-                          <Text style={styles.pinDigit}>
+                          <Text style={styles.pinDigit} allowFontScaling={false}>
                             {currentRide.pickup_otp?.[i] || '•'}
                           </Text>
                         </View>
@@ -535,8 +537,8 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
             )}
 
             {/* Cancellation policy timer — only shown after driver assigned */}
-            {(currentRide?.status === 'driver_accepted' ||
-              currentRide?.status === 'driver_arrived') && (
+            {(currentRide?.status === RideStatus.DRIVER_ACCEPTED ||
+              currentRide?.status === RideStatus.DRIVER_ARRIVED) && (
               <View style={{ marginBottom: 12 }}>
                 <FreeCancelTimer
                   driverAcceptedAt={(currentRide as any)?.driver_accepted_at}
@@ -595,7 +597,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
             {__DEV__ && (
               <View style={styles.devBar}>
                 <Text style={styles.devLabel}>DEV: {currentRide?.status || 'unknown'}</Text>
-                {(!currentRide?.status || currentRide?.status === 'searching') && (
+                {(!currentRide?.status || currentRide?.status === RideStatus.SEARCHING) && (
                   <TouchableOpacity style={styles.devBtn} onPress={async () => {
                     try { await simulateDriverArrival(); } catch(e) { console.log(e); }
                     if (rideId) fetchRide(rideId);
@@ -603,7 +605,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                     <Text style={styles.devBtnText}>Assign Driver</Text>
                   </TouchableOpacity>
                 )}
-                {(currentRide?.status === 'driver_assigned' || currentRide?.status === 'driver_accepted') && (
+                {(currentRide?.status === RideStatus.DRIVER_ASSIGNED || currentRide?.status === RideStatus.DRIVER_ACCEPTED) && (
                   <TouchableOpacity style={styles.devBtn} onPress={async () => {
                     try {
                                             await api.post(`/drivers/rides/${currentRide.id}/arrive`);
@@ -613,7 +615,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                     <Text style={styles.devBtnText}>Driver Arrive</Text>
                   </TouchableOpacity>
                 )}
-                {currentRide?.status === 'driver_arrived' && (
+                {currentRide?.status === RideStatus.DRIVER_ARRIVED && (
                   <TouchableOpacity style={styles.devBtn} onPress={async () => {
                     try {
                                             await api.post(`/drivers/rides/${currentRide.id}/start`);
@@ -623,7 +625,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                     <Text style={styles.devBtnText}>Start Ride</Text>
                   </TouchableOpacity>
                 )}
-                {currentRide?.status === 'in_progress' && (
+                {currentRide?.status === RideStatus.IN_PROGRESS && (
                   <TouchableOpacity style={styles.devBtn} onPress={async () => {
                     try {
                                             await api.post(`/drivers/rides/${currentRide.id}/complete`);

@@ -342,7 +342,11 @@ export const useRideStore = create<RideState>((set, get) => ({
         rideData.scheduled_time = scheduledTime.toISOString();
       }
 
-      const response = await api.post('/rides', rideData);
+      const userId = useAuthStore.getState().user?.id ?? 'anon';
+      const idempotencyKey = `ride-${userId}-${Date.now()}`;
+      const response = await api.post('/rides', rideData, {
+        headers: { 'Idempotency-Key': idempotencyKey },
+      });
       set({ currentRide: response.data, isLoading: false, scheduledTime: null });
       _persistRide(response.data, null);
       return response.data;

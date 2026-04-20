@@ -1,0 +1,78 @@
+{
+  "common": {
+    "loading": "加载中...",
+    "error": "错误",
+    "success": "成功",
+    "cancel": "取消",
+    "confirm": "确认",
+    "save": "保存",
+    "back": "返回",
+    "done": "完成",
+    "ok": "确定",
+    "close": "关闭",
+    "retry": "重试"
+  },
+  "home": {
+    "whereToGo": "去哪里？",
+    "searchPlaceholder": "搜索目的地",
+    "nearbyDrivers": "附近司机",
+    "scheduledRides": "预约行程"
+  },
+  "ride": {
+    "chooseRide": "选择车型",
+    "confirmRide": "确认行程",
+    "scheduleLater": "预约稍后",
+    "noDrivers": "附近暂无车辆",
+    "findingRides": "正在寻找最优行程...",
+    "shareInvoice": "分享收据",
+    "rideComplete": "行程完成！",
+    "howWasRide": "您的行程体验如何？"
+  },
+  "wallet": {
+    "title": "钱包",
+    "balance": "可用余额",
+    "topUp": "充值",
+    "transfer": "转账",
+    "recentActivity": "近期活动",
+    "noTransactions": "暂无交易记录",
+    "transferTo": "转账给",
+    "recipientPhone": "收款方手机号",
+    "amount": "金额",
+    "transferSuccess": "转账成功"
+  },
+  "loyalty": {
+    "title": "积分奖励",
+    "points": "积分",
+    "tier": "等级",
+    "lifetime": "累计积分",
+    "redeem": "兑换积分",
+    "history": "积分历史",
+    "noHistory": "暂无积分记录",
+    "redeemSuccess": "积分兑换成功"
+  },
+  "support": {
+    "title": "联系客服",
+    "howCanWeHelp": "今天我们能帮您什么？",
+    "submitReport": "提交报告",
+    "faq": "常见问题",
+    "chat": "与AI助手对话",
+    "chatPlaceholder": "请输入您的问题...",
+    "submitting": "提交中..."
+  },
+  "settings": {
+    "title": "设置",
+    "notifications": "通知",
+    "appearance": "外观",
+    "darkMode": "深色模式",
+    "language": "语言",
+    "account": "账户",
+    "about": "关于",
+    "selectLanguage": "选择语言"
+  },
+  "languages": {
+    "en": "英语",
+    "fr": "法语",
+    "es": "西班牙语",
+    "zh": "简体中文"
+  }
+}

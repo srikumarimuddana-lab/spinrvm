@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
-  TextInput, ActivityIndicator, Platform, KeyboardAvoidingView,
+  TextInput, ActivityIndicator, Platform, KeyboardAvoidingView, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -12,6 +12,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
 const TOP_UP_AMOUNTS = [10, 25, 50, 100];
+const PHONE_REGEX = /^\+?1?\s?\(?[0-9]{3}\)?[\s.-]?[0-9]{3}[\s.-]?[0-9]{4}$/;
 
 const TXN_ICONS: Record<string, string> = {
   top_up: 'arrow-down-circle',
@@ -44,13 +45,17 @@ export default function WalletScreen() {
 
   const {
     wallet, transactions, isLoading,
-    fetchWallet, topUp, fetchTransactions, clearError,
+    fetchWallet, topUp, fetchTransactions, transfer, clearError,
   } = useWalletStore();
 
   const [walletError, setWalletError] = useState<string | null>(null);
   const [showTopUp, setShowTopUp] = useState(false);
+  const [showTransfer, setShowTransfer] = useState(false);
   const [customAmount, setCustomAmount] = useState('');
   const [topUpLoading, setTopUpLoading] = useState(false);
+  const [transferPhone, setTransferPhone] = useState('');
+  const [transferAmount, setTransferAmount] = useState('');
+  const [transferLoading, setTransferLoading] = useState(false);
   const [alertState, setAlertState] = useState<{
     visible: boolean; title: string; message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
@@ -79,6 +84,37 @@ export default function WalletScreen() {
       setAlertState({ visible: true, title: 'Top-up Failed', message: err.message || 'Please try again', variant: 'danger' });
     } finally {
       setTopUpLoading(false);
+    }
+  };
+
+  const handleTransfer = async () => {
+    const phone = transferPhone.trim();
+    const amount = parseFloat(transferAmount);
+    if (!PHONE_REGEX.test(phone.replace(/\s/g, ''))) {
+      setAlertState({ visible: true, title: 'Invalid Phone', message: 'Enter a valid Canadian phone number.', variant: 'warning' });
+      return;
+    }
+    if (isNaN(amount) || amount <= 0 || amount > 500) {
+      setAlertState({ visible: true, title: 'Invalid Amount', message: 'Amount must be between $0.01 and $500.', variant: 'warning' });
+      return;
+    }
+    if ((wallet?.balance ?? 0) < amount) {
+      setAlertState({ visible: true, title: 'Insufficient Funds', message: `Your balance ($${(wallet?.balance ?? 0).toFixed(2)}) is less than $${amount.toFixed(2)}.`, variant: 'danger' });
+      return;
+    }
+    setTransferLoading(true);
+    try {
+      await transfer(phone, amount);
+      setShowTransfer(false);
+      setTransferPhone('');
+      setTransferAmount('');
+      setAlertState({ visible: true, title: 'Transfer Sent!', message: `$${amount.toFixed(2)} sent to ${phone}.`, variant: 'success' });
+      fetchWallet();
+      fetchTransactions(30);
+    } catch (err: any) {
+      setAlertState({ visible: true, title: 'Transfer Failed', message: err.message || 'Please try again.', variant: 'danger' });
+    } finally {
+      setTransferLoading(false);
     }
   };
 
@@ -134,6 +170,10 @@ export default function WalletScreen() {
           <TouchableOpacity style={styles.actionButton} onPress={() => setShowTopUp(true)}>
             <Ionicons name="add-circle" size={22} color="#FFF" />
             <Text style={styles.actionText}>Top Up</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionButton} onPress={() => setShowTransfer(true)}>
+            <Ionicons name="send" size={22} color="#FFF" />
+            <Text style={styles.actionText}>Transfer</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.actionButton, styles.actionSecondary]}
@@ -214,6 +254,84 @@ export default function WalletScreen() {
           showsVerticalScrollIndicator={false}
         />
       )}
+
+      {/* Transfer Modal */}
+      <Modal visible={showTransfer} animationType="slide" transparent onRequestClose={() => setShowTransfer(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowTransfer(false)}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+            <TouchableOpacity activeOpacity={1} style={styles.transferSheet}>
+              <View style={styles.sheetHandle} />
+              <Text style={styles.transferTitle}>Send Money</Text>
+              <Text style={styles.transferSub}>Transfer wallet funds to another Spinr user</Text>
+
+              {/* Balance indicator */}
+              <View style={styles.transferBalanceRow}>
+                <Ionicons name="wallet-outline" size={16} color={colors.textDim} />
+                <Text style={styles.transferBalanceText}>
+                  Available: <Text style={{ fontWeight: '700', color: colors.primary }}>${(wallet?.balance ?? 0).toFixed(2)}</Text>
+                </Text>
+              </View>
+
+              <Text style={styles.transferLabel}>Recipient phone number</Text>
+              <TextInput
+                style={styles.transferInput}
+                placeholder="(306) 555-1234"
+                placeholderTextColor={colors.textDim}
+                value={transferPhone}
+                onChangeText={setTransferPhone}
+                keyboardType="phone-pad"
+                maxLength={20}
+              />
+
+              <Text style={styles.transferLabel}>Amount (CAD)</Text>
+              <View style={styles.transferAmountRow}>
+                <Text style={styles.transferDollar}>$</Text>
+                <TextInput
+                  style={[styles.transferInput, { flex: 1 }]}
+                  placeholder="0.00"
+                  placeholderTextColor={colors.textDim}
+                  value={transferAmount}
+                  onChangeText={setTransferAmount}
+                  keyboardType="decimal-pad"
+                  maxLength={7}
+                />
+              </View>
+
+              {/* Quick amounts */}
+              <View style={styles.quickAmounts}>
+                {[5, 10, 20, 50].map(amt => (
+                  <TouchableOpacity
+                    key={amt}
+                    style={[styles.quickAmtBtn, transferAmount === String(amt) && styles.quickAmtBtnActive]}
+                    onPress={() => setTransferAmount(String(amt))}
+                  >
+                    <Text style={[styles.quickAmtText, transferAmount === String(amt) && styles.quickAmtTextActive]}>
+                      ${amt}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <TouchableOpacity
+                style={[styles.transferBtn, transferLoading && styles.transferBtnDisabled]}
+                onPress={handleTransfer}
+                disabled={transferLoading}
+              >
+                {transferLoading ? (
+                  <ActivityIndicator color="#FFF" />
+                ) : (
+                  <>
+                    <Ionicons name="send" size={18} color="#FFF" />
+                    <Text style={styles.transferBtnText}>
+                      {transferAmount ? `Send $${parseFloat(transferAmount || '0').toFixed(2)}` : 'Send'}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </KeyboardAvoidingView>
+        </TouchableOpacity>
+      </Modal>
 
       <CustomAlert
         visible={alertState.visible}
@@ -301,5 +419,41 @@ function createStyles(colors: ThemeColors) {
     emptyContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 60 },
     emptyText: { fontSize: 16, fontWeight: '600', color: colors.textDim, marginTop: 12 },
     emptySubtext: { fontSize: 14, color: '#BBB', marginTop: 4 },
+
+    // Transfer modal
+    modalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.45)' },
+    transferSheet: {
+      backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+      paddingHorizontal: 20, paddingBottom: 40, paddingTop: 12,
+    },
+    sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: 'center', marginBottom: 16 },
+    transferTitle: { fontSize: 20, fontWeight: '800', color: colors.text, marginBottom: 4 },
+    transferSub: { fontSize: 13, color: colors.textDim, marginBottom: 16 },
+    transferBalanceRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 16,
+      backgroundColor: colors.surfaceLight, borderRadius: 10, padding: 10,
+    },
+    transferBalanceText: { fontSize: 14, color: colors.textDim },
+    transferLabel: { fontSize: 13, fontWeight: '600', color: colors.textSecondary, marginBottom: 6, marginTop: 4 },
+    transferInput: {
+      backgroundColor: colors.surfaceLight, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 13,
+      fontSize: 16, color: colors.text, borderWidth: 1, borderColor: colors.border, marginBottom: 12,
+    },
+    transferAmountRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    transferDollar: { fontSize: 22, fontWeight: '700', color: colors.text, paddingBottom: 12 },
+    quickAmounts: { flexDirection: 'row', gap: 8, marginBottom: 20 },
+    quickAmtBtn: {
+      flex: 1, paddingVertical: 10, borderRadius: 10,
+      backgroundColor: colors.surfaceLight, borderWidth: 1, borderColor: colors.border, alignItems: 'center',
+    },
+    quickAmtBtnActive: { backgroundColor: `${colors.primary}15`, borderColor: colors.primary },
+    quickAmtText: { fontSize: 15, fontWeight: '700', color: colors.text },
+    quickAmtTextActive: { color: colors.primary },
+    transferBtn: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+      backgroundColor: colors.primary, borderRadius: 24, paddingVertical: 16,
+    },
+    transferBtnDisabled: { opacity: 0.5 },
+    transferBtnText: { fontSize: 17, fontWeight: '700', color: '#FFF' },
   });
 }

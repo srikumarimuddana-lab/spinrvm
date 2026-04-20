@@ -84,7 +84,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | C5 | Status enums match between rider + driver views | X | `test_status_enums_match_between_rider_and_driver_views` |
 | C6 | Rider + driver endpoint surface both mounted | X | `TestCrossAppHTTPContract` |
 | C7 | Surge multiplier applied consistently across estimate + fare + payout | — | **Gap: add test** |
-| C8 | WebSocket reconnect after network drop preserves ride state | — | **Gap: add test** |
+| C8 | WebSocket reconnect after network drop preserves ride state | ✅ | `useRiderSocket.ts:onopen` + `useDriverDashboard.ts:onmessage` + `test_p1_ws_reconnect.py` |
 | C9 | Backend clock drift: server timestamps authoritative over client | — | **Gap: add test** |
 | C10 | Rider offline during pickup — status transitions deferred, not dropped | — | **Gap: add test** |
 
@@ -158,7 +158,7 @@ Implementation work remaining: P0-4 surge-lock, P0-5 Stripe card charge.
 | P0-5 | Payment failure at complete | ⚠️ **partial** — card path is a stub (`rides.py:1088`) | ✅ wallet pinned + xfail documents card gap | Needs Stripe `PaymentIntent.confirm` + decline handling |
 
 ### P1 — Critical before scale
-6. **WebSocket reconnect with state preservation** — C8
+6. ✅ **WebSocket reconnect with state preservation** — C8 — closed: `useRiderSocket.ts` calls `fetchRide` in `onopen`; `useDriverDashboard.ts` calls `fetchActiveRide` on first auth-confirmed message after reconnect; `backend/tests/test_p1_ws_reconnect.py` pins ConnectionManager round-trip + HTTP recovery; `rider-app/hooks/__tests__/useRiderSocket.reconnect.test.ts` pins client-side reconnect behavior
 7. **Mid-trip restart restore** (rider and driver) — R14, D12
 8. **Role-claim tampering guard** — S3, S8
 9. **Multi-stop E2E** — R11

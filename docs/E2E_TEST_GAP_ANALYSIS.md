@@ -175,7 +175,7 @@ Implementation work remaining: P0-4 surge-lock, P0-5 Stripe card charge.
 
 ### P3 — Native (requires Detox or Maestro)
 18. ✅ **iOS + Android E2E — Maestro flows + manual smoke checklist** — `docs/MOBILE_SMOKE.md` (8-section sign-off checklist, 40 steps); new Maestro flows: `.maestro/rider/03_schedule_and_cancel_ride.yaml`, `.maestro/rider/04_mid_trip_chat.yaml`, `.maestro/rider/05_sos_button.yaml`, `.maestro/driver/07_in_trip_chat.yaml`; existing flows: login (rider+driver), go-online, accept-ride, verify-OTP, complete-trip, payout
-19. Native push-notification flows (FCM/APNs)
+19. ✅ **Native push-notification flows** — FCM/APNs — register_push_token (upsert + iOS/Android separate rows + users.fcm_token mirror), get_notifications + unread_count, mark-read/read-all, preferences (defaults + partial update), create_notification deeplink injection; pinned by `backend/tests/test_p3_push_notifications.py` (15 cases + 2 xfail for live FCM delivery) + `rider-app/hooks/__tests__/useScheduledRideReminder.test.ts` (8 cases: schedule, skip-too-soon, idempotent cancel, storage, FCM handler)
 20. Background location for drivers (iOS policy changes)
 
 ---

@@ -1788,5 +1788,283 @@ TASK 08 TALLY
 | TOTAL           |    16 |
 
 ================================================================================
-[AUDIT IN PROGRESS — TASKS 09–16 PENDING]
+TASK 09 — TEST COVERAGE (Dimension 09)
+================================================================================
+
+[09-1] HIGH | No Jest Coverage Threshold — Coverage Can Drop to Zero Undetected
+File: rider-app/jest.config.js
+Finding: jest.config.js sets `preset: 'jest-expo'` and configures
+  `setupFilesAfterEnv`, `testPathIgnorePatterns`, `transformIgnorePatterns`, and
+  `moduleNameMapper` — but defines no `coverageThreshold` block whatsoever.
+  The CI job runs `yarn test --ci --coverage` (ci.yml:201) and uploads the report
+  to Codecov. However, because no threshold is configured in jest.config.js, Jest
+  will always exit 0 regardless of coverage percentage. A PR that deletes all tests
+  or introduces dead paths would pass CI silently.
+  The D09 framework checklist requires: `lines ≥ 70, functions ≥ 60`.
+  The backend pytest job correctly enforces `--cov-fail-under=70` (ci.yml:79);
+  the rider-app Jest job has no equivalent gate.
+Fix: Add a coverageThreshold block to rider-app/jest.config.js:
+    module.exports = {
+      // ...existing config...
+      coverageThreshold: {
+        global: {
+          lines: 70,
+          functions: 60,
+          branches: 60,
+          statements: 70,
+        },
+      },
+    };
+  Effort: 15 minutes.
+
+[09-2] HIGH | rideStore.test.ts Missing: hydrateActiveRide, Double-Booking Guard,
+             Cancel-After-driver_arrived
+File: rider-app/store/__tests__/rideStore.test.ts
+Finding: The test file covers createRide (happy path + missing-details throw),
+  cancelRide (happy path only), startRide, completeRide, clearRide, and recent-
+  searches helpers. Three critical paths are entirely absent:
+
+  (a) hydrateActiveRide — the cold-start path that reads AsyncStorage, hits
+      /rides/active, and routes the user into an active-ride screen. A bug here
+      (R-P2-2: stale ride not revalidated) is confirmed unfixed and untested.
+
+  (b) Double-booking guard — createRide() has no idempotency key and no
+      optimistic dedup guard (R-P1-21). There is no test that calls createRide()
+      twice concurrently or verifies that a second in-flight call is rejected
+      while the first is pending (isLoading flag).
+
+  (c) cancelRide called when currentRide.status === 'driver_arrived' — the
+      backend guard uses the wrong status string ('trip_in_progress' instead of
+      'in_progress', R-P1-18) and the frontend has no cancel-fee warning. The
+      existing cancelRide test only covers `driver_accepted` status; there is no
+      test asserting that a cancel during driver_arrived shows a fee warning or
+      is blocked client-side.
+
+  Together these gaps mean the two highest-severity store bugs confirmed in this
+  audit (R-P1-18, R-P1-21) have no regression coverage.
+Fix: Add three describe blocks:
+  • 'hydrateActiveRide' — test: valid live ride → sets currentRide; stale ride
+    (backend returns different id) → clears AsyncStorage; network error → clears.
+  • 'createRide double-submit guard' — set isLoading: true, verify createRide()
+    returns without calling api.post a second time.
+  • 'cancelRide from driver_arrived' — mock status 'driver_arrived', verify
+    that the cancellation flow either shows a fee alert or is rejected.
+  Effort: 3–4 hours.
+
+[09-3] HIGH | rideStore.ws.test.ts Missing: driver_timeout Re-dispatch, ride_cancelled
+             Event, WS/Poll Race Condition
+File: rider-app/store/__tests__/rideStore.ws.test.ts
+Finding: The file tests updateDriverLocation, applyRideStatusFromWS, addChatMessage,
+  and clearRide. Three WebSocket scenarios that directly correspond to known bugs
+  or UX gaps are absent:
+
+  (a) driver_timeout re-dispatch — useRiderSocket's driver_timeout case calls
+      fetchRide() (R-P1-16). The store has no test asserting that when
+      applyRideStatusFromWS is called with a driver_timeout payload, the store
+      transitions back to 'searching' status and the currentDriver is cleared.
+
+  (b) ride_cancelled by backend — if the backend cancels a ride (driver no-show,
+      system timeout), a WS message is pushed. There is no test verifying that
+      the ride store handles a 'ride_cancelled' WS event by clearing currentRide
+      and currentDriver.
+
+  (c) WS update vs. poll race — R-P2-29 documents a confirmed race where a stale
+      poll response overwrites a fresher WS driver position. No test exists that
+      calls applyRideStatusFromWS (updating driver lat/lng) followed immediately
+      by a fetchRide() mock returning older coordinates, and asserts that the
+      fresher WS coordinates are preserved.
+
+  The driver_timeout and ride_cancelled gaps are especially high-impact: they are
+  paths that real users hit when a driver fails to respond or cancels, and they
+  have zero automated coverage.
+Fix: Add three test cases:
+  • driver_timeout: applyRideStatusFromWS('ride_1', 'searching') after a
+    driver_timeout WS payload → currentDriver becomes null.
+  • ride_cancelled: applyRideStatusFromWS('ride_1', 'cancelled') → clearRide
+    called (currentRide null, currentDriver null).
+  • Race: updateDriverLocation(51.5, -105.5); then fetchRide() mock returns
+    {lat: 51.0, lng: -105.0}; assert final driver lat === 51.5 (WS wins).
+  Effort: 2–3 hours.
+
+[09-4] HIGH | walletStore.test.ts Missing: Insufficient Balance Rejection,
+             Tip Idempotency
+File: rider-app/store/__tests__/walletStore.test.ts
+Finding: The file tests fetchWallet (success + error), topUp (success + error),
+  fetchTransactions (two variants), createFareSplit (success), cancelFareSplit,
+  and clearError. Two safety-critical wallet paths are absent:
+
+  (a) Insufficient balance rejection — payWithWallet (which maps to POST
+      /wallet/pay) is listed in the file's header comment ("Covers: fetchWallet,
+      topUp, payWithWallet, ...") but no describe('payWithWallet') block exists.
+      In particular, there is no test that mocks a 400 response with "Insufficient
+      wallet balance" and verifies the store surfaces this error to the UI.
+      R-P1-19 (wallet pay does not validate amount vs. fare) is a confirmed HIGH
+      finding; without a payWithWallet test the regression surface is invisible.
+
+  (b) Tip idempotency — rateRide() and addTip() store actions have no tests at
+      all. R-P1-20 (additive tip accumulation) is a confirmed HIGH finding. There
+      is no test verifying that a second tip submission is rejected client-side
+      (e.g., tipSent flag) or that the store surfaces a 409 conflict from the
+      backend correctly.
+
+Fix: Add two describe blocks:
+  • 'payWithWallet' — success path (balance deducted); 400 insufficient balance
+    (error surfaced); 400 amount mismatch (error surfaced).
+  • 'addTip' — first submission succeeds; second submission with same rideId
+    receives 409 → error state set; verify store does not double-count the tip.
+  Effort: 2 hours.
+
+[09-5] MEDIUM | Fare Split, Scheduled Rides, Promo Validation, and Offline Queue
+              Not Covered in Any Unit Test
+File: rider-app/store/__tests__/ (all three files)
+Finding: Four store subsystems have zero unit-test coverage:
+
+  (a) Fare split lifecycle — walletStore.test.ts tests createFareSplit and
+      cancelFareSplit (both happy paths), but there is no test for: participant
+      payment confirmation (pay_split_share), split expiry, or the R-P2-34
+      double-payment TOCTOU race scenario.
+
+  (b) Scheduled rides — rideStore has fetchScheduledRides() and cancelScheduledRide()
+      actions (rideStore.ts:532, 542). Neither is tested. The scheduled-ride state
+      (scheduledRides array) is zeroed in resetStore() but never exercised.
+
+  (c) Promo validation — rideStore has applyPromo() and fetchAvailablePromos()
+      actions. The store's appliedPromo field is zeroed in resetStore() but
+      applyPromo() is not tested. Given R-P1-8 (promo discount not validated
+      server-side) and R-P2-33 (minimum fare bypass), client-side promo handling
+      should have explicit coverage.
+
+  (d) Offline queue — rideStore.ts:280 defines syncOfflineRequests() which replays
+      queued create_ride calls on reconnect. R-P2-1 identifies this as covering
+      only ride creation (cancel, rate, tip are dropped). There is no test for
+      syncOfflineRequests() at all — neither the current narrow behaviour nor the
+      gap.
+
+  Severity: MEDIUM (not individually critical, but collectively mean that four
+  significant store subsystems have zero regression safety net before beta).
+Fix: Add test coverage for:
+  • fetchScheduledRides + cancelScheduledRide (rideStore)
+  • applyPromo / fetchAvailablePromos (rideStore)
+  • syncOfflineRequests — verify pending create_ride is replayed; verify that
+    cancel/rate/tip queue items are noted as not-replayed (or add the replay).
+  • fareSplit payment confirmation path (walletStore)
+  Effort: 3–4 hours.
+
+[09-6] HIGH | E2E ride-booking.spec.ts Does Not Cover: Rating, Tip, or Explicit
+             Screen Assertions
+File: rider-app/e2e/ride-booking.spec.ts
+Finding: The spec walks five ride-status stages (searching → driver_assigned →
+  driver_arrived → in_progress → completed) by seeding localStorage with auth
+  and mocking /rides/active. However:
+
+  (a) Rating and tip steps are absent — the D09 checklist requires the E2E flow
+      to cover: book → driver arriving → in-progress → completed → rate → tip.
+      After 'completed' the test ends. Neither rate-ride nor the rating section
+      inside ride-completed.tsx is exercised in E2E.
+
+  (b) The assertion after each stage is only `expect(page.locator('body'))
+      .toBeVisible()` — this confirms the page has not crashed but not that the
+      correct screen or UI elements are rendered. No `assertVisible` equivalent
+      (getByRole, getByText, getByTestId) is used in the ride-booking spec.
+
+  (c) The test seeds auth and mocks backend once per stage iteration (five
+      `seedAuthedSession` + `mockBackend` calls in a loop with page.goto('/')
+      per iteration) rather than simulating a single ride session through all
+      transitions. This means the test never validates that state transitions
+      between screens work correctly in a continuous session.
+
+  Severity: HIGH per D09 framework ("E2E covers only login — no ride flow" maps
+  closest, since the flow is present but shallow: no UI assertions and no
+  rating/tip step).
+Fix:
+  • Add a sixth stage for 'rate' — mock /rides/{id}/rate endpoint, assert
+    that a rating UI element is visible (e.g., page.getByTestId('star-rating')).
+  • Add a seventh stage for 'tip' — verify tip button is visible and tappable.
+  • Replace bare `body.toBeVisible()` with at least one screen-specific
+    assertion per stage (e.g., getByText('Finding your driver') for searching,
+    getByText("Your driver is on the way") for driver_assigned, etc.).
+  • Convert the loop-per-stage pattern into a sequential single-session test that
+    uses mockBackend({ rideStatusSequence: stages }) to simulate real transitions.
+  Effort: 4–6 hours.
+
+[09-7] PASS | All Unit Test Files Mock the API Client — No Real HTTP Calls
+File: rider-app/store/__tests__/rideStore.test.ts,
+      rider-app/store/__tests__/rideStore.ws.test.ts,
+      rider-app/store/__tests__/walletStore.test.ts
+Finding: All three unit-test files open with `jest.mock('@shared/api/client', ...)`
+  before importing any store. The mock replaces the shared Axios client with
+  Jest spy functions (post, get, put, patch, delete). No real HTTP calls are
+  possible in Jest context. AsyncStorage is similarly mocked in rideStore tests.
+  Supabase and Firebase are not directly imported by the store test files; no
+  mock is needed. No test file references a live backend URL or reads
+  EXPO_PUBLIC_BACKEND_URL at test time.
+
+[09-8] PASS | E2E Tests Use Playwright page.route() to Intercept All Backend Calls
+File: rider-app/e2e/fixtures.ts, rider-app/playwright.config.ts
+Finding: mockBackend() registers a page.route('**/api/v1/**', ...) handler that
+  intercepts every backend request and returns canned JSON. Google Maps and Firebase
+  are stubbed via page.addInitScript before any app script runs. The Playwright
+  config confirms no external base URL is mandated (defaults to localhost:3002).
+  The route handler returns a default `{}` for any unrecognised path, preventing
+  network leakage. CI retries (2 retries on failures) are configured but flaky
+  tests are not silently suppressed — they are retried and reported in the GitHub
+  Actions reporter.
+
+[09-9] MEDIUM | No Component Tests Exist — Zero Coverage for Critical UI Components
+File: rider-app/ (no __tests__ directory outside store/)
+Finding: The D09 checklist requires component tests for critical UI:
+  RideOfferPanel, ActiveRidePanel, TripCompletedPanel. Searching the repository
+  finds only three test files, all in rider-app/store/__tests__/. No component-
+  level test files exist anywhere in rider-app/app/, rider-app/components/, or
+  rider-app/hooks/. The useRiderSocket hook — which dispatches every WebSocket
+  event — is not tested at the hook level. This means a regression in how a
+  WebSocket event is translated into a store dispatch would be invisible until
+  a manual E2E run or production failure.
+Fix: Add @testing-library/react-native component tests for at minimum:
+  • RideStatusPanel / ride-searching state (renders "Finding your driver" text)
+  • ActiveRidePanel (renders driver name, ETA, cancel button)
+  • TripCompletedPanel (renders fare, rating stars, tip buttons)
+  • useRiderSocket hook test using a fake WebSocket — verify that
+    driver_location_update, driver_timeout, ride_cancelled each correctly
+    dispatch to the store.
+  Effort: 1–2 days.
+
+[09-10] MEDIUM | No Snapshot Tests — But Also No Explicit Rationale to Exclude Them
+File: rider-app/jest.config.js, rider-app/store/__tests__/
+Finding: The D09 checklist flags "snapshot tests without a clear rationale" as
+  a concern (snapshots rot quickly). The rider-app has zero snapshot tests, which
+  avoids the snapshot-rot problem but also means there is no golden-render check
+  for any screen. This is not a bug, but combined with the absence of component
+  tests ([09-9]) it means no automated check exists for any rendered UI state.
+  Note: this finding is MEDIUM only in conjunction with [09-9] — if component
+  tests are added, snapshot-free is perfectly acceptable.
+
+[09-11] LOW | CI Does Not Run E2E Tests in the Rider-App Test Job
+File: .github/workflows/ci.yml:199–209
+Finding: The `rider-app-test` CI job runs `yarn test --ci --coverage` (Jest only).
+  E2E Playwright tests (`yarn test:e2e`) are run in a separate job
+  (`playwright-smoke`, ci.yml:384) that depends on `rider-app-test` and uses an
+  `expo export` build. E2E tests are therefore not blocking — they run in a
+  downstream job and a Playwright failure does not prevent the `rider-app-test`
+  job from marking green. Additionally, ci.yml:2 (`retries: process.env.CI ? 2 : 0`
+  in playwright.config.ts) means Playwright retries twice before reporting failure,
+  which can mask genuine flakiness in the smoke suite.
+  Severity: LOW (E2E do run on every PR; this is a depth/visibility gap, not a
+  missing gate).
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 09 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     4 |
+| MEDIUM          |     3 |
+| LOW             |     1 |
+| PASS            |     2 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    10 |
+
+================================================================================
+[AUDIT IN PROGRESS — TASKS 10–16 PENDING]
 ================================================================================

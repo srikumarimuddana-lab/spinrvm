@@ -87,6 +87,7 @@ async def charge_ride(
     total_amount: float,
     payment_method_id: Optional[str] = None,
     stripe_customer_id: Optional[str] = None,
+    payment_intent_id: Optional[str] = None,
 ) -> ChargeOutcome:
     """Charge the rider's card for a completed ride.
 
@@ -103,6 +104,9 @@ async def charge_ride(
         default attached payment method.
     stripe_customer_id
         Stripe cus_xxx. Required for off-session charges against a saved card.
+    payment_intent_id
+        If the ride already has a PaymentIntent (e.g. from a prior
+        requires_action response), confirm it rather than creating a new one.
 
     Returns
     -------
@@ -169,11 +173,19 @@ async def charge_ride(
     }
 
     try:
-        intent = stripe.PaymentIntent.create(
-            **params,
-            api_key=stripe_secret,
-            idempotency_key=idempotency_key,
-        )
+        if payment_intent_id:
+            # Confirm an already-created PaymentIntent (e.g. retry after 3DS
+            # requires_action, or a PI created at booking time).
+            intent = stripe.PaymentIntent.confirm(
+                payment_intent_id,
+                api_key=stripe_secret,
+            )
+        else:
+            intent = stripe.PaymentIntent.create(
+                **params,
+                api_key=stripe_secret,
+                idempotency_key=idempotency_key,
+            )
     except _StripeCardError as e:
         # Card explicitly declined (insufficient_funds, card_declined, etc.).
         # This is the "surface retry UX to the rider" case.

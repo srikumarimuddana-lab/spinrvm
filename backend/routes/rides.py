@@ -1348,6 +1348,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             total_amount=float(total_charge),
             payment_method_id=payment_method_id,
             stripe_customer_id=stripe_customer_id,
+            payment_intent_id=ride.get("payment_intent_id"),
         )
 
         if outcome.status == "succeeded":

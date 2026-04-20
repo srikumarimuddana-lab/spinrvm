@@ -1834,3 +1834,43 @@ async def get_corporate_policy(company_id: str) -> Optional[Dict[str, Any]]:
         )
         return _single_row_from_res(res)
     return await run_sync(_fn)
+
+
+async def upsert_corporate_policy(
+    company_id: str, patch: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Insert or update the company's policy row.
+
+    The table has a UNIQUE constraint on company_id so we upsert on that
+    column.  Callers pass only the fields they want to change; for a full
+    replace they pass the complete desired state.
+    """
+    existing = await get_corporate_policy(company_id)
+    now = datetime.utcnow().isoformat()
+    if existing:
+        update_patch = {**patch, "updated_at": now}
+
+        def _upd():
+            res = (
+                supabase.table("corporate_policies")
+                .update(update_patch)
+                .eq("id", existing["id"])
+                .execute()
+            )
+            return _single_row_from_res(res) or {**existing, **update_patch}
+
+        return await run_sync(_upd) or existing
+
+    insert_doc = {
+        "company_id": company_id,
+        "active": True,
+        "created_at": now,
+        "updated_at": now,
+        **patch,
+    }
+
+    def _ins():
+        res = supabase.table("corporate_policies").insert(insert_doc).execute()
+        return _single_row_from_res(res) or insert_doc
+
+    return await run_sync(_ins)

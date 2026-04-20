@@ -674,6 +674,84 @@ without field filtering (e.g. ride history, accept/arrive/complete responses).
 
 ---
 
+## R-P1-29 · Notification Tap from Killed State Discards Payload — No Deep Link to Ride Screen
+
+**Audit finding [13-4 HIGH].** Neither `_layout.tsx` nor `index.tsx` calls
+`messaging().getInitialNotification()` (Firebase) or
+`Notifications.getLastNotificationResponseAsync()` (Expo Notifications).
+When the app is killed and the rider taps a push notification, the app launches
+to the splash / home screen with the notification payload silently discarded.
+The rider is not routed to the correct ride screen (driver-arrived, ride-in-progress, etc.).
+
+**File to fix:** `rider-app/app/_layout.tsx` or `rider-app/app/index.tsx`
+
+**How to fix:**
+```typescript
+// In _layout.tsx useEffect (after isAuthInitialized), add:
+messaging().getInitialNotification().then(msg => {
+  if (!msg?.data) return;
+  routeFromNotificationData(msg.data, router);
+});
+// Also check Expo Notifications path:
+Notifications.getLastNotificationResponseAsync().then(response => {
+  if (!response) return;
+  routeFromNotificationData(response.notification.request.content.data, router);
+});
+
+function routeFromNotificationData(data: Record<string, string>, router: Router) {
+  const { type, ride_id } = data;
+  switch (type) {
+    case 'driver_accepted':   router.replace('/driver-arriving'); break;
+    case 'driver_arrived':    router.replace('/driver-arrived'); break;
+    case 'ride_started':      router.replace('/ride-in-progress'); break;
+    case 'ride_completed':    router.replace('/ride-completed'); break;
+    default:                  router.replace('/(tabs)'); break;
+  }
+}
+```
+Also requires the backend to include `data.type` and `data.ride_id` in FCM
+payloads — see R-P1-30.
+
+**Effort:** 3–4 hours (frontend routing + backend payload change)
+
+---
+
+## R-P1-30 · FCM Payloads Missing data Field — Foreground Handler Cannot Route by Type
+
+**Audit finding [13-5 HIGH].** The foreground FCM handler comment in `_layout.tsx:258`
+explicitly acknowledges: "Backend notifications currently carry only title/body (no
+data field), so we can't route by event type." The foreground handler performs a
+generic `fetchRide()` for all notification types regardless of what event occurred.
+Consequences: non-ride notifications (promotions, payments) trigger unnecessary ride
+refetches; killed-state deep linking (R-P1-29) is impossible without `data.type`
+and `data.ride_id`.
+
+**File to fix:** Backend notification sending code + `rider-app/app/_layout.tsx`
+
+**How to fix:**
+```python
+# Backend — add data dict to every FCM send call, e.g.:
+messaging.send(Message(
+    notification=Notification(title="Your driver has arrived", body="..."),
+    data={"type": "driver_arrived", "ride_id": str(ride_id)},
+    token=device_token,
+))
+```
+```typescript
+// Frontend — update foreground handler to route by type:
+const unsubscribe = onForegroundMessage((msg) => {
+  const { type, ride_id } = msg.data ?? {};
+  if (RIDE_TYPES.includes(type) && ride_id) {
+    useRideStore.getState().fetchRide(ride_id);
+  }
+  // other types handled separately
+});
+```
+
+**Effort:** 2 hours (backend payload) + 2 hours (frontend handler update)
+
+---
+
 ## Checklist
 
 - [ ] R-P1-1 Cancellation fee enforced after driver_arrived; Cancel button disabled
@@ -704,3 +782,5 @@ without field filtering (e.g. ride history, accept/arrive/complete responses).
 - [ ] R-P1-26 E2E ride-booking spec: rate/tip stages added; screen-specific UI assertions; single-session flow
 - [ ] R-P1-27 ALLOWED_ORIGINS env var set to include spinr.app and spinr-track.app in production
 - [ ] R-P1-28 Rider phone/email/stripe_customer_id stripped from GET /drivers/rides/active response
+- [ ] R-P1-29 Killed-state notification tap routes to correct ride screen (getInitialNotification handler)
+- [ ] R-P1-30 FCM payloads include data.type + data.ride_id on all backend sends; foreground handler routes by type

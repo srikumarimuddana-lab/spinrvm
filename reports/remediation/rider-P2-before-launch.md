@@ -1158,6 +1158,110 @@ Also add `anonymised_at` column to the rides schema.
 
 ---
 
+## R-P2-47 · Notification Centre: Tapping a Notification Doesn't Navigate — Mark-Read Only
+
+**Audit finding [13-6 MEDIUM].** `renderNotification` `onPress` in
+`rider-app/app/notifications.tsx:128` calls only `handleMarkRead(item)`. No navigation
+to the relevant screen occurs. A rider who taps "Your driver has arrived" in the
+notification centre is left on the notifications list. For time-sensitive events this
+means the rider may miss the free-cancel window while looking at a list.
+
+**File to fix:** `rider-app/app/notifications.tsx` — `renderNotification` onPress
+
+**How to fix:**
+```typescript
+const handleTap = async (item: AppNotification) => {
+  await handleMarkRead(item);
+  switch (item.type) {
+    case 'ride_update':
+    case 'ride':
+      // Navigate to the active ride screen or ride-details for past rides
+      router.push('/(tabs)');
+      break;
+    case 'promotion':
+      router.push('/promotions');
+      break;
+    default:
+      break; // no navigation for generic alerts
+  }
+};
+```
+Long-term: include `ride_id` in the notification API response and route directly
+to `/ride-details?id=${item.ride_id}` for completed ride notifications.
+
+**Effort:** 2–3 hours
+
+---
+
+## R-P2-48 · Notification Centre Unread Badge Count Not Shown at Entry Point
+
+**Audit finding [13-7 MEDIUM].** `unreadCount` is tracked inside the notifications screen
+as local state. The tab bar (`(tabs)/_layout.tsx`) has no `tabBarBadge`, and the
+account.tsx entry point button has no badge. Riders cannot see that they have
+unread notifications without navigating to the notifications screen.
+
+**File to fix:** Global store + `rider-app/app/(tabs)/account.tsx` (notifications entry)
+
+**How to fix:**
+1. Add an `unreadNotificationCount` field to a lightweight global store (or add to
+   an existing store like `useAuthStore`). Fetch it once on auth and refresh on
+   foreground resume.
+2. In `account.tsx`, pass the count to the notifications `MenuItem`:
+   ```tsx
+   <MenuItem
+     badge={unreadCount > 0 ? String(unreadCount) : undefined}
+     title="Notifications"
+     ...
+   />
+   ```
+
+**Effort:** 2–3 hours
+
+---
+
+## R-P2-49 · Support Tickets Submitted Without Auth Token — Tickets Are Anonymous
+
+**Audit finding [13-8 MEDIUM].** `support.tsx:43–48` uses raw `fetch()` with no
+Authorization header. Support tickets arrive at the backend without rider identity.
+Support agents cannot link a ticket to a ride or verify the complaint.
+
+**File to fix:** `rider-app/app/support.tsx` — `handleSubmit`
+
+**How to fix:**
+```typescript
+import api from '@shared/api/client';
+
+// Replace the raw fetch() with:
+await api.post('/support/tickets', {
+  subject: 'App Support Request',
+  message: issue,
+  category: 'general',
+});
+```
+
+**Effort:** 30 minutes
+
+---
+
+## R-P2-50 · No Structured Dispute / Complaint Flow — Support Is Free-Text Only
+
+**Audit finding [13-9 MEDIUM].** The support screen offers a single free-text textarea
+with no ride-linked dispute option, no category selection, no fare dispute path.
+Frustrated riders with no structured dispute path are more likely to initiate a
+card chargeback rather than in-app resolution.
+
+**File to fix:** `rider-app/app/support.tsx` + ride-details screen
+
+**How to fix:**
+1. Add category selection (Fare Issue / Driver Behaviour / App Bug / Other).
+2. Add a "Report issue with a trip" entry point from `ride-details.tsx` that pre-fills
+   `ride_id` in the ticket payload.
+3. For fare disputes, add an `amount_disputed` field and surface it to support agents.
+
+**Effort:** 3–5 hours (UI + backend ticket schema update)
+
+---
+
 ## Checklist
 
 - [ ] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
@@ -1206,3 +1310,7 @@ Also add `anonymised_at` column to the rides schema.
 - [ ] R-P2-44 account.tsx Legal section includes Privacy Policy link (/legal?type=privacy)
 - [ ] R-P2-45 In-app location consent modal shown before requestForegroundPermissionsAsync()
 - [ ] R-P2-46 Rides anonymised on account deletion; retention policy + purge job defined
+- [ ] R-P2-47 Notification centre tap navigates to relevant screen (not just mark-read)
+- [ ] R-P2-48 Unread notification badge count surfaced at notifications entry point in account.tsx
+- [ ] R-P2-49 Support ticket submit uses authenticated api client (not raw fetch)
+- [ ] R-P2-50 Structured dispute/complaint flow added with category selection and ride_id linkage

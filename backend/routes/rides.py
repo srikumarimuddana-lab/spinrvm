@@ -22,7 +22,7 @@ try:
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
     from ..utils.crypto import hash_otp
-    from ..utils.rate_limiter import ride_request_limit
+    from ..utils.rate_limiter import cancel_ride_limit, ride_request_limit
     from ..validators import validate_ride_location
 except ImportError:
     import db_supabase
@@ -37,7 +37,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from socket_manager import manager
     from utils.crypto import hash_otp
-    from utils.rate_limiter import ride_request_limit
+    from utils.rate_limiter import cancel_ride_limit, ride_request_limit
     from validators import validate_ride_location
 
 from .fares import _fares_for_location_impl, get_fares_for_location
@@ -809,17 +809,21 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
 @api_router.get("/history")
 async def get_ride_history(
     limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    before: Optional[str] = Query(default=None),
     current_user: dict = Depends(get_current_user),
 ):
-    """Get rider's past rides for the activity tab. Only completed or cancelled rides.
-    Any stale rides (searching/assigned but old) are auto-cancelled."""
+    """Get rider's past rides for the activity tab with cursor-based pagination.
+
+    Pass ``before=<ride_id>`` to fetch the page of rides older than that ride.
+    Returns ``next_cursor`` (the id of the last ride in this page) to use as
+    the next ``before`` value, or ``null`` when there are no more pages.
+    """
     all_rides = await db_supabase.get_rows(
         "rides",
         {
             "rider_id": current_user["id"],
         },
-        limit=200,
+        limit=2000,
     )
 
     # Only show rides where a driver was actually assigned and ride started or completed
@@ -832,16 +836,22 @@ async def get_ride_history(
         if status == "completed":
             result.append(ride)
         elif status == "cancelled" and had_driver:
-            # Only show cancelled rides where a driver was involved
             result.append(ride)
-        # Skip everything else: searching, assigned but never started, auto-expired, etc.
 
     result.sort(key=lambda r: str(r.get("created_at", "")), reverse=True)
 
-    total_count = len(result)
-    rides = result[offset : offset + limit]
+    # Cursor-based pagination: skip rides up to and including the cursor id
+    if before:
+        cursor_idx = next(
+            (i for i, r in enumerate(result) if r.get("id") == before), None
+        )
+        if cursor_idx is not None:
+            result = result[cursor_idx + 1 :]
 
-    return {"rides": rides, "total": total_count, "limit": limit, "offset": offset}
+    rides = result[:limit]
+    next_cursor = rides[-1]["id"] if len(rides) == limit else None
+
+    return {"rides": rides, "limit": limit, "next_cursor": next_cursor}
 
 
 @api_router.get("/{ride_id}")
@@ -1312,7 +1322,8 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
 
 
 @api_router.post("/{ride_id}/cancel")
-async def cancel_ride_rider(ride_id: str, current_user: dict = Depends(get_current_user)):
+@cancel_ride_limit
+async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict = Depends(get_current_user)):
     """Rider cancels the ride"""
     try:
         from ..logging_utils import diag_logger  # type: ignore

@@ -43,15 +43,15 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | R5 | As a rider, I get OTP to hand to the driver at pickup | X | X | — | OTP entry flow not in E2E |
 | R6 | As a rider, I can cancel before / after match (with correct fee) | X | X | — | fee-calc E2E missing |
 | R7 | As a rider, I can chat with the driver mid-trip | ✅ | ✅ | — | `test_p2_chat.py` + `rideStore.chat.test.ts` — send/persist/WS-forward + dedup |
-| R8 | As a rider, I can pay with card / wallet / cash | X | X | — | wallet-top-up E2E missing |
-| R9 | As a rider, I can apply a promo code | X | X | — | promo E2E missing |
+| R8 | As a rider, I can pay with card / wallet / cash | ✅ | ✅ | — | `test_p2_promo_wallet_loyalty.py` — wallet pay/top-up: balance, guards, fare-inflation block |
+| R9 | As a rider, I can apply a promo code | ✅ | ✅ | — | `test_p2_promo_wallet_loyalty.py` — validate (8 rules) + apply (server-fare guard) |
 | R10 | As a rider, I can rate and tip the driver post-trip | X | X | X | double-submit guard not asserted |
 | R11 | As a rider, I can add stops mid-trip | ✅ | ✅ | — | `test_p1_multi_stop.py` + `rideStore.stops.test.ts`; fare recalc xfail |
 | R12 | As a rider, I can share my ride with a contact | X | X | — | share-link E2E missing |
 | R13 | As a rider, I can trigger an SOS / safety call | ✅ | ✅ | — | `test_p2_sos.py` + `rideStore.sos.test.ts` — persist + admin WS + 403 + 404 + store call |
 | R14 | As a rider, my ride survives app restart | ✅ | ✅ | — | `rideStore.restart.test.ts` — 8 scenarios |
 | R15 | As a rider on a corporate account, charges split correctly | X | X | — | corporate E2E only backend |
-| R16 | As a rider, I earn loyalty points | X | X | — | loyalty E2E missing |
+| R16 | As a rider, I earn loyalty points | ✅ | ✅ | — | `test_p2_promo_wallet_loyalty.py` — earn (fare→points, tier multiplier, dedup), redeem (points→wallet), guards |
 
 ### 2.2 Driver user stories
 
@@ -169,7 +169,7 @@ Implementation work remaining: P0-4 surge-lock, P0-5 Stripe card charge.
 ### P2 — Completeness
 13. ✅ **Chat E2E (rider + driver)** — R7, D11 — closed: `POST /{ride_id}/messages` persists + WS-forwards; non-participant→403; cancelled ride→400; post-trip 24h window enforced; `GET /{ride_id}/messages` scoped to participants; pinned by `backend/tests/test_p2_chat.py` (9 cases) + `rider-app/store/__tests__/rideStore.chat.test.ts` (6 cases) + `driver-app/store/__tests__/driverStore.chat.test.ts` (6 cases)
 14. ✅ **SOS E2E** — R13 — closed: `POST /{ride_id}/emergency` persists incident + notifies admin WS; non-participant→403; unknown ride→404; unique incident_id per trigger; lat/lon forwarded; pinned by `backend/tests/test_p2_sos.py` (7 cases) + `rider-app/store/__tests__/rideStore.sos.test.ts` (3 cases)
-15. Promo / wallet / loyalty E2E — R8, R9, R16
+15. ✅ **Promo / wallet / loyalty E2E** — R8, R9, R16 — closed: promo validate (8 rules: expiry, active, max-uses, per-user, min-fare, private, first-ride, unknown→404) + apply (server-fare guard, non-owner→403); wallet pay (deduction, fare-inflation→400, insufficient→400, suspended→403) + top-up (balance increment, suspended→403); loyalty earn (fare→points, tier multiplier, dedup→already_awarded, non-owner→403, incomplete-ride→400) + redeem (points→wallet credit, insufficient→400, min-redemption→400); pinned by `backend/tests/test_p2_promo_wallet_loyalty.py` (22 cases)
 16. Payout / T4A driver flows — D8, D13
 17. Scheduled rides + DST — R3, E14
 

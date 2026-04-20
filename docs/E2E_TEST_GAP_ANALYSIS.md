@@ -99,7 +99,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | E5 | Driver goes offline mid-trip | ✅ | P1 — rejected 409 by `update_driver_status`; pinned |
 | E6 | Driver's phone loses GPS mid-trip | — | P2 |
 | E7 | Rider updates dropoff after trip started | — | P2 |
-| E8 | Duplicate ride request (double-tap confirm) | — | P1 |
+| E8 | Duplicate ride request (double-tap confirm) | ✅ | P1 — active-ride 409 guard + idempotency-key retry path; `test_e8_duplicate_ride.py` (7 cases) |
 | E9 | Rider creates ride while another is active | X backend | — |
 | E10 | Driver accepts a ride that was just cancelled (race) | X backend | — |
 | E11 | Expired auth token mid-trip → refresh without losing state | ✅ | P1 — mechanism correct; pinned client + backend |

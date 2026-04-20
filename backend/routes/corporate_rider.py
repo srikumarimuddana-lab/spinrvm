@@ -11,6 +11,8 @@ try:
         get_corporate_account_by_id,
         get_corporate_wallet_by_company,
         get_member_allowance,
+        get_ride,
+        get_rows,
         insert_allowance_request,
         list_active_memberships_for_user,
         list_company_allowance_requests,
@@ -31,6 +33,8 @@ except ImportError:
         get_corporate_account_by_id,
         get_corporate_wallet_by_company,
         get_member_allowance,
+        get_ride,
+        get_rows,
         insert_allowance_request,
         list_active_memberships_for_user,
         list_company_allowance_requests,
@@ -159,9 +163,56 @@ async def my_rides(
     to: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
 ):
-    """Plan-3 stub. Plan 5 wires ride_payment_sources → rides join."""
-    await _ensure_member(current_user, company_id)
-    return []
+    """Return the caller's Work rides for a company, joined from ride_payment_sources.
+
+    Query params:
+      from_  ISO-8601 date/datetime lower bound on ride_payment_sources.created_at (inclusive)
+      to     ISO-8601 date/datetime upper bound (inclusive)
+
+    Each item is the ride row augmented with payment source fields:
+      allowance_debit_amount, master_fallback_amount, source_type
+    """
+    membership = await _ensure_member(current_user, company_id)
+
+    payment_sources = await get_rows(
+        "ride_payment_sources",
+        {"member_id": membership["id"]},
+        order="created_at",
+        desc=True,
+        limit=200,
+    )
+
+    if not payment_sources:
+        return []
+
+    # Apply optional date-range filter on the payment source created_at.
+    if from_ or to:
+        filtered = []
+        for ps in payment_sources:
+            created = ps.get("created_at") or ""
+            if from_ and created < from_:
+                continue
+            if to and created > to:
+                continue
+            filtered.append(ps)
+        payment_sources = filtered
+
+    # Hydrate each payment source with the full ride row.
+    result = []
+    for ps in payment_sources:
+        ride_id = ps.get("ride_id")
+        if not ride_id:
+            continue
+        ride = await get_ride(ride_id) or {}
+        result.append({
+            **ride,
+            "allowance_debit_amount": ps.get("allowance_debit_amount"),
+            "master_fallback_amount": ps.get("master_fallback_amount"),
+            "source_type": ps.get("source_type"),
+            "payment_source": ps,
+        })
+
+    return result
 
 
 @router.post("/{company_id}/allowance-requests")

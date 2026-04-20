@@ -303,6 +303,7 @@ class CreateRideRequest(BaseModel):
     scheduled_time: Optional[datetime] = None
     corporate_account_id: Optional[str] = None
     payment_method: str = "card"
+    work_profile: Optional[bool] = None
 
     # ── Input validation (SEC-017) ──────────────────────────────────────── #
 

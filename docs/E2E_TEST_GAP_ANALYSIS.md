@@ -64,12 +64,12 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | D5 | As a driver, I verify the rider's OTP before starting | X | X | — | OTP verify E2E missing |
 | D6 | As a driver, I start and complete the trip | X | X | X | covered by new ride-offer spec |
 | D7 | As a driver, my earnings update after each trip | X | X | X | covered by new earnings poll test |
-| D8 | As a driver, I can cash out / schedule payouts | X | X | — | payout E2E missing |
+| D8 | As a driver, I can cash out / schedule payouts | ✅ | ✅ | — | `test_p2_payout_t4a.py` — persisted+pending, insufficient→400, no-bank→400, not-found→404 |
 | D9 | As a driver, I see a banner when docs expire / onboarding blocks | X | X | ~ | only suspended state E2E'd |
 | D10 | As a driver, I complete quests for bonuses | X | X | — | quest E2E missing |
 | D11 | As a driver, I can chat with the rider | ✅ | ✅ | — | `test_p2_chat.py` + `driverStore.chat.test.ts` — send/persist/WS-forward + dedup |
 | D12 | As a driver, my active trip survives app restart | ✅ | ✅ | — | `driverStore.restart.test.ts` — 8 scenarios |
-| D13 | As a driver, I get my T4A at year-end | X | X | — | T4A E2E skipped (low frequency) |
+| D13 | As a driver, I get my T4A at year-end | ✅ | ✅ | — | `test_p2_payout_t4a.py` — sums driver_earnings, correct trip count, not-found→404 |
 | D14 | As a driver, I can rate the rider | X | X | — | rider-rating E2E missing |
 | D15 | As a driver, I can go offline and WS closes cleanly | X | ~ | — | socket-close E2E missing |
 
@@ -170,7 +170,7 @@ Implementation work remaining: P0-4 surge-lock, P0-5 Stripe card charge.
 13. ✅ **Chat E2E (rider + driver)** — R7, D11 — closed: `POST /{ride_id}/messages` persists + WS-forwards; non-participant→403; cancelled ride→400; post-trip 24h window enforced; `GET /{ride_id}/messages` scoped to participants; pinned by `backend/tests/test_p2_chat.py` (9 cases) + `rider-app/store/__tests__/rideStore.chat.test.ts` (6 cases) + `driver-app/store/__tests__/driverStore.chat.test.ts` (6 cases)
 14. ✅ **SOS E2E** — R13 — closed: `POST /{ride_id}/emergency` persists incident + notifies admin WS; non-participant→403; unknown ride→404; unique incident_id per trigger; lat/lon forwarded; pinned by `backend/tests/test_p2_sos.py` (7 cases) + `rider-app/store/__tests__/rideStore.sos.test.ts` (3 cases)
 15. ✅ **Promo / wallet / loyalty E2E** — R8, R9, R16 — closed: promo validate (8 rules: expiry, active, max-uses, per-user, min-fare, private, first-ride, unknown→404) + apply (server-fare guard, non-owner→403); wallet pay (deduction, fare-inflation→400, insufficient→400, suspended→403) + top-up (balance increment, suspended→403); loyalty earn (fare→points, tier multiplier, dedup→already_awarded, non-owner→403, incomplete-ride→400) + redeem (points→wallet credit, insufficient→400, min-redemption→400); pinned by `backend/tests/test_p2_promo_wallet_loyalty.py` (22 cases)
-16. Payout / T4A driver flows — D8, D13
+16. ✅ **Payout / T4A driver flows** — D8, D13 — closed: `POST /drivers/payouts` persists payout with pending status (no Stripe key); insufficient balance→400; no bank account→400; driver not found→404; `GET /drivers/payouts` returns driver-scoped list; `GET /drivers/t4a/{year}` sums driver_earnings + trip count; pinned by `backend/tests/test_p2_payout_t4a.py` (8 cases)
 17. Scheduled rides + DST — R3, E14
 
 ### P3 — Native (requires Detox or Maestro)

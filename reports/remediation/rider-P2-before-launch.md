@@ -1635,3 +1635,4 @@ contrast compliance.
 - [ ] R-P2-59 Search autocomplete suggestion rows: accessibilityRole="button" + accessibilityLabel on all rows
 - [ ] R-P2-60 BottomSheet instances + RN Modals in ride screens: accessibilityViewIsModal={true} added
 - [ ] R-P2-61 Primary colour contrast: tipBtnTextActive and submit button text meet WCAG AA 4.5:1 in light mode
+- [ ] R-P2-62 Replace all fare/currency template literals (`$${value.toFixed(2)}`) with a shared formatCurrency(amount, locale) utility backed by Intl.NumberFormat('fr-CA',{style:'currency',currency:'CAD'}) (see [16-3])

@@ -897,3 +897,6 @@ button. Missing SOS during an emergency is a safety-critical accessibility failu
 - [ ] R-P1-31 Star rating buttons: accessibilityLabel ("Rate N star/stars") + accessibilityRole="button" + accessibilityState.selected
 - [ ] R-P1-32 SOSButton: accessibilityLabel="Emergency SOS", accessibilityRole="button", accessibilityHint for hold gesture; overlay accessible={true}
 - [ ] R-P1-33 Chat and Share map overlay buttons labelled; headerSafeArea overlay reachable by VoiceOver
+- [ ] R-P1-34 Install react-i18next + i18next + expo-localization; create en-CA and fr-CA locale JSON files; wire t('key') throughout all rider screens (Official Languages Act compliance — see [16-1])
+- [ ] R-P1-35 Replace all hardcoded English string literals in JSX and alert payloads with i18n t('key') calls; audit full app beyond login.tsx and ride-completed.tsx (see [16-2])
+- [ ] R-P1-36 Refactor backend HTTPException detail strings to machine-readable error codes or Accept-Language-aware localised messages; client must not display raw English API error strings to French-locale users (see [16-5])

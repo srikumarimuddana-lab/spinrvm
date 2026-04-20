@@ -1262,6 +1262,137 @@ card chargeback rather than in-app resolution.
 
 ---
 
+## R-P2-51 · ride-options.tsx — fetchEstimates + fetchNearbyDrivers Not Parallelised; No Debounce on Navigation
+
+**Audit finding [14-2 MEDIUM].** `fetchEstimates()` and `fetchNearbyDrivers()` are called
+sequentially in the same useEffect synchronous block (lines 74–75) instead of via
+`Promise.all`. These are independent network calls and their total wall-clock time equals
+sum rather than max. Additionally, no AbortController or isMounted guard is used, so
+rapid back-and-forward navigation can leave in-flight stale requests that populate the
+store after a newer request has already resolved.
+
+**File to fix:** `rider-app/app/ride-options.tsx:71–84`
+
+**How to fix:**
+```typescript
+useEffect(() => {
+  if (!pickup || !dropoff) return;
+  let cancelled = false;
+  (async () => {
+    await Promise.all([fetchEstimates(), fetchNearbyDrivers()]);
+  })();
+  const interval = setInterval(() => { if (!cancelled) fetchNearbyDrivers(); }, 10000);
+  return () => { cancelled = true; clearInterval(interval); };
+}, [pickup, dropoff]);
+```
+For in-flight cancellation, pass an AbortSignal through the store actions and pass it to
+the underlying `fetch`/`axios` call.
+
+**Effort:** 2 hours
+
+---
+
+## R-P2-52 · Activity Tab Uses ScrollView + Missing Pagination — No FlatList Virtualisation
+
+**Audit finding [14-3 MEDIUM].** The Activity screen renders all ride history in a plain
+`ScrollView` with no FlatList virtualisation. The backend supports pagination (limit/offset)
+but the frontend always fetches the default first page and never requests more. As ride
+history grows, all rendered ride cards stay in memory simultaneously with no recycling.
+
+**File to fix:** `rider-app/app/(tabs)/activity.tsx:45–256`
+
+**How to fix:**
+1. Replace `ScrollView` with `FlatList`.
+2. Add `keyExtractor={(item) => item.id}`, `initialNumToRender={10}`,
+   `maxToRenderPerBatch={5}`, `windowSize={5}`, `removeClippedSubviews` (Android).
+3. Since each ride card is fixed height, add `getItemLayout` for O(1) scroll calculations.
+4. Implement `onEndReached` to append the next page from `/rides/history?limit=20&offset=N`.
+5. Pass the group headers as `ListHeaderComponent` items or use a `SectionList`.
+
+**Effort:** 4–6 hours
+
+---
+
+## R-P2-53 · CarMarker Missing React.memo — Re-Renders on Every 1 Hz WS Location Update
+
+**Audit finding [14-4 MEDIUM].** `shared/components/CarMarker.tsx` is not wrapped in
+`React.memo`. Every `driver_location_update` WebSocket event calls `set({ currentDriver })`
+in the store, which triggers a re-render of any screen subscribed to `currentDriver`
+(driver-arriving, ride-in-progress). The CarMarker re-renders every ~1 second even when
+the marker coordinates have not changed between frames.
+
+**File to fix:** `shared/components/CarMarker.tsx`
+
+**How to fix:**
+```typescript
+export const CarMarker = React.memo(CarMarkerBase,
+  (prev, next) =>
+    prev.coordinate.latitude === next.coordinate.latitude &&
+    prev.coordinate.longitude === next.coordinate.longitude &&
+    prev.heading === next.heading &&
+    prev.size === next.size
+);
+```
+Also consider resetting `tracksViewChanges` to `true` briefly when coordinates change
+(rather than only on mount) so the Android Marker snapshot is refreshed on movement.
+
+**Effort:** 1 hour
+
+---
+
+## R-P2-54 · driver-arriving.tsx Polls at 3 s Even When WebSocket Is Connected
+
+**Audit finding [14-5 MEDIUM].** The polling interval in `driver-arriving.tsx` runs at 3 s
+during the `searching`/`driver_assigned` phase regardless of WebSocket connection state.
+`useRiderSocket` exports `connectionState` but `driver-arriving.tsx` does not call
+`useRiderSocket()`. At scale this means ~20 redundant GET /rides/{id} requests per minute
+per active rider screen, even when the WebSocket is delivering real-time updates.
+
+**File to fix:** `rider-app/app/driver-arriving.tsx:78–90`
+
+**How to fix:**
+```typescript
+const { connectionState } = useRiderSocket();
+useEffect(() => {
+  if (!rideId) return;
+  fetchRide(rideId);
+  const fastPoll = !currentRide || status === 'searching' || status === 'driver_assigned';
+  // Suspend fast poll when WS is healthy; keep a 15 s fallback for stale connections
+  const delay = connectionState === 'connected' ? 15000 : (fastPoll ? 3000 : 15000);
+  const interval = setInterval(() => fetchRide(rideId), delay);
+  return () => clearInterval(interval);
+}, [rideId, currentRide?.status, connectionState]);
+```
+
+**Effort:** 1–2 hours
+
+---
+
+## R-P2-55 · Vehicle Type and Profile Avatar Images Use Plain RN Image — No expo-image Caching
+
+**Audit finding [14-7 MEDIUM].** Two production image-loading sites use the plain React
+Native `<Image>` component instead of `expo-image`, resulting in no memory or disk caching
+for remote images:
+- `rider-app/app/ride-options.tsx:430–436` — vehicle type images downloaded on every mount.
+- `rider-app/app/(tabs)/index.tsx:147–150` — user profile photo downloaded on every mount.
+
+**File to fix:** `rider-app/app/ride-options.tsx`; `rider-app/app/(tabs)/index.tsx`
+
+**How to fix:**
+```typescript
+// Replace:
+import { Image } from 'react-native';
+// With:
+import { Image } from 'expo-image';
+// Change resizeMode="contain" prop to contentFit="contain"
+// Optionally add: placeholder={blurhash} cachePolicy="memory-disk"
+```
+`expo-image` is already installed in `package.json` (`"expo-image": "~3.0.11"`).
+
+**Effort:** 1 hour
+
+---
+
 ## Checklist
 
 - [ ] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
@@ -1314,3 +1445,8 @@ card chargeback rather than in-app resolution.
 - [ ] R-P2-48 Unread notification badge count surfaced at notifications entry point in account.tsx
 - [ ] R-P2-49 Support ticket submit uses authenticated api client (not raw fetch)
 - [ ] R-P2-50 Structured dispute/complaint flow added with category selection and ride_id linkage
+- [ ] R-P2-51 ride-options.tsx: fetchEstimates + fetchNearbyDrivers parallelised with Promise.all; AbortController added
+- [ ] R-P2-52 Activity tab: ScrollView replaced with FlatList; pagination wired to /rides/history?limit=20&offset=N
+- [ ] R-P2-53 CarMarker wrapped in React.memo with coordinate/heading equality comparator
+- [ ] R-P2-54 driver-arriving.tsx: 3 s poll suspended when WebSocket connectionState === 'connected'
+- [ ] R-P2-55 ride-options.tsx + index.tsx: plain RN Image replaced with expo-image for vehicle/avatar remote images

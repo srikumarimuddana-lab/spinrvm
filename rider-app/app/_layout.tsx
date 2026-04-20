@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Stack } from 'expo-router';
+import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -26,6 +26,31 @@ import {
   setBackgroundMessageHandler,
   onTokenRefresh,
 } from '@shared/services/firebase';
+import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
+
+// R-P1-29: Route to the correct screen based on FCM notification data.
+// Called both for killed-state (getInitialNotification) and tapped-while-backgrounded notifications.
+function routeFromNotificationData(data: Record<string, string> | undefined) {
+  if (!data?.type || !data?.ride_id) return;
+  const { type, ride_id } = data;
+  switch (type) {
+    case 'driver_accepted':
+    case 'driver_arrived':
+      router.push({ pathname: '/driver-arriving', params: { rideId: ride_id } } as any);
+      break;
+    case 'ride_started':
+      router.push({ pathname: '/ride-in-progress', params: { rideId: ride_id } } as any);
+      break;
+    case 'ride_completed':
+      router.push({ pathname: '/ride-completed', params: { rideId: ride_id } } as any);
+      break;
+    case 'ride_cancelled':
+      router.replace('/(tabs)' as any);
+      break;
+    default:
+      break;
+  }
+}
 
 // expo-notifications' push-token APIs were removed from Expo Go in SDK 53,
 // and its import throws on web where notifications don't exist. Lazy-require
@@ -166,6 +191,16 @@ export default function RootLayout() {
               importance: Notifications.AndroidImportance.DEFAULT,
               sound: 'default',
             });
+            // Channel for scheduled ride reminders (T-15 min alert)
+            await Notifications.setNotificationChannelAsync('scheduled-reminders', {
+              name: 'Scheduled Ride Reminders',
+              description: 'Reminder 15 minutes before your scheduled ride departs.',
+              importance: Notifications.AndroidImportance.HIGH,
+              sound: 'default',
+              vibrationPattern: [0, 250, 150, 250],
+              lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+              enableVibrate: true,
+            });
           } catch (e) {
             console.log('[Push] Android channel setup failed:', e);
           }
@@ -249,33 +284,65 @@ export default function RootLayout() {
   }, [isAuthInitialized, authToken]);
 
   // ── Foreground FCM message handler ──
-  // When the backend pushes a ride-state update (driver accepted,
-  // arrived, ride started, ride cancelled), refresh the currentRide
-  // from the API so the UI snaps to the new state immediately instead
-  // of waiting up to 5 seconds for the next polling cycle in
-  // ride-status.tsx / driver-arriving.tsx / ride-in-progress.tsx.
-  //
-  // Backend notifications currently carry only title/body (no `data`
-  // field), so we can't route by event type — we refetch whatever ride
-  // the store considers active. If there's no currentRide we no-op.
-  // Gated on `isAuthInitialized` so the subscription doesn't race the
-  // rest of cold-start.
   useEffect(() => {
     if (!isAuthInitialized) return;
 
     const unsubscribe = onForegroundMessage((remoteMessage: any) => {
       console.log('[Push] Rider foreground FCM:', remoteMessage?.notification?.title);
+
+      // Scheduled ride reminder — show a local notification so the alert
+      // appears even when the app is foregrounded (FCM suppresses the
+      // OS banner for foreground messages).
+      const reminderRideId = handleScheduledRideReminderFCM(remoteMessage);
+      if (reminderRideId) {
+        if (Notifications) {
+          const scheduledTime = remoteMessage?.data?.scheduled_time;
+          const timeLabel = scheduledTime
+            ? new Date(scheduledTime).toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })
+            : 'soon';
+          Notifications.scheduleNotificationAsync({
+            content: {
+              title: '🚗 Ride in 15 minutes',
+              body: `Your scheduled Spinr ride departs at ${timeLabel}. Get ready!`,
+              data: { type: 'scheduled_ride_reminder', rideId: reminderRideId },
+              sound: 'default',
+              ...(Platform.OS === 'android' ? { channelId: 'scheduled-reminders' } : {}),
+            },
+            trigger: null, // show immediately
+          }).catch(() => {});
+        }
+        return; // don't also refetch ride for reminder events
+      }
+
+      // All other FCM types — refresh the active ride state
       const currentRide = useRideStore.getState().currentRide;
       if (currentRide?.id) {
-        useRideStore.getState().fetchRide(currentRide.id).catch(() => {
-          // Polling will cover the next attempt; don't surface.
-        });
+        useRideStore.getState().fetchRide(currentRide.id).catch(() => {});
       }
     });
 
     return () => {
       if (typeof unsubscribe === 'function') unsubscribe();
     };
+  }, [isAuthInitialized]);
+
+  // R-P1-29: Killed-state deep linking — check if the app was opened by tapping
+  // a notification while it was fully killed. expo-notifications.getInitialNotificationResponseAsync()
+  // returns the tapped notification response in that case.
+  useEffect(() => {
+    if (!isAuthInitialized || !canUseNotifications || !Notifications) return;
+    (async () => {
+      try {
+        const response = await Notifications.getInitialNotificationResponseAsync?.();
+        if (response?.notification?.request?.content?.data) {
+          const data = response.notification.request.content.data as Record<string, string>;
+          console.log('[Push] Killed-state notification tap — routing from data:', data);
+          routeFromNotificationData(data);
+        }
+      } catch (e) {
+        console.log('[Push] getInitialNotification failed:', e);
+      }
+    })();
   }, [isAuthInitialized]);
 
   // ── Network connectivity monitoring for offline sync ──
@@ -367,7 +434,6 @@ function RootLayoutInner({
               <Stack.Screen name="driver-arrived" options={{ gestureEnabled: false }} />
               <Stack.Screen name="ride-in-progress" options={{ gestureEnabled: false }} />
               <Stack.Screen name="ride-completed" options={{ gestureEnabled: false }} />
-              <Stack.Screen name="rate-ride" />
               <Stack.Screen name="chat-driver" />
 
               {/* Account */}

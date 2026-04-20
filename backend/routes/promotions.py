@@ -33,6 +33,11 @@ class ValidatePromoRequest(BaseModel):
     ride_fare: Decimal = Decimal("0.00")  # Decimal for currency precision
 
 
+class ApplyPromoRequest(BaseModel):
+    code: str
+    ride_id: str  # Required for server-side fare verification (R-P1-8)
+
+
 class CreatePromoCodeRequest(BaseModel):
     code: str
     discount_type: str = "flat"  # flat | percentage
@@ -201,12 +206,23 @@ async def validate_promo(
 
 @api_router.post("/apply")
 async def apply_promo(
-    req: ValidatePromoRequest,
+    req: ApplyPromoRequest,
     current_user: dict = Depends(get_current_user),
 ):
-    """Apply a promo code (records usage). Call after ride creation."""
-    # Re-validate
-    validation = await validate_promo(req, current_user)
+    """Apply a promo code (records usage). Call after ride creation.
+    R-P1-8: uses server-stored ride fare, not client-supplied fare.
+    """
+    # Fetch server-side fare to prevent client-manipulated discount inflation.
+    ride = await db_supabase.find_one("rides", {"id": req.ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="ERR_FORBIDDEN")
+    server_fare = Decimal(str(ride.get("total_fare", 0)))
+
+    validate_req = ValidatePromoRequest(code=req.code, ride_fare=server_fare)
+    # Re-validate using server fare
+    validation = await validate_promo(validate_req, current_user)
 
     # Record application
     application = {

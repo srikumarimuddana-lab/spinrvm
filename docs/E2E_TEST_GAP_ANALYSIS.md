@@ -38,7 +38,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 |---|---|---|---|---|---|
 | R1 | As a rider, I can sign up / log in with phone OTP | X | ~ | X | native E2E missing |
 | R2 | As a rider, I can see fare estimates before booking | X | X | X | surge-applied estimate not E2E'd |
-| R3 | As a rider, I can request a ride with pickup + dropoff | X | X | X | scheduled-ride path not E2E'd |
+| R3 | As a rider, I can request a ride with pickup + dropoff | ✅ | ✅ | X | `test_p2_scheduled_rides.py` — list, cancel, guards; DST UTC round-trip pinned |
 | R4 | As a rider, I see the driver's ETA and car moving on a map | X | ~ | ~ | live location interpolation not tested |
 | R5 | As a rider, I get OTP to hand to the driver at pickup | X | X | — | OTP entry flow not in E2E |
 | R6 | As a rider, I can cancel before / after match (with correct fee) | X | X | — | fee-calc E2E missing |
@@ -105,7 +105,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | E11 | Expired auth token mid-trip → refresh without losing state | ✅ | P1 — mechanism correct; pinned client + backend |
 | E12 | WebSocket auth message rejected | X | — |
 | E13 | Backend rolling deploy during active trip (WS drop) | — | P2 |
-| E14 | Timezone / DST boundary in scheduled ride | — | P2 |
+| E14 | Timezone / DST boundary in scheduled ride | ✅ | ⚠️ | UTC round-trip pinned; DST-gap rejection `xfail(strict=False)` — server should reject non-existent local times |
 | E15 | Abusive rider: pickup outside service area | — | P2 |
 | E16 | Surge boundary: multiplier changes between estimate and create | — | P1 |
 
@@ -171,7 +171,7 @@ Implementation work remaining: P0-4 surge-lock, P0-5 Stripe card charge.
 14. ✅ **SOS E2E** — R13 — closed: `POST /{ride_id}/emergency` persists incident + notifies admin WS; non-participant→403; unknown ride→404; unique incident_id per trigger; lat/lon forwarded; pinned by `backend/tests/test_p2_sos.py` (7 cases) + `rider-app/store/__tests__/rideStore.sos.test.ts` (3 cases)
 15. ✅ **Promo / wallet / loyalty E2E** — R8, R9, R16 — closed: promo validate (8 rules: expiry, active, max-uses, per-user, min-fare, private, first-ride, unknown→404) + apply (server-fare guard, non-owner→403); wallet pay (deduction, fare-inflation→400, insufficient→400, suspended→403) + top-up (balance increment, suspended→403); loyalty earn (fare→points, tier multiplier, dedup→already_awarded, non-owner→403, incomplete-ride→400) + redeem (points→wallet credit, insufficient→400, min-redemption→400); pinned by `backend/tests/test_p2_promo_wallet_loyalty.py` (22 cases)
 16. ✅ **Payout / T4A driver flows** — D8, D13 — closed: `POST /drivers/payouts` persists payout with pending status (no Stripe key); insufficient balance→400; no bank account→400; driver not found→404; `GET /drivers/payouts` returns driver-scoped list; `GET /drivers/t4a/{year}` sums driver_earnings + trip count; pinned by `backend/tests/test_p2_payout_t4a.py` (8 cases)
-17. Scheduled rides + DST — R3, E14
+17. ✅ **Scheduled rides + DST** — R3, E14 — closed: `GET /rides/scheduled` returns list via cursor stub; `DELETE /rides/scheduled/{id}` cancels (status="cancelled"), owner+scheduled guard→404, already-cancelled/completed→400; UTC scheduled_time round-trips correctly; DST-gap rejection is `xfail(strict=False)` (E14 living TODO: server should reject non-existent local times with 400); pinned by `backend/tests/test_p2_scheduled_rides.py` (7 cases)
 
 ### P3 — Native (requires Detox or Maestro)
 18. iOS + Android E2E for each app — currently all E2E is Expo-Web only

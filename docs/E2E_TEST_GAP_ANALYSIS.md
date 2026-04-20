@@ -105,7 +105,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | E11 | Expired auth token mid-trip → refresh without losing state | ✅ | P1 — mechanism correct; pinned client + backend |
 | E12 | WebSocket auth message rejected | X | — |
 | E13 | Backend rolling deploy during active trip (WS drop) | — | P2 |
-| E14 | Timezone / DST boundary in scheduled ride | ✅ | ⚠️ | UTC round-trip pinned; DST-gap rejection `xfail(strict=False)` — server should reject non-existent local times |
+| E14 | Timezone / DST boundary in scheduled ride | ✅ | UTC round-trip + DST-gap rejection both pinned; `zoneinfo` round-trip guard in `CreateRideRequest.validate_scheduled_time` (`schemas.py`); `test_p2_scheduled_rides.py::TestDSTBoundary` |
 | E15 | Abusive rider: pickup outside service area | — | P2 |
 | E16 | Surge boundary: multiplier changes between estimate and create | — | P1 |
 
@@ -147,7 +147,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 
 **Status (2026-04-20):** All 5 investigated; tests added in
 `backend/tests/test_p0_ship_blockers.py`.
-Implementation work remaining: P0-4 surge-lock, P0-5 Stripe card charge.
+Implementation work remaining: P0-5 Stripe card charge (in progress on separate branch).
 
 | # | Item | Impl | Test | Notes |
 |---|---|---|---|---|
@@ -171,12 +171,12 @@ Implementation work remaining: P0-4 surge-lock, P0-5 Stripe card charge.
 14. ✅ **SOS E2E** — R13 — closed: `POST /{ride_id}/emergency` persists incident + notifies admin WS; non-participant→403; unknown ride→404; unique incident_id per trigger; lat/lon forwarded; pinned by `backend/tests/test_p2_sos.py` (7 cases) + `rider-app/store/__tests__/rideStore.sos.test.ts` (3 cases)
 15. ✅ **Promo / wallet / loyalty E2E** — R8, R9, R16 — closed: promo validate (8 rules: expiry, active, max-uses, per-user, min-fare, private, first-ride, unknown→404) + apply (server-fare guard, non-owner→403); wallet pay (deduction, fare-inflation→400, insufficient→400, suspended→403) + top-up (balance increment, suspended→403); loyalty earn (fare→points, tier multiplier, dedup→already_awarded, non-owner→403, incomplete-ride→400) + redeem (points→wallet credit, insufficient→400, min-redemption→400); pinned by `backend/tests/test_p2_promo_wallet_loyalty.py` (22 cases)
 16. ✅ **Payout / T4A driver flows** — D8, D13 — closed: `POST /drivers/payouts` persists payout with pending status (no Stripe key); insufficient balance→400; no bank account→400; driver not found→404; `GET /drivers/payouts` returns driver-scoped list; `GET /drivers/t4a/{year}` sums driver_earnings + trip count; pinned by `backend/tests/test_p2_payout_t4a.py` (8 cases)
-17. ✅ **Scheduled rides + DST** — R3, E14 — closed: `GET /rides/scheduled` returns list via cursor stub; `DELETE /rides/scheduled/{id}` cancels (status="cancelled"), owner+scheduled guard→404, already-cancelled/completed→400; UTC scheduled_time round-trips correctly; DST-gap rejection is `xfail(strict=False)` (E14 living TODO: server should reject non-existent local times with 400); pinned by `backend/tests/test_p2_scheduled_rides.py` (7 cases)
+17. ✅ **Scheduled rides + DST (E14 closed)** — R3, E14 — closed: `GET /rides/scheduled` returns list; `DELETE /rides/scheduled/{id}` cancels with owner+scheduled guard→404, already-cancelled/completed→400; UTC round-trip pinned; DST-gap guard implemented via `zoneinfo` round-trip in `CreateRideRequest.validate_scheduled_time` — non-existent local times now raise `ValidationError`; valid post-gap times pass; pinned by `backend/tests/test_p2_scheduled_rides.py` (9 cases)
 
 ### P3 — Native (requires Detox or Maestro)
 18. ✅ **iOS + Android E2E — Maestro flows + manual smoke checklist** — `docs/MOBILE_SMOKE.md` (8-section sign-off checklist, 40 steps); new Maestro flows: `.maestro/rider/03_schedule_and_cancel_ride.yaml`, `.maestro/rider/04_mid_trip_chat.yaml`, `.maestro/rider/05_sos_button.yaml`, `.maestro/driver/07_in_trip_chat.yaml`; existing flows: login (rider+driver), go-online, accept-ride, verify-OTP, complete-trip, payout
-19. ✅ **Native push-notification flows** — FCM/APNs — register_push_token (upsert + iOS/Android separate rows + users.fcm_token mirror), get_notifications + unread_count, mark-read/read-all, preferences (defaults + partial update), create_notification deeplink injection; pinned by `backend/tests/test_p3_push_notifications.py` (15 cases + 2 xfail for live FCM delivery) + `rider-app/hooks/__tests__/useScheduledRideReminder.test.ts` (8 cases: schedule, skip-too-soon, idempotent cancel, storage, FCM handler)
-20. ✅ **Background location for drivers** — `POST /drivers/location-batch`: list/dict/locations key, last-point-wins, empty→noop, user-scoped; pinned by `backend/tests/test_p3_background_location.py` (8 cases + 3 xfail for native device permission); client batch-upload logic pinned by `driver-app/hooks/__tests__/locationBatch.test.ts` (5 cases: empty→no-call, points key, clear-on-success, restore-on-failure, clear-after-max-retries); native always-permission manual via `docs/MOBILE_SMOKE.md §F`
+19. ✅ **Native push-notification flows** — FCM/APNs — register_push_token (upsert + iOS/Android separate rows + users.fcm_token mirror), get_notifications + unread_count, mark-read/read-all, preferences (defaults + partial update), create_notification deeplink injection; FCM delivery path mocked via `sys.modules` (no live credentials needed); pinned by `backend/tests/test_p3_push_notifications.py` (17 cases — all passing) + `rider-app/hooks/__tests__/useScheduledRideReminder.test.ts` (8 cases: schedule, skip-too-soon, idempotent cancel, storage, FCM handler)
+20. ✅ **Background location for drivers** — `POST /drivers/location-batch`: list/dict/locations key, last-point-wins, empty→noop, user-scoped; pinned by `backend/tests/test_p3_background_location.py` (10 cases + 1 xfail — backgrounded-continuity requires real device); `requestBackgroundPermissionsAsync` call on go-online pinned by `driver-app/hooks/__tests__/goOnlinePermission.test.ts` (4 cases); client batch-upload pinned by `driver-app/hooks/__tests__/locationBatch.test.ts` (5 cases); native always-permission manual via `docs/MOBILE_SMOKE.md §F`
 
 ---
 

@@ -46,7 +46,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | R8 | As a rider, I can pay with card / wallet / cash | X | X | — | wallet-top-up E2E missing |
 | R9 | As a rider, I can apply a promo code | X | X | — | promo E2E missing |
 | R10 | As a rider, I can rate and tip the driver post-trip | X | X | X | double-submit guard not asserted |
-| R11 | As a rider, I can add stops mid-trip | X | X | — | multi-stop E2E missing |
+| R11 | As a rider, I can add stops mid-trip | ✅ | ✅ | — | `test_p1_multi_stop.py` + `rideStore.stops.test.ts`; fare recalc xfail |
 | R12 | As a rider, I can share my ride with a contact | X | X | — | share-link E2E missing |
 | R13 | As a rider, I can trigger an SOS / safety call | X | ~ | — | SOS E2E missing |
 | R14 | As a rider, my ride survives app restart | ✅ | ✅ | — | `rideStore.restart.test.ts` — 8 scenarios |
@@ -161,7 +161,7 @@ Implementation work remaining: P0-4 surge-lock, P0-5 Stripe card charge.
 6. ✅ **WebSocket reconnect with state preservation** — C8 — closed: `useRiderSocket.ts` calls `fetchRide` in `onopen`; `useDriverDashboard.ts` calls `fetchActiveRide` on first auth-confirmed message after reconnect; `backend/tests/test_p1_ws_reconnect.py` pins ConnectionManager round-trip + HTTP recovery; `rider-app/hooks/__tests__/useRiderSocket.reconnect.test.ts` pins client-side reconnect behavior
 7. ✅ **Mid-trip restart restore** (rider and driver) — R14, D12 — closed: `rider-app/store/__tests__/rideStore.restart.test.ts` pins `hydrateActiveRide()` (8 scenarios: active, terminal, stale, offline, no-override); `driver-app/store/__tests__/driverStore.restart.test.ts` pins `hydrateDriverRideState()` (8 scenarios: navigating, arrived, in-progress, terminal states, corrupt JSON, no-override)
 8. ✅ **Role-claim tampering guard** — S3, S8 — closed: S1 gap fixed (`accept_ride` in `drivers.py` now rejects `ride.rider_id == current_user.id` → 403); S3 pinned — `get_current_user` always uses DB role, never JWT claim; S8 pinned — `get_driver_earnings` uses `current_user.id`, no caller-supplied driver_id; `backend/tests/test_p1_security.py`
-9. **Multi-stop E2E** — R11
+9. ✅ **Multi-stop E2E** — R11 — closed: `backend/tests/test_p1_multi_stop.py` pins add/remove stop mid-trip (WS driver notification, auth guards, position insertion, bad-index rejection); `rider-app/store/__tests__/rideStore.stops.test.ts` pins pre-ride addStop/removeStop/updateStop; fare-recalculation on mid-trip stop is xfail(strict=False) — not yet implemented
 10. **Driver offline mid-trip** — E5
 11. **Token refresh mid-trip** — E11
 12. **CORS on web exports** — S9

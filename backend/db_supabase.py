@@ -489,6 +489,26 @@ async def get_otp_record(phone: str, code: str) -> Optional[Dict[str, Any]]:
     )
 
 
+async def get_otp_record_by_phone(phone: str) -> Optional[Dict[str, Any]]:
+    """Fetch the most-recent unverified OTP record for a phone number.
+    Used by verify_otp so the hash comparison can be done in constant time
+    with hmac.compare_digest rather than via a DB equality predicate.
+    """
+    if not supabase:
+        return None
+    return await run_sync(
+        lambda: _single_row_from_res(
+            supabase.table("otp_records")
+            .select("*")
+            .eq("phone", phone)
+            .eq("verified", False)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+    )
+
+
 async def verify_otp_record(record_id: str):
     if not supabase:
         return None

@@ -14,11 +14,23 @@ except ImportError:
 
 
 class SendOTPRequest(BaseModel):
-    phone: str = Field(..., min_length=10, max_length=15, pattern=r'^\+\d+$')
+    phone: str = Field(
+        ...,
+        min_length=12,
+        max_length=12,
+        pattern=r'^\+1\d{10}$',
+        description="Canadian/US phone in E.164 format: +1XXXXXXXXXX",
+    )
 
 
 class VerifyOTPRequest(BaseModel):
-    phone: str = Field(..., min_length=10, max_length=15, pattern=r'^\+\d+$')
+    phone: str = Field(
+        ...,
+        min_length=12,
+        max_length=12,
+        pattern=r'^\+1\d{10}$',
+        description="Canadian/US phone in E.164 format: +1XXXXXXXXXX",
+    )
     code: str = Field(..., min_length=4, max_length=4, pattern=r'^\d{4}$')
 
 

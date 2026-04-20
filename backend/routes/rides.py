@@ -524,6 +524,17 @@ async def create_ride(
     # back to ``request`` without also reworking the rate-limit decorator.
     validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
 
+    # R-P1-7: Idempotency — if the client retries after a network drop, return
+    # the previously-created ride instead of charging the rider twice.
+    idempotency_key = request.headers.get("Idempotency-Key")
+    if idempotency_key:
+        existing = await db_supabase.find_one(
+            "rides",
+            {"idempotency_key": idempotency_key, "rider_id": current_user["id"]},
+        )
+        if existing:
+            return existing
+
     # Ban check + payment method validation share a single users-row read.
     # Previously this was two round-trips: ``find_one(users)`` (for card path)
     # + ``get_user_status`` (always). ``status`` lives on the same row.
@@ -669,6 +680,8 @@ async def create_ride(
     ride_data["tax_amount"] = tax_amount
     ride_data["tax_breakdown"] = fees_result.get("tax_breakdown", {})
     ride_data["grand_total"] = grand_total
+    if idempotency_key:
+        ride_data["idempotency_key"] = idempotency_key
 
     # ``insert_ride`` returns the row Supabase just wrote — use it directly
     # instead of a follow-up ``get_ride`` round-trip. Fall back to the
@@ -960,6 +973,10 @@ async def add_tip(ride_id: str, request: Request, current_user: dict = Depends(g
 
     if ride.get("status") != "completed":
         raise HTTPException(status_code=400, detail="Can only tip completed rides")
+
+    # R-P1-20: Block duplicate tips — one tip per ride.
+    if ride.get("tip_amount", 0) > 0:
+        raise HTTPException(status_code=400, detail="ERR_TIP_DUPLICATE")
 
     new_tip = ride.get("tip_amount", 0) + tip_amount
     new_driver_earnings = ride.get("driver_earnings", 0) + tip_amount
@@ -1338,7 +1355,7 @@ async def cancel_ride_rider(ride_id: str, current_user: dict = Depends(get_curre
     if ride.get("status") in ["completed", "cancelled"]:
         raise HTTPException(status_code=400, detail="Ride already completed or cancelled")
 
-    if ride.get("status") == 'trip_in_progress':
+    if ride.get("status") == 'in_progress':
         raise RideStateError("Cannot cancel after trip has started")
 
     # Calculate cancellation fee based on time since driver accepted
@@ -1875,11 +1892,18 @@ async def simulate_driver_arrival(ride_id: str, current_user: dict = Depends(get
 
 @api_router.post("/{ride_id}/start")
 async def rider_start_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
-    """Rider-side: Mark ride as in progress (when OTP already verified or used together with driver)."""
+    """Start a ride. Restricted to the assigned driver only (R-P1-17)."""
+    # R-P1-17: Only the assigned driver may mark a ride as started.
+    if not current_user.get("is_driver"):
+        raise HTTPException(status_code=403, detail="ERR_DRIVER_ONLY")
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
-    if ride.get("rider_id") != current_user["id"]:
+    # Verify this driver is the one assigned to the ride
+    driver_row = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
+    if not driver_row or ride.get("driver_id") != driver_row["id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     if ride.get("status") not in ["driver_arrived"]:
         raise HTTPException(status_code=400, detail=f"Cannot start ride with status: {ride.get('status')}")

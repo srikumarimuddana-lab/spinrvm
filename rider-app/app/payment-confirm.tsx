@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -19,6 +20,11 @@ import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
+
+interface CorporateAccount {
+  id: string;
+  company_name: string;
+}
 
 const PAYMENT_METHODS = [
   { id: 'card', name: 'Credit Card', icon: 'card', last4: '4242' },
@@ -35,6 +41,9 @@ export default function PaymentConfirmScreen() {
   const [promoValidating, setPromoValidating] = useState(false);
   const [promoApplied, setPromoApplied] = useState(false);
   const [promoMessage, setPromoMessage] = useState('');
+  const [corporateAccounts, setCorporateAccounts] = useState<CorporateAccount[]>([]);
+  const [useCorporate, setUseCorporate] = useState(false);
+  const [selectedCorporateId, setSelectedCorporateId] = useState<string | null>(null);
   const [alertState, setAlertState] = useState<{
     visible: boolean;
     title: string;
@@ -48,12 +57,21 @@ export default function PaymentConfirmScreen() {
 
   const selectedEstimate = estimates.find((e) => e.vehicle_type.id === selectedVehicle?.id);
 
+  useEffect(() => {
+    api.get('/corporate/rider/accounts').then((res) => {
+      const accounts: CorporateAccount[] = res.data || [];
+      setCorporateAccounts(accounts);
+      if (accounts.length > 0) setSelectedCorporateId(accounts[0].id);
+    }).catch(() => {});
+  }, []);
+
   const [isBooking, setIsBooking] = useState(false);
   const handleBookRide = async () => {
     if (isBooking || isLoading) return;
     setIsBooking(true);
     try {
-      const ride = await createRide(selectedPayment);
+      const corpId = useCorporate && selectedCorporateId ? selectedCorporateId : null;
+      const ride = await createRide(selectedPayment, corpId);
       Analytics.rideRequested({
         vehicle_type: selectedVehicle?.name ?? 'unknown',
         estimated_fare: totalFare,
@@ -229,6 +247,47 @@ export default function PaymentConfirmScreen() {
             <Text style={styles.addPaymentText}>Add Payment Method</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Corporate Billing */}
+        {corporateAccounts.length > 0 && (
+          <View style={styles.corporateSection}>
+            <View style={styles.corporateRow}>
+              <View style={styles.corporateIconWrap}>
+                <Ionicons name="business" size={20} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.corporateTitle}>Bill to Business</Text>
+                <Text style={styles.corporateSubtitle}>
+                  {useCorporate && selectedCorporateId
+                    ? corporateAccounts.find(a => a.id === selectedCorporateId)?.company_name
+                    : 'Use a corporate account'}
+                </Text>
+              </View>
+              <Switch
+                value={useCorporate}
+                onValueChange={(v) => setUseCorporate(v)}
+                trackColor={{ false: colors.border, true: colors.primary }}
+                thumbColor="#FFF"
+              />
+            </View>
+            {useCorporate && corporateAccounts.length > 1 && (
+              <View style={styles.corporatePicker}>
+                {corporateAccounts.map((acct) => (
+                  <TouchableOpacity
+                    key={acct.id}
+                    style={[styles.corporateOption, selectedCorporateId === acct.id && styles.corporateOptionSelected]}
+                    onPress={() => setSelectedCorporateId(acct.id)}
+                  >
+                    <Text style={[styles.corporateOptionText, selectedCorporateId === acct.id && { color: colors.primary }]}>
+                      {acct.company_name}
+                    </Text>
+                    {selectedCorporateId === acct.id && <Ionicons name="checkmark" size={16} color={colors.primary} />}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
 
         {/* Promo Code */}
         {!promoExpanded ? (
@@ -689,6 +748,57 @@ function createStyles(colors: ThemeColors) {
       fontSize: 18,
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.primary,
+    },
+    corporateSection: {
+      backgroundColor: colors.surface,
+      padding: 16,
+      marginBottom: 12,
+    },
+    corporateRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+    },
+    corporateIconWrap: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.primary + '15',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    corporateTitle: {
+      fontSize: 15,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.text,
+    },
+    corporateSubtitle: {
+      fontSize: 13,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+      marginTop: 2,
+    },
+    corporatePicker: {
+      marginTop: 12,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      paddingTop: 12,
+    },
+    corporateOption: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      borderRadius: 10,
+    },
+    corporateOptionSelected: {
+      backgroundColor: colors.primary + '10',
+    },
+    corporateOptionText: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.text,
     },
     splitButton: {
       flexDirection: 'row',

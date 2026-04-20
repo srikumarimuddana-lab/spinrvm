@@ -1,12 +1,19 @@
 """Policy evaluation for corporate ride bookings (v1 stub).
 
-Pure function — no I/O. Safe to call from tests without any DB fixtures.
+Public API:
+  evaluate_policy(policy, ride_context) -> dict
+    Pure sync function — no I/O. Safe to call from tests without any DB fixtures.
+
+  evaluate_policy_for_ride(corporate_account_id, rider_id, estimated_fare, ...) -> PolicyResult
+    Async wrapper: fetches policy + allowance from DB, builds context, delegates to
+    evaluate_policy. Use this from route handlers.
 """
 from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Dict, List
+from decimal import Decimal
+from typing import Dict, List, Optional
 
 try:
     import pytz as _pytz
@@ -14,6 +21,114 @@ except ImportError:
     _pytz = None  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+
+class PolicyResult:
+    """Structured result from evaluate_policy / evaluate_policy_for_ride.
+
+    Attributes:
+        passed         True when all rules pass (or policy_override active).
+        failed_rules   Rules that would have failed (empty on full pass).
+        bypassed_rules Rules skipped due to policy_override (for audit log).
+        policy         The raw policy dict that was evaluated.
+    """
+
+    __slots__ = ("passed", "failed_rules", "bypassed_rules", "policy")
+
+    def __init__(
+        self,
+        passed: bool,
+        failed_rules: List[str],
+        bypassed_rules: List[str],
+        policy: Optional[dict] = None,
+    ) -> None:
+        self.passed = passed
+        self.failed_rules = failed_rules
+        self.bypassed_rules = bypassed_rules
+        self.policy = policy or {}
+
+    @classmethod
+    def _from_dict(cls, result: dict, policy: Optional[dict] = None) -> "PolicyResult":
+        return cls(
+            passed=result.get("pass", True),
+            failed_rules=result.get("failed_rules", []),
+            bypassed_rules=result.get("bypassed_rules", []),
+            policy=policy,
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "pass": self.passed,
+            "failed_rules": self.failed_rules,
+            "bypassed_rules": self.bypassed_rules,
+        }
+
+
+async def evaluate_policy_for_ride(
+    corporate_account_id: str,
+    rider_id: str,
+    estimated_fare: Decimal,
+    ride_type: str,         # "standard" | "xl" | "premium"
+    pickup_time: datetime,  # UTC
+    *,
+    policy_override: bool = False,
+) -> PolicyResult:
+    """Fetch policy + member allowance from the DB and evaluate all rules.
+
+    Returns a PolicyResult. Callers should inspect `.passed` and `.failed_rules`.
+    Never raises — a DB failure returns a permissive PolicyResult with a warning
+    so a transient outage cannot silently block every work ride.
+    """
+    try:
+        from ..db_supabase import (  # type: ignore
+            get_corporate_policy,
+            get_member_allowance,
+            list_active_memberships_for_user,
+        )
+    except ImportError:
+        from db_supabase import (  # type: ignore
+            get_corporate_policy,
+            get_member_allowance,
+            list_active_memberships_for_user,
+        )
+
+    policy: dict = {}
+    allowance: dict = {}
+
+    try:
+        policy = await get_corporate_policy(corporate_account_id) or {}
+    except Exception as exc:
+        logger.warning(
+            "[policy] could not fetch policy for company=%s: %s — treating as no policy",
+            corporate_account_id, exc,
+        )
+
+    try:
+        memberships = await list_active_memberships_for_user(rider_id)
+        member = next(
+            (m for m in memberships if m.get("company_id") == corporate_account_id), None
+        )
+        if member:
+            allowance = await get_member_allowance(member["id"]) or {}
+            if policy_override is False:
+                policy_override = bool(member.get("policy_override"))
+    except Exception as exc:
+        logger.warning(
+            "[policy] could not fetch allowance for rider=%s company=%s: %s",
+            rider_id, corporate_account_id, exc,
+        )
+
+    ride_context: dict = {
+        "estimated_fare": float(estimated_fare),
+        "ride_type": ride_type,
+        "pickup_time": pickup_time,
+        "allowance": allowance,
+        "policy_override": policy_override,
+    }
+
+    raw = evaluate_policy(policy, ride_context)
+    return PolicyResult._from_dict(raw, policy=policy)
+
 
 # Day-of-week abbreviations → Python weekday index (Mon=0 … Sun=6)
 _DOW_MAP: Dict[str, int] = {

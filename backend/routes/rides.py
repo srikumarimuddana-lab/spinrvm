@@ -1240,7 +1240,72 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 "created_at": datetime.utcnow().isoformat(),
             })
 
-    # Card path is still a stub — Stripe charge to be wired separately.
+    else:
+        # Card path — charge rider's saved Stripe payment method.
+        try:
+            import stripe as _stripe  # noqa: PLC0415
+        except ImportError:
+            logger.error("stripe package not installed")
+            await db_supabase.update_ride(ride_id, {"payment_status": "failed"})
+            raise HTTPException(status_code=503, detail="Payment provider unavailable")
+
+        _settings = await get_app_settings()
+        _stripe_secret = _settings.get("stripe_secret_key", "")
+        if not _stripe_secret:
+            logger.error("[PAYMENT] Stripe not configured — cannot charge ride %s", ride_id)
+            await db_supabase.update_ride(ride_id, {"payment_status": "failed"})
+            raise HTTPException(status_code=503, detail="Payment provider not configured")
+
+        _rider_user = await db_supabase.get_user_by_id(current_user["id"])
+        _pm_id = (_rider_user or {}).get("default_payment_method")
+        _customer_id = (_rider_user or {}).get("stripe_customer_id")
+        if not _pm_id:
+            await db_supabase.update_ride(ride_id, {"payment_status": "failed"})
+            raise HTTPException(status_code=400, detail="No saved payment method on file")
+
+        _charge_cents = int(
+            _round(_d(str(total_charge))) * 100
+        )
+
+        try:
+            _intent = _stripe.PaymentIntent.create(
+                amount=_charge_cents,
+                currency="cad",
+                customer=_customer_id,
+                payment_method=_pm_id,
+                confirm=True,
+                off_session=True,
+                metadata={"ride_id": ride_id, "user_id": current_user["id"]},
+                api_key=_stripe_secret,
+                idempotency_key=f"ride-payment-{ride_id}",
+            )
+        except _stripe.error.CardError as exc:
+            _stripe_msg = exc.user_message or str(exc)
+            logger.warning("[PAYMENT] Stripe CardError ride=%s: %s", ride_id, _stripe_msg)
+            await db_supabase.update_ride(ride_id, {"payment_status": "failed"})
+            raise HTTPException(status_code=402, detail=_stripe_msg) from exc
+        except _stripe.error.StripeError as exc:
+            logger.error("[PAYMENT] StripeError ride=%s: %s", ride_id, exc)
+            await db_supabase.update_ride(ride_id, {"payment_status": "failed"})
+            raise HTTPException(status_code=402, detail=str(exc)) from exc
+
+        if _intent.status not in ("succeeded", "requires_capture"):
+            logger.warning(
+                "[PAYMENT] Unexpected PaymentIntent status=%s ride=%s", _intent.status, ride_id
+            )
+            await db_supabase.update_ride(ride_id, {"payment_status": "failed"})
+            raise HTTPException(
+                status_code=402, detail=f"Payment not completed (status: {_intent.status})"
+            )
+
+        # Persist the PaymentIntent ID so disputes/refunds can reference it.
+        await db_supabase.update_ride(ride_id, {"payment_intent_id": _intent.id})
+
+        await manager.send_personal_message(
+            {"type": "payment_completed", "ride_id": ride_id, "payment_intent_id": _intent.id},
+            f"rider_{current_user['id']}",
+        )
+
     await db_supabase.update_ride(
         ride_id,
         {

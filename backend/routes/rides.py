@@ -2,6 +2,7 @@ import asyncio
 import secrets
 import uuid
 from datetime import datetime
+from datetime import timezone as _tz
 from decimal import ROUND_HALF_UP, Decimal
 from typing import List, Optional
 
@@ -53,12 +54,16 @@ try:
         sign_estimate_token,
         verify_estimate_token,
     )
+    from ..services import corporate_allowance_service, corporate_wallet_service  # type: ignore
+    from ..services.corporate_policy_service import evaluate_policy  # type: ignore
 except ImportError:
     from utils.estimate_token import (
         EstimateTokenError,
         sign_estimate_token,
         verify_estimate_token,
     )
+    from services import corporate_allowance_service, corporate_wallet_service  # type: ignore
+    from services.corporate_policy_service import evaluate_policy  # type: ignore
 
 db = db_supabase  # legacy alias
 dispatch = DispatchService(db_supabase)  # module-level instance for legacy call sites
@@ -618,7 +623,7 @@ async def create_ride(
         raise HTTPException(status_code=403, detail="Your account has been suspended due to policy violations.")
     if user_status == "suspended":
         raise HTTPException(status_code=403, detail="Your account is currently suspended. Please contact support.")
-    if body.payment_method == "card":
+    if body.payment_method == "card" and not body.work_profile:
         if not rider_row or not rider_row.get("stripe_customer_id"):
             raise HTTPException(status_code=400, detail="No payment method on file. Please add a card first.")
 
@@ -797,6 +802,62 @@ async def create_ride(
     ride_data["grand_total"] = grand_total
     if idempotency_key:
         ride_data["idempotency_key"] = idempotency_key
+
+    # ── Corporate work-profile pre-dispatch check ─────────────────────────────
+    # Activated when the rider sends work_profile=true + corporate_account_id.
+    # Policy violation or insufficient funds → reject before a driver is
+    # disturbed. Personal rides (no work_profile flag) skip this block entirely.
+    if body.work_profile and body.corporate_account_id:
+        _corp_company_id = body.corporate_account_id
+
+        # 1. Resolve active membership
+        _memberships = await db_supabase.list_active_memberships_for_user(current_user["id"])
+        _membership = next(
+            (m for m in _memberships if m.get("company_id") == _corp_company_id), None
+        )
+        if not _membership:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": "no_corporate_membership"},
+            )
+
+        # 2. Fetch allowance
+        _allowance = await db_supabase.get_member_allowance(_membership["id"]) or {}
+
+        # 3. Fetch company policy
+        _policy = await db_supabase.get_corporate_policy(_corp_company_id) or {}
+
+        # 4. Run policy evaluator
+        _ride_ctx: dict = {
+            "estimated_fare": _f(total_fare),
+            "pickup_time": datetime.now(_tz.utc).isoformat(),
+            "allowance": _allowance,
+            "policy_override": _membership.get("policy_override", False),
+        }
+        _eval = evaluate_policy(_policy, _ride_ctx)
+        if not _eval["pass"]:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": "policy_violation", "failed_rules": _eval["failed_rules"]},
+            )
+
+        # 5. Pre-auth buffer check (skip for unlimited allowances)
+        if _allowance.get("type") != "unlimited":
+            _remaining = _d(str(_allowance.get("amount") or 0)) - _d(
+                str(max(float(_allowance.get("used") or 0), 0.0))
+            )
+            _master_permitted = _policy.get("allowed_payment_source", "both") in (
+                "master_only", "both"
+            )
+            if _remaining < _round(_d(str(_f(total_fare))) * _d("1.5")) and not _master_permitted:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"reason": "allowance_low"},
+                )
+
+        # 6. Tag ride as corporate
+        ride_data["corporate_account_id"] = _corp_company_id
+        ride_data["payment_method"] = "company_allowance"
 
     # ``insert_ride`` returns the row Supabase just wrote — use it directly
     # instead of a follow-up ``get_ride`` round-trip. Fall back to the
@@ -1108,7 +1169,8 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
     payment_method = (ride.get("payment_method") or "card").lower()
 
     if payment_method == "wallet":
-        from decimal import Decimal, ROUND_HALF_UP
+        from decimal import ROUND_HALF_UP, Decimal
+
         from .wallet import _record_transaction, get_or_create_wallet
 
         wallet = await get_or_create_wallet(current_user["id"])
@@ -1145,6 +1207,96 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             reference_id=ride_id,
             description=f"Ride payment ${float(debit):.2f}",
         )
+
+    elif payment_method == "company_allowance":
+        from decimal import Decimal as _Dec
+
+        _company_id = ride.get("corporate_account_id")
+        if not _company_id:
+            raise HTTPException(status_code=400, detail="Corporate account not set on ride")
+
+        # 1. Resolve membership
+        _corp_memberships = await db_supabase.list_active_memberships_for_user(ride["rider_id"])
+        _corp_membership = next(
+            (m for m in _corp_memberships if m.get("company_id") == _company_id), None
+        )
+        if not _corp_membership:
+            await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
+            raise HTTPException(status_code=400, detail="Corporate membership not found")
+
+        # 2. Fetch allowance and wallet
+        _corp_allowance = await db_supabase.get_member_allowance(_corp_membership["id"]) or {}
+        _corp_wallet = await db_supabase.get_corporate_wallet_by_company(_company_id) or {}
+
+        # 3. Compute split — allowance covers what it can, master covers rest
+        _total = _round(_d(str(total_charge)))
+        if _corp_allowance.get("type") == "unlimited":
+            _allowance_debit = _total
+            _master_debit = _round(_Dec("0"))
+        else:
+            _remaining = _round(
+                _d(str(_corp_allowance.get("amount") or 0))
+                - _d(str(max(float(_corp_allowance.get("used") or 0), 0.0)))
+            )
+            _remaining = max(_remaining, _round(_Dec("0")))
+            _allowance_debit = min(_remaining, _total)
+            _master_debit = _total - _allowance_debit
+
+        # 4. Check master fallback permission
+        _corp_policy = await db_supabase.get_corporate_policy(_company_id) or {}
+        _flag_violation = False
+        if _master_debit > 0 and _corp_policy.get("allowed_payment_source") == "allowance_only":
+            # Debit-and-flag: driver must be paid, never strand the ride
+            _flag_violation = True
+
+        # 5. Apply allowance debit (calls corporate_allowance_apply_delta RPC)
+        if _allowance_debit > 0 and _corp_allowance.get("id") and _corp_wallet.get("id"):
+            await corporate_allowance_service.apply_rollback(
+                wallet_id=_corp_wallet["id"],
+                allowance_id=_corp_allowance["id"],
+                member_id=_corp_membership["id"],
+                amount=float(_allowance_debit),
+                notes=f"ride:{ride_id}:allowance",
+            )
+
+        # 6. Apply master wallet debit (calls corporate_wallet_apply_delta RPC)
+        if _master_debit > 0 and _corp_wallet.get("id"):
+            await corporate_wallet_service.apply_adjustment(
+                wallet_id=_corp_wallet["id"],
+                amount=-float(_master_debit),
+                notes=f"Ride fallback debit {ride_id}",
+                actor_user_id=ride.get("rider_id", "system"),
+            )
+
+        # 7. Insert ride_payment_sources row
+        await db_supabase.insert_one("ride_payment_sources", {
+            "ride_id": ride_id,
+            "source_type": "company_allowance",
+            "allowance_debit_amount": float(_allowance_debit),
+            "master_fallback_amount": float(_master_debit),
+            "member_id": _corp_membership["id"],
+            "company_id": _company_id,
+            "created_at": datetime.utcnow().isoformat(),
+        })
+
+        # 8. Policy re-check at completion (log only — never strand driver)
+        _completion_ctx = {
+            "final_fare": float(_total),
+            "phase": "completion",
+            "allowance": _corp_allowance,
+        }
+        _completion_eval = evaluate_policy(_corp_policy, _completion_ctx)
+        if not _completion_eval["pass"] or _flag_violation:
+            await db_supabase.insert_one("corporate_policy_evaluations", {
+                "ride_id": ride_id,
+                "member_id": _corp_membership["id"],
+                "company_id": _company_id,
+                "phase": "completion",
+                "result": "violation",
+                "failed_rules": _completion_eval.get("failed_rules", []),
+                "bypassed_rules": [],
+                "created_at": datetime.utcnow().isoformat(),
+            })
 
     # Card path is still a stub — Stripe charge to be wired separately.
     await db_supabase.update_ride(

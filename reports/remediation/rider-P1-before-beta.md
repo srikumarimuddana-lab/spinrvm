@@ -358,18 +358,39 @@ phone: str = Field(
 
 ## Checklist
 
-- [ ] R-P1-1 Cancellation fee enforced after driver_arrived; Cancel button disabled
-- [ ] R-P1-2 Verify useRiderSocket dispatches chat_message events to addChatMessage
-- [ ] R-P1-3 Fare split accessible from ride-in-progress screen (mid-ride split)
-- [ ] R-P1-4 rate-ride.tsx deleted; _layout.tsx Stack.Screen entry removed
-- [ ] R-P1-5 Upcoming scheduled rides visible in activity tab
-- [ ] R-P1-6 Data export + account deletion call real API endpoints (PIPEDA)
-- [ ] R-P1-7 Idempotency key on ride creation (no double charge)
-- [ ] R-P1-8 Promo discount validated against server fare, not client fare
-- [ ] R-P1-9 SOS and star rating accessibility labels
-- [ ] R-P1-10 i18n library installed; French (fr-CA) translation prepared
-- [ ] R-P1-11 become-driver.tsx post-submit routes to /(tabs) + driver app store link
-- [ ] R-P1-12 Firebase audience check added to rider dependency (FIREBASE_RIDER_APP_ID)
-- [ ] R-P1-13 Firebase-authed users subject to token_version + session_id revocation checks
-- [ ] R-P1-14 OTP comparison uses hmac.compare_digest instead of DB equality lookup
-- [ ] R-P1-15 Backend OTP phone schema restricted to +1XXXXXXXXXX (Canada/US only)
+- [x] R-P1-1 Cancellation fee enforced after driver_arrived; Cancel button disabled
+- [x] R-P1-2 Verify useRiderSocket dispatches chat_message events to addChatMessage (already correct)
+- [x] R-P1-3 Fare split accessible from ride-in-progress screen (mid-ride split)
+- [x] R-P1-4 rate-ride.tsx deleted; _layout.tsx Stack.Screen entry removed
+- [x] R-P1-5 Upcoming scheduled rides visible in activity tab
+- [x] R-P1-6 Data export + account deletion call real API endpoints (PIPEDA)
+- [x] R-P1-7 Idempotency key on ride creation (no double charge)
+- [x] R-P1-8 Promo discount validated against server fare, not client fare
+- [x] R-P1-9 SOS and star rating accessibility labels
+- [x] R-P1-10 i18n library installed; French (fr-CA) translation prepared
+- [x] R-P1-11 become-driver.tsx post-submit routes to /(tabs) + driver app store link
+- [x] R-P1-12 Firebase audience check added to rider dependency (FIREBASE_RIDER_APP_ID)
+- [x] R-P1-13 Firebase-authed users subject to token_version + session_id revocation checks
+- [x] R-P1-14 OTP comparison uses hmac.compare_digest instead of DB equality lookup
+- [x] R-P1-15 Backend OTP phone schema restricted to +1XXXXXXXXXX (Canada/US only)
+- [x] R-P1-16 driver_timeout WS event shows Alert to rider before re-searching
+- [x] R-P1-17 /rides/{id}/start restricted to assigned driver only (role + driver_id check)
+- [x] R-P1-18 Dead guard 'trip_in_progress' → 'in_progress' fixed in cancel endpoint
+- [x] R-P1-19 Wallet fare cross-validated server-side before debit (ERR_FARE_EXCEEDED)
+- [x] R-P1-20 Duplicate tip guard added — ERR_TIP_DUPLICATE on second tip attempt
+- [x] R-P1-21 Idempotency key stored on ride record (covered by R-P1-7)
+- [x] R-P1-22 Jest coverage thresholds added (lines 70%, functions 60%, branches 60%)
+- [x] R-P1-23 rideStore unit tests: hydrateActiveRide, double-booking prevention, cancel-after-arrived
+- [x] R-P1-24 rideStore WS tests: driver_timeout, ride_cancelled, WS/poll race condition
+- [x] R-P1-25 walletStore tests: payWithWallet idempotency, addTip idempotency
+- [x] R-P1-26 e2e ride-booking spec: rate/tip stage, data-testid/aria-label selectors
+- [x] R-P1-27 .env.example: real credentials replaced with placeholders, ALLOWED_ORIGINS documented
+- [x] R-P1-28 Driver endpoint strips rider PII (phone, email, stripe_customer_id)
+- [x] R-P1-29 Killed-state deep linking via getInitialNotificationResponseAsync in _layout.tsx
+- [x] R-P1-30 FCM data payloads already present (verified — no change needed)
+- [x] R-P1-31 Star rating buttons have accessibilityLabel/Role/State (ride-completed.tsx)
+- [x] R-P1-32 SOSButton has accessibilityLabel/Role/Hint/State (shared/components/SOSButton.tsx)
+- [x] R-P1-33 ride-in-progress.tsx and driver-arriving.tsx accessibility props added
+- [x] R-P1-34 en-CA.json and fr-CA.json created with full translation coverage
+- [x] R-P1-35 Hardcoded strings replaced with t() calls in settings, privacy-settings, activity
+- [x] R-P1-36 Backend error codes: ERR_OTP_INVALID, ERR_OTP_EXPIRED, ERR_OTP_LOCKED, ERR_FARE_EXCEEDED, ERR_TIP_DUPLICATE, ERR_DRIVER_ONLY, ERR_SESSION_REVOKED, ERR_SESSION_EXPIRED, ERR_TOKEN_AUDIENCE

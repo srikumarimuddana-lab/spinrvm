@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { useRideStore } from '../store/rideStore';
 import { API_URL } from '@shared/config';
+import { RideStatus } from '../constants/rideStatus';
 
 /**
  * Real-time WebSocket client for the rider app.
@@ -93,7 +94,7 @@ export function useRiderSocket() {
 
       case 'ride_completed':
         if (rideId) {
-          applyRideStatusFromWS(rideId, 'completed', {
+          applyRideStatusFromWS(rideId, RideStatus.COMPLETED, {
             total_fare: data.total_fare,
           });
           fetchRide(rideId);
@@ -257,7 +258,8 @@ export function useRiderSocket() {
     }
   }, []);
 
-  return { connectionState, sendMessage };
+  const wsConnected = connectionState === 'connected';
+  return { connectionState, wsConnected, sendMessage };
 }
 
 export default useRiderSocket;

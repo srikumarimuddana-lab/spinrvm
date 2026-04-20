@@ -42,14 +42,16 @@ export default function ActivityScreen() {
   const [activeTab, setActiveTab] = useState<TabType>('history');
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { t } = useTranslation();
 
   const fetchData = async () => {
+    setFetchError(null);
     try {
       const [ridesRes, typesRes] = await Promise.all([
-        api.get('/rides/history').catch(() => ({ data: [] })),
+        api.get('/rides/history'),
         api.get('/vehicle-types').catch(() => ({ data: [] })),
       ]);
 
@@ -61,6 +63,7 @@ export default function ActivityScreen() {
       });
       setVehicleTypes(typesMap);
     } catch (error) {
+      setFetchError('Could not load rides. Pull to refresh.');
       console.log('Error fetching activity data:', error);
     } finally {
       setLoading(false);
@@ -200,7 +203,13 @@ export default function ActivityScreen() {
             showsVerticalScrollIndicator={false}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           >
-            {rides.length === 0 && !loading ? (
+            {fetchError ? (
+              <View style={styles.emptyState}>
+                <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
+                <Text style={[styles.emptyTitle, { color: '#EF4444' }]}>Could not load rides</Text>
+                <Text style={styles.emptyText}>Pull down to refresh.</Text>
+              </View>
+            ) : rides.length === 0 && !loading ? (
               <View style={styles.emptyState}>
                 <View style={styles.emptyIconContainer}>
                   <Ionicons name="car-outline" size={48} color="#CCC" />

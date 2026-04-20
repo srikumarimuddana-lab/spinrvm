@@ -4,10 +4,12 @@ try:
     from .. import db_supabase
     from ..dependencies import get_current_user
     from ..schemas import SavedAddress, SavedAddressCreate
+    from ..validators import sanitize_string
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
     from schemas import SavedAddress, SavedAddressCreate
+    from validators import sanitize_string
 
 api_router = APIRouter(prefix="/addresses", tags=["Addresses"])
 
@@ -26,8 +28,8 @@ async def get_saved_addresses(current_user: dict = Depends(get_current_user)):
 async def create_saved_address(request: SavedAddressCreate, current_user: dict = Depends(get_current_user)):
     address = SavedAddress(
         user_id=current_user["id"],
-        name=request.name,
-        address=request.address,
+        name=sanitize_string(request.name),
+        address=sanitize_string(request.address),
         lat=request.lat,
         lng=request.lng,
         icon=request.icon,

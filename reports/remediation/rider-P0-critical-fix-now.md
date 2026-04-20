@@ -274,3 +274,4 @@ records, and driver data are accessible. The key expires 2036.
 - [x] R-P0-6 Home screen SOS replaced with real SOSButton; 911 fallback when no active ride — fake TouchableOpacity replaced with SOSButton in index.tsx
 - [x] R-P0-7 OTP lockout fails closed on Redis error (not silently bypassed) — _check_otp_lockout raises HTTP 503 on Redis error
 - [x] R-P0-8 Supabase service-role key rotated; backend/.env.example placeholder replaced — NOTE: actual key rotation must be done manually in Supabase Dashboard → Settings → API
+- [x] R-P0-9 Stripe card charge wired: off-session PaymentIntent in process_payment; payment_method_id stored on ride; real saved cards loaded in payment-confirm.tsx; GET /payments/cards stripe_secret bug fixed

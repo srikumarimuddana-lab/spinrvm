@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput,
-  Platform, ActivityIndicator, BackHandler, Share, KeyboardAvoidingView,
+  Platform, ActivityIndicator, BackHandler, Share, KeyboardAvoidingView, Clipboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -67,39 +67,53 @@ export default function RideCompletedScreen() {
     return () => sub.remove();
   }, []);
 
-  const handleShareInvoice = async () => {
+  const buildReceiptText = () => {
     const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
     const total = fare + tipAmount;
-    const invoice = [
-      `SPINR RIDE RECEIPT`,
-      `──────────────────`,
-      `Date: ${currentRide?.ride_completed_at ? new Date(currentRide.ride_completed_at).toLocaleString() : new Date().toLocaleString()}`,
+    const rideDate = currentRide?.ride_completed_at
+      ? new Date(currentRide.ride_completed_at).toLocaleString('en-CA', {
+          weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+          hour: '2-digit', minute: '2-digit',
+        })
+      : new Date().toLocaleString('en-CA', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    return [
+      `╔══════════════════════════════╗`,
+      `║      SPINR RIDE RECEIPT      ║`,
+      `║   Saskatoon · Regina, SK     ║`,
+      `╚══════════════════════════════╝`,
       ``,
-      `Pickup: ${currentRide?.pickup_address || '—'}`,
-      `Dropoff: ${currentRide?.dropoff_address || '—'}`,
-      `Distance: ${distance.toFixed(1)} km`,
-      `Duration: ${duration} min`,
+      `📅 ${rideDate}`,
+      `🆔 Ride: ${currentRide?.id?.slice(0, 8).toUpperCase() ?? '—'}`,
       ``,
+      `▸ FROM  ${currentRide?.pickup_address || '—'}`,
+      `▸ TO    ${currentRide?.dropoff_address || '—'}`,
+      ``,
+      `━━━━━━ FARE BREAKDOWN ━━━━━━`,
       `Base fare:     $${(currentRide?.base_fare || 0).toFixed(2)}`,
-      `Distance:      $${(currentRide?.distance_fare || 0).toFixed(2)}`,
-      `Time:          $${(currentRide?.time_fare || 0).toFixed(2)}`,
+      `Distance fare: $${(currentRide?.distance_fare || 0).toFixed(2)}  (${distance.toFixed(1)} km)`,
+      `Time fare:     $${(currentRide?.time_fare || 0).toFixed(2)}  (${duration} min)`,
       `Booking fee:   $${(currentRide?.booking_fee || 0).toFixed(2)}`,
-      tipAmount > 0 ? `Tip:           $${tipAmount.toFixed(2)}` : '',
-      `──────────────────`,
+      tipAmount > 0 ? `Tip:           $${tipAmount.toFixed(2)}` : null,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
       `TOTAL:         $${total.toFixed(2)} CAD`,
       ``,
-      `Payment: Card •••• ${currentRide?.card_last4 || '4242'}`,
+      `💳 Card •••• ${currentRide?.card_last4 || '4242'}  ✅ PAID`,
       ``,
-      `Driver: ${currentDriver?.name || 'Driver'}`,
-      `Vehicle: ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || ''} ${currentDriver?.vehicle_model || ''}`,
-      `Plate: ${currentDriver?.license_plate || '—'}`,
+      `👤 Driver: ${currentDriver?.name || 'Driver'}`,
+      `🚙 ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || ''} ${currentDriver?.vehicle_model || ''}`,
+      `🪪 Plate: ${currentDriver?.license_plate || '—'}`,
       ``,
-      `Spinr Technologies Inc. · Saskatoon, SK`,
-      `support@spinr.ca`,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+      `Spinr Technologies Inc.`,
+      `support@spinr.ca · spinr.ca`,
+      `Mon–Fri 9am–6pm CST`,
     ].filter(Boolean).join('\n');
+  };
 
+  const handleShareInvoice = async () => {
     try {
-      await Share.share({ message: invoice, title: 'Spinr Ride Receipt' });
+      await Share.share({ message: buildReceiptText(), title: 'Spinr Ride Receipt' });
     } catch {}
   };
 
@@ -174,11 +188,22 @@ export default function RideCompletedScreen() {
 
         {/* Post-Trip Actions */}
         <View style={styles.postTripActions}>
-          <TouchableOpacity style={styles.invoiceBtn} onPress={handleShareInvoice}>
-            <Ionicons name="receipt-outline" size={18} color={colors.primary} />
-            <Text style={styles.invoiceBtnText}>Share Invoice</Text>
-            <Ionicons name="share-outline" size={16} color={colors.textDim} />
-          </TouchableOpacity>
+          <View style={styles.receiptRow}>
+            <TouchableOpacity style={[styles.invoiceBtn, { flex: 1 }]} onPress={handleShareInvoice}>
+              <Ionicons name="receipt-outline" size={18} color={colors.primary} />
+              <Text style={styles.invoiceBtnText}>Share Receipt</Text>
+              <Ionicons name="share-outline" size={16} color={colors.textDim} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.copyReceiptBtn}
+              onPress={() => {
+                Clipboard.setString(buildReceiptText());
+                setAlertState({ visible: true, title: 'Copied!', message: 'Receipt copied to clipboard.', variant: 'success' });
+              }}
+            >
+              <Ionicons name="copy-outline" size={18} color={colors.textDim} />
+            </TouchableOpacity>
+          </View>
           <TouchableOpacity
             style={styles.chatBtn}
             onPress={() => router.push(`/chat-driver?rideId=${rideId}` as any)}
@@ -449,12 +474,18 @@ function createStyles(colors: ThemeColors) {
     subtitle: { fontSize: 14, color: colors.textDim },
 
     // Invoice
+    receiptRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
     invoiceBtn: {
-      flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',
-      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14, marginBottom: 16,
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14,
       borderWidth: 1, borderColor: '#ECECEC',
     },
     invoiceBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text },
+    copyReceiptBtn: {
+      backgroundColor: colors.surfaceLight, borderRadius: 14, paddingHorizontal: 16,
+      alignItems: 'center', justifyContent: 'center',
+      borderWidth: 1, borderColor: '#ECECEC',
+    },
     postTripActions: { width: '100%', gap: 8, marginBottom: 8 },
     chatBtn: {
       flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',

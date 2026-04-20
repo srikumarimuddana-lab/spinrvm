@@ -50,10 +50,10 @@ except ImportError:
 
 try:
     from ..services import corporate_allowance_service, corporate_wallet_service  # type: ignore
-    from ..services.corporate_policy_service import evaluate_policy  # type: ignore
+    from ..services.corporate_policy_service import evaluate_policy, evaluate_policy_for_ride  # type: ignore
 except ImportError:
     from services import corporate_allowance_service, corporate_wallet_service  # type: ignore
-    from services.corporate_policy_service import evaluate_policy  # type: ignore
+    from services.corporate_policy_service import evaluate_policy, evaluate_policy_for_ride  # type: ignore
 
 db = db_supabase  # legacy alias
 dispatch = DispatchService(db_supabase)  # module-level instance for legacy call sites
@@ -724,27 +724,26 @@ async def create_ride(
                 detail={"reason": "no_corporate_membership"},
             )
 
-        # 2. Fetch allowance
-        _allowance = await db_supabase.get_member_allowance(_membership["id"]) or {}
-
-        # 3. Fetch company policy
-        _policy = await db_supabase.get_corporate_policy(_corp_company_id) or {}
-
-        # 4. Run policy evaluator
-        _ride_ctx: dict = {
-            "estimated_fare": _f(total_fare),
-            "pickup_time": datetime.now(_tz.utc).isoformat(),
-            "allowance": _allowance,
-            "policy_override": _membership.get("policy_override", False),
-        }
-        _eval = evaluate_policy(_policy, _ride_ctx)
-        if not _eval["pass"]:
+        # 2–4. Fetch allowance + policy, evaluate all rules.
+        _policy_result = await evaluate_policy_for_ride(
+            corporate_account_id=_corp_company_id,
+            rider_id=current_user["id"],
+            estimated_fare=total_fare,
+            ride_type=body.vehicle_type_id or "standard",
+            pickup_time=datetime.now(_tz.utc),
+            policy_override=_membership.get("policy_override", False),
+        )
+        if not _policy_result.passed:
             raise HTTPException(
                 status_code=400,
-                detail={"reason": "policy_violation", "failed_rules": _eval["failed_rules"]},
+                detail={"reason": "policy_violation", "failed_rules": _policy_result.failed_rules},
             )
 
-        # 5. Pre-auth buffer check (skip for unlimited allowances)
+        # 5. Pre-auth buffer check (skip for unlimited allowances).
+        # Uses allowance + policy surfaced by evaluate_policy_for_ride so we
+        # don't need a second round-trip to fetch them separately.
+        _allowance = _policy_result.allowance
+        _policy = _policy_result.policy
         if _allowance.get("type") != "unlimited":
             _remaining = _d(str(_allowance.get("amount") or 0)) - _d(
                 str(max(float(_allowance.get("used") or 0), 0.0))
@@ -1106,8 +1105,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
 
     total_charge = (ride.get("total_fare", 0) or 0) + tip_amount
 
-    # Branch on payment method. Wallet is debited here against a real
-    # ledger; card is still a stub awaiting the Stripe charge wire-up.
+    # Branch on payment method.
     payment_method = (ride.get("payment_method") or "card").lower()
 
     if payment_method == "wallet":

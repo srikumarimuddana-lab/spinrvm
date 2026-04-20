@@ -102,7 +102,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | E8 | Duplicate ride request (double-tap confirm) | — | P1 |
 | E9 | Rider creates ride while another is active | X backend | — |
 | E10 | Driver accepts a ride that was just cancelled (race) | X backend | — |
-| E11 | Expired auth token mid-trip → refresh without losing state | ~ | P1 |
+| E11 | Expired auth token mid-trip → refresh without losing state | ✅ | P1 — mechanism correct; pinned client + backend |
 | E12 | WebSocket auth message rejected | X | — |
 | E13 | Backend rolling deploy during active trip (WS drop) | — | P2 |
 | E14 | Timezone / DST boundary in scheduled ride | — | P2 |
@@ -163,7 +163,7 @@ Implementation work remaining: P0-4 surge-lock, P0-5 Stripe card charge.
 8. ✅ **Role-claim tampering guard** — S3, S8 — closed: S1 gap fixed (`accept_ride` in `drivers.py` now rejects `ride.rider_id == current_user.id` → 403); S3 pinned — `get_current_user` always uses DB role, never JWT claim; S8 pinned — `get_driver_earnings` uses `current_user.id`, no caller-supplied driver_id; `backend/tests/test_p1_security.py`
 9. ✅ **Multi-stop E2E** — R11 — closed: `backend/tests/test_p1_multi_stop.py` pins add/remove stop mid-trip (WS driver notification, auth guards, position insertion, bad-index rejection); `rider-app/store/__tests__/rideStore.stops.test.ts` pins pre-ride addStop/removeStop/updateStop; fare-recalculation on mid-trip stop is xfail(strict=False) — not yet implemented
 10. ✅ **Driver offline mid-trip** — E5 — closed: `PUT /drivers/{id}/status` now rejects with 409 when driver has an active ride (driver_accepted/driver_arrived/in_progress); pinned by `backend/tests/test_p1_driver_offline.py` (7 test cases)
-11. **Token refresh mid-trip** — E11
+11. ✅ **Token refresh mid-trip** — E11 — closed: refresh mechanism already correct (`shared/api/client.ts` 401→refresh→retry with dedup); `shared/api/__tests__/client.refresh.test.ts` pins 5 client-side scenarios; `backend/tests/test_p1_token_refresh.py` pins 5 backend endpoint scenarios (rotation, invalid token, admin guard, deleted user, replaces reference)
 12. **CORS on web exports** — S9
 
 ### P2 — Completeness

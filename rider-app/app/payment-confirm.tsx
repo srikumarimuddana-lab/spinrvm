@@ -21,6 +21,7 @@ import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
+import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
 
 interface CorporateAccount {
   id: string;
@@ -55,6 +56,7 @@ function PaymentConfirmScreenContent() {
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const { scheduleReminder } = useScheduledRideReminder();
 
   const selectedEstimate = estimates.find((e) => e.vehicle_type.id === selectedVehicle?.id);
 
@@ -78,7 +80,19 @@ function PaymentConfirmScreenContent() {
         estimated_fare: totalFare,
       });
       Analytics.paymentInitiated({ method: selectedPayment, amount: totalFare });
-      router.replace('/driver-arriving?rideId=' + ride.id);
+
+      // Schedule a local 15-min reminder if this is a scheduled ride.
+      // The backend cron also fires an FCM `scheduled_ride_reminder`; this
+      // local notification is a client-side fallback.
+      if (scheduledTime && ride.id) {
+        scheduleReminder(ride.id, scheduledTime).catch(() => {});
+      }
+
+      if (scheduledTime) {
+        router.replace('/(tabs)');
+      } else {
+        router.replace('/driver-arriving?rideId=' + ride.id);
+      }
     } catch (error: any) {
       setAlertState({ visible: true, title: 'Error', message: error.message || 'Failed to book ride', variant: 'danger' });
     } finally {

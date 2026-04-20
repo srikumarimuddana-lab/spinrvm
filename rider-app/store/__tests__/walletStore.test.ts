@@ -202,4 +202,20 @@ describe('walletStore', () => {
       expect(useWalletStore.getState().wallet?.balance).toBe(5.0);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // R-P1-25: addTip idempotency
+  // ---------------------------------------------------------------------------
+  describe('addTip idempotency', () => {
+    it('second tip call is rejected when a tip already exists', async () => {
+      // Backend rejects duplicate tip with 400
+      const err: any = new Error('Tip already added');
+      err.response = { status: 400, data: { detail: 'A tip has already been added for this ride' } };
+      mockApi.post.mockRejectedValueOnce(err);
+
+      await expect(
+        useWalletStore.getState().addTip?.('ride-99', 3.0)
+      ).rejects.toThrow();
+    });
+  });
 });

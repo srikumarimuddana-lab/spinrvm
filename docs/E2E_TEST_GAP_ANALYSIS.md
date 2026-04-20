@@ -66,7 +66,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | D7 | As a driver, my earnings update after each trip | X | X | X | covered by new earnings poll test |
 | D8 | As a driver, I can cash out / schedule payouts | ✅ | ✅ | — | `test_p2_payout_t4a.py` — persisted+pending, insufficient→400, no-bank→400, not-found→404 |
 | D9 | As a driver, I see a banner when docs expire / onboarding blocks | X | X | ~ | only suspended state E2E'd |
-| D10 | As a driver, I complete quests for bonuses | X | X | — | quest E2E missing |
+| D10 | As a driver, I complete quests for bonuses | ✅ | ✅ | — | `test_e4_d10_payment_3ds_quests.py` — available quests (progress, expired filtered), join (creates row, dup→400, full→400, expired→400), claim (wallet credited, not-completed→400, non-owner→403) |
 | D11 | As a driver, I can chat with the rider | ✅ | ✅ | — | `test_p2_chat.py` + `driverStore.chat.test.ts` — send/persist/WS-forward + dedup |
 | D12 | As a driver, my active trip survives app restart | ✅ | ✅ | — | `driverStore.restart.test.ts` — 8 scenarios |
 | D13 | As a driver, I get my T4A at year-end | ✅ | ✅ | — | `test_p2_payout_t4a.py` — sums driver_earnings, correct trip count, not-found→404 |
@@ -95,7 +95,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | E1 | No drivers nearby → rider sees "no drivers available" after timeout | — | P1 |
 | E2 | All nearby drivers decline → expand radius / fail | — | P1 |
 | E3 | Stripe charge fails at completion → retry + fallback | ~ backend only | P1 |
-| E4 | Payment 3DS challenge interrupts completion | — | P2 |
+| E4 | Payment 3DS challenge interrupts completion | ✅ | P2 — `requires_action` retry loop pinned: succeeded→paid, requires_confirmation→retry+counter, cancelled→capped, max-retries→skip, final-failure→rider push; `test_e4_d10_payment_3ds_quests.py::TestPayment3DSRetry` (6 cases) |
 | E5 | Driver goes offline mid-trip | ✅ | P1 — rejected 409 by `update_driver_status`; pinned |
 | E6 | Driver's phone loses GPS mid-trip | — | P2 |
 | E7 | Rider updates dropoff after trip started | — | P2 |

@@ -2420,6 +2420,27 @@ async def update_driver_status(
                 status_code=400, detail="Your driver profile has not been verified yet. Please wait for admin approval."
             )
 
+    if not is_online:
+        # Prevent driver from going offline while actively carrying a rider.
+        # The ride remains assigned to this driver regardless of their online
+        # flag, but rejecting the toggle avoids a confusing UI state where the
+        # driver shows as "offline" yet has an active trip.
+        active_ride = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows(
+                "rides",
+                {
+                    "driver_id": driver_id,
+                    "status": {"$in": ["driver_accepted", "driver_arrived", "in_progress"]},
+                },
+                limit=1,
+            )
+        )
+        if active_ride:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot go offline during an active trip. Please complete the current ride first.",
+            )
+
     if is_online:
         now = datetime.utcnow()
 

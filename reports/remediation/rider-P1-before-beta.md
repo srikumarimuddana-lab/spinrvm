@@ -509,6 +509,98 @@ but not retries or back-navigation re-submits.
 
 ---
 
+## R-P1-22 · Jest Coverage Threshold Missing — Coverage Can Drop to Zero
+
+**Audit finding [09-1 HIGH].** `rider-app/jest.config.js` has no `coverageThreshold`
+block. CI runs `yarn test --ci --coverage` but Jest will always exit 0 regardless of
+coverage percentage. A PR that deletes all tests passes CI silently.
+
+**File to fix:** `rider-app/jest.config.js`
+
+**How to fix:**
+```js
+module.exports = {
+  // ...existing config...
+  coverageThreshold: {
+    global: {
+      lines: 70,
+      functions: 60,
+      branches: 60,
+      statements: 70,
+    },
+  },
+};
+```
+
+**Effort:** 15 minutes
+
+---
+
+## R-P1-23 · rideStore.test.ts Missing hydrateActiveRide, Double-Booking Guard,
+           Cancel-After-driver_arrived Tests
+
+**Audit finding [09-2 HIGH].** Three critical paths have no test coverage:
+`hydrateActiveRide` (stale-ride cold-start bug), the double-booking concurrent
+createRide guard, and cancelRide when `status === 'driver_arrived'` (confirmed
+live bug R-P1-18 and R-P1-21 lack regression coverage).
+
+**File to fix:** `rider-app/store/__tests__/rideStore.test.ts`
+
+**How to fix:** Add describe blocks for each path — see finding [09-2] for
+specific test cases required.
+
+**Effort:** 3–4 hours
+
+---
+
+## R-P1-24 · rideStore.ws.test.ts Missing driver_timeout, ride_cancelled, WS/Poll Race
+
+**Audit finding [09-3 HIGH].** Three WebSocket scenarios are untested:
+`driver_timeout` re-dispatch (R-P1-16), `ride_cancelled` event (backend-initiated
+cancellation), and the WS-vs-poll driver-position race (R-P2-29). These are paths
+real users hit when a driver fails to respond or cancels mid-trip.
+
+**File to fix:** `rider-app/store/__tests__/rideStore.ws.test.ts`
+
+**How to fix:** Add three it() cases — see finding [09-3] for specific scenarios.
+
+**Effort:** 2–3 hours
+
+---
+
+## R-P1-25 · walletStore.test.ts Missing payWithWallet and Tip Idempotency Tests
+
+**Audit finding [09-4 HIGH].** `payWithWallet` is listed in the file header
+("Covers: ... payWithWallet ...") but no test exists. Insufficient balance
+rejection and amount-mismatch error paths are untested. `addTip` / `rateRide`
+have no tests — the tip-accumulation bug (R-P1-20) has zero regression safety net.
+
+**File to fix:** `rider-app/store/__tests__/walletStore.test.ts`
+
+**How to fix:** Add describe blocks for `payWithWallet` (success, 400 balance,
+400 mismatch) and `addTip` (success, 409 duplicate) — see finding [09-4].
+
+**Effort:** 2 hours
+
+---
+
+## R-P1-26 · E2E ride-booking.spec.ts Missing Rating/Tip Steps and UI Assertions
+
+**Audit finding [09-6 HIGH].** The E2E booking flow ends at 'completed' with no
+rating or tip step. All stage assertions are `expect(page.locator('body')).toBeVisible()`
+— no screen-specific element is verified. The test loop re-seeds auth per stage
+rather than running a continuous session.
+
+**File to fix:** `rider-app/e2e/ride-booking.spec.ts`
+
+**How to fix:** Add rate and tip stages; replace body-visible assertion with
+getByText/getByTestId assertions per stage; convert loop to a sequential
+single-session test using `rideStatusSequence`. See finding [09-6] for details.
+
+**Effort:** 4–6 hours
+
+---
+
 ## Checklist
 
 - [ ] R-P1-1 Cancellation fee enforced after driver_arrived; Cancel button disabled
@@ -532,3 +624,8 @@ but not retries or back-navigation re-submits.
 - [ ] R-P1-19 /wallet/pay cross-checks debit amount against stored ride fare (no underpay exploit)
 - [ ] R-P1-20 add_tip endpoint blocks duplicate tips; tip is one-time-only per ride
 - [ ] R-P1-21 createRide() idempotency key confirmed present (see R-P1-7 fix)
+- [ ] R-P1-22 Jest coverageThreshold block added (lines ≥ 70, functions ≥ 60)
+- [ ] R-P1-23 rideStore.test.ts: hydrateActiveRide, double-booking, cancel-after-driver_arrived tests added
+- [ ] R-P1-24 rideStore.ws.test.ts: driver_timeout, ride_cancelled, WS/poll race tests added
+- [ ] R-P1-25 walletStore.test.ts: payWithWallet and addTip idempotency tests added
+- [ ] R-P1-26 E2E ride-booking spec: rate/tip stages added; screen-specific UI assertions; single-session flow

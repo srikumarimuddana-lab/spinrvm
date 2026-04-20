@@ -794,6 +794,45 @@ if not getattr(guard, "modified_count", 1) == 0:
 
 ---
 
+## R-P2-35 · Store Unit Tests Missing for Fare Split, Scheduled Rides, Promo, Offline Queue
+
+**Audit finding [09-5 MEDIUM].** Four store subsystems have zero unit-test coverage:
+scheduled rides (`fetchScheduledRides`, `cancelScheduledRide`), promo validation
+(`applyPromo`, `fetchAvailablePromos`), offline queue replay (`syncOfflineRequests`),
+and fare-split participant payment. The D09 framework requires all state transitions
+and error paths to be tested.
+
+**Files to fix:**
+- `rider-app/store/__tests__/rideStore.test.ts` — add scheduled rides, promo, offline queue tests
+- `rider-app/store/__tests__/walletStore.test.ts` — add fare-split payment confirmation test
+
+**How to fix:** See finding [09-5] in the audit for specific test case descriptions.
+
+**Effort:** 3–4 hours
+
+---
+
+## R-P2-36 · No Component-Level Tests — useRiderSocket and Critical UI Panels Untested
+
+**Audit finding [09-9 MEDIUM].** Only three test files exist, all in `store/__tests__/`.
+No component or hook tests exist for `useRiderSocket`, `RideOfferPanel`,
+`ActiveRidePanel`, or `TripCompletedPanel`. A regression in WebSocket event dispatching
+would be invisible until a manual E2E run or production failure.
+
+**Files to fix:** Create new test files in `rider-app/hooks/__tests__/` and
+`rider-app/components/__tests__/`
+
+**How to fix:**
+1. Add `rider-app/hooks/__tests__/useRiderSocket.test.ts` using a mock WebSocket class:
+   verify `driver_location_update`, `driver_timeout`, and `ride_cancelled` events
+   each dispatch the correct store action.
+2. Add component tests for the three ride-panel components using
+   `@testing-library/react-native` — verify key text and interactive elements render.
+
+**Effort:** 1–2 days
+
+---
+
 ## Checklist
 
 - [ ] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
@@ -830,3 +869,5 @@ if not getattr(guard, "modified_count", 1) == 0:
 - [ ] R-P2-32 Book button disabled state tied to isSubmitting state (not only isLoading); spinner shown immediately
 - [ ] R-P2-33 Promo validation uses ride_id to fetch fare server-side; minimum-fare bypass closed
 - [ ] R-P2-34 Fare-split pay endpoint uses atomic status guard to prevent TOCTOU double-deduction
+- [ ] R-P2-35 Store tests added for scheduled rides, promo, offline queue, fare-split payment confirmation
+- [ ] R-P2-36 useRiderSocket hook test added; component tests for ride panel UI components added

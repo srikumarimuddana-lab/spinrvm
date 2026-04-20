@@ -196,30 +196,52 @@ class TestDSTBoundary:
         # The ride row stores the UTC value verbatim
         assert ride["scheduled_time"] == dst_transition_utc
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "E14 gap: the backend does not validate that scheduled_time falls "
-            "inside a DST gap (e.g. 02:30 Eastern on spring-forward night). "
-            "A booking for a non-existent local time should be rejected with 400. "
-            "Fix: add tz-aware validation in create_ride using pytz or zoneinfo."
-        ),
-    )
     def test_dst_gap_time_is_rejected(self):
         """Booking a ride for a local time that doesn't exist (DST gap) must
-        return 400. Currently the server accepts it verbatim — this xfail
-        documents the known gap (E14) until timezone validation is added."""
-        import zoneinfo
+        raise a ValidationError. 2027-03-14 02:30 America/Toronto is the
+        spring-forward gap (clocks jump 02:00 → 03:00 EDT).
 
-        eastern = zoneinfo.ZoneInfo("America/Toronto")
-        # 02:30 on spring-forward night doesn't exist in Eastern time
-        # (clocks jump 02:00 → 03:00)
-        dst_gap_local = datetime(2025, 3, 9, 2, 30, tzinfo=eastern)
+        Fix landed in: backend/schemas.py::CreateRideRequest.validate_scheduled_time
+        — uses zoneinfo round-trip to detect non-existent wall-clock times.
+        """
+        from pydantic import ValidationError
+        from backend.schemas import CreateRideRequest
 
-        # The DST transition makes this timestamp fold to 01:30 UTC-equivalent
-        # rather than the intended 07:30 UTC.  The backend should detect this
-        # and raise 400; currently it does not.
-        is_ambiguous_or_nonexistent = dst_gap_local.utcoffset() is None
-        assert is_ambiguous_or_nonexistent, (
-            "Backend should reject DST-gap scheduled_time but currently doesn't"
+        # 2027-03-14 is the spring-forward Sunday for Eastern time.
+        # 02:30 does not exist; clocks skip from 02:00 → 03:00.
+        # scheduled_timezone enables the DST-gap guard on the validator.
+        with pytest.raises(ValidationError) as exc_info:
+            CreateRideRequest(
+                vehicle_type_id="standard",
+                pickup_address="123 Main St",
+                pickup_lat=52.1,
+                pickup_lng=-106.0,
+                dropoff_address="456 Broadway",
+                dropoff_lat=52.2,
+                dropoff_lng=-106.1,
+                is_scheduled=True,
+                scheduled_timezone="America/Toronto",
+                scheduled_time=datetime(2027, 3, 14, 2, 30),
+            )
+
+        errors_text = str(exc_info.value)
+        assert "DST" in errors_text or "gap" in errors_text.lower() or "not exist" in errors_text
+
+    def test_valid_scheduled_time_in_timezone_accepted(self):
+        """A time that's valid in the given timezone passes the DST guard."""
+        from backend.schemas import CreateRideRequest
+
+        # 2027-03-14 04:00 (after spring-forward) is a valid EDT time.
+        ride_req = CreateRideRequest(
+            vehicle_type_id="standard",
+            pickup_address="123 Main St",
+            pickup_lat=52.1,
+            pickup_lng=-106.0,
+            dropoff_address="456 Broadway",
+            dropoff_lat=52.2,
+            dropoff_lng=-106.1,
+            is_scheduled=True,
+            scheduled_timezone="America/Toronto",
+            scheduled_time=datetime(2027, 3, 14, 4, 0),
         )
+        assert ride_req.scheduled_time is not None

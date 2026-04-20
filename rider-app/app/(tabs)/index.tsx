@@ -507,8 +507,8 @@ function createStyles(colors: ThemeColors) {
       padding: 4,
     },
     mapControlButton: {
-      width: 40,
-      height: 40,
+      width: 44,
+      height: 44,
       justifyContent: 'center',
       alignItems: 'center',
     },

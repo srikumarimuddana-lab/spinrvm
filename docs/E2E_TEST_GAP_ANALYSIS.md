@@ -174,7 +174,7 @@ Implementation work remaining: P0-4 surge-lock, P0-5 Stripe card charge.
 17. ✅ **Scheduled rides + DST** — R3, E14 — closed: `GET /rides/scheduled` returns list via cursor stub; `DELETE /rides/scheduled/{id}` cancels (status="cancelled"), owner+scheduled guard→404, already-cancelled/completed→400; UTC scheduled_time round-trips correctly; DST-gap rejection is `xfail(strict=False)` (E14 living TODO: server should reject non-existent local times with 400); pinned by `backend/tests/test_p2_scheduled_rides.py` (7 cases)
 
 ### P3 — Native (requires Detox or Maestro)
-18. iOS + Android E2E for each app — currently all E2E is Expo-Web only
+18. ✅ **iOS + Android E2E — Maestro flows + manual smoke checklist** — `docs/MOBILE_SMOKE.md` (8-section sign-off checklist, 40 steps); new Maestro flows: `.maestro/rider/03_schedule_and_cancel_ride.yaml`, `.maestro/rider/04_mid_trip_chat.yaml`, `.maestro/rider/05_sos_button.yaml`, `.maestro/driver/07_in_trip_chat.yaml`; existing flows: login (rider+driver), go-online, accept-ride, verify-OTP, complete-trip, payout
 19. Native push-notification flows (FCM/APNs)
 20. Background location for drivers (iOS policy changes)
 
@@ -210,7 +210,7 @@ cd driver-app && yarn build:web && PLAYWRIGHT_START_SERVER=1 yarn test:e2e
 Run all of the above, plus:
 - Admin-dashboard Playwright suite
 - Backend `pytest` without `-m` filter (includes slow + payments integration)
-- Manual smoke on iOS + Android (checklist in `docs/MOBILE_SMOKE.md` — **does not yet exist; P3 deliverable**)
+- Manual smoke on iOS + Android (checklist in `docs/MOBILE_SMOKE.md` — ✅ created; 8 sections, 40 steps, sign-off table)
 
 ---
 

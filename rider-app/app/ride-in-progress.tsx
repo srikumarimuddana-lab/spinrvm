@@ -9,6 +9,7 @@ import {
   Linking,
   Platform,
   ActivityIndicator,
+  BackHandler,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -98,6 +99,31 @@ export default function RideInProgressScreen() {
     if (currentRide?.status === RideStatus.COMPLETED) {
       router.replace({ pathname: '/ride-completed', params: { rideId } });
     }
+  }, [currentRide?.status]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setAlertState({
+        visible: true,
+        title: 'End ride early?',
+        message: `Full fare of $${(currentRide?.total_fare || 0).toFixed(2)} applies. Your driver will continue.`,
+        variant: 'warning',
+        buttons: [
+          { text: 'Continue Ride', style: 'cancel' },
+          {
+            text: 'End & Pay Full Fare',
+            style: 'destructive',
+            onPress: async () => {
+              try { await api.post(`/drivers/rides/${currentRide?.id}/complete`); }
+              catch (e) { console.log(e); }
+              if (rideId) fetchRide(rideId);
+            },
+          },
+        ],
+      });
+      return true;
+    });
+    return () => sub.remove();
   }, [currentRide?.status]);
 
   const handleSafety = () => {

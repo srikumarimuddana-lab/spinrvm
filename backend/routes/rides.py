@@ -72,6 +72,13 @@ try:
 except ImportError:
     from utils.stripe_charge import charge_ride
 
+try:
+    from ..services import corporate_allowance_service, corporate_wallet_service  # type: ignore
+    from ..services.corporate_policy_service import evaluate_policy  # type: ignore
+except ImportError:
+    from services import corporate_allowance_service, corporate_wallet_service  # type: ignore
+    from services.corporate_policy_service import evaluate_policy  # type: ignore
+
 db = db_supabase  # legacy alias
 dispatch = DispatchService(db_supabase)  # module-level instance for legacy call sites
 
@@ -1328,6 +1335,8 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         # multi-outcome (succeeded / requires_action / declined / failed).
         rider_user = await db_supabase.get_user_by_id(current_user["id"])
         stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
+        # Prefer the payment method stored on the ride (selected by rider);
+        # fall back to user's default if none was captured at booking time.
         payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
 
         outcome = await charge_ride(
@@ -1349,6 +1358,8 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 },
             )
         elif outcome.status == "requires_action":
+            # 3DS / SCA — rider-app runs stripe.confirmPayment(client_secret)
+            # and then retries this endpoint.
             await db_supabase.update_ride(
                 ride_id,
                 {
@@ -1395,6 +1406,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 },
             )
         else:
+            # outcome.status == "failed" — ops issue, not a card decline.
             await db_supabase.update_ride(
                 ride_id,
                 {

@@ -7,12 +7,17 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
+import api from '@shared/api/client';
+import { useAuthStore } from '@shared/store/authStore';
 import type { ThemeColors } from '@shared/theme/index';
+import { useTranslation } from '../i18n';
 
 export default function PrivacySettingsScreen() {
   const router = useRouter();
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const { logout } = useAuthStore();
+  const { t } = useTranslation();
   const [locationAlways, setLocationAlways] = useState(false);
   const [shareRideData, setShareRideData] = useState(true);
   const [marketingEmails, setMarketingEmails] = useState(true);
@@ -25,23 +30,52 @@ export default function PrivacySettingsScreen() {
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
+  // R-P1-6: PIPEDA — wire Download My Data to real backend endpoint
+  const handleDownloadData = async () => {
+    try {
+      await api.post('/users/data-export');
+      setAlertState({
+        visible: true,
+        title: t('privacy.download_requested'),
+        message: t('privacy.download_requested_msg'),
+        variant: 'success',
+      });
+    } catch (err: any) {
+      setAlertState({
+        visible: true,
+        title: 'Error',
+        message: err?.response?.data?.detail || 'Failed to request data export. Please try again.',
+        variant: 'danger',
+      });
+    }
+  };
+
+  // R-P1-6: PIPEDA — wire Delete Account to real backend endpoint + logout
   const handleDeleteAccount = () => {
     setAlertState({
       visible: true,
-      title: 'Delete Account',
-      message: 'This will permanently delete your account and all data. This cannot be undone.',
+      title: t('privacy.delete_confirm_title'),
+      message: t('privacy.delete_confirm_msg'),
       variant: 'danger',
       buttons: [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         {
-          text: 'Delete My Account',
+          text: t('privacy.delete_my_account'),
           style: 'destructive',
-          onPress: () => setAlertState({
-            visible: true,
-            title: 'Submitted',
-            message: 'Your account deletion request has been submitted. You will receive a confirmation email.',
-            variant: 'success',
-          }),
+          onPress: async () => {
+            try {
+              await api.delete('/users/account');
+              await logout();
+              router.replace('/login' as any);
+            } catch (err: any) {
+              setAlertState({
+                visible: true,
+                title: 'Error',
+                message: err?.response?.data?.detail || 'Failed to delete account. Please contact support.',
+                variant: 'danger',
+              });
+            }
+          },
         },
       ],
     });
@@ -53,72 +87,70 @@ export default function PrivacySettingsScreen() {
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Privacy & Settings</Text>
+        <Text style={styles.headerTitle}>{t('privacy.title')}</Text>
         <View style={{ width: 44 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
         {/* Location */}
-        <Text style={styles.sectionTitle}>Location</Text>
+        <Text style={styles.sectionTitle}>{t('privacy.location_section')}</Text>
         <View style={styles.card}>
           <SettingRow
             icon="location" iconColor="#3B82F6" iconBg="#DBEAFE"
-            title="Background Location"
-            subtitle="Allow location access when app is closed"
+            title={t('privacy.background_location')}
+            subtitle={t('privacy.background_location_subtitle')}
             toggle value={locationAlways} onToggle={setLocationAlways}
             colors={colors}
           />
           <SettingRow
             icon="navigate" iconColor="#10B981" iconBg="#ECFDF5"
-            title="Share Live Location"
-            subtitle="Share location with driver during ride"
+            title={t('privacy.share_live')}
+            subtitle={t('privacy.share_live_subtitle')}
             toggle value={shareRideData} onToggle={setShareRideData}
             colors={colors}
           />
         </View>
 
         {/* Notifications */}
-        <Text style={styles.sectionTitle}>Notifications</Text>
+        <Text style={styles.sectionTitle}>{t('privacy.notifications_section')}</Text>
         <View style={styles.card}>
           <SettingRow
             icon="notifications" iconColor="#F59E0B" iconBg="#FEF3C7"
-            title="Push Notifications"
-            subtitle="Ride updates, promotions, alerts"
+            title={t('privacy.push_notifications')}
+            subtitle={t('privacy.push_notifications_subtitle')}
             toggle value={pushNotifications} onToggle={setPushNotifications}
             colors={colors}
           />
           <SettingRow
             icon="mail" iconColor="#8B5CF6" iconBg="#EDE9FE"
-            title="Marketing Emails"
-            subtitle="Offers, news, and updates"
+            title={t('privacy.marketing_emails')}
+            subtitle={t('privacy.marketing_emails_subtitle')}
             toggle value={marketingEmails} onToggle={setMarketingEmails}
             colors={colors}
           />
         </View>
 
         {/* Data */}
-        <Text style={styles.sectionTitle}>Data & Privacy</Text>
+        <Text style={styles.sectionTitle}>{t('privacy.data_section')}</Text>
         <View style={styles.card}>
           <SettingRow
             icon="download-outline" iconColor="#6B7280" iconBg="#F3F4F6"
-            title="Download My Data"
-            subtitle="Request a copy of your personal data"
-            onPress={() => setAlertState({ visible: true, title: 'Requested', message: 'Your data export has been requested. You will receive an email with a download link.', variant: 'success' })}
+            title={t('privacy.download_data')}
+            subtitle={t('privacy.download_data_subtitle')}
+            onPress={handleDownloadData}
             colors={colors}
           />
           <SettingRow
             icon="trash-outline" iconColor="#DC2626" iconBg="#FEE2E2"
-            title="Delete Account"
-            subtitle="Permanently delete account and data"
+            title={t('privacy.delete_account')}
+            subtitle={t('privacy.delete_account_subtitle')}
             onPress={handleDeleteAccount}
             danger
             colors={colors}
           />
         </View>
 
-        <Text style={styles.footerText}>
-          Your data is handled in accordance with our Privacy Policy. Spinr never sells your personal information.
-        </Text>
+        <Text style={styles.footerText}>{t('privacy.footer')}</Text>
       </ScrollView>
       <CustomAlert
         visible={alertState.visible}

@@ -276,7 +276,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
 
           <View style={styles.etaPill}>
             <View style={styles.greenDot} />
-            <Text style={styles.etaText}>
+            <Text style={styles.etaText} allowFontScaling={false}>
               {currentRide?.status === RideStatus.DRIVER_ASSIGNED
                 ? 'Confirming driver…'
                 : `Arriving in ${eta} min`}
@@ -495,7 +495,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                       </View>
                       <View style={styles.vehicleTextContainer}>
                         <Text style={styles.vehicleLabel}>LICENSE PLATE</Text>
-                        <Text style={styles.plateValue}>{currentDriver?.license_plate || 'Pending'}</Text>
+                        <Text style={styles.plateValue} allowFontScaling={false}>{currentDriver?.license_plate || 'Pending'}</Text>
                       </View>
                     </View>
                   </View>
@@ -511,7 +511,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                     <View style={styles.pinBoxes}>
                       {[0, 1, 2, 3].map((i) => (
                         <View key={i} style={styles.pinBox}>
-                          <Text style={styles.pinDigit}>
+                          <Text style={styles.pinDigit} allowFontScaling={false}>
                             {currentRide.pickup_otp?.[i] || '•'}
                           </Text>
                         </View>

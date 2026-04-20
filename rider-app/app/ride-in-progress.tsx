@@ -8,6 +8,7 @@ import {
   Share,
   Linking,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -31,7 +32,7 @@ const { width } = Dimensions.get('window');
 export default function RideInProgressScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
-  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency } = useRideStore();
+  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency, isLoading, error } = useRideStore();
   const { wsConnected } = useRiderSocket();
   const [eta, setEta] = useState(15);
   const [estimatedTime, setEstimatedTime] = useState('12:45 PM');
@@ -198,7 +199,7 @@ I've shared my live location with you for safety.
       <SafeAreaView edges={['top']} style={styles.headerSafeArea}>
         <View style={styles.statusPill}>
           <View style={styles.greenDot} />
-          <Text style={styles.statusText}>Ride Started - Enjoy your trip</Text>
+          <Text style={styles.statusText} allowFontScaling={false}>Ride Started - Enjoy your trip</Text>
         </View>
       </SafeAreaView>
 
@@ -209,7 +210,23 @@ I've shared my live location with you for safety.
 
       {/* Map Area */}
       <View style={styles.mapContainer}>
-        {currentRide ? (
+        {isLoading && !currentRide ? (
+          <View style={styles.mapPlaceholder}>
+            <ActivityIndicator size="large" color="#EE2B2B" />
+            <Text style={styles.mapPlaceholderText}>Loading ride…</Text>
+          </View>
+        ) : error && !currentRide ? (
+          <View style={styles.mapPlaceholder}>
+            <Ionicons name="alert-circle" size={48} color="#EF4444" />
+            <Text style={styles.mapPlaceholderText}>Could not load ride</Text>
+            <TouchableOpacity
+              style={styles.retryBtn}
+              onPress={() => rideId && fetchRide(rideId)}
+            >
+              <Text style={styles.retryBtnText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        ) : currentRide ? (
           <MapView
             {...({ ref: mapRef } as any)}
             provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
@@ -308,7 +325,7 @@ I've shared my live location with you for safety.
           </MapView>
         ) : (
           <View style={styles.mapPlaceholder}>
-             <Text>Loading Map...</Text>
+            <Text style={styles.mapPlaceholderText}>Loading Map…</Text>
           </View>
         )}
 
@@ -334,11 +351,11 @@ I've shared my live location with you for safety.
             <View style={styles.etaHero}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.etaLabel}>ARRIVING AT</Text>
-                <Text style={styles.etaTime}>{estimatedTime}</Text>
+                <Text style={styles.etaTime} allowFontScaling={false}>{estimatedTime}</Text>
               </View>
               <View style={styles.etaBadge}>
-                <Text style={styles.etaBadgeNum}>{eta}</Text>
-                <Text style={styles.etaBadgeUnit}>min</Text>
+                <Text style={styles.etaBadgeNum} allowFontScaling={false}>{eta}</Text>
+                <Text style={styles.etaBadgeUnit} allowFontScaling={false}>min</Text>
               </View>
             </View>
 
@@ -519,6 +536,9 @@ function createStyles(colors: ThemeColors) {
     mapContainer: { flex: 1, position: 'relative' },
     map: { ...StyleSheet.absoluteFillObject },
     mapPlaceholder: { flex: 1, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' },
+    mapPlaceholderText: { marginTop: 12, fontSize: 15, fontWeight: '500', color: '#555' },
+    retryBtn: { marginTop: 16, paddingHorizontal: 28, paddingVertical: 12, backgroundColor: '#EE2B2B', borderRadius: 24 },
+    retryBtnText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
     locationButton: {
       position: 'absolute', right: 16, bottom: 16,
       width: 48, height: 48, borderRadius: 24, backgroundColor: colors.surface,

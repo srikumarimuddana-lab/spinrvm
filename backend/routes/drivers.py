@@ -1996,10 +1996,17 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         logger.warning(f"Could not aggregate GPS data for ride {ride_id}: {e}")
 
     # ── Build update payload ──
+    # P0-5: do NOT write payment_status here. The driver completing the
+    # trip does not mean the rider's card has been charged. Leave
+    # payment_status as whatever it was (typically "pending") and let
+    # rides.py::process_payment be the single writer that flips it to
+    # "paid" / "failed" / "requires_action" based on the real Stripe
+    # outcome. Previously this hardcoded "completed" — not a valid
+    # payment_status value, and it masked genuine failures from the
+    # webhook dispatcher in webhooks.py.
     update_fields: Dict[str, Any] = {
         "status": "completed",
         "ride_completed_at": datetime.utcnow(),
-        "payment_status": "completed",
         "updated_at": datetime.utcnow(),
         "planned_distance_km": planned_distance,
         "actual_distance_km": actual_distance_km,

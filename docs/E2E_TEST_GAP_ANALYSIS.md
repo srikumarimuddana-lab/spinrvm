@@ -96,7 +96,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | E2 | All nearby drivers decline → expand radius / fail | — | P1 |
 | E3 | Stripe charge fails at completion → retry + fallback | ~ backend only | P1 |
 | E4 | Payment 3DS challenge interrupts completion | — | P2 |
-| E5 | Driver goes offline mid-trip | — | P1 |
+| E5 | Driver goes offline mid-trip | ✅ | P1 — rejected 409 by `update_driver_status`; pinned |
 | E6 | Driver's phone loses GPS mid-trip | — | P2 |
 | E7 | Rider updates dropoff after trip started | — | P2 |
 | E8 | Duplicate ride request (double-tap confirm) | — | P1 |
@@ -162,7 +162,7 @@ Implementation work remaining: P0-4 surge-lock, P0-5 Stripe card charge.
 7. ✅ **Mid-trip restart restore** (rider and driver) — R14, D12 — closed: `rider-app/store/__tests__/rideStore.restart.test.ts` pins `hydrateActiveRide()` (8 scenarios: active, terminal, stale, offline, no-override); `driver-app/store/__tests__/driverStore.restart.test.ts` pins `hydrateDriverRideState()` (8 scenarios: navigating, arrived, in-progress, terminal states, corrupt JSON, no-override)
 8. ✅ **Role-claim tampering guard** — S3, S8 — closed: S1 gap fixed (`accept_ride` in `drivers.py` now rejects `ride.rider_id == current_user.id` → 403); S3 pinned — `get_current_user` always uses DB role, never JWT claim; S8 pinned — `get_driver_earnings` uses `current_user.id`, no caller-supplied driver_id; `backend/tests/test_p1_security.py`
 9. ✅ **Multi-stop E2E** — R11 — closed: `backend/tests/test_p1_multi_stop.py` pins add/remove stop mid-trip (WS driver notification, auth guards, position insertion, bad-index rejection); `rider-app/store/__tests__/rideStore.stops.test.ts` pins pre-ride addStop/removeStop/updateStop; fare-recalculation on mid-trip stop is xfail(strict=False) — not yet implemented
-10. **Driver offline mid-trip** — E5
+10. ✅ **Driver offline mid-trip** — E5 — closed: `PUT /drivers/{id}/status` now rejects with 409 when driver has an active ride (driver_accepted/driver_arrived/in_progress); pinned by `backend/tests/test_p1_driver_offline.py` (7 test cases)
 11. **Token refresh mid-trip** — E11
 12. **CORS on web exports** — S9
 

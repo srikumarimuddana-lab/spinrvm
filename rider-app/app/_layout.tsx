@@ -11,6 +11,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useRideStore } from '../store/rideStore';
+import { useWorkProfileStore } from '../store/workProfileStore';
 import { useRiderSocket } from '../hooks/useRiderSocket';
 import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
@@ -110,6 +111,7 @@ export default function RootLayout() {
 
   const { initialize: initializeAuth, isInitialized: isAuthInitialized, token: authToken } = useAuthStore();
   const { initialize: initializeLocation, isInitialized: isLocationInitialized } = useLocationStore();
+  const hydrateWorkProfile = useWorkProfileStore(s => s.hydrate);
   const [isOffline, setIsOffline] = useState(false);
   // Stripe publishable key is fetched from the backend at boot so operators
   // can rotate it without an app release. Until it loads, we render children
@@ -161,7 +163,7 @@ export default function RootLayout() {
   useEffect(() => {
     const init = async () => {
       try {
-        await Promise.all([initializeAuth(), initializeLocation()]);
+        await Promise.all([initializeAuth(), initializeLocation(), hydrateWorkProfile()]);
 
         // Firebase native modules: Crashlytics + App Check. FCM token
         // registration is deferred to a separate effect that waits for

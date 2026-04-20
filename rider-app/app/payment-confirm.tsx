@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
+import { useWorkProfileStore } from '../store/workProfileStore';
 import CustomAlert from '@shared/components/CustomAlert';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -43,9 +44,14 @@ function PaymentConfirmScreenContent() {
   const [promoValidating, setPromoValidating] = useState(false);
   const [promoApplied, setPromoApplied] = useState(false);
   const [promoMessage, setPromoMessage] = useState('');
-  const [corporateAccounts, setCorporateAccounts] = useState<CorporateAccount[]>([]);
-  const [useCorporate, setUseCorporate] = useState(false);
-  const [selectedCorporateId, setSelectedCorporateId] = useState<string | null>(null);
+  const { profiles: workProfiles, workModeEnabled, fetchProfiles: fetchWorkProfiles, activeCompanyId } = useWorkProfileStore();
+  const corporateAccounts: CorporateAccount[] = workProfiles
+    .map(p => ({ id: p.company.id ?? '', company_name: p.company.name ?? '' }))
+    .filter(a => a.id);
+  const [useCorporate, setUseCorporate] = useState(workModeEnabled);
+  const [selectedCorporateId, setSelectedCorporateId] = useState<string | null>(
+    workModeEnabled ? (activeCompanyId ?? null) : null,
+  );
   const [alertState, setAlertState] = useState<{
     visible: boolean;
     title: string;
@@ -61,12 +67,16 @@ function PaymentConfirmScreenContent() {
   const selectedEstimate = estimates.find((e) => e.vehicle_type.id === selectedVehicle?.id);
 
   useEffect(() => {
-    api.get('/corporate/rider/accounts').then((res) => {
-      const accounts: CorporateAccount[] = res.data || [];
-      setCorporateAccounts(accounts);
-      if (accounts.length > 0) setSelectedCorporateId(accounts[0].id);
-    }).catch(() => {});
+    fetchWorkProfiles();
   }, []);
+
+  // Keep toggle in sync if work mode changes while screen is open
+  useEffect(() => {
+    if (workModeEnabled && corporateAccounts.length > 0) {
+      setUseCorporate(true);
+      setSelectedCorporateId(prev => prev ?? activeCompanyId ?? corporateAccounts[0]?.id ?? null);
+    }
+  }, [workModeEnabled, corporateAccounts.length]);
 
   const [isBooking, setIsBooking] = useState(false);
   const handleBookRide = async () => {

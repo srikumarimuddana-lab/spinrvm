@@ -134,24 +134,59 @@ class _WSPubSub:
             logger.warning(f"WS pub/sub: publish failed, falling back to local delivery: {e}")
             return False
 
+    async def _reconnect(self) -> bool:
+        """Re-subscribe on the existing Redis client after a connection error.
+
+        Closes the broken pubsub object and creates a fresh one. Does not
+        close the underlying Redis client — redis.asyncio reconnects the
+        transport automatically on the next command, so we only need to
+        re-issue the SUBSCRIBE. Returns True on success.
+        """
+        logger.info("WS pub/sub: attempting reconnect…")
+        await self._safe_close_pubsub()
+        try:
+            self._pubsub = self._redis.pubsub()
+            await self._pubsub.subscribe(CHANNEL)
+            logger.info("WS pub/sub: reconnect successful")
+            return True
+        except Exception as e:
+            logger.error(f"WS pub/sub: reconnect failed: {e}")
+            await self._safe_close_pubsub()
+            return False
+
     async def _consumer(self) -> None:
         """Long-running task that delivers incoming messages locally.
 
-        Uses the blocking ``get_message`` loop rather than ``listen()``
-        so we can react to cancellation on a fixed cadence. 1s timeout
-        is plenty — the consumer is event-driven and the sleep is only
-        hit when idle.
+        Uses the ``get_message`` poll loop with a 1 s timeout so we can
+        react to cancellation without blocking indefinitely. Consecutive
+        read errors trigger a reconnect attempt so a Redis outage does not
+        leave the consumer spinning against a dead pubsub object forever.
         """
+        _consecutive_errors = 0
+        _reconnect_threshold = 5
+
         try:
             while True:
                 try:
                     msg = await self._pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                    _consecutive_errors = 0
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    logger.warning(f"WS pub/sub: consumer read error: {e}")
-                    # Back off briefly so a wedged Redis doesn't spin.
-                    await asyncio.sleep(1.0)
+                    _consecutive_errors += 1
+                    logger.warning(
+                        f"WS pub/sub: consumer read error "
+                        f"({_consecutive_errors}/{_reconnect_threshold}): {e}"
+                    )
+                    if _consecutive_errors >= _reconnect_threshold:
+                        reconnected = await self._reconnect()
+                        if reconnected:
+                            _consecutive_errors = 0
+                        else:
+                            # Redis still down — back off before next probe.
+                            await asyncio.sleep(5.0)
+                    else:
+                        await asyncio.sleep(1.0)
                     continue
 
                 if not msg:

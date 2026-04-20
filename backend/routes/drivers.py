@@ -1673,6 +1673,12 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
+    if driver.get("status") == "suspended":
+        raise HTTPException(
+            status_code=403,
+            detail="Your account is suspended. Please renew your documents to continue driving.",
+        )
+
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")

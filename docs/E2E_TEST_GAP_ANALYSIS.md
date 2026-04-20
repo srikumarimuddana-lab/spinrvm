@@ -113,14 +113,14 @@ Legend: `X` covered, `~` partial, `—` not covered.
 
 | # | Scenario | Covered? | Priority |
 |---|---|---|---|
-| S1 | Rider tries to accept own ride (role escalation) | — | P1 |
+| S1 | Rider tries to accept own ride (role escalation) | ✅ | P1 — fixed: `accept_ride` guard + pinned |
 | S2 | Driver tries to complete a ride not assigned to them | X | — |
-| S3 | JWT with tampered role claim → 401 | ~ | P1 |
+| S3 | JWT with tampered role claim → 401 | ✅ | P1 — role from DB, pinned in `test_p1_security.py` |
 | S4 | Rate-limit on OTP send | X | — |
 | S5 | SQL/NoSQL injection in ride.notes or address | ~ | P1 |
 | S6 | PII (phone, card tail) leaks in logs or API responses | X | — |
 | S7 | Rider views another rider's ride by guessing ride_id | X | — |
-| S8 | Driver views another driver's earnings | — | P1 |
+| S8 | Driver views another driver's earnings | ✅ | P1 — scoped by `current_user.id`, pinned in `test_p1_security.py` |
 | S9 | CORS / CSRF on web-export endpoints | — | P1 |
 
 ---
@@ -160,7 +160,7 @@ Implementation work remaining: P0-4 surge-lock, P0-5 Stripe card charge.
 ### P1 — Critical before scale
 6. ✅ **WebSocket reconnect with state preservation** — C8 — closed: `useRiderSocket.ts` calls `fetchRide` in `onopen`; `useDriverDashboard.ts` calls `fetchActiveRide` on first auth-confirmed message after reconnect; `backend/tests/test_p1_ws_reconnect.py` pins ConnectionManager round-trip + HTTP recovery; `rider-app/hooks/__tests__/useRiderSocket.reconnect.test.ts` pins client-side reconnect behavior
 7. ✅ **Mid-trip restart restore** (rider and driver) — R14, D12 — closed: `rider-app/store/__tests__/rideStore.restart.test.ts` pins `hydrateActiveRide()` (8 scenarios: active, terminal, stale, offline, no-override); `driver-app/store/__tests__/driverStore.restart.test.ts` pins `hydrateDriverRideState()` (8 scenarios: navigating, arrived, in-progress, terminal states, corrupt JSON, no-override)
-8. **Role-claim tampering guard** — S3, S8
+8. ✅ **Role-claim tampering guard** — S3, S8 — closed: S1 gap fixed (`accept_ride` in `drivers.py` now rejects `ride.rider_id == current_user.id` → 403); S3 pinned — `get_current_user` always uses DB role, never JWT claim; S8 pinned — `get_driver_earnings` uses `current_user.id`, no caller-supplied driver_id; `backend/tests/test_p1_security.py`
 9. **Multi-stop E2E** — R11
 10. **Driver offline mid-trip** — E5
 11. **Token refresh mid-trip** — E11

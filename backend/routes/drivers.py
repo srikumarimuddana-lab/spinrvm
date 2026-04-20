@@ -1685,6 +1685,11 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
+    # A driver-user must never accept a ride they themselves created — prevents
+    # self-dispatch fraud on dual-role accounts.
+    if ride.get("rider_id") == current_user["id"]:
+        raise HTTPException(status_code=403, detail="Cannot accept your own ride")
+
     diag_logger.info(
         f"[ACCEPT] entry ride_id={ride_id} driver_id={driver.get('id')} "
         f"pre_status={ride.get('status')} pre_driver_id={ride.get('driver_id')}"

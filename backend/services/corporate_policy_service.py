@@ -32,29 +32,42 @@ class PolicyResult:
         failed_rules   Rules that would have failed (empty on full pass).
         bypassed_rules Rules skipped due to policy_override (for audit log).
         policy         The raw policy dict that was evaluated.
+        allowance      The member's allowance row fetched during evaluation.
+                       Empty dict when called via the sync evaluate_policy path.
     """
 
-    __slots__ = ("passed", "failed_rules", "bypassed_rules", "policy")
+    __slots__ = ("passed", "failed_rules", "bypassed_rules", "skipped_rules", "policy", "allowance")
 
     def __init__(
         self,
         passed: bool,
         failed_rules: List[str],
         bypassed_rules: List[str],
+        skipped_rules: Optional[List[str]] = None,
         policy: Optional[dict] = None,
+        allowance: Optional[dict] = None,
     ) -> None:
         self.passed = passed
         self.failed_rules = failed_rules
         self.bypassed_rules = bypassed_rules
+        self.skipped_rules = skipped_rules or []
         self.policy = policy or {}
+        self.allowance = allowance or {}
 
     @classmethod
-    def _from_dict(cls, result: dict, policy: Optional[dict] = None) -> "PolicyResult":
+    def _from_dict(
+        cls,
+        result: dict,
+        policy: Optional[dict] = None,
+        allowance: Optional[dict] = None,
+    ) -> "PolicyResult":
         return cls(
             passed=result.get("pass", True),
             failed_rules=result.get("failed_rules", []),
             bypassed_rules=result.get("bypassed_rules", []),
+            skipped_rules=result.get("skipped_rules", []),
             policy=policy,
+            allowance=allowance,
         )
 
     def to_dict(self) -> dict:
@@ -62,6 +75,7 @@ class PolicyResult:
             "pass": self.passed,
             "failed_rules": self.failed_rules,
             "bypassed_rules": self.bypassed_rules,
+            "skipped_rules": self.skipped_rules,
         }
 
 
@@ -128,7 +142,7 @@ async def evaluate_policy_for_ride(
     }
 
     raw = evaluate_policy(policy, ride_context)
-    return PolicyResult._from_dict(raw, policy=policy)
+    return PolicyResult._from_dict(raw, policy=policy, allowance=allowance)
 
 
 # Day-of-week abbreviations → Python weekday index (Mon=0 … Sun=6)
@@ -141,13 +155,14 @@ _DOW_MAP: Dict[str, int] = {
 def evaluate_policy(policy: dict, ride_context: dict) -> dict:
     """Evaluate v1 corporate policy rules against a ride context.
 
-    Returns ``{"pass": bool, "failed_rules": list[str], "bypassed_rules": list[str]}``.
+    Returns ``{"pass": bool, "failed_rules": list[str], "bypassed_rules": list[str],
+               "skipped_rules": list[str]}``.
 
     Rules evaluated:
     - max_fare_per_ride  — estimated_fare (or final_fare) vs policy cap
     - time_window        — pickup time within allowed day+time windows (company tz)
     - allowed_payment_source — allowance_only blocks rides with empty allowance
-    - geofence           — STUB: always passes; PostGIS not available in unit tests
+    - geofence           — DEFERRED: always passes; awaiting PostGIS infrastructure
 
     If ``ride_context["policy_override"]`` is True all rules are short-circuited
     but would-be failures are captured in ``bypassed_rules`` for audit.
@@ -211,18 +226,23 @@ def evaluate_policy(policy: dict, ride_context: dict) -> dict:
                 failed.append("allowed_payment_source")
 
     # ── Rule 4: geofence ─────────────────────────────────────────────────────
-    # TODO: implement PostGIS ST_Contains check against policy["allowed_geofence"]
-    # once spatial queries are available in the test environment.  Both pickup
-    # AND dropoff must lie inside at least one polygon in the GeoJSON
-    # FeatureCollection.  For now we always pass and warn so operators know
-    # the check is not active.
+    # DEFERRED: PostGIS ST_Contains check against policy["allowed_geofence"].
+    # Both pickup AND dropoff must lie inside at least one polygon in the GeoJSON
+    # FeatureCollection.  Unblocked when supabase_extensions.postgis is available
+    # in the deployment environment.  Until then we warn + pass so a configured
+    # geofence is visible in logs and in the PolicyResult.skipped_rules field.
+    skipped: List[str] = []
     if policy.get("allowed_geofence"):
+        skipped.append("geofence")
         logger.warning(
-            "[policy] geofence rule skipped — PostGIS stub (not yet implemented)"
+            "[policy] geofence check deferred (PostGIS unavailable) — "
+            "ride_id=%s company=%s",
+            ride_context.get("ride_id", "unknown"),
+            ride_context.get("corporate_account_id", "unknown"),
         )
 
     # ── Override: bypass all rules but still surface would-be failures ────────
     if ride_context.get("policy_override"):
-        return {"pass": True, "failed_rules": [], "bypassed_rules": failed}
+        return {"pass": True, "failed_rules": [], "bypassed_rules": failed, "skipped_rules": skipped}
 
-    return {"pass": len(failed) == 0, "failed_rules": failed, "bypassed_rules": []}
+    return {"pass": len(failed) == 0, "failed_rules": failed, "bypassed_rules": [], "skipped_rules": skipped}

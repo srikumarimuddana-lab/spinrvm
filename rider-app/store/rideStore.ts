@@ -2,9 +2,11 @@ import { create } from 'zustand';
 import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Alert } from 'react-native';
+import { RideStatus } from '../constants/rideStatus';
 
 const ACTIVE_RIDE_KEY = '@spinr:active_ride';
-const TERMINAL_STATUSES = new Set(['completed', 'cancelled', 'failed']);
+const TERMINAL_STATUSES = new Set([RideStatus.COMPLETED, RideStatus.CANCELLED, RideStatus.FAILED]);
 
 // Write currentRide + currentDriver to AsyncStorage. Clears key when ride is
 // terminal so stale data never survives across sessions.
@@ -213,8 +215,13 @@ export const useRideStore = create<RideState>((set, get) => ({
         _persistRide(ride, driver);
         return response.data;
       }
+      // No active ride on server — clear any stale local state
+      get().clearRide();
       return null;
-    } catch {
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        get().clearRide();
+      }
       return null;
     }
   },
@@ -276,40 +283,67 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   applyPromo: (promo) => set({ appliedPromo: promo }),
 
-  // Sync offline queued requests when back online
+  // Sync offline queued requests when back online.
+  // Queue entry shape: { id, type, rideId, payload, retries, timestamp }
+  // Supported types: create_ride | cancel_ride | rate_ride | tip | emergency
   syncOfflineRequests: async () => {
     try {
       const queueStr = await AsyncStorage.getItem('offline_queue');
       if (!queueStr) return;
 
-      const queue = JSON.parse(queueStr);
+      const queue: Array<{
+        id: string;
+        type: 'create_ride' | 'cancel_ride' | 'rate_ride' | 'tip' | 'emergency';
+        rideId?: string;
+        payload?: any;
+        retries?: number;
+        timestamp?: number;
+      }> = JSON.parse(queueStr);
       if (queue.length === 0) return;
 
       const successfulSyncs: string[] = [];
+      const failedPermanently: string[] = [];
 
       for (const request of queue) {
         try {
-          if (request.type === 'create_ride') {
-            await api.post('/rides', request.data);
-            successfulSyncs.push(request.id);
+          switch (request.type) {
+            case 'create_ride':
+              await api.post('/rides', request.payload);
+              break;
+            case 'cancel_ride':
+              if (request.rideId) await api.post(`/rides/${request.rideId}/cancel`);
+              break;
+            case 'rate_ride':
+              if (request.rideId) await api.post(`/rides/${request.rideId}/rate`, request.payload);
+              break;
+            case 'tip':
+              if (request.rideId) await api.post(`/rides/${request.rideId}/tip`, request.payload);
+              break;
+            case 'emergency':
+              if (request.rideId) await api.post(`/rides/${request.rideId}/emergency`, request.payload);
+              break;
           }
-          // Add other request types here as needed
-        } catch (error) {
-          // Increment retry count, remove after max retries
-          request.retryCount = (request.retryCount || 0) + 1;
-          if (request.retryCount >= 3) {
-            successfulSyncs.push(request.id); // Remove failed requests
+          successfulSyncs.push(request.id);
+        } catch {
+          request.retries = (request.retries || 0) + 1;
+          if (request.retries >= 3) {
+            failedPermanently.push(request.id);
           }
         }
       }
 
-      // Remove successfully synced requests
-      const updatedQueue = queue.filter(req => !successfulSyncs.includes(req.id));
+      const idsToRemove = new Set([...successfulSyncs, ...failedPermanently]);
+      const updatedQueue = queue.filter(req => !idsToRemove.has(req.id));
       await AsyncStorage.setItem('offline_queue', JSON.stringify(updatedQueue));
 
+      if (failedPermanently.length > 0) {
+        Alert.alert(
+          'Sync Failed',
+          `${failedPermanently.length} offline action(s) could not be synced and were dropped.`,
+        );
+      }
       if (successfulSyncs.length > 0) {
-        // Could emit an event or show notification that offline requests were synced
-        console.log(`Synced ${successfulSyncs.length} offline requests`);
+        console.log(`[Offline] Synced ${successfulSyncs.length} requests`);
       }
     } catch (error) {
       console.error('Failed to sync offline requests:', error);
@@ -391,7 +425,7 @@ export const useRideStore = create<RideState>((set, get) => ({
     try {
       const response = await api.post(`/rides/${currentRide.id}/simulate-arrival`);
       set({
-        currentRide: { ...currentRide, status: 'driver_arrived', pickup_otp: response.data.pickup_otp },
+        currentRide: { ...currentRide, status: RideStatus.DRIVER_ARRIVED, pickup_otp: response.data.pickup_otp },
       });
     } catch (error: any) {
       set({ error: error.message });
@@ -405,7 +439,7 @@ export const useRideStore = create<RideState>((set, get) => ({
     try {
       await api.post(`/rides/${currentRide.id}/start`);
       set({
-        currentRide: { ...currentRide, status: 'in_progress' },
+        currentRide: { ...currentRide, status: RideStatus.IN_PROGRESS },
       });
     } catch (error: any) {
       set({ error: error.message });
@@ -585,18 +619,32 @@ export const useRideStore = create<RideState>((set, get) => ({
     try {
       const raw = await AsyncStorage.getItem(ACTIVE_RIDE_KEY);
       if (!raw) return;
-      const { currentRide, currentDriver } = JSON.parse(raw);
-      if (!currentRide || TERMINAL_STATUSES.has(currentRide.status)) {
+      const { currentRide: stored, currentDriver } = JSON.parse(raw);
+      if (!stored || TERMINAL_STATUSES.has(stored.status)) {
         await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
         return;
       }
-      // Only restore if there's no ride already in memory (e.g. from a
-      // previous mount in the same session).
-      if (!get().currentRide) {
-        set({ currentRide, currentDriver: currentDriver || null });
+      // Validate against backend — if the ride completed or was cancelled
+      // while the app was closed the stored data would be stale.
+      try {
+        const live = await api.get('/rides/active');
+        if (!live.data?.active || live.data.ride?.id !== stored.id) {
+          await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
+          return; // stale — do not route
+        }
+        const liveRide = live.data.ride;
+        const liveDriver = liveRide.driver || currentDriver || null;
+        if (!get().currentRide) {
+          set({ currentRide: liveRide, currentDriver: liveDriver });
+        }
+      } catch {
+        // Offline or server error — restore from cache optimistically but
+        // fetchActiveRide on mount will correct any stale state.
+        if (!get().currentRide) {
+          set({ currentRide: stored, currentDriver: currentDriver || null });
+        }
       }
     } catch {
-      // Corrupt data — clear and let the API fetch handle it
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
     }
   },

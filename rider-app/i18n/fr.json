@@ -1,0 +1,78 @@
+{
+  "common": {
+    "loading": "Chargement...",
+    "error": "Erreur",
+    "success": "Succès",
+    "cancel": "Annuler",
+    "confirm": "Confirmer",
+    "save": "Enregistrer",
+    "back": "Retour",
+    "done": "Terminé",
+    "ok": "OK",
+    "close": "Fermer",
+    "retry": "Réessayer"
+  },
+  "home": {
+    "whereToGo": "Où allez-vous?",
+    "searchPlaceholder": "Rechercher une destination",
+    "nearbyDrivers": "Conducteurs à proximité",
+    "scheduledRides": "Trajets planifiés"
+  },
+  "ride": {
+    "chooseRide": "Choisir un trajet",
+    "confirmRide": "Confirmer le trajet",
+    "scheduleLater": "Planifier plus tard",
+    "noDrivers": "Aucune voiture disponible",
+    "findingRides": "Recherche des meilleurs trajets...",
+    "shareInvoice": "Partager le reçu",
+    "rideComplete": "Trajet terminé!",
+    "howWasRide": "Comment était votre trajet?"
+  },
+  "wallet": {
+    "title": "Portefeuille",
+    "balance": "Solde disponible",
+    "topUp": "Recharger",
+    "transfer": "Transférer",
+    "recentActivity": "Activité récente",
+    "noTransactions": "Aucune transaction",
+    "transferTo": "Transférer à",
+    "recipientPhone": "Numéro de téléphone du destinataire",
+    "amount": "Montant",
+    "transferSuccess": "Transfert envoyé avec succès"
+  },
+  "loyalty": {
+    "title": "Récompenses",
+    "points": "Points",
+    "tier": "Niveau",
+    "lifetime": "Points à vie",
+    "redeem": "Échanger des points",
+    "history": "Historique des points",
+    "noHistory": "Aucun historique de points",
+    "redeemSuccess": "Points échangés avec succès"
+  },
+  "support": {
+    "title": "Contacter le support",
+    "howCanWeHelp": "Comment pouvons-nous vous aider?",
+    "submitReport": "Soumettre le rapport",
+    "faq": "FAQ",
+    "chat": "Chat avec l'assistant IA",
+    "chatPlaceholder": "Posez une question...",
+    "submitting": "Envoi en cours..."
+  },
+  "settings": {
+    "title": "Paramètres",
+    "notifications": "Notifications",
+    "appearance": "Apparence",
+    "darkMode": "Mode sombre",
+    "language": "Langue",
+    "account": "Compte",
+    "about": "À propos",
+    "selectLanguage": "Choisir la langue"
+  },
+  "languages": {
+    "en": "Anglais",
+    "fr": "Français",
+    "es": "Espagnol",
+    "zh": "Chinois (simplifié)"
+  }
+}

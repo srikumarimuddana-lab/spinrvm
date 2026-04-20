@@ -1,0 +1,78 @@
+{
+  "common": {
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "save": "Save",
+    "back": "Back",
+    "done": "Done",
+    "ok": "OK",
+    "close": "Close",
+    "retry": "Try Again"
+  },
+  "home": {
+    "whereToGo": "Where to go?",
+    "searchPlaceholder": "Search destination",
+    "nearbyDrivers": "Nearby drivers",
+    "scheduledRides": "Scheduled rides"
+  },
+  "ride": {
+    "chooseRide": "Choose a ride",
+    "confirmRide": "Confirm Ride",
+    "scheduleLater": "Schedule later",
+    "noDrivers": "No cars available right now",
+    "findingRides": "Finding best rides...",
+    "shareInvoice": "Share Receipt",
+    "rideComplete": "Ride Complete!",
+    "howWasRide": "How was your ride?"
+  },
+  "wallet": {
+    "title": "Wallet",
+    "balance": "Available Balance",
+    "topUp": "Top Up",
+    "transfer": "Transfer",
+    "recentActivity": "Recent Activity",
+    "noTransactions": "No transactions yet",
+    "transferTo": "Transfer to",
+    "recipientPhone": "Recipient phone number",
+    "amount": "Amount",
+    "transferSuccess": "Transfer sent successfully"
+  },
+  "loyalty": {
+    "title": "Rewards",
+    "points": "Points",
+    "tier": "Tier",
+    "lifetime": "Lifetime Points",
+    "redeem": "Redeem Points",
+    "history": "Points History",
+    "noHistory": "No points history yet",
+    "redeemSuccess": "Points redeemed successfully"
+  },
+  "support": {
+    "title": "Contact Support",
+    "howCanWeHelp": "How can we help you today?",
+    "submitReport": "Submit Report",
+    "faq": "FAQ",
+    "chat": "Chat with AI Assistant",
+    "chatPlaceholder": "Ask a question...",
+    "submitting": "Submitting..."
+  },
+  "settings": {
+    "title": "Settings",
+    "notifications": "Notifications",
+    "appearance": "Appearance",
+    "darkMode": "Dark Mode",
+    "language": "Language",
+    "account": "Account",
+    "about": "About",
+    "selectLanguage": "Select Language"
+  },
+  "languages": {
+    "en": "English",
+    "fr": "French",
+    "es": "Spanish",
+    "zh": "Chinese (Simplified)"
+  }
+}

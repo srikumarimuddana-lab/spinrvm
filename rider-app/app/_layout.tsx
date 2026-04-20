@@ -26,6 +26,7 @@ import {
   setBackgroundMessageHandler,
   onTokenRefresh,
 } from '@shared/services/firebase';
+import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
 
 // R-P1-29: Route to the correct screen based on FCM notification data.
 // Called both for killed-state (getInitialNotification) and tapped-while-backgrounded notifications.
@@ -190,6 +191,16 @@ export default function RootLayout() {
               importance: Notifications.AndroidImportance.DEFAULT,
               sound: 'default',
             });
+            // Channel for scheduled ride reminders (T-15 min alert)
+            await Notifications.setNotificationChannelAsync('scheduled-reminders', {
+              name: 'Scheduled Ride Reminders',
+              description: 'Reminder 15 minutes before your scheduled ride departs.',
+              importance: Notifications.AndroidImportance.HIGH,
+              sound: 'default',
+              vibrationPattern: [0, 250, 150, 250],
+              lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+              enableVibrate: true,
+            });
           } catch (e) {
             console.log('[Push] Android channel setup failed:', e);
           }
@@ -278,6 +289,32 @@ export default function RootLayout() {
 
     const unsubscribe = onForegroundMessage((remoteMessage: any) => {
       console.log('[Push] Rider foreground FCM:', remoteMessage?.notification?.title);
+
+      // Scheduled ride reminder — show a local notification so the alert
+      // appears even when the app is foregrounded (FCM suppresses the
+      // OS banner for foreground messages).
+      const reminderRideId = handleScheduledRideReminderFCM(remoteMessage);
+      if (reminderRideId) {
+        if (Notifications) {
+          const scheduledTime = remoteMessage?.data?.scheduled_time;
+          const timeLabel = scheduledTime
+            ? new Date(scheduledTime).toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })
+            : 'soon';
+          Notifications.scheduleNotificationAsync({
+            content: {
+              title: '🚗 Ride in 15 minutes',
+              body: `Your scheduled Spinr ride departs at ${timeLabel}. Get ready!`,
+              data: { type: 'scheduled_ride_reminder', rideId: reminderRideId },
+              sound: 'default',
+              ...(Platform.OS === 'android' ? { channelId: 'scheduled-reminders' } : {}),
+            },
+            trigger: null, // show immediately
+          }).catch(() => {});
+        }
+        return; // don't also refetch ride for reminder events
+      }
+
+      // All other FCM types — refresh the active ride state
       const currentRide = useRideStore.getState().currentRide;
       if (currentRide?.id) {
         useRideStore.getState().fetchRide(currentRide.id).catch(() => {});

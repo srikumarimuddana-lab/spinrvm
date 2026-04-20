@@ -150,7 +150,7 @@ export default function RideInProgressScreen() {
     // Get share token from backend API
     let shareToken = rideId || 'demo';
     try {
-      const shareRes = await api.get(`/rides/${rideId}/share`);
+      const shareRes = await api.post(`/rides/${rideId}/share`);
       if (shareRes.data?.share_token) {
         shareToken = shareRes.data.share_token;
       }
@@ -199,7 +199,7 @@ I've shared my live location with you for safety.
   const handleCopyTrackingLink = async () => {
     let shareToken = rideId || 'demo';
     try {
-      const shareRes = await api.get(`/rides/${rideId}/share`);
+      const shareRes = await api.post(`/rides/${rideId}/share`);
       if (shareRes.data?.share_token) {
         shareToken = shareRes.data.share_token;
       }
@@ -209,6 +209,10 @@ I've shared my live location with you for safety.
     const trackingLink = `https://spinr-track.app/${shareToken}`;
     await Clipboard.setStringAsync(trackingLink);
     setAlertState({ visible: true, title: 'Copied!', message: 'Live tracking link copied to clipboard', variant: 'success' });
+  };
+
+  const handleOpenTrackingView = () => {
+    router.push({ pathname: '/ride-tracking-webview', params: { rideId: rideId as string } } as any);
   };
 
   // No free cancel during ride — rider pays full fare if they end early
@@ -493,7 +497,10 @@ I've shared my live location with you for safety.
                 <Ionicons name="share-outline" size={20} color={colors.text} />
                 <Text style={styles.actionBtnText}>Share Trip</Text>
               </TouchableOpacity>
-              {/* R-P1-3: Split Fare — accessible mid-ride via fare-split screen */}
+              <TouchableOpacity style={styles.actionBtn} onPress={handleOpenTrackingView}>
+                <Ionicons name="map-outline" size={20} color={colors.text} />
+                <Text style={styles.actionBtnText}>Live Map</Text>
+              </TouchableOpacity>
               <TouchableOpacity
                 style={styles.actionBtn}
                 onPress={() => router.push({ pathname: '/fare-split', params: { rideId } } as any)}

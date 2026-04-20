@@ -80,7 +80,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | C1 | Driver accepts → rider UI flips within <1s via WS (not 15s poll) | X | `test_cross_app_ride_lifecycle::test_driver_accept_updates_status_seen_by_rider` |
 | C2 | Two drivers racing same offer → exactly one wins | X | `test_e2e_ride_lifecycle::test_two_drivers_accepting_same_ride_one_wins` |
 | C3 | Rider cancels post-accept → driver notified via WS | X | `test_cross_app_ride_lifecycle::test_cancel_by_rider_during_driver_accepted_frees_driver` |
-| C4 | Driver cancels post-accept → rider notified | — | **Gap: add to cross-app** |
+| C4 | Driver cancels post-accept → rider notified | ✅ | WS `ride_cancelled` to rider channel + push notification asserted; `test_cross_app_ride_lifecycle.py::test_driver_cancel_after_accept_notifies_rider`; guard: pre-accept cancel rejected before notification sent |
 | C5 | Status enums match between rider + driver views | X | `test_status_enums_match_between_rider_and_driver_views` |
 | C6 | Rider + driver endpoint surface both mounted | X | `TestCrossAppHTTPContract` |
 | C7 | Surge multiplier applied consistently across estimate + fare + payout | — | **Gap: add test** |

@@ -205,6 +205,98 @@ class TestCrossAppRideLifecycle:
         )
 
 
+    async def test_driver_cancel_after_accept_notifies_rider(self):
+        """C4 — driver cancels after accepting: rider must receive both a
+        WebSocket ride_cancelled event AND a push notification.
+
+        Without this the rider UI stays on 'Driver en route' until the
+        15-second poll catches up — a ~15s UX cliff and potential safety issue.
+
+        Code under test: backend/routes/drivers.py::cancel_ride (~line 2084).
+        """
+        from backend.routes import drivers as drv_mod
+
+        accepted = _ride(status="driver_accepted", driver_id=DRIVER_ID)
+        cancelled = _ride(status="cancelled", driver_id=DRIVER_ID)
+
+        ws_calls = []
+
+        async def _capture_ws(message, channel):
+            ws_calls.append((channel, message))
+
+        push_calls = []
+
+        async def _capture_push(user_id, title, body, data=None):
+            push_calls.append({"user_id": user_id, "title": title, "data": data})
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows",
+                  AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers.db_supabase.get_ride",
+                  AsyncMock(side_effect=[accepted, cancelled])),
+            patch("backend.routes.drivers.db_supabase.update_ride", AsyncMock(return_value=cancelled)),
+            patch("backend.routes.drivers.db_supabase.set_driver_available", AsyncMock()),
+            patch("backend.routes.drivers.manager.send_personal_message",
+                  AsyncMock(side_effect=_capture_ws)),
+            patch("backend.routes.drivers.send_push_notification",
+                  AsyncMock(side_effect=_capture_push)),
+        ):
+            result = await drv_mod.cancel_ride(
+                ride_id=RIDE_ID,
+                reason="driver_emergency",
+                current_user={"id": DRIVER_USER_ID},
+            )
+
+        assert result == {"success": True}
+
+        # ── WebSocket contract ──────────────────────────────────────────────
+        rider_ws = [
+            (ch, msg) for ch, msg in ws_calls
+            if RIDER_ID in str(ch)
+        ]
+        assert rider_ws, (
+            f"Driver cancel did not publish to rider channel. "
+            f"Channels seen: {[ch for ch, _ in ws_calls]}"
+        )
+        cancel_events = [msg for _, msg in rider_ws if msg.get("type") == "ride_cancelled"]
+        assert cancel_events, "No ride_cancelled event in rider's WebSocket channel"
+        assert cancel_events[0]["ride_id"] == RIDE_ID
+
+        # ── Push notification contract ──────────────────────────────────────
+        rider_pushes = [p for p in push_calls if p["user_id"] == RIDER_ID]
+        assert rider_pushes, (
+            "Rider did not receive a push notification when driver cancelled. "
+            "Rider has no way to learn about the cancellation without a poll."
+        )
+
+    async def test_driver_cancel_before_accept_does_not_notify_rider(self):
+        """Driver can only cancel rides they have accepted — attempting to cancel
+        a 'searching' ride they don't own must be rejected before any notification
+        is sent.  Guards against a rogue driver spamming cancellation events."""
+        from fastapi import HTTPException
+        from backend.routes import drivers as drv_mod
+
+        searching = _ride(status="searching", driver_id=None)
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows",
+                  AsyncMock(return_value=[_driver()])),
+            patch("backend.routes.drivers.db_supabase.get_ride",
+                  AsyncMock(return_value=searching)),
+            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()) as ws_mock,
+            patch("backend.routes.drivers.send_push_notification", AsyncMock()) as push_mock,
+        ):
+            with pytest.raises(Exception):
+                await drv_mod.cancel_ride(
+                    ride_id=RIDE_ID,
+                    reason="driver_not_owner",
+                    current_user={"id": DRIVER_USER_ID},
+                )
+
+        ws_mock.assert_not_called()
+        push_mock.assert_not_called()
+
+
 @pytest.mark.e2e
 class TestCrossAppHTTPContract:
     """Shape contracts between rider and driver apps and the backend.

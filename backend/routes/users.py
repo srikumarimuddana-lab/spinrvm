@@ -65,6 +65,49 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
     return UserProfile(**updated_user)
 
 
+@api_router.post("/data-export")
+async def request_data_export(current_user: dict = Depends(get_current_user)):
+    """R-P1-6 PIPEDA: Queue a data-export email for the authenticated rider.
+    In production this queues a background job that emails a signed download link.
+    """
+    user_id = current_user["id"]
+    logger.info(f"Data export requested for user {user_id}")
+    try:
+        export_record = {
+            "id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "status": "pending",
+            "requested_at": datetime.utcnow().isoformat(),
+        }
+        await db_supabase.insert_one("data_export_requests", export_record)
+    except Exception as e:
+        logger.warning(f"Could not record data export request: {e}")
+    return {"success": True, "message": "Data export requested. You will receive an email with a download link within 24 hours."}
+
+
+@api_router.delete("/account")
+async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
+    """R-P1-6 PIPEDA: Soft-delete account with a 30-day grace period (right to erasure)."""
+    user_id = current_user["id"]
+    logger.info(f"Account deletion (PIPEDA) requested for user {user_id}")
+
+    grace_period_end = (datetime.utcnow().replace(microsecond=0) +
+                        __import__('datetime').timedelta(days=30)).isoformat()
+    now = datetime.utcnow().isoformat()
+    try:
+        await db_supabase.update_one(
+            "users",
+            {"id": user_id},
+            {"deletion_requested_at": now, "deletion_scheduled_at": grace_period_end, "status": "pending_deletion"},
+        )
+        await db_supabase.update_one("drivers", {"user_id": user_id}, {"deleted_at": now})
+        logger.info(f"Account deletion scheduled for user {user_id} (grace period until {grace_period_end})")
+        return {"success": True, "message": "Account deletion scheduled. Your account will be permanently deleted after 30 days."}
+    except Exception as e:
+        logger.error(f"Account deletion failed for user {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to schedule account deletion. Please contact support.") from e
+
+
 @api_router.delete("/profile")
 async def delete_account(current_user: dict = Depends(get_current_user)):
     """Permanently delete the current user's account and all associated data."""

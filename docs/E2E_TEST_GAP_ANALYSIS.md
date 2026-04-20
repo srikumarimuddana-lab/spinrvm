@@ -42,7 +42,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | R4 | As a rider, I see the driver's ETA and car moving on a map | X | ~ | ~ | live location interpolation not tested |
 | R5 | As a rider, I get OTP to hand to the driver at pickup | X | X | — | OTP entry flow not in E2E |
 | R6 | As a rider, I can cancel before / after match (with correct fee) | X | X | — | fee-calc E2E missing |
-| R7 | As a rider, I can chat with the driver mid-trip | X | ~ | — | chat E2E missing |
+| R7 | As a rider, I can chat with the driver mid-trip | ✅ | ✅ | — | `test_p2_chat.py` + `rideStore.chat.test.ts` — send/persist/WS-forward + dedup |
 | R8 | As a rider, I can pay with card / wallet / cash | X | X | — | wallet-top-up E2E missing |
 | R9 | As a rider, I can apply a promo code | X | X | — | promo E2E missing |
 | R10 | As a rider, I can rate and tip the driver post-trip | X | X | X | double-submit guard not asserted |
@@ -67,7 +67,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | D8 | As a driver, I can cash out / schedule payouts | X | X | — | payout E2E missing |
 | D9 | As a driver, I see a banner when docs expire / onboarding blocks | X | X | ~ | only suspended state E2E'd |
 | D10 | As a driver, I complete quests for bonuses | X | X | — | quest E2E missing |
-| D11 | As a driver, I can chat with the rider | X | ~ | — | chat E2E missing |
+| D11 | As a driver, I can chat with the rider | ✅ | ✅ | — | `test_p2_chat.py` + `driverStore.chat.test.ts` — send/persist/WS-forward + dedup |
 | D12 | As a driver, my active trip survives app restart | ✅ | ✅ | — | `driverStore.restart.test.ts` — 8 scenarios |
 | D13 | As a driver, I get my T4A at year-end | X | X | — | T4A E2E skipped (low frequency) |
 | D14 | As a driver, I can rate the rider | X | X | — | rider-rating E2E missing |
@@ -167,7 +167,7 @@ Implementation work remaining: P0-4 surge-lock, P0-5 Stripe card charge.
 12. ✅ **CORS on web exports** — S9 — closed: CORS already correct (explicit allowlist + wildcard-in-production guard + credentials disabled with wildcard); `backend/tests/test_p1_cors.py` pins 8 scenarios: wildcard rejects in production, disables credentials; unlisted origin gets no header; allowed origin reflected with credentials; always-allowed origins present
 
 ### P2 — Completeness
-13. Chat E2E (rider + driver) — R7, D11
+13. ✅ **Chat E2E (rider + driver)** — R7, D11 — closed: `POST /{ride_id}/messages` persists + WS-forwards; non-participant→403; cancelled ride→400; post-trip 24h window enforced; `GET /{ride_id}/messages` scoped to participants; pinned by `backend/tests/test_p2_chat.py` (9 cases) + `rider-app/store/__tests__/rideStore.chat.test.ts` (6 cases) + `driver-app/store/__tests__/driverStore.chat.test.ts` (6 cases)
 14. SOS E2E — R13
 15. Promo / wallet / loyalty E2E — R8, R9, R16
 16. Payout / T4A driver flows — D8, D13

@@ -3261,4 +3261,331 @@ TASK 14 TALLY
 | TOTAL           |    10 |
 
 ================================================================================
-[AUDIT IN PROGRESS — TASKS 15–16 PENDING]
+TASK 15 — ACCESSIBILITY — WCAG 2.1 / AODA (Dimension 15)
+================================================================================
+
+[15-1] HIGH | Star Rating Buttons Have No accessibilityLabel or accessibilityRole
+File: rider-app/app/ride-completed.tsx:339–347
+Finding: The five star-rating buttons are rendered as plain TouchableOpacity
+  elements with no accessibility attributes:
+    {[1, 2, 3, 4, 5].map((star) => (
+      <TouchableOpacity key={star} onPress={() => setRating(star)}
+                        style={styles.starBtn}>
+        <Ionicons name={star <= rating ? 'star' : 'star-outline'} ... />
+      </TouchableOpacity>
+    ))}
+  VoiceOver reads these as "button" with no label. A screen-reader user cannot
+  tell which star they are focused on, what value they are about to set, or
+  which star is currently selected. Rating the driver is a mandatory step before
+  the ride can be closed (the submit button is labelled "Rate & Done").
+  Per D15 severity guide: "Critical action has no accessibility label" → HIGH.
+Fix:
+  <TouchableOpacity
+    key={star}
+    onPress={() => setRating(star)}
+    accessibilityLabel={`Rate ${star} star${star > 1 ? 's' : ''}`}
+    accessibilityRole="button"
+    accessibilityState={{ selected: rating === star }}
+    style={styles.starBtn}
+  >
+  Effort: 30 minutes.
+
+[15-2] MEDIUM | Tip Buttons Missing accessibilityLabel and accessibilityRole;
+               Custom Tip Container Is Not an Accessible Button
+File: rider-app/app/ride-completed.tsx:375–396
+Finding: The $2, $5, and $10 tip TouchableOpacity buttons have no
+  accessibilityLabel and no accessibilityRole:
+    <TouchableOpacity
+      style={[styles.tipBtn, selectedTip === amt && styles.tipBtnActive]}
+      onPress={() => { setSelectedTip(amt); setCustomTip(''); }}
+    >
+      <Text ...>${amt}</Text>
+    </TouchableOpacity>
+  VoiceOver reads the child text ("$2") but announces no role. Without a role,
+  VoiceOver may not announce these as interactive. The custom tip container is
+  a plain View (not touchable), containing only a Text and a TextInput. While
+  the TextInput itself is reachable by focus, the "$" prefix Text has no label.
+  Touch target height: paddingVertical 12 + text height ≈ 19pt → total ≈ 43pt,
+  marginally below the 44pt minimum (iOS HIG). Width exceeds 44pt.
+  Per D15 severity guide: "Focus order illogical / missing label" → MEDIUM.
+Fix:
+  {tipOptions.map((amt) => (
+    <TouchableOpacity
+      key={amt}
+      accessibilityLabel={`Tip $${amt}`}
+      accessibilityRole="button"
+      accessibilityState={{ selected: selectedTip === amt }}
+      style={[styles.tipBtn, selectedTip === amt && styles.tipBtnActive]}
+      onPress={() => { setSelectedTip(amt); setCustomTip(''); }}
+    >
+      <Text ...>${amt}</Text>
+    </TouchableOpacity>
+  ))}
+  Increase tipBtn paddingVertical from 12 to 13 to clear the 44pt minimum.
+  Wrap the custom tip View in a View with minHeight: 44 and add
+  accessibilityLabel="Custom tip amount" on the TextInput.
+  Effort: 30 minutes.
+
+[15-3] HIGH | SOSButton Has No accessibilityLabel, accessibilityRole, or
+              accessibilityHint — VoiceOver Cannot Identify or Activate It
+File: shared/components/SOSButton.tsx:99–127
+Finding: The TouchableOpacity that constitutes the entire SOS button carries
+  no accessibility props:
+    <TouchableOpacity
+      style={[styles.btn, ...]}
+      onPressIn={startPress}
+      onPressOut={endPress}
+      activeOpacity={0.9}
+    >
+  VoiceOver announces this as an unlabelled "button". The element is activated
+  by a long press (1.2 s hold), which VoiceOver does not discover from the
+  element itself — there is no accessibilityHint explaining the gesture, and no
+  accessibilityActivate override. The component is used in:
+    • rider-app/app/driver-arriving.tsx:284 (header overlay, size="small")
+    • rider-app/app/ride-in-progress.tsx:204 (floating overlay, size="small")
+    • rider-app/app/ride-in-progress.tsx:443 (bottom-sheet action bar)
+  In all three placements, VoiceOver focus is also complicated by the parent
+  being a pointerEvents="box-none" SafeAreaView overlay — the button may be
+  skipped entirely in linear VoiceOver navigation if the overlay container is
+  not assigned accessible={true}.
+  Per D15 severity guide: "Critical action has no accessibility label" → HIGH.
+Fix:
+  <TouchableOpacity
+    accessibilityLabel="Emergency SOS"
+    accessibilityRole="button"
+    accessibilityHint="Hold for 1.2 seconds to send an emergency alert"
+    onPressIn={startPress}
+    onPressOut={endPress}
+    activeOpacity={0.9}
+    style={[styles.btn, ...]}
+  >
+  Also add accessible={true} to the parent SafeAreaView overlay in
+  driver-arriving.tsx and ride-in-progress.tsx so VoiceOver includes
+  the button in its focus order.
+  Effort: 1 hour.
+
+[15-4] MEDIUM | FreeCancelTimer Does Not Use accessibilityLiveRegion — Countdown
+               Is Silent to Screen Reader
+File: rider-app/components/FreeCancelTimer.tsx:70–91
+Finding: The FreeCancelTimer component renders a countdown (e.g. "1:45
+  remaining") that decrements every second via setSecondsLeft() state. No
+  accessibilityLiveRegion is applied to the Text element carrying the countdown
+  value. When the window expires the label changes to "Cancellation fee applies
+  / $3.00" — also without a live-region announcement. A VoiceOver user who is
+  not focused on the timer receives no spoken notification that:
+    (a) a free-cancel window is counting down, or
+    (b) the window has expired and a fee now applies.
+  Missing the fee transition is a financial consequence for the rider.
+  Per D15 severity guide: "accessibilityLiveRegion on dynamically updating
+  content" → MEDIUM.
+Fix:
+  Apply accessibilityLiveRegion="polite" to the Text element carrying the
+  countdown so screen readers announce updates:
+    <Text
+      accessibilityLiveRegion="polite"
+      accessibilityLabel={
+        isWindowOpen
+          ? `Free cancellation — ${timerLabel} remaining`
+          : `Cancellation fee applies — $${cancellationFee.toFixed(2)}`
+      }
+      style={styles.freeTimer}
+    >
+      {timerLabel}
+    </Text>
+  To avoid spamming the user every second, update the announced value only
+  when it crosses 60 s (1-minute warning) and again at 0 (fee transition).
+  The simplest approach is to set the live region only on the transition
+  label ("Cancellation fee applies") and use accessibilityLiveRegion="assertive"
+  for that specific state change, leaving the second-by-second countdown silent.
+  Effort: 1 hour.
+
+[15-5] MEDIUM | OTP Screen — 4 Visual Code Boxes Are Not Individually Labelled;
+               Single-TextInput Architecture Hides Focus From Screen Reader
+File: rider-app/app/otp.tsx:234–277
+Finding: The OTP entry UI uses a single hidden TextInput (opacity:0, 1×1pt)
+  behind four Animated.View boxes. The visible boxes are pure View elements
+  with no accessibilityLabel, no accessible={true}, and no focus management.
+  A VoiceOver user encounters:
+    • The hidden TextInput gets focus. VoiceOver announces "text field" with
+      no label describing which digit position or what is expected.
+    • The four visual boxes are non-interactive Views — VoiceOver skips them.
+    • There is no per-position announcement (e.g. "Digit 1 of 4 entered").
+    • The outer TouchableOpacity wrapper (line 247) has no accessibilityLabel.
+  Focus order: the hidden TextInput is the only element in the code area that
+  VoiceOver will actually land on. This is technically acceptable if the
+  TextInput itself is well-labelled — it is not. The TextInput carries no
+  accessibilityLabel or accessibilityHint.
+  Per D15 severity guide: "Focus order illogical" → MEDIUM.
+Fix:
+  Add to the hidden TextInput:
+    accessibilityLabel="Enter 4-digit verification code"
+    accessibilityHint={`${code.length} of 4 digits entered`}
+  The label updates dynamically with the code.length hint to give positional
+  feedback. The outer TouchableOpacity (codeBoxes) should also carry:
+    accessibilityLabel="Verification code entry"
+    accessible={false}   // let focus fall through to the TextInput
+  Effort: 1 hour.
+
+[15-6] MEDIUM | Search Autocomplete — Suggestion TouchableOpacity Rows Have No
+               accessibilityLabel or accessibilityRole
+File: rider-app/app/search-destination.tsx:296–315
+Finding: The renderPrediction() function renders each Google Places autocomplete
+  result as a TouchableOpacity with no accessibility attributes:
+    <TouchableOpacity
+      style={styles.predictionRow}
+      onPress={() => handleSelectPrediction(item)}
+    >
+  VoiceOver reads the child Text elements sequentially but does not announce the
+  element as a button or provide a combined label. For a suggestion like
+  "221B Baker Street, London, ON, Canada", VoiceOver reads the main text and
+  secondary text as separate text items with no contextual grouping. The user
+  must infer that double-tapping selects the suggestion.
+  The same pattern applies to the static "Current Location", "Set location on
+  map", saved-address, and recent-search rows (lines 445–605): all are
+  TouchableOpacity elements with only Text children and no accessibility props.
+  Per D15 severity guide: "Missing accessibilityLabel on non-obvious button"
+  → MEDIUM (affects core booking flow — entering destination).
+Fix:
+  const renderPrediction = ({ item }: { item: PlacePrediction }) => (
+    <TouchableOpacity
+      style={styles.predictionRow}
+      accessibilityRole="button"
+      accessibilityLabel={item.description}
+      onPress={() => handleSelectPrediction(item)}
+    >
+  Apply equivalent accessibilityRole="button" + accessibilityLabel to all
+  static suggestion rows (Current Location, Set on map, saved addresses,
+  recent searches).
+  Effort: 1 hour.
+
+[15-7] LOW | Driver Avatar Placeholder Not Marked accessibilityElementsHidden
+File: rider-app/app/driver-arriving.tsx:465–469;
+      rider-app/app/ride-completed.tsx:326–329
+Finding: The driver avatar in both screens is a decorative View containing
+  only an Ionicons placeholder icon ("person"). Neither uses
+  accessibilityElementsHidden={true}. VoiceOver will announce the Ionicons
+  icon as an unlabelled image element, adding noise to the focus traversal.
+  When a real driver photo is eventually wired in, an accessibilityLabel
+  (e.g. "Driver photo") will be required instead.
+  Per D15 severity guide: "Decorative image not hidden from screen reader"
+  → LOW.
+Fix:
+  <View style={styles.driverAvatar} accessibilityElementsHidden={true}>
+    <Ionicons name="person" size={28} color={colors.textDim} />
+  </View>
+  Effort: 15 minutes.
+
+[15-8] MEDIUM | Bottom Sheets (driver-arriving, driver-arrived, ride-in-progress)
+               Do Not Use accessibilityViewIsModal — Focus Not Trapped
+File: rider-app/app/driver-arriving.tsx:421–640;
+      rider-app/app/driver-arrived.tsx:225–235;
+      rider-app/app/ride-in-progress.tsx:319–328
+Finding: All three screens use @gorhom/bottom-sheet with no
+  accessibilityViewIsModal={true} prop. The BottomSheet component from
+  @gorhom/bottom-sheet v4 supports an accessibilityViewIsModal prop that
+  traps VoiceOver focus to the sheet's content, preventing the user from
+  accidentally swiping focus to the map controls or header buttons behind the
+  sheet. Without this prop, VoiceOver can traverse from bottom-sheet elements
+  directly to the map tile, the driver car marker, or the floating SOS button
+  in an undefined order.
+  The ride-options.tsx screen also renders two RN Modal elements
+  (date/time pickers, lines 532 and 568) without accessibilityViewIsModal.
+  Per D15 specification: "accessibilityViewIsModal on modal sheets to trap
+  focus" → MEDIUM.
+Fix:
+  <BottomSheet
+    ref={bottomSheetRef}
+    ...
+    accessibilityViewIsModal={true}
+  >
+  Apply the same to both Modal elements in ride-options.tsx:
+    <Modal transparent animationType="slide" visible={showDatePicker}
+           accessibilityViewIsModal={true}>
+  Note: @gorhom/bottom-sheet passes additional props to the underlying
+  View via the backgroundStyle prop; verify the prop is forwarded in the
+  installed version (v4.x).
+  Effort: 1 hour.
+
+[15-9] MEDIUM | Primary Colour (#FF3B30) on White Fails 4.5:1 Contrast Ratio
+               for Normal-Weight Text
+File: shared/theme/index.ts:41–59;
+      rider-app/app/ride-completed.tsx:488, 532–533
+Finding: The Spinr light-mode primary colour is #FF3B30 (red). The
+  WCAG 2.1 relative luminance contrast of #FF3B30 against #FFFFFF is
+  approximately 3.95:1, which is below the 4.5:1 AA threshold for normal
+  text and small UI elements.
+  Affected instances in the rider app:
+    • fareAmount (line 488): fontSize 42, fontWeight 800 — qualifies as large
+      text (≥ 18pt bold ≡ 24px bold). Contrast ≥ 3:1 required → PASS at 3.95:1.
+    • tipBtnText active state (line 533): fontSize 16, fontWeight 700. Tip
+      button text colour is colors.primary (#FF3B30) on white surface — 3.95:1,
+      FAILS 4.5:1 for 16pt normal text.
+    • Primary action button background (#FF3B30) with white text (#FFF):
+      submitBtn (line 554): paddingVertical 16, fontSize 17 fontWeight 700.
+      White (#FFF) on #FF3B30 = 3.95:1. At 17pt bold this does not meet the
+      18pt threshold for large-text exemption → FAILS 4.5:1.
+  Dark mode primary #FF453A on #1C1C1E: ≈ 4.63:1 → PASS.
+  Per D15 severity guide: "Text contrast ratio < 3:1 — unreadable" is HIGH,
+  but ratios here are between 3:1 and 4.5:1 (AA failure, not AAA). For small
+  interactive element text (tip active, submit button) this is a MEDIUM
+  compliance gap.
+Fix:
+  Option A — Darken the primary action red in light mode to achieve 4.5:1
+  against white. #D93025 gives ~4.55:1.
+  Option B — Use white text exclusively on the primary button (already done)
+  and accept the 3.95:1 ratio for buttons ≥ 44pt tall where large-text rules
+  may apply by convention — document the design decision.
+  At minimum fix the tipBtnTextActive text colour (#FF3B30 on white surface)
+  by using a darker shade: #C0392B (contrast ~4.6:1).
+  Effort: 2 hours (design decision + token update propagation).
+
+[15-10] HIGH | Map Overlay Buttons (SOS, Message) Lack accessibilityLabel and
+               May Be Unreachable by VoiceOver Linear Navigation
+File: rider-app/app/driver-arriving.tsx:282–285;
+      rider-app/app/ride-in-progress.tsx:202–205, 550–553
+Finding: (Extends finding [15-3].) Beyond the missing labels on SOSButton itself:
+  (a) driver-arriving.tsx header (line 269): the parent SafeAreaView uses
+      style={styles.headerSafeArea} with position:absolute, zIndex:10,
+      pointerEvents not set. VoiceOver's linear swipe order follows document
+      order, but absolutely positioned elements appearing before the BottomSheet
+      in the JSX tree may be skipped when the sheet is open and covers the
+      header area visually. There is no explicit accessibility ordering (e.g.
+      importantForAccessibility or accessibilityOrder) to guarantee the SOS
+      button is reachable.
+  (b) ride-in-progress.tsx "Message" button (line 550–553) inside the
+      BottomSheet has no accessibilityLabel or accessibilityRole. VoiceOver
+      reads the child Ionicons icon as an unlabelled image.
+  (c) ride-in-progress.tsx "Share" button (line 556–558) similarly has no
+      label — TouchableOpacity with only an Ionicons child and no props.
+  A VoiceOver user in a live ride cannot reliably reach the SOS button or
+  the chat button. Missing the SOS button during an emergency constitutes a
+  safety-critical accessibility failure.
+  Per D15 severity guide: "Screen reader cannot operate core flow" → HIGH.
+Fix:
+  (a) On the headerSafeArea overlay in driver-arriving.tsx and
+      ride-in-progress.tsx, add accessible={true} and ensure it is positioned
+      after the map in the accessibility order. Consider using
+      importantForAccessibility="yes" on the header View.
+  (b) Message button (ride-in-progress.tsx:550):
+        accessibilityLabel="Message driver"
+        accessibilityRole="button"
+  (c) Share button (ride-in-progress.tsx:556):
+        accessibilityLabel="Share trip details"
+        accessibilityRole="button"
+  Effort: 1–2 hours.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 15 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     3 |
+| MEDIUM          |     6 |
+| LOW             |     1 |
+| PASS            |     0 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    10 |
+
+================================================================================
+[AUDIT IN PROGRESS — TASKS 16 PENDING]

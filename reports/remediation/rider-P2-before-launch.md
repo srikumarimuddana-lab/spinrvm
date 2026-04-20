@@ -1393,6 +1393,185 @@ import { Image } from 'expo-image';
 
 ---
 
+## R-P2-56 · Tip Buttons Missing accessibilityLabel/accessibilityRole; Height Marginally
+           Below 44pt Minimum
+
+**Audit finding [15-2 MEDIUM].** The $2, $5, $10 tip `TouchableOpacity` elements in
+`ride-completed.tsx:375–382` carry no `accessibilityLabel` and no `accessibilityRole`.
+`tipBtn` style has `paddingVertical: 12` with ~19pt text height, giving a total tap target of
+~43pt — 1pt below the iOS HIG 44pt minimum. The custom tip `View` container is not an
+accessible button.
+
+**File to fix:** `rider-app/app/ride-completed.tsx:375–396`
+
+**How to fix:**
+```tsx
+<TouchableOpacity
+  key={amt}
+  accessibilityLabel={`Tip $${amt}`}
+  accessibilityRole="button"
+  accessibilityState={{ selected: selectedTip === amt }}
+  style={[styles.tipBtn, selectedTip === amt && styles.tipBtnActive]}
+  onPress={() => { setSelectedTip(amt); setCustomTip(''); }}
+>
+```
+Increase `tipBtn.paddingVertical` from `12` to `13` to clear 44pt.
+Add `accessibilityLabel="Custom tip amount"` to the custom TextInput.
+
+**Effort:** 30 minutes
+
+---
+
+## R-P2-57 · FreeCancelTimer Countdown Is Silent to Screen Reader — No accessibilityLiveRegion
+
+**Audit finding [15-4 MEDIUM].** `rider-app/components/FreeCancelTimer.tsx:70–91` — the
+countdown text updates every second and the label changes when the free-cancel window expires,
+but no `accessibilityLiveRegion` is set. A VoiceOver user not focused on the timer receives no
+spoken announcement of the countdown or the fee-transition event.
+
+**File to fix:** `rider-app/components/FreeCancelTimer.tsx`
+
+**How to fix:**
+```tsx
+// On the timer Text, fire an assertive announcement only at key transitions:
+<Text
+  accessibilityLiveRegion={secondsLeft === 0 ? 'assertive' : 'polite'}
+  accessibilityLabel={
+    isWindowOpen
+      ? `Free cancellation — ${timerLabel} remaining`
+      : `Cancellation fee applies — $${cancellationFee.toFixed(2)}`
+  }
+  style={styles.freeTimer}
+>
+  {timerLabel}
+</Text>
+```
+Keep per-second announcements silent (remove or conditionalize the live region to trigger
+only at the 60 s mark and 0 s transition).
+
+**Effort:** 1 hour
+
+---
+
+## R-P2-58 · OTP Entry Boxes Not Individually Labelled; Hidden TextInput Has No
+           accessibilityLabel
+
+**Audit finding [15-5 MEDIUM].** `rider-app/app/otp.tsx:234–277` — the single hidden
+`TextInput` driving the 4-box OTP UI has no `accessibilityLabel` or `accessibilityHint`.
+VoiceOver announces it as an unlabelled text field. The four visual `Animated.View` boxes are
+non-interactive and invisible to the screen reader. Users receive no positional feedback
+("2 of 4 digits entered").
+
+**File to fix:** `rider-app/app/otp.tsx:237–244`
+
+**How to fix:**
+```tsx
+<TextInput
+  ref={inputRef}
+  style={styles.hiddenInput}
+  value={code}
+  onChangeText={handleCodeChange}
+  keyboardType="phone-pad"
+  maxLength={codeLength}
+  autoFocus
+  accessibilityLabel="Enter 4-digit verification code"
+  accessibilityHint={`${code.length} of 4 digits entered`}
+/>
+```
+
+**Effort:** 30 minutes
+
+---
+
+## R-P2-59 · Search Autocomplete Suggestion Rows Have No accessibilityLabel or
+           accessibilityRole
+
+**Audit finding [15-6 MEDIUM].** All suggestion rows in `search-destination.tsx` —
+including Google Places predictions (line 296–315), "Current Location" (line 445),
+"Set location on map" (line 471), saved addresses, and recent searches — are
+`TouchableOpacity` elements with only `Text` children and no accessibility props.
+VoiceOver reads child text without role context. Core booking flow (entering destination)
+is degraded for screen-reader users.
+
+**File to fix:** `rider-app/app/search-destination.tsx:296–315, 445–605`
+
+**How to fix:**
+```tsx
+const renderPrediction = ({ item }: { item: PlacePrediction }) => (
+  <TouchableOpacity
+    style={styles.predictionRow}
+    accessibilityRole="button"
+    accessibilityLabel={item.description}
+    onPress={() => handleSelectPrediction(item)}
+  >
+```
+Apply `accessibilityRole="button"` and `accessibilityLabel` to all static suggestion rows.
+
+**Effort:** 1 hour
+
+---
+
+## R-P2-60 · Bottom Sheets in Ride Screens Missing accessibilityViewIsModal — VoiceOver
+           Focus Not Trapped
+
+**Audit finding [15-8 MEDIUM].** `@gorhom/bottom-sheet` is used in `driver-arriving.tsx`,
+`driver-arrived.tsx`, and `ride-in-progress.tsx` without `accessibilityViewIsModal={true}`.
+VoiceOver can traverse from sheet content to background map elements. Two RN `Modal`
+elements in `ride-options.tsx` (date/time pickers, lines 532 and 568) also lack
+`accessibilityViewIsModal`.
+
+**File to fix:**
+- `rider-app/app/driver-arriving.tsx:421`
+- `rider-app/app/driver-arrived.tsx:225`
+- `rider-app/app/ride-in-progress.tsx:319`
+- `rider-app/app/ride-options.tsx:532, 568`
+
+**How to fix:**
+```tsx
+<BottomSheet
+  ref={bottomSheetRef}
+  accessibilityViewIsModal={true}
+  ...
+>
+// And for RN Modal:
+<Modal transparent animationType="slide" visible={showDatePicker}
+       accessibilityViewIsModal={true}>
+```
+
+**Effort:** 1 hour
+
+---
+
+## R-P2-61 · Primary Colour (#FF3B30) on White Background Fails WCAG AA 4.5:1 Contrast
+           Ratio for Normal-Weight Text
+
+**Audit finding [15-9 MEDIUM].** Light-mode primary `#FF3B30` against `#FFFFFF` has a
+contrast ratio of approximately 3.95:1, below the WCAG AA threshold of 4.5:1 for normal text.
+Affected instances:
+- `ride-completed.tsx:533` — `tipBtnTextActive` (16pt text, colour `colors.primary` on white
+  surface): 3.95:1, FAILS.
+- `ride-completed.tsx:554–557` — submit button: white `#FFF` text on `#FF3B30` background.
+  At 17pt bold this does not meet the 18pt large-text threshold, so 4.5:1 is required:
+  3.95:1, FAILS.
+
+Dark-mode primary `#FF453A` on `#1C1C1E` is ≈ 4.63:1 — PASS.
+
+**File to fix:** `shared/theme/index.ts` (lightColors.primary) and/or component-level overrides
+
+**How to fix:**
+Option A — Darken `lightColors.primary` to `#D93025` (contrast ≈ 4.55:1 against white).
+Option B — Keep brand colour and use a darker override only for text-on-white contexts:
+```tsx
+// tipBtnTextActive — override to darker shade:
+tipBtnTextActive: { color: '#C0392B' },  // contrast ~4.6:1
+```
+Document the design decision in the design system so future brand-colour updates account for
+contrast compliance.
+
+**Effort:** 2 hours (design decision + token update + regression check)
+
+---
+
 ## Checklist
 
 - [ ] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
@@ -1450,3 +1629,9 @@ import { Image } from 'expo-image';
 - [ ] R-P2-53 CarMarker wrapped in React.memo with coordinate/heading equality comparator
 - [ ] R-P2-54 driver-arriving.tsx: 3 s poll suspended when WebSocket connectionState === 'connected'
 - [ ] R-P2-55 ride-options.tsx + index.tsx: plain RN Image replaced with expo-image for vehicle/avatar remote images
+- [ ] R-P2-56 Tip buttons: accessibilityLabel + accessibilityRole; paddingVertical raised to 13 to meet 44pt; custom tip TextInput labelled
+- [ ] R-P2-57 FreeCancelTimer: accessibilityLiveRegion fires at 60 s and 0 s transitions; fee-change announced assertively
+- [ ] R-P2-58 OTP hidden TextInput: accessibilityLabel="Enter 4-digit verification code" + digit-count hint added
+- [ ] R-P2-59 Search autocomplete suggestion rows: accessibilityRole="button" + accessibilityLabel on all rows
+- [ ] R-P2-60 BottomSheet instances + RN Modals in ride screens: accessibilityViewIsModal={true} added
+- [ ] R-P2-61 Primary colour contrast: tipBtnTextActive and submit button text meet WCAG AA 4.5:1 in light mode

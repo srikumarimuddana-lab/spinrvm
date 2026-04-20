@@ -752,6 +752,116 @@ const unsubscribe = onForegroundMessage((msg) => {
 
 ---
 
+## R-P1-31 · Star Rating Buttons Missing accessibilityLabel and accessibilityRole
+
+**Audit finding [15-1 HIGH].** The 5 star-rating `TouchableOpacity` buttons in
+`ride-completed.tsx:339–347` have no `accessibilityLabel` and no `accessibilityRole`.
+VoiceOver announces each as an unlabelled "button". A screen-reader user cannot identify
+which star they are focused on, which is currently selected, or what value they are setting.
+Rating the driver is a mandatory step — the rider cannot leave the screen without it.
+
+**File to fix:** `rider-app/app/ride-completed.tsx:339–347`
+
+**How to fix:**
+```tsx
+{[1, 2, 3, 4, 5].map((star) => (
+  <TouchableOpacity
+    key={star}
+    onPress={() => setRating(star)}
+    accessibilityLabel={`Rate ${star} star${star > 1 ? 's' : ''}`}
+    accessibilityRole="button"
+    accessibilityState={{ selected: rating === star }}
+    style={styles.starBtn}
+  >
+    <Ionicons name={star <= rating ? 'star' : 'star-outline'} size={36}
+              color={star <= rating ? '#FFB800' : '#DDD'} />
+  </TouchableOpacity>
+))}
+```
+
+**Effort:** 30 minutes
+
+---
+
+## R-P1-32 · SOSButton Missing accessibilityLabel, accessibilityRole, and
+           accessibilityHint — VoiceOver Cannot Identify or Trigger It
+
+**Audit finding [15-3 HIGH].** `shared/components/SOSButton.tsx:99–127` — the core
+`TouchableOpacity` element carries no accessibility props. VoiceOver announces it as an
+unnamed "button". The long-press gesture (1.2 s hold) is entirely undiscoverable. The button
+is used in three screens: `driver-arriving.tsx:284`, `ride-in-progress.tsx:204`, and
+`ride-in-progress.tsx:443`. In all three positions, the floating SafeAreaView overlay has
+`pointerEvents` unset and no `accessible={true}`, meaning VoiceOver may skip the button
+entirely when navigating linearly.
+
+**File to fix:** `shared/components/SOSButton.tsx`
+
+**How to fix:**
+```tsx
+<TouchableOpacity
+  accessibilityLabel="Emergency SOS"
+  accessibilityRole="button"
+  accessibilityHint="Hold for 1.2 seconds to send an emergency alert"
+  onPressIn={startPress}
+  onPressOut={endPress}
+  activeOpacity={0.9}
+  style={[styles.btn, ...]}
+>
+```
+Also add `accessible={true}` to the parent SafeAreaView overlay in `driver-arriving.tsx`
+and `ride-in-progress.tsx`.
+
+**Effort:** 1 hour
+
+---
+
+## R-P1-33 · Map Overlay Buttons (SOS, Chat, Share) Unreachable by VoiceOver
+           Linear Navigation; Missing Labels on Chat and Share Buttons
+
+**Audit finding [15-10 HIGH].** Three interactive map overlay elements in ride screens lack
+accessibility attributes and may not be reachable via VoiceOver linear swipe:
+
+- `driver-arriving.tsx` header overlay (position:absolute, zIndex:10): SOS button may be
+  skipped when BottomSheet is foregrounded — no `importantForAccessibility` ordering.
+- `ride-in-progress.tsx:550–553`: "Message" button (`TouchableOpacity` with Ionicons child)
+  has no `accessibilityLabel` or `accessibilityRole`.
+- `ride-in-progress.tsx:556–558`: "Share" button similarly has no label.
+
+A VoiceOver user in an active ride cannot reliably reach the emergency SOS or the chat
+button. Missing SOS during an emergency is a safety-critical accessibility failure.
+
+**File to fix:**
+- `shared/components/SOSButton.tsx` (see R-P1-32)
+- `rider-app/app/ride-in-progress.tsx:550–558`
+- `rider-app/app/driver-arriving.tsx:269` (headerSafeArea overlay)
+
+**How to fix:**
+```tsx
+// Message button (ride-in-progress.tsx:550):
+<TouchableOpacity
+  style={styles.messageButton}
+  onPress={handleMessage}
+  accessibilityLabel="Message driver"
+  accessibilityRole="button"
+>
+
+// Share button (ride-in-progress.tsx:556):
+<TouchableOpacity
+  style={styles.shareButton}
+  onPress={handleShareTrip}
+  accessibilityLabel="Share trip details"
+  accessibilityRole="button"
+>
+
+// Header overlay in driver-arriving.tsx (line 269):
+<View style={styles.header} accessible={true}
+      importantForAccessibility="yes">
+```
+
+**Effort:** 1–2 hours
+
+---
+
 ## Checklist
 
 - [ ] R-P1-1 Cancellation fee enforced after driver_arrived; Cancel button disabled
@@ -784,3 +894,6 @@ const unsubscribe = onForegroundMessage((msg) => {
 - [ ] R-P1-28 Rider phone/email/stripe_customer_id stripped from GET /drivers/rides/active response
 - [ ] R-P1-29 Killed-state notification tap routes to correct ride screen (getInitialNotification handler)
 - [ ] R-P1-30 FCM payloads include data.type + data.ride_id on all backend sends; foreground handler routes by type
+- [ ] R-P1-31 Star rating buttons: accessibilityLabel ("Rate N star/stars") + accessibilityRole="button" + accessibilityState.selected
+- [ ] R-P1-32 SOSButton: accessibilityLabel="Emergency SOS", accessibilityRole="button", accessibilityHint for hold gesture; overlay accessible={true}
+- [ ] R-P1-33 Chat and Share map overlay buttons labelled; headerSafeArea overlay reachable by VoiceOver

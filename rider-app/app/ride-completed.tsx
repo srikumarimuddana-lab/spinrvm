@@ -15,6 +15,8 @@ import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
+import { useStripe } from '@stripe/stripe-react-native';
+import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -23,6 +25,11 @@ function RideCompletedScreenContent() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const { currentRide, currentDriver, fetchRide, rateRide, clearRide } = useRideStore();
+
+  // P0-5: confirmPayment is called when the backend returns
+  // requires_action for 3DS / SCA. StripeProvider is wired at the app
+  // root in app/_layout.tsx so useStripe() resolves here.
+  const { confirmPayment } = useStripe();
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -131,25 +138,64 @@ function RideCompletedScreenContent() {
     }
   };
 
+  /**
+   * Map a PaymentAttemptResult's alert (pure data) to the local
+   * alertState shape (with onPress handlers). Split from the attempt
+   * itself so the attempt stays pure-data and unit-testable.
+   */
+  const showPaymentAlert = (alert: NonNullable<Awaited<ReturnType<typeof attemptRidePayment>>['alert']>) => {
+    const buttons = (alert.buttons || []).map((b: PaymentAlertButton) => ({
+      text: b.text,
+      style: (b.kind === 'cancel' ? 'cancel' : 'default') as 'default' | 'cancel',
+      onPress: b.kind === 'change_card' ? () => router.push('/manage-cards' as any) : undefined,
+    }));
+    setAlertState({
+      visible: true,
+      title: alert.title,
+      message: alert.message,
+      variant: alert.variant,
+      buttons: buttons.length ? buttons : [{ text: 'OK' }],
+    });
+  };
+
   const handleSubmit = async () => {
     if (isSubmitting) return; // prevent double tap
     setIsSubmitting(true);
     try {
       const tipAmount = selectedTip || (customTip ? parseFloat(customTip) : 0);
 
-      // 1. Rate the driver (always, even if already paid)
+      // 1. Rate the driver first — this is fire-and-forget because
+      //    rating may fail if already rated (idempotent upstream).
       try {
         await rateRide(rideId as string, rating, comment || undefined, tipAmount > 0 ? tipAmount : undefined);
       } catch { /* rating may fail if already rated */ }
 
-      // 2. Process payment only if not already paid
+      // 2. Process payment. If the rider has already paid (came back to
+      //    this screen), skip the attempt entirely.
+      let paymentOk = alreadyPaid;
+      let chargedAmount: number | undefined;
       if (!alreadyPaid) {
-        try {
-          await api.post(`/rides/${rideId}/process-payment`, { tip_amount: tipAmount });
-          const total = (currentRide?.total_fare || 0) + (tipAmount || 0);
-          Analytics.paymentCompleted({ method: 'default', amount: total });
-        } catch { /* backend handles idempotency */ }
+        const result = await attemptRidePayment({
+          api,
+          stripe: confirmPayment ? { confirmPayment } : null,
+          rideId: rideId as string,
+          tipAmount,
+        });
+        paymentOk = result.ok;
+        chargedAmount = result.charged;
+        if (!paymentOk && result.alert) {
+          showPaymentAlert(result.alert);
+        }
       }
+
+      // If payment failed, stay on this screen so the rider can fix
+      // their card and retry. Alert has already been shown.
+      if (!paymentOk) {
+        return;
+      }
+
+      const total = (currentRide?.total_fare || 0) + (tipAmount || 0);
+      Analytics.paymentCompleted({ method: 'default', amount: chargedAmount ?? total });
 
       Analytics.rideCompleted({
         fare: currentRide?.total_fare || 0,

@@ -1685,6 +1685,11 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
+    # A driver-user must never accept a ride they themselves created — prevents
+    # self-dispatch fraud on dual-role accounts.
+    if ride.get("rider_id") == current_user["id"]:
+        raise HTTPException(status_code=403, detail="Cannot accept your own ride")
+
     diag_logger.info(
         f"[ACCEPT] entry ride_id={ride_id} driver_id={driver.get('id')} "
         f"pre_status={ride.get('status')} pre_driver_id={ride.get('driver_id')}"
@@ -1991,10 +1996,17 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         logger.warning(f"Could not aggregate GPS data for ride {ride_id}: {e}")
 
     # ── Build update payload ──
+    # P0-5: do NOT write payment_status here. The driver completing the
+    # trip does not mean the rider's card has been charged. Leave
+    # payment_status as whatever it was (typically "pending") and let
+    # rides.py::process_payment be the single writer that flips it to
+    # "paid" / "failed" / "requires_action" based on the real Stripe
+    # outcome. Previously this hardcoded "completed" — not a valid
+    # payment_status value, and it masked genuine failures from the
+    # webhook dispatcher in webhooks.py.
     update_fields: Dict[str, Any] = {
         "status": "completed",
         "ride_completed_at": datetime.utcnow(),
-        "payment_status": "completed",
         "updated_at": datetime.utcnow(),
         "planned_distance_km": planned_distance,
         "actual_distance_km": actual_distance_km,
@@ -2413,6 +2425,27 @@ async def update_driver_status(
         if not driver.get("is_verified", False) and driver.get("status") != "active":
             raise HTTPException(
                 status_code=400, detail="Your driver profile has not been verified yet. Please wait for admin approval."
+            )
+
+    if not is_online:
+        # Prevent driver from going offline while actively carrying a rider.
+        # The ride remains assigned to this driver regardless of their online
+        # flag, but rejecting the toggle avoids a confusing UI state where the
+        # driver shows as "offline" yet has an active trip.
+        active_ride = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows(
+                "rides",
+                {
+                    "driver_id": driver_id,
+                    "status": {"$in": ["driver_accepted", "driver_arrived", "in_progress"]},
+                },
+                limit=1,
+            )
+        )
+        if active_ride:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot go offline during an active trip. Please complete the current ride first.",
             )
 
     if is_online:

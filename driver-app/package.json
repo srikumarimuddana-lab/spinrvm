@@ -65,6 +65,7 @@
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
+    "@playwright/test": "^1.48.0",
     "@testing-library/jest-native": "^5.4.3",
     "@testing-library/react-native": "^13.3.3",
     "@types/jest": "^29.5.0",
@@ -93,8 +94,13 @@
   "scripts": {
     "android": "expo run:android",
     "ios": "expo run:ios",
+    "start": "expo start",
+    "web": "expo start --web",
+    "build:web": "expo export --platform web",
     "test": "jest",
     "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
   }
 }

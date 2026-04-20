@@ -172,6 +172,12 @@ export function useRiderSocket() {
         token,
         client_type: 'rider',
       }));
+      // Re-sync ride state: any events sent while disconnected are not
+      // buffered by the server, so pull from the HTTP source of truth.
+      const rideId = rideIdRef.current;
+      if (rideId) {
+        useRideStore.getState().fetchRide(rideId);
+      }
     };
 
     ws.onmessage = (event) => {

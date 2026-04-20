@@ -303,6 +303,11 @@ class CreateRideRequest(BaseModel):
     scheduled_time: Optional[datetime] = None
     corporate_account_id: Optional[str] = None
     payment_method: str = "card"
+    # P0-4 surge-lock: optional signed token returned by /rides/estimate.
+    # When present + valid, the backend reuses the surge_multiplier that
+    # was shown to the rider instead of re-reading the service area, so
+    # the confirmed fare can't bait-and-switch from the estimate.
+    estimate_token: Optional[str] = None
 
     # ── Input validation (SEC-017) ──────────────────────────────────────── #
 

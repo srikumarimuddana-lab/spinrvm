@@ -997,6 +997,167 @@ HTML or redirects, "no-referrer" is strictly stronger and has zero functional co
 
 ---
 
+## R-P2-42 · Driver Can Query Own Rating Before Rating the Rider — No Blind-Rating Enforcement
+
+**Audit finding [12-3 MEDIUM].** `GET /drivers/me` returns the driver's current average rating
+before the driver has submitted their post-ride rating of the rider. No guard prevents a driver from:
+1. Calling `GET /drivers/me` to see their current rating (e.g. 4.72).
+2. Observing that the rider's rating of them changed their average (e.g. drops to 4.68).
+3. Retaliating by submitting a 1-star rating for the rider.
+
+Additionally, `POST /drivers/rides/{ride_id}/rate-rider` has no guards:
+- Does not verify the ride is in "completed" state.
+- Does not verify the caller is the ride's assigned driver.
+- Does not prevent duplicate ratings of the same ride.
+
+**File to fix:** `backend/routes/drivers.py` — `rate_rider` (line 2120) and `get_my_driver` (line 208)
+
+**How to fix:**
+```python
+# rate_rider — add guards:
+@api_router.post("/rides/{ride_id}/rate-rider")
+async def rate_rider(ride_id: str, rating_data: RideRatingRequest, current_user: dict = Depends(get_current_user)):
+    driver = ...  # existing
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("driver_id") != driver["id"]:
+        raise HTTPException(status_code=403, detail="Not your ride")
+    if ride.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Ride must be completed to rate rider")
+    if ride.get("rider_rating") is not None:
+        raise HTTPException(status_code=409, detail="Rider already rated for this ride")
+    # ... existing update
+```
+
+For blind-rating: strip `rating` from the `GET /drivers/me` response in a post-ride window,
+or implement a mutual-reveal pattern (both parties rate → ratings revealed after 30 min window).
+
+**Effort:** 2–4 hours
+
+---
+
+## R-P2-43 · account.tsx Has No Direct Path to "Delete My Account" or "Export My Data"
+
+**Audit finding [12-4 MEDIUM].** The Account tab (the expected destination for data-subject
+rights under PIPEDA) has no "Delete My Account" or "Download My Data" menu items. These
+options are buried two taps deep in Account → Privacy & Settings. PIPEDA and App Store
+Review Guidelines expect data-subject rights to be readily discoverable.
+
+Note: The underlying buttons in `privacy-settings.tsx` are already confirmed API stubs
+(finding [01-2] / R-P1-6). This item is about surface-level discoverability.
+
+**File to fix:** `rider-app/app/(tabs)/account.tsx` — Safety & Privacy section (~line 209)
+
+**How to fix:**
+Add two menu items directly in the Safety & Privacy section:
+```tsx
+<MenuItem
+  icon="download-outline" iconColor="#6B7280" iconBg="#F3F4F6"
+  title="Download My Data"
+  subtitle="Request a copy of your personal data"
+  onPress={() => router.push('/privacy-settings' as any)}
+/>
+<MenuItem
+  icon="trash-outline" iconColor="#DC2626" iconBg="#FEE2E2"
+  title="Delete My Account"
+  subtitle="Permanently delete your account and data"
+  onPress={() => router.push('/privacy-settings' as any)}
+/>
+```
+Long-term: call the API directly from account.tsx rather than routing through privacy-settings.
+
+**Effort:** 1 hour
+
+---
+
+## R-P2-44 · Privacy Policy Not Linked from Account Tab
+
+**Audit finding [12-5 MEDIUM].** `account.tsx:241` links to `/legal?type=tos` (Terms of
+Service only). The Privacy Policy is accessible via `/legal?type=privacy` but no navigation
+path in the Account tab reaches it. PIPEDA requires the privacy policy to be "readily available."
+
+**File to fix:** `rider-app/app/(tabs)/account.tsx` — Legal & Help section (~line 238)
+
+**How to fix:**
+```tsx
+// Add a second menu item or update existing to offer a choice:
+<MenuItem
+  icon="eye-outline" iconColor="#6B7280" iconBg="#F3F4F6"
+  title="Privacy Policy"
+  subtitle="How we collect, use, and protect your data"
+  onPress={() => router.push('/legal?type=privacy' as any)}
+/>
+```
+
+**Effort:** 30 minutes
+
+---
+
+## R-P2-45 · No In-App Location Consent Explanation Before OS Permission Dialog
+
+**Audit finding [12-6 MEDIUM].** `index.tsx` calls `Location.requestForegroundPermissionsAsync()`
+immediately on mount without any prior in-app consent screen. PIPEDA requires informed consent
+before collecting personal data. The OS permission dialog (backed by `NSLocationWhenInUseUsageDescription`
+in `app.config.ts`) provides a system-level prompt but does not meet the "meaningful consent"
+standard that explains the full data-collection purpose, retention, and sharing.
+
+**File to fix:** `rider-app/app/(tabs)/index.tsx` — location permission useEffect (~line 72)
+
+**How to fix:**
+```typescript
+// Before calling requestForegroundPermissionsAsync():
+const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+const consentShown = await AsyncStorage.getItem('@spinr:location_consent_shown');
+if (!consentShown) {
+  // Show modal: "Spinr needs your location to find nearby drivers and navigate to your pickup.
+  //   Your location is only shared with your assigned driver during an active trip."
+  // On "Allow": set flag, then call requestForegroundPermissionsAsync()
+  // On "Deny": set flag, show "Location access is required for ride matching"
+  await AsyncStorage.setItem('@spinr:location_consent_shown', '1');
+}
+let { status } = await Location.requestForegroundPermissionsAsync();
+```
+
+**Effort:** 2–3 hours (modal UI + AsyncStorage flag + fallback copy)
+
+---
+
+## R-P2-46 · Rides Not Soft-Deleted or Anonymised on Account Closure
+
+**Audit finding [12-8 MEDIUM].** `DELETE /users/profile` soft-deletes the user and driver rows
+but leaves all ride records intact with `rider_id` pointing to the deleted user.
+No retention policy, no anonymisation, no purge job exists. PIPEDA requires data not to be
+retained longer than necessary for the purpose.
+
+**File to fix:** `backend/routes/users.py` — `delete_account` handler + new purge job
+
+**How to fix:**
+```python
+# In delete_account() — anonymise rides after marking user deleted:
+await db_supabase.update_many(
+    "rides",
+    {"rider_id": user_id},
+    {
+        "rider_id": None,
+        "pickup_address": "Address removed",
+        "dropoff_address": "Address removed",
+        "pickup_lat": None, "pickup_lng": None,
+        "dropoff_lat": None, "dropoff_lng": None,
+        "anonymised_at": now,
+    }
+)
+```
+
+Add a scheduled purge job that anonymises rides for users whose `deleted_at` was more than
+N days ago (suggest 90 days for trip data; 7 years for financial/receipt data per CRA).
+
+Also add `anonymised_at` column to the rides schema.
+
+**Effort:** 1 day (schema migration + anonymisation logic + purge job + policy doc)
+
+---
+
 ## Checklist
 
 - [ ] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
@@ -1040,3 +1201,8 @@ HTML or redirects, "no-referrer" is strictly stronger and has zero functional co
 - [ ] R-P2-39 /rides/{id}/cancel decorated with @ride_request_limit; request: Request param added
 - [ ] R-P2-40 /promo/validate rate-limited at 10/minute; generic error message for unknown codes
 - [ ] R-P2-41 Referrer-Policy changed from strict-origin-when-cross-origin to no-referrer
+- [ ] R-P2-42 rate_rider endpoint guards: completed-state, driver ownership, no-re-rate; blind-rating enforced
+- [ ] R-P2-43 account.tsx Safety & Privacy section links directly to Delete Account and Download My Data
+- [ ] R-P2-44 account.tsx Legal section includes Privacy Policy link (/legal?type=privacy)
+- [ ] R-P2-45 In-app location consent modal shown before requestForegroundPermissionsAsync()
+- [ ] R-P2-46 Rides anonymised on account deletion; retention policy + purge job defined

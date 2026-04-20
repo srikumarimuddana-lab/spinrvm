@@ -2533,5 +2533,201 @@ TASK 11 TALLY
 | TOTAL           |    15 |
 
 ================================================================================
-[AUDIT IN PROGRESS — TASKS 12–16 PENDING]
+TASK 12 — COMPLIANCE: PII, PCI-DSS & DATA RETENTION (Dimension 12)
+================================================================================
+
+NOTE ON SCOPE AND FRAMING
+The driver audit (D12) checked driver PII leaking to riders. This audit checks
+the inverse: RIDER PII leaking to drivers. Checklist items from the dimension
+framework are evaluated from the rider-as-data-subject perspective.
+
+────────────────────────────────────────────────────────────────────────────────
+PII FIELD STRIPPING — RIDER DATA IN DRIVER-FACING RESPONSES
+────────────────────────────────────────────────────────────────────────────────
+
+[12-1] HIGH | Full Rider User Object Returned to Driver in GET /drivers/rides/active
+File: backend/routes/drivers.py:1617–1633
+Finding: When a driver fetches their active ride, the endpoint loads the rider's
+  user record with:
+      rider = await db_supabase.get_user_by_id(ride["rider_id"])
+  and returns it verbatim via:
+      return { "ride": serialize_doc(ride), "rider": serialize_doc(rider), ... }
+  serialize_doc() is a passthrough (returns doc unchanged, line 201–202). No field
+  stripping occurs. The full users row is sent to the driver, which includes:
+    • phone (riders phone number)
+    • email
+    • stripe_customer_id
+    • default_payment_method (Stripe payment method token)
+    • profile_image (base64 data URI — potentially large)
+  None of these fields are required by the driver to complete the trip. The
+  dispatch WebSocket payload (rides.py:264–278) correctly limits rider data to
+  rider_name and rider_rating only. The HTTP REST endpoint does not apply any
+  equivalent filter. A driver making GET /drivers/rides/active receives the
+  rider's phone number, email, and Stripe customer ID in the response body.
+  This is a PIPEDA violation: personal data must not be disclosed beyond what
+  is strictly necessary for the purpose for which it was collected.
+Fix: Create a RiderPublicView allowlist (first_name, profile_image, rating only)
+  and apply it before returning rider data from get_active_ride(). At minimum,
+  strip phone, email, stripe_customer_id, default_payment_method from the
+  serialized rider object. Equivalent to what the dispatch payload already does.
+  File: backend/routes/drivers.py — get_active_ride(), around line 1630.
+  Example:
+    RIDER_PUBLIC_FIELDS = {"id", "first_name", "profile_image", "rating"}
+    safe_rider = {k: v for k, v in rider.items() if k in RIDER_PUBLIC_FIELDS}
+  Effort: 1 hour.
+
+[12-2] PASS | Saved Addresses Not Accessible to Drivers After Ride Completes
+File: backend/routes/addresses.py:19–22
+Finding: GET /addresses filters by {"user_id": current_user["id"]} — a driver
+  can only retrieve their own saved addresses, never a rider's. The endpoint has
+  no ride-context parameter and no driver-role bypass. After a ride completes,
+  a driver calling this endpoint receives only their own saved places. Rider
+  home/work addresses are not exposed to drivers via this route.
+
+────────────────────────────────────────────────────────────────────────────────
+RATING — BLIND RATING ENFORCEMENT
+────────────────────────────────────────────────────────────────────────────────
+
+[12-3] MEDIUM | Driver Can Query Own Rating Before Rating the Rider — No Blind-Rating Enforcement
+File: backend/routes/drivers.py:208–219 (GET /drivers/me)
+       backend/routes/drivers.py:2120–2136 (POST /drivers/rides/{id}/rate-rider)
+Finding: The driver's own star rating is stored on the drivers row and is
+  returned in full by GET /drivers/me (via the /me endpoint). No check prevents
+  a driver from calling GET /drivers/me, noting their current average rating,
+  submitting a POST /drivers/rides/{id}/rate-rider, and then calling GET /me
+  again to observe how the rider's rating affected their average. This allows a
+  driver to infer exactly what rating a rider gave them before the driver
+  finalises their rating of the rider. Blind-rating (both parties rate without
+  seeing the other's rating) is a standard fairness control for two-sided rating
+  systems. Without it, drivers can tactically give punitive 1-star ratings in
+  retaliation. Additionally, rate-rider has no completed-ride guard: the endpoint
+  does not check that the ride is in "completed" state, that this driver was the
+  assigned driver, or that the rider has already rated. It also does not prevent
+  the driver from rating the same ride twice.
+Fix:
+  (a) Short-term: strip "rating" from the GET /drivers/me response until after
+    the post-ride rating window (e.g. 30 minutes after ride completion).
+  (b) Long-term: add a mutual blind-reveal: only expose updated ratings after
+    both parties have submitted, or after the 30-minute window expires.
+  (c) Add guards to POST /drivers/rides/{id}/rate-rider:
+    — ride must be "completed"; ride.driver_id must equal caller's driver_id
+    — rider_rating must be NULL (no re-rating)
+  Effort: 2–4 hours.
+
+────────────────────────────────────────────────────────────────────────────────
+PIPEDA — CANADIAN PRIVACY LAW
+────────────────────────────────────────────────────────────────────────────────
+
+[12-4] MEDIUM | account.tsx Has No Direct "Delete My Account" or "Export My Data" Option
+File: rider-app/app/(tabs)/account.tsx:163–243
+Finding: The Account tab (the natural place a rider looks to manage their data)
+  has no "Delete Account" or "Download My Data" menu items. These options exist
+  in the separate Privacy & Settings screen (privacy-settings.tsx), accessible
+  via Account → Privacy & Settings (line 225). The two-step path is non-obvious:
+  PIPEDA and App Store Review Guidelines both expect data-subject rights to be
+  discoverable without hunting through nested menus.
+  Note: Both buttons in privacy-settings.tsx are already documented as API stubs
+  in finding [01-2] / R-P1-6. This finding addresses discoverability from the
+  account tab; the stub fix is tracked separately.
+Fix: Add "Delete My Account" and "Download My Data" direct menu items to the
+  Account tab, in the "Safety & Privacy" section (around line 209). These can
+  route to privacy-settings.tsx or call the API directly.
+  Effort: 1 hour.
+
+[12-5] MEDIUM | Privacy Policy Not Accessible Directly from Account Tab — Only ToS Linked
+File: rider-app/app/(tabs)/account.tsx:238–242
+       rider-app/app/legal.tsx:20, 37–40
+Finding: The Account tab → Legal menu item calls:
+    router.push('/legal?type=tos' as any)
+  This opens only the Terms of Service. The legal.tsx screen supports a
+  ?type=privacy parameter that fetches the Privacy Policy from the backend, but
+  no navigation path in the Account tab links to it. Under PIPEDA, the privacy
+  policy must be "readily available" to data subjects. A user can access it only
+  if they manually navigate to legal.tsx and change the URL parameter, which is
+  not possible from the UI. The driver audit confirmed legal.tsx works correctly
+  — the privacy policy fetch path exists and is functional ([01-11] PASS);
+  the gap is entirely in the navigation link in account.tsx.
+Fix: Add a second "Privacy Policy" menu item in the Legal & Help section that
+  calls router.push('/legal?type=privacy'). Alternatively, update the existing
+  "Legal" item to present a choice ("Terms of Service" / "Privacy Policy") or
+  link to legal.tsx with a tab picker.
+  File: rider-app/app/(tabs)/account.tsx — Legal & Help section (line ~238).
+  Effort: 30 minutes.
+
+[12-6] MEDIUM | No In-App Location Consent Explanation Before OS Permission Dialog
+File: rider-app/app/(tabs)/index.tsx:82–113
+Finding: On first launch, index.tsx calls:
+    let { status } = await Location.requestForegroundPermissionsAsync();
+  immediately inside the useEffect hook, without any prior in-app screen or
+  modal explaining why GPS is needed and how it will be used. The OS permission
+  dialog appears with no Spinr-authored context. PIPEDA requires that consent be
+  informed: data subjects must understand the purpose of collection before
+  consenting. Apple App Store guidelines also require a usage description preamble
+  (NSLocationWhenInUseUsageDescription is set in app.config.ts, but this is
+  the system text — it does not satisfy PIPEDA's "meaningful consent"
+  requirement). Best practice for ride-hailing apps (Uber, Lyft) is to display
+  an in-app "Allow Spinr to use your location to find nearby drivers" screen
+  before the OS dialog, giving the user context and a clear Allow/Deny choice.
+Fix: Add a LocationConsentScreen or modal that appears before the first
+  requestForegroundPermissionsAsync() call if location permission has not been
+  previously granted. Store the "consent shown" flag in AsyncStorage.
+  The screen should explain: what data is collected (real-time GPS), why (match
+  with drivers, navigate to pickup), and how long it is retained.
+  File: rider-app/app/(tabs)/index.tsx — wrap permission request.
+  Effort: 2–3 hours.
+
+[12-7] PASS | Corporate Admin Cannot Access Full Rider PII — Only Trip Cost Data
+File: backend/routes/corporate_company.py:77–86
+       backend/db_supabase.py:1494–1505
+Finding: The company-admin portal (GET /company/{id}/members) queries only the
+  corporate_members table, which contains: member_id, company_id, invited_email,
+  status, and role. No phone numbers, home/work addresses, payment methods, or
+  full user profile fields are joined. The rider-facing /rider/work-profile
+  endpoints return only membership metadata and allowance data (amount, used,
+  remaining). No rider PII beyond the invited_email (which the company provided
+  during invitation) is exposed to company admins. PASS.
+
+────────────────────────────────────────────────────────────────────────────────
+DATA RETENTION — SOFT-DELETE
+────────────────────────────────────────────────────────────────────────────────
+
+[12-8] MEDIUM | Rides Table Has No soft-delete Column — No deleted_at on Ride Records
+File: backend/routes/users.py:68–88 (delete_account)
+       backend/routes/rides.py (no ride deletion path)
+Finding: The delete_account endpoint (users.py:68) correctly soft-deletes the
+  users row (deleted_at) and the drivers row (deleted_at). However, a ride record
+  has no deleted_at column: rides are never deleted or soft-deleted. When an
+  account is deleted, the rider's rides remain in the database with their
+  rider_id set to a deleted user — no purge, no anonymisation, no retention
+  window. PIPEDA requires a retention policy: data must not be kept longer than
+  is necessary for the purpose. Completed rides contain: pickup/dropoff addresses,
+  timestamps, fare, tip, payment method used, and driver assigned. Indefinite
+  retention of completed ride records attached to a deleted account violates
+  the data minimisation principle. Additionally, saved_addresses are hard-deleted
+  on account closure (delete_many, line 81) while rides are not — creating an
+  inconsistent retention model. No automated purge job exists.
+Fix:
+  (a) Add deleted_at / anonymised_at to the rides table.
+  (b) On account deletion: anonymise ride records (null out rider_id, replace
+    pickup/dropoff addresses with "Address removed") after the retention window.
+  (c) Define a retention policy (e.g. 7 years for financial records per CRA,
+    90 days for non-financial data).
+  (d) Add a scheduled purge/anonymisation job.
+  Effort: 1 day (schema migration + purge job + policy documentation).
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 12 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     5 |
+| LOW             |     0 |
+| PASS            |     2 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     8 |
+
+================================================================================
+[AUDIT IN PROGRESS — TASKS 13–16 PENDING]
 ================================================================================

@@ -11,6 +11,8 @@ try:
         get_corporate_account_by_id,
         get_corporate_wallet_by_company,
         get_member_allowance,
+        get_ride,
+        get_rows,
         insert_allowance_request,
         list_active_memberships_for_user,
         list_company_allowance_requests,
@@ -31,6 +33,8 @@ except ImportError:
         get_corporate_account_by_id,
         get_corporate_wallet_by_company,
         get_member_allowance,
+        get_ride,
+        get_rows,
         insert_allowance_request,
         list_active_memberships_for_user,
         list_company_allowance_requests,
@@ -159,9 +163,38 @@ async def my_rides(
     to: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
 ):
-    """Plan-3 stub. Plan 5 wires ride_payment_sources → rides join."""
-    await _ensure_member(current_user, company_id)
-    return []
+    """Return this rider's work rides for the given company.
+
+    Joins ride_payment_sources (written at process_payment time) back to
+    the rides table so the rider app can show the Work tab ride history.
+    """
+    membership = await _ensure_member(current_user, company_id)
+    member_id = membership["id"]
+
+    filters: dict = {"company_id": company_id, "member_id": member_id}
+    if from_:
+        filters["created_at"] = {"$gte": from_}
+
+    rps_rows = await get_rows("ride_payment_sources", filters, limit=100)
+
+    # Apply `to` date ceiling in Python — db helper only supports one
+    # comparison operator per key in a single filter dict.
+    if to and rps_rows:
+        rps_rows = [r for r in rps_rows if (r.get("created_at") or "") <= to]
+
+    if not rps_rows:
+        return []
+
+    ride_ids = [r["ride_id"] for r in rps_rows]
+    rides_list = await get_rows("rides", {"id": {"$in": ride_ids}}, limit=len(ride_ids))
+    rides_by_id = {r["id"]: r for r in rides_list}
+
+    rps_by_ride = {r["ride_id"]: r for r in rps_rows}
+    return [
+        {**rides_by_id[rid], "payment_source": rps_by_ride[rid]}
+        for rid in ride_ids
+        if rid in rides_by_id
+    ]
 
 
 @router.post("/{company_id}/allowance-requests")

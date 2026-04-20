@@ -647,6 +647,38 @@ async def create_ride(
     driver_earnings = _round(base_fare + distance_fare + time_fare)
     admin_earnings = _round(booking_fee + airport_fee)
 
+    # Pre-dispatch corporate policy check (spec §4 — booking phase).
+    # Only runs when rider explicitly books with company_allowance payment method.
+    _corp_member_id: Optional[str] = None
+    if body.corporate_account_id and body.payment_method == "company_allowance":
+        try:
+            from ..services.corporate_policy_service import evaluate_policy  # type: ignore
+        except ImportError:
+            from services.corporate_policy_service import evaluate_policy  # type: ignore
+
+        _policy_result = await evaluate_policy(
+            corporate_account_id=body.corporate_account_id,
+            rider_id=current_user["id"],
+            estimated_fare=total_fare,
+            ride_type="standard",
+            pickup_time=datetime.utcnow(),
+        )
+        if not _policy_result.allowed:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "message": _policy_result.reason,
+                    "failed_rules": _policy_result.failed_rules,
+                },
+            )
+        _corp_members = await db_supabase.get_rows(
+            "corporate_members",
+            {"company_id": body.corporate_account_id, "user_id": current_user["id"], "status": "active"},
+            limit=1,
+        )
+        if _corp_members:
+            _corp_member_id = _corp_members[0]["id"]
+
     pickup_otp_plain = generate_pickup_otp()
     ride = Ride(
         rider_id=current_user["id"],
@@ -677,6 +709,10 @@ async def create_ride(
     )
 
     ride_data = ride.dict()
+    if body.corporate_account_id:
+        ride_data["corporate_account_id"] = body.corporate_account_id
+    if _corp_member_id:
+        ride_data["corporate_member_id"] = _corp_member_id
     if service_area_id:
         ride_data["service_area_id"] = service_area_id
     # Preserve the original planned (straight-line) distance. ride.distance_km
@@ -1082,6 +1118,14 @@ async def process_payment(ride_id: str, request: Request, current_user: dict = D
     elif payment_method == "company_allowance":
         corporate_account_id = ride.get("corporate_account_id")
         member_id = ride.get("corporate_member_id")
+        # Fallback: look up member_id for rides booked before migration 36
+        if not member_id and corporate_account_id:
+            _members = await db_supabase.get_rows(
+                "corporate_members",
+                {"company_id": corporate_account_id, "user_id": current_user["id"], "status": "active"},
+                limit=1,
+            )
+            member_id = _members[0]["id"] if _members else None
         if not corporate_account_id:
             await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
             raise HTTPException(status_code=400, detail="No corporate account linked to this ride.")

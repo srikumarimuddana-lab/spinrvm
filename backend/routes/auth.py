@@ -69,18 +69,20 @@ _LOCK_KEY = "otp_lock:{}"
 
 
 async def _check_otp_lockout(phone: str) -> None:
-    """Raise 429 if phone is currently locked out. Never raises on Redis errors."""
+    """Raise 429 if phone is currently locked out. Raises 503 on Redis errors (fail closed)."""
     try:
         locked = await redis_get(_LOCK_KEY.format(phone))
+        if locked:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many failed attempts. Please try again later.",
+                headers={"Retry-After": str(settings.OTP_LOCKOUT_DURATION_SECONDS)},
+            )
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.warning(f"_check_otp_lockout: redis_get failed: {e}")
-        return
-    if locked:
-        raise HTTPException(
-            status_code=429,
-            detail="Too many failed attempts. Please try again later.",
-            headers={"Retry-After": str(settings.OTP_LOCKOUT_DURATION_SECONDS)},
-        )
+        logger.error(f"Redis unavailable in OTP lockout check: {e}")
+        raise HTTPException(status_code=503, detail="Authentication service temporarily unavailable")
 
 
 async def _record_otp_failure(phone: str) -> None:

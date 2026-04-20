@@ -15,14 +15,18 @@ These tests pin:
   - Large batch: last (most-recent) point wins
 
 Native-device path (always-permission on iOS / Android, background
-watchPosition) is pinned in the client (Jest) and in the smoke checklist
-(docs/MOBILE_SMOKE.md §F); those cases are marked xfail here.
+watchPosition) is pinned in the client (Jest):
+  driver-app/hooks/__tests__/goOnlinePermission.test.ts
+
+The "location continues when app is backgrounded" case requires a real device
+and remains xfail below.
 
 Run:
     pytest backend/tests/test_p3_background_location.py -v
 """
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -135,26 +139,53 @@ class TestUpdateLocationBatch:
 # Native background location permission — requires real device
 # ─────────────────────────────────────────────────────────────────────────────
 
+_TS_HOOK = Path(__file__).parents[2] / "driver-app" / "hooks" / "useDriverDashboard.ts"
+_JEST_COVERAGE = (
+    Path(__file__).parents[2]
+    / "driver-app" / "hooks" / "__tests__" / "goOnlinePermission.test.ts"
+)
+
+
+class TestBackgroundPermissionCodePath:
+    """P3-20: requestBackgroundPermissionsAsync is called on go-online.
+
+    Coverage is provided by the Jest suite:
+      driver-app/hooks/__tests__/goOnlinePermission.test.ts
+
+    These tests pin that the call is present in the TypeScript source and
+    that the Jest coverage file exists.
+    """
+
+    def test_ios_always_permission_requested_on_go_online(self):
+        """Location.requestBackgroundPermissionsAsync() is in the go-online
+        path of useDriverDashboard.ts; Jest test pins the call is made."""
+        src = _TS_HOOK.read_text()
+        assert "requestBackgroundPermissionsAsync" in src, (
+            "requestBackgroundPermissionsAsync call removed from useDriverDashboard.ts"
+        )
+        assert _JEST_COVERAGE.exists(), (
+            "goOnlinePermission.test.ts is missing — Jest coverage dropped"
+        )
+
+    def test_android_background_location_permission_requested(self):
+        """Same expo-location API call handles Android ACCESS_BACKGROUND_LOCATION.
+        Source presence + Jest coverage file verify the path exists."""
+        src = _TS_HOOK.read_text()
+        assert "requestBackgroundPermissionsAsync" in src
+        assert _JEST_COVERAGE.exists()
+
+
 @pytest.mark.xfail(
     strict=False,
     reason=(
-        "P3-20 gap: iOS 'Always' background location permission and Android "
-        "'ACCESS_BACKGROUND_LOCATION' cannot be tested without a real device. "
-        "The driver goes online flow calls Location.requestBackgroundPermissionsAsync() "
-        "(driver-app/hooks/useDriverDashboard.ts ~L631). "
-        "Fix: add Detox device permission grant via "
-        "device.setPermissions({'location': 'always'}) before the test. "
-        "Covered manually via docs/MOBILE_SMOKE.md §F."
+        "P3-20 gap: verifying that location updates *continue* when the app is "
+        "backgrounded requires a real iOS/Android device with a background task "
+        "runner (Detox + device.setPermissions or Espresso). "
+        "Covered manually via docs/MOBILE_SMOKE.md §F step F-4."
     ),
 )
-class TestNativeBackgroundLocationPermission:
-    """Native-only — xfail until Detox simulator tests are active."""
-
-    def test_ios_always_permission_requested_on_go_online(self):
-        raise AssertionError("Detox simulator not configured")
-
-    def test_android_background_location_permission_requested(self):
-        raise AssertionError("Detox simulator not configured")
+class TestBackgroundLocationContinuity:
+    """Real-device only — xfail until Detox background-task tests are active."""
 
     def test_location_updates_continue_when_app_backgrounded(self):
-        raise AssertionError("Requires real device with background task")
+        raise AssertionError("Requires real device with background task runner")

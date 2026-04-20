@@ -2729,5 +2729,279 @@ TASK 12 TALLY
 | TOTAL           |     8 |
 
 ================================================================================
-[AUDIT IN PROGRESS — TASKS 13–16 PENDING]
+TASK 13 — NOTIFICATIONS, AI SUPPORT & KNOWLEDGE BASE (Dimension 13)
+================================================================================
+
+[13-1] PASS | setBackgroundMessageHandler() Registered at Module Level
+File: rider-app/app/_layout.tsx:74–76
+Finding: setBackgroundMessageHandler() is called at the top of _layout.tsx,
+  outside the RootLayout React component, at module evaluation time. This
+  satisfies the FCM requirement that the background handler be registered before
+  React mounts, so the JS runtime can wake and handle messages when the app is
+  backgrounded or killed. The shared/services/firebase.ts wrapper correctly
+  delegates to messaging().setBackgroundMessageHandler() (line 116), which is the
+  required Firebase call.
+
+[13-2] PASS | FCM Token Re-Registered on Token Rotation (onTokenRefresh)
+File: rider-app/app/_layout.tsx:233–248
+Finding: The auth-gated useEffect (lines 203–249) subscribes to
+  onTokenRefresh(async (newToken) => { ... }) immediately after the initial token
+  registration succeeds. The callback POSTs the new token to
+  /notifications/register-token with the platform field, matching the initial
+  registration call. The subscription is cleaned up on effect teardown. Token
+  rotation is therefore handled without requiring a cold start.
+
+[13-3] PASS | Ride Lifecycle — All Six Required Event Types Handled in WebSocket
+File: rider-app/hooks/useRiderSocket.ts:81–115
+Finding: All six required ride-lifecycle event types are handled in the
+  handleMessage switch statement:
+    driver_accepted  (line 81) — fetchRide() triggers screen transition
+    driver_arrived   (line 85) — fetchRide() + Vibration.vibrate()
+    ride_started     (line 90) — fetchRide()
+    ride_completed   (line 94) — applyRideStatusFromWS() + fetchRide()
+    ride_cancelled   (line 103) — Alert.alert() + clearRide()
+    driver_timeout   (line 113) — fetchRide() (alert missing — covered by R-P1-16)
+  A catch-all ride_status_changed handler (line 119) provides additional coverage.
+  All lifecycle events that cause screen transitions are correctly handled.
+
+[13-4] HIGH | Notification Tap from Killed State Does Not Open the Correct Ride Screen
+File: rider-app/app/_layout.tsx (entire file); rider-app/app/index.tsx
+Finding: Neither _layout.tsx nor index.tsx calls
+  messaging().getInitialNotification() (Firebase FCM) or
+  Notifications.getLastNotificationResponseAsync() (Expo Notifications).
+  When the app is completely killed and the rider taps a push notification
+  (e.g., "Your driver has arrived"), the OS launches the app but the notification
+  payload is silently discarded. There is no code that reads the launch notification
+  and routes to the correct ride screen (driver-arrived, ride-in-progress, etc.).
+  The rider lands on the splash screen / tab home with no context.
+  In a ride-hailing app, push notifications from killed state are the primary way
+  a rider learns their driver has arrived when the app is not open. Failing to deep
+  link leaves the rider on the home screen, unaware of what triggered the launch,
+  with no indication that their driver is waiting.
+  Note: the app.config.ts intentFilters (android) and associatedDomains (iOS) are
+  configured for web deep links (spinr.app/ride, spinr-track.app/) but these are
+  for Universal Links, not for FCM notification tap routing.
+Fix: In _layout.tsx (or index.tsx), add on-mount handling:
+    // Firebase (killed state):
+    messaging().getInitialNotification().then(remoteMessage => {
+      if (!remoteMessage) return;
+      routeFromNotification(remoteMessage.data);
+    });
+    // Expo Notifications (killed state):
+    Notifications.getLastNotificationResponseAsync().then(response => {
+      if (!response) return;
+      routeFromNotification(response.notification.request.content.data);
+    });
+  routeFromNotification(data) should inspect data.type and data.ride_id:
+    switch (data.type) {
+      case 'driver_accepted':   router.replace('/driver-arriving'); break;
+      case 'driver_arrived':    router.replace('/driver-arrived'); break;
+      case 'ride_started':      router.replace('/ride-in-progress'); break;
+      case 'ride_completed':    router.replace('/ride-completed'); break;
+      default:                  router.replace('/(tabs)'); break;
+    }
+  This requires the backend to include data.type and data.ride_id in FCM payloads
+  (see finding [13-5] for the payload gap).
+  Effort: 3–4 hours (frontend routing + backend payload change).
+
+[13-5] HIGH | Foreground FCM Handler Cannot Route by Event Type — Backend Sends No data Field
+File: rider-app/app/_layout.tsx:256–278
+Finding: The foreground FCM handler comment at line 258 explicitly acknowledges:
+  "Backend notifications currently carry only title/body (no data field), so we
+  can't route by event type — we refetch whatever ride the store considers active."
+  This means the foreground handler is a best-effort generic refetch, not a typed
+  event router. Consequences:
+  (a) Non-ride notifications (promotions, system alerts, payment processed) all
+    trigger a fetchRide() on the active ride unnecessarily — wasted API calls and
+    incorrect UI refresh.
+  (b) If the backend ever sends a notification about a ride the store doesn't
+    know about (e.g., a new ride created server-side), the no-op guard
+    (if (currentRide?.id)) means the notification is silently swallowed with no
+    navigation.
+  (c) Killed-state routing (finding [13-4]) is impossible without the data field.
+  The Dimension 13 checklist requires: "Foreground handler processes all
+  notification types — not just a subset."
+Fix: Add a data field to every FCM payload the backend sends. At minimum:
+    { type: 'driver_accepted' | 'driver_arrived' | ... | 'payment_processed',
+      ride_id: <uuid> }
+  Then update the foreground handler to route by type:
+    const unsubscribe = onForegroundMessage((msg) => {
+      const { type, ride_id } = msg.data ?? {};
+      if (type && RIDE_EVENT_TYPES.includes(type) && ride_id) {
+        fetchRide(ride_id);
+      } else if (type === 'payment_processed') {
+        walletStore.fetchBalance();
+      }
+      // etc.
+    });
+  Effort: 2 hours (backend payload change) + 2 hours (frontend handler update).
+
+[13-6] MEDIUM | Notification Centre: Tapping a Notification Only Marks It Read — No Navigation
+File: rider-app/app/notifications.tsx:88–103, 128
+Finding: The renderNotification onPress callback (line 128) calls only
+  handleMarkRead(item), which optimistically marks the notification as read and
+  calls PUT /notifications/{id}/read. No routing to the relevant screen occurs.
+  A rider who taps a "Your driver has arrived" notification in the notification
+  centre remains on the notifications list screen. They must navigate back to Home
+  manually and figure out their ride state. For time-sensitive events (driver
+  arrived, ride started) this is a significant UX failure: the rider may not
+  realise their driver is waiting until after the free-cancel window has expired.
+  The Dimension 13 checklist explicitly requires: "Notification tap navigates to
+  relevant screen (deeplink routing)."
+Fix: Extend the renderNotification onPress to route after marking read:
+    const handleTap = async (item: AppNotification) => {
+      await handleMarkRead(item);
+      switch (item.type) {
+        case 'ride_update':
+        case 'ride':
+          if (item.ride_id) router.push(`/ride-details?id=${item.ride_id}`);
+          else router.push('/(tabs)');
+          break;
+        case 'promotion':
+          router.push('/promotions');
+          break;
+        default:
+          // no navigation needed for generic alerts
+          break;
+      }
+    };
+  Requires the backend to include ride_id in notification records (or store it
+  in the AppNotification interface if the API already returns it).
+  Effort: 2–3 hours.
+
+[13-7] MEDIUM | Notification Centre: Unread Badge Count Not Shown on Tab or Entry Point
+File: rider-app/app/(tabs)/_layout.tsx; rider-app/app/(tabs)/account.tsx:154, 236
+Finding: The notifications.tsx screen tracks unreadCount from the API
+  (GET /notifications returns unread_count). However, unreadCount is local state
+  inside the notifications screen and is never exposed to the tab bar or to the
+  Account screen entry point. The notifications screen is not a tab at all — it
+  is accessed from Account → Help & Support or a quick-action card in account.tsx.
+  Neither account.tsx (line 154) nor the tab bar _layout.tsx passes a badge prop
+  to any tab or button. The Dimension 13 checklist requires: "Notification centre:
+  unread badge, read/unread state, pull-to-refresh." Pull-to-refresh is present
+  (RefreshControl, line 175). Read/unread state is present (is_read, unreadBar).
+  The badge on the entry point is the missing piece.
+Fix:
+  1. Lift unread count to a global store (or a lightweight polling hook that
+     fetches only unread_count on foreground events).
+  2. In account.tsx, show a badge on the Notifications menu item:
+     <MenuItem badge={unreadCount > 0 ? String(unreadCount) : undefined} ...>
+  3. Optionally, if notifications moves to a tab, use Tabs.Screen tabBarBadge.
+  Effort: 2–3 hours.
+
+[13-8] MEDIUM | Support Screen Uses Unauthenticated fetch() — Tickets Are Anonymous
+File: rider-app/app/support.tsx:43–48
+Finding: handleSubmit() uses raw fetch() with no Authorization header:
+    await fetch(`${SpinrConfig.backendUrl}/support/tickets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subject: ..., message: ..., category: 'general' })
+    });
+  The shared api client (shared/api/client.ts) injects the JWT automatically and
+  handles 401 refresh; a raw fetch() bypasses this. Support tickets submitted by
+  authenticated riders will arrive at the backend without the rider's identity.
+  A support agent cannot look up the ticket by rider account, link it to a ride
+  history, or verify the complaint. This makes the support system functionally
+  anonymous — the opposite of what a dispute or complaint resolution process needs.
+Fix: Replace fetch() with the authenticated api client:
+    import api from '@shared/api/client';
+    await api.post('/support/tickets', {
+      subject: 'App Support Request', message: issue, category: 'general'
+    });
+  Effort: 30 minutes.
+
+[13-9] MEDIUM | No Dispute or Complaint Flow — Support Screen Is Free-Text Only
+File: rider-app/app/support.tsx
+Finding: The support screen offers a single free-text textarea with no:
+  (a) Ride-linked dispute option (e.g. "Issue with this trip" linking to a
+    specific rideId from ride history)
+  (b) Fare dispute or overcharge complaint with a structured form
+  (c) Category selection (Fare Issue / Driver Behaviour / App Bug / Other)
+  (d) Photo/file attachment for evidence (e.g. damage claim)
+  The Dimension 13 checklist requires: "Fallback to human agent / phone / email
+  when bot can't answer." The company contact info (email + phone) is displayed
+  in the companyCard block — this provides a human escalation path — so the human
+  contact requirement is partially met. However, the lack of any structured
+  dispute/complaint path means a rider who was overcharged or had a bad experience
+  cannot raise a formal dispute linked to their ride record. This increases chargeback
+  risk: riders frustrated by the process will dispute charges with their card issuer
+  instead of going through in-app support.
+Fix: Add a "Report an issue with a recent ride" entry point from either the support
+  screen or the ride-details screen. At minimum, pass ride_id in the ticket payload
+  and offer category selection. A structured dispute form (reason, amount disputed)
+  would be the full fix.
+  Effort: 3–5 hours (UI + backend ticket schema update).
+
+[13-10] RECOMMENDATION | No In-App Rationale Shown Before Notification Permission Dialog
+File: shared/services/firebase.ts:75–98; rider-app/app/_layout.tsx:204–229
+Finding: requestPushPermissionAndGetToken() calls messaging().requestPermission()
+  directly (firebase.ts:80) without any prior in-app modal explaining why push
+  notifications are needed. On iOS, the OS permission dialog appears with the
+  NSUserNotificationsUsageDescription from app.config.ts but no Spinr-authored
+  explanation context. Best practice (and Apple HIG recommendation) is to show an
+  in-app screen first: "Spinr needs notifications to tell you when your driver has
+  accepted your ride, is arriving, and has arrived at your pickup location." with
+  a primary "Enable Notifications" CTA and a secondary "Not Now" option — so users
+  understand the value before the OS dialog fires. Users who deny on the OS dialog
+  cannot be prompted again; an in-app rationale improves opt-in rates significantly.
+  Per D13 severity guide: this is a "nice to have" UX improvement → RECOMMENDATION.
+Fix: Add a NotificationConsentModal (similar to the location consent modal
+  recommended in R-P2-45) that fires before requestPushPermissionAndGetToken() on
+  first FCM registration attempt. Gate with an AsyncStorage flag so it shows once.
+  Effort: 2–3 hours.
+
+[13-11] RECOMMENDATION | No AI Support Bot or FAQ — No Self-Serve Help Exists
+File: rider-app/app/support.tsx (no FAQ or AI); rider-app/app/ (no faq.tsx)
+Finding: The Dimension 13 checklist requires an AI support bot (recommended:
+  Gemini 1.5 Flash via google-generativeai, already installed) with a knowledge
+  base, and an FAQ screen with categories (Onboarding, Payments, Documents,
+  Technical), search functionality, and FAQ content managed via the admin panel.
+  None of these exist. The support screen is a free-text form with company
+  contact info only. Riders have no self-serve path to answer common questions
+  (e.g. "How do I cancel a ride?", "When will I be charged?", "How do I get a
+  receipt?"). All support load goes to human agents.
+  Per the severity guide: "No AI bot or FAQ — drivers have no self-serve help"
+  → RECOMMENDATION.
+Fix: Phase 1 (2–3 days): Add a FAQ screen with hardcoded categories and common
+  questions. Link from the support screen and from error states.
+  Phase 2 (1 week): Wire Gemini 1.5 Flash via the backend with a knowledge base
+  of FAQ content, rate-limited endpoint, and a fallback "Connect to an agent"
+  option. PII: pass only user_id in the API call metadata, not the rider's name
+  or phone in the prompt text.
+
+[13-12] RECOMMENDATION | Android Notification Channels Not Declared in app.config.ts
+File: rider-app/app.config.ts; rider-app/app/_layout.tsx:153–172
+Finding: The Dimension 13 checklist requires Android notification channels
+  declared in app.config.ts — specifically `ride-offers` (MAX priority) and
+  `default` (HIGH priority). The rider app creates its channels at runtime
+  (setNotificationChannelAsync in _layout.tsx:155–168) rather than via
+  app.config.ts. Runtime declaration works for SDK < 53 but EAS Build / bare
+  workflow best practice is to declare channels in app.config.ts so EAS can
+  validate them and include them in the native build manifest. Additionally,
+  the rider app creates a `ride-updates` channel (HIGH importance) instead of
+  a `ride-offers` channel (MAX importance). For the rider, HIGH is appropriate
+  (not MAX, as the code comments correctly explain), but the channel naming
+  deviates from the checklist specification.
+  Per the severity guide, Android channels not declared → HIGH in the driver
+  app; for the rider app the runtime path is functional, so this is downgraded
+  to RECOMMENDATION (the runtime path works on the same SDK version).
+Fix: Optionally migrate channel declarations to the expo-notifications plugin
+  in app.config.ts. Update channel naming to match the checklist convention
+  (or document the intentional difference). Effort: 1 hour.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 13 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     2 |
+| MEDIUM          |     4 |
+| LOW             |     0 |
+| PASS            |     3 |
+| RECOMMENDATION  |     3 |
+| TOTAL           |    12 |
+
+================================================================================
+[AUDIT IN PROGRESS — TASKS 14–16 PENDING]
 ================================================================================

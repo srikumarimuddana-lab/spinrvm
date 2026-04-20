@@ -49,7 +49,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | R11 | As a rider, I can add stops mid-trip | X | X | — | multi-stop E2E missing |
 | R12 | As a rider, I can share my ride with a contact | X | X | — | share-link E2E missing |
 | R13 | As a rider, I can trigger an SOS / safety call | X | ~ | — | SOS E2E missing |
-| R14 | As a rider, my ride survives app restart | ~ | — | — | cold-restart restore untested |
+| R14 | As a rider, my ride survives app restart | ✅ | ✅ | — | `rideStore.restart.test.ts` — 8 scenarios |
 | R15 | As a rider on a corporate account, charges split correctly | X | X | — | corporate E2E only backend |
 | R16 | As a rider, I earn loyalty points | X | X | — | loyalty E2E missing |
 
@@ -68,7 +68,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | D9 | As a driver, I see a banner when docs expire / onboarding blocks | X | X | ~ | only suspended state E2E'd |
 | D10 | As a driver, I complete quests for bonuses | X | X | — | quest E2E missing |
 | D11 | As a driver, I can chat with the rider | X | ~ | — | chat E2E missing |
-| D12 | As a driver, my active trip survives app restart | X | — | — | mid-trip restore untested |
+| D12 | As a driver, my active trip survives app restart | ✅ | ✅ | — | `driverStore.restart.test.ts` — 8 scenarios |
 | D13 | As a driver, I get my T4A at year-end | X | X | — | T4A E2E skipped (low frequency) |
 | D14 | As a driver, I can rate the rider | X | X | — | rider-rating E2E missing |
 | D15 | As a driver, I can go offline and WS closes cleanly | X | ~ | — | socket-close E2E missing |
@@ -159,7 +159,7 @@ Implementation work remaining: P0-4 surge-lock, P0-5 Stripe card charge.
 
 ### P1 — Critical before scale
 6. ✅ **WebSocket reconnect with state preservation** — C8 — closed: `useRiderSocket.ts` calls `fetchRide` in `onopen`; `useDriverDashboard.ts` calls `fetchActiveRide` on first auth-confirmed message after reconnect; `backend/tests/test_p1_ws_reconnect.py` pins ConnectionManager round-trip + HTTP recovery; `rider-app/hooks/__tests__/useRiderSocket.reconnect.test.ts` pins client-side reconnect behavior
-7. **Mid-trip restart restore** (rider and driver) — R14, D12
+7. ✅ **Mid-trip restart restore** (rider and driver) — R14, D12 — closed: `rider-app/store/__tests__/rideStore.restart.test.ts` pins `hydrateActiveRide()` (8 scenarios: active, terminal, stale, offline, no-override); `driver-app/store/__tests__/driverStore.restart.test.ts` pins `hydrateDriverRideState()` (8 scenarios: navigating, arrived, in-progress, terminal states, corrupt JSON, no-override)
 8. **Role-claim tampering guard** — S3, S8
 9. **Multi-stop E2E** — R11
 10. **Driver offline mid-trip** — E5

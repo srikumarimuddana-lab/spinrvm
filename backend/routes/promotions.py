@@ -8,15 +8,17 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 try:
     from .. import db_supabase
     from ..dependencies import get_current_user
+    from ..utils.rate_limiter import promo_available_limit, promo_validate_limit
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
+    from utils.rate_limiter import promo_available_limit, promo_validate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +60,9 @@ class UpdatePromoCodeRequest(BaseModel):
 
 
 @api_router.post("/validate")
+@promo_validate_limit
 async def validate_promo(
+    request: Request,
     req: ValidatePromoRequest,
     current_user: dict = Depends(get_current_user),
 ):
@@ -230,7 +234,9 @@ async def apply_promo(
 
 
 @api_router.get("/available")
+@promo_available_limit
 async def get_available_promos(
+    request: Request,
     ride_fare: float = Query(0.0),
     current_user: dict = Depends(get_current_user),
 ):

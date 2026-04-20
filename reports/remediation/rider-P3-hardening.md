@@ -106,11 +106,11 @@ to prevent a single screen crash from killing the whole session.
 
 ## Checklist
 
-- [ ] R-P3-1 Rate limits on rides, cancellation, promo endpoints
-- [ ] R-P3-2 FCM onTokenRefresh listener added
-- [ ] R-P3-3 CarMarker memoized — only re-renders on lat/lng change
-- [ ] R-P3-4 Activity FlatList paginated (cursor-based)
-- [ ] R-P3-5 Home screen requests cached with TTL, not fired on every tab switch
-- [ ] R-P3-6 Scheduled ride date picker enforces minimum future time
-- [ ] R-P3-7 Unit tests for all missing store action paths
-- [ ] R-P3-8 ErrorBoundary on each major ride-flow screen
+- [x] R-P3-1 Rate limits on rides, cancellation, promo endpoints
+- [x] R-P3-2 FCM onTokenRefresh listener added
+- [x] R-P3-3 CarMarker memoized — only re-renders on lat/lng change
+- [x] R-P3-4 Activity FlatList paginated (cursor-based)
+- [x] R-P3-5 Home screen requests cached with TTL, not fired on every tab switch
+- [x] R-P3-6 Scheduled ride date picker enforces minimum future time
+- [x] R-P3-7 Unit tests for all missing store action paths
+- [x] R-P3-8 ErrorBoundary on each major ride-flow screen

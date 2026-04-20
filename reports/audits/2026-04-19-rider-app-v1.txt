@@ -3003,5 +3003,262 @@ TASK 13 TALLY
 | TOTAL           |    12 |
 
 ================================================================================
-[AUDIT IN PROGRESS — TASKS 14–16 PENDING]
+TASK 14 — PERFORMANCE & SCALABILITY (Dimension 14)
 ================================================================================
+
+[14-1] PASS | Home Screen Mount — Sequential but Lightweight; Location Cached
+File: rider-app/app/(tabs)/index.tsx:72–118
+Finding: On mount, two effects fire:
+  (1) Location effect (line 72): reads a cached GPS coordinate from AsyncStorage
+    first (instant), then calls Location.getLastKnownPositionAsync() for a
+    fast OS-cached fix, then calls Location.getCurrentPositionAsync() in the
+    background. Only after the accurate fix is obtained does it fire a single
+    weather fetch (api.open-meteo.com). These are intentionally sequential
+    (each depends on the location result) — not a parallelism gap.
+  (2) Saved-addresses effect (line 116): fetchSavedAddresses() fires
+    independently.
+  The only "API call" on mount is fetchSavedAddresses(). The weather fetch is
+  lazy (fires once GPS is ready) and is not blocking. Effectively zero blocking
+  API calls on mount. The last-location cache means the map renders with a
+  prior-session coordinate before any network call completes, which is the
+  correct UX pattern.
+  User profile image is loaded with the plain React Native <Image> component
+  (line 147), not expo-image — see [14-8] below.
+  No parallelism concern here; the design is correct.
+
+[14-2] MEDIUM | ride-options.tsx — fetchEstimates + fetchNearbyDrivers Fire on
+  Mount With No Debounce; fetchAvailablePromos Fires on estimates Change
+File: rider-app/app/ride-options.tsx:71–92
+Finding: On mount (or when pickup/dropoff changes), fetchEstimates() and
+  fetchNearbyDrivers() are called sequentially (not Promise.all) in the same
+  synchronous block (lines 74–75). A 10-second setInterval also fires
+  fetchNearbyDrivers() repeatedly. Once estimates arrive, a second useEffect
+  (lines 87–92) calls fetchAvailablePromos(fare) in response to estimates
+  changing.
+  Problem 1 — No debounce or mount-guard on navigation: the useEffect depends
+  on [pickup, dropoff] (line 84). If a user navigates back from this screen
+  and returns (e.g. changes destination), the effect re-fires immediately with
+  the new values. There is no debounce, no AbortController, no isMounted guard.
+  A rapid back-and-forward will queue multiple overlapping fetchEstimates() and
+  fetchNearbyDrivers() calls — the interval is cleared on unmount (PASS) but
+  the in-flight fetch is not cancelled. The component may receive a stale
+  response after a new request has already populated the store.
+  Problem 2 — fetchEstimates and fetchNearbyDrivers are sequential, not
+  parallelised: they are independent network calls but run one after the other
+  (lines 74–75). A Promise.all([fetchEstimates(), fetchNearbyDrivers()]) would
+  reduce total wall-clock time by ~half.
+  Problem 3 — console.log left in the mount effect (line 73): see [14-9].
+  Per D14 severity guide: missing debounce on a user-navigable screen and
+  missing parallelisation → MEDIUM.
+Fix:
+  (1) Parallelise with Promise.all([fetchEstimates(), fetchNearbyDrivers()]).
+  (2) Add an AbortController or isMounted ref to cancel in-flight fetches on
+    effect cleanup. Pattern: const controller = new AbortController(); return
+    () => controller.abort().
+  (3) Optionally debounce with a 300 ms delay before firing on [pickup, dropoff]
+    change to absorb rapid navigation events.
+  Effort: 2 hours.
+
+[14-3] MEDIUM | Activity Tab Uses ScrollView, Not FlatList — No Pagination or
+  Virtualisation
+File: rider-app/app/(tabs)/activity.tsx:195–256
+Finding: The Activity screen renders all ride history inside a plain ScrollView
+  (line 195), not a FlatList. Every ride card is mounted and in memory
+  simultaneously. The API call on line 47 fetches up to 200 raw rides from the
+  database (backend/routes/rides.py:817 — get_rows limit=200), filters them in
+  Python, and returns the filtered result paginated with limit=20/offset=0 query
+  params — but the frontend ignores those params entirely (api.get('/rides/history')
+  with no limit/offset arguments, line 48). The frontend therefore always receives
+  the first page (up to 20 from the backend default) and renders all 20 in a
+  ScrollView with no further pagination.
+  The backend endpoint does support pagination (limit/offset query params, line
+  811), but the frontend never advances beyond page 1, and the ScrollView means
+  no virtualisation even if more records were loaded.
+  Additionally: there is no keyExtractor (not applicable to ScrollView, but
+  relevant to migration), no FlatList, no initialNumToRender, no
+  maxToRenderPerBatch, no getItemLayout.
+  Per D14 severity guide: "FlatList missing initialNumToRender — slow initial
+  render" → MEDIUM. Using a ScrollView instead of FlatList for a list of
+  arbitrary length is the underlying issue.
+Fix:
+  (1) Replace ScrollView with FlatList. Add keyExtractor (ride.id), initialNumToRender=10,
+    maxToRenderPerBatch=5, windowSize=5, removeClippedSubviews for Android.
+  (2) Wire pagination: pass limit=20&offset={offset} to /rides/history and
+    implement an onEndReached handler to load the next page.
+  (3) Since each ride card has a fixed height, add getItemLayout for O(1) scroll
+    position calculations.
+  Effort: 4–6 hours.
+
+[14-4] MEDIUM | CarMarker Is Not Wrapped in React.memo — Re-Renders on Every
+  driver_location_update WS Event (~1 Hz)
+File: shared/components/CarMarker.tsx:30–78
+Finding: The CarMarker component is defined as:
+    export const CarMarker: React.FC<CarMarkerProps> = ({ ... }) => { ... }
+  It is NOT wrapped in React.memo. When the WebSocket delivers a
+  driver_location_update event (~every 1 second), updateDriverLocation() in
+  rideStore.ts (line 563) calls set({ currentDriver: updated }), which produces
+  a new object reference for currentDriver. Any screen that subscribes to
+  currentDriver (driver-arriving.tsx, ride-in-progress.tsx) re-renders, and
+  with it the CarMarker — even when coordinate/heading have not changed.
+  The tracksViewChanges flag is set to true for 800 ms on mount and then
+  flipped to false (lines 40–43), which is a correct optimisation for the
+  initial render. However, without React.memo the entire component function
+  re-runs on every parent re-render, nullifying the tracksViewChanges
+  optimisation after the initial 800 ms because the parent always re-renders.
+  Per D14 severity guide: "Component missing React.memo — unnecessary re-renders"
+  → MEDIUM.
+Fix:
+  Wrap with React.memo and add a custom areEqual comparator that returns true
+  (skips re-render) when coordinate.latitude, coordinate.longitude, heading,
+  size, and zIndex are all equal:
+    export const CarMarker = React.memo(CarMarkerBase,
+      (prev, next) =>
+        prev.coordinate.latitude === next.coordinate.latitude &&
+        prev.coordinate.longitude === next.coordinate.longitude &&
+        prev.heading === next.heading &&
+        prev.size === next.size
+    );
+  Also consider moving tracksViewChanges to respond to coordinate changes only
+  (reset to true briefly when lat/lng change, then flip back to false) so the
+  Android Marker snapshot is refreshed on movement.
+  Effort: 1 hour.
+
+[14-5] MEDIUM | driver-arriving.tsx Polls at 3 s Regardless of WS Connection
+  State — Poll Not Suspended When WS Is Healthy
+File: rider-app/app/driver-arriving.tsx:78–90
+Finding: The useEffect at line 78 sets up a polling interval:
+    const fastPoll = !currentRide || status === 'searching' || status === 'driver_assigned';
+    const interval = setInterval(() => fetchRide(rideId), fastPoll ? 3000 : 15000);
+  The poll drops to 15 s once the ride is in driver_accepted/driver_arrived/
+  in_progress state — which is better than constant 3 s, but the poll still
+  runs unconditionally regardless of whether the WebSocket is connected and
+  delivering updates.
+  useRiderSocket.ts exports a connectionState ('connected' | 'reconnecting' |
+  'disconnected'), but driver-arriving.tsx does not import useRiderSocket at
+  all — there is no call to useRiderSocket() anywhere in the file. The poll
+  therefore runs at 3 s during the searching/driver_assigned phase even when
+  the WebSocket is delivering real-time updates.
+  In the healthy WS case this means ~20 redundant GET /rides/{id} calls per
+  minute during the driver-search phase. At scale this amplifies backend load
+  by a constant multiplier equal to the number of active rider screens.
+  Per D14 severity guide: "Polling suspended when WebSocket is connected" is a
+  checklist item; it is not suspended → MEDIUM.
+Fix:
+  Import useRiderSocket in driver-arriving.tsx and read connectionState.
+  Suspend the fast poll when the WS is connected:
+    const { connectionState } = useRiderSocket();
+    const pollInterval = connectionState === 'connected' ? null : (fastPoll ? 3000 : 15000);
+    useEffect(() => {
+      if (!rideId || !pollInterval) return;
+      const interval = setInterval(() => fetchRide(rideId), pollInterval);
+      return () => clearInterval(interval);
+    }, [rideId, currentRide?.status, pollInterval]);
+  The 15 s fallback poll should remain as a backstop for stale WS connections.
+  Effort: 1–2 hours.
+
+[14-6] PASS | FreeCancelTimer — Interval Properly Cleaned Up on Unmount
+File: rider-app/components/FreeCancelTimer.tsx:41–52
+Finding: The useEffect at line 41 returns () => clearInterval(interval) as its
+  cleanup function. When the parent screen (driver-arriving.tsx) unmounts
+  (e.g. status transitions to driver_arrived and router.replace() fires), React
+  calls the cleanup, the interval is cleared, and no further setSecondsLeft()
+  calls occur. There is no memory leak or state-update-after-unmount risk.
+  Additionally, the interval self-terminates when remaining === 0 (line 49),
+  so the timer stops firing even if it outlives a parent re-render.
+  The Reanimated library is not used in FreeCancelTimer — the countdown is
+  implemented with setInterval and React state only, so there is no Reanimated
+  animation to cancel.
+
+[14-7] MEDIUM | Driver Photo Not Loaded — Placeholder Icon Used; CarMarker
+  Uses Plain RN Image; ride-options.tsx Car Images Use Plain RN Image
+File: rider-app/app/driver-arriving.tsx:464–469;
+      rider-app/app/ride-options.tsx:430–436;
+      rider-app/app/(tabs)/index.tsx:147–150;
+      shared/components/CarMarker.tsx:66–72
+Finding: Four separate image loading sites fail to use expo-image:
+  (a) driver-arriving.tsx driverAvatar (line 464): uses a plain Ionicons icon
+    (no photo loaded at all — the driverPhoto field from the backend is not
+    rendered; the avatar is always a generic grey circle with a person icon).
+    This is a UX gap, not strictly a caching issue, but expo-image would be
+    needed when the photo is wired.
+  (b) ride-options.tsx vehicle type images (lines 430–436): renders
+    estimate.vehicle_type.image_url with <Image> from react-native, not
+    expo-image. These images are downloaded fresh on every mount with no
+    memory or disk cache.
+  (c) index.tsx user profile avatar (lines 147–150): <Image> from react-native
+    loads the user's profile photo with no caching.
+  (d) shared/components/CarMarker.tsx (line 66): uses <Image> from react-native
+    for the car marker PNG. This is a local require() (static asset), so no
+    network caching is needed — PASS for this instance.
+  Per D14 severity guide: "expo-image not used — no caching for remote images"
+  → MEDIUM for items (b) and (c). Item (d) is a local asset (PASS).
+Fix:
+  Replace import { Image } from 'react-native' with import { Image } from
+  'expo-image' in ride-options.tsx (vehicle images) and index.tsx (avatar).
+  expo-image provides memory + disk caching, blurhash placeholders, and
+  progressive loading with no API change beyond adding a contentFit prop.
+  When driver photo is eventually wired in driver-arriving.tsx, use expo-image
+  there too.
+  Effort: 1 hour.
+
+[14-8] PASS | Hermes + New Architecture Enabled; No JSC Override
+File: rider-app/app.config.ts:16; rider-app/eas.json
+Finding: app.config.ts sets newArchEnabled: true (line 16). Expo SDK 54 with
+  New Architecture enables Hermes by default on both iOS and Android. There is
+  no "jsEngine": "jsc" override in app.config.ts or eas.json. Hermes is active.
+  Metro cache is configured with a FileStore shared across web/android builds
+  (metro.config.js:10–12). maxWorkers is set to 2 to reduce resource usage
+  (metro.config.js:15). Metro configuration is satisfactory.
+
+[14-9] LOW | console.log Statements Present in Production Code Paths
+File: rider-app/app/ride-options.tsx:73;
+      rider-app/app/driver-arriving.tsx:254, 600, 610, 620;
+      rider-app/app/activity.tsx:60;
+      and ~35 additional instances across rider-app/app/
+Finding: Pre-audit baseline identified ~40 console.log statements across the
+  rider app (noted in the audit preamble). Specific instances found in scoped
+  files:
+  • ride-options.tsx:73 — logs platform and route on every fetchEstimates()
+    trigger. This is not guarded by __DEV__ and fires in production builds,
+    leaking pickup/dropoff address strings to device logs.
+  • driver-arriving.tsx:254 — logs Share errors in production.
+  • driver-arriving.tsx:600, 610, 620 — these are inside __DEV__ blocks (PASS
+    for those three).
+  • activity.tsx:60 — logs fetch errors including the full error object.
+  Per D14 severity guide: "console.log in production build" → LOW.
+Fix:
+  Replace unchecked console.log calls with either:
+  (a) __DEV__ guards: if (__DEV__) console.log(...)
+  (b) The existing LogRocket error reporting (already initialised in _layout.tsx)
+    for catch blocks: LogRocket.captureException(error)
+  Strip all debug console.log calls before the first production build.
+  A lint rule (no-console with an allowlist of console.warn/error) would prevent
+  recurrence.
+  Effort: 1–2 hours.
+
+[14-10] PASS | Backend /rides/history Endpoint Is Paginated
+File: backend/routes/rides.py:809–844
+Finding: The /rides/history GET endpoint accepts limit (default 20, max 100) and
+  offset query parameters (lines 811–812). Pagination metadata (total, limit,
+  offset) is returned in the response (line 844). The backend does perform an
+  unbounded get_rows() call with limit=200 internally and then slices in Python
+  (lines 817–843), which is a backend-side concern (the 200-row cap prevents
+  truly unbounded queries). The frontend does not pass pagination params
+  (finding [14-3]) — that is a frontend issue, but the backend API surface is
+  correct.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 14 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     0 |
+| MEDIUM          |     5 |
+| LOW             |     1 |
+| PASS            |     4 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    10 |
+
+================================================================================
+[AUDIT IN PROGRESS — TASKS 15–16 PENDING]

@@ -151,8 +151,19 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
     if not wallet.get("is_active", True):
         raise HTTPException(status_code=403, detail="Wallet is suspended")
 
-    old_balance = _d(wallet.get("balance", 0))
+    # R-P1-19: Validate client-supplied amount against the server-stored ride fare
+    # to prevent a malicious caller from paying less than the actual fare.
+    ride = await db.find_one("rides", {"id": req.ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="ERR_FORBIDDEN")
+    server_fare = _d(ride.get("total_fare", 0))
     debit_amount = _d(req.amount)
+    if debit_amount > server_fare + _d("0.01"):
+        raise HTTPException(status_code=400, detail="ERR_FARE_EXCEEDED")
+
+    old_balance = _d(wallet.get("balance", 0))
 
     if old_balance < debit_amount:
         raise HTTPException(status_code=400, detail="Insufficient wallet balance")

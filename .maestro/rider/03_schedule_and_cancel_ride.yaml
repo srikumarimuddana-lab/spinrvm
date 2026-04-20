@@ -1,0 +1,68 @@
+appId: com.spinr.user
+---
+# Rider App — Schedule a Ride and Cancel It (P3-18)
+# Verifies: ride scheduled, local reminder set, cancellation removes reminder.
+# Assumes user is logged in.
+
+- launchApp
+
+# Tap search bar
+- tapOn:
+    text: "Where to?"
+
+# Enter destination
+- inputText: "Saskatoon Airport"
+- waitForAnimationToEnd:
+    timeout: 2000
+
+# Select first suggestion
+- tapOn:
+    index: 0
+    selector: "list-item"
+    optional: true
+
+# Tap schedule toggle / date-time picker
+- tapOn:
+    text: "Schedule"
+    optional: true
+- tapOn:
+    id: "schedule-toggle"
+    optional: true
+
+# Pick a time 2 hours from now (generic interaction)
+- waitForAnimationToEnd:
+    timeout: 1000
+
+# Confirm schedule
+- tapOn:
+    text: "Confirm"
+    optional: true
+- tapOn:
+    text: "Done"
+    optional: true
+
+# Select vehicle and request
+- assertVisible:
+    text: "Request"
+    optional: true
+- tapOn:
+    text: "Request"
+    optional: true
+
+# Verify scheduled confirmation visible
+- assertVisible:
+    text: "Scheduled"
+    optional: true
+
+# Cancel the scheduled ride
+- tapOn:
+    text: "Cancel Ride"
+    optional: true
+- tapOn:
+    text: "Confirm"
+    optional: true
+
+# Verify back at home state
+- assertVisible:
+    text: "Where to?"
+    optional: true

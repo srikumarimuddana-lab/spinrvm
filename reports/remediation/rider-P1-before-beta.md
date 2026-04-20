@@ -633,6 +633,47 @@ No code change required — the middleware already reads `ALLOWED_ORIGINS` from 
 
 ---
 
+## R-P1-28 · Rider Phone, Email, and Stripe Customer ID Exposed in GET /drivers/rides/active
+
+**Audit finding [12-1 HIGH].** `get_active_ride()` in `backend/routes/drivers.py:1617–1633`
+returns `serialize_doc(rider)` where `rider = await db_supabase.get_user_by_id(ride["rider_id"])`.
+`serialize_doc` is a no-op passthrough (line 201–202: `return doc`). The full users row — including
+`phone`, `email`, `stripe_customer_id`, and `default_payment_method` — is sent to the driver.
+
+This is the inverse of the driver-audit PII finding. The driver only needs the rider's first name,
+profile photo, and star rating to complete the trip. Phone/email/payment token disclosure is a PIPEDA
+violation.
+
+**Note:** The dispatch WebSocket payload (`rides.py:264–278`) already limits rider data to
+`rider_name` and `rider_rating`. The REST endpoint must apply an equivalent filter.
+The existing `R-P2-7` checklist item describes this as "verify and strip" — this finding confirms
+the leak is real and escalates it to P1 (HIGH).
+
+**File to fix:** `backend/routes/drivers.py` — `get_active_ride()`, line 1630
+
+**How to fix:**
+```python
+# Define a rider allowlist (only what the driver app needs):
+_RIDER_PUBLIC_FIELDS = {"id", "first_name", "profile_image", "rating"}
+
+# In get_active_ride(), replace:
+#   "rider": serialize_doc(rider) if rider else None,
+# With:
+safe_rider = {k: v for k, v in rider.items() if k in _RIDER_PUBLIC_FIELDS} if rider else None
+return {
+    "ride": serialize_doc(ride),
+    "rider": safe_rider,
+    "vehicle_type": serialize_doc(vehicle_type) if vehicle_type else None,
+}
+```
+
+Also audit any other driver-facing endpoints that call `get_user_by_id` and return the result
+without field filtering (e.g. ride history, accept/arrive/complete responses).
+
+**Effort:** 1–2 hours
+
+---
+
 ## Checklist
 
 - [ ] R-P1-1 Cancellation fee enforced after driver_arrived; Cancel button disabled
@@ -662,3 +703,4 @@ No code change required — the middleware already reads `ALLOWED_ORIGINS` from 
 - [ ] R-P1-25 walletStore.test.ts: payWithWallet and addTip idempotency tests added
 - [ ] R-P1-26 E2E ride-booking spec: rate/tip stages added; screen-specific UI assertions; single-session flow
 - [ ] R-P1-27 ALLOWED_ORIGINS env var set to include spinr.app and spinr-track.app in production
+- [ ] R-P1-28 Rider phone/email/stripe_customer_id stripped from GET /drivers/rides/active response

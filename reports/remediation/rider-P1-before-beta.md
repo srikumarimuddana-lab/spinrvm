@@ -440,6 +440,75 @@ case 'driver_timeout':
 
 ---
 
+## R-P1-19 · /wallet/pay Does Not Validate Amount Against Stored Ride Fare
+
+**Audit finding [08-1 HIGH].** `WalletPayRequest` in `backend/routes/wallet.py:89–91`
+accepts any amount > 0 from the client. The handler checks sufficient balance but never
+fetches the ride record to verify the requested debit equals the stored fare. A client can
+POST `/wallet/pay` with `amount=0.01` for any valid `ride_id` and the ride is marked as
+fully paid while only $0.01 is debited. The Stripe card path correctly cross-checks amount
+vs. stored fare (payments.py:72–85); the wallet path must do the same.
+
+**File to fix:** `backend/routes/wallet.py` — `wallet_pay` handler
+
+**How to fix:**
+```python
+async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_current_user)):
+    ride = await db.find_one("rides", {"id": req.ride_id})
+    if not ride or ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    fare = _d(ride.get("total_fare", 0))
+    if _d(req.amount) != fare:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Payment amount {req.amount} does not match ride fare {fare}",
+        )
+    # ... rest of handler unchanged
+```
+
+**Effort:** 1 hour
+
+---
+
+## R-P1-20 · Tip Endpoint Is Additive — Rider Can Submit Multiple Tips for the Same Ride
+
+**Audit finding [08-2 HIGH].** `POST /rides/{ride_id}/tip` in `backend/routes/rides.py:964`
+uses `new_tip = ride.get("tip_amount", 0) + tip_amount` — each call accumulates rather than
+setting a one-time tip. The client-side `tipSent` flag (`ride-completed.tsx:109`) prevents
+re-submission within one screen session, but is lost on navigation or app restart. Multiple
+calls inflate `driver_earnings` by the tip amount each time.
+
+**File to fix:** `backend/routes/rides.py` — `add_tip` handler (line 964)
+
+**How to fix:**
+```python
+# Option A — one-time guard at the database level:
+if ride.get("tip_amount", 0) > 0:
+    raise HTTPException(status_code=409, detail="Tip already submitted for this ride")
+
+# Option B — add a tip_paid boolean column; set True on first call.
+```
+
+**Effort:** 30 minutes
+
+---
+
+## R-P1-21 · createRide() Missing Idempotency Key — Double Charge on Network Retry
+
+**Audit finding [08-3 HIGH].** (Confirms and supersedes R-P1-7.) Neither `createRide()` in
+`rideStore.ts` nor the backend `create_ride` handler implements a request idempotency key.
+A network timeout followed by a user retry creates two rides and initiates two payment
+intents. The `isSubmitting` ref in `payment-confirm.tsx` catches same-session double-taps
+but not retries or back-navigation re-submits.
+
+**File to fix:** `rider-app/store/rideStore.ts` + `backend/routes/rides.py`
+
+**See also:** R-P1-7 (same fix prescription — this finding confirms R-P1-7 as still open).
+
+**Effort:** 2–3 hours
+
+---
+
 ## Checklist
 
 - [ ] R-P1-1 Cancellation fee enforced after driver_arrived; Cancel button disabled
@@ -460,3 +529,6 @@ case 'driver_timeout':
 - [ ] R-P1-16 driver_timeout shows "Searching Again" alert before fetchRide
 - [ ] R-P1-17 /rides/{id}/start restricted to driver role only (OTP bypass closed)
 - [ ] R-P1-18 cancel_ride guard changed from 'trip_in_progress' to 'in_progress' (dead guard fixed)
+- [ ] R-P1-19 /wallet/pay cross-checks debit amount against stored ride fare (no underpay exploit)
+- [ ] R-P1-20 add_tip endpoint blocks duplicate tips; tip is one-time-only per ride
+- [ ] R-P1-21 createRide() idempotency key confirmed present (see R-P1-7 fix)

@@ -342,20 +342,69 @@ class TestCreateNotificationHelper:
 # Native delivery path (FCM/APNs send) — requires live creds
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "P3-19 gap: FCM/APNs delivery requires live service-account credentials "
-        "and cannot be tested in CI without a real Firebase project. "
-        "Fix: add a Firebase emulator or mock FCM SDK in features/send_push_notification.py. "
-        "Until then, delivery is verified manually via MOBILE_SMOKE.md §E."
-    ),
-)
+@pytest.mark.asyncio
 class TestNativePushDelivery:
-    """Delivery path — xfail until Firebase emulator or mock SDK is wired in."""
+    """Delivery path — firebase_admin.messaging mocked via sys.modules.
 
-    def test_push_delivered_to_ios_device(self):
-        raise AssertionError("Firebase emulator not configured")
+    Code under test: backend/features.py::send_push_notification (~line 1114).
+    The function does a local `from firebase_admin import messaging` so we
+    inject a mock into sys.modules before calling it.
+    """
 
-    def test_push_delivered_to_android_device(self):
-        raise AssertionError("Firebase emulator not configured")
+    async def _deliver(self, token: str):
+        import sys
+        from unittest.mock import MagicMock
+
+        mock_messaging = MagicMock()
+        mock_messaging.send = MagicMock(return_value="projects/spinr/messages/ok")
+
+        mock_firebase = MagicMock()
+        mock_firebase.messaging = mock_messaging
+
+        user_row = {"id": USER_ID, "fcm_token": token}
+
+        with (
+            patch.dict(sys.modules, {
+                "firebase_admin": mock_firebase,
+                "firebase_admin.messaging": mock_messaging,
+            }),
+            patch("backend.features.db_supabase.find_one",
+                  AsyncMock(return_value=user_row)),
+            patch("backend.features.db_supabase.get_user_by_id",
+                  AsyncMock(return_value=user_row)),
+        ):
+            from backend import features as features_mod
+            result = await features_mod.send_push_notification(
+                user_id=USER_ID,
+                title="Ride accepted",
+                body="Your driver is on the way",
+            )
+
+        return result, mock_messaging
+
+    async def test_push_delivered_to_ios_device(self):
+        """iOS APNs-routed FCM token reaches messaging.send."""
+        ios_token = "ios-apns-device-token-abc123"
+        result, mock_messaging = await self._deliver(ios_token)
+
+        assert result is True
+        mock_messaging.send.assert_called_once()
+        # Message was built with the correct FCM token
+        msg_arg = mock_messaging.Message.call_args
+        assert msg_arg is not None
+        assert msg_arg.kwargs.get("token") == ios_token or (
+            msg_arg.args and ios_token in str(msg_arg.args)
+        )
+
+    async def test_push_delivered_to_android_device(self):
+        """Android FCM registration token reaches messaging.send."""
+        android_token = "android-fcm-registration-token-xyz789"
+        result, mock_messaging = await self._deliver(android_token)
+
+        assert result is True
+        mock_messaging.send.assert_called_once()
+        msg_arg = mock_messaging.Message.call_args
+        assert msg_arg is not None
+        assert msg_arg.kwargs.get("token") == android_token or (
+            msg_arg.args and android_token in str(msg_arg.args)
+        )

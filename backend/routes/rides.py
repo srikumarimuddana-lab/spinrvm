@@ -7,7 +7,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     from .. import db_supabase
@@ -68,6 +68,10 @@ def _f(v: Decimal) -> float:
 
 
 api_router = APIRouter(prefix="/rides", tags=["Rides"])
+
+
+class TipRequest(BaseModel):
+    amount: Decimal = Field(..., gt=0, le=500, description="Tip in CAD (max $500)")
 
 
 async def create_demo_drivers(vehicle_type_id: str, lat: float, lng: float):
@@ -943,13 +947,8 @@ async def get_ride(ride_id: str, current_user: dict = Depends(get_current_user))
 
 
 @api_router.post("/{ride_id}/tip")
-async def add_tip(ride_id: str, request: Request, current_user: dict = Depends(get_current_user)):
-    data = await request.json()
-    tip_amount = float(data.get("amount", 0))
-    if tip_amount <= 0:
-        raise HTTPException(status_code=400, detail="Invalid tip amount")
-    if tip_amount > 500:
-        raise HTTPException(status_code=400, detail="Tip amount exceeds maximum ($500)")
+async def add_tip(ride_id: str, req: TipRequest, current_user: dict = Depends(get_current_user)):
+    tip_amount = float(req.amount)
 
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -969,11 +968,14 @@ async def add_tip(ride_id: str, request: Request, current_user: dict = Depends(g
     return {"success": True, "tip_amount": new_tip}
 
 
+class ProcessPaymentRequest(BaseModel):
+    tip_amount: Decimal = Field(default=Decimal("0"), ge=0, le=500)
+
+
 @api_router.post("/{ride_id}/process-payment")
-async def process_payment(ride_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user: dict = Depends(get_current_user)):
     """Process payment for completed ride. Charges rider's card for fare + tip."""
-    data = await request.json()
-    tip_amount = float(data.get("tip_amount", 0))
+    tip_amount = float(req.tip_amount)
 
     ride = await db_supabase.get_ride(ride_id)
     if not ride:

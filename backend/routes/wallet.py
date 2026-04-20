@@ -83,12 +83,12 @@ async def _record_transaction(
 
 
 class TopUpRequest(BaseModel):
-    amount: float = Field(..., gt=0, le=500, description="Amount in CAD (max $500)")
+    amount: Decimal = Field(..., gt=0, le=500, description="Amount in CAD (max $500)")
 
 
 class WalletPayRequest(BaseModel):
     ride_id: str
-    amount: float = Field(..., gt=0)
+    amount: Decimal = Field(..., gt=0, le=500, description="Amount in CAD (max $500)")
 
 
 class TransferRequest(BaseModel):

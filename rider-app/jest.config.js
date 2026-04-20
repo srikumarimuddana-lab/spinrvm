@@ -11,4 +11,12 @@ module.exports = {
   moduleNameMapper: {
     '^@shared/(.*)$': '<rootDir>/../shared/$1',
   },
+  // R-P1-22: Enforce minimum coverage thresholds before merging to main.
+  coverageThreshold: {
+    global: {
+      lines: 70,
+      functions: 60,
+      branches: 60,
+    },
+  },
 };

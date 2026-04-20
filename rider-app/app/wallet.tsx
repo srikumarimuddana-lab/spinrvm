@@ -47,6 +47,7 @@ export default function WalletScreen() {
     fetchWallet, topUp, fetchTransactions, clearError,
   } = useWalletStore();
 
+  const [walletError, setWalletError] = useState<string | null>(null);
   const [showTopUp, setShowTopUp] = useState(false);
   const [customAmount, setCustomAmount] = useState('');
   const [topUpLoading, setTopUpLoading] = useState(false);
@@ -56,8 +57,10 @@ export default function WalletScreen() {
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
   useEffect(() => {
-    fetchWallet();
-    fetchTransactions(30);
+    setWalletError(null);
+    Promise.all([fetchWallet(), fetchTransactions(30)]).catch(() => {
+      setWalletError('Balance unavailable');
+    });
   }, []);
 
   const handleTopUp = async (amount: number) => {
@@ -118,9 +121,13 @@ export default function WalletScreen() {
       {/* Balance Card */}
       <View style={styles.balanceCard}>
         <Text style={styles.balanceLabel}>Available Balance</Text>
-        <Text style={styles.balanceAmount}>
-          ${(wallet?.balance ?? 0).toFixed(2)}
-        </Text>
+        {walletError ? (
+          <Text style={[styles.balanceAmount, { fontSize: 20 }]}>Balance unavailable</Text>
+        ) : (
+          <Text style={styles.balanceAmount}>
+            ${(wallet?.balance ?? 0).toFixed(2)}
+          </Text>
+        )}
         <Text style={styles.balanceCurrency}>{wallet?.currency || 'CAD'}</Text>
 
         <View style={styles.balanceActions}>

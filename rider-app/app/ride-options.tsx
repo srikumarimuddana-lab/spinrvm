@@ -43,6 +43,7 @@ export default function RideOptionsScreen() {
     nearbyDrivers,
     selectVehicle,
     isLoading,
+    error: storeError,
     scheduledTime,
     setScheduledTime,
     availablePromos,
@@ -51,6 +52,7 @@ export default function RideOptionsScreen() {
     applyPromo,
   } = useRideStore();
 
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [routeKey, setRouteKey] = useState(0);
   const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
@@ -68,10 +70,19 @@ export default function RideOptionsScreen() {
   }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = useRef<MapView>(null);
 
+  const handleFetchEstimates = async () => {
+    setFetchError(null);
+    try {
+      await fetchEstimates();
+    } catch {
+      setFetchError('Could not load fares. Tap to retry.');
+    }
+  };
+
   useEffect(() => {
     if (pickup && dropoff) {
       console.log('Platform:', Platform.OS, '| Fetching estimates & nearby drivers for:', pickup.address, 'to', dropoff.address);
-      fetchEstimates();
+      handleFetchEstimates();
       fetchNearbyDrivers();
 
       // Auto-refresh drivers every 10 seconds
@@ -403,7 +414,15 @@ export default function RideOptionsScreen() {
       )}
 
       {/* Vehicle Options */}
-      {isLoading ? (
+      {fetchError ? (
+        <View style={styles.loadingContainer}>
+          <Ionicons name="alert-circle-outline" size={40} color="#EF4444" />
+          <Text style={[styles.loadingText, { color: '#EF4444', marginTop: 10 }]}>{fetchError}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={handleFetchEstimates}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : isLoading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
           <Text style={styles.loadingText}>Finding best rides...</Text>
@@ -733,6 +752,18 @@ function createStyles(colors: ThemeColors) {
     fontSize: 14,
     fontFamily: 'PlusJakartaSans_400Regular',
     color: colors.textDim,
+  },
+  retryButton: {
+    marginTop: 16,
+    paddingHorizontal: 28,
+    paddingVertical: 12,
+    backgroundColor: colors.primary,
+    borderRadius: 24,
+  },
+  retryButtonText: {
+    color: '#FFF',
+    fontSize: 15,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
   },
   optionsList: {
     flex: 1,

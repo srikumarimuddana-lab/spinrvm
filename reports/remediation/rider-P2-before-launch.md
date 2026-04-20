@@ -8,7 +8,7 @@ hit under normal usage.
 
 ---
 
-## R-P2-1 · Offline Queue Only Handles Ride Creation
+## ✅ R-P2-1 · Offline Queue Only Handles Ride Creation
 
 **What's wrong:** `syncOfflineRequests()` in `rideStore.ts` only replays `create_ride`
 requests queued while offline. If a rider cancels a ride, submits a rating, or pays a
@@ -25,7 +25,7 @@ Replay each on reconnect; clear after 3 failed retries with a user notification.
 
 ---
 
-## R-P2-2 · Cold-Start Stale Ride Not Validated Before Routing
+## ✅ R-P2-2 · Cold-Start Stale Ride Not Validated Before Routing
 
 **What's wrong:** `hydrateActiveRide()` restores a ride from AsyncStorage on cold start
 and immediately routes to a ride screen. If the ride completed or was cancelled while
@@ -64,7 +64,7 @@ hydrateActiveRide: async () => {
 
 ---
 
-## R-P2-3 · Ride Status Magic Strings — No Central Constants
+## ✅ R-P2-3 · Ride Status Magic Strings — No Central Constants
 
 **What's wrong:** Ride status values (`'searching'`, `'driver_assigned'`, `'driver_arrived'`,
 `'in_progress'`, `'completed'`, `'cancelled'`) are scattered as literal strings across
@@ -93,7 +93,7 @@ and all ride screens with `RideStatus.X` references.
 
 ---
 
-## R-P2-4 · TypeScript `any` Types — Store and API Responses
+## ✅ R-P2-4 · TypeScript `any` Types — Store and API Responses
 
 **What's wrong:** The stores and many screens use `: any` for API responses, component
 props, and WebSocket message payloads. This disables TypeScript's protection against
@@ -119,7 +119,7 @@ if (!parsed.success) return; // ignore malformed message
 
 ---
 
-## R-P2-5 · Polling Not Suspended When WebSocket Is Connected
+## ✅ R-P2-5 · Polling Not Suspended When WebSocket Is Connected
 
 **What's wrong:** `driver-arriving.tsx` polls `/rides/{id}` every 3 seconds as a
 fallback for when WebSocket is unavailable. But polling continues even when the
@@ -142,7 +142,7 @@ useEffect(() => {
 
 ---
 
-## R-P2-6 · Error States Missing on Key Screens
+## ✅ R-P2-6 · Error States Missing on Key Screens
 
 **What's wrong:** Several screens show a blank view or infinite spinner when an API
 call fails. Users have no way to recover.
@@ -157,7 +157,7 @@ call fails. Users have no way to recover.
 
 ---
 
-## R-P2-7 · Rider PII in Driver-Facing API Responses — Verify and Strip
+## ✅ R-P2-7 · Rider PII in Driver-Facing API Responses — Verify and Strip
 
 **What's wrong:** Based on the driver audit, driver-facing ride responses may include
 rider fields that should be absent: phone number, email, home/work saved addresses,
@@ -173,7 +173,7 @@ Apply it to all driver-facing ride fetch responses.
 
 ---
 
-## R-P2-8 · become-driver.tsx — Incomplete Handoff to Driver App
+## ✅ R-P2-8 · become-driver.tsx — Incomplete Handoff to Driver App
 
 **What's wrong:** `become-driver.tsx` exists but the path to download or open the
 driver app is unclear. A rider trying to become a driver may hit a dead end.
@@ -189,7 +189,7 @@ driver app is unclear. A rider trying to become a driver may hit a dead end.
 
 ---
 
-## R-P2-9 · Touch Targets Below 44pt on Rating and Tip Buttons
+## ✅ R-P2-9 · Touch Targets Below 44pt on Rating and Tip Buttons
 
 **What's wrong:** The star rating buttons and tip preset buttons in `ride-completed.tsx`
 are likely below the iOS Human Interface Guideline minimum of 44×44pt.
@@ -210,7 +210,7 @@ are likely below the iOS Human Interface Guideline minimum of 44×44pt.
 
 ---
 
-## R-P2-10 · Corporate Ride Flow Has No UI Entry Point
+## ✅ R-P2-10 · Corporate Ride Flow Has No UI Entry Point
 
 **Audit finding [01-5 MEDIUM] — confirmed.** `rideStore.createRide()` does not include
 `corporate_account_id` in its payload (rideStore.ts:319–352). `activity.tsx` has a
@@ -226,7 +226,7 @@ account on their profile. Pass `corporate_account_id` in the ride creation paylo
 
 ---
 
-## R-P2-11 · Legal/ToS Not Presented During Onboarding
+## ✅ R-P2-11 · Legal/ToS Not Presented During Onboarding
 
 **Audit finding [01-7 RECOMMENDATION].** `legal.tsx` exists and is accessible from
 Account → Legal. New riders completing sign-up are never asked to accept the Terms of
@@ -244,7 +244,7 @@ server-side.
 
 ---
 
-## R-P2-12 · become-driver.tsx — Incomplete Handoff Description (Pre-P1-11)
+## ✅ R-P2-12 · become-driver.tsx — Incomplete Handoff Description (Pre-P1-11)
 
 **Note:** The routing crash was elevated to P1-11. This item tracks the UX polish
 follow-up: deep-link to the Spinr Driver app if already installed on device.
@@ -258,7 +258,7 @@ installed, then deep-link vs App Store.
 
 ---
 
-## R-P2-13 · Access Token Persisted to SecureStore — Memory-Only Pattern Not Followed
+## ✅ R-P2-13 · Access Token Persisted to SecureStore — Memory-Only Pattern Not Followed
 
 **Audit finding [02-5 LOW].** `setTokens()` in `shared/store/authStore.ts:154` writes the
 access token to `expo-secure-store` in addition to the in-memory `_inMemoryToken`. The standard
@@ -278,7 +278,7 @@ persisted refresh token rather than reading the access token from disk.
 
 ---
 
-## R-P2-14 · EAS Test/Preview Builds Point to Production Backend
+## ✅ R-P2-14 · EAS Test/Preview Builds Point to Production Backend
 
 **Audit finding [03-2 MEDIUM].** `rider-app/eas.json` test and preview build profiles
 hardcode `"https://spinr-backend-production.up.railway.app"` as `EXPO_PUBLIC_BACKEND_URL`.
@@ -301,7 +301,7 @@ Set `SPINR_STAGING_BACKEND_URL` as an EAS secret once a staging environment exis
 
 ---
 
-## R-P2-15 · TruffleHog CI Scans Only Last Commit with --only-verified
+## ✅ R-P2-15 · TruffleHog CI Scans Only Last Commit with --only-verified
 
 **Audit finding [03-3 MEDIUM].** The `security-scan` CI job uses
 `trufflehog --only-verified --since-commit HEAD~1`. Only one commit is scanned per run,
@@ -323,7 +323,7 @@ Remove `--only-verified` to catch unverified patterns too.
 
 ---
 
-## R-P2-16 · Rider-App CI Missing EXPO_PUBLIC_ Scan; play-service-account.json Not in .gitignore
+## ✅ R-P2-16 · Rider-App CI Missing EXPO_PUBLIC_ Scan; play-service-account.json Not in .gitignore
 
 **Audit finding [03-4 LOW + 03-5 LOW].** The rider-app CI job has no check for private
 variables accidentally placed in `EXPO_PUBLIC_` namespace. The `rider-app/.gitignore` does not
@@ -350,7 +350,7 @@ exclude `play-service-account.json` referenced in `eas.json`.
 
 ---
 
-## R-P2-17 · Tip Endpoints Use Raw request.json() — NaN Bypasses Guards
+## ✅ R-P2-17 · Tip Endpoints Use Raw request.json() — NaN Bypasses Guards
 
 **Audit finding [04-2 MEDIUM].** `add_tip` (rides.py:946) and `process_payment`
 (rides.py:973) both read tip amount via `float(data.get(..., 0))` outside Pydantic.
@@ -373,7 +373,7 @@ tip_amount = req.amount
 
 ---
 
-## R-P2-18 · stops Array — No Maximum Count or Coordinate Validation
+## ✅ R-P2-18 · stops Array — No Maximum Count or Coordinate Validation
 
 **Audit finding [04-3 MEDIUM].** `CreateRideRequest.stops` (backend/schemas.py:273)
 is `Optional[List[Dict[str, Any]]]` with no `max_length` and no lat/lng validators
@@ -401,7 +401,7 @@ def validate_stops(cls, stops):
 
 ---
 
-## R-P2-19 · scheduled_time Accepts Past Timestamps
+## ✅ R-P2-19 · scheduled_time Accepts Past Timestamps
 
 **Audit finding [04-4 MEDIUM].** `CreateRideRequest.scheduled_time` (schemas.py:275)
 has no validator to reject past datetimes. A scheduled ride submitted with a
@@ -425,7 +425,7 @@ def validate_scheduled_time(cls, v):
 
 ---
 
-## R-P2-20 · Fare Split Phone Strings Have No Format Validation
+## ✅ R-P2-20 · Fare Split Phone Strings Have No Format Validation
 
 **Audit finding [04-5 MEDIUM].** `CreateFareSplitRequest` enforces a max of 5
 participants (PASS) but individual phone strings are unconstrained — any string
@@ -449,7 +449,7 @@ def validate_phone(cls, v):
 
 ---
 
-## R-P2-21 · SavedAddressCreate — No Length Limit or Sanitization
+## ✅ R-P2-21 · SavedAddressCreate — No Length Limit or Sanitization
 
 **Audit finding [04-6 MEDIUM].** `SavedAddressCreate.name` and `.address`
 (schemas.py:150–155) have no max_length. The existing `sanitize_string()` in
@@ -473,7 +473,7 @@ before creating the record.
 
 ---
 
-## R-P2-22 · WalletPayRequest Has No Maximum Cap
+## ✅ R-P2-22 · WalletPayRequest Has No Maximum Cap
 
 **Audit finding [04-7 MEDIUM].** `WalletPayRequest.amount: float = Field(..., gt=0)`
 has no upper bound (contrast: TopUpRequest correctly has `le=500`).
@@ -487,7 +487,7 @@ top-up limit.
 
 ---
 
-## R-P2-23 · Wallet Request Models Use float Instead of Decimal
+## ✅ R-P2-23 · Wallet Request Models Use float Instead of Decimal
 
 **Audit finding [04-8 MEDIUM].** `TopUpRequest.amount` and `WalletPayRequest.amount`
 are typed as `float`. While the handler wraps with `_d()` (Decimal rounding),
@@ -509,7 +509,7 @@ class WalletPayRequest(BaseModel):
 
 ---
 
-## R-P2-24 · search-destination.tsx — No KeyboardAvoidingView
+## ✅ R-P2-24 · search-destination.tsx — No KeyboardAvoidingView
 
 **Audit finding [05-2 MEDIUM].** The "Search Ride" primary action button
 (search-destination.tsx:615) sits below the FlatList and is hidden behind the
@@ -539,7 +539,7 @@ return (
 
 ---
 
-## R-P2-25 · allowFontScaling Not Set — Layout Breaks at Large System Font Sizes
+## ✅ R-P2-25 · allowFontScaling Not Set — Layout Breaks at Large System Font Sizes
 
 **Audit finding [05-8 MEDIUM].** Zero usages of `allowFontScaling` found across
 all 36 rider-app screens and shared components. Fixed-height containers (status
@@ -557,7 +557,7 @@ containers (buttons, pills, badges). Allow scaling on free-flow content.
 
 ---
 
-## R-P2-26 · ride-in-progress.tsx — No Error State for Ride Load Failure
+## ✅ R-P2-26 · ride-in-progress.tsx — No Error State for Ride Load Failure
 
 **Audit finding [05-6 MEDIUM].** When `currentRide` is null (fetchRide failed),
 the screen shows "Loading Map..." indefinitely with no error recovery path.
@@ -572,7 +572,7 @@ conditional; when error, show alert icon + "Could not load ride" + retry button.
 
 ---
 
-## R-P2-27 · driver-arrived.tsx — Blank Screen When Ride Data Unavailable
+## ✅ R-P2-27 · driver-arrived.tsx — Blank Screen When Ride Data Unavailable
 
 **Audit finding [05-7 MEDIUM].** `{currentRide ? (<MapView ...>) : null}` at
 driver-arrived.tsx:126 renders a blank white area when currentRide is null.
@@ -586,7 +586,7 @@ The screen shows the bottom sheet shell but no map content, no error, no retry.
 
 ---
 
-## R-P2-28 · Home Screen Zoom Buttons Below 44pt Touch Target
+## ✅ R-P2-28 · Home Screen Zoom Buttons Below 44pt Touch Target
 
 **Audit finding [05-9 MEDIUM].** `mapControlButton: { width: 40, height: 40 }` in
 index.tsx. Both zoom-in and zoom-out buttons are 40×40pt with no `hitSlop`,

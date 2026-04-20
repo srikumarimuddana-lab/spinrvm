@@ -421,11 +421,10 @@ jobs:
           tar -xzf trufflehog.tar.gz trufflehog
           chmod +x trufflehog && sudo mv trufflehog /usr/local/bin/
 
-      - name: Secrets scan (verified only)
+      - name: Secrets scan
         run: |
           trufflehog git file://. \
-            --only-verified \
-            --since-commit HEAD~1 \
+            --since-commit origin/${{ github.base_ref }} \
             --fail
 
       - name: Run Trivy vulnerability scanner (filesystem)

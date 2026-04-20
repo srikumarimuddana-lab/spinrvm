@@ -9,6 +9,7 @@ import {
   Platform,
   ScrollView,
   ActivityIndicator,
+  Linking,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -20,6 +21,10 @@ import { uploadFile } from '@shared/api/upload';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+
+const DRIVER_APP_SCHEME = 'spinr-driver://';
+const DRIVER_APP_STORE_IOS = 'https://apps.apple.com/ca/app/spinr-driver/id0000000000';
+const DRIVER_APP_STORE_ANDROID = 'https://play.google.com/store/apps/details?id=com.spinr.driver';
 
 // Steps: 0=Intro, 1=Personal, 2=Vehicle, 3=Docs, 4=Review
 const STEPS = ['Intro', 'Personal', 'Vehicle', 'Documents', 'Review'];
@@ -45,6 +50,7 @@ export default function BecomeDriverScreen() {
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const [currentStep, setCurrentStep] = useState(0);
+  const [driverAppInstalled, setDriverAppInstalled] = useState<boolean | null>(null);
 
   // Personal Info
   const [firstName, setFirstName] = useState(user?.first_name || '');
@@ -81,7 +87,20 @@ export default function BecomeDriverScreen() {
   useEffect(() => {
     fetchVehicleTypes();
     fetchRequirements();
+    Linking.canOpenURL(DRIVER_APP_SCHEME).then(setDriverAppInstalled).catch(() => setDriverAppInstalled(false));
   }, []);
+
+  const openDriverApp = async () => {
+    const phone = user?.phone || '';
+    const deepLink = `${DRIVER_APP_SCHEME}onboard?phone=${encodeURIComponent(phone)}`;
+    const canOpen = await Linking.canOpenURL(deepLink);
+    if (canOpen) {
+      await Linking.openURL(deepLink);
+    } else {
+      const storeUrl = Platform.OS === 'ios' ? DRIVER_APP_STORE_IOS : DRIVER_APP_STORE_ANDROID;
+      await Linking.openURL(storeUrl);
+    }
+  };
 
   const fetchVehicleTypes = async () => {
     setLoadingTypes(true);
@@ -300,9 +319,25 @@ export default function BecomeDriverScreen() {
               <Text style={styles.subtitle}>
                 Your vehicle must be 9 years old or newer (2017+).
               </Text>
+              {driverAppInstalled && (
+                <TouchableOpacity style={[styles.primaryButton, styles.driverAppButton]} onPress={openDriverApp}>
+                  <Ionicons name="open-outline" size={20} color="#FFF" />
+                  <Text style={styles.primaryButtonText}>Open Spinr Driver App</Text>
+                </TouchableOpacity>
+              )}
               <TouchableOpacity style={styles.primaryButton} onPress={() => setCurrentStep(1)}>
-                <Text style={styles.primaryButtonText}>Get Started</Text>
+                <Text style={styles.primaryButtonText}>
+                  {driverAppInstalled ? 'Apply in Browser Instead' : 'Get Started'}
+                </Text>
               </TouchableOpacity>
+              {!driverAppInstalled && driverAppInstalled !== null && (
+                <TouchableOpacity style={styles.downloadLink} onPress={openDriverApp}>
+                  <Ionicons name="download-outline" size={16} color={colors.primary} />
+                  <Text style={styles.downloadLinkText}>
+                    {Platform.OS === 'ios' ? 'Get it on the App Store' : 'Get it on Google Play'}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
@@ -508,10 +543,16 @@ function createStyles(colors: ThemeColors) {
 
     primaryButton: {
       backgroundColor: colors.primary, borderRadius: 30, padding: 18,
-      alignItems: 'center', marginTop: 20
+      alignItems: 'center', marginTop: 20, flexDirection: 'row', justifyContent: 'center', gap: 8,
     },
+    driverAppButton: { backgroundColor: '#1D4ED8' },
     disabledButton: { opacity: 0.7 },
     primaryButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
+    downloadLink: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+      gap: 6, marginTop: 14,
+    },
+    downloadLinkText: { fontSize: 14, color: colors.primary, fontWeight: '600' },
 
     reviewCard: { padding: 20, backgroundColor: colors.surfaceLight, borderRadius: 12 },
     reviewRow: { fontSize: 16, marginBottom: 10 }

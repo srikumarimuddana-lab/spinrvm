@@ -14,7 +14,7 @@ try:
     from ..dependencies import generate_pickup_otp, get_current_user
     from ..features import calculate_airport_fee, calculate_all_fees, send_push_notification
     from ..geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
-    from ..schemas import CreateRideRequest, Ride, RideRatingRequest
+    from ..schemas import CreateRideRequest, DriverPublicView, Ride, RideRatingRequest
     from ..services import DispatchService
     from ..services.dispatch_service import (
         filter_and_rank_drivers,
@@ -29,7 +29,7 @@ except ImportError:
     from dependencies import generate_pickup_otp, get_current_user
     from features import calculate_airport_fee, calculate_all_fees, send_push_notification
     from geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
-    from schemas import CreateRideRequest, Ride, RideRatingRequest
+    from schemas import CreateRideRequest, DriverPublicView, Ride, RideRatingRequest
     from services.dispatch_service import (
         DispatchService,
         filter_and_rank_drivers,
@@ -879,25 +879,20 @@ async def get_ride(ride_id: str, current_user: dict = Depends(get_current_user))
     if ride.get("driver_id"):
         assigned_driver = await db_supabase.get_driver_by_id(ride["driver_id"])
         if assigned_driver:
-            ride["driver"] = {
-                "id": assigned_driver.get("id"),
-                "name": assigned_driver.get("name"),
-                "rating": assigned_driver.get("rating"),
-                "total_rides": assigned_driver.get("total_rides"),
-                "profile_image_url": assigned_driver.get("profile_image_url"),
-                "vehicle_make": assigned_driver.get("vehicle_make"),
-                "vehicle_model": assigned_driver.get("vehicle_model"),
-                "vehicle_color": assigned_driver.get("vehicle_color"),
-                "license_plate": assigned_driver.get("license_plate"),
-                "vehicle_year": assigned_driver.get("vehicle_year"),
-                "lat": assigned_driver.get("lat"),
-                "lng": assigned_driver.get("lng"),
-                # NOTE: deliberately excluded: phone, license_number,
-                # vehicle_vin, insurance_expiry_date,
-                # background_check_expiry_date, work_eligibility_expiry_date,
-                # documents, stripe_account_id, fcm_token, user_id,
-                # bank_account details, onboarding flags.
-            }
+            ride["driver"] = DriverPublicView(
+                id=assigned_driver.get("id", ""),
+                name=assigned_driver.get("name", ""),
+                rating=assigned_driver.get("rating"),
+                total_rides=assigned_driver.get("total_rides"),
+                profile_image_url=assigned_driver.get("profile_image_url"),
+                vehicle_make=assigned_driver.get("vehicle_make"),
+                vehicle_model=assigned_driver.get("vehicle_model"),
+                vehicle_color=assigned_driver.get("vehicle_color"),
+                license_plate=assigned_driver.get("license_plate"),
+                vehicle_year=assigned_driver.get("vehicle_year"),
+                lat=assigned_driver.get("lat"),
+                lng=assigned_driver.get("lng"),
+            ).dict()
 
     # Derive free_cancel_seconds_remaining + cancellation_fee from app_settings (UX-001).
     # These allow the frontend to show accurate countdown/fee without hardcoding.

@@ -13,6 +13,22 @@ except ImportError:
 # ============ Models ============
 
 
+class DriverPublicView(BaseModel):
+    """Safe subset of driver fields exposed to riders — no PII."""
+    id: str
+    name: str
+    rating: Optional[float] = None
+    total_rides: Optional[int] = None
+    profile_image_url: Optional[str] = None
+    vehicle_make: Optional[str] = None
+    vehicle_model: Optional[str] = None
+    vehicle_color: Optional[str] = None
+    license_plate: Optional[str] = None
+    vehicle_year: Optional[int] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+
+
 class SendOTPRequest(BaseModel):
     phone: str = Field(..., min_length=10, max_length=15, pattern=r'^\+\d+$')
 

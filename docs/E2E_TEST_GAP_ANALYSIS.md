@@ -143,12 +143,19 @@ Legend: `X` covered, `~` partial, `—` not covered.
 
 ## 4. Prioritized gap closure plan
 
-### P0 — Ship-blockers (close before any production E2E run)
-1. **Driver-cancel-post-accept notifies rider** — mirror C3 for the reverse direction
-2. **No-drivers-available UX** — add timeout + rider-facing error E2E
-3. **Duplicate ride request guard** — E8, prevents double-charge
-4. **Surge boundary** — E16, fare consistency between estimate/create/complete
-5. **Payment failure at complete** — E3, both backend retry + client-facing message
+### P0 — Ship-blockers
+
+**Status (2026-04-20):** All 5 investigated; tests added in
+`backend/tests/test_p0_ship_blockers.py`.
+Implementation work remaining: P0-4 surge-lock, P0-5 Stripe card charge.
+
+| # | Item | Impl | Test | Notes |
+|---|---|---|---|---|
+| P0-1 | Driver-cancel-post-accept notifies rider | ✅ exists (`drivers.py:2115`) | ✅ pinned | Handler-level WS + push both asserted |
+| P0-2 | No-drivers-available 5-min timeout | ✅ exists (`rides.py::ride_search_timeout`) | ✅ pinned | Function extracted to module scope so it's directly testable |
+| P0-3 | Duplicate ride request guard | ✅ exists (active-ride + `Idempotency-Key`) | ✅ pinned | Handler + route-level both covered |
+| P0-4 | Surge boundary (estimate → create) | ⚠️ **partial** — surge re-read on create | ✅ xfail documents gap | Needs `estimate_token` / signed surge lock |
+| P0-5 | Payment failure at complete | ⚠️ **partial** — card path is a stub (`rides.py:1088`) | ✅ wallet pinned + xfail documents card gap | Needs Stripe `PaymentIntent.confirm` + decline handling |
 
 ### P1 — Critical before scale
 6. **WebSocket reconnect with state preservation** — C8

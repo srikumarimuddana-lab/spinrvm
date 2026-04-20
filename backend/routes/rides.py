@@ -516,6 +516,48 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
     return estimates
 
 
+async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
+    """Auto-cancel a ride if it's still ``searching`` after ``timeout_seconds``.
+
+    Matches Uber/Lyft's 5-minute default. Publishes a ``ride_cancelled`` WS
+    message to the rider's channel and fires a push notification so the rider
+    is alerted even if the app is backgrounded.
+
+    Extracted from ``create_ride`` so it can be unit-tested directly — see
+    backend/tests/test_p0_ship_blockers.py::TestNoDriversAvailableTimeout.
+    """
+    await asyncio.sleep(timeout_seconds)
+    try:
+        current_ride = await db_supabase.get_ride(r_id)
+        if current_ride and current_ride.get("status") == "searching":
+            await db_supabase.update_ride(
+                r_id,
+                {
+                    "status": "cancelled",
+                    "cancelled_at": datetime.utcnow(),
+                    "cancellation_reason": "No nearby drivers found. Please try again.",
+                    "updated_at": datetime.utcnow(),
+                },
+            )
+            await manager.send_personal_message(
+                {
+                    "type": "ride_cancelled",
+                    "ride_id": r_id,
+                    "reason": "No nearby drivers available. Your ride has been automatically cancelled.",
+                },
+                f"rider_{current_ride['rider_id']}",
+            )
+            await send_push_notification(
+                current_ride["rider_id"],
+                "Ride Cancelled ❌",
+                "No nearby drivers were found. Your ride has been automatically cancelled. Please try again.",
+                {"type": "ride_cancelled", "ride_id": r_id, "is_auto": True},
+            )
+            logger.info(f"Ride {r_id} auto-cancelled after {timeout_seconds}s - no driver found")
+    except Exception as e:
+        logger.warning(f"Ride timeout handler error for {r_id}: {e}")
+
+
 @api_router.post("")
 @ride_request_limit
 async def create_ride(
@@ -721,45 +763,6 @@ async def create_ride(
     # Small helper to ensure we return a clean dict
     def serialize_doc(doc):
         return doc
-
-    # GAP FIX: Start a background task to auto-cancel if no driver is found within 5 minutes
-    async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
-        """Auto-cancel ride if still 'searching' after timeout (default 5 min, matching Uber/Lyft)."""
-        await asyncio.sleep(timeout_seconds)
-        try:
-            current_ride = await db_supabase.get_ride(r_id)
-            if current_ride and current_ride.get("status") == "searching":
-                await db_supabase.update_ride(
-                    r_id,
-                    {
-                        "status": "cancelled",
-                        "cancelled_at": datetime.utcnow(),
-                        "cancellation_reason": "No nearby drivers found. Please try again.",
-                        "updated_at": datetime.utcnow(),
-                    },
-                )
-                # Notify rider
-                await manager.send_personal_message(
-                    {
-                        "type": "ride_cancelled",
-                        "ride_id": r_id,
-                        "reason": "No nearby drivers available. Your ride has been automatically cancelled.",
-                    },
-                    f"rider_{current_ride['rider_id']}",
-                )
-                # G6: Also send a push notification so the rider gets alerted
-                # even if the app is backgrounded or killed. Previously only
-                # the WS message was sent, which was silently lost if the rider
-                # wasn't actively looking at the app.
-                await send_push_notification(
-                    current_ride["rider_id"],
-                    "Ride Cancelled ❌",
-                    "No nearby drivers were found. Your ride has been automatically cancelled. Please try again.",
-                    {"type": "ride_cancelled", "ride_id": r_id, "is_auto": True},
-                )
-                logger.info(f"Ride {r_id} auto-cancelled after {timeout_seconds}s - no driver found")
-        except Exception as e:
-            logger.warning(f"Ride timeout handler error for {r_id}: {e}")
 
     if updated_ride and updated_ride.get("status") == "searching":
         asyncio.create_task(ride_search_timeout(ride.id))

@@ -9,6 +9,8 @@ import {
   Share,
   Linking,
   Platform,
+  ActivityIndicator,
+  BackHandler,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -18,6 +20,8 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useRideStore } from '../store/rideStore';
+import { useRiderSocket } from '../hooks/useRiderSocket';
+import { RideStatus } from '../constants/rideStatus';
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
 import { SOSButton } from '@shared/components/SOSButton';
@@ -30,7 +34,8 @@ const { width } = Dimensions.get('window');
 function RideInProgressScreenContent() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
-  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency } = useRideStore();
+  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency, isLoading, error } = useRideStore();
+  const { wsConnected } = useRiderSocket();
   const [eta, setEta] = useState(15);
   const [estimatedTime, setEstimatedTime] = useState('12:45 PM');
   const [currentLocation, setCurrentLocation] = useState('4th Avenue North');
@@ -76,13 +81,13 @@ function RideInProgressScreenContent() {
   }, [currentRide?.dropoff_lat, currentRide?.dropoff_lng, currentDriver?.lat, currentDriver?.lng]);
 
   useEffect(() => {
-    if (rideId) {
-      fetchRide(rideId);
-      // Fallback poll — WS delivers driver position + ride status in real-time.
-      const interval = setInterval(() => fetchRide(rideId), 15000);
-      return () => clearInterval(interval);
-    }
-  }, [rideId]);
+    if (!rideId) return;
+    fetchRide(rideId);
+    // Suspend fallback poll while WebSocket is delivering updates in real-time.
+    if (wsConnected) return;
+    const interval = setInterval(() => fetchRide(rideId), 15000);
+    return () => clearInterval(interval);
+  }, [rideId, wsConnected]);
 
   useEffect(() => {
     // Calculate estimated arrival time
@@ -92,9 +97,34 @@ function RideInProgressScreenContent() {
   }, [eta]);
 
   useEffect(() => {
-    if (currentRide?.status === 'completed') {
+    if (currentRide?.status === RideStatus.COMPLETED) {
       router.replace({ pathname: '/ride-completed', params: { rideId } });
     }
+  }, [currentRide?.status]);
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setAlertState({
+        visible: true,
+        title: 'End ride early?',
+        message: `Full fare of $${(currentRide?.total_fare || 0).toFixed(2)} applies. Your driver will continue.`,
+        variant: 'warning',
+        buttons: [
+          { text: 'Continue Ride', style: 'cancel' },
+          {
+            text: 'End & Pay Full Fare',
+            style: 'destructive',
+            onPress: async () => {
+              try { await api.post(`/drivers/rides/${currentRide?.id}/complete`); }
+              catch (e) { console.log(e); }
+              if (rideId) fetchRide(rideId);
+            },
+          },
+        ],
+      });
+      return true;
+    });
+    return () => sub.remove();
   }, [currentRide?.status]);
 
   const handleSafety = () => {
@@ -121,7 +151,7 @@ function RideInProgressScreenContent() {
     // Get share token from backend API
     let shareToken = rideId || 'demo';
     try {
-      const shareRes = await api.get(`/rides/${rideId}/share`);
+      const shareRes = await api.post(`/rides/${rideId}/share`);
       if (shareRes.data?.share_token) {
         shareToken = shareRes.data.share_token;
       }
@@ -170,7 +200,7 @@ I've shared my live location with you for safety.
   const handleCopyTrackingLink = async () => {
     let shareToken = rideId || 'demo';
     try {
-      const shareRes = await api.get(`/rides/${rideId}/share`);
+      const shareRes = await api.post(`/rides/${rideId}/share`);
       if (shareRes.data?.share_token) {
         shareToken = shareRes.data.share_token;
       }
@@ -180,6 +210,10 @@ I've shared my live location with you for safety.
     const trackingLink = `https://spinr-track.app/${shareToken}`;
     await Clipboard.setStringAsync(trackingLink);
     setAlertState({ visible: true, title: 'Copied!', message: 'Live tracking link copied to clipboard', variant: 'success' });
+  };
+
+  const handleOpenTrackingView = () => {
+    router.push({ pathname: '/ride-tracking-webview', params: { rideId: rideId as string } } as any);
   };
 
   // No free cancel during ride — rider pays full fare if they end early
@@ -196,7 +230,7 @@ I've shared my live location with you for safety.
       <SafeAreaView edges={['top']} style={styles.headerSafeArea}>
         <View style={styles.statusPill}>
           <View style={styles.greenDot} />
-          <Text style={styles.statusText}>Ride Started - Enjoy your trip</Text>
+          <Text style={styles.statusText} allowFontScaling={false}>Ride Started - Enjoy your trip</Text>
         </View>
       </SafeAreaView>
 
@@ -207,7 +241,23 @@ I've shared my live location with you for safety.
 
       {/* Map Area */}
       <View style={styles.mapContainer}>
-        {currentRide ? (
+        {isLoading && !currentRide ? (
+          <View style={styles.mapPlaceholder}>
+            <ActivityIndicator size="large" color="#EE2B2B" />
+            <Text style={styles.mapPlaceholderText}>Loading ride…</Text>
+          </View>
+        ) : error && !currentRide ? (
+          <View style={styles.mapPlaceholder}>
+            <Ionicons name="alert-circle" size={48} color="#EF4444" />
+            <Text style={styles.mapPlaceholderText}>Could not load ride</Text>
+            <TouchableOpacity
+              style={styles.retryBtn}
+              onPress={() => rideId && fetchRide(rideId)}
+            >
+              <Text style={styles.retryBtnText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        ) : currentRide ? (
           <MapView
             {...({ ref: mapRef } as any)}
             provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
@@ -306,7 +356,7 @@ I've shared my live location with you for safety.
           </MapView>
         ) : (
           <View style={styles.mapPlaceholder}>
-             <Text>Loading Map...</Text>
+            <Text style={styles.mapPlaceholderText}>Loading Map…</Text>
           </View>
         )}
 
@@ -332,11 +382,11 @@ I've shared my live location with you for safety.
             <View style={styles.etaHero}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.etaLabel}>ARRIVING AT</Text>
-                <Text style={styles.etaTime}>{estimatedTime}</Text>
+                <Text style={styles.etaTime} allowFontScaling={false}>{estimatedTime}</Text>
               </View>
               <View style={styles.etaBadge}>
-                <Text style={styles.etaBadgeNum}>{eta}</Text>
-                <Text style={styles.etaBadgeUnit}>min</Text>
+                <Text style={styles.etaBadgeNum} allowFontScaling={false}>{eta}</Text>
+                <Text style={styles.etaBadgeUnit} allowFontScaling={false}>min</Text>
               </View>
             </View>
 
@@ -364,6 +414,9 @@ I've shared my live location with you for safety.
                 <TouchableOpacity
                   style={styles.msgIconBtn}
                   onPress={() => router.push({ pathname: '/chat-driver', params: { rideId } } as any)}
+                  accessibilityLabel="Message driver"
+                  accessibilityRole="button"
+                  accessibilityHint="Open chat with your driver"
                 >
                   <Ionicons name="chatbubble" size={20} color={colors.primary} />
                 </TouchableOpacity>
@@ -436,9 +489,28 @@ I've shared my live location with you for safety.
 
             {/* Action Row */}
             <View style={styles.actionRow}>
-              <TouchableOpacity style={styles.actionBtn} onPress={handleShareTrip}>
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={handleShareTrip}
+                accessibilityLabel="Share trip"
+                accessibilityRole="button"
+              >
                 <Ionicons name="share-outline" size={20} color={colors.text} />
                 <Text style={styles.actionBtnText}>Share Trip</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.actionBtn} onPress={handleOpenTrackingView}>
+                <Ionicons name="map-outline" size={20} color={colors.text} />
+                <Text style={styles.actionBtnText}>Live Map</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => router.push({ pathname: '/fare-split', params: { rideId } } as any)}
+                accessibilityLabel="Split fare"
+                accessibilityRole="button"
+                accessibilityHint="Divide the ride cost with others"
+              >
+                <Ionicons name="people-outline" size={20} color={colors.text} />
+                <Text style={styles.actionBtnText}>Split Fare</Text>
               </TouchableOpacity>
               <View style={styles.actionBtn}>
                 <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} />
@@ -525,6 +597,9 @@ function createStyles(colors: ThemeColors) {
     mapContainer: { flex: 1, position: 'relative' },
     map: { ...StyleSheet.absoluteFillObject },
     mapPlaceholder: { flex: 1, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' },
+    mapPlaceholderText: { marginTop: 12, fontSize: 15, fontWeight: '500', color: '#555' },
+    retryBtn: { marginTop: 16, paddingHorizontal: 28, paddingVertical: 12, backgroundColor: '#EE2B2B', borderRadius: 24 },
+    retryBtnText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
     locationButton: {
       position: 'absolute', right: 16, bottom: 16,
       width: 48, height: 48, borderRadius: 24, backgroundColor: colors.surface,

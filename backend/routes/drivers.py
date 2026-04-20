@@ -1627,9 +1627,17 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
         logger.warning(f"get_active_ride: failed to load vehicle_type {ride['vehicle_type_id']}: {e}")
         vehicle_type = None
 
+    # R-P1-28: Strip PII fields from the rider object — drivers only need
+    # first name + profile photo for the in-app UI. Phone, email, and
+    # Stripe customer ID must never be exposed to the driver.
+    safe_rider = None
+    if rider:
+        raw = serialize_doc(rider)
+        safe_rider = {k: raw[k] for k in raw if k not in {"phone", "email", "stripe_customer_id"}}
+
     return {
         "ride": serialize_doc(ride),
-        "rider": serialize_doc(rider) if rider else None,
+        "rider": safe_rider,
         "vehicle_type": serialize_doc(vehicle_type) if vehicle_type else None,
     }
 

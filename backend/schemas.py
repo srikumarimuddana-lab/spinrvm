@@ -13,12 +13,40 @@ except ImportError:
 # ============ Models ============
 
 
+class DriverPublicView(BaseModel):
+    """Safe subset of driver fields exposed to riders — no PII."""
+    id: str
+    name: str
+    rating: Optional[float] = None
+    total_rides: Optional[int] = None
+    profile_image_url: Optional[str] = None
+    vehicle_make: Optional[str] = None
+    vehicle_model: Optional[str] = None
+    vehicle_color: Optional[str] = None
+    license_plate: Optional[str] = None
+    vehicle_year: Optional[int] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+
+
 class SendOTPRequest(BaseModel):
-    phone: str = Field(..., min_length=10, max_length=15, pattern=r'^\+\d+$')
+    phone: str = Field(
+        ...,
+        min_length=12,
+        max_length=12,
+        pattern=r'^\+1\d{10}$',
+        description="Canadian/US phone in E.164 format: +1XXXXXXXXXX",
+    )
 
 
 class VerifyOTPRequest(BaseModel):
-    phone: str = Field(..., min_length=10, max_length=15, pattern=r'^\+\d+$')
+    phone: str = Field(
+        ...,
+        min_length=12,
+        max_length=12,
+        pattern=r'^\+1\d{10}$',
+        description="Canadian/US phone in E.164 format: +1XXXXXXXXXX",
+    )
     code: str = Field(..., min_length=4, max_length=4, pattern=r'^\d{4}$')
 
 
@@ -148,8 +176,8 @@ class SavedAddress(BaseModel):
 
 
 class SavedAddressCreate(BaseModel):
-    name: str
-    address: str
+    name: str = Field(..., min_length=1, max_length=100)
+    address: str = Field(..., min_length=5, max_length=300)
     lat: float
     lng: float
     icon: str = "location"
@@ -270,7 +298,7 @@ class CreateRideRequest(BaseModel):
     dropoff_address: str
     dropoff_lat: float
     dropoff_lng: float
-    stops: Optional[List[Dict[str, Any]]] = []
+    stops: Optional[List[Dict[str, Any]]] = Field(default=[], max_length=5)
     is_scheduled: bool = False
     scheduled_time: Optional[datetime] = None
     corporate_account_id: Optional[str] = None
@@ -297,4 +325,25 @@ class CreateRideRequest(BaseModel):
     def validate_lng(cls, v: float) -> float:
         if not (-180.0 <= v <= 180.0):
             raise ValueError('Longitude must be between -180 and 180')
+        return v
+
+    @validator('stops')
+    def validate_stops(cls, stops: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        for stop in stops:
+            lat = stop.get('lat')
+            lng = stop.get('lng')
+            if lat is None or lng is None:
+                raise ValueError('Each stop must have lat and lng')
+            if not (-90 <= float(lat) <= 90):
+                raise ValueError(f'Stop latitude out of range: {lat}')
+            if not (-180 <= float(lng) <= 180):
+                raise ValueError(f'Stop longitude out of range: {lng}')
+        return stops
+
+    @validator('scheduled_time')
+    def validate_scheduled_time(cls, v: Optional[datetime]) -> Optional[datetime]:
+        if v is not None:
+            from datetime import timedelta
+            if v < datetime.utcnow() + timedelta(minutes=5):
+                raise ValueError('Scheduled time must be at least 5 minutes in the future')
         return v

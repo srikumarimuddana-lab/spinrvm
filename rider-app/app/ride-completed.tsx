@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput,
-  Platform, ActivityIndicator, BackHandler, Share, KeyboardAvoidingView,
+  Platform, ActivityIndicator, BackHandler, Share, KeyboardAvoidingView, Clipboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -68,39 +68,53 @@ function RideCompletedScreenContent() {
     return () => sub.remove();
   }, []);
 
-  const handleShareInvoice = async () => {
+  const buildReceiptText = () => {
     const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
     const total = fare + tipAmount;
-    const invoice = [
-      `SPINR RIDE RECEIPT`,
-      `──────────────────`,
-      `Date: ${currentRide?.ride_completed_at ? new Date(currentRide.ride_completed_at).toLocaleString() : new Date().toLocaleString()}`,
+    const rideDate = currentRide?.ride_completed_at
+      ? new Date(currentRide.ride_completed_at).toLocaleString('en-CA', {
+          weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+          hour: '2-digit', minute: '2-digit',
+        })
+      : new Date().toLocaleString('en-CA', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    return [
+      `╔══════════════════════════════╗`,
+      `║      SPINR RIDE RECEIPT      ║`,
+      `║   Saskatoon · Regina, SK     ║`,
+      `╚══════════════════════════════╝`,
       ``,
-      `Pickup: ${currentRide?.pickup_address || '—'}`,
-      `Dropoff: ${currentRide?.dropoff_address || '—'}`,
-      `Distance: ${distance.toFixed(1)} km`,
-      `Duration: ${duration} min`,
+      `📅 ${rideDate}`,
+      `🆔 Ride: ${currentRide?.id?.slice(0, 8).toUpperCase() ?? '—'}`,
       ``,
+      `▸ FROM  ${currentRide?.pickup_address || '—'}`,
+      `▸ TO    ${currentRide?.dropoff_address || '—'}`,
+      ``,
+      `━━━━━━ FARE BREAKDOWN ━━━━━━`,
       `Base fare:     $${(currentRide?.base_fare || 0).toFixed(2)}`,
-      `Distance:      $${(currentRide?.distance_fare || 0).toFixed(2)}`,
-      `Time:          $${(currentRide?.time_fare || 0).toFixed(2)}`,
+      `Distance fare: $${(currentRide?.distance_fare || 0).toFixed(2)}  (${distance.toFixed(1)} km)`,
+      `Time fare:     $${(currentRide?.time_fare || 0).toFixed(2)}  (${duration} min)`,
       `Booking fee:   $${(currentRide?.booking_fee || 0).toFixed(2)}`,
-      tipAmount > 0 ? `Tip:           $${tipAmount.toFixed(2)}` : '',
-      `──────────────────`,
+      tipAmount > 0 ? `Tip:           $${tipAmount.toFixed(2)}` : null,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
       `TOTAL:         $${total.toFixed(2)} CAD`,
       ``,
-      `Payment: Card •••• ${currentRide?.card_last4 || '4242'}`,
+      `💳 Card •••• ${currentRide?.card_last4 || '4242'}  ✅ PAID`,
       ``,
-      `Driver: ${currentDriver?.name || 'Driver'}`,
-      `Vehicle: ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || ''} ${currentDriver?.vehicle_model || ''}`,
-      `Plate: ${currentDriver?.license_plate || '—'}`,
+      `👤 Driver: ${currentDriver?.name || 'Driver'}`,
+      `🚙 ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || ''} ${currentDriver?.vehicle_model || ''}`,
+      `🪪 Plate: ${currentDriver?.license_plate || '—'}`,
       ``,
-      `Spinr Technologies Inc. · Saskatoon, SK`,
-      `support@spinr.ca`,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+      `Spinr Technologies Inc.`,
+      `support@spinr.ca · spinr.ca`,
+      `Mon–Fri 9am–6pm CST`,
     ].filter(Boolean).join('\n');
+  };
 
+  const handleShareInvoice = async () => {
     try {
-      await Share.share({ message: invoice, title: 'Spinr Ride Receipt' });
+      await Share.share({ message: buildReceiptText(), title: 'Spinr Ride Receipt' });
     } catch {}
   };
 
@@ -175,11 +189,22 @@ function RideCompletedScreenContent() {
 
         {/* Post-Trip Actions */}
         <View style={styles.postTripActions}>
-          <TouchableOpacity style={styles.invoiceBtn} onPress={handleShareInvoice}>
-            <Ionicons name="receipt-outline" size={18} color={colors.primary} />
-            <Text style={styles.invoiceBtnText}>Share Invoice</Text>
-            <Ionicons name="share-outline" size={16} color={colors.textDim} />
-          </TouchableOpacity>
+          <View style={styles.receiptRow}>
+            <TouchableOpacity style={[styles.invoiceBtn, { flex: 1 }]} onPress={handleShareInvoice}>
+              <Ionicons name="receipt-outline" size={18} color={colors.primary} />
+              <Text style={styles.invoiceBtnText}>Share Receipt</Text>
+              <Ionicons name="share-outline" size={16} color={colors.textDim} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.copyReceiptBtn}
+              onPress={() => {
+                Clipboard.setString(buildReceiptText());
+                setAlertState({ visible: true, title: 'Copied!', message: 'Receipt copied to clipboard.', variant: 'success' });
+              }}
+            >
+              <Ionicons name="copy-outline" size={18} color={colors.textDim} />
+            </TouchableOpacity>
+          </View>
           <TouchableOpacity
             style={styles.chatBtn}
             onPress={() => router.push(`/chat-driver?rideId=${rideId}` as any)}
@@ -338,7 +363,14 @@ function RideCompletedScreenContent() {
           <Text style={styles.rateLabel}>How was your ride?</Text>
           <View style={styles.starsRow}>
             {[1, 2, 3, 4, 5].map((star) => (
-              <TouchableOpacity key={star} onPress={() => setRating(star)} style={styles.starBtn}>
+              <TouchableOpacity
+                key={star}
+                onPress={() => setRating(star)}
+                style={styles.starBtn}
+                accessibilityLabel={`Rate ${star} star${star > 1 ? 's' : ''}`}
+                accessibilityRole="button"
+                accessibilityState={{ selected: rating === star }}
+              >
                 <Ionicons
                   name={star <= rating ? 'star' : 'star-outline'}
                   size={36}
@@ -458,12 +490,18 @@ function createStyles(colors: ThemeColors) {
     subtitle: { fontSize: 14, color: colors.textDim },
 
     // Invoice
+    receiptRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
     invoiceBtn: {
-      flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',
-      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14, marginBottom: 16,
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14,
       borderWidth: 1, borderColor: '#ECECEC',
     },
     invoiceBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text },
+    copyReceiptBtn: {
+      backgroundColor: colors.surfaceLight, borderRadius: 14, paddingHorizontal: 16,
+      alignItems: 'center', justifyContent: 'center',
+      borderWidth: 1, borderColor: '#ECECEC',
+    },
     postTripActions: { width: '100%', gap: 8, marginBottom: 8 },
     chatBtn: {
       flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',
@@ -520,7 +558,7 @@ function createStyles(colors: ThemeColors) {
     driverMeta: { fontSize: 12, color: colors.textDim, marginTop: 2 },
     rateLabel: { fontSize: 15, fontWeight: '600', color: colors.text, textAlign: 'center', marginBottom: 12 },
     starsRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 6 },
-    starBtn: { padding: 4 },
+    starBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
     ratingText: { fontSize: 13, color: colors.textDim, textAlign: 'center', marginBottom: 14 },
     commentInput: {
       backgroundColor: colors.surface, borderRadius: 14, padding: 14, fontSize: 14, color: colors.text,
@@ -536,6 +574,7 @@ function createStyles(colors: ThemeColors) {
     tipBtn: {
       paddingHorizontal: 20, paddingVertical: 12, borderRadius: 14,
       backgroundColor: colors.surface, borderWidth: 1.5, borderColor: colors.border,
+      minHeight: 44, justifyContent: 'center', alignItems: 'center',
     },
     tipBtnActive: { backgroundColor: `${colors.primary}15`, borderColor: colors.primary },
     tipBtnText: { fontSize: 16, fontWeight: '700', color: colors.text },

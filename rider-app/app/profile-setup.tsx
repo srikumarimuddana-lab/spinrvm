@@ -11,6 +11,7 @@ import {
   TouchableWithoutFeedback,
   ActivityIndicator,
   ScrollView,
+  Linking,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -36,6 +37,7 @@ export default function ProfileSetupScreen() {
   const [showGenderPicker, setShowGenderPicker] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [focusedField, setFocusedField] = useState<string | null>(null);
+  const [tosAccepted, setTosAccepted] = useState(false);
   const [alertState, setAlertState] = useState<{
     visible: boolean;
     title: string;
@@ -87,7 +89,7 @@ export default function ProfileSetupScreen() {
     router.replace('/login');
   };
 
-  const isFormValid = firstName.trim() && lastName.trim() && email.trim() && gender;
+  const isFormValid = firstName.trim() && lastName.trim() && email.trim() && gender && (isEditing || tosAccepted);
 
   const genderOptions = [
     { label: 'Male', value: 'Male' },
@@ -262,6 +264,35 @@ export default function ProfileSetupScreen() {
                 )}
               </View>
             </View>
+
+            {/* Terms of Service — first-time setup only */}
+            {!isEditing && (
+              <TouchableOpacity
+                style={styles.tosRow}
+                onPress={() => setTosAccepted((v) => !v)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.tosCheckbox, tosAccepted && styles.tosCheckboxChecked]}>
+                  {tosAccepted && <Ionicons name="checkmark" size={14} color="#FFF" />}
+                </View>
+                <Text style={styles.tosText}>
+                  I agree to the{' '}
+                  <Text
+                    style={styles.tosLink}
+                    onPress={() => Linking.openURL('https://spinr.ca/terms')}
+                  >
+                    Terms of Service
+                  </Text>
+                  {' '}and{' '}
+                  <Text
+                    style={styles.tosLink}
+                    onPress={() => Linking.openURL('https://spinr.ca/privacy')}
+                  >
+                    Privacy Policy
+                  </Text>
+                </Text>
+              </TouchableOpacity>
+            )}
 
             {/* Submit Button */}
             <TouchableOpacity
@@ -508,6 +539,38 @@ function createStyles(colors: ThemeColors) {
       fontSize: 15,
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.textDim,
+    },
+    tosRow: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      gap: 12,
+      marginBottom: 20,
+    },
+    tosCheckbox: {
+      width: 22,
+      height: 22,
+      borderRadius: 6,
+      borderWidth: 2,
+      borderColor: colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginTop: 1,
+      flexShrink: 0,
+    },
+    tosCheckboxChecked: {
+      backgroundColor: colors.primary,
+      borderColor: colors.primary,
+    },
+    tosText: {
+      flex: 1,
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+      lineHeight: 20,
+    },
+    tosLink: {
+      color: colors.primary,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
     },
   });
 }

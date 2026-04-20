@@ -363,6 +363,9 @@ I've shared my live location with you for safety.
                 <TouchableOpacity
                   style={styles.msgIconBtn}
                   onPress={() => router.push({ pathname: '/chat-driver', params: { rideId } } as any)}
+                  accessibilityLabel="Message driver"
+                  accessibilityRole="button"
+                  accessibilityHint="Open chat with your driver"
                 >
                   <Ionicons name="chatbubble" size={20} color={colors.primary} />
                 </TouchableOpacity>
@@ -435,9 +438,25 @@ I've shared my live location with you for safety.
 
             {/* Action Row */}
             <View style={styles.actionRow}>
-              <TouchableOpacity style={styles.actionBtn} onPress={handleShareTrip}>
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={handleShareTrip}
+                accessibilityLabel="Share trip"
+                accessibilityRole="button"
+              >
                 <Ionicons name="share-outline" size={20} color={colors.text} />
                 <Text style={styles.actionBtnText}>Share Trip</Text>
+              </TouchableOpacity>
+              {/* R-P1-3: Split Fare — accessible mid-ride via fare-split screen */}
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => router.push({ pathname: '/fare-split', params: { rideId } } as any)}
+                accessibilityLabel="Split fare"
+                accessibilityRole="button"
+                accessibilityHint="Divide the ride cost with others"
+              >
+                <Ionicons name="people-outline" size={20} color={colors.text} />
+                <Text style={styles.actionBtnText}>Split Fare</Text>
               </TouchableOpacity>
               <View style={styles.actionBtn}>
                 <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} />

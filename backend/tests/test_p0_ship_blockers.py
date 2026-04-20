@@ -450,28 +450,141 @@ class TestSurgeBoundaryConsistency:
         if r.status_code == 200:
             assert r.json().get("grand_total") == 27.75
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "Surge-lock is not implemented. /estimate and POST /rides each "
-            "independently query service_area for surge_multiplier, so surge "
-            "drift between the two calls bait-and-switches the rider on price. "
-            "Fix: /estimate should return an estimate_token (signed { "
-            "surge_multiplier, expires_at }) and POST /rides should accept it "
-            "and reuse the locked surge if still within the expiry window."
-        ),
-    )
     def test_surge_is_locked_between_estimate_and_create(self):
-        """DOCUMENTS THE GAP — will pass once surge-locking ships.
+        """Surge-lock via estimate_token (P0-4 CLOSED).
 
-        Expectation: estimate at surge=1.5, then config flips surge to 1.0,
-        then create_ride should still apply 1.5 (because the estimate was
-        already shown to the rider). Today this test fails because create_ride
-        re-reads surge at line 606.
+        Scenario: rider gets estimate at surge=1.5, then server's current
+        surge flips to 1.0 before they confirm. With the estimate_token,
+        the confirmed ride must still price at 1.5 — the rider already saw
+        and accepted that amount.
         """
-        # The actual assertion can be written once the estimate_token
-        # mechanism exists. Until then this xfail serves as a living TODO.
-        assert False, "surge-lock not implemented yet"
+        from backend.utils.estimate_token import (
+            sign_estimate_token,
+            verify_estimate_token,
+        )
+
+        tok = sign_estimate_token(
+            rider_id=RIDER_ID,
+            vehicle_type_id="economy",
+            pickup_lat=52.13,
+            pickup_lng=-106.67,
+            dropoff_lat=52.12,
+            dropoff_lng=-106.65,
+            surge_multiplier=1.5,
+            total_fare=27.75,
+        )
+
+        payload = verify_estimate_token(
+            tok,
+            rider_id=RIDER_ID,
+            vehicle_type_id="economy",
+            pickup_lat=52.13,
+            pickup_lng=-106.67,
+            dropoff_lat=52.12,
+            dropoff_lng=-106.65,
+        )
+
+        assert payload["sm"] == 1.5, (
+            "Surge-lock broken: estimate_token did not preserve surge_multiplier"
+        )
+        assert payload["tf"] == 27.75
+
+
+@pytest.mark.e2e
+@pytest.mark.asyncio
+class TestCreateRideHonorsEstimateToken:
+    """End-to-end proof that POST /rides uses the token's surge rather
+    than re-reading service_area. This is the behaviour the P0-4 gap
+    analysis cared about — upstream verify_estimate_token is unit-tested
+    in test_estimate_token.py."""
+
+    async def test_valid_token_overrides_current_surge(self):
+        """When token surge=1.5 and service_area surge=1.0 are in conflict,
+        the ride persists with the token's 1.5."""
+        from starlette.requests import Request
+
+        from backend.routes import rides as rides_mod
+        from backend.schemas import CreateRideRequest
+        from backend.utils.estimate_token import sign_estimate_token
+
+        # Issue a token locking surge=1.5
+        token = sign_estimate_token(
+            rider_id=RIDER_ID,
+            vehicle_type_id="economy",
+            pickup_lat=52.13,
+            pickup_lng=-106.67,
+            dropoff_lat=52.12,
+            dropoff_lng=-106.65,
+            surge_multiplier=1.5,
+            total_fare=27.75,
+        )
+
+        # Service area now reports surge=1.0 — classic drift scenario
+        fare_info = {
+            "vehicle_type": {"id": "economy", "name": "Economy"},
+            "base_fare": 2.5,
+            "per_km_rate": 1.5,
+            "per_minute_rate": 0.25,
+            "booking_fee": 2.0,
+            "minimum_fare": 5.0,
+            "surge_multiplier": 1.0,  # CURRENT surge — should be ignored
+        }
+
+        body = CreateRideRequest(
+            pickup_address="123 Main",
+            pickup_lat=52.13,
+            pickup_lng=-106.67,
+            dropoff_address="456 Broadway",
+            dropoff_lat=52.12,
+            dropoff_lng=-106.65,
+            vehicle_type_id="economy",
+            payment_method="card",
+            estimate_token=token,
+        )
+
+        fake_request = MagicMock(spec=Request)
+        fake_request.headers = {}
+        fake_request.client = MagicMock(host="127.0.0.1")
+
+        rider_row = {"id": RIDER_ID, "status": "active", "stripe_customer_id": "cus_x"}
+
+        # Capture the ride row inserted so we can inspect the fare
+        inserted_rows = []
+
+        async def _capture_insert(row):
+            inserted_rows.append(row)
+            # Supabase returns the inserted row
+            return {**row, "id": "ride_new_001"}
+
+        with (
+            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=rider_row)),
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=[
+                [],  # no active ride
+                [],  # service_areas (empty is fine — no airport)
+                [{"id": "economy"}],  # vehicle_types
+            ])),
+            patch("backend.routes.rides._fares_for_location_impl", AsyncMock(return_value=[fare_info])),
+            patch("backend.routes.rides.calculate_airport_fee", AsyncMock(return_value={"airport_fee": 0.0})),
+            patch("backend.routes.rides.calculate_all_fees", AsyncMock(return_value={"fees_total": 0.0, "tax_amount": 0.0})),
+            patch("backend.routes.rides.db_supabase.insert_ride", AsyncMock(side_effect=_capture_insert)),
+            patch("backend.routes.rides.match_driver_to_ride", AsyncMock()),
+            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value={"id": "ride_new_001", "status": "searching"})),
+            patch("backend.routes.rides.asyncio.create_task", lambda coro: coro.close()),
+        ):
+            await rides_mod.create_ride(
+                request=fake_request, body=body, current_user={"id": RIDER_ID}
+            )
+
+        assert inserted_rows, "create_ride did not insert a ride"
+        inserted = inserted_rows[0]
+
+        # The recorded surge on the persisted ride must be the token's 1.5,
+        # not the current 1.0 — otherwise the fare the rider saw in the
+        # estimate differs from what we charge.
+        assert inserted.get("surge_multiplier") == 1.5, (
+            f"Surge not locked: persisted {inserted.get('surge_multiplier')}, expected 1.5 "
+            f"(token had surge=1.5; service_area currently has 1.0)"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

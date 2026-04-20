@@ -109,8 +109,13 @@ export function useRiderSocket() {
         break;
 
       // Driver didn't respond in time — backend is re-dispatching.
-      // Refetch the ride so the UI shows the "searching" state again.
+      // R-P1-16: Show Alert first so the rider knows what happened,
+      // then refetch so the UI transitions back to "searching".
       case 'driver_timeout':
+        Alert.alert(
+          'Driver Unavailable',
+          'The driver did not respond in time. Finding another driver\u2026',
+        );
         if (rideId) fetchRide(rideId);
         break;
 

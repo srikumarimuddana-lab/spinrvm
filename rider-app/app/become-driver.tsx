@@ -251,10 +251,12 @@ export default function BecomeDriverScreen() {
 
       setAlertState({
         visible: true,
-        title: 'Success',
-        message: 'Application submitted! Waiting for approval.',
+        title: 'Application Submitted!',
+        message: 'Waiting for approval. To start driving, download the Spinr Driver app.',
         variant: 'success',
-        buttons: [{ text: 'OK', onPress: () => router.replace('/(driver)' as any) }],
+        buttons: [
+          { text: 'OK', onPress: () => router.replace('/(tabs)' as any) },
+        ],
       });
     } catch (err: any) {
       setAlertState({ visible: true, title: 'Registration Failed', message: err.message, variant: 'danger' });

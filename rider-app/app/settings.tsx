@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Modal, FlatList,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -9,17 +9,19 @@ import { useAuthStore } from '@shared/store/authStore';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { useLanguageStore, LANGUAGES, type Language } from '../i18n';
 
 export default function SettingsScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
   const { colors, isDark, colorScheme, setTheme } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const { language, setLanguage } = useLanguageStore();
 
   const [pushEnabled, setPushEnabled] = useState(true);
   const [emailEnabled, setEmailEnabled] = useState(true);
   const [smsEnabled, setSmsEnabled] = useState(true);
-  const [language, setLanguage] = useState('English');
+  const [showLangModal, setShowLangModal] = useState(false);
   const [alertState, setAlertState] = useState<{
     visible: boolean;
     title: string;
@@ -68,25 +70,16 @@ export default function SettingsScreen() {
         {/* Language */}
         <Text style={styles.sectionTitle}>Language & Region</Text>
         <View style={styles.card}>
-          <TouchableOpacity style={styles.row} onPress={() => {
-            setAlertState({
-              visible: true,
-              title: 'Language',
-              message: 'Select your preferred language',
-              variant: 'info',
-              buttons: [
-                { text: 'English', onPress: () => setLanguage('English') },
-                { text: 'French', onPress: () => setLanguage('French') },
-                { text: 'Cancel', style: 'cancel' },
-              ],
-            });
-          }}>
+          <TouchableOpacity style={styles.row} onPress={() => setShowLangModal(true)}>
             <View style={[styles.rowIcon, { backgroundColor: '#DBEAFE' }]}>
               <Ionicons name="globe" size={20} color="#3B82F6" />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>Language</Text>
-              <Text style={styles.rowSub}>{language}</Text>
+              <Text style={styles.rowSub}>
+                {LANGUAGES.find(l => l.code === language)?.flag}{' '}
+                {LANGUAGES.find(l => l.code === language)?.nativeName ?? 'English'}
+              </Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
           </TouchableOpacity>
@@ -155,6 +148,32 @@ export default function SettingsScreen() {
 
         <Text style={styles.version}>Spinr v1.0.2 · {user?.phone || ''}</Text>
       </ScrollView>
+      {/* Language Picker Modal */}
+      <Modal visible={showLangModal} animationType="slide" transparent onRequestClose={() => setShowLangModal(false)}>
+        <TouchableOpacity style={styles.langOverlay} activeOpacity={1} onPress={() => setShowLangModal(false)}>
+          <TouchableOpacity activeOpacity={1} style={styles.langSheet}>
+            <View style={styles.langHandle} />
+            <Text style={styles.langTitle}>Select Language</Text>
+            {LANGUAGES.map((lang) => (
+              <TouchableOpacity
+                key={lang.code}
+                style={[styles.langRow, language === lang.code && styles.langRowActive]}
+                onPress={() => { setLanguage(lang.code as Language); setShowLangModal(false); }}
+              >
+                <Text style={styles.langFlag}>{lang.flag}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.langNative}>{lang.nativeName}</Text>
+                  <Text style={styles.langEnglish}>{lang.name}</Text>
+                </View>
+                {language === lang.code && (
+                  <Ionicons name="checkmark-circle" size={22} color={colors.primary} />
+                )}
+              </TouchableOpacity>
+            ))}
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
       <CustomAlert
         visible={alertState.visible}
         title={alertState.title}
@@ -212,5 +231,23 @@ function createStyles(colors: ThemeColors) {
     rowTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
     rowSub: { fontSize: 12, color: colors.textDim, marginTop: 1 },
     version: { fontSize: 12, color: colors.textDim, textAlign: 'center', marginTop: 24 },
+
+    // Language modal
+    langOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
+    langSheet: {
+      backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+      paddingHorizontal: 20, paddingBottom: 40, paddingTop: 12,
+    },
+    langHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: 'center', marginBottom: 16 },
+    langTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginBottom: 16 },
+    langRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, paddingHorizontal: 12,
+      borderRadius: 14, marginBottom: 8, backgroundColor: colors.surfaceLight,
+      borderWidth: 1.5, borderColor: 'transparent',
+    },
+    langRowActive: { borderColor: colors.primary, backgroundColor: `${colors.primary}10` },
+    langFlag: { fontSize: 28 },
+    langNative: { fontSize: 16, fontWeight: '600', color: colors.text },
+    langEnglish: { fontSize: 12, color: colors.textDim, marginTop: 1 },
   });
 }

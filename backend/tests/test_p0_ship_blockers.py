@@ -8,6 +8,9 @@ fails loudly. Where the implementation is a stub or deliberately missing,
 the test is marked ``xfail(strict=False)`` with a comment pointing at the
 gap so the failing assertion documents what needs to be built.
 
+Also covers E3 Stripe charge scenarios (TestE3*): happy path, card decline,
+and Stripe unavailability — using charge_ride() PaymentIntent.confirm path.
+
 Run as:
     pytest backend/tests/test_p0_ship_blockers.py -v
     pytest -m e2e backend/tests/test_p0_ship_blockers.py  # lifecycle subset
@@ -18,6 +21,8 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from backend.utils.stripe_charge import ChargeOutcome
 
 
 RIDER_ID = "rider_p0"
@@ -703,3 +708,327 @@ class TestPaymentFailureAtComplete:
         can retry with a different card.
         """
         assert False, "card path is a stub; Stripe charge not yet wired"
+
+
+# ── E3: Stripe charge at completion ─────────────────────────────────────────
+
+def _patch_settings(secret: str = "sk_test_xxx"):
+    from unittest.mock import AsyncMock as _AM
+
+    async def _s():
+        return {"stripe_secret_key": secret}
+
+    return patch("backend.utils.stripe_charge.get_app_settings", _AM(side_effect=_s))
+
+
+def _patch_stripe_confirm(return_value=None, side_effect=None):
+    mock_stripe = MagicMock()
+    if side_effect is not None:
+        mock_stripe.PaymentIntent.confirm.side_effect = side_effect
+    else:
+        mock_stripe.PaymentIntent.confirm.return_value = return_value
+    # create should not be called when a PI id is supplied
+    mock_stripe.PaymentIntent.create.side_effect = AssertionError("create must not be called when PI id supplied")
+    return patch("backend.utils.stripe_charge.stripe", mock_stripe), mock_stripe
+
+
+_BASE_KW = dict(
+    ride={"id": "ride_e3_1"},
+    rider_id="rider_e3",
+    total_amount=30.00,
+    stripe_customer_id="cus_e3",
+    payment_method_id="pm_e3",
+    payment_intent_id="pi_e3_existing",
+)
+
+
+# ── E3-1: Happy path — PaymentIntent.confirm succeeds ───────────────────────
+
+@pytest.mark.asyncio
+class TestE3HappyPath:
+    async def test_confirm_called_instead_of_create(self):
+        """When payment_intent_id is supplied, confirm() is called, not create()."""
+        from backend.utils.stripe_charge import charge_ride
+
+        intent = MagicMock(id="pi_e3_existing", status="succeeded", client_secret=None)
+        stripe_patch, mock_stripe = _patch_stripe_confirm(return_value=intent)
+
+        with _patch_settings(), stripe_patch:
+            outcome = await charge_ride(**_BASE_KW)
+
+        assert outcome.status == "succeeded"
+        assert outcome.payment_intent_id == "pi_e3_existing"
+        assert outcome.charged_amount == 30.00
+
+        mock_stripe.PaymentIntent.confirm.assert_called_once_with(
+            "pi_e3_existing",
+            api_key="sk_test_xxx",
+        )
+        # create must NOT have been called (side_effect would raise AssertionError)
+        mock_stripe.PaymentIntent.create.assert_not_called()
+
+    async def test_no_pi_id_falls_back_to_create(self):
+        """Without payment_intent_id the original create() path is taken."""
+        from backend.utils.stripe_charge import charge_ride
+
+        mock_stripe = MagicMock()
+        mock_stripe.PaymentIntent.create.return_value = MagicMock(
+            id="pi_new", status="succeeded", client_secret=None
+        )
+
+        kw = {**_BASE_KW, "payment_intent_id": None}
+        with _patch_settings(), patch("backend.utils.stripe_charge.stripe", mock_stripe):
+            outcome = await charge_ride(**kw)
+
+        assert outcome.status == "succeeded"
+        mock_stripe.PaymentIntent.create.assert_called_once()
+        mock_stripe.PaymentIntent.confirm.assert_not_called()
+
+
+# ── E3-2: Card declined — confirm raises CardError → HTTP 402 ───────────────
+
+@pytest.mark.asyncio
+class TestE3CardDecline:
+    async def test_card_decline_marks_payment_failed_and_allows_retry(self):
+        """stripe.PaymentIntent.confirm raises CardError → declined outcome.
+        The caller (process_payment) must return 402 and NOT mark ride completed."""
+        from backend.utils.stripe_charge import charge_ride
+
+        class _FakeErr:
+            code = "card_declined"
+            decline_code = "insufficient_funds"
+            message = "Your card has insufficient funds."
+
+        class _FakeCardError(Exception):
+            def __init__(self):
+                super().__init__("Insufficient funds")
+                self.error = _FakeErr()
+
+        mock_stripe = MagicMock()
+        mock_stripe.PaymentIntent.confirm.side_effect = _FakeCardError()
+
+        with _patch_settings(), \
+             patch("backend.utils.stripe_charge.stripe", mock_stripe), \
+             patch("backend.utils.stripe_charge._StripeCardError", _FakeCardError):
+            outcome = await charge_ride(**_BASE_KW)
+
+        assert outcome.status == "declined"
+        assert outcome.decline_code == "insufficient_funds"
+        assert "insufficient" in (outcome.error_message or "").lower()
+
+    async def test_requires_payment_method_after_confirm_treated_as_declined(self):
+        """PI lands in requires_payment_method after confirm → declined."""
+        from backend.utils.stripe_charge import charge_ride
+
+        intent = MagicMock(id="pi_e3_existing", status="requires_payment_method", client_secret=None)
+        stripe_patch, _ = _patch_stripe_confirm(return_value=intent)
+
+        with _patch_settings(), stripe_patch:
+            outcome = await charge_ride(**_BASE_KW)
+
+        assert outcome.status == "declined"
+
+
+# ── E3-3: Stripe unavailable — network / import failure → graceful fallback ─
+
+@pytest.mark.asyncio
+class TestE3StripeUnavailable:
+    async def test_stripe_base_error_returns_failed(self):
+        """Non-card Stripe error (connection, rate-limit) → failed, not 5xx crash."""
+        from backend.utils.stripe_charge import charge_ride
+
+        class _FakeCardError(Exception):
+            pass
+
+        class _FakeStripeError(_FakeCardError):
+            pass
+
+        mock_stripe = MagicMock()
+        mock_stripe.PaymentIntent.confirm.side_effect = _FakeStripeError(
+            "api_connection_error: Unable to reach Stripe"
+        )
+
+        # Patch _StripeCardError to a class _FakeStripeError does NOT inherit
+        # from so the except-CardError branch is skipped and the
+        # except-StripeBaseError branch catches it.
+        class _UnrelatedCardError(Exception):
+            pass
+
+        with _patch_settings(), \
+             patch("backend.utils.stripe_charge.stripe", mock_stripe), \
+             patch("backend.utils.stripe_charge._StripeCardError", _UnrelatedCardError), \
+             patch("backend.utils.stripe_charge._StripeBaseError", _FakeStripeError):
+            outcome = await charge_ride(**_BASE_KW)
+
+        assert outcome.status == "failed"
+        assert "api_connection_error" in (outcome.error_message or "")
+
+    async def test_stripe_module_not_installed_returns_unconfigured(self):
+        """stripe package absent at import time → unconfigured (not a crash)."""
+        from backend.utils.stripe_charge import charge_ride
+
+        with _patch_settings(), patch("backend.utils.stripe_charge.stripe", None):
+            outcome = await charge_ride(**_BASE_KW)
+
+        assert outcome.status == "unconfigured"
+
+    async def test_stripe_key_missing_returns_unconfigured(self):
+        """Empty stripe_secret_key in settings → unconfigured (dev / staging)."""
+        from backend.utils.stripe_charge import charge_ride
+
+        with _patch_settings(secret=""):
+            outcome = await charge_ride(**_BASE_KW)
+
+        assert outcome.status == "unconfigured"
+
+
+# ── E3-4: process_payment endpoint — HTTP response surface ──────────────────
+#
+# These tests stub charge_ride() and db_supabase to verify that process_payment
+# maps ChargeOutcome → the correct HTTP status codes without needing a live DB.
+
+def _make_ride(payment_intent_id: str | None = None) -> dict:
+    return {
+        "id": "ride_http_1",
+        "rider_id": "user_1",
+        "payment_method": "card",
+        "payment_method_id": "pm_http",
+        "payment_intent_id": payment_intent_id,
+        "payment_status": "pending",
+        "total_fare": 20.00,
+        "tip_amount": 0,
+    }
+
+
+def _app_with_mocked_auth(user_id: str = "user_1"):
+    """Return a TestClient-ready FastAPI app with auth bypassed.
+
+    The rides router registers itself with prefix="/rides", so all routes
+    are reachable under /rides/<ride_id>/... in the test client.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    try:
+        from backend.routes.rides import api_router
+        from backend.dependencies import get_current_user
+    except ImportError:
+        from routes.rides import api_router
+        from dependencies import get_current_user
+
+    app = FastAPI()
+    app.include_router(api_router)  # router has prefix="/rides" built in
+
+    async def _fake_user():
+        return {"id": user_id, "role": "rider"}
+
+    app.dependency_overrides[get_current_user] = _fake_user
+    return TestClient(app)
+
+
+@pytest.mark.asyncio
+class TestProcessPaymentHTTP:
+    """HTTP surface tests for process_payment — verifies that charge_ride
+    outcomes map to the correct HTTP status codes."""
+
+    def _load_rides_module(self):
+        """Ensure routes.rides is loaded into sys.modules before patching.
+
+        conftest.py sets env vars and sys.path before any test runs, so
+        `routes.rides` is importable by test time. We trigger the import
+        here rather than at module-load time to ensure conftest fixtures
+        (env vars, mock supabase) are already active.
+        """
+        import importlib
+        import sys
+
+        # Check if already loaded under either package form
+        for key in ("backend.routes.rides", "routes.rides"):
+            if key in sys.modules:
+                return sys.modules[key]
+
+        for mod_path in ("backend.routes.rides", "routes.rides"):
+            try:
+                return importlib.import_module(mod_path)
+            except (ImportError, ModuleNotFoundError):
+                continue
+        raise ImportError("Cannot import rides module")
+
+    async def test_succeeded_returns_200_and_paid(self):
+        """charge_ride returns succeeded → process_payment returns 200."""
+        rides_mod = self._load_rides_module()
+        ride = _make_ride()
+        outcome = ChargeOutcome(status="succeeded", payment_intent_id="pi_ok", charged_amount=20.0)
+
+        with patch.object(rides_mod, "db_supabase") as mock_db, \
+             patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)), \
+             patch.object(rides_mod, "db") as _mock_legacy_db:
+
+            mock_db.get_ride = AsyncMock(return_value=ride)
+            mock_db.get_user_by_id = AsyncMock(return_value={"stripe_customer_id": "cus_1"})
+            mock_db.update_ride = AsyncMock()
+            _mock_legacy_db.update_one = AsyncMock(
+                return_value=MagicMock(modified_count=1)
+            )
+
+            client = _app_with_mocked_auth()
+            resp = client.post("/rides/ride_http_1/process-payment", json={"tip_amount": "0"})
+
+        assert resp.status_code == 200
+        assert resp.json().get("success") is True
+
+    async def test_declined_returns_402(self):
+        """charge_ride returns declined → process_payment returns 402."""
+        rides_mod = self._load_rides_module()
+        ride = _make_ride()
+        outcome = ChargeOutcome(
+            status="declined",
+            decline_code="insufficient_funds",
+            error_message="Your card has insufficient funds.",
+        )
+
+        with patch.object(rides_mod, "db_supabase") as mock_db, \
+             patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)), \
+             patch.object(rides_mod, "db") as _mock_legacy_db:
+
+            mock_db.get_ride = AsyncMock(return_value=ride)
+            mock_db.get_user_by_id = AsyncMock(return_value={"stripe_customer_id": "cus_1"})
+            mock_db.update_ride = AsyncMock()
+            _mock_legacy_db.update_one = AsyncMock(
+                return_value=MagicMock(modified_count=1)
+            )
+
+            client = _app_with_mocked_auth()
+            resp = client.post("/rides/ride_http_1/process-payment", json={"tip_amount": "0"})
+
+        assert resp.status_code == 402
+        detail = resp.json().get("detail", {})
+        assert detail.get("code") == "card_declined"
+        assert detail.get("decline_code") == "insufficient_funds"
+
+    async def test_stripe_failed_returns_502(self):
+        """charge_ride returns failed (ops error) → process_payment returns 502."""
+        rides_mod = self._load_rides_module()
+        ride = _make_ride()
+        outcome = ChargeOutcome(
+            status="failed",
+            error_message="api_connection_error: Unable to reach Stripe",
+        )
+
+        with patch.object(rides_mod, "db_supabase") as mock_db, \
+             patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)), \
+             patch.object(rides_mod, "db") as _mock_legacy_db:
+
+            mock_db.get_ride = AsyncMock(return_value=ride)
+            mock_db.get_user_by_id = AsyncMock(return_value={"stripe_customer_id": "cus_1"})
+            mock_db.update_ride = AsyncMock()
+            _mock_legacy_db.update_one = AsyncMock(
+                return_value=MagicMock(modified_count=1)
+            )
+
+            client = _app_with_mocked_auth()
+            resp = client.post("/rides/ride_http_1/process-payment", json={"tip_amount": "0"})
+
+        assert resp.status_code == 502
+        detail = resp.json().get("detail", {})
+        assert detail.get("code") == "payment_processor_error"

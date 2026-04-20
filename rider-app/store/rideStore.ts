@@ -143,7 +143,7 @@ interface RideState {
   fetchEstimates: () => Promise<void>;
   fetchNearbyDrivers: () => Promise<void>;
   selectVehicle: (vehicle: VehicleType) => void;
-  createRide: (paymentMethod: string, corporateAccountId?: string | null) => Promise<Ride>;
+  createRide: (paymentMethod: string, corporateAccountId?: string | null, paymentMethodId?: string) => Promise<Ride>;
   fetchRide: (rideId: string) => Promise<void>;
   cancelRide: () => Promise<void>;
   simulateDriverArrival: () => Promise<void>;
@@ -355,7 +355,7 @@ export const useRideStore = create<RideState>((set, get) => ({
     }
   },
 
-  createRide: async (paymentMethod, corporateAccountId) => {
+  createRide: async (paymentMethod, corporateAccountId, paymentMethodId) => {
     const { pickup, dropoff, selectedVehicle, stops, scheduledTime, estimates } = get();
     if (!pickup || !dropoff || !selectedVehicle) {
       throw new Error('Missing ride details');
@@ -382,6 +382,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         dropoff_lng: dropoff.lng,
         stops: stops,
         payment_method: paymentMethod,
+        payment_method_id: paymentMethodId ?? null,
         corporate_account_id: corporateAccountId || null,
         estimate_token: selectedEstimate?.estimate_token,
         created_at: new Date().toISOString(),

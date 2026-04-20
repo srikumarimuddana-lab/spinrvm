@@ -17,6 +17,8 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useRideStore } from '../store/rideStore';
+import { useRiderSocket } from '../hooks/useRiderSocket';
+import { RideStatus } from '../constants/rideStatus';
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
 import { SOSButton } from '@shared/components/SOSButton';
@@ -30,6 +32,7 @@ export default function RideInProgressScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency } = useRideStore();
+  const { wsConnected } = useRiderSocket();
   const [eta, setEta] = useState(15);
   const [estimatedTime, setEstimatedTime] = useState('12:45 PM');
   const [currentLocation, setCurrentLocation] = useState('4th Avenue North');
@@ -75,13 +78,13 @@ export default function RideInProgressScreen() {
   }, [currentRide?.dropoff_lat, currentRide?.dropoff_lng, currentDriver?.lat, currentDriver?.lng]);
 
   useEffect(() => {
-    if (rideId) {
-      fetchRide(rideId);
-      // Fallback poll — WS delivers driver position + ride status in real-time.
-      const interval = setInterval(() => fetchRide(rideId), 15000);
-      return () => clearInterval(interval);
-    }
-  }, [rideId]);
+    if (!rideId) return;
+    fetchRide(rideId);
+    // Suspend fallback poll while WebSocket is delivering updates in real-time.
+    if (wsConnected) return;
+    const interval = setInterval(() => fetchRide(rideId), 15000);
+    return () => clearInterval(interval);
+  }, [rideId, wsConnected]);
 
   useEffect(() => {
     // Calculate estimated arrival time
@@ -91,7 +94,7 @@ export default function RideInProgressScreen() {
   }, [eta]);
 
   useEffect(() => {
-    if (currentRide?.status === 'completed') {
+    if (currentRide?.status === RideStatus.COMPLETED) {
       router.replace({ pathname: '/ride-completed', params: { rideId } });
     }
   }, [currentRide?.status]);

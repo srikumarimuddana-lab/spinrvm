@@ -10,6 +10,8 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useRideStore } from '../store/rideStore';
+import { useRiderSocket } from '../hooks/useRiderSocket';
+import { RideStatus } from '../constants/rideStatus';
 import { CarMarker } from '@shared/components/CarMarker';
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
@@ -24,6 +26,7 @@ export default function DriverArrivedScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const { currentRide, currentDriver, fetchRide, cancelRide, clearRide } = useRideStore();
+  const { wsConnected } = useRiderSocket();
   const mapRef = React.useRef<MapView>(null);
   const bottomSheetRef = React.useRef<BottomSheet>(null);
   const snapPoints = useMemo(() => ['42%', '70%', '92%'], []);
@@ -70,16 +73,15 @@ export default function DriverArrivedScreen() {
   }, [currentRide?.total_fare]);
 
   useEffect(() => {
-    if (rideId) {
-      fetchRide(rideId);
-      // Fallback poll — WS delivers updates in real-time.
-      const interval = setInterval(() => fetchRide(rideId), 15000);
-      return () => clearInterval(interval);
-    }
-  }, [rideId]);
+    if (!rideId) return;
+    fetchRide(rideId);
+    if (wsConnected) return;
+    const interval = setInterval(() => fetchRide(rideId), 15000);
+    return () => clearInterval(interval);
+  }, [rideId, wsConnected]);
 
   useEffect(() => {
-    if (currentRide?.status === 'in_progress') {
+    if (currentRide?.status === RideStatus.IN_PROGRESS) {
       router.replace({ pathname: '/ride-in-progress', params: { rideId } } as any);
     }
   }, [currentRide?.status]);

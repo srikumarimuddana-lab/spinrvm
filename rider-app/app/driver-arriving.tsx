@@ -266,7 +266,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
   return (
     <View style={styles.container}>
       {/* Header */}
-      <SafeAreaView edges={['top']} style={styles.headerSafeArea}>
+      <SafeAreaView edges={['top']} style={styles.headerSafeArea} accessible={true}>
         <View style={styles.header}>
           <TouchableOpacity style={styles.backButton} onPress={handleBack}>
             <Ionicons name="arrow-back" size={24} color={colors.text} />

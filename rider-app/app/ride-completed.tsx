@@ -337,7 +337,14 @@ export default function RideCompletedScreen() {
           <Text style={styles.rateLabel}>How was your ride?</Text>
           <View style={styles.starsRow}>
             {[1, 2, 3, 4, 5].map((star) => (
-              <TouchableOpacity key={star} onPress={() => setRating(star)} style={styles.starBtn}>
+              <TouchableOpacity
+                key={star}
+                onPress={() => setRating(star)}
+                style={styles.starBtn}
+                accessibilityLabel={`Rate ${star} star${star > 1 ? 's' : ''}`}
+                accessibilityRole="button"
+                accessibilityState={{ selected: rating === star }}
+              >
                 <Ionicons
                   name={star <= rating ? 'star' : 'star-outline'}
                   size={36}

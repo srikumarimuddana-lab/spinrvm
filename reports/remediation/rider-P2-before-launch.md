@@ -921,6 +921,82 @@ Create a shared `RideScreenErrorFallback` component that always includes a
 
 ---
 
+## R-P2-39 · /rides/{id}/cancel Missing Rate-Limit Decorator
+
+**Audit finding [11-2 MEDIUM].** `POST /rides/{ride_id}/cancel` in `backend/routes/rides.py:1314`
+has no SlowAPI rate-limit decorator. The create_ride endpoint (line 515) correctly applies
+`@ride_request_limit`; the cancel endpoint does not. An authenticated client can hammer the
+cancel endpoint without throttling, causing repeated DB reads, state-machine evaluations,
+and potentially repeated Stripe cancellation-fee charge attempts.
+
+**File to fix:** `backend/routes/rides.py` — `cancel_ride_rider` endpoint
+
+**How to fix:**
+```python
+from utils.rate_limiter import ride_request_limit
+
+@api_router.post("/{ride_id}/cancel")
+@ride_request_limit
+async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict = Depends(get_current_user)):
+    # Note: SlowAPI requires first param named `request` of type starlette.requests.Request
+    ...
+```
+
+**Effort:** 30 minutes
+
+---
+
+## R-P2-40 · /promo/validate Not Rate-Limited — Promo Code Enumeration Possible
+
+**Audit finding [11-3 MEDIUM].** `POST /promo/validate` in `backend/routes/promotions.py:60`
+has no rate-limit decorator. The endpoint returns distinct error messages for each failure
+case (404 for unknown code; 400 for expired, usage-exceeded, user-ineligible). An attacker
+can submit sequential guesses to identify valid promo codes — a 404 confirms "code doesn't
+exist"; a 400 confirms "code exists but not applicable." Short promo codes (e.g. "FALL10")
+are enumerable in minutes at unlimited request rates.
+
+**File to fix:** `backend/routes/promotions.py` — `validate_promo` endpoint
+
+**How to fix:**
+```python
+from utils.rate_limiter import default_limiter
+from fastapi import Request
+
+promo_validate_limit = default_limiter.limit("10/minute")
+
+@api_router.post("/validate")
+@promo_validate_limit
+async def validate_promo(request: Request, req: ValidatePromoRequest, current_user: dict = Depends(get_current_user)):
+    ...
+```
+Consider also returning a generic "Promo code not found or not applicable" message for
+both 404 and eligibility-failure cases to eliminate the timing/status oracle.
+
+**Effort:** 30 minutes
+
+---
+
+## R-P2-41 · Referrer-Policy Value Should Be "no-referrer" per Checklist
+
+**Audit finding [11-4 MEDIUM].** `_BASE_SECURITY_HEADERS` in
+`backend/core/middleware.py:99` sets `Referrer-Policy: strict-origin-when-cross-origin`
+instead of the checklist-required `no-referrer`. For a pure JSON API backend with no
+HTML or redirects, "no-referrer" is strictly stronger and has zero functional cost.
+
+**File to fix:** `backend/core/middleware.py:99`
+
+**How to fix:**
+```python
+# Change:
+"Referrer-Policy": "strict-origin-when-cross-origin",
+# To:
+"Referrer-Policy": "no-referrer",
+```
+
+**Effort:** 5 minutes
+
+---
+
 ## Checklist
 
 - [ ] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
@@ -961,3 +1037,6 @@ Create a shared `RideScreenErrorFallback` component that always includes a
 - [ ] R-P2-36 useRiderSocket hook test added; component tests for ride panel UI components added
 - [ ] R-P2-37 ride-options.tsx shows error message + retry button when fetchEstimates() fails
 - [ ] R-P2-38 ErrorBoundary added to driver-arriving, ride-in-progress, ride-completed, driver-arrived screens
+- [ ] R-P2-39 /rides/{id}/cancel decorated with @ride_request_limit; request: Request param added
+- [ ] R-P2-40 /promo/validate rate-limited at 10/minute; generic error message for unknown codes
+- [ ] R-P2-41 Referrer-Policy changed from strict-origin-when-cross-origin to no-referrer

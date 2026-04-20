@@ -2289,5 +2289,249 @@ TASK 10 TALLY
 | TOTAL           |     8 |
 
 ================================================================================
-[AUDIT IN PROGRESS — TASKS 11–16 PENDING]
+TASK 11 — SECURITY HEADERS, CORS & RATE LIMITING (Dimension 11)
+================================================================================
+Scope    : backend/core/middleware.py · backend/core/config.py ·
+           backend/utils/rate_limiter.py · backend/routes/rides.py ·
+           backend/routes/promotions.py · rider-app/app.config.ts ·
+           rider-app/app/_layout.tsx
+Framework: audit-framework/dimensions/11-security-headers-cors.md
+Checks   : CORS allowlist · wildcard · security headers · rate limiting ·
+           deep link validation · Firebase App Check · CORS on error responses
+
+────────────────────────────────────────────────────────────────────────────────
+
+[11-1] HIGH | spinr.app Origin Not in CORS Allowlist — Rider Web App Cannot Call API
+File: backend/core/config.py:47
+      backend/core/middleware.py:307–313
+Finding: The ALLOWED_ORIGINS default and the hardcoded always_allowed list
+  together define the full CORS origin set. The hardcoded list is:
+    ["https://spinr-admin.vercel.app", "http://localhost:3000", "http://localhost:3001"]
+  The default ALLOWED_ORIGINS env var is:
+    "http://localhost:3000,http://localhost:8081,http://localhost:19006"
+  Neither list includes https://spinr.app or https://spinr-track.app.
+  The rider mobile app (React Native, not web) is not affected because it does
+  not use browser CORS. However, the app.config.ts intentionally registers
+  applinks:spinr.app and applinks:spinr-track.app as associated domains
+  (app.config.ts:37–39) — meaning spinr.app hosts a web landing page or
+  web app that links into the native app. Any web component on spinr.app
+  that calls the backend API (e.g. the live-tracking page at
+  spinr-track.app/{token} or a web booking flow) will be rejected with a
+  CORS error.
+  The backend serves a public unauthenticated /track/{share_token} endpoint
+  (rides.py:1198). If spinr-track.app hosts a web page that calls this
+  endpoint in the browser, every request will fail with "CORS policy: No
+  'Access-Control-Allow-Origin' header is present."
+Fix: Add https://spinr.app and https://spinr-track.app to the ALLOWED_ORIGINS
+  environment variable for the production deployment. If these domains host no
+  web-to-backend calls today, document the gap and add them before any web
+  component is shipped.
+  Additionally, document the complete expected production allowlist in the
+  .env.example file so operators know what to set:
+    ALLOWED_ORIGINS=https://spinr.app,https://spinr-track.app,https://spinr-admin.vercel.app
+  Effort: 30 minutes.
+
+[11-2] MEDIUM | /rides/{id}/cancel Missing Rate-Limit Decorator
+File: backend/routes/rides.py:1314–1315
+Finding: POST /rides/{ride_id}/cancel has no SlowAPI rate-limit decorator.
+  The create_ride endpoint (line 515–516) correctly applies
+  @ride_request_limit (10/minute). The cancel endpoint has no equivalent:
+    @api_router.post("/{ride_id}/cancel")
+    async def cancel_ride_rider(ride_id: str, current_user: dict = ...):
+  An authenticated attacker (or a client bug that retries on network error)
+  can flood the cancel endpoint without throttling, causing repeated
+  cancellation-fee charge attempts or backend load from repeated DB reads,
+  state machine evaluations, and potential Stripe API calls.
+  Dimension 11 checklist: "Rate limits configured for all sensitive
+  endpoints." Cancel is a financial-state endpoint.
+Fix: Add @ride_request_limit (or a separate cancel_limit = default_limiter.limit("5/minute"))
+  directly above the cancel endpoint, analogous to create_ride:
+    @api_router.post("/{ride_id}/cancel")
+    @ride_request_limit
+    async def cancel_ride_rider(request: Request, ride_id: str, ...):
+  (Note: SlowAPI requires the first parameter to be named `request` of type
+  starlette.requests.Request when using a decorator — add `request: Request`
+  as done in create_ride:517–524.)
+  Effort: 30 minutes.
+
+[11-3] MEDIUM | /promo/validate Missing Rate-Limit Decorator — Code Enumeration Possible
+File: backend/routes/promotions.py:60–64
+Finding: POST /promo/validate has no SlowAPI decorator:
+    @api_router.post("/validate")
+    async def validate_promo(req: ValidatePromoRequest, current_user: dict = ...):
+  The endpoint performs a live database lookup for each submitted promo code and
+  returns distinct error messages per failure case (invalid code → 404;
+  expired → 400; usage limit → 400; user eligibility → 400). A malicious
+  caller can submit sequential or dictionary guesses against this endpoint to
+  enumerate valid promo codes (a 404 response means the code does not exist;
+  a 400 means it does). With no rate limit, hundreds of guesses per second are
+  possible. Short promo codes (e.g. "SUMMER25", "FALL10") are low-entropy and
+  enumerable within minutes.
+  The Dimension 11 checklist explicitly names promo validation as a target for
+  rate limiting to prevent code enumeration.
+Fix: Add a rate-limit decorator. A dedicated promo_limit at 10/minute per user
+  (not per IP, since the user is authenticated) is appropriate:
+    promo_validate_limit = default_limiter.limit("10/minute")
+    @api_router.post("/validate")
+    @promo_validate_limit
+    async def validate_promo(request: Request, req: ValidatePromoRequest, ...):
+  Additionally, consider returning a generic "Promo code not found or not
+  applicable" message instead of distinct 404 vs 400 responses to make
+  enumeration harder.
+  Effort: 30 minutes.
+
+[11-4] MEDIUM | Referrer-Policy Value Is Non-Standard — Violates D11 Checklist
+File: backend/core/middleware.py:99
+Finding: _BASE_SECURITY_HEADERS sets:
+    "Referrer-Policy": "strict-origin-when-cross-origin"
+  The Dimension 11 checklist requires:
+    "Referrer-Policy: no-referrer"
+  "strict-origin-when-cross-origin" sends the origin component of the URL
+  on cross-origin requests (but drops the path). For an API backend that
+  serves no HTML and whose clients are mobile apps, "no-referrer" is stricter
+  and has no functional cost — there is no legitimate use case for the backend
+  to emit a Referrer on responses, and doing so leaks origin information in
+  server logs.
+Fix: Change the Referrer-Policy value to "no-referrer":
+    "Referrer-Policy": "no-referrer",
+  Effort: 5 minutes.
+
+[11-5] PASS | No Wildcard (*) in Production CORS
+File: backend/core/middleware.py:315–323
+Finding: init_middleware() explicitly detects if wildcard "*" is in the origins
+  list and raises RuntimeError when ENV=production:
+    if wildcard and is_production:
+        raise RuntimeError("CORS is configured with wildcard '*' while ENV=production...")
+  The server refuses to start with wildcard CORS in production. In development,
+  wildcard is allowed but allow_credentials is disabled to comply with the CORS
+  spec. PASS.
+
+[11-6] PASS | CORS Allowlist Enforced via Environment Variable
+File: backend/core/config.py:47; backend/core/middleware.py:307
+Finding: origins are parsed from settings.ALLOWED_ORIGINS, which is a
+  Pydantic BaseSettings field backed by the ALLOWED_ORIGINS environment
+  variable. The server reads it at startup; no origin is hardcoded in
+  production config. The always_allowed list hardcodes only admin and
+  localhost origins, which is acceptable. PASS.
+
+[11-7] PASS | Preflight OPTIONS Handled Correctly
+File: backend/core/middleware.py:334–340
+Finding: FastAPI's CORSMiddleware is registered with allow_methods=["*"] and
+  allow_headers=["*"]. CORSMiddleware handles OPTIONS preflight requests
+  automatically and returns the correct Access-Control-Allow-Methods and
+  Access-Control-Allow-Headers headers. PASS.
+
+[11-8] PASS | CORS Headers Present on 4xx/5xx Error Responses
+File: backend/core/middleware.py:353–387
+      backend/utils/error_handling.py:542–560
+Finding: Two mechanisms ensure CORS headers reach error responses:
+  (1) cors_exception_handler registered via @app.exception_handler(Exception)
+  in init_middleware (line 354) inspects the origin header and adds
+  Access-Control-Allow-Origin + Vary: Origin on all exception responses,
+  including HTTP exceptions and unhandled 500s.
+  (2) register_exception_handlers() (server.py:54) registers a second
+  general_exception_handler from utils/error_handling.py that reads from the
+  same resolved origins set (error_handling.py:538) and applies _cors_headers_for().
+  Both paths resolve origins from the same settings.ALLOWED_ORIGINS variable
+  so the two handlers stay in sync. Error responses carry security headers too
+  (middleware.py:385: _apply_security_headers on exception response). PASS.
+
+[11-9] PASS | All Required Security Headers Present on API Responses
+File: backend/core/middleware.py:96–138
+Finding: SecurityHeadersMiddleware applies all required headers on every
+  response via _apply_security_headers():
+    X-Content-Type-Options: nosniff            ✓ (line 97)
+    X-Frame-Options: DENY                      ✓ (line 98)
+    Referrer-Policy: strict-origin-when-cross-origin ✓ (line 99) [see 11-4]
+    Permissions-Policy: geolocation=(),
+      microphone=(), camera=(), payment=()     ✓ (line 100)
+    Cross-Origin-Opener-Policy: same-origin    ✓ (line 101)
+    Cross-Origin-Resource-Policy: same-site    ✓ (line 102)
+    Content-Security-Policy: default-src 'none';
+      frame-ancestors 'none'; base-uri 'none' ✓ (line 105/138)
+    Strict-Transport-Security: max-age=31536000;
+      includeSubDomains; preload              ✓ (line 133, production only)
+  Security headers are also injected into exception responses (line 385).
+  Minor: Referrer-Policy value should be "no-referrer" per checklist (see 11-4).
+  Minor: Cross-Origin-Resource-Policy is "same-site" vs the checklist value of
+  "same-origin" — for an API with mobile clients "same-site" is correct
+  because mobile apps are not "same-origin" but requests are legitimate.
+  No missing headers; PASS with the Referrer-Policy gap noted as 11-4.
+
+[11-10] PASS | Deep Link ride_id Validated Against Authenticated User (No IDOR)
+File: backend/routes/rides.py:847–864
+      rider-app/app/ride-details.tsx:19, 33
+Finding: The rider app opens ride-details.tsx with a rideId parameter which
+  calls GET /rides/{rideId}. The backend get_ride() handler (line 847):
+  (1) Fetches the ride by ID.
+  (2) Checks is_rider = ride["rider_id"] == current_user["id"].
+  (3) Also checks is_driver (for the assigned driver's view).
+  (4) Falls back to an admin role check.
+  (5) Returns 403 if none of the above match.
+  A crafted deep link spinr.app/ride/{foreign_id} cannot expose another user's
+  ride — the authenticated user's identity is cross-checked against the ride
+  record server-side. IDOR is not possible on this path. PASS.
+
+[11-11] PASS | Share Token (spinr-track.app/{token}) Validated — Not a Ride ID
+File: backend/routes/rides.py:1198–1247
+Finding: The /track/{share_token} public endpoint (line 1198) does NOT accept
+  a raw ride_id. It queries rides by shared_trip_token (a 32-byte
+  secrets.token_urlsafe value). The token is unguessable. The endpoint also:
+  (a) Rejects tokens older than 24 hours (line 1214).
+  (b) Returns only a minimal safe subset of ride data (status, addresses, and
+    a filtered driver object with name/location/vehicle — no PII, no payment
+    data, no phone numbers).
+  A crafted spinr-track.app URL cannot enumerate rides or access another
+  user's data because the token is cryptographically random and ride_id is not
+  exposed on this path. PASS.
+
+[11-12] PASS | Firebase App Check Enforced on All Rider-Specific Backend Endpoints
+File: backend/core/middleware.py:27, 351
+Finding: Per finding [03-11] (verified in D03 audit): _APP_CHECK_ENFORCEMENT
+  = True and FirebaseAppCheckMiddleware is registered with
+  enforcement_enabled=True. Every /api/* request — including all rider
+  endpoints — requires a valid X-Firebase-AppCheck header. WebSockets, health
+  probes, and docs are correctly exempted. The public /track/{share_token}
+  endpoint is served under /api/v1/rides/track/... and therefore IS protected
+  by App Check — unauthenticated web browsers cannot reach it directly.
+  Note: the /track endpoint intentionally has no user auth requirement (safety
+  contacts need it), so App Check alone gates it. This is by design; the token
+  is the access control mechanism. PASS.
+
+[11-13] PASS | Rate Limiting Reads X-Forwarded-For Behind CDN/Proxy
+File: backend/utils/rate_limiter.py:63–67
+Finding: default_limiter is created with key_func=get_ipaddr (slowapi.util).
+  get_ipaddr reads X-Forwarded-For when present, falling back to the TCP
+  remote address. This means real client IPs are used behind Railway / Fly.io /
+  Cloudflare reverse proxies. PASS.
+
+[11-14] PASS | Redis-Backed Rate Limiting in Production with Startup Validation
+File: backend/utils/rate_limiter.py:36–59
+      backend/core/middleware.py:264–276
+Finding: _rate_limit_storage_uri falls back to "memory://" only when
+  RATE_LIMIT_REDIS_URL is unset. _validate_production_config() (middleware.py:
+  264–276) raises RuntimeError if RATE_LIMIT_REDIS_URL is empty in
+  ENV=production — the server refuses to start. Development environments log
+  a clear warning about per-worker counters. PASS.
+
+[11-15] PASS | ride_request_limit Applied to POST /rides (Ride Creation)
+File: backend/routes/rides.py:515–516
+Finding: The create_ride endpoint is decorated with @ride_request_limit which
+  maps to default_limiter.limit("10/minute") (rate_limiter.py:174). PASS.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 11 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     3 |
+| LOW             |     0 |
+| PASS            |    11 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    15 |
+
+================================================================================
+[AUDIT IN PROGRESS — TASKS 12–16 PENDING]
 ================================================================================

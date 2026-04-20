@@ -537,6 +537,17 @@ async def create_ride(
         if not rider_row or not rider_row.get("stripe_customer_id"):
             raise HTTPException(status_code=400, detail="No payment method on file. Please add a card first.")
 
+    active_statuses = ["searching", "driver_assigned", "driver_accepted", "driver_arrived", "in_progress"]
+    existing_ride = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows(
+            "rides",
+            {"rider_id": current_user["id"], "status": {"$in": active_statuses}},
+            limit=1,
+        )
+    )
+    if existing_ride:
+        raise HTTPException(status_code=409, detail="You already have an active ride")
+
     distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
     duration_minutes = int(distance_km / 30 * 60) + 5
 

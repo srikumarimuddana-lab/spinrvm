@@ -1,4 +1,4 @@
-import React, { useRef, useState, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -48,10 +48,10 @@ export default function PaymentConfirmScreen() {
 
   const selectedEstimate = estimates.find((e) => e.vehicle_type.id === selectedVehicle?.id);
 
-  const isSubmitting = useRef(false);
+  const [isBooking, setIsBooking] = useState(false);
   const handleBookRide = async () => {
-    if (isSubmitting.current) return;
-    isSubmitting.current = true;
+    if (isBooking || isLoading) return;
+    setIsBooking(true);
     try {
       const ride = await createRide(selectedPayment);
       Analytics.rideRequested({
@@ -63,7 +63,7 @@ export default function PaymentConfirmScreen() {
     } catch (error: any) {
       setAlertState({ visible: true, title: 'Error', message: error.message || 'Failed to book ride', variant: 'danger' });
     } finally {
-      isSubmitting.current = false;
+      setIsBooking(false);
     }
   };
 
@@ -317,12 +317,12 @@ export default function PaymentConfirmScreen() {
           </View>
         )}
         <TouchableOpacity
-          style={styles.bookButton}
+          style={[styles.bookButton, (isLoading || isBooking) && { opacity: 0.6 }]}
           onPress={handleBookRide}
-          disabled={isLoading}
+          disabled={isLoading || isBooking}
           activeOpacity={0.8}
         >
-          {isLoading ? (
+          {isLoading || isBooking ? (
             <ActivityIndicator color="#FFFFFF" />
           ) : (
             <>

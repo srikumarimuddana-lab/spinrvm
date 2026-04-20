@@ -10,11 +10,13 @@ import { useRideStore } from '../store/rideStore';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
 
 export default function ScheduledRidesScreen() {
   const router = useRouter();
   const { scheduledRides, fetchScheduledRides, cancelScheduledRide } = useRideStore();
   const { colors, isDark } = useTheme();
+  const { cancelReminder } = useScheduledRideReminder();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -54,6 +56,7 @@ export default function ScheduledRidesScreen() {
             setAlertState(prev => ({ ...prev, visible: false }));
             try {
               await cancelScheduledRide(rideId);
+              cancelReminder(rideId).catch(() => {});
               setAlertState({
                 visible: true, title: 'Cancelled',
                 message: 'Your scheduled ride has been cancelled.',

@@ -1,11 +1,13 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
+  FlatList,
   ScrollView,
   TouchableOpacity,
   RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,6 +16,7 @@ import { useRideStore } from '../../store/rideStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import api from '@shared/api/client';
+import { useAuthStore } from '@shared/store/authStore';
 import { useTranslation } from '../../i18n';
 
 interface RideHistory {
@@ -33,8 +36,11 @@ interface RideHistory {
 type FilterType = 'all' | 'personal' | 'business';
 type TabType = 'history' | 'upcoming';
 
+const PAGE_LIMIT = 20;
+
 export default function ActivityScreen() {
   const router = useRouter();
+  const { token } = useAuthStore();
   const { scheduledRides, fetchScheduledRides } = useRideStore();
   const [rides, setRides] = useState<RideHistory[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<Record<string, string>>({});
@@ -43,19 +49,33 @@ export default function ActivityScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { t } = useTranslation();
 
-  const fetchData = async () => {
+  const fetchPage = useCallback(async (cursor?: string) => {
+    try {
+      const url = cursor
+        ? `/rides/history?limit=${PAGE_LIMIT}&before=${cursor}`
+        : `/rides/history?limit=${PAGE_LIMIT}`;
+      const res = await api.get(url).catch(() => ({ data: { rides: [], next_cursor: null } }));
+      return { rides: res.data?.rides ?? [], next_cursor: res.data?.next_cursor ?? null };
+    } catch {
+      return { rides: [], next_cursor: null };
+    }
+  }, []);
+
+  const fetchData = useCallback(async () => {
     setFetchError(null);
     try {
-      const [ridesRes, typesRes] = await Promise.all([
-        api.get('/rides/history'),
+      const [pageResult, typesRes] = await Promise.all([
+        fetchPage(),
         api.get('/vehicle-types').catch(() => ({ data: [] })),
       ]);
-
-      setRides(ridesRes.data || []);
+      setRides(pageResult.rides);
+      setNextCursor(pageResult.next_cursor);
 
       const typesMap: Record<string, string> = {};
       (typesRes.data || []).forEach((t: any) => {
@@ -69,7 +89,19 @@ export default function ActivityScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [fetchPage]);
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !nextCursor) return;
+    setLoadingMore(true);
+    try {
+      const pageResult = await fetchPage(nextCursor);
+      setRides(prev => [...prev, ...pageResult.rides]);
+      setNextCursor(pageResult.next_cursor);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore, nextCursor, fetchPage]);
 
   useEffect(() => {
     fetchData();
@@ -124,33 +156,99 @@ export default function ActivityScreen() {
     return vehicleTypes[id] || 'Standard';
   };
 
-  const groupRidesByMonth = (rideList: RideHistory[]) => {
-    const groups: { [key: string]: RideHistory[] } = {};
-    const now = new Date();
-
-    rideList.forEach(ride => {
-      const date = new Date(ride.created_at);
-      const isRecent = (now.getTime() - date.getTime()) < 7 * 24 * 60 * 60 * 1000;
-      const key = isRecent ? 'RECENT' : date.toLocaleDateString([], { month: 'long' }).toUpperCase();
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(ride);
-    });
-
-    return groups;
+  const handleRidePress = (ride: RideHistory) => {
+    router.push({ pathname: '/ride-details', params: { rideId: ride.id } } as any);
   };
 
-  const filteredRides = rides.filter(ride => {
+  const filteredRides = useMemo(() => rides.filter(ride => {
     if (filter === 'all') return true;
     if (filter === 'business') return !!ride.corporate_account_id;
     if (filter === 'personal') return !ride.corporate_account_id;
     return true;
-  });
+  }), [rides, filter]);
 
-  const groupedRides = groupRidesByMonth(filteredRides);
+  // Group rides by month for section headers
+  const sections = useMemo(() => {
+    const groups: { title: string; data: RideHistory[] }[] = [];
+    const keyMap: Record<string, RideHistory[]> = {};
+    const keyOrder: string[] = [];
+    const now = new Date();
 
-  const handleRidePress = (ride: RideHistory) => {
-    router.push({ pathname: '/ride-details', params: { rideId: ride.id } } as any);
-  };
+    filteredRides.forEach(ride => {
+      const date = new Date(ride.created_at);
+      const isRecent = (now.getTime() - date.getTime()) < 7 * 24 * 60 * 60 * 1000;
+      const key = isRecent ? 'RECENT' : date.toLocaleDateString([], { month: 'long' }).toUpperCase();
+
+      if (!keyMap[key]) {
+        keyMap[key] = [];
+        keyOrder.push(key);
+      }
+      keyMap[key].push(ride);
+    });
+
+    keyOrder.forEach(key => groups.push({ title: key, data: keyMap[key] }));
+    return groups;
+  }, [filteredRides]);
+
+  // Flatten sections into FlatList items (header + rides)
+  type ListItem =
+    | { type: 'header'; key: string; title: string }
+    | { type: 'ride'; key: string; ride: RideHistory };
+
+  const listItems = useMemo((): ListItem[] => {
+    const items: ListItem[] = [];
+    sections.forEach(section => {
+      items.push({ type: 'header', key: `h-${section.title}`, title: section.title });
+      section.data.forEach(ride => items.push({ type: 'ride', key: ride.id, ride }));
+    });
+    return items;
+  }, [sections]);
+
+  const renderItem = useCallback(({ item }: { item: ListItem }) => {
+    if (item.type === 'header') {
+      return <Text style={styles.monthHeader}>{item.title}</Text>;
+    }
+    const { ride } = item;
+    return (
+      <TouchableOpacity
+        style={styles.rideCard}
+        onPress={() => handleRidePress(ride)}
+      >
+        <View style={[styles.rideIcon, { backgroundColor: '#FFF0F0' }]}>
+          <Ionicons
+            name={getRideIcon(ride.status) as any}
+            size={20}
+            color={colors.primary}
+          />
+        </View>
+
+        <View style={styles.rideDetails}>
+          <Text style={styles.rideDestination} numberOfLines={1}>
+            {ride.dropoff_address || 'Unknown destination'}
+          </Text>
+          <Text style={styles.rideInfo}>
+            {formatDate(ride.created_at)} • {getVehicleType(ride.vehicle_type_id)}
+          </Text>
+        </View>
+
+        <View style={styles.rideFareContainer}>
+          <Text style={[styles.rideFare, ride.status === 'cancelled' && styles.rideFareCancelled]}>
+            ${ride.status === 'cancelled' ? '0.00' : ride.total_fare?.toFixed(2) || '0.00'}
+          </Text>
+          <View style={styles.rideStatusContainer}>
+            <View style={[styles.statusDot, { backgroundColor: getStatusColor(ride.status) }]} />
+            <Text style={[styles.rideStatus, { color: getStatusColor(ride.status) }]}>
+              {getStatusText(ride.status)}
+            </Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
+  }, [styles, colors, vehicleTypes]);
+
+  const ListFooter = loadingMore ? (
+    <ActivityIndicator size="small" color={colors.primary} style={{ padding: 16 }} />
+  ) : null;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -188,7 +286,7 @@ export default function ActivityScreen() {
               <TouchableOpacity
                 key={f}
                 style={[styles.filterTab, filter === f && styles.filterTabActive]}
-                onPress={() => setFilter(f)}
+                onPress={() => setFilter(f as FilterType)}
               >
                 <Text style={[styles.filterTabText, filter === f && styles.filterTabTextActive]}>
                   {f.charAt(0).toUpperCase() + f.slice(1)}
@@ -197,68 +295,36 @@ export default function ActivityScreen() {
             ))}
           </View>
 
-          <ScrollView
-            style={styles.content}
-            contentContainerStyle={styles.contentContainer}
-            showsVerticalScrollIndicator={false}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-          >
-            {fetchError ? (
-              <View style={styles.emptyState}>
-                <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
-                <Text style={[styles.emptyTitle, { color: '#EF4444' }]}>Could not load rides</Text>
-                <Text style={styles.emptyText}>Pull down to refresh.</Text>
+          {fetchError ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
+              <Text style={[styles.emptyTitle, { color: '#EF4444' }]}>Could not load rides</Text>
+              <Text style={styles.emptyText}>Pull down to refresh.</Text>
+            </View>
+          ) : rides.length === 0 && !loading ? (
+            <View style={styles.emptyState}>
+              <View style={styles.emptyIconContainer}>
+                <Ionicons name="car-outline" size={48} color="#CCC" />
               </View>
-            ) : rides.length === 0 && !loading ? (
-              <View style={styles.emptyState}>
-                <View style={styles.emptyIconContainer}>
-                  <Ionicons name="car-outline" size={48} color="#CCC" />
-                </View>
-                <Text style={styles.emptyTitle}>{t('activity.no_rides')}</Text>
-                <Text style={styles.emptyText}>{t('activity.no_rides_subtitle')}</Text>
-              </View>
-            ) : (
-              Object.entries(groupedRides).map(([month, monthRides]) => (
-                <View key={month}>
-                  <Text style={styles.monthHeader}>{month}</Text>
-                  {monthRides.map((ride) => (
-                    <TouchableOpacity
-                      key={ride.id}
-                      style={styles.rideCard}
-                      onPress={() => handleRidePress(ride)}
-                    >
-                      <View style={[styles.rideIcon, { backgroundColor: '#FFF0F0' }]}>
-                        <Ionicons
-                          name={getRideIcon(ride.status) as any}
-                          size={20}
-                          color={colors.primary}
-                        />
-                      </View>
-                      <View style={styles.rideDetails}>
-                        <Text style={styles.rideDestination} numberOfLines={1}>
-                          {ride.dropoff_address || 'Unknown destination'}
-                        </Text>
-                        <Text style={styles.rideInfo}>
-                          {formatDate(ride.created_at)} • {getVehicleType(ride.vehicle_type_id)}
-                        </Text>
-                      </View>
-                      <View style={styles.rideFareContainer}>
-                        <Text style={[styles.rideFare, ride.status === 'cancelled' && styles.rideFareCancelled]}>
-                          ${ride.status === 'cancelled' ? '0.00' : ride.total_fare?.toFixed(2) || '0.00'}
-                        </Text>
-                        <View style={styles.rideStatusContainer}>
-                          <View style={[styles.statusDot, { backgroundColor: getStatusColor(ride.status) }]} />
-                          <Text style={[styles.rideStatus, { color: getStatusColor(ride.status) }]}>
-                            {getStatusText(ride.status)}
-                          </Text>
-                        </View>
-                      </View>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              ))
-            )}
-          </ScrollView>
+              <Text style={styles.emptyTitle}>{t('activity.no_rides')}</Text>
+              <Text style={styles.emptyText}>{t('activity.no_rides_subtitle')}</Text>
+            </View>
+          ) : (
+            <FlatList
+              data={listItems}
+              keyExtractor={item => item.key}
+              renderItem={renderItem}
+              style={styles.content}
+              contentContainerStyle={styles.contentContainer}
+              showsVerticalScrollIndicator={false}
+              onEndReached={loadMore}
+              onEndReachedThreshold={0.3}
+              ListFooterComponent={ListFooter}
+              refreshControl={
+                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+              }
+            />
+          )}
         </>
       )}
 

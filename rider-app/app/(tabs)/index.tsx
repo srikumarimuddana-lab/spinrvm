@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
@@ -22,6 +23,8 @@ import CustomAlert from '@shared/components/CustomAlert';
 import { SOSButton } from '@shared/components/SOSButton';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+
+const HOME_DATA_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 const { width, height } = Dimensions.get('window');
 
@@ -50,6 +53,7 @@ export default function HomeScreen() {
     variant: 'info' | 'warning' | 'danger' | 'success';
   }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = useRef<any>(null);
+  const lastFetchedAt = useRef<number>(0);
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -71,53 +75,61 @@ export default function HomeScreen() {
     return null;
   };
 
-  useEffect(() => {
-    (async () => {
-      // 0. Load cached location INSTANTLY (from previous session)
-      const cached = await loadLastLocation();
-      if (cached) {
-        const cachedLoc = { coords: { latitude: cached.lat, longitude: cached.lng } };
-        setLocation(cachedLoc);
-        setUserLocation({ latitude: cached.lat, longitude: cached.lng });
+  const fetchHomeData = useCallback(async () => {
+    // 0. Load cached location INSTANTLY (from previous session)
+    const cached = await loadLastLocation();
+    if (cached) {
+      const cachedLoc = { coords: { latitude: cached.lat, longitude: cached.lng } };
+      setLocation(cachedLoc);
+      setUserLocation({ latitude: cached.lat, longitude: cached.lng });
+    }
+
+    let { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') return;
+
+    // 1. Get last known from OS (cached GPS, faster than full fix)
+    try {
+      const lastKnown = await Location.getLastKnownPositionAsync();
+      if (lastKnown) {
+        setLocation(lastKnown);
+        setUserLocation({ latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude });
+        saveLastLocation(lastKnown.coords.latitude, lastKnown.coords.longitude);
       }
+    } catch {}
 
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
+    // 2. Get accurate position in background; weather + saved places in parallel
+    Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+      .then(loc => {
+        setLocation(loc);
+        setUserLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+        saveLastLocation(loc.coords.latitude, loc.coords.longitude);
 
-      // 1. Get last known from OS (cached GPS, faster than full fix)
-      try {
-        const lastKnown = await Location.getLastKnownPositionAsync();
-        if (lastKnown) {
-          setLocation(lastKnown);
-          setUserLocation({ latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude });
-          saveLastLocation(lastKnown.coords.latitude, lastKnown.coords.longitude);
-        }
-      } catch {}
+        // 3. Weather in parallel with position fix
+        fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.coords.latitude}&longitude=${loc.coords.longitude}&current_weather=true`)
+          .then(r => r.json())
+          .then(data => {
+            if (data?.current_weather?.temperature !== undefined) {
+              setTemperature(Math.round(data.current_weather.temperature));
+            }
+          })
+          .catch(() => {});
+      })
+      .catch(() => {});
 
-      // 2. Get accurate position in background
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
-        .then(loc => {
-          setLocation(loc);
-          setUserLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
-          saveLastLocation(loc.coords.latitude, loc.coords.longitude);
-
-          // 3. Weather in parallel
-          fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.coords.latitude}&longitude=${loc.coords.longitude}&current_weather=true`)
-            .then(r => r.json())
-            .then(data => {
-              if (data?.current_weather?.temperature !== undefined) {
-                setTemperature(Math.round(data.current_weather.temperature));
-              }
-            })
-            .catch(() => {});
-        })
-        .catch(() => {});
-    })();
-  }, []);
-
-  useEffect(() => {
+    // 4. Saved places (independent of GPS fix)
     fetchSavedAddresses();
   }, []);
+
+  // Use useFocusEffect so tab switches don't re-fire all requests unless data
+  // is stale (older than HOME_DATA_TTL_MS). First mount always fetches.
+  useFocusEffect(
+    useCallback(() => {
+      const now = Date.now();
+      if (now - lastFetchedAt.current < HOME_DATA_TTL_MS) return;
+      lastFetchedAt.current = now;
+      fetchHomeData();
+    }, [fetchHomeData])
+  );
 
   const getGreeting = () => {
     const hour = new Date().getHours();

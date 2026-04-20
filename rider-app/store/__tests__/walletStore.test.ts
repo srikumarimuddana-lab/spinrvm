@@ -170,31 +170,42 @@ describe('walletStore', () => {
     });
   });
 
-  // R-P1-25: payWithWallet and addTip idempotency tests
-  describe('payWithWallet idempotency', () => {
-    it('second identical wallet payment reuses existing transaction (no balance change)', async () => {
+  // ---------------------------------------------------------------------------
+  // R-P3-7 — payWithWallet insufficient balance rejection
+  // ---------------------------------------------------------------------------
+  describe('payWithWallet', () => {
+    it('deducts balance on success', async () => {
       useWalletStore.setState({ wallet: makeWallet({ balance: 50.0 }) });
-
-      // First payment succeeds
       mockApi.post.mockResolvedValueOnce({ data: { balance: 40.5 } });
-      await useWalletStore.getState().payWithWallet?.('ride-99', 9.5);
 
-      // Verify balance updated
-      if (useWalletStore.getState().wallet?.balance !== undefined) {
-        expect(useWalletStore.getState().wallet?.balance).toBeCloseTo(40.5);
-      }
+      await useWalletStore.getState().payWithWallet('ride-99', 9.5);
 
-      // Second attempt with same ride returns already-paid (409/200 with already_paid)
-      mockApi.post.mockResolvedValueOnce({ data: { balance: 40.5, already_paid: true } });
-      const result: any = await useWalletStore.getState().payWithWallet?.('ride-99', 9.5);
+      expect(mockApi.post).toHaveBeenCalledWith('/wallet/pay', { ride_id: 'ride-99', amount: 9.5 });
+      expect(useWalletStore.getState().wallet?.balance).toBe(40.5);
+      expect(useWalletStore.getState().isLoading).toBe(false);
+    });
 
-      // Balance unchanged after idempotent call
-      if (result?.already_paid !== undefined) {
-        expect(result.already_paid).toBe(true);
-      }
+    it('sets error and rethrows when balance is insufficient', async () => {
+      useWalletStore.setState({ wallet: makeWallet({ balance: 5.0 }) });
+
+      const err: any = new Error('Request failed with status code 400');
+      err.response = { data: { detail: 'Insufficient balance' } };
+      mockApi.post.mockRejectedValueOnce(err);
+
+      await expect(
+        useWalletStore.getState().payWithWallet('ride-99', 20.0)
+      ).rejects.toThrow();
+
+      expect(useWalletStore.getState().error).toBe('Insufficient balance');
+      expect(useWalletStore.getState().isLoading).toBe(false);
+      // Balance should be unchanged — payment was rejected
+      expect(useWalletStore.getState().wallet?.balance).toBe(5.0);
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // R-P1-25: addTip idempotency
+  // ---------------------------------------------------------------------------
   describe('addTip idempotency', () => {
     it('second tip call is rejected when a tip already exists', async () => {
       // Backend rejects duplicate tip with 400

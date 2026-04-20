@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
   Text,
@@ -30,7 +31,7 @@ import type { ThemeColors } from '@shared/theme/index';
 
 const { width } = Dimensions.get('window');
 
-export default function RideInProgressScreen() {
+function RideInProgressScreenContent() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency, isLoading, error } = useRideStore();
@@ -564,6 +565,14 @@ I've shared my live location with you for safety.
         onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
       />
     </View>
+  );
+}
+
+export default function RideInProgressScreen() {
+  return (
+    <ErrorBoundary>
+      <RideInProgressScreenContent />
+    </ErrorBoundary>
   );
 }
 

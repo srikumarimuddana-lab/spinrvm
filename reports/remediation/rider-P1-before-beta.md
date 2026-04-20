@@ -356,6 +356,64 @@ phone: str = Field(
 
 ---
 
+## R-P1-17 · /rides/{id}/start Accepts Rider Token — Bypasses OTP Verification
+
+**Audit finding [07-1 HIGH].** `rider_start_ride` (POST `/rides/{id}/start`) in
+`backend/routes/rides.py:1876–1890` is reachable by any authenticated rider. It
+checks only that the caller is the ride's `rider_id`, then unconditionally flips
+the ride to `in_progress` and records `ride_started_at` — no OTP check, no driver
+role verification. The intended start path is the driver-side
+`/drivers/rides/{id}/start` endpoint, which requires the 4-digit OTP. This
+parallel path completely bypasses pickup OTP verification.
+
+**File to fix:** `backend/routes/rides.py:1876–1890`
+
+**How to fix:**
+```python
+# Option A — remove the endpoint entirely (driver-side path is sufficient).
+# Option B — restrict to driver role only:
+@api_router.post("/{ride_id}/start")
+async def rider_start_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride or not driver or ride.get("driver_id") != driver["id"]:
+        raise HTTPException(status_code=403, detail="Only the assigned driver can start the ride")
+    if ride.get("status") not in ["driver_arrived"]:
+        raise HTTPException(status_code=400, detail=f"Cannot start from state: {ride.get('status')}")
+    await db_supabase.update_ride(ride_id, {"status": "in_progress", ...})
+```
+
+**Effort:** 1 hour
+
+---
+
+## R-P1-18 · cancel_ride Guard Uses Wrong Status String — In-Progress Rides Can Be Cancelled Free
+
+**Audit finding [07-2 HIGH].** `cancel_ride_rider` in `backend/routes/rides.py:1341`
+checks `ride.get("status") == 'trip_in_progress'` to block cancellation of live trips.
+The actual status string is `'in_progress'` — `'trip_in_progress'` is never assigned
+anywhere. This guard **never fires**. A rider can cancel a live in-progress trip and
+receive zero cancellation fee, leaving the driver mid-journey with no payment.
+
+**File to fix:** `backend/routes/rides.py:1341`
+
+**How to fix:**
+```python
+# Change:
+if ride.get("status") == 'trip_in_progress':
+# To:
+NON_CANCELLABLE = {'in_progress', 'completed', 'cancelled'}
+if ride.get('status') in NON_CANCELLABLE:
+    raise HTTPException(
+        status_code=400,
+        detail=f"Cannot cancel a ride that is {ride.get('status')}"
+    )
+```
+
+**Effort:** 30 minutes
+
+---
+
 ## R-P1-16 · driver_timeout Has No "Searching Again" UI Feedback
 
 **Audit finding [06-4 MEDIUM].** When the backend re-dispatches after a driver fails
@@ -400,3 +458,5 @@ case 'driver_timeout':
 - [ ] R-P1-14 OTP comparison uses hmac.compare_digest instead of DB equality lookup
 - [ ] R-P1-15 Backend OTP phone schema restricted to +1XXXXXXXXXX (Canada/US only)
 - [ ] R-P1-16 driver_timeout shows "Searching Again" alert before fetchRide
+- [ ] R-P1-17 /rides/{id}/start restricted to driver role only (OTP bypass closed)
+- [ ] R-P1-18 cancel_ride guard changed from 'trip_in_progress' to 'in_progress' (dead guard fixed)

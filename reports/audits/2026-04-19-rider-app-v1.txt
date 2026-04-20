@@ -1164,5 +1164,310 @@ TASK 06 TALLY
 | TOTAL           |    11 |
 
 ================================================================================
-[AUDIT IN PROGRESS — TASKS 07–16 PENDING]
+TASK 07 — STATE MACHINE & DISPATCH (Dimension 07)
+================================================================================
+Scope    : rider-app/store/rideStore.ts · rider-app/app/driver-arriving.tsx ·
+           rider-app/components/FreeCancelTimer.tsx ·
+           rider-app/hooks/useRiderSocket.ts · backend/routes/rides.py
+Framework: audit-framework/dimensions/07-state-machine.md
+Checks   : Cancel fee after driver_arrived · /start and /complete role guards ·
+           double booking · cold-start hydration · FreeCancelTimer expiry ·
+           driver_timeout UI reset · magic strings
+
+State machine: searching → driver_assigned → driver_accepted →
+               driver_arrived → in_progress → completed / cancelled
+
+────────────────────────────────────────────────────────────────────────────────
+
+[07-1] HIGH | Rider Can Call /rides/{id}/start Directly — Bypasses OTP Verification
+File: backend/routes/rides.py:1876–1890
+Finding: The endpoint rider_start_ride (POST /rides/{id}/start) is reachable by
+  any authenticated rider, not just the assigned driver. It checks only that
+  the caller is the ride's rider_id, then unconditionally flips the ride to
+  'in_progress' and sets ride_started_at — no OTP verification, no driver role
+  check, no requirement that the driver have entered the OTP on their device.
+  The driver-app's start-ride flow (POST /drivers/rides/{id}/start) is the
+  intended path: that endpoint verifies the 4-digit OTP before transitioning.
+  This endpoint creates a completely parallel bypass path:
+    POST /rides/{rideId}/start   (rider token)  →  status = 'in_progress'
+  A rider can start their own trip before the driver arrives (even from
+  'driver_assigned' state, because the guard only checks
+  `ride.status not in ["driver_arrived"]` — meaning driver_arrived is the
+  only allowed state, but the endpoint doesn't require the driver to have
+  verified anything). The entire OTP pickup-verification flow is skipped.
+  An adversarial rider could also use this to remove a driver from a ride
+  they don't want (start the ride, driver sees it as started but never
+  verified OTP, causing confusion and a potential dispute).
+  The endpoint's docstring "when OTP already verified or used together with
+  driver" acknowledges the OTP bypass but provides no enforcement.
+Fix: Remove rider_start_ride entirely, or restrict it to driver role:
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
+    if not driver or ride.get("driver_id") != driver["id"]:
+        raise HTTPException(status_code=403, detail="Only the assigned driver can start the ride")
+  Require OTP verification in the same guard. Rides must only transition to
+  in_progress via the driver-side /drivers/rides/{id}/start endpoint.
+  Effort: 1 hour.
+
+[07-2] HIGH | cancel_ride Uses Wrong Status Guard — In-Progress Rides Can Be Cancelled Free
+File: backend/routes/rides.py:1341
+Finding: The cancel_ride_rider endpoint checks:
+    if ride.get("status") == 'trip_in_progress':
+        raise RideStateError("Cannot cancel after trip has started")
+  The actual status string used throughout the codebase is 'in_progress', not
+  'trip_in_progress'. This string is never assigned by any endpoint. The guard
+  therefore NEVER fires. A rider whose ride is in status 'in_progress' (trip
+  actively under way) can successfully call POST /rides/{id}/cancel and will:
+  (a) cancel a live trip mid-journey,
+  (b) receive no cancellation fee (charged_driver stays 0 because neither the
+      driver_arrived branch nor the time-based branch triggers for in_progress),
+  (c) leave the driver mid-trip with no payment and no notification.
+  The driver earnings for the partial trip are forfeit.
+  Reproduction: ride.status = 'in_progress' → POST /rides/{id}/cancel →
+  returns {success: true, cancellation_fee: 0}.
+Fix: Change the guard to use the correct status string:
+    if ride.get("status") == 'in_progress':
+        raise RideStateError("Cannot cancel after trip has started")
+  Additionally, add a comprehensive guard covering all non-cancellable states:
+    NON_CANCELLABLE = {'in_progress', 'completed', 'cancelled'}
+    if ride.get('status') in NON_CANCELLABLE:
+        raise HTTPException(400, f"Cannot cancel ride in state: {ride.get('status')}")
+  Effort: 30 minutes.
+
+[07-3] HIGH | Double Booking — No Active Ride Guard on Client or Server
+File: rider-app/store/rideStore.ts:319–353 · backend/routes/rides.py:515–739
+Finding: createRide() in rideStore.ts does not check whether currentRide is
+  already set before calling POST /rides. The backend create_ride handler
+  performs no query to verify whether the rider already has an active ride in
+  states ('searching', 'driver_assigned', 'driver_accepted', 'driver_arrived',
+  'in_progress'). If the rider double-taps the Book button or navigates back
+  and re-submits payment-confirm.tsx before the first request returns, two
+  simultaneous rides are created and two drivers are dispatched.
+  payment-confirm.tsx uses a `isSubmitting` ref (line 51-53) that prevents
+  UI-level double-taps within the same screen mount, but this guard is reset
+  on each navigation and is bypassed by page-reload or navigation back.
+  This was pre-populated as R-P0-5; the audit confirms neither the store nor
+  the backend has the guard. The isSubmitting ref only protects against the
+  fastest double-taps, not against navigating back and re-submitting.
+Fix: (a) Client — in createRide(), before the API call:
+    if (get().currentRide) throw new Error('A ride is already active');
+  (b) Server — in create_ride(), after the ban check:
+    existing = await db.find_one('rides', {'rider_id': current_user['id'],
+      'status': {'$in': ['searching', 'driver_assigned', 'driver_accepted',
+                          'driver_arrived', 'in_progress']}})
+    if existing:
+        raise HTTPException(409, 'You already have an active ride')
+  Effort: 2–3 hours (P0-5 already tracked).
+
+[07-4] MEDIUM | hydrateActiveRide() Restores Stale Ride Without Backend Validation
+File: rider-app/store/rideStore.ts:584–602
+Finding: hydrateActiveRide() reads the last known ride from AsyncStorage and,
+  if status is not in TERMINAL_STATUSES, immediately populates currentRide
+  and currentDriver from the stale local copy — without calling /rides/active
+  to confirm the ride is still live. If the app was closed while a ride was
+  in_progress and the ride completed (or was cancelled) while the app was
+  shut down, the next cold start will restore the stale 'in_progress' ride
+  and route the rider to ride-in-progress.tsx with ghost data. The rider sees
+  a live-looking ride screen for a trip that already ended.
+  The subsequent fetchActiveRide() call (invoked separately in _layout.tsx)
+  will eventually correct this, but there is a visible window of incorrect
+  state between hydrateActiveRide() resolving and fetchActiveRide() returning.
+  If fetchActiveRide() fails (network unavailable), the ghost state persists
+  indefinitely and the rider cannot book a new ride.
+  This was pre-populated as R-P2-2; the audit confirms the validation call
+  (GET /rides/active) is absent from hydrateActiveRide().
+Fix: Validate the stored ride against the backend before setting state:
+    hydrateActiveRide: async () => {
+      const raw = await AsyncStorage.getItem(ACTIVE_RIDE_KEY);
+      if (!raw) return;
+      const { currentRide } = JSON.parse(raw);
+      if (!currentRide || TERMINAL_STATUSES.has(currentRide.status)) {
+        await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
+        return;
+      }
+      try {
+        const live = await api.get('/rides/active');
+        if (!live.data?.active || live.data.ride?.id !== currentRide.id) {
+          await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
+          return; // stale — do not restore
+        }
+        if (!get().currentRide) {
+          set({ currentRide: live.data.ride, currentDriver: live.data.ride.driver || null });
+        }
+      } catch {
+        await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
+      }
+    }
+  Effort: 2 hours (R-P2-2 already tracked).
+
+[07-5] MEDIUM | FreeCancelTimer Shows Expired But Does Not Disable Cancel Button
+File: rider-app/components/FreeCancelTimer.tsx:54–90 ·
+      rider-app/app/driver-arriving.tsx:537–547
+Finding: FreeCancelTimer correctly counts down the free-cancel window and
+  displays "Cancellation fee: $X" in red when the window expires. However,
+  the component is display-only — it emits no callback when the timer reaches
+  zero, and the Cancel button in driver-arriving.tsx remains fully enabled and
+  shows a fee warning but does NOT visually communicate that the fee will be
+  charged. A rider who sees the "Cancellation fee: $3.00" label on the timer
+  may still not associate the timer expiry with the Cancel button becoming
+  a paid action.
+  More critically: there is no onExpire callback from FreeCancelTimer to the
+  parent screen. The Cancel button is not disabled; no toast appears saying
+  "Free cancel window expired." The only signal is the passive label change
+  inside the timer card. A rider who glances at the screen without reading
+  the timer text may tap Cancel thinking it is still free.
+  Additionally, the handleBack() function in driver-arriving.tsx correctly
+  shows "A cancellation fee of $X will be charged" when status=driver_arrived,
+  but the fee dialog is NOT triggered before the timer expires for
+  status=driver_accepted (the dialog says "free cancel" even when the timer
+  has already expired at that status).
+Fix:
+  (a) Add an onExpire?: () => void prop to FreeCancelTimer. When the timer
+      hits zero, call onExpire(). In driver-arriving.tsx, on onExpire, show
+      a toast or banner: "Free cancel window expired — cancellation fee now
+      applies."
+  (b) In handleBack(), when status is driver_accepted AND the free cancel
+      window has expired (free_cancel_seconds_remaining === 0), switch to
+      the fee-warning dialog instead of the free cancel dialog.
+  Effort: 1–2 hours.
+
+[07-6] MEDIUM | driver_timeout Does Not Reset UI to "Searching" State
+File: rider-app/hooks/useRiderSocket.ts:111–115
+Finding: The driver_timeout WebSocket case at line 113–115 only calls
+  fetchRide(rideId). It does NOT call applyRideStatusFromWS to immediately
+  set currentRide.status back to 'searching' in the store. The UI continues
+  to display the driver card, driver name, and route with the previous
+  driver's details while the fetchRide response is in flight. At the 3 s
+  poll interval this is a brief inconsistency; but if the poll is in slow
+  mode (15 s) or if the network is slow, the rider sees the previous driver's
+  details for up to 15 s after the driver timed out. There is also no Alert
+  or notification to tell the rider what happened. This was documented in
+  finding [06-4] and R-P1-16; re-confirmed here as part of the D07 state
+  machine audit.
+Fix: In the driver_timeout case, immediately apply the status transition and
+  show an alert before fetching:
+    case 'driver_timeout':
+      if (rideId) {
+        applyRideStatusFromWS(rideId, 'searching');  // instant UI update
+        Alert.alert('Driver Not Available',
+          'Your driver didn\'t respond. Finding another driver…');
+        fetchRide(rideId);
+      }
+      break;
+  Effort: 30 minutes (R-P1-16 already tracked).
+
+[07-7] MEDIUM | Ride Status Magic Strings Scattered Across 36 Screens — No Constants
+File: rider-app/store/rideStore.ts · rider-app/hooks/useRiderSocket.ts ·
+      rider-app/app/ (all 36 screens)
+Finding: Status strings 'searching', 'driver_assigned', 'driver_accepted',
+  'driver_arrived', 'in_progress', 'completed', 'cancelled' appear as inline
+  literals across the entire codebase. The pre-audit baseline noted 78 magic
+  ride-status strings. The wrong-status bug in [07-2] ('trip_in_progress'
+  instead of 'in_progress') is a direct consequence of this pattern — a typo
+  in a string literal created a permanently dead guard. The client state
+  machine string 'driver_accepted' matches the backend string; however, no
+  TypeScript type enforces this correspondence. A future rename or addition
+  of a new status would require a codebase-wide grep to catch all usages.
+  This was pre-populated as R-P2-3; confirmed present in every ride-flow file.
+Fix: Create rider-app/constants/rideStatus.ts:
+    export const RideStatus = {
+      SEARCHING: 'searching',
+      DRIVER_ASSIGNED: 'driver_assigned',
+      DRIVER_ACCEPTED: 'driver_accepted',
+      DRIVER_ARRIVED: 'driver_arrived',
+      IN_PROGRESS: 'in_progress',
+      COMPLETED: 'completed',
+      CANCELLED: 'cancelled',
+    } as const;
+  Replace all inline literals with RideStatus.X references. On the backend,
+  define VALID_STATUSES and CANCEL_ALLOWED_STATES as module-level frozensets.
+  Effort: 3–4 hours (R-P2-3 already tracked).
+
+────────────────────────────────────────────────────────────────────────────────
+PASSES
+────────────────────────────────────────────────────────────────────────────────
+
+[07-8] PASS | Cancellation Fee Correctly Applied and Paid Out for driver_arrived
+File: backend/routes/rides.py:1356–1412
+Finding: cancel_ride_rider correctly detects ride.status == 'driver_arrived'
+  (line 1356) and charges a flat $5.00 driver cancellation fee (charged_driver
+  = Decimal("5.00")) plus the admin portion. The fee is immediately credited
+  to the driver's wallet (lines 1383–1405) with a wallet_transactions record
+  and a push notification to the driver. The cancel button in
+  driver-arriving.tsx (handleBack, lines 131–148) correctly shows a fee
+  warning dialog before proceeding. The fee is calculated server-side from
+  app_settings — not hardcoded on the client. The $5.00 driver fee and
+  $0.50 admin fee are independent of the client-supplied values.
+
+[07-9] PASS | /rides/{id}/complete Is a Read-Only Endpoint (No State Mutation)
+File: backend/routes/rides.py:1893–1902
+Finding: rider_complete_ride (POST /rides/{id}/complete) does NOT transition
+  the ride to 'completed'. It simply calls get_ride(ride_id) and returns the
+  current ride dict. The ride is completed exclusively by the driver-side
+  endpoint (/drivers/rides/{id}/complete), which sets status='completed',
+  stores the final distance, and processes driver earnings. The rider's
+  /complete endpoint is a convenience fetch for the ride-completed.tsx screen.
+  No state bypass is possible through this endpoint.
+
+[07-10] PASS | Atomic Driver Claim Prevents Double-Accept Race
+File: backend/routes/rides.py:189–201
+Finding: match_driver_to_ride uses db_supabase.claim_driver_atomic() to
+  atomically claim a driver (sets is_available=False) before assigning them
+  to a ride. If two concurrent dispatch calls race, the second claim returns
+  None and triggers a fallback loop through remaining candidates. The ride
+  assignment UPDATE is only performed after a successful atomic claim.
+  This addresses the "two drivers both accept the same ride" CRITICAL pattern
+  in the D07 severity guide.
+
+[07-11] PASS | 5-Minute Auto-Cancel Implemented for "searching" Timeout
+File: backend/routes/rides.py:698–737
+Finding: After ride creation, if the ride returns to 'searching' status,
+  asyncio.create_task(ride_search_timeout(ride.id, 300)) is launched. After
+  300 s it re-checks the ride; if still 'searching', it cancels the ride,
+  notifies the rider via WebSocket and push notification, and logs the event.
+  This satisfies the D07 checklist item "5-minute auto-cancel if no driver
+  found — notification sent to rider."
+
+[07-12] PASS | Re-Dispatch on Driver Decline Is Handled (Not Fire-and-Forget)
+File: backend/routes/rides.py:340–411 (_offer_timeout_handler)
+Finding: _offer_timeout_handler waits for the driver to respond. If the ride
+  is still in 'driver_assigned' state after timeout_seconds (offer_timeout + 15),
+  it releases the driver (sets is_available=True), resets the ride to
+  'searching', notifies the rider via WebSocket, and calls
+  match_driver_to_ride(ride_id) again. Re-dispatch is fully implemented and
+  server-authoritative (fires even if the driver's device crashes or loses
+  connectivity). The function handles errors with a try/except and logs
+  failures via logger.warning — no silent failure on exception.
+
+[07-13] PASS | Driver Card Hidden Until driver_accepted State — No Pre-Accept Leak
+File: rider-app/app/driver-arriving.tsx:450–453
+Finding: The driver details card is only rendered when
+  currentRide.status === 'driver_accepted' || 'driver_arrived' || 'in_progress'.
+  While the ride is in 'driver_assigned' (dispatched but driver hasn't tapped
+  Accept), the screen shows a "Finding your driver" ActivityIndicator with no
+  driver name, vehicle, or plate. This prevents showing a driver's identity
+  before they have committed to the ride.
+
+[07-14] PASS | Cancellation Fee Calculation Uses Server-Side app_settings
+File: rider-app/app/driver-arriving.tsx:105–106 · backend/routes/rides.py:898–937
+Finding: The cancel fee and free-cancel window are read from
+  (currentRide as any)?.cancellation_fee and free_cancel_window_seconds, which
+  are injected into the GET /rides/{id} response from app_settings at
+  lines 908–937. The old client-side formula (Math.min(5, fare * 0.2)) has
+  been replaced. Fee values are server-authoritative.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 07 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     3 |
+| MEDIUM          |     4 |
+| LOW             |     0 |
+| PASS            |     7 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    14 |
+
+================================================================================
+[AUDIT IN PROGRESS — TASKS 08–16 PENDING]
 ================================================================================

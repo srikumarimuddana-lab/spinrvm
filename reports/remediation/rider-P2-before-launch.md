@@ -658,6 +658,55 @@ if (status !== 'granted') {
 
 ---
 
+## R-P2-31 · FreeCancelTimer Shows Expired but Does Not Disable Cancel Button
+
+**Audit finding [07-5 MEDIUM].** `FreeCancelTimer` in
+`rider-app/components/FreeCancelTimer.tsx` is a display-only component: when the
+free-cancel window expires it changes the label to "Cancellation fee: $X" but emits
+no callback. The Cancel button in `driver-arriving.tsx` remains enabled and shows
+no visual change when the window expires while the ride is in `driver_accepted`
+state. A rider who misses the passive label change may tap Cancel believing it is
+still free.
+
+**Files to fix:**
+- `rider-app/components/FreeCancelTimer.tsx` — add `onExpire` prop
+- `rider-app/app/driver-arriving.tsx` — fire fee warning on expiry + update handleBack
+
+**How to fix:**
+```typescript
+// FreeCancelTimer.tsx — add prop and call it:
+interface FreeCancelTimerProps {
+  onExpire?: () => void;
+  // ... existing props
+}
+// In the setInterval callback when remaining === 0:
+if (remaining === 0) {
+  clearInterval(interval);
+  onExpire?.();
+}
+
+// driver-arriving.tsx — wire the callback:
+<FreeCancelTimer
+  driverAcceptedAt={(currentRide as any)?.driver_accepted_at}
+  freeCancelWindowSeconds={freeCancelWindowSeconds}
+  cancellationFee={cancellationFee}
+  onExpire={() =>
+    // Show a brief toast or banner: "Free cancel window expired — fee now applies"
+    setAlertState({ visible: true, title: 'Free Cancel Expired',
+      message: `A $${cancellationFee.toFixed(2)} fee now applies if you cancel.`,
+      variant: 'warning', buttons: [{ text: 'OK' }] })
+  }
+/>
+```
+
+Also update `handleBack()`: when `status === 'driver_accepted'` AND
+`(currentRide as any).free_cancel_seconds_remaining === 0`, show the fee-warning
+dialog rather than the "free cancel" dialog.
+
+**Effort:** 1–2 hours
+
+---
+
 ## Checklist
 
 - [ ] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
@@ -690,3 +739,4 @@ if (status !== 'granted') {
 - [ ] R-P2-28 Home screen zoom buttons increased to 44×44pt
 - [ ] R-P2-29 fetchRide() merges REST driver object but preserves WS-updated lat/lng (no marker jump-back)
 - [ ] R-P2-30 Location denied shows Alert + "Open Settings" deep-link instead of silent early-return
+- [ ] R-P2-31 FreeCancelTimer expiry fires onExpire callback; Cancel button shows fee warning for expired window

@@ -23,6 +23,8 @@ try:
         list_company_allowance_requests,
         list_company_allowances,
         list_company_members,
+        list_company_ride_payment_sources,
+        list_wallet_transactions,
         update_allowance_request,
         update_corporate_member,
         upsert_corporate_policy,
@@ -57,6 +59,8 @@ except ImportError:
         list_company_allowance_requests,
         list_company_allowances,
         list_company_members,
+        list_company_ride_payment_sources,
+        list_wallet_transactions,
         update_allowance_request,
         update_corporate_member,
         upsert_corporate_policy,
@@ -343,3 +347,124 @@ async def patch_policy(
         ]
 
     return await upsert_corporate_policy(company_id, patch)
+
+
+# ---------- Billing (Plan 6) ----------
+
+def _month_bounds(month: str) -> tuple[str, str]:
+    """Return (from_iso, to_iso) [inclusive-exclusive] bounds for YYYY-MM."""
+    from datetime import datetime as _dt
+
+    try:
+        anchor = _dt.strptime(month, "%Y-%m")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="month must be YYYY-MM") from exc
+    if anchor.month == 12:
+        end = anchor.replace(year=anchor.year + 1, month=1)
+    else:
+        end = anchor.replace(month=anchor.month + 1)
+    return anchor.isoformat(), end.isoformat()
+
+
+def _aggregate_rows(rows: list[dict]) -> dict:
+    allowance_total = 0.0
+    master_total = 0.0
+    by_member: dict[str, dict] = {}
+    for r in rows:
+        ad = float(r.get("allowance_debit_amount") or 0)
+        md = float(r.get("master_fallback_amount") or 0)
+        allowance_total += ad
+        master_total += md
+        mid = r.get("member_id") or "unknown"
+        slot = by_member.setdefault(
+            mid,
+            {"member_id": mid, "ride_count": 0, "allowance_total": 0.0, "master_total": 0.0, "total": 0.0},
+        )
+        slot["ride_count"] += 1
+        slot["allowance_total"] += ad
+        slot["master_total"] += md
+        slot["total"] += ad + md
+    total = allowance_total + master_total
+    return {
+        "ride_count": len(rows),
+        "allowance_total": round(allowance_total, 2),
+        "master_total": round(master_total, 2),
+        "total": round(total, 2),
+        "avg_fare": round(total / len(rows), 2) if rows else 0.0,
+        "by_member": sorted(by_member.values(), key=lambda m: m["total"], reverse=True),
+    }
+
+
+@router.get("/billing/summary")
+async def billing_summary(
+    company_id: str,
+    month: Optional[str] = None,
+    guard=Depends(require_company_admin),
+):
+    """Aggregate spend for a month (defaults to the current month in UTC).
+
+    Returns ride count, total company spend (allowance + master fallback),
+    average fare, and per-member breakdown sorted by total desc.
+    """
+    from datetime import datetime as _dt
+
+    if month is None:
+        month = _dt.utcnow().strftime("%Y-%m")
+    from_iso, to_iso = _month_bounds(month)
+    rows = await list_company_ride_payment_sources(
+        company_id=company_id, from_iso=from_iso, to_iso=to_iso, limit=1000,
+    )
+    wallet = await get_corporate_wallet_by_company(company_id) or {}
+    return {
+        "month": month,
+        "wallet_balance": float(wallet.get("balance") or 0),
+        "wallet_currency": wallet.get("currency") or "CAD",
+        **_aggregate_rows(rows),
+    }
+
+
+@router.get("/billing/statements/{month}")
+async def billing_statement(
+    company_id: str,
+    month: str,
+    guard=Depends(require_company_admin),
+):
+    """Full monthly statement: per-ride line items + summary totals.
+
+    `month` is YYYY-MM; returns 422 if the string is malformed.
+    """
+    from_iso, to_iso = _month_bounds(month)
+    rows = await list_company_ride_payment_sources(
+        company_id=company_id, from_iso=from_iso, to_iso=to_iso, limit=5000,
+    )
+    return {
+        "month": month,
+        "from": from_iso,
+        "to": to_iso,
+        "line_items": rows,
+        "summary": _aggregate_rows(rows),
+    }
+
+
+@router.get("/billing/transactions")
+async def billing_transactions(
+    company_id: str,
+    skip: int = 0,
+    limit: int = 50,
+    guard=Depends(require_company_admin),
+):
+    """Paged corporate wallet ledger (top-ups, debits, adjustments)."""
+    wallet = await get_corporate_wallet_by_company(company_id)
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+    txns = await list_wallet_transactions(
+        wallet_id=wallet["id"],
+        skip=max(skip, 0),
+        limit=min(max(limit, 1), 200),
+    )
+    return {
+        "wallet_id": wallet["id"],
+        "balance": float(wallet.get("balance") or 0),
+        "currency": wallet.get("currency") or "CAD",
+        "transactions": txns,
+    }

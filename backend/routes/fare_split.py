@@ -8,13 +8,14 @@ Flow:
 """
 
 import logging
+import re
 import uuid
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 try:
     from ..db import db
@@ -39,6 +40,12 @@ def _d(v) -> Decimal:
 class CreateFareSplitRequest(BaseModel):
     ride_id: str
     participant_phones: List[str] = Field(..., min_length=1, max_length=5)
+
+    @validator('participant_phones', each_item=True)
+    def validate_phone(cls, v: str) -> str:
+        if not re.match(r'^\+1\d{10}$', v):
+            raise ValueError(f'Phone must be in +1XXXXXXXXXX format: {v}')
+        return v
 
 
 class RespondToSplitRequest(BaseModel):

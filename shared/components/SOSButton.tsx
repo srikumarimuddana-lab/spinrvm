@@ -106,6 +106,10 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
         onPressIn={startPress}
         onPressOut={endPress}
         activeOpacity={0.9}
+        accessibilityLabel={triggered ? 'Emergency alert sent' : 'Emergency SOS'}
+        accessibilityRole="button"
+        accessibilityHint="Hold for 1.5 seconds to send an emergency alert"
+        accessibilityState={{ selected: triggered }}
       >
         <Ionicons
           name={triggered ? 'checkmark-circle' : 'shield'}

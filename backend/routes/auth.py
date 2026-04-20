@@ -75,14 +75,14 @@ async def _check_otp_lockout(phone: str) -> None:
         if locked:
             raise HTTPException(
                 status_code=429,
-                detail="Too many failed attempts. Please try again later.",
+                detail="ERR_OTP_LOCKED",
                 headers={"Retry-After": str(settings.OTP_LOCKOUT_DURATION_SECONDS)},
             )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Redis unavailable in OTP lockout check: {e}")
-        raise HTTPException(status_code=503, detail="Authentication service temporarily unavailable")
+        raise HTTPException(status_code=503, detail="ERR_AUTH_UNAVAILABLE")
 
 
 async def _record_otp_failure(phone: str) -> None:
@@ -214,8 +214,15 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
     await _check_otp_lockout(phone)
     otp_record = None
     try:
-        # compare hashes, never plain text (SEC-016)
-        otp_record = await db_supabase.get_otp_record(phone, hash_otp(code))
+        # R-P1-14: Fetch by phone only; compare hashes in constant time with
+        # hmac.compare_digest to prevent timing-based hash-prefix leakage.
+        import hmac as _hmac
+        otp_record = await db_supabase.get_otp_record_by_phone(phone)
+        if otp_record:
+            expected = otp_record.get("code", "")
+            actual = hash_otp(code)
+            if not _hmac.compare_digest(str(expected), str(actual)):
+                otp_record = None
     except Exception as e:
         logger.warning(f"Could not query OTP from DB: {e}")
 
@@ -230,7 +237,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
     if not otp_record:
         # Wrong code — record the failure (may trigger lockout)
         await _record_otp_failure(phone)
-        raise HTTPException(status_code=400, detail="Invalid verification code")
+        raise HTTPException(status_code=400, detail="ERR_OTP_INVALID")
     # Parse expires_at to datetime if it's a string (from Supabase)
     expires_at = otp_record.get("expires_at")
     if isinstance(expires_at, str):
@@ -240,11 +247,11 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             expires_at = datetime.fromisoformat(expires_at)
         except ValueError:
             logger.error(f"Invalid date format for OTP expires_at: {expires_at}")
-            raise HTTPException(status_code=500, detail="Internal data error: invalid expiration date") from None
+            raise HTTPException(status_code=500, detail="ERR_INTERNAL") from None
 
     if not expires_at:
         logger.error("OTP record missing expires_at field")
-        raise HTTPException(status_code=500, detail="Internal data error: missing expiration date")
+        raise HTTPException(status_code=500, detail="ERR_INTERNAL")
 
     # Ensure expires_at is timezone-aware for comparison
     if expires_at.tzinfo is None:
@@ -255,7 +262,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             await db_supabase.delete_otp_record(otp_record["id"])
         except Exception:  # noqa: S110
             pass
-        raise HTTPException(status_code=400, detail="OTP has expired")
+        raise HTTPException(status_code=400, detail="ERR_OTP_EXPIRED")
 
     try:
         await db_supabase.update_one("otp_records", {"id": otp_record["id"]}, {"verified": True})

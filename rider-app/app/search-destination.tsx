@@ -8,6 +8,8 @@ import {
   FlatList,
   Keyboard,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -316,6 +318,10 @@ export default function SearchDestinationScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
@@ -632,6 +638,7 @@ export default function SearchDestinationScreen() {
         buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
         onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
       />
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

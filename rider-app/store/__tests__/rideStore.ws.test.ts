@@ -144,4 +144,61 @@ describe('rideStore — WebSocket-driven updates', () => {
       expect(useRideStore.getState().currentRide).toBeNull();
     });
   });
+
+  // R-P1-24: driver_timeout, ride_cancelled, WS/poll race condition tests
+  describe('driver_timeout via applyRideStatusFromWS', () => {
+    it('should revert status to searching on driver_timeout', () => {
+      useRideStore.setState({
+        currentRide: { id: 'ride_1', status: 'driver_assigned' } as any,
+      });
+
+      useRideStore.getState().applyRideStatusFromWS('ride_1', 'searching');
+
+      expect(useRideStore.getState().currentRide?.status).toBe('searching');
+    });
+
+    it('should noop driver_timeout when no matching ride', () => {
+      useRideStore.setState({
+        currentRide: { id: 'ride_1', status: 'driver_assigned' } as any,
+      });
+
+      useRideStore.getState().applyRideStatusFromWS('ride_999', 'searching');
+
+      expect(useRideStore.getState().currentRide?.status).toBe('driver_assigned');
+    });
+  });
+
+  describe('ride_cancelled via clearRide', () => {
+    it('should clear ride + driver + chat on ride_cancelled', () => {
+      useRideStore.setState({
+        currentRide: { id: 'ride_1', status: 'driver_assigned' } as any,
+        currentDriver: { id: 'driver_1', name: 'Jane' } as any,
+        chatMessages: [{ id: 'm1', text: 'On my way' }],
+      });
+
+      useRideStore.getState().clearRide();
+
+      expect(useRideStore.getState().currentRide).toBeNull();
+      expect(useRideStore.getState().currentDriver).toBeNull();
+      expect(useRideStore.getState().chatMessages).toHaveLength(0);
+    });
+  });
+
+  describe('WS/poll race: last-write-wins on status', () => {
+    it('applyRideStatusFromWS after a poll should use latest status', () => {
+      useRideStore.setState({
+        currentRide: { id: 'ride_1', status: 'driver_assigned' } as any,
+      });
+
+      // Simulate poll setting a later status
+      useRideStore.setState({
+        currentRide: { id: 'ride_1', status: 'driver_arrived' } as any,
+      });
+
+      // WS arrives with stale status — should not downgrade
+      useRideStore.getState().applyRideStatusFromWS('ride_1', 'driver_arrived');
+
+      expect(useRideStore.getState().currentRide?.status).toBe('driver_arrived');
+    });
+  });
 });

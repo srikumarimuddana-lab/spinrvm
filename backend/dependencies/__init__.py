@@ -144,6 +144,12 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             payload = None
 
         if payload:
+            # R-P1-12: Enforce rider app audience — reject tokens minted for the
+            # driver app (which would otherwise create/access rider accounts).
+            rider_app_id = getattr(settings, "FIREBASE_RIDER_APP_ID", None)
+            if rider_app_id and payload.get("aud") != rider_app_id:
+                raise HTTPException(status_code=401, detail="ERR_TOKEN_AUDIENCE")
+
             uid = payload.get("uid") or payload.get("user_id")
             # Try to find user by Firebase UID
             user = await db_supabase.get_user_by_id(uid)
@@ -164,7 +170,15 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                     await db_supabase.create_user(new_user)
                     user = new_user
 
+            # R-P1-13: Apply same revocation checks as the JWT path so that
+            # /auth/logout-all also invalidates Firebase-authenticated sessions.
             if user:
+                if _token_version_mismatch({}, user):
+                    raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
+                token_session = payload.get("session_id")
+                db_session = user.get("current_session_id")
+                if db_session and token_session and token_session != db_session:
+                    raise HTTPException(status_code=401, detail="ERR_SESSION_EXPIRED")
                 driver = (lambda _r: _r[0] if _r else None)(
                     await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
                 )
@@ -211,7 +225,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         token_session = payload.get("session_id")
         db_session = user.get("current_session_id")
         if db_session and token_session != db_session:
-            raise HTTPException(status_code=401, detail="Session expired. Logged in from another device.")
+            raise HTTPException(status_code=401, detail="ERR_SESSION_EXPIRED")
         # Revocation gate — if the user's token_version has been bumped
         # (admin force-logout-all, password reset, suspected compromise)
         # every access token issued before the bump must be rejected.
@@ -221,7 +235,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         if _token_version_mismatch(payload, user):
             raise HTTPException(
                 status_code=401,
-                detail="Session revoked — please log in again.",
+                detail="ERR_SESSION_REVOKED",
             )
         # Role is always determined by the DB — never trust JWT role claims.
         # A forged JWT with "role": "super_admin" must not grant escalated access.

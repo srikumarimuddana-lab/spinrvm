@@ -1819,3 +1819,18 @@ async def find_companies_by_email_domain(domain: str) -> List[Dict[str, Any]]:
         )
         return _rows_from_res(res)
     return await run_sync(_fn)
+
+
+async def get_corporate_policy(company_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch the active corporate_policies row for a company."""
+    def _fn():
+        res = (
+            supabase.table("corporate_policies")
+            .select("*")
+            .eq("company_id", company_id)
+            .eq("active", True)
+            .limit(1)
+            .execute()
+        )
+        return _single_row_from_res(res)
+    return await run_sync(_fn)

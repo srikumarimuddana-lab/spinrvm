@@ -309,6 +309,7 @@ class CreateRideRequest(BaseModel):
     # was shown to the rider instead of re-reading the service area, so
     # the confirmed fare can't bait-and-switch from the estimate.
     estimate_token: Optional[str] = None
+    work_profile: Optional[bool] = None
 
     # ── Input validation (SEC-017) ──────────────────────────────────────── #
 

@@ -260,6 +260,7 @@ class Ride(BaseModel):
     total_fare: Decimal
     tip_amount: Decimal = Decimal("0.0")
     payment_method: str = "card"
+    payment_method_id: Optional[str] = None
     payment_intent_id: Optional[str] = None
     payment_status: str = "pending"
     status: str = "searching"
@@ -309,6 +310,7 @@ class CreateRideRequest(BaseModel):
     # was shown to the rider instead of re-reading the service area, so
     # the confirmed fare can't bait-and-switch from the estimate.
     estimate_token: Optional[str] = None
+    payment_method_id: Optional[str] = None
     work_profile: Optional[bool] = None
 
     # ── Input validation (SEC-017) ──────────────────────────────────────── #

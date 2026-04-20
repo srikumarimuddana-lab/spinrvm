@@ -41,6 +41,8 @@ except ImportError:
     from utils.rate_limiter import cancel_ride_limit, ride_request_limit
     from validators import validate_ride_location
 
+import stripe
+
 from .fares import _fares_for_location_impl, get_fares_for_location
 
 try:
@@ -792,6 +794,7 @@ async def create_ride(
         driver_earnings=_f(driver_earnings),
         admin_earnings=_f(admin_earnings),
         payment_method=body.payment_method,
+        payment_method_id=body.payment_method_id,
         status="searching",
         pickup_otp=hash_otp(pickup_otp_plain),
         ride_requested_at=datetime.utcnow(),
@@ -1358,8 +1361,6 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 },
             )
         elif outcome.status == "requires_action":
-            # 3DS / SCA — rider-app runs stripe.confirmPayment(client_secret)
-            # and then retries this endpoint.
             await db_supabase.update_ride(
                 ride_id,
                 {
@@ -1406,7 +1407,6 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 },
             )
         else:
-            # outcome.status == "failed" — ops issue, not a card decline.
             await db_supabase.update_ride(
                 ride_id,
                 {

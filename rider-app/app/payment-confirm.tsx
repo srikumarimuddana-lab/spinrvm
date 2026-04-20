@@ -28,15 +28,21 @@ interface CorporateAccount {
   company_name: string;
 }
 
-const PAYMENT_METHODS = [
-  { id: 'card', name: 'Credit Card', icon: 'card', last4: '4242' },
-  { id: 'wallet', name: 'Spinr Wallet', icon: 'wallet', last4: '' },
-];
+interface SavedCard {
+  id: string;
+  brand: string;
+  last4: string;
+  exp_month: number;
+  exp_year: number;
+  is_default: boolean;
+}
 
 function PaymentConfirmScreenContent() {
   const router = useRouter();
   const { pickup, dropoff, selectedVehicle, estimates, createRide, isLoading, scheduledTime } = useRideStore();
   const [selectedPayment, setSelectedPayment] = useState('card');
+  const [savedCards, setSavedCards] = useState<SavedCard[]>([]);
+  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [promoExpanded, setPromoExpanded] = useState(false);
   const [promoCode, setPromoCode] = useState('');
   const [promoDiscount, setPromoDiscount] = useState(0);
@@ -68,13 +74,23 @@ function PaymentConfirmScreenContent() {
     }).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    api.get('/payments/cards').then((res) => {
+      const cards: SavedCard[] = Array.isArray(res.data) ? res.data : [];
+      setSavedCards(cards);
+      const defaultCard = cards.find((c) => c.is_default) ?? cards[0];
+      if (defaultCard) setSelectedCardId(defaultCard.id);
+    }).catch(() => {});
+  }, []);
+
   const [isBooking, setIsBooking] = useState(false);
   const handleBookRide = async () => {
     if (isBooking || isLoading) return;
     setIsBooking(true);
     try {
       const corpId = useCorporate && selectedCorporateId ? selectedCorporateId : null;
-      const ride = await createRide(selectedPayment, corpId);
+      const pmId = selectedPayment === 'card' ? (selectedCardId ?? undefined) : undefined;
+      const ride = await createRide(selectedPayment, corpId, pmId);
       Analytics.rideRequested({
         vehicle_type: selectedVehicle?.name ?? 'unknown',
         estimated_fare: totalFare,
@@ -227,35 +243,69 @@ function PaymentConfirmScreenContent() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Payment Method</Text>
-          {PAYMENT_METHODS.map((method) => (
+
+          {/* Saved cards from Stripe */}
+          {savedCards.map((card) => {
+            const isSelected = selectedPayment === 'card' && selectedCardId === card.id;
+            return (
+              <TouchableOpacity
+                key={card.id}
+                style={[styles.paymentOption, isSelected && styles.paymentOptionSelected]}
+                onPress={() => { setSelectedPayment('card'); setSelectedCardId(card.id); }}
+              >
+                <View style={styles.paymentIconContainer}>
+                  <Ionicons name="card" size={24} color={isSelected ? colors.primary : colors.textDim} />
+                </View>
+                <View style={styles.paymentInfo}>
+                  <Text style={styles.paymentName}>{card.brand.charAt(0).toUpperCase() + card.brand.slice(1)}</Text>
+                  <Text style={styles.paymentDetails}>•••• {card.last4}  {card.exp_month}/{String(card.exp_year).slice(-2)}</Text>
+                </View>
+                {isSelected && (
+                  <View style={styles.paymentCheck}>
+                    <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+
+          {/* Show generic card option if no saved cards loaded yet */}
+          {savedCards.length === 0 && (
             <TouchableOpacity
-              key={method.id}
-              style={[
-                styles.paymentOption,
-                selectedPayment === method.id && styles.paymentOptionSelected,
-              ]}
-              onPress={() => setSelectedPayment(method.id)}
+              style={[styles.paymentOption, selectedPayment === 'card' && styles.paymentOptionSelected]}
+              onPress={() => setSelectedPayment('card')}
             >
               <View style={styles.paymentIconContainer}>
-                <Ionicons
-                  name={method.icon as any}
-                  size={24}
-                  color={selectedPayment === method.id ? colors.primary : colors.textDim}
-                />
+                <Ionicons name="card" size={24} color={selectedPayment === 'card' ? colors.primary : colors.textDim} />
               </View>
               <View style={styles.paymentInfo}>
-                <Text style={styles.paymentName}>{method.name}</Text>
-                {method.last4 && (
-                  <Text style={styles.paymentDetails}>•••• {method.last4}</Text>
-                )}
+                <Text style={styles.paymentName}>Credit Card</Text>
               </View>
-              {selectedPayment === method.id && (
+              {selectedPayment === 'card' && (
                 <View style={styles.paymentCheck}>
                   <Ionicons name="checkmark" size={18} color="#FFFFFF" />
                 </View>
               )}
             </TouchableOpacity>
-          ))}
+          )}
+
+          {/* Wallet */}
+          <TouchableOpacity
+            style={[styles.paymentOption, selectedPayment === 'wallet' && styles.paymentOptionSelected]}
+            onPress={() => setSelectedPayment('wallet')}
+          >
+            <View style={styles.paymentIconContainer}>
+              <Ionicons name="wallet" size={24} color={selectedPayment === 'wallet' ? colors.primary : colors.textDim} />
+            </View>
+            <View style={styles.paymentInfo}>
+              <Text style={styles.paymentName}>Spinr Wallet</Text>
+            </View>
+            {selectedPayment === 'wallet' && (
+              <View style={styles.paymentCheck}>
+                <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+              </View>
+            )}
+          </TouchableOpacity>
 
           <TouchableOpacity style={styles.addPaymentButton} onPress={() => router.push('/manage-cards' as any)}>
             <Ionicons name="add" size={20} color={colors.primary} />

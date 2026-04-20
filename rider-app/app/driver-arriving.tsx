@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
   Text,
@@ -31,7 +32,7 @@ import { FreeCancelTimer } from '../components/FreeCancelTimer';
 
 const { width } = Dimensions.get('window');
 
-export default function DriverArrivingScreen() {
+function DriverArrivingScreenContent() {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const router = useRouter();
@@ -649,6 +650,14 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
         onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
       />
     </View>
+  );
+}
+
+export default function DriverArrivingScreen() {
+  return (
+    <ErrorBoundary>
+      <DriverArrivingScreenContent />
+    </ErrorBoundary>
   );
 }
 

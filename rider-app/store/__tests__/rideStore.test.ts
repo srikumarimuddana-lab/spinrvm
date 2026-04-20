@@ -358,3 +358,138 @@ describe('rideStore — recent searches', () => {
     expect(useRideStore.getState().recentSearches).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// R-P3-7 — Hardening: missing action paths
+// ---------------------------------------------------------------------------
+
+describe('rideStore — createRide double-booking guard', () => {
+  test('propagates 409 conflict when server rejects duplicate ride', async () => {
+    const vehicle = { id: 'vt-1', name: 'Spinr X', description: 'Standard', icon: 'car', capacity: 4 };
+    useRideStore.setState({
+      pickup: makeLocation('100 Queen St'),
+      dropoff: makeLocation('200 King St'),
+      selectedVehicle: vehicle,
+    });
+
+    const conflictErr: any = new Error('Request failed with status code 409');
+    conflictErr.response = { status: 409, data: { detail: 'You already have an active ride' } };
+    mockApi.post.mockRejectedValueOnce(conflictErr);
+
+    await expect(
+      act(async () => useRideStore.getState().createRide('card'))
+    ).rejects.toThrow();
+
+    expect(useRideStore.getState().isLoading).toBe(false);
+    expect(useRideStore.getState().error).toBeTruthy();
+    expect(useRideStore.getState().currentRide).toBeNull();
+  });
+});
+
+describe('rideStore — cancelRide after driver_arrived', () => {
+  test('sets error state when backend rejects cancel for arrived driver', async () => {
+    useRideStore.setState({
+      currentRide: makeRide('driver_arrived') as any,
+      currentDriver: { id: 'drv-1', name: 'Bob' } as any,
+    });
+
+    const err: any = new Error('Request failed with status code 400');
+    err.response = { status: 400, data: { detail: 'Cancellation fee applies' } };
+    mockApi.post.mockRejectedValueOnce(err);
+
+    // cancelRide does not rethrow — it sets error state
+    await act(async () => {
+      await useRideStore.getState().cancelRide();
+    });
+
+    const state = useRideStore.getState();
+    expect(state.error).toBeTruthy();
+    // ride should NOT have been cleared — we only clear on success
+    expect(state.currentRide).not.toBeNull();
+    expect(state.isLoading).toBe(false);
+  });
+});
+
+describe('rideStore — hydrateActiveRide stale ride', () => {
+  const AsyncStorageMock = require('@react-native-async-storage/async-storage');
+
+  test('clears AsyncStorage when stored ride has terminal status', async () => {
+    const staleRide = makeRide('cancelled');
+    AsyncStorageMock.getItem.mockResolvedValueOnce(
+      JSON.stringify({ currentRide: staleRide, currentDriver: null })
+    );
+
+    await act(async () => {
+      await useRideStore.getState().hydrateActiveRide();
+    });
+
+    // Terminal ride must be removed from storage, not loaded into state
+    expect(AsyncStorageMock.removeItem).toHaveBeenCalled();
+    expect(useRideStore.getState().currentRide).toBeNull();
+  });
+
+  test('does not overwrite an already-loaded ride', async () => {
+    const memoryRide = makeRide('driver_accepted');
+    useRideStore.setState({ currentRide: memoryRide as any });
+
+    const storedRide = makeRide('driver_accepted', { id: 'ride-old' });
+    AsyncStorageMock.getItem.mockResolvedValueOnce(
+      JSON.stringify({ currentRide: storedRide, currentDriver: null })
+    );
+
+    await act(async () => {
+      await useRideStore.getState().hydrateActiveRide();
+    });
+
+    // Memory ride wins — stored ride should not overwrite it
+    expect(useRideStore.getState().currentRide?.id).toBe(memoryRide.id);
+  });
+});
+
+describe('rideStore — syncOfflineRequests', () => {
+  const AsyncStorageMock = require('@react-native-async-storage/async-storage');
+
+  test('replays queued create_ride requests and clears them on success', async () => {
+    const queuedReq = { id: 'q-1', type: 'create_ride', data: { vehicle_type_id: 'vt-1' }, retryCount: 0 };
+    AsyncStorageMock.getItem.mockResolvedValueOnce(JSON.stringify([queuedReq]));
+    mockApi.post.mockResolvedValueOnce({ data: makeRide('searching') });
+
+    await act(async () => {
+      await useRideStore.getState().syncOfflineRequests();
+    });
+
+    expect(mockApi.post).toHaveBeenCalledWith('/rides', queuedReq.data);
+    // Queue should now be empty (stored as [])
+    const storedQueue = JSON.parse(AsyncStorageMock.setItem.mock.calls.at(-1)[1]);
+    expect(storedQueue).toHaveLength(0);
+  });
+
+  test('removes request after max retries (3) on repeated failure', async () => {
+    const queuedReq = { id: 'q-2', type: 'create_ride', data: {}, retryCount: 2 };
+    AsyncStorageMock.getItem.mockResolvedValueOnce(JSON.stringify([queuedReq]));
+    mockApi.post.mockRejectedValueOnce(new Error('Network error'));
+
+    await act(async () => {
+      await useRideStore.getState().syncOfflineRequests();
+    });
+
+    // retryCount was already 2; after one more failure it hits >= 3 → removed
+    const storedQueue = JSON.parse(AsyncStorageMock.setItem.mock.calls.at(-1)[1]);
+    expect(storedQueue).toHaveLength(0);
+  });
+});
+
+describe('rideStore — triggerEmergency network failure', () => {
+  test('does not throw when API call fails (keeps 911 UI flow unblocked)', async () => {
+    mockApi.post.mockRejectedValueOnce(new Error('Network error'));
+
+    await expect(
+      act(async () =>
+        useRideStore.getState().triggerEmergency('ride-456', 43.65, -79.38)
+      )
+    ).resolves.toBeUndefined();
+
+    // Store error should NOT be set — triggerEmergency swallows network failures
+    expect(useRideStore.getState().error).toBeNull();
+  });
+});

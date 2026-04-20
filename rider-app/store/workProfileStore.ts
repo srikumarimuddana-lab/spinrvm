@@ -29,11 +29,26 @@ export interface AllowanceBalance {
   status: string | null;
 }
 
+export interface WorkTimeWindow {
+  day: 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+  start: string;
+  end: string;
+}
+
+export interface WorkPolicy {
+  active?: boolean;
+  max_fare_per_ride?: number | null;
+  allowed_geofence?: Record<string, unknown> | null;
+  allowed_time_windows?: WorkTimeWindow[] | null;
+  allowed_payment_source?: 'allowance_only' | 'master_only' | 'both';
+}
+
 interface WorkProfileState {
   profiles: WorkProfile[];
   activeCompanyId: string | null;
   workModeEnabled: boolean;
   balance: AllowanceBalance | null;
+  policy: WorkPolicy | null;
   requests: any[];
   isLoading: boolean;
   balanceLoading: boolean;
@@ -44,8 +59,10 @@ interface WorkProfileState {
   setActiveCompany(id: string): Promise<void>;
   setWorkMode(enabled: boolean): Promise<void>;
   fetchBalance(): Promise<void>;
+  fetchPolicy(): Promise<void>;
   fetchRequests(): Promise<void>;
   submitRequest(amount: number, reason: string): Promise<any>;
+  checkRide(fare: number, pickupAt?: Date): { ok: boolean; reasons: string[] };
 }
 
 const _persist = async (activeCompanyId: string | null, workModeEnabled: boolean) => {
@@ -59,6 +76,7 @@ export const useWorkProfileStore = create<WorkProfileState>((set, get) => ({
   activeCompanyId: null,
   workModeEnabled: false,
   balance: null,
+  policy: null,
   requests: [],
   isLoading: false,
   balanceLoading: false,
@@ -112,6 +130,39 @@ export const useWorkProfileStore = create<WorkProfileState>((set, get) => ({
     } catch {
       set({ balanceLoading: false });
     }
+  },
+
+  fetchPolicy: async () => {
+    const { activeCompanyId } = get();
+    if (!activeCompanyId) return;
+    try {
+      const res = await api.get<WorkPolicy>(`/company/${activeCompanyId}/policy`);
+      set({ policy: res.data ?? null });
+    } catch {
+      set({ policy: null });
+    }
+  },
+
+  checkRide: (fare, pickupAt) => {
+    const { policy, workModeEnabled } = get();
+    const reasons: string[] = [];
+    if (!workModeEnabled || !policy || policy.active === false) {
+      return { ok: true, reasons };
+    }
+    if (typeof policy.max_fare_per_ride === 'number' && fare > policy.max_fare_per_ride) {
+      reasons.push(`Fare exceeds company cap of $${policy.max_fare_per_ride.toFixed(2)}.`);
+    }
+    const windows = policy.allowed_time_windows;
+    if (windows && windows.length > 0) {
+      const when = pickupAt ?? new Date();
+      const dayKey = (['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const)[when.getDay()];
+      const hhmm = `${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}`;
+      const inWindow = windows.some(w => w.day === dayKey && hhmm >= w.start && hhmm <= w.end);
+      if (!inWindow) {
+        reasons.push('This time is outside the allowed work hours.');
+      }
+    }
+    return { ok: reasons.length === 0, reasons };
   },
 
   fetchRequests: async () => {

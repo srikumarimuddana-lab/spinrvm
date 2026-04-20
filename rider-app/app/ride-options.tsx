@@ -19,6 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Circle, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { useRideStore } from '../store/rideStore';
+import { useWorkProfileStore } from '../store/workProfileStore';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -52,6 +53,16 @@ function RideOptionsScreenContent() {
     fetchAvailablePromos,
     applyPromo,
   } = useRideStore();
+
+  const workModeEnabled = useWorkProfileStore(s => s.workModeEnabled);
+  const activeCompanyId = useWorkProfileStore(s => s.activeCompanyId);
+  const workProfiles = useWorkProfileStore(s => s.profiles);
+  const fetchPolicy = useWorkProfileStore(s => s.fetchPolicy);
+  const checkRide = useWorkProfileStore(s => s.checkRide);
+  const activeCompanyName = useMemo(
+    () => workProfiles.find(p => p.company.id === activeCompanyId)?.company.name ?? null,
+    [workProfiles, activeCompanyId],
+  );
 
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -95,6 +106,13 @@ function RideOptionsScreenContent() {
       return () => clearInterval(interval);
     }
   }, [pickup, dropoff]);
+
+  // Refresh work policy when work mode is active
+  useEffect(() => {
+    if (workModeEnabled && activeCompanyId) {
+      fetchPolicy();
+    }
+  }, [workModeEnabled, activeCompanyId]);
 
   // Fetch promos when estimates are ready
   useEffect(() => {
@@ -168,6 +186,25 @@ function RideOptionsScreenContent() {
     if (isScheduling && !scheduledTime) {
       setAlertState({ visible: true, title: 'Select Time', message: 'Please pick a date and time for your scheduled ride.', variant: 'warning' });
       return;
+    }
+    if (workModeEnabled && activeCompanyId && selectedEstimate) {
+      const when = isScheduling && scheduledTime ? scheduledTime : undefined;
+      const check = checkRide(selectedEstimate.total_fare, when);
+      if (!check.ok) {
+        setAlertState({
+          visible: true,
+          title: 'Blocked by company policy',
+          message: check.reasons.join('\n'),
+          variant: 'warning',
+          buttons: [
+            { text: 'Turn off work mode', style: 'destructive', onPress: () => {
+              useWorkProfileStore.getState().setWorkMode(false);
+            }},
+            { text: 'Change ride', style: 'cancel' },
+          ],
+        });
+        return;
+      }
     }
     router.push('/payment-confirm');
   };
@@ -403,6 +440,21 @@ function RideOptionsScreenContent() {
           )}
           <Ionicons name="chevron-forward" size={14} color="#999" />
         </TouchableOpacity>
+      )}
+
+      {/* Work Mode Banner */}
+      {workModeEnabled && activeCompanyId && (
+        <View style={styles.workBanner}>
+          <Ionicons name="briefcase" size={16} color="#1D4ED8" />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.workBannerTitle}>
+              Billed to {activeCompanyName ?? 'your employer'}
+            </Text>
+            <Text style={styles.workBannerSubtitle}>
+              This ride will be covered by your work allowance.
+            </Text>
+          </View>
+        </View>
       )}
 
       {/* Options Header */}
@@ -966,6 +1018,31 @@ function createStyles(colors: ThemeColors) {
     fontSize: 18,
     fontFamily: 'PlusJakartaSans_700Bold',
     color: '#10B981',
+  },
+  workBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 20,
+    marginTop: 8,
+    marginBottom: 4,
+    backgroundColor: '#EFF6FF',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  workBannerTitle: {
+    fontSize: 13,
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: '#1E3A8A',
+  },
+  workBannerSubtitle: {
+    fontSize: 11,
+    fontFamily: 'PlusJakartaSans_400Regular',
+    color: '#1D4ED8',
+    marginTop: 1,
   },
   promoBanner: {
     flexDirection: 'row',

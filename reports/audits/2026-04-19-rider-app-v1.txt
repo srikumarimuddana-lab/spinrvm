@@ -983,5 +983,2718 @@ TASK 05 TALLY
 | TOTAL           |    23 |
 
 ================================================================================
-[AUDIT IN PROGRESS — TASKS 06–16 PENDING]
+TASK 06 — REAL-TIME FEATURES (WebSocket & GPS) (Dimension 06)
+================================================================================
+Scope    : rider-app/hooks/useRiderSocket.ts · rider-app/store/rideStore.ts ·
+           rider-app/app/driver-arriving.tsx · rider-app/app/ride-in-progress.tsx ·
+           rider-app/app/chat-driver.tsx · rider-app/app/(tabs)/index.tsx
+Framework: audit-framework/dimensions/06-real-time.md
+Checks   : WS auth order · exponential backoff · poll/WS race condition ·
+           driver_timeout UI · chat delivery mechanism · GPS permission flow ·
+           WS cleanup · heartbeat · background/foreground reconnect
+
+────────────────────────────────────────────────────────────────────────────────
+
+[06-1] PASS | WS Auth Sent as First Message Before Any Data Consumed
+File: rider-app/hooks/useRiderSocket.ts:160–168
+Finding: In ws.onopen, the very first action is to send the auth message:
+    ws.send(JSON.stringify({ type: 'auth', token, client_type: 'rider' }))
+  The token is retrieved from useAuthStore.getState().token immediately before
+  the send. No data subscription or store-read happens before this call.
+  The hook guards against a missing token before opening the connection (lines
+  149–153), so the socket is never opened without an auth token available.
+  The connect() function itself refuses to proceed if userId, rideId, or token
+  is absent (lines 145–153). Authentication is therefore enforced as the first
+  message in every session.
+
+[06-2] PASS | Exponential Backoff with Jitter Implemented
+File: rider-app/hooks/useRiderSocket.ts:186–196
+Finding: RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000] (line 36).
+  On ws.onclose the next delay is selected as:
+    const baseDelay = RECONNECT_DELAYS[Math.min(attempt, length - 1)]
+    const jitter = Math.random() * 1000 - 500;   // ±500 ms
+    const delay = Math.max(500, baseDelay + jitter);
+  The attempt counter is incremented before each recursive connect() call
+  (line 195). The delay sequence is [~1s, ~2s, ~5s, ~10s, ~30s] capped at the
+  last bucket — correct exponential backoff with jitter. The reconnect loop is
+  only entered when userId and rideId are still present (lines 185–186),
+  preventing ghost reconnects after ride completion.
+
+[06-3] MEDIUM | Poll Result Can Overwrite More-Recent WS Driver Position
+File: rider-app/store/rideStore.ts:355–371 (fetchRide) ·
+      rider-app/app/driver-arriving.tsx:81–88 · rider-app/app/ride-in-progress.tsx:78–83
+Finding: fetchRide() at rideStore.ts:364 unconditionally overwrites both
+  currentRide and currentDriver with whatever the REST response returns:
+    set({ currentRide: ride, currentDriver: driver, isLoading: false });
+  updateDriverLocation() (called from the WS path) updates currentDriver.lat/lng
+  in real time with sub-100 ms latency. However, when a poll fires (every 3 s on
+  driver-arriving, 15 s on ride-in-progress), the REST API response's driver
+  object contains the driver's GPS coordinates as of the last backend persist
+  cycle. If the poll response arrives AFTER a WS driver_location_update, the
+  poll sets currentDriver.lat/lng to older coordinates, causing the map marker
+  to jump backwards.
+  Example sequence:
+    t=0   WS: driver at (52.1300, -106.6700) → marker updates
+    t=0.5 REST /rides/{id} responds with driver at (52.1285, -106.6712)
+            → fetchRide sets currentDriver → marker jumps back 150 m
+  The driver-arriving screen's 3 s poll interval makes this visible on the map
+  at typical city driving speeds (50 km/h ≈ 14 m/s → 42 m/interval).
+Fix: In fetchRide(), preserve the WS-updated lat/lng if they are fresher than
+  the REST response. One approach — record the timestamp of the last WS
+  location update in the store and only overwrite lat/lng from REST if the WS
+  timestamp is absent or older than the response. A simpler approach: in
+  fetchRide(), merge the REST driver object but skip lat/lng fields when
+  currentDriver already has coordinates (since WS is always newer). Effort: 1h.
+
+[06-4] MEDIUM | driver_timeout Fires fetchRide() But UI Has No "Searching Again" Indicator
+File: rider-app/hooks/useRiderSocket.ts:113–115
+Finding: The driver_timeout case calls fetchRide(rideId) which will reload the
+  ride object. If the backend re-dispatches and the status returns to 'searching',
+  driver-arriving.tsx's status check at lines 85–87 will re-enter fastPoll (3 s).
+  However, there is no transient UI element that explicitly tells the rider
+  "Your driver didn't respond — finding you a new one." The screen will show the
+  existing driver card (or the "Finding your driver" spinner, depending on the
+  returned status) but there is no timeout-specific message or animation.
+  A rider watching the screen may be confused why the driver info disappeared
+  without explanation. The comment in the code (line 111) acknowledges the intent
+  but the UI does not surface it.
+Fix: On receiving driver_timeout, before calling fetchRide, set a transient
+  store flag (e.g. driverTimedOut: true) or dispatch a local notification/alert:
+  Alert.alert('Driver Not Available', 'Looking for a new driver…'). Clear the
+  flag after the next fetchRide resolves. Effort: 1h.
+
+[06-5] PASS | Chat Delivers New Messages via WebSocket (Not Polling)
+File: rider-app/hooks/useRiderSocket.ts:127–129 ·
+      rider-app/store/rideStore.ts:482–487 · rider-app/app/chat-driver.tsx:38–57
+Finding: The chat_message WS case in useRiderSocket (line 127–129) calls
+  useRideStore.getState().addChatMessage(data), which deduplicates by id
+  (rideStore.ts:484–486). chat-driver.tsx has NO polling interval — there is
+  no setInterval anywhere in the file. On mount it loads history once via
+  GET /rides/{id}/messages (lines 39–52), then relies entirely on the WS push
+  for subsequent messages. New messages arrive in real-time via the hook mounted
+  in _layout.tsx (line 103). No backgrounding concern exists for the WS
+  transport because useRiderSocket reconnects on AppState 'active' (lines
+  226–246). This supersedes the concern raised in R-P1-2 — the handler IS
+  present and functional.
+
+[06-6] MEDIUM | GPS Permission: No Re-Permission Flow When User Denies Location
+File: rider-app/app/(tabs)/index.tsx:82–83
+Finding: index.tsx requests foreground permission correctly as the first step
+  (line 82: Location.requestForegroundPermissionsAsync()). If the user denies,
+  the function early-returns at line 83 (`if (status !== 'granted') return`).
+  No alert, no explanation, no deep-link to Settings is shown. The map
+  renders the "Locating..." placeholder indefinitely. The rider has no feedback
+  that their location was denied and no prompt to re-enable it.
+  Note: Background location permission is not requested at all in this screen —
+  this is acceptable for the rider-side (the rider does not need background GPS;
+  only the driver does). The foreground-before-background order is therefore
+  satisfied by omission.
+Fix: When status !== 'granted', show an alert:
+  "Location access required. Spinr needs your location to show nearby drivers
+   and confirm your pickup. Please enable location in Settings."
+  with an "Open Settings" button that calls Linking.openSettings(). Effort: 30m.
+
+[06-7] PASS | WS Socket Closed on Ride Completion and on Logout
+File: rider-app/hooks/useRiderSocket.ts:215–223 · rider-app/store/rideStore.ts:497–499
+Finding: The lifecycle effect (lines 215–223) calls disconnect() when
+  currentRide?.id becomes falsy. clearRide() in rideStore.ts sets
+  currentRide: null (line 498), which triggers the effect and calls disconnect().
+  clearRide() is called from ride_cancelled WS handler (line 108), the cancel
+  button flows in driver-arriving.tsx, and the ride-completed screen.
+  For logout: useAuthStore.logout() clears the user object, causing user?.id
+  to become null, which also fires the lifecycle effect's disconnect() path.
+  Both ride completion and logout correctly close and null the WebSocket reference.
+
+[06-8] PASS | Heartbeat — useRiderSocket Replies to Server ping with pong
+File: rider-app/hooks/useRiderSocket.ts:62–65
+Finding: The 'ping' case in handleMessage checks ws.readyState === WebSocket.OPEN
+  before sending. The pong reply is sent immediately in the same message handler,
+  with no setTimeout delay. This satisfies the 30-second ping-pong keepalive
+  requirement from the checklist. The pong message is { type: 'pong' } matching
+  the expected server format.
+
+[06-9] PASS | WS Reconnects When App Returns to Foreground
+File: rider-app/hooks/useRiderSocket.ts:226–246
+Finding: AppState.addEventListener('change') is registered on mount (line 227).
+  When nextState === 'active' and both userId and rideId are set, the code
+  checks if the socket is CLOSED or CLOSING (line 234) and calls connect() with
+  the attempt counter reset to 0 (line 240 — fast reconnect on foreground).
+  Any pending reconnect timeout is cancelled before reconnecting (lines 237–239).
+  The subscription is correctly removed on unmount (line 245: sub.remove()).
+  This covers the scenario where the phone was locked for >30 s (heartbeat missed)
+  and the server silently closed the connection — foreground triggers a clean
+  reconnect rather than waiting for the backoff timer.
+
+────────────────────────────────────────────────────────────────────────────────
+ADDITIONAL CHECKS (from D06 checklist not in the 9 specific checks)
+────────────────────────────────────────────────────────────────────────────────
+
+[06-10] LOW | GPS Accuracy Uses Location.Accuracy.Balanced on Home Screen — Not BestForNavigation
+File: rider-app/app/(tabs)/index.tsx:96
+Finding: index.tsx calls getCurrentPositionAsync with accuracy: Location.Accuracy.Balanced.
+  Per the D06 checklist, active rides should use ACCURACY.BestForNavigation.
+  The home screen is not an active-ride screen, so Balanced is appropriate there.
+  However, no GPS subscription is set up for the rider during the ride flow — the
+  rider's position is not tracked for navigation purposes (only the driver's
+  position is). Therefore BestForNavigation is not applicable for rider GPS.
+  This is flagged LOW as a documentation gap: the accuracy choice is correct but
+  should be annotated in comments to explain why BestForNavigation is absent.
+
+[06-11] RECOMMENDATION | Polling Not Suspended When WebSocket Is Connected
+File: rider-app/app/driver-arriving.tsx:81–88 · rider-app/app/ride-in-progress.tsx:78–83
+Finding: driver-arriving.tsx polls every 3 s (fast) or 15 s (slow) regardless of
+  WS connection state. ride-in-progress.tsx polls every 15 s unconditionally.
+  When WS is healthy, these polls are redundant and waste battery/bandwidth.
+  This was already documented as R-P2-5 (before this audit). Confirming the gap
+  is still present. The connectionState from useRiderSocket is available in
+  _layout.tsx (line 103) but is not exposed to child screens.
+  This is a RECOMMENDATION, not a new finding — see R-P2-5 for fix guidance.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 06 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     0 |
+| MEDIUM          |     3 |
+| LOW             |     1 |
+| PASS            |     6 |
+| RECOMMENDATION  |     1 |
+| TOTAL           |    11 |
+
+================================================================================
+TASK 07 — STATE MACHINE & DISPATCH (Dimension 07)
+================================================================================
+Scope    : rider-app/store/rideStore.ts · rider-app/app/driver-arriving.tsx ·
+           rider-app/components/FreeCancelTimer.tsx ·
+           rider-app/hooks/useRiderSocket.ts · backend/routes/rides.py
+Framework: audit-framework/dimensions/07-state-machine.md
+Checks   : Cancel fee after driver_arrived · /start and /complete role guards ·
+           double booking · cold-start hydration · FreeCancelTimer expiry ·
+           driver_timeout UI reset · magic strings
+
+State machine: searching → driver_assigned → driver_accepted →
+               driver_arrived → in_progress → completed / cancelled
+
+────────────────────────────────────────────────────────────────────────────────
+
+[07-1] HIGH | Rider Can Call /rides/{id}/start Directly — Bypasses OTP Verification
+File: backend/routes/rides.py:1876–1890
+Finding: The endpoint rider_start_ride (POST /rides/{id}/start) is reachable by
+  any authenticated rider, not just the assigned driver. It checks only that
+  the caller is the ride's rider_id, then unconditionally flips the ride to
+  'in_progress' and sets ride_started_at — no OTP verification, no driver role
+  check, no requirement that the driver have entered the OTP on their device.
+  The driver-app's start-ride flow (POST /drivers/rides/{id}/start) is the
+  intended path: that endpoint verifies the 4-digit OTP before transitioning.
+  This endpoint creates a completely parallel bypass path:
+    POST /rides/{rideId}/start   (rider token)  →  status = 'in_progress'
+  A rider can start their own trip before the driver arrives (even from
+  'driver_assigned' state, because the guard only checks
+  `ride.status not in ["driver_arrived"]` — meaning driver_arrived is the
+  only allowed state, but the endpoint doesn't require the driver to have
+  verified anything). The entire OTP pickup-verification flow is skipped.
+  An adversarial rider could also use this to remove a driver from a ride
+  they don't want (start the ride, driver sees it as started but never
+  verified OTP, causing confusion and a potential dispute).
+  The endpoint's docstring "when OTP already verified or used together with
+  driver" acknowledges the OTP bypass but provides no enforcement.
+Fix: Remove rider_start_ride entirely, or restrict it to driver role:
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
+    if not driver or ride.get("driver_id") != driver["id"]:
+        raise HTTPException(status_code=403, detail="Only the assigned driver can start the ride")
+  Require OTP verification in the same guard. Rides must only transition to
+  in_progress via the driver-side /drivers/rides/{id}/start endpoint.
+  Effort: 1 hour.
+
+[07-2] HIGH | cancel_ride Uses Wrong Status Guard — In-Progress Rides Can Be Cancelled Free
+File: backend/routes/rides.py:1341
+Finding: The cancel_ride_rider endpoint checks:
+    if ride.get("status") == 'trip_in_progress':
+        raise RideStateError("Cannot cancel after trip has started")
+  The actual status string used throughout the codebase is 'in_progress', not
+  'trip_in_progress'. This string is never assigned by any endpoint. The guard
+  therefore NEVER fires. A rider whose ride is in status 'in_progress' (trip
+  actively under way) can successfully call POST /rides/{id}/cancel and will:
+  (a) cancel a live trip mid-journey,
+  (b) receive no cancellation fee (charged_driver stays 0 because neither the
+      driver_arrived branch nor the time-based branch triggers for in_progress),
+  (c) leave the driver mid-trip with no payment and no notification.
+  The driver earnings for the partial trip are forfeit.
+  Reproduction: ride.status = 'in_progress' → POST /rides/{id}/cancel →
+  returns {success: true, cancellation_fee: 0}.
+Fix: Change the guard to use the correct status string:
+    if ride.get("status") == 'in_progress':
+        raise RideStateError("Cannot cancel after trip has started")
+  Additionally, add a comprehensive guard covering all non-cancellable states:
+    NON_CANCELLABLE = {'in_progress', 'completed', 'cancelled'}
+    if ride.get('status') in NON_CANCELLABLE:
+        raise HTTPException(400, f"Cannot cancel ride in state: {ride.get('status')}")
+  Effort: 30 minutes.
+
+[07-3] HIGH | Double Booking — No Active Ride Guard on Client or Server
+File: rider-app/store/rideStore.ts:319–353 · backend/routes/rides.py:515–739
+Finding: createRide() in rideStore.ts does not check whether currentRide is
+  already set before calling POST /rides. The backend create_ride handler
+  performs no query to verify whether the rider already has an active ride in
+  states ('searching', 'driver_assigned', 'driver_accepted', 'driver_arrived',
+  'in_progress'). If the rider double-taps the Book button or navigates back
+  and re-submits payment-confirm.tsx before the first request returns, two
+  simultaneous rides are created and two drivers are dispatched.
+  payment-confirm.tsx uses a `isSubmitting` ref (line 51-53) that prevents
+  UI-level double-taps within the same screen mount, but this guard is reset
+  on each navigation and is bypassed by page-reload or navigation back.
+  This was pre-populated as R-P0-5; the audit confirms neither the store nor
+  the backend has the guard. The isSubmitting ref only protects against the
+  fastest double-taps, not against navigating back and re-submitting.
+Fix: (a) Client — in createRide(), before the API call:
+    if (get().currentRide) throw new Error('A ride is already active');
+  (b) Server — in create_ride(), after the ban check:
+    existing = await db.find_one('rides', {'rider_id': current_user['id'],
+      'status': {'$in': ['searching', 'driver_assigned', 'driver_accepted',
+                          'driver_arrived', 'in_progress']}})
+    if existing:
+        raise HTTPException(409, 'You already have an active ride')
+  Effort: 2–3 hours (P0-5 already tracked).
+
+[07-4] MEDIUM | hydrateActiveRide() Restores Stale Ride Without Backend Validation
+File: rider-app/store/rideStore.ts:584–602
+Finding: hydrateActiveRide() reads the last known ride from AsyncStorage and,
+  if status is not in TERMINAL_STATUSES, immediately populates currentRide
+  and currentDriver from the stale local copy — without calling /rides/active
+  to confirm the ride is still live. If the app was closed while a ride was
+  in_progress and the ride completed (or was cancelled) while the app was
+  shut down, the next cold start will restore the stale 'in_progress' ride
+  and route the rider to ride-in-progress.tsx with ghost data. The rider sees
+  a live-looking ride screen for a trip that already ended.
+  The subsequent fetchActiveRide() call (invoked separately in _layout.tsx)
+  will eventually correct this, but there is a visible window of incorrect
+  state between hydrateActiveRide() resolving and fetchActiveRide() returning.
+  If fetchActiveRide() fails (network unavailable), the ghost state persists
+  indefinitely and the rider cannot book a new ride.
+  This was pre-populated as R-P2-2; the audit confirms the validation call
+  (GET /rides/active) is absent from hydrateActiveRide().
+Fix: Validate the stored ride against the backend before setting state:
+    hydrateActiveRide: async () => {
+      const raw = await AsyncStorage.getItem(ACTIVE_RIDE_KEY);
+      if (!raw) return;
+      const { currentRide } = JSON.parse(raw);
+      if (!currentRide || TERMINAL_STATUSES.has(currentRide.status)) {
+        await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
+        return;
+      }
+      try {
+        const live = await api.get('/rides/active');
+        if (!live.data?.active || live.data.ride?.id !== currentRide.id) {
+          await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
+          return; // stale — do not restore
+        }
+        if (!get().currentRide) {
+          set({ currentRide: live.data.ride, currentDriver: live.data.ride.driver || null });
+        }
+      } catch {
+        await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
+      }
+    }
+  Effort: 2 hours (R-P2-2 already tracked).
+
+[07-5] MEDIUM | FreeCancelTimer Shows Expired But Does Not Disable Cancel Button
+File: rider-app/components/FreeCancelTimer.tsx:54–90 ·
+      rider-app/app/driver-arriving.tsx:537–547
+Finding: FreeCancelTimer correctly counts down the free-cancel window and
+  displays "Cancellation fee: $X" in red when the window expires. However,
+  the component is display-only — it emits no callback when the timer reaches
+  zero, and the Cancel button in driver-arriving.tsx remains fully enabled and
+  shows a fee warning but does NOT visually communicate that the fee will be
+  charged. A rider who sees the "Cancellation fee: $3.00" label on the timer
+  may still not associate the timer expiry with the Cancel button becoming
+  a paid action.
+  More critically: there is no onExpire callback from FreeCancelTimer to the
+  parent screen. The Cancel button is not disabled; no toast appears saying
+  "Free cancel window expired." The only signal is the passive label change
+  inside the timer card. A rider who glances at the screen without reading
+  the timer text may tap Cancel thinking it is still free.
+  Additionally, the handleBack() function in driver-arriving.tsx correctly
+  shows "A cancellation fee of $X will be charged" when status=driver_arrived,
+  but the fee dialog is NOT triggered before the timer expires for
+  status=driver_accepted (the dialog says "free cancel" even when the timer
+  has already expired at that status).
+Fix:
+  (a) Add an onExpire?: () => void prop to FreeCancelTimer. When the timer
+      hits zero, call onExpire(). In driver-arriving.tsx, on onExpire, show
+      a toast or banner: "Free cancel window expired — cancellation fee now
+      applies."
+  (b) In handleBack(), when status is driver_accepted AND the free cancel
+      window has expired (free_cancel_seconds_remaining === 0), switch to
+      the fee-warning dialog instead of the free cancel dialog.
+  Effort: 1–2 hours.
+
+[07-6] MEDIUM | driver_timeout Does Not Reset UI to "Searching" State
+File: rider-app/hooks/useRiderSocket.ts:111–115
+Finding: The driver_timeout WebSocket case at line 113–115 only calls
+  fetchRide(rideId). It does NOT call applyRideStatusFromWS to immediately
+  set currentRide.status back to 'searching' in the store. The UI continues
+  to display the driver card, driver name, and route with the previous
+  driver's details while the fetchRide response is in flight. At the 3 s
+  poll interval this is a brief inconsistency; but if the poll is in slow
+  mode (15 s) or if the network is slow, the rider sees the previous driver's
+  details for up to 15 s after the driver timed out. There is also no Alert
+  or notification to tell the rider what happened. This was documented in
+  finding [06-4] and R-P1-16; re-confirmed here as part of the D07 state
+  machine audit.
+Fix: In the driver_timeout case, immediately apply the status transition and
+  show an alert before fetching:
+    case 'driver_timeout':
+      if (rideId) {
+        applyRideStatusFromWS(rideId, 'searching');  // instant UI update
+        Alert.alert('Driver Not Available',
+          'Your driver didn\'t respond. Finding another driver…');
+        fetchRide(rideId);
+      }
+      break;
+  Effort: 30 minutes (R-P1-16 already tracked).
+
+[07-7] MEDIUM | Ride Status Magic Strings Scattered Across 36 Screens — No Constants
+File: rider-app/store/rideStore.ts · rider-app/hooks/useRiderSocket.ts ·
+      rider-app/app/ (all 36 screens)
+Finding: Status strings 'searching', 'driver_assigned', 'driver_accepted',
+  'driver_arrived', 'in_progress', 'completed', 'cancelled' appear as inline
+  literals across the entire codebase. The pre-audit baseline noted 78 magic
+  ride-status strings. The wrong-status bug in [07-2] ('trip_in_progress'
+  instead of 'in_progress') is a direct consequence of this pattern — a typo
+  in a string literal created a permanently dead guard. The client state
+  machine string 'driver_accepted' matches the backend string; however, no
+  TypeScript type enforces this correspondence. A future rename or addition
+  of a new status would require a codebase-wide grep to catch all usages.
+  This was pre-populated as R-P2-3; confirmed present in every ride-flow file.
+Fix: Create rider-app/constants/rideStatus.ts:
+    export const RideStatus = {
+      SEARCHING: 'searching',
+      DRIVER_ASSIGNED: 'driver_assigned',
+      DRIVER_ACCEPTED: 'driver_accepted',
+      DRIVER_ARRIVED: 'driver_arrived',
+      IN_PROGRESS: 'in_progress',
+      COMPLETED: 'completed',
+      CANCELLED: 'cancelled',
+    } as const;
+  Replace all inline literals with RideStatus.X references. On the backend,
+  define VALID_STATUSES and CANCEL_ALLOWED_STATES as module-level frozensets.
+  Effort: 3–4 hours (R-P2-3 already tracked).
+
+────────────────────────────────────────────────────────────────────────────────
+PASSES
+────────────────────────────────────────────────────────────────────────────────
+
+[07-8] PASS | Cancellation Fee Correctly Applied and Paid Out for driver_arrived
+File: backend/routes/rides.py:1356–1412
+Finding: cancel_ride_rider correctly detects ride.status == 'driver_arrived'
+  (line 1356) and charges a flat $5.00 driver cancellation fee (charged_driver
+  = Decimal("5.00")) plus the admin portion. The fee is immediately credited
+  to the driver's wallet (lines 1383–1405) with a wallet_transactions record
+  and a push notification to the driver. The cancel button in
+  driver-arriving.tsx (handleBack, lines 131–148) correctly shows a fee
+  warning dialog before proceeding. The fee is calculated server-side from
+  app_settings — not hardcoded on the client. The $5.00 driver fee and
+  $0.50 admin fee are independent of the client-supplied values.
+
+[07-9] PASS | /rides/{id}/complete Is a Read-Only Endpoint (No State Mutation)
+File: backend/routes/rides.py:1893–1902
+Finding: rider_complete_ride (POST /rides/{id}/complete) does NOT transition
+  the ride to 'completed'. It simply calls get_ride(ride_id) and returns the
+  current ride dict. The ride is completed exclusively by the driver-side
+  endpoint (/drivers/rides/{id}/complete), which sets status='completed',
+  stores the final distance, and processes driver earnings. The rider's
+  /complete endpoint is a convenience fetch for the ride-completed.tsx screen.
+  No state bypass is possible through this endpoint.
+
+[07-10] PASS | Atomic Driver Claim Prevents Double-Accept Race
+File: backend/routes/rides.py:189–201
+Finding: match_driver_to_ride uses db_supabase.claim_driver_atomic() to
+  atomically claim a driver (sets is_available=False) before assigning them
+  to a ride. If two concurrent dispatch calls race, the second claim returns
+  None and triggers a fallback loop through remaining candidates. The ride
+  assignment UPDATE is only performed after a successful atomic claim.
+  This addresses the "two drivers both accept the same ride" CRITICAL pattern
+  in the D07 severity guide.
+
+[07-11] PASS | 5-Minute Auto-Cancel Implemented for "searching" Timeout
+File: backend/routes/rides.py:698–737
+Finding: After ride creation, if the ride returns to 'searching' status,
+  asyncio.create_task(ride_search_timeout(ride.id, 300)) is launched. After
+  300 s it re-checks the ride; if still 'searching', it cancels the ride,
+  notifies the rider via WebSocket and push notification, and logs the event.
+  This satisfies the D07 checklist item "5-minute auto-cancel if no driver
+  found — notification sent to rider."
+
+[07-12] PASS | Re-Dispatch on Driver Decline Is Handled (Not Fire-and-Forget)
+File: backend/routes/rides.py:340–411 (_offer_timeout_handler)
+Finding: _offer_timeout_handler waits for the driver to respond. If the ride
+  is still in 'driver_assigned' state after timeout_seconds (offer_timeout + 15),
+  it releases the driver (sets is_available=True), resets the ride to
+  'searching', notifies the rider via WebSocket, and calls
+  match_driver_to_ride(ride_id) again. Re-dispatch is fully implemented and
+  server-authoritative (fires even if the driver's device crashes or loses
+  connectivity). The function handles errors with a try/except and logs
+  failures via logger.warning — no silent failure on exception.
+
+[07-13] PASS | Driver Card Hidden Until driver_accepted State — No Pre-Accept Leak
+File: rider-app/app/driver-arriving.tsx:450–453
+Finding: The driver details card is only rendered when
+  currentRide.status === 'driver_accepted' || 'driver_arrived' || 'in_progress'.
+  While the ride is in 'driver_assigned' (dispatched but driver hasn't tapped
+  Accept), the screen shows a "Finding your driver" ActivityIndicator with no
+  driver name, vehicle, or plate. This prevents showing a driver's identity
+  before they have committed to the ride.
+
+[07-14] PASS | Cancellation Fee Calculation Uses Server-Side app_settings
+File: rider-app/app/driver-arriving.tsx:105–106 · backend/routes/rides.py:898–937
+Finding: The cancel fee and free-cancel window are read from
+  (currentRide as any)?.cancellation_fee and free_cancel_window_seconds, which
+  are injected into the GET /rides/{id} response from app_settings at
+  lines 908–937. The old client-side formula (Math.min(5, fare * 0.2)) has
+  been replaced. Fee values are server-authoritative.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 07 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     3 |
+| MEDIUM          |     4 |
+| LOW             |     0 |
+| PASS            |     7 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    14 |
+
+================================================================================
+TASK 08 — PAYMENTS & PCI COMPLIANCE (Dimension 08)
+================================================================================
+Scope    : rider-app/app/payment-confirm.tsx · rider-app/app/ride-completed.tsx ·
+           rider-app/app/manage-cards.tsx · rider-app/store/walletStore.ts ·
+           rider-app/store/rideStore.ts · backend/routes/payments.py ·
+           backend/routes/rides.py · backend/routes/promo.py ·
+           backend/routes/wallet.py · backend/routes/webhooks.py ·
+           backend/routes/fare_split.py
+Framework: audit-framework/dimensions/08-payments.md
+Checks   : Idempotency key · double-tap guard · wallet balance server-side ·
+           tip idempotency · SetupIntent / customer_id · promo fare validation ·
+           fare-split idempotency · webhook HMAC · raw card data
+
+────────────────────────────────────────────────────────────────────────────────
+
+[08-1] HIGH | /wallet/pay Does Not Validate Amount Against Stored Ride Fare
+File: backend/routes/wallet.py:89–91, 146–188
+Finding: WalletPayRequest accepts any amount > 0 from the client:
+    class WalletPayRequest(BaseModel):
+        ride_id: str
+        amount: float = Field(..., gt=0)   # no upper bound, no fare cross-check
+  The wallet_pay handler checks the rider has sufficient balance but never
+  fetches the ride record to confirm the requested debit matches the stored
+  ride fare. A client can POST /wallet/pay with ride_id="<valid_id>" and
+  amount=0.01 (or any arbitrary amount), and the handler will:
+  (a) debit only $0.01 from the wallet instead of the full fare,
+  (b) set the ride's payment_status to "paid",
+  (c) return success.
+  The rider effectively pays a fraction of the fare while the ride is marked
+  fully settled. The driver's earnings are credited based on ride creation
+  (not on this wallet-pay event), but the operator's ledger shows a fraudulent
+  "paid" status at the manipulated amount.
+  Contrast: POST /payments/create-intent correctly cross-checks body.amount
+  against the stored ride fare (payments.py:72–85).
+Fix: Fetch the ride record in wallet_pay and enforce the debit equals the fare:
+    ride = await db.find_one("rides", {"id": req.ride_id})
+    if not ride or ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(404, "Ride not found")
+    fare = _d(ride.get("total_fare", 0))
+    if _d(req.amount) != fare:
+        raise HTTPException(400,
+            f"Payment amount {req.amount} does not match ride fare {fare}")
+  Additionally add an upper bound consistent with the system maximum fare
+  (e.g. le=500) and change the type from float to Decimal at the schema level
+  (see also R-P2-23 for the float-to-Decimal migration).
+  Effort: 1 hour.
+
+[08-2] HIGH | Tip Is Additive — Rider Can Submit Multiple Tips for the Same Ride
+File: backend/routes/rides.py:945–969
+Finding: POST /rides/{ride_id}/tip accumulates tip amounts rather than
+  setting a one-time tip:
+    new_tip = ride.get("tip_amount", 0) + tip_amount
+    await db_supabase.update_ride(ride_id, {"tip_amount": new_tip, ...})
+  There is no flag or check to prevent a rider from calling this endpoint
+  multiple times. Each call adds to the running total, so:
+    POST /rides/{id}/tip  { "amount": 5 }  → tip_amount = 5, driver +$5
+    POST /rides/{id}/tip  { "amount": 5 }  → tip_amount = 10, driver +$5 again
+  ride-completed.tsx does set a local tipSent flag (line 109: if tipSent) that
+  prevents re-sending within a single screen session, but this guard is in
+  client state only — it is lost on navigation, app backgrounding, or any API
+  call made outside the screen. A malicious or buggy client can call the
+  endpoint N times and over-tip, generating unbounded driver_earnings credits.
+  No wallet debit is made by /tip (the endpoint only updates the ride record);
+  the monetary impact depends on whether the driver's payout flow reads
+  tip_amount from the ride record. If it does, driver earnings are inflated.
+Fix: Add a one-time-tip guard:
+  Option A — status field: add a `tip_paid: bool` column; set it to True on
+    first tip call and return 409 on subsequent calls.
+  Option B — check existing value: if ride.get("tip_amount", 0) > 0, return
+    409 "Tip already submitted for this ride."
+  Also consider whether /tip and /process-payment's tip_amount path should
+  be unified — currently a rider can tip via both routes independently.
+  Effort: 30 minutes.
+
+[08-3] HIGH | createRide() Does Not Pass an Idempotency Key — Double Charge on Retry
+File: rider-app/store/rideStore.ts:319–353 · backend/routes/rides.py:515–739
+Finding: createRide() in rideStore.ts calls POST /rides with no Idempotency-Key
+  header. If the network drops between the client sending the request and
+  receiving the response, the automatic retry (api client interceptor or user
+  re-tap) will create a second ride and initiate a second payment intent. The
+  backend create_ride handler has no idempotency cache on the ride-creation
+  path — each POST /rides creates a new ride unconditionally.
+  payment-confirm.tsx uses an isSubmitting ref (line 51–53) that prevents
+  UI-level double-taps within the same screen session, but the Book button's
+  disabled prop is tied to the store's isLoading state, not isSubmitting.
+  The disabled={isLoading} guard (line 322) is set during the API call but
+  resets to false after createRide resolves or rejects — and importantly,
+  isLoading (a Zustand state value) does NOT visually disable the button
+  during the navigation transition from the error alert back to the screen.
+  A network timeout → error alert → user re-taps Book creates two rides.
+  This issue was pre-identified as R-P1-7; the audit confirms neither the
+  client Idempotency-Key header nor the server-side idempotency cache is
+  implemented.
+Fix: See R-P1-7 for the full fix prescription. Core fix:
+  (a) Client — generate a UUID key before the call and set
+      headers: { 'Idempotency-Key': key } on the api.post('/rides', ...) call.
+  (b) Backend — store (idempotency_key, user_id, response) in a short-lived
+      cache (Redis or DB) and return the cached response for duplicates.
+  Effort: 2–3 hours.
+
+[08-4] MEDIUM | Book Button — disabled Prop Tied to isLoading, Not isSubmitting Ref
+File: rider-app/app/payment-confirm.tsx:51–54, 319–336
+Finding: The Book button uses disabled={isLoading} (line 322), where isLoading
+  comes from the rideStore Zustand state (line 30). The isSubmitting ref (line
+  51) is the correct guard against double-taps, but it is NOT reflected in the
+  button's disabled prop. The button remains visually tappable and does not show
+  a spinner when isSubmitting.current is true (only when isLoading is true).
+  Between the moment the rider taps "Book" and the moment createRide() sets
+  isLoading: true in the store (line 326), there is a brief window (the
+  async overhead before the API call begins) during which neither guard blocks
+  a second tap. In practice, isSubmitting.current = true runs synchronously
+  before await, so the ref guard catches most double-taps. But:
+  (a) The button gives no visual feedback (no spinner, no disabled state)
+      while the API call is in-flight with isLoading still false.
+  (b) A user who navigates away and back gets a fresh screen mount with
+      isSubmitting.current = false, bypassing the guard.
+Fix: Add local isSubmitting state (useState, not useRef) and use it to disable
+  the button and show a spinner:
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    // In handleBookRide: setIsSubmitting(true) before, setIsSubmitting(false) in finally
+    <TouchableOpacity disabled={isSubmitting || isLoading} ...>
+  This provides immediate visual feedback and correctly blocks the button until
+  the API completes. Effort: 30 minutes.
+
+[08-5] MEDIUM | Promo Discount Calculated Against Client-Supplied Fare — No Server Validation
+File: rider-app/app/payment-confirm.tsx:76–77 · backend/routes/promotions.py:60–195
+Finding: The promo validation flow:
+  1. Client calls: POST /promo/validate  { code, ride_fare: selectedEstimate.total_fare }
+  2. Backend calculates discount as a fraction of ride_fare (the client value)
+  3. discount_amount is returned and shown on the UI
+  The backend never cross-checks ride_fare against a stored ride record. A
+  client can supply ride_fare=0.01 when validating, receive a negligible
+  discount amount, but then when ride_fare is large, the stored promo usage is
+  already recorded. More critically: when ride_fare=0 or is manipulated to be
+  very small, a percentage discount yields a near-zero discount_amount that
+  inflates the client's displayed "total" less than expected.
+  The inverse is also true: submitting ride_fare=10000 inflates the percentage
+  discount calculation well above what the actual fare warrants.
+  Crucially, the discount is only shown in the UI — the actual ride fare
+  deduction must happen during ride creation, but createRide() does not pass
+  the promo_code or applied discount to the backend (rideStore.ts:319–353).
+  The backend create_ride handler has no promo application logic.
+  This means the discount is display-only: the rider is charged the full fare
+  regardless of the promo code applied, which is a different severity class
+  (broken feature, not a fraud vector). However, the client-controlled
+  ride_fare in /promo/validate does mean the minimum-fare eligibility check
+  (line 111: if req.ride_fare < min_fare) can be bypassed by supplying a high
+  fake fare value.
+  This is the issue pre-identified as R-P1-8; confirmed present.
+Fix: Two parts:
+  (a) validate_promo must accept only a promo code — not a ride_fare. Fare
+      should be fetched from the ride record or estimate by ID:
+      POST /promo/validate  { code, ride_id }  — backend fetches fare.
+  (b) createRide() must pass the applied promo_id to the backend, which
+      deducts the discount from the server-side fare during ride creation.
+  Effort: 2–3 hours (frontend + backend).
+
+[08-6] MEDIUM | Fare-Split Participant Payment Is Not Idempotent
+File: backend/routes/fare_split.py:257–329
+Finding: The pay_split_share endpoint checks participant["status"] == "paid"
+  before processing (line 271–272: if participant["status"] == "paid": raise 400).
+  This is a correct guard. However, there is a TOCTOU (time-of-check/time-of-use)
+  race condition: two concurrent requests from the same participant can both
+  read status="accepted", pass the check simultaneously, then both update
+  the wallet and both mark the status as "paid". Under normal single-device
+  usage this race is unlikely, but:
+  (a) No database-level atomic guard prevents it (no SELECT...FOR UPDATE or
+      conditional update pattern equivalent to the atomic guard in
+      process_payment at rides.py:993–1001).
+  (b) The wallet deduction (lines 291–304) uses a two-step read-then-write
+      without optimistic concurrency: two parallel calls read the same
+      balance, both deduct the share, both write back a new balance, resulting
+      in one deduction actually taking effect and the other being silently lost.
+Fix: Apply the same atomic guard pattern used in process_payment:
+    guard = await db.update_one(
+        "fare_split_participants",
+        {"id": participant_id, "status": "accepted"},   # condition: still accepted
+        {"$set": {"status": "processing"}},
+    )
+    if not guard.modified_count:                         # already paid or processing
+        return {"status": "paid", "already_paid": True}
+  Then proceed with the wallet deduction and final "paid" status update.
+  Effort: 1 hour.
+
+[08-7] PASS | Stripe Webhook Verifies HMAC Signature via construct_event()
+File: backend/routes/webhooks.py:25–55
+Finding: The stripe_webhook handler:
+  (a) Reads stripe_webhook_secret from app_settings (not hardcoded).
+  (b) Requires the secret to be present — returns 500 with an error message
+      if stripe_webhook_secret is not configured (lines 35–40), rejecting
+      all unverified events rather than processing them blindly.
+  (c) Calls stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+      (line 50) — this verifies the Stripe-Signature header's HMAC-SHA256 sig.
+  (d) Invalid payload → 400 "Invalid payload"; invalid signature → 400
+      "Invalid signature". No event is processed without a valid HMAC.
+  The HMAC secret is loaded at runtime from the database settings store, not
+  from a hardcoded string. Per framework checklist: PASS.
+
+[08-8] PASS | Webhook Event Idempotency via stripe_events Dedup Table
+File: backend/routes/webhooks.py:67–88 · backend/db_supabase.py:1084–1100
+Finding: claim_stripe_event() is called before any business logic (line 81).
+  It inserts (event_id, event_type, processed) atomically using the event_id
+  as PRIMARY KEY. A duplicate event_id (Stripe retry) causes a unique-key
+  violation, claim_stripe_event returns False, and the handler returns 200
+  with {"duplicate": True} without repeating any side effects (line 87–88).
+  mark_stripe_event_processed() stamps processed_at after successful handling
+  (line 223). Events that fail processing (exception before mark_processed)
+  have processed_at=NULL, enabling nightly reconciliation replay.
+
+[08-9] PASS | PaymentIntent Creation Has Idempotency Key
+File: backend/routes/payments.py:105–116
+Finding: create_payment_intent() constructs an idempotency key:
+    idempotency_key = f"ride-{body.ride_id}-{current_user['id']}"  (when ride_id present)
+    fallback: f"intent-{current_user['id']}-{amount}"
+  The key is passed to stripe.PaymentIntent.create(..., idempotency_key=...).
+  A network retry that re-POSTs to /payments/create-intent with the same
+  ride_id and user_id will receive the same PaymentIntent from Stripe without
+  creating a second charge. Per framework checklist: PASS.
+
+[08-10] PASS | PaymentIntent Amount Cross-Checked Against Stored Ride Fare
+File: backend/routes/payments.py:72–85
+Finding: When body.ride_id is present, the handler fetches the ride record and
+  compares Decimal(str(body.amount)) with Decimal(str(ride.total_fare)). A
+  mismatch raises HTTP 400. The comparison uses Decimal on both sides to avoid
+  float equality pitfalls. Client cannot inflate/deflate the Stripe charge by
+  manipulating the amount field.
+
+[08-11] PASS | Card Add Flow Uses Stripe SetupIntent — Customer ID Server-Derived
+File: backend/routes/payments.py:156–185, 353–392 · rider-app/app/manage-cards.tsx:88–113
+Finding: On the client, manage-cards.tsx calls Stripe's createPaymentMethod()
+  (line 92) using @stripe/stripe-react-native's CardField. Raw PAN/CVC/expiry
+  remain inside the native Stripe view and never appear in JavaScript.
+  The tokenized payment_method_id is the only value posted to /payments/cards.
+  The backend's add_card handler calls get_or_create_stripe_customer() (line
+  354) to resolve the customer_id server-side from the authenticated user's
+  database record. The client cannot inject a foreign customer_id.
+  The endpoint also creates a SetupIntent (line 361–368: stripe.SetupIntent.create
+  with confirm=True) to save the card for future off-session use.
+  SetupIntent customer ID is derived server-side from the DB lookup — not
+  client-supplied. Per framework checklist: PASS.
+
+[08-12] PASS | PCI Guard Rejects Raw Card Fields — Including camelCase Variants
+File: backend/routes/payments.py:280–327
+Finding: The _RAW_CARD_FIELDS set (lines 280–284) covers all variants required
+  by the framework checklist:
+    snake_case: card_number, cvv, cvv2, cvc, cvc2, security_code,
+                card_security_code, expiry, expiration, expiration_date,
+                exp_month, exp_year, card_no
+    camelCase:  cardNumber, pan, primary_account_number
+  The guard fires before Pydantic model validation (before any logging) and
+  raises HTTP 400 without echoing the offending values back. The warning log
+  records only the field names, not their values. All required snake_case and
+  camelCase variants from the D08 checklist are present.
+
+[08-13] PASS | No Raw Card Data Collected by Any Mobile Screen
+File: rider-app/app/manage-cards.tsx · rider-app/app/payment-confirm.tsx ·
+      rider-app/app/wallet.tsx
+Finding: manage-cards.tsx is the only screen that collects card information.
+  It uses Stripe's <CardField> component (line 226) — a native Stripe-hosted
+  view. Card number, expiry, and CVC are entered directly into the Stripe
+  native layer and are never exposed to JavaScript or React state. The screen
+  has no TextInput fields for card_number, cvv, exp_month, or exp_year. The
+  cardholder name is the only free-text field (line 244), which is not a PCI
+  sensitive value. payment-confirm.tsx and wallet.tsx contain no card-entry
+  UI at all. PCI SAQ-A scope is maintained.
+
+[08-14] PASS | Process-Payment Has Atomic Double-Charge Guard
+File: backend/routes/rides.py:984–1001
+Finding: Before executing any payment logic, process_payment checks if
+  ride.payment_status is already "paid" or "processing" (line 985) and returns
+  immediately if so (idempotent early return). It then performs an atomic
+  conditional update: SET payment_status="processing" WHERE payment_status NOT
+  IN ("paid", "processing"). If modified_count == 0, another concurrent request
+  won the race and the current call returns safely. The wallet debit proceeds
+  only after this guard succeeds.
+
+[08-15] PASS | Wallet Pay Validates Sufficient Balance Server-Side
+File: backend/routes/wallet.py:146–188
+Finding: wallet_pay fetches the wallet balance with Decimal arithmetic
+  (lines 154–158: old_balance = _d(wallet.balance); if old_balance < debit_amount:
+  raise 400 "Insufficient wallet balance"). The check runs server-side in
+  Python with ROUND_HALF_UP Decimal before any debit is applied. The client
+  balance display is not trusted. Balance cannot go negative.
+
+[08-16] PASS | Fare-Split Total Derived from Server-Side Ride Fare
+File: backend/routes/fare_split.py:56–120
+Finding: create_fare_split fetches total_fare from the ride record in the DB:
+    total_fare = float(ride.get("grand_total") or ride.get("total_fare", 0))
+  The split amount is calculated as total_fare / split_count server-side.
+  The client does not supply the fare to be split — only the ride_id and
+  participant phone numbers. A rider cannot manipulate their split amount by
+  crafting the request payload.
+
+[08-17] LOW | Stripe Test Key sk_test_* Likely Present in App Settings (Dev Mode)
+File: backend/routes/payments.py:61 · backend/routes/webhooks.py:32
+Finding: Both payment and webhook handlers read stripe_secret_key from
+  app_settings at runtime. No sk_test_* value is committed in source files
+  (audit previously confirmed — [03-17] PASS). However, the development
+  app_settings in the database will carry a sk_test_* key during testing.
+  Per audit ground rules: Stripe test keys (sk_test_*) → LOW severity only.
+  Production-readiness gate: ensure app_settings.stripe_secret_key and
+  stripe_webhook_secret are set to live values (sk_live_*, whsec_*) before
+  production launch via an env-gated settings migration.
+  Effort: Production config task — 30 minutes.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 08 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     3 |
+| MEDIUM          |     3 |
+| LOW             |     1 |
+| PASS            |     9 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    16 |
+
+================================================================================
+TASK 09 — TEST COVERAGE (Dimension 09)
+================================================================================
+
+[09-1] HIGH | No Jest Coverage Threshold — Coverage Can Drop to Zero Undetected
+File: rider-app/jest.config.js
+Finding: jest.config.js sets `preset: 'jest-expo'` and configures
+  `setupFilesAfterEnv`, `testPathIgnorePatterns`, `transformIgnorePatterns`, and
+  `moduleNameMapper` — but defines no `coverageThreshold` block whatsoever.
+  The CI job runs `yarn test --ci --coverage` (ci.yml:201) and uploads the report
+  to Codecov. However, because no threshold is configured in jest.config.js, Jest
+  will always exit 0 regardless of coverage percentage. A PR that deletes all tests
+  or introduces dead paths would pass CI silently.
+  The D09 framework checklist requires: `lines ≥ 70, functions ≥ 60`.
+  The backend pytest job correctly enforces `--cov-fail-under=70` (ci.yml:79);
+  the rider-app Jest job has no equivalent gate.
+Fix: Add a coverageThreshold block to rider-app/jest.config.js:
+    module.exports = {
+      // ...existing config...
+      coverageThreshold: {
+        global: {
+          lines: 70,
+          functions: 60,
+          branches: 60,
+          statements: 70,
+        },
+      },
+    };
+  Effort: 15 minutes.
+
+[09-2] HIGH | rideStore.test.ts Missing: hydrateActiveRide, Double-Booking Guard,
+             Cancel-After-driver_arrived
+File: rider-app/store/__tests__/rideStore.test.ts
+Finding: The test file covers createRide (happy path + missing-details throw),
+  cancelRide (happy path only), startRide, completeRide, clearRide, and recent-
+  searches helpers. Three critical paths are entirely absent:
+
+  (a) hydrateActiveRide — the cold-start path that reads AsyncStorage, hits
+      /rides/active, and routes the user into an active-ride screen. A bug here
+      (R-P2-2: stale ride not revalidated) is confirmed unfixed and untested.
+
+  (b) Double-booking guard — createRide() has no idempotency key and no
+      optimistic dedup guard (R-P1-21). There is no test that calls createRide()
+      twice concurrently or verifies that a second in-flight call is rejected
+      while the first is pending (isLoading flag).
+
+  (c) cancelRide called when currentRide.status === 'driver_arrived' — the
+      backend guard uses the wrong status string ('trip_in_progress' instead of
+      'in_progress', R-P1-18) and the frontend has no cancel-fee warning. The
+      existing cancelRide test only covers `driver_accepted` status; there is no
+      test asserting that a cancel during driver_arrived shows a fee warning or
+      is blocked client-side.
+
+  Together these gaps mean the two highest-severity store bugs confirmed in this
+  audit (R-P1-18, R-P1-21) have no regression coverage.
+Fix: Add three describe blocks:
+  • 'hydrateActiveRide' — test: valid live ride → sets currentRide; stale ride
+    (backend returns different id) → clears AsyncStorage; network error → clears.
+  • 'createRide double-submit guard' — set isLoading: true, verify createRide()
+    returns without calling api.post a second time.
+  • 'cancelRide from driver_arrived' — mock status 'driver_arrived', verify
+    that the cancellation flow either shows a fee alert or is rejected.
+  Effort: 3–4 hours.
+
+[09-3] HIGH | rideStore.ws.test.ts Missing: driver_timeout Re-dispatch, ride_cancelled
+             Event, WS/Poll Race Condition
+File: rider-app/store/__tests__/rideStore.ws.test.ts
+Finding: The file tests updateDriverLocation, applyRideStatusFromWS, addChatMessage,
+  and clearRide. Three WebSocket scenarios that directly correspond to known bugs
+  or UX gaps are absent:
+
+  (a) driver_timeout re-dispatch — useRiderSocket's driver_timeout case calls
+      fetchRide() (R-P1-16). The store has no test asserting that when
+      applyRideStatusFromWS is called with a driver_timeout payload, the store
+      transitions back to 'searching' status and the currentDriver is cleared.
+
+  (b) ride_cancelled by backend — if the backend cancels a ride (driver no-show,
+      system timeout), a WS message is pushed. There is no test verifying that
+      the ride store handles a 'ride_cancelled' WS event by clearing currentRide
+      and currentDriver.
+
+  (c) WS update vs. poll race — R-P2-29 documents a confirmed race where a stale
+      poll response overwrites a fresher WS driver position. No test exists that
+      calls applyRideStatusFromWS (updating driver lat/lng) followed immediately
+      by a fetchRide() mock returning older coordinates, and asserts that the
+      fresher WS coordinates are preserved.
+
+  The driver_timeout and ride_cancelled gaps are especially high-impact: they are
+  paths that real users hit when a driver fails to respond or cancels, and they
+  have zero automated coverage.
+Fix: Add three test cases:
+  • driver_timeout: applyRideStatusFromWS('ride_1', 'searching') after a
+    driver_timeout WS payload → currentDriver becomes null.
+  • ride_cancelled: applyRideStatusFromWS('ride_1', 'cancelled') → clearRide
+    called (currentRide null, currentDriver null).
+  • Race: updateDriverLocation(51.5, -105.5); then fetchRide() mock returns
+    {lat: 51.0, lng: -105.0}; assert final driver lat === 51.5 (WS wins).
+  Effort: 2–3 hours.
+
+[09-4] HIGH | walletStore.test.ts Missing: Insufficient Balance Rejection,
+             Tip Idempotency
+File: rider-app/store/__tests__/walletStore.test.ts
+Finding: The file tests fetchWallet (success + error), topUp (success + error),
+  fetchTransactions (two variants), createFareSplit (success), cancelFareSplit,
+  and clearError. Two safety-critical wallet paths are absent:
+
+  (a) Insufficient balance rejection — payWithWallet (which maps to POST
+      /wallet/pay) is listed in the file's header comment ("Covers: fetchWallet,
+      topUp, payWithWallet, ...") but no describe('payWithWallet') block exists.
+      In particular, there is no test that mocks a 400 response with "Insufficient
+      wallet balance" and verifies the store surfaces this error to the UI.
+      R-P1-19 (wallet pay does not validate amount vs. fare) is a confirmed HIGH
+      finding; without a payWithWallet test the regression surface is invisible.
+
+  (b) Tip idempotency — rateRide() and addTip() store actions have no tests at
+      all. R-P1-20 (additive tip accumulation) is a confirmed HIGH finding. There
+      is no test verifying that a second tip submission is rejected client-side
+      (e.g., tipSent flag) or that the store surfaces a 409 conflict from the
+      backend correctly.
+
+Fix: Add two describe blocks:
+  • 'payWithWallet' — success path (balance deducted); 400 insufficient balance
+    (error surfaced); 400 amount mismatch (error surfaced).
+  • 'addTip' — first submission succeeds; second submission with same rideId
+    receives 409 → error state set; verify store does not double-count the tip.
+  Effort: 2 hours.
+
+[09-5] MEDIUM | Fare Split, Scheduled Rides, Promo Validation, and Offline Queue
+              Not Covered in Any Unit Test
+File: rider-app/store/__tests__/ (all three files)
+Finding: Four store subsystems have zero unit-test coverage:
+
+  (a) Fare split lifecycle — walletStore.test.ts tests createFareSplit and
+      cancelFareSplit (both happy paths), but there is no test for: participant
+      payment confirmation (pay_split_share), split expiry, or the R-P2-34
+      double-payment TOCTOU race scenario.
+
+  (b) Scheduled rides — rideStore has fetchScheduledRides() and cancelScheduledRide()
+      actions (rideStore.ts:532, 542). Neither is tested. The scheduled-ride state
+      (scheduledRides array) is zeroed in resetStore() but never exercised.
+
+  (c) Promo validation — rideStore has applyPromo() and fetchAvailablePromos()
+      actions. The store's appliedPromo field is zeroed in resetStore() but
+      applyPromo() is not tested. Given R-P1-8 (promo discount not validated
+      server-side) and R-P2-33 (minimum fare bypass), client-side promo handling
+      should have explicit coverage.
+
+  (d) Offline queue — rideStore.ts:280 defines syncOfflineRequests() which replays
+      queued create_ride calls on reconnect. R-P2-1 identifies this as covering
+      only ride creation (cancel, rate, tip are dropped). There is no test for
+      syncOfflineRequests() at all — neither the current narrow behaviour nor the
+      gap.
+
+  Severity: MEDIUM (not individually critical, but collectively mean that four
+  significant store subsystems have zero regression safety net before beta).
+Fix: Add test coverage for:
+  • fetchScheduledRides + cancelScheduledRide (rideStore)
+  • applyPromo / fetchAvailablePromos (rideStore)
+  • syncOfflineRequests — verify pending create_ride is replayed; verify that
+    cancel/rate/tip queue items are noted as not-replayed (or add the replay).
+  • fareSplit payment confirmation path (walletStore)
+  Effort: 3–4 hours.
+
+[09-6] HIGH | E2E ride-booking.spec.ts Does Not Cover: Rating, Tip, or Explicit
+             Screen Assertions
+File: rider-app/e2e/ride-booking.spec.ts
+Finding: The spec walks five ride-status stages (searching → driver_assigned →
+  driver_arrived → in_progress → completed) by seeding localStorage with auth
+  and mocking /rides/active. However:
+
+  (a) Rating and tip steps are absent — the D09 checklist requires the E2E flow
+      to cover: book → driver arriving → in-progress → completed → rate → tip.
+      After 'completed' the test ends. Neither rate-ride nor the rating section
+      inside ride-completed.tsx is exercised in E2E.
+
+  (b) The assertion after each stage is only `expect(page.locator('body'))
+      .toBeVisible()` — this confirms the page has not crashed but not that the
+      correct screen or UI elements are rendered. No `assertVisible` equivalent
+      (getByRole, getByText, getByTestId) is used in the ride-booking spec.
+
+  (c) The test seeds auth and mocks backend once per stage iteration (five
+      `seedAuthedSession` + `mockBackend` calls in a loop with page.goto('/')
+      per iteration) rather than simulating a single ride session through all
+      transitions. This means the test never validates that state transitions
+      between screens work correctly in a continuous session.
+
+  Severity: HIGH per D09 framework ("E2E covers only login — no ride flow" maps
+  closest, since the flow is present but shallow: no UI assertions and no
+  rating/tip step).
+Fix:
+  • Add a sixth stage for 'rate' — mock /rides/{id}/rate endpoint, assert
+    that a rating UI element is visible (e.g., page.getByTestId('star-rating')).
+  • Add a seventh stage for 'tip' — verify tip button is visible and tappable.
+  • Replace bare `body.toBeVisible()` with at least one screen-specific
+    assertion per stage (e.g., getByText('Finding your driver') for searching,
+    getByText("Your driver is on the way") for driver_assigned, etc.).
+  • Convert the loop-per-stage pattern into a sequential single-session test that
+    uses mockBackend({ rideStatusSequence: stages }) to simulate real transitions.
+  Effort: 4–6 hours.
+
+[09-7] PASS | All Unit Test Files Mock the API Client — No Real HTTP Calls
+File: rider-app/store/__tests__/rideStore.test.ts,
+      rider-app/store/__tests__/rideStore.ws.test.ts,
+      rider-app/store/__tests__/walletStore.test.ts
+Finding: All three unit-test files open with `jest.mock('@shared/api/client', ...)`
+  before importing any store. The mock replaces the shared Axios client with
+  Jest spy functions (post, get, put, patch, delete). No real HTTP calls are
+  possible in Jest context. AsyncStorage is similarly mocked in rideStore tests.
+  Supabase and Firebase are not directly imported by the store test files; no
+  mock is needed. No test file references a live backend URL or reads
+  EXPO_PUBLIC_BACKEND_URL at test time.
+
+[09-8] PASS | E2E Tests Use Playwright page.route() to Intercept All Backend Calls
+File: rider-app/e2e/fixtures.ts, rider-app/playwright.config.ts
+Finding: mockBackend() registers a page.route('**/api/v1/**', ...) handler that
+  intercepts every backend request and returns canned JSON. Google Maps and Firebase
+  are stubbed via page.addInitScript before any app script runs. The Playwright
+  config confirms no external base URL is mandated (defaults to localhost:3002).
+  The route handler returns a default `{}` for any unrecognised path, preventing
+  network leakage. CI retries (2 retries on failures) are configured but flaky
+  tests are not silently suppressed — they are retried and reported in the GitHub
+  Actions reporter.
+
+[09-9] MEDIUM | No Component Tests Exist — Zero Coverage for Critical UI Components
+File: rider-app/ (no __tests__ directory outside store/)
+Finding: The D09 checklist requires component tests for critical UI:
+  RideOfferPanel, ActiveRidePanel, TripCompletedPanel. Searching the repository
+  finds only three test files, all in rider-app/store/__tests__/. No component-
+  level test files exist anywhere in rider-app/app/, rider-app/components/, or
+  rider-app/hooks/. The useRiderSocket hook — which dispatches every WebSocket
+  event — is not tested at the hook level. This means a regression in how a
+  WebSocket event is translated into a store dispatch would be invisible until
+  a manual E2E run or production failure.
+Fix: Add @testing-library/react-native component tests for at minimum:
+  • RideStatusPanel / ride-searching state (renders "Finding your driver" text)
+  • ActiveRidePanel (renders driver name, ETA, cancel button)
+  • TripCompletedPanel (renders fare, rating stars, tip buttons)
+  • useRiderSocket hook test using a fake WebSocket — verify that
+    driver_location_update, driver_timeout, ride_cancelled each correctly
+    dispatch to the store.
+  Effort: 1–2 days.
+
+[09-10] MEDIUM | No Snapshot Tests — But Also No Explicit Rationale to Exclude Them
+File: rider-app/jest.config.js, rider-app/store/__tests__/
+Finding: The D09 checklist flags "snapshot tests without a clear rationale" as
+  a concern (snapshots rot quickly). The rider-app has zero snapshot tests, which
+  avoids the snapshot-rot problem but also means there is no golden-render check
+  for any screen. This is not a bug, but combined with the absence of component
+  tests ([09-9]) it means no automated check exists for any rendered UI state.
+  Note: this finding is MEDIUM only in conjunction with [09-9] — if component
+  tests are added, snapshot-free is perfectly acceptable.
+
+[09-11] LOW | CI Does Not Run E2E Tests in the Rider-App Test Job
+File: .github/workflows/ci.yml:199–209
+Finding: The `rider-app-test` CI job runs `yarn test --ci --coverage` (Jest only).
+  E2E Playwright tests (`yarn test:e2e`) are run in a separate job
+  (`playwright-smoke`, ci.yml:384) that depends on `rider-app-test` and uses an
+  `expo export` build. E2E tests are therefore not blocking — they run in a
+  downstream job and a Playwright failure does not prevent the `rider-app-test`
+  job from marking green. Additionally, ci.yml:2 (`retries: process.env.CI ? 2 : 0`
+  in playwright.config.ts) means Playwright retries twice before reporting failure,
+  which can mask genuine flakiness in the smoke suite.
+  Severity: LOW (E2E do run on every PR; this is a depth/visibility gap, not a
+  missing gate).
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 09 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     4 |
+| MEDIUM          |     3 |
+| LOW             |     1 |
+| PASS            |     2 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    10 |
+
+================================================================================
+TASK 10 — ERROR HANDLING & RESILIENCE (Dimension 10)
+================================================================================
+
+[10-1] MEDIUM | fetchEstimates() Failure: Empty Screen, No Retry UI
+File: rider-app/app/ride-options.tsx:71–84, 406–495
+      rider-app/store/rideStore.ts:222–242
+Finding: When fetchEstimates() fails, rideStore sets isLoading=false and
+  error=error.message (rideStore.ts:240–241) but the ride-options.tsx screen
+  never reads the error field from the store. The render logic is:
+    • isLoading=true  → ActivityIndicator + "Finding best rides..."
+    • isLoading=false, estimates=[]  → empty ScrollView (nothing rendered)
+  The estimates array stays empty, the footer "Confirm" button is hidden
+  (line 498: !isLoading && !allUnavailable && estimates.length > 0), and no
+  error message or retry button is shown. The user sees a blank white panel
+  with no explanation and no way to recover except pressing the back button
+  and trying again from scratch.
+  The error state in the store (rideStore.error) is also never cleared between
+  navigations, so a second fetch on the same mount doesn't reset it either.
+Fix: Read useRideStore().error and, when estimates.length===0 && !isLoading &&
+  error, render an error card with message and a "Retry" button that calls
+  fetchEstimates(). Clear the error on mount with clearError().
+  Effort: 1 hour.
+
+[10-2] PASS | createRide() Network Failure: Button Disables and Error Displays
+File: rider-app/app/payment-confirm.tsx:51–68, 319–336
+Finding: payment-confirm.tsx uses an isSubmitting ref (line 51) as a guard —
+  handleBookRide() returns immediately if isSubmitting.current is true.
+  On success the flow navigates away; on error the catch block (line 63–65)
+  calls setAlertState({ variant: 'danger', ... }) which renders a CustomAlert
+  with the error message. The finally block (line 65–67) clears the ref so the
+  button becomes active again.
+  The book button shows an ActivityIndicator when isLoading=true (line 325) and
+  the button is disabled={isLoading} (line 321). This means: (a) spinner shows
+  during the in-flight request, (b) error message appears after failure, and
+  (c) the button re-enables so the user can retry.
+  One gap: the button uses disabled={isLoading} (store-level flag) rather than
+  disabled={isSubmitting.current}. The isSubmitting ref prevents re-entry but
+  the button is not visually disabled while isSubmitting is true and isLoading
+  is still false (store sets isLoading before the API call, so this is usually
+  fine, but there is a brief window between the guard check and set({isLoading:
+  true}) where a rapid double-tap could slip through). This exact gap was
+  already flagged as R-P2-32. No new finding raised here.
+  Overall verdict: PASS — error is shown and button re-enables after failure.
+
+[10-3] HIGH | triggerEmergency() Swallows Errors — Rider Not Notified on Failure
+File: rider-app/store/rideStore.ts:442–453
+Finding: The triggerEmergency action catches all errors and logs them to the
+  console but deliberately does not notify the user (the comment reads "Even if
+  API fails, we don't throw to not block the local 911 UI flow"). This design
+  choice means a rider whose SOS call fails — due to a network outage, timeout,
+  or backend error — receives no indication that emergency services were NOT
+  notified through the app.
+  The caller in ride-in-progress.tsx (line 111) calls triggerEmergency() then
+  Linking.openURL('tel:911') immediately, so the phone-dial path does work
+  independently. However, the backend emergency path also sends push
+  notifications to emergency contacts, records the GPS coordinates, and flags
+  the ride for live monitoring. All of that silently fails if the API call
+  fails, and the rider is not told that only the direct 911 call went through.
+  This is exactly the pre-populated finding R-P0-1 in rider-P0-critical-fix-
+  now.md — confirming it is still present and unfixed.
+  The correct fix (as documented in R-P0-1) is to add an Alert in the catch
+  block: "Emergency alert may not have reached our team — please call 911
+  directly" with a tel:911 button. The throw should then re-raise so the caller
+  can clean up if needed.
+Fix: Catch block must show Alert.alert() with 911 fallback link. See R-P0-1
+  for the full code prescription.
+  Effort: 1 hour.
+
+[10-4] MEDIUM | Offline Queue Handles Only create_ride — cancel, rate, tip Silently Dropped
+File: rider-app/store/rideStore.ts:280–317
+Finding: syncOfflineRequests() only processes entries where request.type ===
+  'create_ride' (line 294). All other types fall into the implicit else branch
+  and do nothing. This was already identified in R-P2-1.
+  Confirming with code inspection:
+  • cancelRide() (line 373): calls api.post directly — no offline queue write
+  • rateRide() (line 429): calls api.post directly — no offline queue write
+  • completeRide() (line 415): calls api.post directly — no offline queue write
+  • triggerEmergency() (line 442): calls api.post directly — no offline queue write
+  None of these actions write to the 'offline_queue' AsyncStorage key before
+  attempting the API call. They simply fail silently if the request throws
+  (cancelRide sets error, rateRide re-throws but the caller in ride-completed
+  catches and shows an alert, completeRide just sets error). So the queue
+  restriction to create_ride is moot in practice — the other actions never
+  get queued in the first place, making them silently lost when offline.
+  A rider who taps "Cancel", "Rate", or "Submit Tip" while offline gets either
+  an error alert (rateRide) or nothing (cancelRide, completeRide). The queue
+  defined in the spec comment ("Add other request types here as needed") is
+  a dead stub.
+  Severity: MEDIUM (confirmed prior finding R-P2-1; not raising a new P2).
+Fix: See R-P2-1 for the full fix prescription. Effort: 3–4 hours.
+
+[10-5] MEDIUM | Cold-Start Stale Ride: hydrateActiveRide() Does Not Validate Against Backend
+File: rider-app/store/rideStore.ts:584–602
+      rider-app/app/_layout.tsx (cold-start flow)
+Finding: hydrateActiveRide() (rideStore.ts:584) reads the cached ride from
+  AsyncStorage and restores it to the store IF the status is not in
+  TERMINAL_STATUSES (completed, cancelled, failed). It does NOT make an API
+  call to validate that the ride is still active on the backend.
+  If the backend has moved the ride to a terminal state while the app was
+  closed (e.g. ride was cancelled by the driver, or timed out), the stale
+  non-terminal status in AsyncStorage will cause the store to restore the
+  phantom ride. The layout's route-guard or individual screens (driver-arriving,
+  ride-in-progress) then render with stale data until the next poll interval
+  (15 seconds) corrects the state. During that window the rider sees a ghost
+  active-ride screen.
+  There is no 404 handling either: _layout.tsx calls hydrateActiveRide() and
+  fetchActiveRide() in sequence. fetchActiveRide() calls GET /rides/active and
+  will correct the state if the ride is gone — but only after the layout has
+  already rendered. The issue is the initial flash of the wrong screen, not a
+  permanent stuck state.
+  Note: this is confirmed prior finding R-P2-2. However the specific question
+  was: "if /rides/active returns 404, does hydrateActiveRide() clear the stale
+  state and route to home?" — the answer is that hydrateActiveRide() itself
+  never calls the backend, so it cannot detect the 404. The correction only
+  happens in the subsequent fetchActiveRide() call which returns null on any
+  error. That null return does not explicitly clear the store state that was
+  just populated by hydrateActiveRide() — the store retains currentRide until
+  fetchActiveRide()'s success path overwrites it. So a 404 from /rides/active
+  leaves currentRide set to the stale hydrated data indefinitely (there is no
+  "clear if null returned" logic in fetchActiveRide).
+  This is worse than previously documented: the stale ride persists until a
+  screen-level status check transitions the UI.
+Fix: In fetchActiveRide(), when the response indicates no active ride (or on
+  404), explicitly call clearRide() to remove the stale hydrated state.
+  Or add an API call inside hydrateActiveRide() before restoring state. See
+  R-P2-2 for the prescribed fix.
+  Effort: 2 hours.
+
+[10-6] PASS | completeRide() Idempotency: Backend Handles Duplicate Gracefully
+File: rider-app/store/rideStore.ts:415–427
+      backend/routes/rides.py:1893–1902
+Finding: POST /{ride_id}/complete is a read-only endpoint — it fetches and
+  returns the current ride state (line 1901: "Return the current ride state").
+  It does NOT perform a state mutation. The driver-side endpoint performs the
+  actual status transition to 'completed'; the rider /complete path only reads
+  the result. Repeated calls from the rider client will simply return the ride
+  object each time without any side effects, duplicate charges, or conflicts.
+  The client-side completeRide() action (rideStore.ts:415) calls this endpoint
+  then calls AsyncStorage.removeItem(ACTIVE_RIDE_KEY). Multiple calls will each
+  attempt the removeItem (idempotent) and set currentRide to the returned data.
+  No spinner-forever risk: the catch block (line 424) sets isLoading to false
+  via the error path... wait — there is no isLoading toggle in completeRide()
+  at all. The action does not call set({isLoading: true}) before the request or
+  set({isLoading: false}) after. The absence of isLoading management means the
+  book button on payment-confirm (disabled={isLoading}) is not affected here.
+  Idempotency verdict: PASS — the endpoint is safe to call multiple times.
+  Minor note: completeRide() has no isLoading guard, so the calling screen
+  must handle its own button-disable state. This is tracked separately.
+
+[10-7] MEDIUM | ErrorBoundary at Root Only — Major Ride Screens Unprotected
+File: rider-app/app/_layout.tsx:302, 329
+      rider-app/app/driver-arriving.tsx (no ErrorBoundary)
+      rider-app/app/ride-in-progress.tsx (no ErrorBoundary)
+      rider-app/app/ride-completed.tsx (no ErrorBoundary assumed)
+Finding: ErrorBoundary is applied only at the root layout level — once in the
+  loading state shell (line 302) and once wrapping the full Stack in
+  RootLayoutInner (line 329). No individual screen in the ride flow is wrapped
+  in its own ErrorBoundary.
+  The dimension checklist requires: "Every major screen is wrapped in an
+  ErrorBoundary (not just root)." The driver-arriving and ride-in-progress
+  screens are explicitly named in the audit brief.
+  The root ErrorBoundary shows "Something went wrong" with a "Try Again" button
+  (shared/components/ErrorBoundary.tsx:39) — this is a full-screen takeover
+  that replaces the entire navigation stack, not just the failing screen. A
+  JavaScript error thrown inside driver-arriving (e.g. from a failed map
+  render, bad data from WS event, or null driver coordinates) will kill the
+  entire app UI rather than showing a screen-level fallback that preserves
+  navigation to other tabs.
+  During an active ride, this means a single render error on the map puts the
+  rider in a dead app state with no navigation to the home screen. The "Try
+  Again" button resets the ErrorBoundary state which re-mounts the entire app
+  — potentially losing ride context (though the store persists via Zustand).
+  The ErrorBoundary does call captureException() (line 84), so crashes are
+  logged to the error reporting service — that part is PASS.
+Fix: Wrap driver-arriving, ride-in-progress, ride-completed, and driver-arrived
+  individually with <ErrorBoundary> using a screen-specific fallback that shows
+  a retry button AND a "Go Home" navigation option that calls clearRide() so
+  the rider is not trapped in a stale ride state.
+  Effort: 2 hours.
+
+[10-8] PASS | 401 During Active Ride: Silent Token Refresh via Queued Refresh Deduplication
+File: shared/api/client.ts:153–218
+Finding: The API client implements a full token refresh flow with concurrent-
+  request deduplication. On a 401 response, handleApiError() (line 153):
+  1. Checks that _refreshCallback is registered and that a retry function is
+     available (line 155).
+  2. Deduplicates concurrent refresh calls via _refreshPromise (line 159–163)
+     — multiple simultaneous requests that all hit 401 will share a single
+     refresh attempt rather than flooding the auth server.
+  3. If the refresh succeeds, the original request is retried automatically
+     with the new in-memory token (line 165).
+  4. Only if the refresh fails does the client fall through to log the 401 and
+     call authStore.logout() which redirects to /login (lines 194–213).
+  The 15-second request timeout is configured globally (REQUEST_TIMEOUT=15000,
+  line 12), satisfying the dimension requirement.
+  The error log ring buffer is bounded at 50 entries (MAX_ERROR_LOG=50, line
+  139), satisfying the accumulation requirement. Entries store only message,
+  status, method, url, request_id, and exception_type — not full response
+  bodies (line 176–185). PASS on log contents.
+  The 401 retry queue correctly avoids recursion: it checks url !== '/auth/
+  refresh' (line 155) to prevent infinite retry loops on the refresh endpoint
+  itself.
+  4xx errors are not automatically retried — only 401 triggers the one-time
+  refresh+retry pattern. Other 4xx errors throw immediately.
+  Overall: the live ride map screen is not disrupted during a silent token
+  refresh because the client retries the original request transparently. The
+  rider sees no error UI unless the refresh itself fails (which triggers logout
+  — the correct behavior for a fully expired session).
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 10 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     4 |
+| LOW             |     0 |
+| PASS            |     3 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     8 |
+
+================================================================================
+TASK 11 — SECURITY HEADERS, CORS & RATE LIMITING (Dimension 11)
+================================================================================
+Scope    : backend/core/middleware.py · backend/core/config.py ·
+           backend/utils/rate_limiter.py · backend/routes/rides.py ·
+           backend/routes/promotions.py · rider-app/app.config.ts ·
+           rider-app/app/_layout.tsx
+Framework: audit-framework/dimensions/11-security-headers-cors.md
+Checks   : CORS allowlist · wildcard · security headers · rate limiting ·
+           deep link validation · Firebase App Check · CORS on error responses
+
+────────────────────────────────────────────────────────────────────────────────
+
+[11-1] HIGH | spinr.app Origin Not in CORS Allowlist — Rider Web App Cannot Call API
+File: backend/core/config.py:47
+      backend/core/middleware.py:307–313
+Finding: The ALLOWED_ORIGINS default and the hardcoded always_allowed list
+  together define the full CORS origin set. The hardcoded list is:
+    ["https://spinr-admin.vercel.app", "http://localhost:3000", "http://localhost:3001"]
+  The default ALLOWED_ORIGINS env var is:
+    "http://localhost:3000,http://localhost:8081,http://localhost:19006"
+  Neither list includes https://spinr.app or https://spinr-track.app.
+  The rider mobile app (React Native, not web) is not affected because it does
+  not use browser CORS. However, the app.config.ts intentionally registers
+  applinks:spinr.app and applinks:spinr-track.app as associated domains
+  (app.config.ts:37–39) — meaning spinr.app hosts a web landing page or
+  web app that links into the native app. Any web component on spinr.app
+  that calls the backend API (e.g. the live-tracking page at
+  spinr-track.app/{token} or a web booking flow) will be rejected with a
+  CORS error.
+  The backend serves a public unauthenticated /track/{share_token} endpoint
+  (rides.py:1198). If spinr-track.app hosts a web page that calls this
+  endpoint in the browser, every request will fail with "CORS policy: No
+  'Access-Control-Allow-Origin' header is present."
+Fix: Add https://spinr.app and https://spinr-track.app to the ALLOWED_ORIGINS
+  environment variable for the production deployment. If these domains host no
+  web-to-backend calls today, document the gap and add them before any web
+  component is shipped.
+  Additionally, document the complete expected production allowlist in the
+  .env.example file so operators know what to set:
+    ALLOWED_ORIGINS=https://spinr.app,https://spinr-track.app,https://spinr-admin.vercel.app
+  Effort: 30 minutes.
+
+[11-2] MEDIUM | /rides/{id}/cancel Missing Rate-Limit Decorator
+File: backend/routes/rides.py:1314–1315
+Finding: POST /rides/{ride_id}/cancel has no SlowAPI rate-limit decorator.
+  The create_ride endpoint (line 515–516) correctly applies
+  @ride_request_limit (10/minute). The cancel endpoint has no equivalent:
+    @api_router.post("/{ride_id}/cancel")
+    async def cancel_ride_rider(ride_id: str, current_user: dict = ...):
+  An authenticated attacker (or a client bug that retries on network error)
+  can flood the cancel endpoint without throttling, causing repeated
+  cancellation-fee charge attempts or backend load from repeated DB reads,
+  state machine evaluations, and potential Stripe API calls.
+  Dimension 11 checklist: "Rate limits configured for all sensitive
+  endpoints." Cancel is a financial-state endpoint.
+Fix: Add @ride_request_limit (or a separate cancel_limit = default_limiter.limit("5/minute"))
+  directly above the cancel endpoint, analogous to create_ride:
+    @api_router.post("/{ride_id}/cancel")
+    @ride_request_limit
+    async def cancel_ride_rider(request: Request, ride_id: str, ...):
+  (Note: SlowAPI requires the first parameter to be named `request` of type
+  starlette.requests.Request when using a decorator — add `request: Request`
+  as done in create_ride:517–524.)
+  Effort: 30 minutes.
+
+[11-3] MEDIUM | /promo/validate Missing Rate-Limit Decorator — Code Enumeration Possible
+File: backend/routes/promotions.py:60–64
+Finding: POST /promo/validate has no SlowAPI decorator:
+    @api_router.post("/validate")
+    async def validate_promo(req: ValidatePromoRequest, current_user: dict = ...):
+  The endpoint performs a live database lookup for each submitted promo code and
+  returns distinct error messages per failure case (invalid code → 404;
+  expired → 400; usage limit → 400; user eligibility → 400). A malicious
+  caller can submit sequential or dictionary guesses against this endpoint to
+  enumerate valid promo codes (a 404 response means the code does not exist;
+  a 400 means it does). With no rate limit, hundreds of guesses per second are
+  possible. Short promo codes (e.g. "SUMMER25", "FALL10") are low-entropy and
+  enumerable within minutes.
+  The Dimension 11 checklist explicitly names promo validation as a target for
+  rate limiting to prevent code enumeration.
+Fix: Add a rate-limit decorator. A dedicated promo_limit at 10/minute per user
+  (not per IP, since the user is authenticated) is appropriate:
+    promo_validate_limit = default_limiter.limit("10/minute")
+    @api_router.post("/validate")
+    @promo_validate_limit
+    async def validate_promo(request: Request, req: ValidatePromoRequest, ...):
+  Additionally, consider returning a generic "Promo code not found or not
+  applicable" message instead of distinct 404 vs 400 responses to make
+  enumeration harder.
+  Effort: 30 minutes.
+
+[11-4] MEDIUM | Referrer-Policy Value Is Non-Standard — Violates D11 Checklist
+File: backend/core/middleware.py:99
+Finding: _BASE_SECURITY_HEADERS sets:
+    "Referrer-Policy": "strict-origin-when-cross-origin"
+  The Dimension 11 checklist requires:
+    "Referrer-Policy: no-referrer"
+  "strict-origin-when-cross-origin" sends the origin component of the URL
+  on cross-origin requests (but drops the path). For an API backend that
+  serves no HTML and whose clients are mobile apps, "no-referrer" is stricter
+  and has no functional cost — there is no legitimate use case for the backend
+  to emit a Referrer on responses, and doing so leaks origin information in
+  server logs.
+Fix: Change the Referrer-Policy value to "no-referrer":
+    "Referrer-Policy": "no-referrer",
+  Effort: 5 minutes.
+
+[11-5] PASS | No Wildcard (*) in Production CORS
+File: backend/core/middleware.py:315–323
+Finding: init_middleware() explicitly detects if wildcard "*" is in the origins
+  list and raises RuntimeError when ENV=production:
+    if wildcard and is_production:
+        raise RuntimeError("CORS is configured with wildcard '*' while ENV=production...")
+  The server refuses to start with wildcard CORS in production. In development,
+  wildcard is allowed but allow_credentials is disabled to comply with the CORS
+  spec. PASS.
+
+[11-6] PASS | CORS Allowlist Enforced via Environment Variable
+File: backend/core/config.py:47; backend/core/middleware.py:307
+Finding: origins are parsed from settings.ALLOWED_ORIGINS, which is a
+  Pydantic BaseSettings field backed by the ALLOWED_ORIGINS environment
+  variable. The server reads it at startup; no origin is hardcoded in
+  production config. The always_allowed list hardcodes only admin and
+  localhost origins, which is acceptable. PASS.
+
+[11-7] PASS | Preflight OPTIONS Handled Correctly
+File: backend/core/middleware.py:334–340
+Finding: FastAPI's CORSMiddleware is registered with allow_methods=["*"] and
+  allow_headers=["*"]. CORSMiddleware handles OPTIONS preflight requests
+  automatically and returns the correct Access-Control-Allow-Methods and
+  Access-Control-Allow-Headers headers. PASS.
+
+[11-8] PASS | CORS Headers Present on 4xx/5xx Error Responses
+File: backend/core/middleware.py:353–387
+      backend/utils/error_handling.py:542–560
+Finding: Two mechanisms ensure CORS headers reach error responses:
+  (1) cors_exception_handler registered via @app.exception_handler(Exception)
+  in init_middleware (line 354) inspects the origin header and adds
+  Access-Control-Allow-Origin + Vary: Origin on all exception responses,
+  including HTTP exceptions and unhandled 500s.
+  (2) register_exception_handlers() (server.py:54) registers a second
+  general_exception_handler from utils/error_handling.py that reads from the
+  same resolved origins set (error_handling.py:538) and applies _cors_headers_for().
+  Both paths resolve origins from the same settings.ALLOWED_ORIGINS variable
+  so the two handlers stay in sync. Error responses carry security headers too
+  (middleware.py:385: _apply_security_headers on exception response). PASS.
+
+[11-9] PASS | All Required Security Headers Present on API Responses
+File: backend/core/middleware.py:96–138
+Finding: SecurityHeadersMiddleware applies all required headers on every
+  response via _apply_security_headers():
+    X-Content-Type-Options: nosniff            ✓ (line 97)
+    X-Frame-Options: DENY                      ✓ (line 98)
+    Referrer-Policy: strict-origin-when-cross-origin ✓ (line 99) [see 11-4]
+    Permissions-Policy: geolocation=(),
+      microphone=(), camera=(), payment=()     ✓ (line 100)
+    Cross-Origin-Opener-Policy: same-origin    ✓ (line 101)
+    Cross-Origin-Resource-Policy: same-site    ✓ (line 102)
+    Content-Security-Policy: default-src 'none';
+      frame-ancestors 'none'; base-uri 'none' ✓ (line 105/138)
+    Strict-Transport-Security: max-age=31536000;
+      includeSubDomains; preload              ✓ (line 133, production only)
+  Security headers are also injected into exception responses (line 385).
+  Minor: Referrer-Policy value should be "no-referrer" per checklist (see 11-4).
+  Minor: Cross-Origin-Resource-Policy is "same-site" vs the checklist value of
+  "same-origin" — for an API with mobile clients "same-site" is correct
+  because mobile apps are not "same-origin" but requests are legitimate.
+  No missing headers; PASS with the Referrer-Policy gap noted as 11-4.
+
+[11-10] PASS | Deep Link ride_id Validated Against Authenticated User (No IDOR)
+File: backend/routes/rides.py:847–864
+      rider-app/app/ride-details.tsx:19, 33
+Finding: The rider app opens ride-details.tsx with a rideId parameter which
+  calls GET /rides/{rideId}. The backend get_ride() handler (line 847):
+  (1) Fetches the ride by ID.
+  (2) Checks is_rider = ride["rider_id"] == current_user["id"].
+  (3) Also checks is_driver (for the assigned driver's view).
+  (4) Falls back to an admin role check.
+  (5) Returns 403 if none of the above match.
+  A crafted deep link spinr.app/ride/{foreign_id} cannot expose another user's
+  ride — the authenticated user's identity is cross-checked against the ride
+  record server-side. IDOR is not possible on this path. PASS.
+
+[11-11] PASS | Share Token (spinr-track.app/{token}) Validated — Not a Ride ID
+File: backend/routes/rides.py:1198–1247
+Finding: The /track/{share_token} public endpoint (line 1198) does NOT accept
+  a raw ride_id. It queries rides by shared_trip_token (a 32-byte
+  secrets.token_urlsafe value). The token is unguessable. The endpoint also:
+  (a) Rejects tokens older than 24 hours (line 1214).
+  (b) Returns only a minimal safe subset of ride data (status, addresses, and
+    a filtered driver object with name/location/vehicle — no PII, no payment
+    data, no phone numbers).
+  A crafted spinr-track.app URL cannot enumerate rides or access another
+  user's data because the token is cryptographically random and ride_id is not
+  exposed on this path. PASS.
+
+[11-12] PASS | Firebase App Check Enforced on All Rider-Specific Backend Endpoints
+File: backend/core/middleware.py:27, 351
+Finding: Per finding [03-11] (verified in D03 audit): _APP_CHECK_ENFORCEMENT
+  = True and FirebaseAppCheckMiddleware is registered with
+  enforcement_enabled=True. Every /api/* request — including all rider
+  endpoints — requires a valid X-Firebase-AppCheck header. WebSockets, health
+  probes, and docs are correctly exempted. The public /track/{share_token}
+  endpoint is served under /api/v1/rides/track/... and therefore IS protected
+  by App Check — unauthenticated web browsers cannot reach it directly.
+  Note: the /track endpoint intentionally has no user auth requirement (safety
+  contacts need it), so App Check alone gates it. This is by design; the token
+  is the access control mechanism. PASS.
+
+[11-13] PASS | Rate Limiting Reads X-Forwarded-For Behind CDN/Proxy
+File: backend/utils/rate_limiter.py:63–67
+Finding: default_limiter is created with key_func=get_ipaddr (slowapi.util).
+  get_ipaddr reads X-Forwarded-For when present, falling back to the TCP
+  remote address. This means real client IPs are used behind Railway / Fly.io /
+  Cloudflare reverse proxies. PASS.
+
+[11-14] PASS | Redis-Backed Rate Limiting in Production with Startup Validation
+File: backend/utils/rate_limiter.py:36–59
+      backend/core/middleware.py:264–276
+Finding: _rate_limit_storage_uri falls back to "memory://" only when
+  RATE_LIMIT_REDIS_URL is unset. _validate_production_config() (middleware.py:
+  264–276) raises RuntimeError if RATE_LIMIT_REDIS_URL is empty in
+  ENV=production — the server refuses to start. Development environments log
+  a clear warning about per-worker counters. PASS.
+
+[11-15] PASS | ride_request_limit Applied to POST /rides (Ride Creation)
+File: backend/routes/rides.py:515–516
+Finding: The create_ride endpoint is decorated with @ride_request_limit which
+  maps to default_limiter.limit("10/minute") (rate_limiter.py:174). PASS.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 11 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     3 |
+| LOW             |     0 |
+| PASS            |    11 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    15 |
+
+================================================================================
+TASK 12 — COMPLIANCE: PII, PCI-DSS & DATA RETENTION (Dimension 12)
+================================================================================
+
+NOTE ON SCOPE AND FRAMING
+The driver audit (D12) checked driver PII leaking to riders. This audit checks
+the inverse: RIDER PII leaking to drivers. Checklist items from the dimension
+framework are evaluated from the rider-as-data-subject perspective.
+
+────────────────────────────────────────────────────────────────────────────────
+PII FIELD STRIPPING — RIDER DATA IN DRIVER-FACING RESPONSES
+────────────────────────────────────────────────────────────────────────────────
+
+[12-1] HIGH | Full Rider User Object Returned to Driver in GET /drivers/rides/active
+File: backend/routes/drivers.py:1617–1633
+Finding: When a driver fetches their active ride, the endpoint loads the rider's
+  user record with:
+      rider = await db_supabase.get_user_by_id(ride["rider_id"])
+  and returns it verbatim via:
+      return { "ride": serialize_doc(ride), "rider": serialize_doc(rider), ... }
+  serialize_doc() is a passthrough (returns doc unchanged, line 201–202). No field
+  stripping occurs. The full users row is sent to the driver, which includes:
+    • phone (riders phone number)
+    • email
+    • stripe_customer_id
+    • default_payment_method (Stripe payment method token)
+    • profile_image (base64 data URI — potentially large)
+  None of these fields are required by the driver to complete the trip. The
+  dispatch WebSocket payload (rides.py:264–278) correctly limits rider data to
+  rider_name and rider_rating only. The HTTP REST endpoint does not apply any
+  equivalent filter. A driver making GET /drivers/rides/active receives the
+  rider's phone number, email, and Stripe customer ID in the response body.
+  This is a PIPEDA violation: personal data must not be disclosed beyond what
+  is strictly necessary for the purpose for which it was collected.
+Fix: Create a RiderPublicView allowlist (first_name, profile_image, rating only)
+  and apply it before returning rider data from get_active_ride(). At minimum,
+  strip phone, email, stripe_customer_id, default_payment_method from the
+  serialized rider object. Equivalent to what the dispatch payload already does.
+  File: backend/routes/drivers.py — get_active_ride(), around line 1630.
+  Example:
+    RIDER_PUBLIC_FIELDS = {"id", "first_name", "profile_image", "rating"}
+    safe_rider = {k: v for k, v in rider.items() if k in RIDER_PUBLIC_FIELDS}
+  Effort: 1 hour.
+
+[12-2] PASS | Saved Addresses Not Accessible to Drivers After Ride Completes
+File: backend/routes/addresses.py:19–22
+Finding: GET /addresses filters by {"user_id": current_user["id"]} — a driver
+  can only retrieve their own saved addresses, never a rider's. The endpoint has
+  no ride-context parameter and no driver-role bypass. After a ride completes,
+  a driver calling this endpoint receives only their own saved places. Rider
+  home/work addresses are not exposed to drivers via this route.
+
+────────────────────────────────────────────────────────────────────────────────
+RATING — BLIND RATING ENFORCEMENT
+────────────────────────────────────────────────────────────────────────────────
+
+[12-3] MEDIUM | Driver Can Query Own Rating Before Rating the Rider — No Blind-Rating Enforcement
+File: backend/routes/drivers.py:208–219 (GET /drivers/me)
+       backend/routes/drivers.py:2120–2136 (POST /drivers/rides/{id}/rate-rider)
+Finding: The driver's own star rating is stored on the drivers row and is
+  returned in full by GET /drivers/me (via the /me endpoint). No check prevents
+  a driver from calling GET /drivers/me, noting their current average rating,
+  submitting a POST /drivers/rides/{id}/rate-rider, and then calling GET /me
+  again to observe how the rider's rating affected their average. This allows a
+  driver to infer exactly what rating a rider gave them before the driver
+  finalises their rating of the rider. Blind-rating (both parties rate without
+  seeing the other's rating) is a standard fairness control for two-sided rating
+  systems. Without it, drivers can tactically give punitive 1-star ratings in
+  retaliation. Additionally, rate-rider has no completed-ride guard: the endpoint
+  does not check that the ride is in "completed" state, that this driver was the
+  assigned driver, or that the rider has already rated. It also does not prevent
+  the driver from rating the same ride twice.
+Fix:
+  (a) Short-term: strip "rating" from the GET /drivers/me response until after
+    the post-ride rating window (e.g. 30 minutes after ride completion).
+  (b) Long-term: add a mutual blind-reveal: only expose updated ratings after
+    both parties have submitted, or after the 30-minute window expires.
+  (c) Add guards to POST /drivers/rides/{id}/rate-rider:
+    — ride must be "completed"; ride.driver_id must equal caller's driver_id
+    — rider_rating must be NULL (no re-rating)
+  Effort: 2–4 hours.
+
+────────────────────────────────────────────────────────────────────────────────
+PIPEDA — CANADIAN PRIVACY LAW
+────────────────────────────────────────────────────────────────────────────────
+
+[12-4] MEDIUM | account.tsx Has No Direct "Delete My Account" or "Export My Data" Option
+File: rider-app/app/(tabs)/account.tsx:163–243
+Finding: The Account tab (the natural place a rider looks to manage their data)
+  has no "Delete Account" or "Download My Data" menu items. These options exist
+  in the separate Privacy & Settings screen (privacy-settings.tsx), accessible
+  via Account → Privacy & Settings (line 225). The two-step path is non-obvious:
+  PIPEDA and App Store Review Guidelines both expect data-subject rights to be
+  discoverable without hunting through nested menus.
+  Note: Both buttons in privacy-settings.tsx are already documented as API stubs
+  in finding [01-2] / R-P1-6. This finding addresses discoverability from the
+  account tab; the stub fix is tracked separately.
+Fix: Add "Delete My Account" and "Download My Data" direct menu items to the
+  Account tab, in the "Safety & Privacy" section (around line 209). These can
+  route to privacy-settings.tsx or call the API directly.
+  Effort: 1 hour.
+
+[12-5] MEDIUM | Privacy Policy Not Accessible Directly from Account Tab — Only ToS Linked
+File: rider-app/app/(tabs)/account.tsx:238–242
+       rider-app/app/legal.tsx:20, 37–40
+Finding: The Account tab → Legal menu item calls:
+    router.push('/legal?type=tos' as any)
+  This opens only the Terms of Service. The legal.tsx screen supports a
+  ?type=privacy parameter that fetches the Privacy Policy from the backend, but
+  no navigation path in the Account tab links to it. Under PIPEDA, the privacy
+  policy must be "readily available" to data subjects. A user can access it only
+  if they manually navigate to legal.tsx and change the URL parameter, which is
+  not possible from the UI. The driver audit confirmed legal.tsx works correctly
+  — the privacy policy fetch path exists and is functional ([01-11] PASS);
+  the gap is entirely in the navigation link in account.tsx.
+Fix: Add a second "Privacy Policy" menu item in the Legal & Help section that
+  calls router.push('/legal?type=privacy'). Alternatively, update the existing
+  "Legal" item to present a choice ("Terms of Service" / "Privacy Policy") or
+  link to legal.tsx with a tab picker.
+  File: rider-app/app/(tabs)/account.tsx — Legal & Help section (line ~238).
+  Effort: 30 minutes.
+
+[12-6] MEDIUM | No In-App Location Consent Explanation Before OS Permission Dialog
+File: rider-app/app/(tabs)/index.tsx:82–113
+Finding: On first launch, index.tsx calls:
+    let { status } = await Location.requestForegroundPermissionsAsync();
+  immediately inside the useEffect hook, without any prior in-app screen or
+  modal explaining why GPS is needed and how it will be used. The OS permission
+  dialog appears with no Spinr-authored context. PIPEDA requires that consent be
+  informed: data subjects must understand the purpose of collection before
+  consenting. Apple App Store guidelines also require a usage description preamble
+  (NSLocationWhenInUseUsageDescription is set in app.config.ts, but this is
+  the system text — it does not satisfy PIPEDA's "meaningful consent"
+  requirement). Best practice for ride-hailing apps (Uber, Lyft) is to display
+  an in-app "Allow Spinr to use your location to find nearby drivers" screen
+  before the OS dialog, giving the user context and a clear Allow/Deny choice.
+Fix: Add a LocationConsentScreen or modal that appears before the first
+  requestForegroundPermissionsAsync() call if location permission has not been
+  previously granted. Store the "consent shown" flag in AsyncStorage.
+  The screen should explain: what data is collected (real-time GPS), why (match
+  with drivers, navigate to pickup), and how long it is retained.
+  File: rider-app/app/(tabs)/index.tsx — wrap permission request.
+  Effort: 2–3 hours.
+
+[12-7] PASS | Corporate Admin Cannot Access Full Rider PII — Only Trip Cost Data
+File: backend/routes/corporate_company.py:77–86
+       backend/db_supabase.py:1494–1505
+Finding: The company-admin portal (GET /company/{id}/members) queries only the
+  corporate_members table, which contains: member_id, company_id, invited_email,
+  status, and role. No phone numbers, home/work addresses, payment methods, or
+  full user profile fields are joined. The rider-facing /rider/work-profile
+  endpoints return only membership metadata and allowance data (amount, used,
+  remaining). No rider PII beyond the invited_email (which the company provided
+  during invitation) is exposed to company admins. PASS.
+
+────────────────────────────────────────────────────────────────────────────────
+DATA RETENTION — SOFT-DELETE
+────────────────────────────────────────────────────────────────────────────────
+
+[12-8] MEDIUM | Rides Table Has No soft-delete Column — No deleted_at on Ride Records
+File: backend/routes/users.py:68–88 (delete_account)
+       backend/routes/rides.py (no ride deletion path)
+Finding: The delete_account endpoint (users.py:68) correctly soft-deletes the
+  users row (deleted_at) and the drivers row (deleted_at). However, a ride record
+  has no deleted_at column: rides are never deleted or soft-deleted. When an
+  account is deleted, the rider's rides remain in the database with their
+  rider_id set to a deleted user — no purge, no anonymisation, no retention
+  window. PIPEDA requires a retention policy: data must not be kept longer than
+  is necessary for the purpose. Completed rides contain: pickup/dropoff addresses,
+  timestamps, fare, tip, payment method used, and driver assigned. Indefinite
+  retention of completed ride records attached to a deleted account violates
+  the data minimisation principle. Additionally, saved_addresses are hard-deleted
+  on account closure (delete_many, line 81) while rides are not — creating an
+  inconsistent retention model. No automated purge job exists.
+Fix:
+  (a) Add deleted_at / anonymised_at to the rides table.
+  (b) On account deletion: anonymise ride records (null out rider_id, replace
+    pickup/dropoff addresses with "Address removed") after the retention window.
+  (c) Define a retention policy (e.g. 7 years for financial records per CRA,
+    90 days for non-financial data).
+  (d) Add a scheduled purge/anonymisation job.
+  Effort: 1 day (schema migration + purge job + policy documentation).
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 12 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     5 |
+| LOW             |     0 |
+| PASS            |     2 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     8 |
+
+================================================================================
+TASK 13 — NOTIFICATIONS, AI SUPPORT & KNOWLEDGE BASE (Dimension 13)
+================================================================================
+
+[13-1] PASS | setBackgroundMessageHandler() Registered at Module Level
+File: rider-app/app/_layout.tsx:74–76
+Finding: setBackgroundMessageHandler() is called at the top of _layout.tsx,
+  outside the RootLayout React component, at module evaluation time. This
+  satisfies the FCM requirement that the background handler be registered before
+  React mounts, so the JS runtime can wake and handle messages when the app is
+  backgrounded or killed. The shared/services/firebase.ts wrapper correctly
+  delegates to messaging().setBackgroundMessageHandler() (line 116), which is the
+  required Firebase call.
+
+[13-2] PASS | FCM Token Re-Registered on Token Rotation (onTokenRefresh)
+File: rider-app/app/_layout.tsx:233–248
+Finding: The auth-gated useEffect (lines 203–249) subscribes to
+  onTokenRefresh(async (newToken) => { ... }) immediately after the initial token
+  registration succeeds. The callback POSTs the new token to
+  /notifications/register-token with the platform field, matching the initial
+  registration call. The subscription is cleaned up on effect teardown. Token
+  rotation is therefore handled without requiring a cold start.
+
+[13-3] PASS | Ride Lifecycle — All Six Required Event Types Handled in WebSocket
+File: rider-app/hooks/useRiderSocket.ts:81–115
+Finding: All six required ride-lifecycle event types are handled in the
+  handleMessage switch statement:
+    driver_accepted  (line 81) — fetchRide() triggers screen transition
+    driver_arrived   (line 85) — fetchRide() + Vibration.vibrate()
+    ride_started     (line 90) — fetchRide()
+    ride_completed   (line 94) — applyRideStatusFromWS() + fetchRide()
+    ride_cancelled   (line 103) — Alert.alert() + clearRide()
+    driver_timeout   (line 113) — fetchRide() (alert missing — covered by R-P1-16)
+  A catch-all ride_status_changed handler (line 119) provides additional coverage.
+  All lifecycle events that cause screen transitions are correctly handled.
+
+[13-4] HIGH | Notification Tap from Killed State Does Not Open the Correct Ride Screen
+File: rider-app/app/_layout.tsx (entire file); rider-app/app/index.tsx
+Finding: Neither _layout.tsx nor index.tsx calls
+  messaging().getInitialNotification() (Firebase FCM) or
+  Notifications.getLastNotificationResponseAsync() (Expo Notifications).
+  When the app is completely killed and the rider taps a push notification
+  (e.g., "Your driver has arrived"), the OS launches the app but the notification
+  payload is silently discarded. There is no code that reads the launch notification
+  and routes to the correct ride screen (driver-arrived, ride-in-progress, etc.).
+  The rider lands on the splash screen / tab home with no context.
+  In a ride-hailing app, push notifications from killed state are the primary way
+  a rider learns their driver has arrived when the app is not open. Failing to deep
+  link leaves the rider on the home screen, unaware of what triggered the launch,
+  with no indication that their driver is waiting.
+  Note: the app.config.ts intentFilters (android) and associatedDomains (iOS) are
+  configured for web deep links (spinr.app/ride, spinr-track.app/) but these are
+  for Universal Links, not for FCM notification tap routing.
+Fix: In _layout.tsx (or index.tsx), add on-mount handling:
+    // Firebase (killed state):
+    messaging().getInitialNotification().then(remoteMessage => {
+      if (!remoteMessage) return;
+      routeFromNotification(remoteMessage.data);
+    });
+    // Expo Notifications (killed state):
+    Notifications.getLastNotificationResponseAsync().then(response => {
+      if (!response) return;
+      routeFromNotification(response.notification.request.content.data);
+    });
+  routeFromNotification(data) should inspect data.type and data.ride_id:
+    switch (data.type) {
+      case 'driver_accepted':   router.replace('/driver-arriving'); break;
+      case 'driver_arrived':    router.replace('/driver-arrived'); break;
+      case 'ride_started':      router.replace('/ride-in-progress'); break;
+      case 'ride_completed':    router.replace('/ride-completed'); break;
+      default:                  router.replace('/(tabs)'); break;
+    }
+  This requires the backend to include data.type and data.ride_id in FCM payloads
+  (see finding [13-5] for the payload gap).
+  Effort: 3–4 hours (frontend routing + backend payload change).
+
+[13-5] HIGH | Foreground FCM Handler Cannot Route by Event Type — Backend Sends No data Field
+File: rider-app/app/_layout.tsx:256–278
+Finding: The foreground FCM handler comment at line 258 explicitly acknowledges:
+  "Backend notifications currently carry only title/body (no data field), so we
+  can't route by event type — we refetch whatever ride the store considers active."
+  This means the foreground handler is a best-effort generic refetch, not a typed
+  event router. Consequences:
+  (a) Non-ride notifications (promotions, system alerts, payment processed) all
+    trigger a fetchRide() on the active ride unnecessarily — wasted API calls and
+    incorrect UI refresh.
+  (b) If the backend ever sends a notification about a ride the store doesn't
+    know about (e.g., a new ride created server-side), the no-op guard
+    (if (currentRide?.id)) means the notification is silently swallowed with no
+    navigation.
+  (c) Killed-state routing (finding [13-4]) is impossible without the data field.
+  The Dimension 13 checklist requires: "Foreground handler processes all
+  notification types — not just a subset."
+Fix: Add a data field to every FCM payload the backend sends. At minimum:
+    { type: 'driver_accepted' | 'driver_arrived' | ... | 'payment_processed',
+      ride_id: <uuid> }
+  Then update the foreground handler to route by type:
+    const unsubscribe = onForegroundMessage((msg) => {
+      const { type, ride_id } = msg.data ?? {};
+      if (type && RIDE_EVENT_TYPES.includes(type) && ride_id) {
+        fetchRide(ride_id);
+      } else if (type === 'payment_processed') {
+        walletStore.fetchBalance();
+      }
+      // etc.
+    });
+  Effort: 2 hours (backend payload change) + 2 hours (frontend handler update).
+
+[13-6] MEDIUM | Notification Centre: Tapping a Notification Only Marks It Read — No Navigation
+File: rider-app/app/notifications.tsx:88–103, 128
+Finding: The renderNotification onPress callback (line 128) calls only
+  handleMarkRead(item), which optimistically marks the notification as read and
+  calls PUT /notifications/{id}/read. No routing to the relevant screen occurs.
+  A rider who taps a "Your driver has arrived" notification in the notification
+  centre remains on the notifications list screen. They must navigate back to Home
+  manually and figure out their ride state. For time-sensitive events (driver
+  arrived, ride started) this is a significant UX failure: the rider may not
+  realise their driver is waiting until after the free-cancel window has expired.
+  The Dimension 13 checklist explicitly requires: "Notification tap navigates to
+  relevant screen (deeplink routing)."
+Fix: Extend the renderNotification onPress to route after marking read:
+    const handleTap = async (item: AppNotification) => {
+      await handleMarkRead(item);
+      switch (item.type) {
+        case 'ride_update':
+        case 'ride':
+          if (item.ride_id) router.push(`/ride-details?id=${item.ride_id}`);
+          else router.push('/(tabs)');
+          break;
+        case 'promotion':
+          router.push('/promotions');
+          break;
+        default:
+          // no navigation needed for generic alerts
+          break;
+      }
+    };
+  Requires the backend to include ride_id in notification records (or store it
+  in the AppNotification interface if the API already returns it).
+  Effort: 2–3 hours.
+
+[13-7] MEDIUM | Notification Centre: Unread Badge Count Not Shown on Tab or Entry Point
+File: rider-app/app/(tabs)/_layout.tsx; rider-app/app/(tabs)/account.tsx:154, 236
+Finding: The notifications.tsx screen tracks unreadCount from the API
+  (GET /notifications returns unread_count). However, unreadCount is local state
+  inside the notifications screen and is never exposed to the tab bar or to the
+  Account screen entry point. The notifications screen is not a tab at all — it
+  is accessed from Account → Help & Support or a quick-action card in account.tsx.
+  Neither account.tsx (line 154) nor the tab bar _layout.tsx passes a badge prop
+  to any tab or button. The Dimension 13 checklist requires: "Notification centre:
+  unread badge, read/unread state, pull-to-refresh." Pull-to-refresh is present
+  (RefreshControl, line 175). Read/unread state is present (is_read, unreadBar).
+  The badge on the entry point is the missing piece.
+Fix:
+  1. Lift unread count to a global store (or a lightweight polling hook that
+     fetches only unread_count on foreground events).
+  2. In account.tsx, show a badge on the Notifications menu item:
+     <MenuItem badge={unreadCount > 0 ? String(unreadCount) : undefined} ...>
+  3. Optionally, if notifications moves to a tab, use Tabs.Screen tabBarBadge.
+  Effort: 2–3 hours.
+
+[13-8] MEDIUM | Support Screen Uses Unauthenticated fetch() — Tickets Are Anonymous
+File: rider-app/app/support.tsx:43–48
+Finding: handleSubmit() uses raw fetch() with no Authorization header:
+    await fetch(`${SpinrConfig.backendUrl}/support/tickets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subject: ..., message: ..., category: 'general' })
+    });
+  The shared api client (shared/api/client.ts) injects the JWT automatically and
+  handles 401 refresh; a raw fetch() bypasses this. Support tickets submitted by
+  authenticated riders will arrive at the backend without the rider's identity.
+  A support agent cannot look up the ticket by rider account, link it to a ride
+  history, or verify the complaint. This makes the support system functionally
+  anonymous — the opposite of what a dispute or complaint resolution process needs.
+Fix: Replace fetch() with the authenticated api client:
+    import api from '@shared/api/client';
+    await api.post('/support/tickets', {
+      subject: 'App Support Request', message: issue, category: 'general'
+    });
+  Effort: 30 minutes.
+
+[13-9] MEDIUM | No Dispute or Complaint Flow — Support Screen Is Free-Text Only
+File: rider-app/app/support.tsx
+Finding: The support screen offers a single free-text textarea with no:
+  (a) Ride-linked dispute option (e.g. "Issue with this trip" linking to a
+    specific rideId from ride history)
+  (b) Fare dispute or overcharge complaint with a structured form
+  (c) Category selection (Fare Issue / Driver Behaviour / App Bug / Other)
+  (d) Photo/file attachment for evidence (e.g. damage claim)
+  The Dimension 13 checklist requires: "Fallback to human agent / phone / email
+  when bot can't answer." The company contact info (email + phone) is displayed
+  in the companyCard block — this provides a human escalation path — so the human
+  contact requirement is partially met. However, the lack of any structured
+  dispute/complaint path means a rider who was overcharged or had a bad experience
+  cannot raise a formal dispute linked to their ride record. This increases chargeback
+  risk: riders frustrated by the process will dispute charges with their card issuer
+  instead of going through in-app support.
+Fix: Add a "Report an issue with a recent ride" entry point from either the support
+  screen or the ride-details screen. At minimum, pass ride_id in the ticket payload
+  and offer category selection. A structured dispute form (reason, amount disputed)
+  would be the full fix.
+  Effort: 3–5 hours (UI + backend ticket schema update).
+
+[13-10] RECOMMENDATION | No In-App Rationale Shown Before Notification Permission Dialog
+File: shared/services/firebase.ts:75–98; rider-app/app/_layout.tsx:204–229
+Finding: requestPushPermissionAndGetToken() calls messaging().requestPermission()
+  directly (firebase.ts:80) without any prior in-app modal explaining why push
+  notifications are needed. On iOS, the OS permission dialog appears with the
+  NSUserNotificationsUsageDescription from app.config.ts but no Spinr-authored
+  explanation context. Best practice (and Apple HIG recommendation) is to show an
+  in-app screen first: "Spinr needs notifications to tell you when your driver has
+  accepted your ride, is arriving, and has arrived at your pickup location." with
+  a primary "Enable Notifications" CTA and a secondary "Not Now" option — so users
+  understand the value before the OS dialog fires. Users who deny on the OS dialog
+  cannot be prompted again; an in-app rationale improves opt-in rates significantly.
+  Per D13 severity guide: this is a "nice to have" UX improvement → RECOMMENDATION.
+Fix: Add a NotificationConsentModal (similar to the location consent modal
+  recommended in R-P2-45) that fires before requestPushPermissionAndGetToken() on
+  first FCM registration attempt. Gate with an AsyncStorage flag so it shows once.
+  Effort: 2–3 hours.
+
+[13-11] RECOMMENDATION | No AI Support Bot or FAQ — No Self-Serve Help Exists
+File: rider-app/app/support.tsx (no FAQ or AI); rider-app/app/ (no faq.tsx)
+Finding: The Dimension 13 checklist requires an AI support bot (recommended:
+  Gemini 1.5 Flash via google-generativeai, already installed) with a knowledge
+  base, and an FAQ screen with categories (Onboarding, Payments, Documents,
+  Technical), search functionality, and FAQ content managed via the admin panel.
+  None of these exist. The support screen is a free-text form with company
+  contact info only. Riders have no self-serve path to answer common questions
+  (e.g. "How do I cancel a ride?", "When will I be charged?", "How do I get a
+  receipt?"). All support load goes to human agents.
+  Per the severity guide: "No AI bot or FAQ — drivers have no self-serve help"
+  → RECOMMENDATION.
+Fix: Phase 1 (2–3 days): Add a FAQ screen with hardcoded categories and common
+  questions. Link from the support screen and from error states.
+  Phase 2 (1 week): Wire Gemini 1.5 Flash via the backend with a knowledge base
+  of FAQ content, rate-limited endpoint, and a fallback "Connect to an agent"
+  option. PII: pass only user_id in the API call metadata, not the rider's name
+  or phone in the prompt text.
+
+[13-12] RECOMMENDATION | Android Notification Channels Not Declared in app.config.ts
+File: rider-app/app.config.ts; rider-app/app/_layout.tsx:153–172
+Finding: The Dimension 13 checklist requires Android notification channels
+  declared in app.config.ts — specifically `ride-offers` (MAX priority) and
+  `default` (HIGH priority). The rider app creates its channels at runtime
+  (setNotificationChannelAsync in _layout.tsx:155–168) rather than via
+  app.config.ts. Runtime declaration works for SDK < 53 but EAS Build / bare
+  workflow best practice is to declare channels in app.config.ts so EAS can
+  validate them and include them in the native build manifest. Additionally,
+  the rider app creates a `ride-updates` channel (HIGH importance) instead of
+  a `ride-offers` channel (MAX importance). For the rider, HIGH is appropriate
+  (not MAX, as the code comments correctly explain), but the channel naming
+  deviates from the checklist specification.
+  Per the severity guide, Android channels not declared → HIGH in the driver
+  app; for the rider app the runtime path is functional, so this is downgraded
+  to RECOMMENDATION (the runtime path works on the same SDK version).
+Fix: Optionally migrate channel declarations to the expo-notifications plugin
+  in app.config.ts. Update channel naming to match the checklist convention
+  (or document the intentional difference). Effort: 1 hour.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 13 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     2 |
+| MEDIUM          |     4 |
+| LOW             |     0 |
+| PASS            |     3 |
+| RECOMMENDATION  |     3 |
+| TOTAL           |    12 |
+
+================================================================================
+TASK 14 — PERFORMANCE & SCALABILITY (Dimension 14)
+================================================================================
+
+[14-1] PASS | Home Screen Mount — Sequential but Lightweight; Location Cached
+File: rider-app/app/(tabs)/index.tsx:72–118
+Finding: On mount, two effects fire:
+  (1) Location effect (line 72): reads a cached GPS coordinate from AsyncStorage
+    first (instant), then calls Location.getLastKnownPositionAsync() for a
+    fast OS-cached fix, then calls Location.getCurrentPositionAsync() in the
+    background. Only after the accurate fix is obtained does it fire a single
+    weather fetch (api.open-meteo.com). These are intentionally sequential
+    (each depends on the location result) — not a parallelism gap.
+  (2) Saved-addresses effect (line 116): fetchSavedAddresses() fires
+    independently.
+  The only "API call" on mount is fetchSavedAddresses(). The weather fetch is
+  lazy (fires once GPS is ready) and is not blocking. Effectively zero blocking
+  API calls on mount. The last-location cache means the map renders with a
+  prior-session coordinate before any network call completes, which is the
+  correct UX pattern.
+  User profile image is loaded with the plain React Native <Image> component
+  (line 147), not expo-image — see [14-8] below.
+  No parallelism concern here; the design is correct.
+
+[14-2] MEDIUM | ride-options.tsx — fetchEstimates + fetchNearbyDrivers Fire on
+  Mount With No Debounce; fetchAvailablePromos Fires on estimates Change
+File: rider-app/app/ride-options.tsx:71–92
+Finding: On mount (or when pickup/dropoff changes), fetchEstimates() and
+  fetchNearbyDrivers() are called sequentially (not Promise.all) in the same
+  synchronous block (lines 74–75). A 10-second setInterval also fires
+  fetchNearbyDrivers() repeatedly. Once estimates arrive, a second useEffect
+  (lines 87–92) calls fetchAvailablePromos(fare) in response to estimates
+  changing.
+  Problem 1 — No debounce or mount-guard on navigation: the useEffect depends
+  on [pickup, dropoff] (line 84). If a user navigates back from this screen
+  and returns (e.g. changes destination), the effect re-fires immediately with
+  the new values. There is no debounce, no AbortController, no isMounted guard.
+  A rapid back-and-forward will queue multiple overlapping fetchEstimates() and
+  fetchNearbyDrivers() calls — the interval is cleared on unmount (PASS) but
+  the in-flight fetch is not cancelled. The component may receive a stale
+  response after a new request has already populated the store.
+  Problem 2 — fetchEstimates and fetchNearbyDrivers are sequential, not
+  parallelised: they are independent network calls but run one after the other
+  (lines 74–75). A Promise.all([fetchEstimates(), fetchNearbyDrivers()]) would
+  reduce total wall-clock time by ~half.
+  Problem 3 — console.log left in the mount effect (line 73): see [14-9].
+  Per D14 severity guide: missing debounce on a user-navigable screen and
+  missing parallelisation → MEDIUM.
+Fix:
+  (1) Parallelise with Promise.all([fetchEstimates(), fetchNearbyDrivers()]).
+  (2) Add an AbortController or isMounted ref to cancel in-flight fetches on
+    effect cleanup. Pattern: const controller = new AbortController(); return
+    () => controller.abort().
+  (3) Optionally debounce with a 300 ms delay before firing on [pickup, dropoff]
+    change to absorb rapid navigation events.
+  Effort: 2 hours.
+
+[14-3] MEDIUM | Activity Tab Uses ScrollView, Not FlatList — No Pagination or
+  Virtualisation
+File: rider-app/app/(tabs)/activity.tsx:195–256
+Finding: The Activity screen renders all ride history inside a plain ScrollView
+  (line 195), not a FlatList. Every ride card is mounted and in memory
+  simultaneously. The API call on line 47 fetches up to 200 raw rides from the
+  database (backend/routes/rides.py:817 — get_rows limit=200), filters them in
+  Python, and returns the filtered result paginated with limit=20/offset=0 query
+  params — but the frontend ignores those params entirely (api.get('/rides/history')
+  with no limit/offset arguments, line 48). The frontend therefore always receives
+  the first page (up to 20 from the backend default) and renders all 20 in a
+  ScrollView with no further pagination.
+  The backend endpoint does support pagination (limit/offset query params, line
+  811), but the frontend never advances beyond page 1, and the ScrollView means
+  no virtualisation even if more records were loaded.
+  Additionally: there is no keyExtractor (not applicable to ScrollView, but
+  relevant to migration), no FlatList, no initialNumToRender, no
+  maxToRenderPerBatch, no getItemLayout.
+  Per D14 severity guide: "FlatList missing initialNumToRender — slow initial
+  render" → MEDIUM. Using a ScrollView instead of FlatList for a list of
+  arbitrary length is the underlying issue.
+Fix:
+  (1) Replace ScrollView with FlatList. Add keyExtractor (ride.id), initialNumToRender=10,
+    maxToRenderPerBatch=5, windowSize=5, removeClippedSubviews for Android.
+  (2) Wire pagination: pass limit=20&offset={offset} to /rides/history and
+    implement an onEndReached handler to load the next page.
+  (3) Since each ride card has a fixed height, add getItemLayout for O(1) scroll
+    position calculations.
+  Effort: 4–6 hours.
+
+[14-4] MEDIUM | CarMarker Is Not Wrapped in React.memo — Re-Renders on Every
+  driver_location_update WS Event (~1 Hz)
+File: shared/components/CarMarker.tsx:30–78
+Finding: The CarMarker component is defined as:
+    export const CarMarker: React.FC<CarMarkerProps> = ({ ... }) => { ... }
+  It is NOT wrapped in React.memo. When the WebSocket delivers a
+  driver_location_update event (~every 1 second), updateDriverLocation() in
+  rideStore.ts (line 563) calls set({ currentDriver: updated }), which produces
+  a new object reference for currentDriver. Any screen that subscribes to
+  currentDriver (driver-arriving.tsx, ride-in-progress.tsx) re-renders, and
+  with it the CarMarker — even when coordinate/heading have not changed.
+  The tracksViewChanges flag is set to true for 800 ms on mount and then
+  flipped to false (lines 40–43), which is a correct optimisation for the
+  initial render. However, without React.memo the entire component function
+  re-runs on every parent re-render, nullifying the tracksViewChanges
+  optimisation after the initial 800 ms because the parent always re-renders.
+  Per D14 severity guide: "Component missing React.memo — unnecessary re-renders"
+  → MEDIUM.
+Fix:
+  Wrap with React.memo and add a custom areEqual comparator that returns true
+  (skips re-render) when coordinate.latitude, coordinate.longitude, heading,
+  size, and zIndex are all equal:
+    export const CarMarker = React.memo(CarMarkerBase,
+      (prev, next) =>
+        prev.coordinate.latitude === next.coordinate.latitude &&
+        prev.coordinate.longitude === next.coordinate.longitude &&
+        prev.heading === next.heading &&
+        prev.size === next.size
+    );
+  Also consider moving tracksViewChanges to respond to coordinate changes only
+  (reset to true briefly when lat/lng change, then flip back to false) so the
+  Android Marker snapshot is refreshed on movement.
+  Effort: 1 hour.
+
+[14-5] MEDIUM | driver-arriving.tsx Polls at 3 s Regardless of WS Connection
+  State — Poll Not Suspended When WS Is Healthy
+File: rider-app/app/driver-arriving.tsx:78–90
+Finding: The useEffect at line 78 sets up a polling interval:
+    const fastPoll = !currentRide || status === 'searching' || status === 'driver_assigned';
+    const interval = setInterval(() => fetchRide(rideId), fastPoll ? 3000 : 15000);
+  The poll drops to 15 s once the ride is in driver_accepted/driver_arrived/
+  in_progress state — which is better than constant 3 s, but the poll still
+  runs unconditionally regardless of whether the WebSocket is connected and
+  delivering updates.
+  useRiderSocket.ts exports a connectionState ('connected' | 'reconnecting' |
+  'disconnected'), but driver-arriving.tsx does not import useRiderSocket at
+  all — there is no call to useRiderSocket() anywhere in the file. The poll
+  therefore runs at 3 s during the searching/driver_assigned phase even when
+  the WebSocket is delivering real-time updates.
+  In the healthy WS case this means ~20 redundant GET /rides/{id} calls per
+  minute during the driver-search phase. At scale this amplifies backend load
+  by a constant multiplier equal to the number of active rider screens.
+  Per D14 severity guide: "Polling suspended when WebSocket is connected" is a
+  checklist item; it is not suspended → MEDIUM.
+Fix:
+  Import useRiderSocket in driver-arriving.tsx and read connectionState.
+  Suspend the fast poll when the WS is connected:
+    const { connectionState } = useRiderSocket();
+    const pollInterval = connectionState === 'connected' ? null : (fastPoll ? 3000 : 15000);
+    useEffect(() => {
+      if (!rideId || !pollInterval) return;
+      const interval = setInterval(() => fetchRide(rideId), pollInterval);
+      return () => clearInterval(interval);
+    }, [rideId, currentRide?.status, pollInterval]);
+  The 15 s fallback poll should remain as a backstop for stale WS connections.
+  Effort: 1–2 hours.
+
+[14-6] PASS | FreeCancelTimer — Interval Properly Cleaned Up on Unmount
+File: rider-app/components/FreeCancelTimer.tsx:41–52
+Finding: The useEffect at line 41 returns () => clearInterval(interval) as its
+  cleanup function. When the parent screen (driver-arriving.tsx) unmounts
+  (e.g. status transitions to driver_arrived and router.replace() fires), React
+  calls the cleanup, the interval is cleared, and no further setSecondsLeft()
+  calls occur. There is no memory leak or state-update-after-unmount risk.
+  Additionally, the interval self-terminates when remaining === 0 (line 49),
+  so the timer stops firing even if it outlives a parent re-render.
+  The Reanimated library is not used in FreeCancelTimer — the countdown is
+  implemented with setInterval and React state only, so there is no Reanimated
+  animation to cancel.
+
+[14-7] MEDIUM | Driver Photo Not Loaded — Placeholder Icon Used; CarMarker
+  Uses Plain RN Image; ride-options.tsx Car Images Use Plain RN Image
+File: rider-app/app/driver-arriving.tsx:464–469;
+      rider-app/app/ride-options.tsx:430–436;
+      rider-app/app/(tabs)/index.tsx:147–150;
+      shared/components/CarMarker.tsx:66–72
+Finding: Four separate image loading sites fail to use expo-image:
+  (a) driver-arriving.tsx driverAvatar (line 464): uses a plain Ionicons icon
+    (no photo loaded at all — the driverPhoto field from the backend is not
+    rendered; the avatar is always a generic grey circle with a person icon).
+    This is a UX gap, not strictly a caching issue, but expo-image would be
+    needed when the photo is wired.
+  (b) ride-options.tsx vehicle type images (lines 430–436): renders
+    estimate.vehicle_type.image_url with <Image> from react-native, not
+    expo-image. These images are downloaded fresh on every mount with no
+    memory or disk cache.
+  (c) index.tsx user profile avatar (lines 147–150): <Image> from react-native
+    loads the user's profile photo with no caching.
+  (d) shared/components/CarMarker.tsx (line 66): uses <Image> from react-native
+    for the car marker PNG. This is a local require() (static asset), so no
+    network caching is needed — PASS for this instance.
+  Per D14 severity guide: "expo-image not used — no caching for remote images"
+  → MEDIUM for items (b) and (c). Item (d) is a local asset (PASS).
+Fix:
+  Replace import { Image } from 'react-native' with import { Image } from
+  'expo-image' in ride-options.tsx (vehicle images) and index.tsx (avatar).
+  expo-image provides memory + disk caching, blurhash placeholders, and
+  progressive loading with no API change beyond adding a contentFit prop.
+  When driver photo is eventually wired in driver-arriving.tsx, use expo-image
+  there too.
+  Effort: 1 hour.
+
+[14-8] PASS | Hermes + New Architecture Enabled; No JSC Override
+File: rider-app/app.config.ts:16; rider-app/eas.json
+Finding: app.config.ts sets newArchEnabled: true (line 16). Expo SDK 54 with
+  New Architecture enables Hermes by default on both iOS and Android. There is
+  no "jsEngine": "jsc" override in app.config.ts or eas.json. Hermes is active.
+  Metro cache is configured with a FileStore shared across web/android builds
+  (metro.config.js:10–12). maxWorkers is set to 2 to reduce resource usage
+  (metro.config.js:15). Metro configuration is satisfactory.
+
+[14-9] LOW | console.log Statements Present in Production Code Paths
+File: rider-app/app/ride-options.tsx:73;
+      rider-app/app/driver-arriving.tsx:254, 600, 610, 620;
+      rider-app/app/activity.tsx:60;
+      and ~35 additional instances across rider-app/app/
+Finding: Pre-audit baseline identified ~40 console.log statements across the
+  rider app (noted in the audit preamble). Specific instances found in scoped
+  files:
+  • ride-options.tsx:73 — logs platform and route on every fetchEstimates()
+    trigger. This is not guarded by __DEV__ and fires in production builds,
+    leaking pickup/dropoff address strings to device logs.
+  • driver-arriving.tsx:254 — logs Share errors in production.
+  • driver-arriving.tsx:600, 610, 620 — these are inside __DEV__ blocks (PASS
+    for those three).
+  • activity.tsx:60 — logs fetch errors including the full error object.
+  Per D14 severity guide: "console.log in production build" → LOW.
+Fix:
+  Replace unchecked console.log calls with either:
+  (a) __DEV__ guards: if (__DEV__) console.log(...)
+  (b) The existing LogRocket error reporting (already initialised in _layout.tsx)
+    for catch blocks: LogRocket.captureException(error)
+  Strip all debug console.log calls before the first production build.
+  A lint rule (no-console with an allowlist of console.warn/error) would prevent
+  recurrence.
+  Effort: 1–2 hours.
+
+[14-10] PASS | Backend /rides/history Endpoint Is Paginated
+File: backend/routes/rides.py:809–844
+Finding: The /rides/history GET endpoint accepts limit (default 20, max 100) and
+  offset query parameters (lines 811–812). Pagination metadata (total, limit,
+  offset) is returned in the response (line 844). The backend does perform an
+  unbounded get_rows() call with limit=200 internally and then slices in Python
+  (lines 817–843), which is a backend-side concern (the 200-row cap prevents
+  truly unbounded queries). The frontend does not pass pagination params
+  (finding [14-3]) — that is a frontend issue, but the backend API surface is
+  correct.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 14 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     0 |
+| MEDIUM          |     5 |
+| LOW             |     1 |
+| PASS            |     4 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    10 |
+
+================================================================================
+TASK 15 — ACCESSIBILITY — WCAG 2.1 / AODA (Dimension 15)
+================================================================================
+
+[15-1] HIGH | Star Rating Buttons Have No accessibilityLabel or accessibilityRole
+File: rider-app/app/ride-completed.tsx:339–347
+Finding: The five star-rating buttons are rendered as plain TouchableOpacity
+  elements with no accessibility attributes:
+    {[1, 2, 3, 4, 5].map((star) => (
+      <TouchableOpacity key={star} onPress={() => setRating(star)}
+                        style={styles.starBtn}>
+        <Ionicons name={star <= rating ? 'star' : 'star-outline'} ... />
+      </TouchableOpacity>
+    ))}
+  VoiceOver reads these as "button" with no label. A screen-reader user cannot
+  tell which star they are focused on, what value they are about to set, or
+  which star is currently selected. Rating the driver is a mandatory step before
+  the ride can be closed (the submit button is labelled "Rate & Done").
+  Per D15 severity guide: "Critical action has no accessibility label" → HIGH.
+Fix:
+  <TouchableOpacity
+    key={star}
+    onPress={() => setRating(star)}
+    accessibilityLabel={`Rate ${star} star${star > 1 ? 's' : ''}`}
+    accessibilityRole="button"
+    accessibilityState={{ selected: rating === star }}
+    style={styles.starBtn}
+  >
+  Effort: 30 minutes.
+
+[15-2] MEDIUM | Tip Buttons Missing accessibilityLabel and accessibilityRole;
+               Custom Tip Container Is Not an Accessible Button
+File: rider-app/app/ride-completed.tsx:375–396
+Finding: The $2, $5, and $10 tip TouchableOpacity buttons have no
+  accessibilityLabel and no accessibilityRole:
+    <TouchableOpacity
+      style={[styles.tipBtn, selectedTip === amt && styles.tipBtnActive]}
+      onPress={() => { setSelectedTip(amt); setCustomTip(''); }}
+    >
+      <Text ...>${amt}</Text>
+    </TouchableOpacity>
+  VoiceOver reads the child text ("$2") but announces no role. Without a role,
+  VoiceOver may not announce these as interactive. The custom tip container is
+  a plain View (not touchable), containing only a Text and a TextInput. While
+  the TextInput itself is reachable by focus, the "$" prefix Text has no label.
+  Touch target height: paddingVertical 12 + text height ≈ 19pt → total ≈ 43pt,
+  marginally below the 44pt minimum (iOS HIG). Width exceeds 44pt.
+  Per D15 severity guide: "Focus order illogical / missing label" → MEDIUM.
+Fix:
+  {tipOptions.map((amt) => (
+    <TouchableOpacity
+      key={amt}
+      accessibilityLabel={`Tip $${amt}`}
+      accessibilityRole="button"
+      accessibilityState={{ selected: selectedTip === amt }}
+      style={[styles.tipBtn, selectedTip === amt && styles.tipBtnActive]}
+      onPress={() => { setSelectedTip(amt); setCustomTip(''); }}
+    >
+      <Text ...>${amt}</Text>
+    </TouchableOpacity>
+  ))}
+  Increase tipBtn paddingVertical from 12 to 13 to clear the 44pt minimum.
+  Wrap the custom tip View in a View with minHeight: 44 and add
+  accessibilityLabel="Custom tip amount" on the TextInput.
+  Effort: 30 minutes.
+
+[15-3] HIGH | SOSButton Has No accessibilityLabel, accessibilityRole, or
+              accessibilityHint — VoiceOver Cannot Identify or Activate It
+File: shared/components/SOSButton.tsx:99–127
+Finding: The TouchableOpacity that constitutes the entire SOS button carries
+  no accessibility props:
+    <TouchableOpacity
+      style={[styles.btn, ...]}
+      onPressIn={startPress}
+      onPressOut={endPress}
+      activeOpacity={0.9}
+    >
+  VoiceOver announces this as an unlabelled "button". The element is activated
+  by a long press (1.2 s hold), which VoiceOver does not discover from the
+  element itself — there is no accessibilityHint explaining the gesture, and no
+  accessibilityActivate override. The component is used in:
+    • rider-app/app/driver-arriving.tsx:284 (header overlay, size="small")
+    • rider-app/app/ride-in-progress.tsx:204 (floating overlay, size="small")
+    • rider-app/app/ride-in-progress.tsx:443 (bottom-sheet action bar)
+  In all three placements, VoiceOver focus is also complicated by the parent
+  being a pointerEvents="box-none" SafeAreaView overlay — the button may be
+  skipped entirely in linear VoiceOver navigation if the overlay container is
+  not assigned accessible={true}.
+  Per D15 severity guide: "Critical action has no accessibility label" → HIGH.
+Fix:
+  <TouchableOpacity
+    accessibilityLabel="Emergency SOS"
+    accessibilityRole="button"
+    accessibilityHint="Hold for 1.2 seconds to send an emergency alert"
+    onPressIn={startPress}
+    onPressOut={endPress}
+    activeOpacity={0.9}
+    style={[styles.btn, ...]}
+  >
+  Also add accessible={true} to the parent SafeAreaView overlay in
+  driver-arriving.tsx and ride-in-progress.tsx so VoiceOver includes
+  the button in its focus order.
+  Effort: 1 hour.
+
+[15-4] MEDIUM | FreeCancelTimer Does Not Use accessibilityLiveRegion — Countdown
+               Is Silent to Screen Reader
+File: rider-app/components/FreeCancelTimer.tsx:70–91
+Finding: The FreeCancelTimer component renders a countdown (e.g. "1:45
+  remaining") that decrements every second via setSecondsLeft() state. No
+  accessibilityLiveRegion is applied to the Text element carrying the countdown
+  value. When the window expires the label changes to "Cancellation fee applies
+  / $3.00" — also without a live-region announcement. A VoiceOver user who is
+  not focused on the timer receives no spoken notification that:
+    (a) a free-cancel window is counting down, or
+    (b) the window has expired and a fee now applies.
+  Missing the fee transition is a financial consequence for the rider.
+  Per D15 severity guide: "accessibilityLiveRegion on dynamically updating
+  content" → MEDIUM.
+Fix:
+  Apply accessibilityLiveRegion="polite" to the Text element carrying the
+  countdown so screen readers announce updates:
+    <Text
+      accessibilityLiveRegion="polite"
+      accessibilityLabel={
+        isWindowOpen
+          ? `Free cancellation — ${timerLabel} remaining`
+          : `Cancellation fee applies — $${cancellationFee.toFixed(2)}`
+      }
+      style={styles.freeTimer}
+    >
+      {timerLabel}
+    </Text>
+  To avoid spamming the user every second, update the announced value only
+  when it crosses 60 s (1-minute warning) and again at 0 (fee transition).
+  The simplest approach is to set the live region only on the transition
+  label ("Cancellation fee applies") and use accessibilityLiveRegion="assertive"
+  for that specific state change, leaving the second-by-second countdown silent.
+  Effort: 1 hour.
+
+[15-5] MEDIUM | OTP Screen — 4 Visual Code Boxes Are Not Individually Labelled;
+               Single-TextInput Architecture Hides Focus From Screen Reader
+File: rider-app/app/otp.tsx:234–277
+Finding: The OTP entry UI uses a single hidden TextInput (opacity:0, 1×1pt)
+  behind four Animated.View boxes. The visible boxes are pure View elements
+  with no accessibilityLabel, no accessible={true}, and no focus management.
+  A VoiceOver user encounters:
+    • The hidden TextInput gets focus. VoiceOver announces "text field" with
+      no label describing which digit position or what is expected.
+    • The four visual boxes are non-interactive Views — VoiceOver skips them.
+    • There is no per-position announcement (e.g. "Digit 1 of 4 entered").
+    • The outer TouchableOpacity wrapper (line 247) has no accessibilityLabel.
+  Focus order: the hidden TextInput is the only element in the code area that
+  VoiceOver will actually land on. This is technically acceptable if the
+  TextInput itself is well-labelled — it is not. The TextInput carries no
+  accessibilityLabel or accessibilityHint.
+  Per D15 severity guide: "Focus order illogical" → MEDIUM.
+Fix:
+  Add to the hidden TextInput:
+    accessibilityLabel="Enter 4-digit verification code"
+    accessibilityHint={`${code.length} of 4 digits entered`}
+  The label updates dynamically with the code.length hint to give positional
+  feedback. The outer TouchableOpacity (codeBoxes) should also carry:
+    accessibilityLabel="Verification code entry"
+    accessible={false}   // let focus fall through to the TextInput
+  Effort: 1 hour.
+
+[15-6] MEDIUM | Search Autocomplete — Suggestion TouchableOpacity Rows Have No
+               accessibilityLabel or accessibilityRole
+File: rider-app/app/search-destination.tsx:296–315
+Finding: The renderPrediction() function renders each Google Places autocomplete
+  result as a TouchableOpacity with no accessibility attributes:
+    <TouchableOpacity
+      style={styles.predictionRow}
+      onPress={() => handleSelectPrediction(item)}
+    >
+  VoiceOver reads the child Text elements sequentially but does not announce the
+  element as a button or provide a combined label. For a suggestion like
+  "221B Baker Street, London, ON, Canada", VoiceOver reads the main text and
+  secondary text as separate text items with no contextual grouping. The user
+  must infer that double-tapping selects the suggestion.
+  The same pattern applies to the static "Current Location", "Set location on
+  map", saved-address, and recent-search rows (lines 445–605): all are
+  TouchableOpacity elements with only Text children and no accessibility props.
+  Per D15 severity guide: "Missing accessibilityLabel on non-obvious button"
+  → MEDIUM (affects core booking flow — entering destination).
+Fix:
+  const renderPrediction = ({ item }: { item: PlacePrediction }) => (
+    <TouchableOpacity
+      style={styles.predictionRow}
+      accessibilityRole="button"
+      accessibilityLabel={item.description}
+      onPress={() => handleSelectPrediction(item)}
+    >
+  Apply equivalent accessibilityRole="button" + accessibilityLabel to all
+  static suggestion rows (Current Location, Set on map, saved addresses,
+  recent searches).
+  Effort: 1 hour.
+
+[15-7] LOW | Driver Avatar Placeholder Not Marked accessibilityElementsHidden
+File: rider-app/app/driver-arriving.tsx:465–469;
+      rider-app/app/ride-completed.tsx:326–329
+Finding: The driver avatar in both screens is a decorative View containing
+  only an Ionicons placeholder icon ("person"). Neither uses
+  accessibilityElementsHidden={true}. VoiceOver will announce the Ionicons
+  icon as an unlabelled image element, adding noise to the focus traversal.
+  When a real driver photo is eventually wired in, an accessibilityLabel
+  (e.g. "Driver photo") will be required instead.
+  Per D15 severity guide: "Decorative image not hidden from screen reader"
+  → LOW.
+Fix:
+  <View style={styles.driverAvatar} accessibilityElementsHidden={true}>
+    <Ionicons name="person" size={28} color={colors.textDim} />
+  </View>
+  Effort: 15 minutes.
+
+[15-8] MEDIUM | Bottom Sheets (driver-arriving, driver-arrived, ride-in-progress)
+               Do Not Use accessibilityViewIsModal — Focus Not Trapped
+File: rider-app/app/driver-arriving.tsx:421–640;
+      rider-app/app/driver-arrived.tsx:225–235;
+      rider-app/app/ride-in-progress.tsx:319–328
+Finding: All three screens use @gorhom/bottom-sheet with no
+  accessibilityViewIsModal={true} prop. The BottomSheet component from
+  @gorhom/bottom-sheet v4 supports an accessibilityViewIsModal prop that
+  traps VoiceOver focus to the sheet's content, preventing the user from
+  accidentally swiping focus to the map controls or header buttons behind the
+  sheet. Without this prop, VoiceOver can traverse from bottom-sheet elements
+  directly to the map tile, the driver car marker, or the floating SOS button
+  in an undefined order.
+  The ride-options.tsx screen also renders two RN Modal elements
+  (date/time pickers, lines 532 and 568) without accessibilityViewIsModal.
+  Per D15 specification: "accessibilityViewIsModal on modal sheets to trap
+  focus" → MEDIUM.
+Fix:
+  <BottomSheet
+    ref={bottomSheetRef}
+    ...
+    accessibilityViewIsModal={true}
+  >
+  Apply the same to both Modal elements in ride-options.tsx:
+    <Modal transparent animationType="slide" visible={showDatePicker}
+           accessibilityViewIsModal={true}>
+  Note: @gorhom/bottom-sheet passes additional props to the underlying
+  View via the backgroundStyle prop; verify the prop is forwarded in the
+  installed version (v4.x).
+  Effort: 1 hour.
+
+[15-9] MEDIUM | Primary Colour (#FF3B30) on White Fails 4.5:1 Contrast Ratio
+               for Normal-Weight Text
+File: shared/theme/index.ts:41–59;
+      rider-app/app/ride-completed.tsx:488, 532–533
+Finding: The Spinr light-mode primary colour is #FF3B30 (red). The
+  WCAG 2.1 relative luminance contrast of #FF3B30 against #FFFFFF is
+  approximately 3.95:1, which is below the 4.5:1 AA threshold for normal
+  text and small UI elements.
+  Affected instances in the rider app:
+    • fareAmount (line 488): fontSize 42, fontWeight 800 — qualifies as large
+      text (≥ 18pt bold ≡ 24px bold). Contrast ≥ 3:1 required → PASS at 3.95:1.
+    • tipBtnText active state (line 533): fontSize 16, fontWeight 700. Tip
+      button text colour is colors.primary (#FF3B30) on white surface — 3.95:1,
+      FAILS 4.5:1 for 16pt normal text.
+    • Primary action button background (#FF3B30) with white text (#FFF):
+      submitBtn (line 554): paddingVertical 16, fontSize 17 fontWeight 700.
+      White (#FFF) on #FF3B30 = 3.95:1. At 17pt bold this does not meet the
+      18pt threshold for large-text exemption → FAILS 4.5:1.
+  Dark mode primary #FF453A on #1C1C1E: ≈ 4.63:1 → PASS.
+  Per D15 severity guide: "Text contrast ratio < 3:1 — unreadable" is HIGH,
+  but ratios here are between 3:1 and 4.5:1 (AA failure, not AAA). For small
+  interactive element text (tip active, submit button) this is a MEDIUM
+  compliance gap.
+Fix:
+  Option A — Darken the primary action red in light mode to achieve 4.5:1
+  against white. #D93025 gives ~4.55:1.
+  Option B — Use white text exclusively on the primary button (already done)
+  and accept the 3.95:1 ratio for buttons ≥ 44pt tall where large-text rules
+  may apply by convention — document the design decision.
+  At minimum fix the tipBtnTextActive text colour (#FF3B30 on white surface)
+  by using a darker shade: #C0392B (contrast ~4.6:1).
+  Effort: 2 hours (design decision + token update propagation).
+
+[15-10] HIGH | Map Overlay Buttons (SOS, Message) Lack accessibilityLabel and
+               May Be Unreachable by VoiceOver Linear Navigation
+File: rider-app/app/driver-arriving.tsx:282–285;
+      rider-app/app/ride-in-progress.tsx:202–205, 550–553
+Finding: (Extends finding [15-3].) Beyond the missing labels on SOSButton itself:
+  (a) driver-arriving.tsx header (line 269): the parent SafeAreaView uses
+      style={styles.headerSafeArea} with position:absolute, zIndex:10,
+      pointerEvents not set. VoiceOver's linear swipe order follows document
+      order, but absolutely positioned elements appearing before the BottomSheet
+      in the JSX tree may be skipped when the sheet is open and covers the
+      header area visually. There is no explicit accessibility ordering (e.g.
+      importantForAccessibility or accessibilityOrder) to guarantee the SOS
+      button is reachable.
+  (b) ride-in-progress.tsx "Message" button (line 550–553) inside the
+      BottomSheet has no accessibilityLabel or accessibilityRole. VoiceOver
+      reads the child Ionicons icon as an unlabelled image.
+  (c) ride-in-progress.tsx "Share" button (line 556–558) similarly has no
+      label — TouchableOpacity with only an Ionicons child and no props.
+  A VoiceOver user in a live ride cannot reliably reach the SOS button or
+  the chat button. Missing the SOS button during an emergency constitutes a
+  safety-critical accessibility failure.
+  Per D15 severity guide: "Screen reader cannot operate core flow" → HIGH.
+Fix:
+  (a) On the headerSafeArea overlay in driver-arriving.tsx and
+      ride-in-progress.tsx, add accessible={true} and ensure it is positioned
+      after the map in the accessibility order. Consider using
+      importantForAccessibility="yes" on the header View.
+  (b) Message button (ride-in-progress.tsx:550):
+        accessibilityLabel="Message driver"
+        accessibilityRole="button"
+  (c) Share button (ride-in-progress.tsx:556):
+        accessibilityLabel="Share trip details"
+        accessibilityRole="button"
+  Effort: 1–2 hours.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 15 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     3 |
+| MEDIUM          |     6 |
+| LOW             |     1 |
+| PASS            |     0 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    10 |
+
+================================================================================
+TASK 16 — INTERNATIONALISATION & LOCALISATION (i18n/l10n)
+Dimension: 16-i18n-localisation.md
+Auditor: Claude (automated)
+Date: 2026-04-20
+================================================================================
+
+[16-1] HIGH | No i18n Library Installed — French Support Entirely Absent
+File: rider-app/package.json (dependencies)
+Finding: No i18n library is present in dependencies or devDependencies. There is
+  no i18next, react-i18next, expo-localization, @formatjs/intl, lingui, or any
+  equivalent. The app has zero infrastructure for translating strings into French.
+  This is a direct violation of Canada's Official Languages Act for federally
+  regulated businesses. No translation files (en-CA, fr-CA) exist anywhere in the
+  rider-app tree.
+Fix:
+  Install react-i18next + i18next + expo-localization. Create locale JSON files
+  for en-CA and fr-CA. Wrap all user-visible strings with t('key'). Define
+  en-CA as the fallback locale. Estimate: 2–4 sprint days to scaffold; ongoing
+  translation effort per feature.
+
+[16-2] HIGH | Hardcoded English Strings Throughout JSX — Not Translatable
+File: rider-app/app/login.tsx lines 68–98;
+      rider-app/app/ride-completed.tsx lines 73–99
+Finding: login.tsx contains at least 6 hardcoded English string literals in JSX
+  and alert payloads: 'Invalid Number', 'Please enter a valid 10-digit phone
+  number.', 'Failed', 'Could not send verification code. Please try again.',
+  'Connection Error', 'Unable to reach server. Please check your connection.'.
+  ride-completed.tsx contains at least 10 hardcoded strings in the invoice
+  template: 'SPINR RIDE RECEIPT', 'Date:', 'Pickup:', 'Dropoff:', 'Distance:',
+  'Duration:', 'Base fare:', 'Booking fee:', 'Tip:', 'TOTAL:', 'Payment:', etc.
+  None pass through any i18n call. A French-locale device would receive English
+  text everywhere.
+Fix:
+  Replace every string literal with t('key') calls once the i18n library is
+  installed (see [16-1]). Audit all remaining screens — these two samples alone
+  show 16+ hardcoded strings; full app likely has hundreds.
+
+[16-3] MEDIUM | Currency Formatted with Raw String Interpolation — No Intl.NumberFormat
+File: rider-app/app/ride-completed.tsx lines 83–89
+Finding: All fare line items use template literals: `$${value.toFixed(2)}` and
+  `$${total.toFixed(2)} CAD`. This hardcodes the dollar sign prefix, USD/CAD
+  ambiguity, and English decimal/thousands conventions. French-Canadian convention
+  uses a trailing symbol and a space: "12,50 $". Intl.NumberFormat('fr-CA',
+  {style:'currency',currency:'CAD'}) would render correctly per locale.
+Fix:
+  Replace all fare/currency display with Intl.NumberFormat using the active
+  locale. Create a shared formatCurrency(amount, locale) utility in @spinr/shared.
+  Effort: 3–4 hours.
+
+[16-4] LOW | Language Setting Is UI-Only — No Locale Change Applied to App
+File: rider-app/app/settings.tsx lines 22, 68–89
+Finding: Settings screen has a "Language & Region" section with English/French
+  toggle that calls setLanguage('French'). However this is local React state only
+  — there is no i18n library to call, no AsyncStorage persistence, no locale
+  propagation to any component. The toggle is cosmetic and non-functional.
+Fix:
+  Once i18n infrastructure is in place (see [16-1]), wire the language selector
+  to i18n.changeLanguage('fr-CA') and persist the selection to AsyncStorage.
+  Effort: 1–2 hours (after [16-1] is complete).
+
+[16-5] HIGH | Backend Error Messages Are English-Only Hardcoded Strings
+File: backend/routes/wallet.py lines 120, 152, 158, 235, 238, 244, 250
+Finding: All FastAPI HTTPException detail strings are hardcoded English:
+  "Wallet is suspended", "Insufficient wallet balance", "Recipient not found",
+  "Cannot transfer to yourself". These strings are returned to the client and
+  displayed verbatim (see login.tsx line 98: error.response?.data?.detail).
+  French-locale users will see English error messages from the API.
+Fix:
+  Accept an Accept-Language header in the backend and return localised error
+  detail strings, or return machine-readable error codes and localise messages
+  client-side using the i18n system. Effort: 1 day for error-code refactor.
+
+[16-6] PASS | Distance Unit Is Kilometres
+File: rider-app/app/ride-completed.tsx line 80
+Finding: Invoice template uses `${distance.toFixed(1)} km` — correct Canadian
+  standard unit. No miles found in sampled files.
+
+[16-7] PASS | Phone Number Formatted for Canadian Display
+File: rider-app/app/login.tsx lines 53–56
+Finding: formatPhoneDisplay() produces (306) 555-1234 format — correct Canadian
+  convention. No raw +1XXXXXXXXXX display to the user.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 16 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     3 |
+| MEDIUM          |     1 |
+| LOW             |     1 |
+| PASS            |     2 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     7 |
+
+================================================================================
+AUDIT COMPLETE — all 16 dimensions
+================================================================================
+FINAL AUDIT TALLY — ALL 16 DIMENSIONS
+================================================================================
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     1 |
+| HIGH            |    31 |
+| MEDIUM          |    58 |
+| LOW             |    11 |
+| PASS            |    76 |
+| RECOMMENDATION  |     7 |
+| TOTAL           |   184 |
 ================================================================================

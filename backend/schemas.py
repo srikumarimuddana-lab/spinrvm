@@ -300,9 +300,15 @@ class CreateRideRequest(BaseModel):
     dropoff_lng: float
     stops: Optional[List[Dict[str, Any]]] = Field(default=[], max_length=5)
     is_scheduled: bool = False
+    scheduled_timezone: Optional[str] = None  # IANA name e.g. "America/Toronto"; used for DST-gap guard
     scheduled_time: Optional[datetime] = None
     corporate_account_id: Optional[str] = None
     payment_method: str = "card"
+    # P0-4 surge-lock: optional signed token returned by /rides/estimate.
+    # When present + valid, the backend reuses the surge_multiplier that
+    # was shown to the rider instead of re-reading the service area, so
+    # the confirmed fare can't bait-and-switch from the estimate.
+    estimate_token: Optional[str] = None
     work_profile: Optional[bool] = None
 
     # ── Input validation (SEC-017) ──────────────────────────────────────── #
@@ -341,10 +347,34 @@ class CreateRideRequest(BaseModel):
                 raise ValueError(f'Stop longitude out of range: {lng}')
         return stops
 
-    @validator('scheduled_time')
-    def validate_scheduled_time(cls, v: Optional[datetime]) -> Optional[datetime]:
+    @validator('scheduled_time', always=True)
+    def validate_scheduled_time(cls, v: Optional[datetime], values: dict) -> Optional[datetime]:
         if v is not None:
             from datetime import timedelta
-            if v < datetime.utcnow() + timedelta(minutes=5):
+            naive = v.replace(tzinfo=None) if v.tzinfo else v
+            if naive < datetime.utcnow() + timedelta(minutes=5):
                 raise ValueError('Scheduled time must be at least 5 minutes in the future')
+
+            tz_name: Optional[str] = values.get('scheduled_timezone')
+            if tz_name:
+                try:
+                    import zoneinfo
+                    tz = zoneinfo.ZoneInfo(tz_name)
+                except (ImportError, KeyError):
+                    raise ValueError(f'Unknown or unsupported timezone: {tz_name}')
+
+                # DST-gap guard: construct the wall-clock time in the named
+                # timezone (fold=0 = pre-transition assumption), convert to UTC,
+                # then convert back and verify the hour/minute round-trips.
+                # A mismatch means the local time doesn't exist (clock was
+                # skipped forward over it).
+                utc_tz = zoneinfo.ZoneInfo('UTC')
+                local = naive.replace(tzinfo=tz, fold=0)
+                back = local.astimezone(utc_tz).astimezone(tz)
+                if back.hour != naive.hour or back.minute != naive.minute:
+                    raise ValueError(
+                        f'The time {naive.strftime("%H:%M")} does not exist in '
+                        f'{tz_name} on that date (DST spring-forward gap). '
+                        'Please choose a time after the clocks change.'
+                    )
         return v

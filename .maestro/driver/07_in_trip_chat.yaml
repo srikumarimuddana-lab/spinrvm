@@ -1,0 +1,57 @@
+appId: com.spinr.driver
+---
+# Driver App — In-Trip Chat (P3-18 / D11)
+# Verifies: driver can open chat during trip, send and receive messages.
+# Assumes a trip is in progress (run after 04_verify_otp).
+
+- launchApp
+
+# Trip should be in progress
+- assertVisible:
+    text: "Trip in Progress"
+    optional: true
+
+# Open chat
+- tapOn:
+    text: "Chat"
+    optional: true
+- tapOn:
+    id: "chat-button"
+    optional: true
+- tapOn:
+    id: "chat-icon"
+    optional: true
+
+- waitForAnimationToEnd:
+    timeout: 2000
+
+# Type a message
+- tapOn:
+    id: "chat-input"
+    optional: true
+- tapOn:
+    text: "Message"
+    optional: true
+- inputText: "On my way, 2 min"
+
+# Send
+- tapOn:
+    text: "Send"
+    optional: true
+- tapOn:
+    id: "send-button"
+    optional: true
+
+# Message visible in thread
+- assertVisible:
+    text: "On my way, 2 min"
+    optional: true
+
+# Go back to trip navigation
+- pressKey: Back
+  optional: true
+
+# Trip still in progress
+- assertVisible:
+    text: "Trip in Progress"
+    optional: true

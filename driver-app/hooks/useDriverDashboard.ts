@@ -503,9 +503,15 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         }
         // First valid (non-error) server message = auth accepted; clear any previous error.
         if (wsRef.current === ws) {
+          const wasReconnect = reconnectAttemptRef.current > 0;
           reconnectAttemptRef.current = 0;
           setConnectionState('connected');
           setWsError(null);
+          // Re-sync active ride state — server buffers no WS events, so any
+          // transitions that fired while disconnected are recovered via HTTP.
+          if (wasReconnect) {
+            fetchActiveRide();
+          }
         }
         handleWSMessageRef.current(data);
       } catch { }

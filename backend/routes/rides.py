@@ -49,9 +49,19 @@ except ImportError:
     from utils.error_handling import RideStateError
 
 try:
+    from ..utils.estimate_token import (
+        EstimateTokenError,
+        sign_estimate_token,
+        verify_estimate_token,
+    )
     from ..services import corporate_allowance_service, corporate_wallet_service  # type: ignore
     from ..services.corporate_policy_service import evaluate_policy  # type: ignore
 except ImportError:
+    from utils.estimate_token import (
+        EstimateTokenError,
+        sign_estimate_token,
+        verify_estimate_token,
+    )
     from services import corporate_allowance_service, corporate_wallet_service  # type: ignore
     from services.corporate_policy_service import evaluate_policy  # type: ignore
 
@@ -505,6 +515,20 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
             closest = min(nearby_for_type, key=lambda x: x["distance_km"])
             eta_minutes = max(2, int(closest["distance_km"] / 30 * 60) + 1)
 
+        # P0-4 surge-lock: sign a token per vehicle_type so POST /rides can
+        # reuse the surge_multiplier shown here instead of re-reading the
+        # service area (which may have changed between estimate + confirm).
+        estimate_token = sign_estimate_token(
+            rider_id=current_user["id"],
+            vehicle_type_id=vt_id,
+            pickup_lat=request.pickup_lat,
+            pickup_lng=request.pickup_lng,
+            dropoff_lat=request.dropoff_lat,
+            dropoff_lng=request.dropoff_lng,
+            surge_multiplier=_f(surge),
+            total_fare=_f(total_fare),
+        )
+
         estimates.append(
             {
                 "vehicle_type": fare_info["vehicle_type"],
@@ -519,9 +543,52 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
                 "available": is_available,
                 "eta_minutes": eta_minutes,
                 "driver_count": driver_count,
+                "estimate_token": estimate_token,
             }
         )
     return estimates
+
+
+async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
+    """Auto-cancel a ride if it's still ``searching`` after ``timeout_seconds``.
+
+    Matches Uber/Lyft's 5-minute default. Publishes a ``ride_cancelled`` WS
+    message to the rider's channel and fires a push notification so the rider
+    is alerted even if the app is backgrounded.
+
+    Extracted from ``create_ride`` so it can be unit-tested directly — see
+    backend/tests/test_p0_ship_blockers.py::TestNoDriversAvailableTimeout.
+    """
+    await asyncio.sleep(timeout_seconds)
+    try:
+        current_ride = await db_supabase.get_ride(r_id)
+        if current_ride and current_ride.get("status") == "searching":
+            await db_supabase.update_ride(
+                r_id,
+                {
+                    "status": "cancelled",
+                    "cancelled_at": datetime.utcnow(),
+                    "cancellation_reason": "No nearby drivers found. Please try again.",
+                    "updated_at": datetime.utcnow(),
+                },
+            )
+            await manager.send_personal_message(
+                {
+                    "type": "ride_cancelled",
+                    "ride_id": r_id,
+                    "reason": "No nearby drivers available. Your ride has been automatically cancelled.",
+                },
+                f"rider_{current_ride['rider_id']}",
+            )
+            await send_push_notification(
+                current_ride["rider_id"],
+                "Ride Cancelled ❌",
+                "No nearby drivers were found. Your ride has been automatically cancelled. Please try again.",
+                {"type": "ride_cancelled", "ride_id": r_id, "is_auto": True},
+            )
+            logger.info(f"Ride {r_id} auto-cancelled after {timeout_seconds}s - no driver found")
+    except Exception as e:
+        logger.warning(f"Ride timeout handler error for {r_id}: {e}")
 
 
 @api_router.post("")
@@ -611,7 +678,37 @@ async def create_ride(
         raise HTTPException(status_code=400, detail="Invalid vehicle type")
 
     # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
-    surge = _d(fare_info.get("surge_multiplier", 1.0))
+    # P0-4 surge-lock: if the client sent back the estimate_token we issued
+    # from /rides/estimate, reuse that surge instead of re-reading the area.
+    # Invalid / expired tokens fall back to current surge — we do not 400
+    # the request, because that would strand a rider mid-confirm if the
+    # token just expired. The worst case of a bad token is parity with the
+    # pre-token behavior (read current surge).
+    current_surge = _d(fare_info.get("surge_multiplier", 1.0))
+    surge = current_surge
+    surge_locked = False
+    if body.estimate_token:
+        try:
+            payload = verify_estimate_token(
+                body.estimate_token,
+                rider_id=current_user["id"],
+                vehicle_type_id=body.vehicle_type_id,
+                pickup_lat=body.pickup_lat,
+                pickup_lng=body.pickup_lng,
+                dropoff_lat=body.dropoff_lat,
+                dropoff_lng=body.dropoff_lng,
+            )
+            surge = _d(payload["sm"])
+            surge_locked = True
+            logger.info(
+                f"Surge locked from estimate_token for rider={current_user['id']} "
+                f"vt={body.vehicle_type_id}: {float(surge)} (current was {float(current_surge)})"
+            )
+        except EstimateTokenError as e:
+            logger.warning(
+                f"estimate_token rejected ({e}); falling back to current surge "
+                f"{float(current_surge)} for rider={current_user['id']}"
+            )
     distance_fare = _round(_d(fare_info["per_km_rate"]) * _d(distance_km) * surge)
     time_fare = _round(_d(fare_info["per_minute_rate"]) * _d(duration_minutes) * surge)
     booking_fee = _d(fare_info.get("booking_fee", 2.0))
@@ -785,45 +882,6 @@ async def create_ride(
     # Small helper to ensure we return a clean dict
     def serialize_doc(doc):
         return doc
-
-    # GAP FIX: Start a background task to auto-cancel if no driver is found within 5 minutes
-    async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
-        """Auto-cancel ride if still 'searching' after timeout (default 5 min, matching Uber/Lyft)."""
-        await asyncio.sleep(timeout_seconds)
-        try:
-            current_ride = await db_supabase.get_ride(r_id)
-            if current_ride and current_ride.get("status") == "searching":
-                await db_supabase.update_ride(
-                    r_id,
-                    {
-                        "status": "cancelled",
-                        "cancelled_at": datetime.utcnow(),
-                        "cancellation_reason": "No nearby drivers found. Please try again.",
-                        "updated_at": datetime.utcnow(),
-                    },
-                )
-                # Notify rider
-                await manager.send_personal_message(
-                    {
-                        "type": "ride_cancelled",
-                        "ride_id": r_id,
-                        "reason": "No nearby drivers available. Your ride has been automatically cancelled.",
-                    },
-                    f"rider_{current_ride['rider_id']}",
-                )
-                # G6: Also send a push notification so the rider gets alerted
-                # even if the app is backgrounded or killed. Previously only
-                # the WS message was sent, which was silently lost if the rider
-                # wasn't actively looking at the app.
-                await send_push_notification(
-                    current_ride["rider_id"],
-                    "Ride Cancelled ❌",
-                    "No nearby drivers were found. Your ride has been automatically cancelled. Please try again.",
-                    {"type": "ride_cancelled", "ride_id": r_id, "is_auto": True},
-                )
-                logger.info(f"Ride {r_id} auto-cancelled after {timeout_seconds}s - no driver found")
-        except Exception as e:
-            logger.warning(f"Ride timeout handler error for {r_id}: {e}")
 
     if updated_ride and updated_ride.get("status") == "searching":
         asyncio.create_task(ride_search_timeout(ride.id))

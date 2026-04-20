@@ -107,7 +107,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | E13 | Backend rolling deploy during active trip (WS drop) | — | P2 |
 | E14 | Timezone / DST boundary in scheduled ride | ✅ | UTC round-trip + DST-gap rejection both pinned; `zoneinfo` round-trip guard in `CreateRideRequest.validate_scheduled_time` (`schemas.py`); `test_p2_scheduled_rides.py::TestDSTBoundary` |
 | E15 | Abusive rider: pickup outside service area | — | P2 |
-| E16 | Surge boundary: multiplier changes between estimate and create | — | P1 |
+| E16 | Surge boundary: multiplier changes between estimate and create | ✅ | P1 — expired/tampered/wrong-rider/wrong-route token all fall back to current surge (no 400); `test_e16_surge_boundary.py` (6 cases) |
 
 ### 2.5 Security / abuse scenarios
 

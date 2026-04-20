@@ -596,6 +596,68 @@ mapControlButton: { width: 44, height: 44, justifyContent: 'center', alignItems:
 
 ---
 
+## R-P2-29 · Poll Result Overwrites More-Recent WS Driver Position (Race Condition)
+
+**Audit finding [06-3 MEDIUM].** `fetchRide()` in `rideStore.ts:364` unconditionally
+overwrites `currentDriver` with the REST response, which contains GPS coordinates as of
+the last backend persist cycle. When a poll response arrives after a `driver_location_update`
+WS push, it sets stale coordinates — the map marker visibly jumps backwards.
+
+At 50 km/h city speeds with the 3 s poll in driver-arriving.tsx, the marker can jump
+back ~42 m on each poll cycle, making the driver's position appear erratic.
+
+**File to fix:** `rider-app/store/rideStore.ts` — `fetchRide` action (line 364)
+
+**How to fix:**
+```typescript
+// In fetchRide(), preserve WS-updated coordinates:
+fetchRide: async (rideId) => {
+  const response = await api.get(`/rides/${rideId}`);
+  const ride = response.data;
+  const freshDriver = ride.driver || null;
+  const currentDriver = get().currentDriver;
+  // If WS has already updated lat/lng, keep the WS values (they are always fresher)
+  const mergedDriver = freshDriver && currentDriver
+    ? { ...freshDriver, lat: currentDriver.lat, lng: currentDriver.lng }
+    : freshDriver;
+  set({ currentRide: ride, currentDriver: mergedDriver, isLoading: false });
+  _persistRide(ride, mergedDriver);
+},
+```
+
+**Effort:** 1 hour
+
+---
+
+## R-P2-30 · No Re-Permission Flow When Rider Denies Location Access
+
+**Audit finding [06-6 MEDIUM].** When `Location.requestForegroundPermissionsAsync()`
+returns `denied`, `index.tsx` silently returns (line 83). The map shows "Locating..."
+indefinitely with no explanation, no alert, and no deep-link to Settings. The rider has
+no feedback that location was denied and no way to re-enable it from within the app.
+
+**File to fix:** `rider-app/app/(tabs)/index.tsx` (location permission effect, lines 82–83)
+
+**How to fix:**
+```typescript
+let { status } = await Location.requestForegroundPermissionsAsync();
+if (status !== 'granted') {
+  Alert.alert(
+    'Location Required',
+    'Spinr needs your location to show nearby drivers and confirm your pickup. Please enable location in Settings.',
+    [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Open Settings', onPress: () => Linking.openSettings() },
+    ]
+  );
+  return;
+}
+```
+
+**Effort:** 30 minutes
+
+---
+
 ## Checklist
 
 - [ ] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
@@ -626,3 +688,5 @@ mapControlButton: { width: 44, height: 44, justifyContent: 'center', alignItems:
 - [ ] R-P2-26 ride-in-progress.tsx adds error state with retry for ride load failure
 - [ ] R-P2-27 driver-arrived.tsx replaces null map render with error/loading state
 - [ ] R-P2-28 Home screen zoom buttons increased to 44×44pt
+- [ ] R-P2-29 fetchRide() merges REST driver object but preserves WS-updated lat/lng (no marker jump-back)
+- [ ] R-P2-30 Location denied shows Alert + "Open Settings" deep-link instead of silent early-return

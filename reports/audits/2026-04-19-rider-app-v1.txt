@@ -983,5 +983,186 @@ TASK 05 TALLY
 | TOTAL           |    23 |
 
 ================================================================================
-[AUDIT IN PROGRESS — TASKS 06–16 PENDING]
+TASK 06 — REAL-TIME FEATURES (WebSocket & GPS) (Dimension 06)
+================================================================================
+Scope    : rider-app/hooks/useRiderSocket.ts · rider-app/store/rideStore.ts ·
+           rider-app/app/driver-arriving.tsx · rider-app/app/ride-in-progress.tsx ·
+           rider-app/app/chat-driver.tsx · rider-app/app/(tabs)/index.tsx
+Framework: audit-framework/dimensions/06-real-time.md
+Checks   : WS auth order · exponential backoff · poll/WS race condition ·
+           driver_timeout UI · chat delivery mechanism · GPS permission flow ·
+           WS cleanup · heartbeat · background/foreground reconnect
+
+────────────────────────────────────────────────────────────────────────────────
+
+[06-1] PASS | WS Auth Sent as First Message Before Any Data Consumed
+File: rider-app/hooks/useRiderSocket.ts:160–168
+Finding: In ws.onopen, the very first action is to send the auth message:
+    ws.send(JSON.stringify({ type: 'auth', token, client_type: 'rider' }))
+  The token is retrieved from useAuthStore.getState().token immediately before
+  the send. No data subscription or store-read happens before this call.
+  The hook guards against a missing token before opening the connection (lines
+  149–153), so the socket is never opened without an auth token available.
+  The connect() function itself refuses to proceed if userId, rideId, or token
+  is absent (lines 145–153). Authentication is therefore enforced as the first
+  message in every session.
+
+[06-2] PASS | Exponential Backoff with Jitter Implemented
+File: rider-app/hooks/useRiderSocket.ts:186–196
+Finding: RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000] (line 36).
+  On ws.onclose the next delay is selected as:
+    const baseDelay = RECONNECT_DELAYS[Math.min(attempt, length - 1)]
+    const jitter = Math.random() * 1000 - 500;   // ±500 ms
+    const delay = Math.max(500, baseDelay + jitter);
+  The attempt counter is incremented before each recursive connect() call
+  (line 195). The delay sequence is [~1s, ~2s, ~5s, ~10s, ~30s] capped at the
+  last bucket — correct exponential backoff with jitter. The reconnect loop is
+  only entered when userId and rideId are still present (lines 185–186),
+  preventing ghost reconnects after ride completion.
+
+[06-3] MEDIUM | Poll Result Can Overwrite More-Recent WS Driver Position
+File: rider-app/store/rideStore.ts:355–371 (fetchRide) ·
+      rider-app/app/driver-arriving.tsx:81–88 · rider-app/app/ride-in-progress.tsx:78–83
+Finding: fetchRide() at rideStore.ts:364 unconditionally overwrites both
+  currentRide and currentDriver with whatever the REST response returns:
+    set({ currentRide: ride, currentDriver: driver, isLoading: false });
+  updateDriverLocation() (called from the WS path) updates currentDriver.lat/lng
+  in real time with sub-100 ms latency. However, when a poll fires (every 3 s on
+  driver-arriving, 15 s on ride-in-progress), the REST API response's driver
+  object contains the driver's GPS coordinates as of the last backend persist
+  cycle. If the poll response arrives AFTER a WS driver_location_update, the
+  poll sets currentDriver.lat/lng to older coordinates, causing the map marker
+  to jump backwards.
+  Example sequence:
+    t=0   WS: driver at (52.1300, -106.6700) → marker updates
+    t=0.5 REST /rides/{id} responds with driver at (52.1285, -106.6712)
+            → fetchRide sets currentDriver → marker jumps back 150 m
+  The driver-arriving screen's 3 s poll interval makes this visible on the map
+  at typical city driving speeds (50 km/h ≈ 14 m/s → 42 m/interval).
+Fix: In fetchRide(), preserve the WS-updated lat/lng if they are fresher than
+  the REST response. One approach — record the timestamp of the last WS
+  location update in the store and only overwrite lat/lng from REST if the WS
+  timestamp is absent or older than the response. A simpler approach: in
+  fetchRide(), merge the REST driver object but skip lat/lng fields when
+  currentDriver already has coordinates (since WS is always newer). Effort: 1h.
+
+[06-4] MEDIUM | driver_timeout Fires fetchRide() But UI Has No "Searching Again" Indicator
+File: rider-app/hooks/useRiderSocket.ts:113–115
+Finding: The driver_timeout case calls fetchRide(rideId) which will reload the
+  ride object. If the backend re-dispatches and the status returns to 'searching',
+  driver-arriving.tsx's status check at lines 85–87 will re-enter fastPoll (3 s).
+  However, there is no transient UI element that explicitly tells the rider
+  "Your driver didn't respond — finding you a new one." The screen will show the
+  existing driver card (or the "Finding your driver" spinner, depending on the
+  returned status) but there is no timeout-specific message or animation.
+  A rider watching the screen may be confused why the driver info disappeared
+  without explanation. The comment in the code (line 111) acknowledges the intent
+  but the UI does not surface it.
+Fix: On receiving driver_timeout, before calling fetchRide, set a transient
+  store flag (e.g. driverTimedOut: true) or dispatch a local notification/alert:
+  Alert.alert('Driver Not Available', 'Looking for a new driver…'). Clear the
+  flag after the next fetchRide resolves. Effort: 1h.
+
+[06-5] PASS | Chat Delivers New Messages via WebSocket (Not Polling)
+File: rider-app/hooks/useRiderSocket.ts:127–129 ·
+      rider-app/store/rideStore.ts:482–487 · rider-app/app/chat-driver.tsx:38–57
+Finding: The chat_message WS case in useRiderSocket (line 127–129) calls
+  useRideStore.getState().addChatMessage(data), which deduplicates by id
+  (rideStore.ts:484–486). chat-driver.tsx has NO polling interval — there is
+  no setInterval anywhere in the file. On mount it loads history once via
+  GET /rides/{id}/messages (lines 39–52), then relies entirely on the WS push
+  for subsequent messages. New messages arrive in real-time via the hook mounted
+  in _layout.tsx (line 103). No backgrounding concern exists for the WS
+  transport because useRiderSocket reconnects on AppState 'active' (lines
+  226–246). This supersedes the concern raised in R-P1-2 — the handler IS
+  present and functional.
+
+[06-6] MEDIUM | GPS Permission: No Re-Permission Flow When User Denies Location
+File: rider-app/app/(tabs)/index.tsx:82–83
+Finding: index.tsx requests foreground permission correctly as the first step
+  (line 82: Location.requestForegroundPermissionsAsync()). If the user denies,
+  the function early-returns at line 83 (`if (status !== 'granted') return`).
+  No alert, no explanation, no deep-link to Settings is shown. The map
+  renders the "Locating..." placeholder indefinitely. The rider has no feedback
+  that their location was denied and no prompt to re-enable it.
+  Note: Background location permission is not requested at all in this screen —
+  this is acceptable for the rider-side (the rider does not need background GPS;
+  only the driver does). The foreground-before-background order is therefore
+  satisfied by omission.
+Fix: When status !== 'granted', show an alert:
+  "Location access required. Spinr needs your location to show nearby drivers
+   and confirm your pickup. Please enable location in Settings."
+  with an "Open Settings" button that calls Linking.openSettings(). Effort: 30m.
+
+[06-7] PASS | WS Socket Closed on Ride Completion and on Logout
+File: rider-app/hooks/useRiderSocket.ts:215–223 · rider-app/store/rideStore.ts:497–499
+Finding: The lifecycle effect (lines 215–223) calls disconnect() when
+  currentRide?.id becomes falsy. clearRide() in rideStore.ts sets
+  currentRide: null (line 498), which triggers the effect and calls disconnect().
+  clearRide() is called from ride_cancelled WS handler (line 108), the cancel
+  button flows in driver-arriving.tsx, and the ride-completed screen.
+  For logout: useAuthStore.logout() clears the user object, causing user?.id
+  to become null, which also fires the lifecycle effect's disconnect() path.
+  Both ride completion and logout correctly close and null the WebSocket reference.
+
+[06-8] PASS | Heartbeat — useRiderSocket Replies to Server ping with pong
+File: rider-app/hooks/useRiderSocket.ts:62–65
+Finding: The 'ping' case in handleMessage checks ws.readyState === WebSocket.OPEN
+  before sending. The pong reply is sent immediately in the same message handler,
+  with no setTimeout delay. This satisfies the 30-second ping-pong keepalive
+  requirement from the checklist. The pong message is { type: 'pong' } matching
+  the expected server format.
+
+[06-9] PASS | WS Reconnects When App Returns to Foreground
+File: rider-app/hooks/useRiderSocket.ts:226–246
+Finding: AppState.addEventListener('change') is registered on mount (line 227).
+  When nextState === 'active' and both userId and rideId are set, the code
+  checks if the socket is CLOSED or CLOSING (line 234) and calls connect() with
+  the attempt counter reset to 0 (line 240 — fast reconnect on foreground).
+  Any pending reconnect timeout is cancelled before reconnecting (lines 237–239).
+  The subscription is correctly removed on unmount (line 245: sub.remove()).
+  This covers the scenario where the phone was locked for >30 s (heartbeat missed)
+  and the server silently closed the connection — foreground triggers a clean
+  reconnect rather than waiting for the backoff timer.
+
+────────────────────────────────────────────────────────────────────────────────
+ADDITIONAL CHECKS (from D06 checklist not in the 9 specific checks)
+────────────────────────────────────────────────────────────────────────────────
+
+[06-10] LOW | GPS Accuracy Uses Location.Accuracy.Balanced on Home Screen — Not BestForNavigation
+File: rider-app/app/(tabs)/index.tsx:96
+Finding: index.tsx calls getCurrentPositionAsync with accuracy: Location.Accuracy.Balanced.
+  Per the D06 checklist, active rides should use ACCURACY.BestForNavigation.
+  The home screen is not an active-ride screen, so Balanced is appropriate there.
+  However, no GPS subscription is set up for the rider during the ride flow — the
+  rider's position is not tracked for navigation purposes (only the driver's
+  position is). Therefore BestForNavigation is not applicable for rider GPS.
+  This is flagged LOW as a documentation gap: the accuracy choice is correct but
+  should be annotated in comments to explain why BestForNavigation is absent.
+
+[06-11] RECOMMENDATION | Polling Not Suspended When WebSocket Is Connected
+File: rider-app/app/driver-arriving.tsx:81–88 · rider-app/app/ride-in-progress.tsx:78–83
+Finding: driver-arriving.tsx polls every 3 s (fast) or 15 s (slow) regardless of
+  WS connection state. ride-in-progress.tsx polls every 15 s unconditionally.
+  When WS is healthy, these polls are redundant and waste battery/bandwidth.
+  This was already documented as R-P2-5 (before this audit). Confirming the gap
+  is still present. The connectionState from useRiderSocket is available in
+  _layout.tsx (line 103) but is not exposed to child screens.
+  This is a RECOMMENDATION, not a new finding — see R-P2-5 for fix guidance.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 06 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     0 |
+| MEDIUM          |     3 |
+| LOW             |     1 |
+| PASS            |     6 |
+| RECOMMENDATION  |     1 |
+| TOTAL           |    11 |
+
+================================================================================
+[AUDIT IN PROGRESS — TASKS 07–16 PENDING]
 ================================================================================

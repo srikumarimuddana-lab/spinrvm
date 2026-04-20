@@ -356,6 +356,32 @@ phone: str = Field(
 
 ---
 
+## R-P1-16 · driver_timeout Has No "Searching Again" UI Feedback
+
+**Audit finding [06-4 MEDIUM].** When the backend re-dispatches after a driver fails
+to accept, `useRiderSocket` receives a `driver_timeout` message and calls `fetchRide()`.
+The ride status may return to `'searching'` but there is no rider-visible notification
+that their original driver timed out and a new one is being found. The driver card
+disappears silently, leaving the rider confused.
+
+**File to fix:** `rider-app/hooks/useRiderSocket.ts` (driver_timeout case, line 113)
+
+**How to fix:**
+```typescript
+case 'driver_timeout':
+  Alert.alert(
+    'Driver Not Available',
+    'Your driver didn\'t respond in time. Looking for a new driver…',
+    [{ text: 'OK' }]
+  );
+  if (rideId) fetchRide(rideId);
+  break;
+```
+
+**Effort:** 30 minutes
+
+---
+
 ## Checklist
 
 - [ ] R-P1-1 Cancellation fee enforced after driver_arrived; Cancel button disabled
@@ -373,3 +399,4 @@ phone: str = Field(
 - [ ] R-P1-13 Firebase-authed users subject to token_version + session_id revocation checks
 - [ ] R-P1-14 OTP comparison uses hmac.compare_digest instead of DB equality lookup
 - [ ] R-P1-15 Backend OTP phone schema restricted to +1XXXXXXXXXX (Canada/US only)
+- [ ] R-P1-16 driver_timeout shows "Searching Again" alert before fetchRide

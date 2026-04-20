@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { Alert, Linking } from 'react-native';
 import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -321,6 +322,9 @@ export const useRideStore = create<RideState>((set, get) => ({
     if (!pickup || !dropoff || !selectedVehicle) {
       throw new Error('Missing ride details');
     }
+    if (get().currentRide) {
+      throw new Error('A ride is already active');
+    }
 
     try {
       set({ isLoading: true, error: null });
@@ -451,8 +455,12 @@ export const useRideStore = create<RideState>((set, get) => ({
         longitude
       });
     } catch (error: any) {
-      console.error('Failed to trigger emergency:', error);
-      // Even if API fails, we don't throw to not block the local 911 UI flow
+      Alert.alert(
+        'Emergency Alert May Not Have Sent',
+        'Could not reach the server. Please call 911 directly.',
+        [{ text: 'Call 911', onPress: () => Linking.openURL('tel:911') }]
+      );
+      throw error;
     }
   },
 

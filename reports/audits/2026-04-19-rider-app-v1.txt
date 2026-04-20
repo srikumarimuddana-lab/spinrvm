@@ -1469,5 +1469,324 @@ TASK 07 TALLY
 | TOTAL           |    14 |
 
 ================================================================================
-[AUDIT IN PROGRESS — TASKS 08–16 PENDING]
+TASK 08 — PAYMENTS & PCI COMPLIANCE (Dimension 08)
+================================================================================
+Scope    : rider-app/app/payment-confirm.tsx · rider-app/app/ride-completed.tsx ·
+           rider-app/app/manage-cards.tsx · rider-app/store/walletStore.ts ·
+           rider-app/store/rideStore.ts · backend/routes/payments.py ·
+           backend/routes/rides.py · backend/routes/promo.py ·
+           backend/routes/wallet.py · backend/routes/webhooks.py ·
+           backend/routes/fare_split.py
+Framework: audit-framework/dimensions/08-payments.md
+Checks   : Idempotency key · double-tap guard · wallet balance server-side ·
+           tip idempotency · SetupIntent / customer_id · promo fare validation ·
+           fare-split idempotency · webhook HMAC · raw card data
+
+────────────────────────────────────────────────────────────────────────────────
+
+[08-1] HIGH | /wallet/pay Does Not Validate Amount Against Stored Ride Fare
+File: backend/routes/wallet.py:89–91, 146–188
+Finding: WalletPayRequest accepts any amount > 0 from the client:
+    class WalletPayRequest(BaseModel):
+        ride_id: str
+        amount: float = Field(..., gt=0)   # no upper bound, no fare cross-check
+  The wallet_pay handler checks the rider has sufficient balance but never
+  fetches the ride record to confirm the requested debit matches the stored
+  ride fare. A client can POST /wallet/pay with ride_id="<valid_id>" and
+  amount=0.01 (or any arbitrary amount), and the handler will:
+  (a) debit only $0.01 from the wallet instead of the full fare,
+  (b) set the ride's payment_status to "paid",
+  (c) return success.
+  The rider effectively pays a fraction of the fare while the ride is marked
+  fully settled. The driver's earnings are credited based on ride creation
+  (not on this wallet-pay event), but the operator's ledger shows a fraudulent
+  "paid" status at the manipulated amount.
+  Contrast: POST /payments/create-intent correctly cross-checks body.amount
+  against the stored ride fare (payments.py:72–85).
+Fix: Fetch the ride record in wallet_pay and enforce the debit equals the fare:
+    ride = await db.find_one("rides", {"id": req.ride_id})
+    if not ride or ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(404, "Ride not found")
+    fare = _d(ride.get("total_fare", 0))
+    if _d(req.amount) != fare:
+        raise HTTPException(400,
+            f"Payment amount {req.amount} does not match ride fare {fare}")
+  Additionally add an upper bound consistent with the system maximum fare
+  (e.g. le=500) and change the type from float to Decimal at the schema level
+  (see also R-P2-23 for the float-to-Decimal migration).
+  Effort: 1 hour.
+
+[08-2] HIGH | Tip Is Additive — Rider Can Submit Multiple Tips for the Same Ride
+File: backend/routes/rides.py:945–969
+Finding: POST /rides/{ride_id}/tip accumulates tip amounts rather than
+  setting a one-time tip:
+    new_tip = ride.get("tip_amount", 0) + tip_amount
+    await db_supabase.update_ride(ride_id, {"tip_amount": new_tip, ...})
+  There is no flag or check to prevent a rider from calling this endpoint
+  multiple times. Each call adds to the running total, so:
+    POST /rides/{id}/tip  { "amount": 5 }  → tip_amount = 5, driver +$5
+    POST /rides/{id}/tip  { "amount": 5 }  → tip_amount = 10, driver +$5 again
+  ride-completed.tsx does set a local tipSent flag (line 109: if tipSent) that
+  prevents re-sending within a single screen session, but this guard is in
+  client state only — it is lost on navigation, app backgrounding, or any API
+  call made outside the screen. A malicious or buggy client can call the
+  endpoint N times and over-tip, generating unbounded driver_earnings credits.
+  No wallet debit is made by /tip (the endpoint only updates the ride record);
+  the monetary impact depends on whether the driver's payout flow reads
+  tip_amount from the ride record. If it does, driver earnings are inflated.
+Fix: Add a one-time-tip guard:
+  Option A — status field: add a `tip_paid: bool` column; set it to True on
+    first tip call and return 409 on subsequent calls.
+  Option B — check existing value: if ride.get("tip_amount", 0) > 0, return
+    409 "Tip already submitted for this ride."
+  Also consider whether /tip and /process-payment's tip_amount path should
+  be unified — currently a rider can tip via both routes independently.
+  Effort: 30 minutes.
+
+[08-3] HIGH | createRide() Does Not Pass an Idempotency Key — Double Charge on Retry
+File: rider-app/store/rideStore.ts:319–353 · backend/routes/rides.py:515–739
+Finding: createRide() in rideStore.ts calls POST /rides with no Idempotency-Key
+  header. If the network drops between the client sending the request and
+  receiving the response, the automatic retry (api client interceptor or user
+  re-tap) will create a second ride and initiate a second payment intent. The
+  backend create_ride handler has no idempotency cache on the ride-creation
+  path — each POST /rides creates a new ride unconditionally.
+  payment-confirm.tsx uses an isSubmitting ref (line 51–53) that prevents
+  UI-level double-taps within the same screen session, but the Book button's
+  disabled prop is tied to the store's isLoading state, not isSubmitting.
+  The disabled={isLoading} guard (line 322) is set during the API call but
+  resets to false after createRide resolves or rejects — and importantly,
+  isLoading (a Zustand state value) does NOT visually disable the button
+  during the navigation transition from the error alert back to the screen.
+  A network timeout → error alert → user re-taps Book creates two rides.
+  This issue was pre-identified as R-P1-7; the audit confirms neither the
+  client Idempotency-Key header nor the server-side idempotency cache is
+  implemented.
+Fix: See R-P1-7 for the full fix prescription. Core fix:
+  (a) Client — generate a UUID key before the call and set
+      headers: { 'Idempotency-Key': key } on the api.post('/rides', ...) call.
+  (b) Backend — store (idempotency_key, user_id, response) in a short-lived
+      cache (Redis or DB) and return the cached response for duplicates.
+  Effort: 2–3 hours.
+
+[08-4] MEDIUM | Book Button — disabled Prop Tied to isLoading, Not isSubmitting Ref
+File: rider-app/app/payment-confirm.tsx:51–54, 319–336
+Finding: The Book button uses disabled={isLoading} (line 322), where isLoading
+  comes from the rideStore Zustand state (line 30). The isSubmitting ref (line
+  51) is the correct guard against double-taps, but it is NOT reflected in the
+  button's disabled prop. The button remains visually tappable and does not show
+  a spinner when isSubmitting.current is true (only when isLoading is true).
+  Between the moment the rider taps "Book" and the moment createRide() sets
+  isLoading: true in the store (line 326), there is a brief window (the
+  async overhead before the API call begins) during which neither guard blocks
+  a second tap. In practice, isSubmitting.current = true runs synchronously
+  before await, so the ref guard catches most double-taps. But:
+  (a) The button gives no visual feedback (no spinner, no disabled state)
+      while the API call is in-flight with isLoading still false.
+  (b) A user who navigates away and back gets a fresh screen mount with
+      isSubmitting.current = false, bypassing the guard.
+Fix: Add local isSubmitting state (useState, not useRef) and use it to disable
+  the button and show a spinner:
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    // In handleBookRide: setIsSubmitting(true) before, setIsSubmitting(false) in finally
+    <TouchableOpacity disabled={isSubmitting || isLoading} ...>
+  This provides immediate visual feedback and correctly blocks the button until
+  the API completes. Effort: 30 minutes.
+
+[08-5] MEDIUM | Promo Discount Calculated Against Client-Supplied Fare — No Server Validation
+File: rider-app/app/payment-confirm.tsx:76–77 · backend/routes/promotions.py:60–195
+Finding: The promo validation flow:
+  1. Client calls: POST /promo/validate  { code, ride_fare: selectedEstimate.total_fare }
+  2. Backend calculates discount as a fraction of ride_fare (the client value)
+  3. discount_amount is returned and shown on the UI
+  The backend never cross-checks ride_fare against a stored ride record. A
+  client can supply ride_fare=0.01 when validating, receive a negligible
+  discount amount, but then when ride_fare is large, the stored promo usage is
+  already recorded. More critically: when ride_fare=0 or is manipulated to be
+  very small, a percentage discount yields a near-zero discount_amount that
+  inflates the client's displayed "total" less than expected.
+  The inverse is also true: submitting ride_fare=10000 inflates the percentage
+  discount calculation well above what the actual fare warrants.
+  Crucially, the discount is only shown in the UI — the actual ride fare
+  deduction must happen during ride creation, but createRide() does not pass
+  the promo_code or applied discount to the backend (rideStore.ts:319–353).
+  The backend create_ride handler has no promo application logic.
+  This means the discount is display-only: the rider is charged the full fare
+  regardless of the promo code applied, which is a different severity class
+  (broken feature, not a fraud vector). However, the client-controlled
+  ride_fare in /promo/validate does mean the minimum-fare eligibility check
+  (line 111: if req.ride_fare < min_fare) can be bypassed by supplying a high
+  fake fare value.
+  This is the issue pre-identified as R-P1-8; confirmed present.
+Fix: Two parts:
+  (a) validate_promo must accept only a promo code — not a ride_fare. Fare
+      should be fetched from the ride record or estimate by ID:
+      POST /promo/validate  { code, ride_id }  — backend fetches fare.
+  (b) createRide() must pass the applied promo_id to the backend, which
+      deducts the discount from the server-side fare during ride creation.
+  Effort: 2–3 hours (frontend + backend).
+
+[08-6] MEDIUM | Fare-Split Participant Payment Is Not Idempotent
+File: backend/routes/fare_split.py:257–329
+Finding: The pay_split_share endpoint checks participant["status"] == "paid"
+  before processing (line 271–272: if participant["status"] == "paid": raise 400).
+  This is a correct guard. However, there is a TOCTOU (time-of-check/time-of-use)
+  race condition: two concurrent requests from the same participant can both
+  read status="accepted", pass the check simultaneously, then both update
+  the wallet and both mark the status as "paid". Under normal single-device
+  usage this race is unlikely, but:
+  (a) No database-level atomic guard prevents it (no SELECT...FOR UPDATE or
+      conditional update pattern equivalent to the atomic guard in
+      process_payment at rides.py:993–1001).
+  (b) The wallet deduction (lines 291–304) uses a two-step read-then-write
+      without optimistic concurrency: two parallel calls read the same
+      balance, both deduct the share, both write back a new balance, resulting
+      in one deduction actually taking effect and the other being silently lost.
+Fix: Apply the same atomic guard pattern used in process_payment:
+    guard = await db.update_one(
+        "fare_split_participants",
+        {"id": participant_id, "status": "accepted"},   # condition: still accepted
+        {"$set": {"status": "processing"}},
+    )
+    if not guard.modified_count:                         # already paid or processing
+        return {"status": "paid", "already_paid": True}
+  Then proceed with the wallet deduction and final "paid" status update.
+  Effort: 1 hour.
+
+[08-7] PASS | Stripe Webhook Verifies HMAC Signature via construct_event()
+File: backend/routes/webhooks.py:25–55
+Finding: The stripe_webhook handler:
+  (a) Reads stripe_webhook_secret from app_settings (not hardcoded).
+  (b) Requires the secret to be present — returns 500 with an error message
+      if stripe_webhook_secret is not configured (lines 35–40), rejecting
+      all unverified events rather than processing them blindly.
+  (c) Calls stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+      (line 50) — this verifies the Stripe-Signature header's HMAC-SHA256 sig.
+  (d) Invalid payload → 400 "Invalid payload"; invalid signature → 400
+      "Invalid signature". No event is processed without a valid HMAC.
+  The HMAC secret is loaded at runtime from the database settings store, not
+  from a hardcoded string. Per framework checklist: PASS.
+
+[08-8] PASS | Webhook Event Idempotency via stripe_events Dedup Table
+File: backend/routes/webhooks.py:67–88 · backend/db_supabase.py:1084–1100
+Finding: claim_stripe_event() is called before any business logic (line 81).
+  It inserts (event_id, event_type, processed) atomically using the event_id
+  as PRIMARY KEY. A duplicate event_id (Stripe retry) causes a unique-key
+  violation, claim_stripe_event returns False, and the handler returns 200
+  with {"duplicate": True} without repeating any side effects (line 87–88).
+  mark_stripe_event_processed() stamps processed_at after successful handling
+  (line 223). Events that fail processing (exception before mark_processed)
+  have processed_at=NULL, enabling nightly reconciliation replay.
+
+[08-9] PASS | PaymentIntent Creation Has Idempotency Key
+File: backend/routes/payments.py:105–116
+Finding: create_payment_intent() constructs an idempotency key:
+    idempotency_key = f"ride-{body.ride_id}-{current_user['id']}"  (when ride_id present)
+    fallback: f"intent-{current_user['id']}-{amount}"
+  The key is passed to stripe.PaymentIntent.create(..., idempotency_key=...).
+  A network retry that re-POSTs to /payments/create-intent with the same
+  ride_id and user_id will receive the same PaymentIntent from Stripe without
+  creating a second charge. Per framework checklist: PASS.
+
+[08-10] PASS | PaymentIntent Amount Cross-Checked Against Stored Ride Fare
+File: backend/routes/payments.py:72–85
+Finding: When body.ride_id is present, the handler fetches the ride record and
+  compares Decimal(str(body.amount)) with Decimal(str(ride.total_fare)). A
+  mismatch raises HTTP 400. The comparison uses Decimal on both sides to avoid
+  float equality pitfalls. Client cannot inflate/deflate the Stripe charge by
+  manipulating the amount field.
+
+[08-11] PASS | Card Add Flow Uses Stripe SetupIntent — Customer ID Server-Derived
+File: backend/routes/payments.py:156–185, 353–392 · rider-app/app/manage-cards.tsx:88–113
+Finding: On the client, manage-cards.tsx calls Stripe's createPaymentMethod()
+  (line 92) using @stripe/stripe-react-native's CardField. Raw PAN/CVC/expiry
+  remain inside the native Stripe view and never appear in JavaScript.
+  The tokenized payment_method_id is the only value posted to /payments/cards.
+  The backend's add_card handler calls get_or_create_stripe_customer() (line
+  354) to resolve the customer_id server-side from the authenticated user's
+  database record. The client cannot inject a foreign customer_id.
+  The endpoint also creates a SetupIntent (line 361–368: stripe.SetupIntent.create
+  with confirm=True) to save the card for future off-session use.
+  SetupIntent customer ID is derived server-side from the DB lookup — not
+  client-supplied. Per framework checklist: PASS.
+
+[08-12] PASS | PCI Guard Rejects Raw Card Fields — Including camelCase Variants
+File: backend/routes/payments.py:280–327
+Finding: The _RAW_CARD_FIELDS set (lines 280–284) covers all variants required
+  by the framework checklist:
+    snake_case: card_number, cvv, cvv2, cvc, cvc2, security_code,
+                card_security_code, expiry, expiration, expiration_date,
+                exp_month, exp_year, card_no
+    camelCase:  cardNumber, pan, primary_account_number
+  The guard fires before Pydantic model validation (before any logging) and
+  raises HTTP 400 without echoing the offending values back. The warning log
+  records only the field names, not their values. All required snake_case and
+  camelCase variants from the D08 checklist are present.
+
+[08-13] PASS | No Raw Card Data Collected by Any Mobile Screen
+File: rider-app/app/manage-cards.tsx · rider-app/app/payment-confirm.tsx ·
+      rider-app/app/wallet.tsx
+Finding: manage-cards.tsx is the only screen that collects card information.
+  It uses Stripe's <CardField> component (line 226) — a native Stripe-hosted
+  view. Card number, expiry, and CVC are entered directly into the Stripe
+  native layer and are never exposed to JavaScript or React state. The screen
+  has no TextInput fields for card_number, cvv, exp_month, or exp_year. The
+  cardholder name is the only free-text field (line 244), which is not a PCI
+  sensitive value. payment-confirm.tsx and wallet.tsx contain no card-entry
+  UI at all. PCI SAQ-A scope is maintained.
+
+[08-14] PASS | Process-Payment Has Atomic Double-Charge Guard
+File: backend/routes/rides.py:984–1001
+Finding: Before executing any payment logic, process_payment checks if
+  ride.payment_status is already "paid" or "processing" (line 985) and returns
+  immediately if so (idempotent early return). It then performs an atomic
+  conditional update: SET payment_status="processing" WHERE payment_status NOT
+  IN ("paid", "processing"). If modified_count == 0, another concurrent request
+  won the race and the current call returns safely. The wallet debit proceeds
+  only after this guard succeeds.
+
+[08-15] PASS | Wallet Pay Validates Sufficient Balance Server-Side
+File: backend/routes/wallet.py:146–188
+Finding: wallet_pay fetches the wallet balance with Decimal arithmetic
+  (lines 154–158: old_balance = _d(wallet.balance); if old_balance < debit_amount:
+  raise 400 "Insufficient wallet balance"). The check runs server-side in
+  Python with ROUND_HALF_UP Decimal before any debit is applied. The client
+  balance display is not trusted. Balance cannot go negative.
+
+[08-16] PASS | Fare-Split Total Derived from Server-Side Ride Fare
+File: backend/routes/fare_split.py:56–120
+Finding: create_fare_split fetches total_fare from the ride record in the DB:
+    total_fare = float(ride.get("grand_total") or ride.get("total_fare", 0))
+  The split amount is calculated as total_fare / split_count server-side.
+  The client does not supply the fare to be split — only the ride_id and
+  participant phone numbers. A rider cannot manipulate their split amount by
+  crafting the request payload.
+
+[08-17] LOW | Stripe Test Key sk_test_* Likely Present in App Settings (Dev Mode)
+File: backend/routes/payments.py:61 · backend/routes/webhooks.py:32
+Finding: Both payment and webhook handlers read stripe_secret_key from
+  app_settings at runtime. No sk_test_* value is committed in source files
+  (audit previously confirmed — [03-17] PASS). However, the development
+  app_settings in the database will carry a sk_test_* key during testing.
+  Per audit ground rules: Stripe test keys (sk_test_*) → LOW severity only.
+  Production-readiness gate: ensure app_settings.stripe_secret_key and
+  stripe_webhook_secret are set to live values (sk_live_*, whsec_*) before
+  production launch via an env-gated settings migration.
+  Effort: Production config task — 30 minutes.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 08 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     3 |
+| MEDIUM          |     3 |
+| LOW             |     1 |
+| PASS            |     9 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    16 |
+
+================================================================================
+[AUDIT IN PROGRESS — TASKS 09–16 PENDING]
 ================================================================================

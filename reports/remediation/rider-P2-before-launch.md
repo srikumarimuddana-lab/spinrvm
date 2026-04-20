@@ -707,6 +707,93 @@ dialog rather than the "free cancel" dialog.
 
 ---
 
+## R-P2-32 · Book Button Disabled State Not Tied to isSubmitting Ref
+
+**Audit finding [08-4 MEDIUM].** `payment-confirm.tsx` uses an `isSubmitting` ref (line 51)
+to prevent double-taps, but the Book button's `disabled` prop is tied to `isLoading` (the
+Zustand store state, line 322) — not to `isSubmitting.current`. Between the tap and the
+first async suspension point in `createRide()`, both guards are false simultaneously. The
+button also shows no visual disabled state (no spinner, no greyed-out appearance) during
+the brief window before `isLoading` is set, giving the user no feedback that the request
+is in-flight.
+
+**File to fix:** `rider-app/app/payment-confirm.tsx`
+
+**How to fix:**
+```typescript
+const [isSubmitting, setIsSubmitting] = useState(false);
+const handleBookRide = async () => {
+  if (isSubmitting) return;
+  setIsSubmitting(true);
+  try {
+    // ... existing logic
+  } finally {
+    setIsSubmitting(false);
+  }
+};
+// Button:
+<TouchableOpacity disabled={isSubmitting || isLoading} ...>
+  {isSubmitting || isLoading ? <ActivityIndicator color="#FFF" /> : <Text>Book</Text>}
+</TouchableOpacity>
+```
+
+**Effort:** 30 minutes
+
+---
+
+## R-P2-33 · Promo Discount Uses Client-Supplied Fare — Minimum Fare Eligibility Bypassed
+
+**Audit finding [08-5 MEDIUM].** `POST /promo/validate` accepts `ride_fare` from the client
+(promotions.py:31). The backend uses this value to check minimum-fare eligibility
+(`if req.ride_fare < min_fare: raise 400`) and to calculate percentage discounts. A
+client can supply any `ride_fare` value — inflating it passes the minimum-fare check for
+promos that require a minimum spend. The discount calculation is also skewed by the
+fake fare value.
+
+**File to fix:** `backend/routes/promotions.py` — `validate_promo`
+
+**How to fix:**
+Change `ValidatePromoRequest` to accept a `ride_id` instead of `ride_fare`:
+```python
+class ValidatePromoRequest(BaseModel):
+    code: str
+    ride_id: Optional[str] = None  # fetch fare server-side; ride must belong to caller
+```
+Inside `validate_promo`, fetch `total_fare` from the ride record when `ride_id` is provided.
+Also wire `createRide()` to pass the applied `promo_id` so the discount is applied during
+ride creation, not just displayed on the client.
+
+**Effort:** 2–3 hours
+
+---
+
+## R-P2-34 · Fare-Split Payment Has TOCTOU Race — Participant Can Double-Pay
+
+**Audit finding [08-6 MEDIUM].** `pay_split_share` in `backend/routes/fare_split.py:257`
+reads the participant status and wallet balance in separate operations with no atomic lock.
+Two concurrent requests from the same participant both pass the `status == "accepted"` check
+simultaneously, then both deduct from the wallet. The result: one share amount is
+effectively deducted twice (wallet drained by 2× share) while the participant is only
+credited once.
+
+**File to fix:** `backend/routes/fare_split.py` — `pay_split_share` handler
+
+**How to fix:**
+```python
+# Atomic claim: only succeeds if status is still "accepted"
+guard = await db.update_one(
+    "fare_split_participants",
+    {"id": participant_id, "status": "accepted"},
+    {"$set": {"status": "processing"}},
+)
+if not getattr(guard, "modified_count", 1) == 0:
+    return {"status": "paid", "already_paid": True}  # already paid or processing
+```
+
+**Effort:** 1 hour
+
+---
+
 ## Checklist
 
 - [ ] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
@@ -740,3 +827,6 @@ dialog rather than the "free cancel" dialog.
 - [ ] R-P2-29 fetchRide() merges REST driver object but preserves WS-updated lat/lng (no marker jump-back)
 - [ ] R-P2-30 Location denied shows Alert + "Open Settings" deep-link instead of silent early-return
 - [ ] R-P2-31 FreeCancelTimer expiry fires onExpire callback; Cancel button shows fee warning for expired window
+- [ ] R-P2-32 Book button disabled state tied to isSubmitting state (not only isLoading); spinner shown immediately
+- [ ] R-P2-33 Promo validation uses ride_id to fetch fare server-side; minimum-fare bypass closed
+- [ ] R-P2-34 Fare-split pay endpoint uses atomic status guard to prevent TOCTOU double-deduction

@@ -3588,4 +3588,113 @@ TASK 15 TALLY
 | TOTAL           |    10 |
 
 ================================================================================
-[AUDIT IN PROGRESS — TASKS 16 PENDING]
+TASK 16 — INTERNATIONALISATION & LOCALISATION (i18n/l10n)
+Dimension: 16-i18n-localisation.md
+Auditor: Claude (automated)
+Date: 2026-04-20
+================================================================================
+
+[16-1] HIGH | No i18n Library Installed — French Support Entirely Absent
+File: rider-app/package.json (dependencies)
+Finding: No i18n library is present in dependencies or devDependencies. There is
+  no i18next, react-i18next, expo-localization, @formatjs/intl, lingui, or any
+  equivalent. The app has zero infrastructure for translating strings into French.
+  This is a direct violation of Canada's Official Languages Act for federally
+  regulated businesses. No translation files (en-CA, fr-CA) exist anywhere in the
+  rider-app tree.
+Fix:
+  Install react-i18next + i18next + expo-localization. Create locale JSON files
+  for en-CA and fr-CA. Wrap all user-visible strings with t('key'). Define
+  en-CA as the fallback locale. Estimate: 2–4 sprint days to scaffold; ongoing
+  translation effort per feature.
+
+[16-2] HIGH | Hardcoded English Strings Throughout JSX — Not Translatable
+File: rider-app/app/login.tsx lines 68–98;
+      rider-app/app/ride-completed.tsx lines 73–99
+Finding: login.tsx contains at least 6 hardcoded English string literals in JSX
+  and alert payloads: 'Invalid Number', 'Please enter a valid 10-digit phone
+  number.', 'Failed', 'Could not send verification code. Please try again.',
+  'Connection Error', 'Unable to reach server. Please check your connection.'.
+  ride-completed.tsx contains at least 10 hardcoded strings in the invoice
+  template: 'SPINR RIDE RECEIPT', 'Date:', 'Pickup:', 'Dropoff:', 'Distance:',
+  'Duration:', 'Base fare:', 'Booking fee:', 'Tip:', 'TOTAL:', 'Payment:', etc.
+  None pass through any i18n call. A French-locale device would receive English
+  text everywhere.
+Fix:
+  Replace every string literal with t('key') calls once the i18n library is
+  installed (see [16-1]). Audit all remaining screens — these two samples alone
+  show 16+ hardcoded strings; full app likely has hundreds.
+
+[16-3] MEDIUM | Currency Formatted with Raw String Interpolation — No Intl.NumberFormat
+File: rider-app/app/ride-completed.tsx lines 83–89
+Finding: All fare line items use template literals: `$${value.toFixed(2)}` and
+  `$${total.toFixed(2)} CAD`. This hardcodes the dollar sign prefix, USD/CAD
+  ambiguity, and English decimal/thousands conventions. French-Canadian convention
+  uses a trailing symbol and a space: "12,50 $". Intl.NumberFormat('fr-CA',
+  {style:'currency',currency:'CAD'}) would render correctly per locale.
+Fix:
+  Replace all fare/currency display with Intl.NumberFormat using the active
+  locale. Create a shared formatCurrency(amount, locale) utility in @spinr/shared.
+  Effort: 3–4 hours.
+
+[16-4] LOW | Language Setting Is UI-Only — No Locale Change Applied to App
+File: rider-app/app/settings.tsx lines 22, 68–89
+Finding: Settings screen has a "Language & Region" section with English/French
+  toggle that calls setLanguage('French'). However this is local React state only
+  — there is no i18n library to call, no AsyncStorage persistence, no locale
+  propagation to any component. The toggle is cosmetic and non-functional.
+Fix:
+  Once i18n infrastructure is in place (see [16-1]), wire the language selector
+  to i18n.changeLanguage('fr-CA') and persist the selection to AsyncStorage.
+  Effort: 1–2 hours (after [16-1] is complete).
+
+[16-5] HIGH | Backend Error Messages Are English-Only Hardcoded Strings
+File: backend/routes/wallet.py lines 120, 152, 158, 235, 238, 244, 250
+Finding: All FastAPI HTTPException detail strings are hardcoded English:
+  "Wallet is suspended", "Insufficient wallet balance", "Recipient not found",
+  "Cannot transfer to yourself". These strings are returned to the client and
+  displayed verbatim (see login.tsx line 98: error.response?.data?.detail).
+  French-locale users will see English error messages from the API.
+Fix:
+  Accept an Accept-Language header in the backend and return localised error
+  detail strings, or return machine-readable error codes and localise messages
+  client-side using the i18n system. Effort: 1 day for error-code refactor.
+
+[16-6] PASS | Distance Unit Is Kilometres
+File: rider-app/app/ride-completed.tsx line 80
+Finding: Invoice template uses `${distance.toFixed(1)} km` — correct Canadian
+  standard unit. No miles found in sampled files.
+
+[16-7] PASS | Phone Number Formatted for Canadian Display
+File: rider-app/app/login.tsx lines 53–56
+Finding: formatPhoneDisplay() produces (306) 555-1234 format — correct Canadian
+  convention. No raw +1XXXXXXXXXX display to the user.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 16 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     3 |
+| MEDIUM          |     1 |
+| LOW             |     1 |
+| PASS            |     2 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     7 |
+
+================================================================================
+AUDIT COMPLETE — all 16 dimensions
+================================================================================
+FINAL AUDIT TALLY — ALL 16 DIMENSIONS
+================================================================================
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     1 |
+| HIGH            |    31 |
+| MEDIUM          |    58 |
+| LOW             |    11 |
+| PASS            |    76 |
+| RECOMMENDATION  |     7 |
+| TOTAL           |   184 |
+================================================================================

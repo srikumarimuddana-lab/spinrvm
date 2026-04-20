@@ -601,6 +601,38 @@ single-session test using `rideStatusSequence`. See finding [09-6] for details.
 
 ---
 
+## R-P1-27 · spinr.app and spinr-track.app Not in CORS Allowlist
+
+**Audit finding [11-1 HIGH].** Neither `https://spinr.app` nor `https://spinr-track.app`
+is in the backend CORS allowlist. The hardcoded `always_allowed` list in
+`backend/core/middleware.py:310` only contains `https://spinr-admin.vercel.app` and
+localhost origins. `ALLOWED_ORIGINS` default (`core/config.py:47`) likewise omits both
+domains. Any browser-side call from spinr.app or spinr-track.app (e.g. the public
+live-tracking page calling `GET /api/v1/rides/track/{token}`) will be rejected with a
+CORS error.
+
+The associated domain declarations in `app.config.ts:37–39` confirm that both domains
+are expected to deep-link into the app — a web component on these domains calling the
+backend API is an anticipated use case.
+
+**File to fix:** Deployment environment variables (not code)
+
+**How to fix:**
+Set the `ALLOWED_ORIGINS` environment variable on the production backend:
+```
+ALLOWED_ORIGINS=https://spinr.app,https://spinr-track.app,https://spinr-admin.vercel.app
+```
+Also update `backend/.env.example` to document the expected production value so future
+operators know what to set:
+```
+ALLOWED_ORIGINS=https://spinr.app,https://spinr-track.app,https://spinr-admin.vercel.app
+```
+No code change required — the middleware already reads `ALLOWED_ORIGINS` from env.
+
+**Effort:** 30 minutes
+
+---
+
 ## Checklist
 
 - [ ] R-P1-1 Cancellation fee enforced after driver_arrived; Cancel button disabled
@@ -629,3 +661,4 @@ single-session test using `rideStatusSequence`. See finding [09-6] for details.
 - [ ] R-P1-24 rideStore.ws.test.ts: driver_timeout, ride_cancelled, WS/poll race tests added
 - [ ] R-P1-25 walletStore.test.ts: payWithWallet and addTip idempotency tests added
 - [ ] R-P1-26 E2E ride-booking spec: rate/tip stages added; screen-specific UI assertions; single-session flow
+- [ ] R-P1-27 ALLOWED_ORIGINS env var set to include spinr.app and spinr-track.app in production

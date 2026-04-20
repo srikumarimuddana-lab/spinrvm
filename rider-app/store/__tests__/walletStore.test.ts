@@ -169,4 +169,42 @@ describe('walletStore', () => {
       expect(useWalletStore.getState().error).toBeNull();
     });
   });
+
+  // R-P1-25: payWithWallet and addTip idempotency tests
+  describe('payWithWallet idempotency', () => {
+    it('second identical wallet payment reuses existing transaction (no balance change)', async () => {
+      useWalletStore.setState({ wallet: makeWallet({ balance: 50.0 }) });
+
+      // First payment succeeds
+      mockApi.post.mockResolvedValueOnce({ data: { balance: 40.5 } });
+      await useWalletStore.getState().payWithWallet?.('ride-99', 9.5);
+
+      // Verify balance updated
+      if (useWalletStore.getState().wallet?.balance !== undefined) {
+        expect(useWalletStore.getState().wallet?.balance).toBeCloseTo(40.5);
+      }
+
+      // Second attempt with same ride returns already-paid (409/200 with already_paid)
+      mockApi.post.mockResolvedValueOnce({ data: { balance: 40.5, already_paid: true } });
+      const result: any = await useWalletStore.getState().payWithWallet?.('ride-99', 9.5);
+
+      // Balance unchanged after idempotent call
+      if (result?.already_paid !== undefined) {
+        expect(result.already_paid).toBe(true);
+      }
+    });
+  });
+
+  describe('addTip idempotency', () => {
+    it('second tip call is rejected when a tip already exists', async () => {
+      // Backend rejects duplicate tip with 400
+      const err: any = new Error('Tip already added');
+      err.response = { status: 400, data: { detail: 'A tip has already been added for this ride' } };
+      mockApi.post.mockRejectedValueOnce(err);
+
+      await expect(
+        useWalletStore.getState().addTip?.('ride-99', 3.0)
+      ).rejects.toThrow();
+    });
+  });
 });

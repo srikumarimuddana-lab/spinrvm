@@ -16,15 +16,68 @@ except ImportError:
     from supabase_client import supabase  # type: ignore
 
 try:
-    from .utils.error_handling import DatabaseError, DuplicateRecordError  # type: ignore
+    from .utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
 except ImportError:
-    from utils.error_handling import DatabaseError, DuplicateRecordError  # type: ignore
+    from utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
 
+import time as _time
 from typing import Callable, TypeVar
 
 from loguru import logger
 
 T = TypeVar("T")
+
+
+class _CircuitBreaker:
+    """Half-open circuit breaker for the Supabase connection pool.
+
+    Opens after FAILURE_THRESHOLD failures within WINDOW seconds.
+    Allows one probe after OPEN_DURATION seconds (half-open).
+    Closes on first success in any state.
+    """
+
+    FAILURE_THRESHOLD = 5
+    WINDOW = 30.0
+    OPEN_DURATION = 60.0
+
+    def __init__(self) -> None:
+        self._state = "closed"
+        self._failure_times: list = []
+        self._opened_at: float | None = None
+
+    def should_allow(self) -> bool:
+        now = _time.monotonic()
+        if self._state == "closed":
+            return True
+        if self._state == "open":
+            if self._opened_at is not None and now - self._opened_at >= self.OPEN_DURATION:
+                self._state = "half_open"
+                return True
+            return False
+        return True  # half_open: allow one probe
+
+    def record_success(self) -> None:
+        if self._state != "closed":
+            logger.info(f"[DB] Circuit breaker CLOSED (was {self._state})")
+        self._state = "closed"
+        self._failure_times.clear()
+        self._opened_at = None
+
+    def record_failure(self) -> None:
+        now = _time.monotonic()
+        self._failure_times = [t for t in self._failure_times if now - t < self.WINDOW]
+        self._failure_times.append(now)
+        if self._state == "closed" and len(self._failure_times) >= self.FAILURE_THRESHOLD:
+            self._state = "open"
+            self._opened_at = now
+            logger.error("[DB] Circuit breaker OPENED — raising ServiceUnavailableException on future calls")
+        elif self._state == "half_open":
+            self._state = "open"
+            self._opened_at = now
+            logger.warning("[DB] Circuit breaker probe failed — back to OPEN")
+
+
+_breaker = _CircuitBreaker()
 
 
 async def run_sync(func: Callable[[], T]) -> T:
@@ -35,9 +88,13 @@ async def run_sync(func: Callable[[], T]) -> T:
       - httpx.RemoteProtocolError("Server disconnected") when Supabase's edge
         drops the HTTP/2 connection mid-response (observed on Railway with
         larger result sets — e.g. the 5000-row heatmap query)."""
+    if not _breaker.should_allow():
+        raise ServiceUnavailableException("database")
     loop = asyncio.get_running_loop()
     try:
-        return await loop.run_in_executor(None, func)  # type: ignore
+        result = await loop.run_in_executor(None, func)  # type: ignore
+        _breaker.record_success()
+        return result
     except Exception as exc:
         exc_name = type(exc).__name__
         exc_str = str(exc)
@@ -51,7 +108,18 @@ async def run_sync(func: Callable[[], T]) -> T:
         if is_conn_terminated or is_remote_disconnect or is_timeout:
             logger.warning(f"Supabase transient failure ({exc_name}) — retrying once: {exc}")
             await asyncio.sleep(0.25)
-            return await loop.run_in_executor(None, func)  # type: ignore
+            try:
+                result = await loop.run_in_executor(None, func)  # type: ignore
+                _breaker.record_success()
+                return result
+            except Exception as retry_exc:
+                _breaker.record_failure()
+                retry_str = str(retry_exc)
+                retry_str_lower = retry_str.lower()
+                if "duplicate key" in retry_str_lower or "unique constraint" in retry_str_lower or "23505" in retry_str:
+                    raise DuplicateRecordError(details={"original": retry_str}) from retry_exc
+                raise DatabaseError(details={"original": retry_str}) from retry_exc
+        _breaker.record_failure()
         exc_str_lower = exc_str.lower()
         if "duplicate key" in exc_str_lower or "unique constraint" in exc_str_lower or "23505" in exc_str:
             raise DuplicateRecordError(details={"original": exc_str}) from exc

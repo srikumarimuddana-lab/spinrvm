@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
   Text,
@@ -28,7 +29,7 @@ const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MAP_HEIGHT = 280;
 
-export default function RideOptionsScreen() {
+function RideOptionsScreenContent() {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const router = useRouter();
@@ -544,7 +545,7 @@ export default function RideOptionsScreen() {
                       value={tempDate}
                       mode="date"
                       display="spinner"
-                      minimumDate={new Date()}
+                      minimumDate={new Date(Date.now() + 15 * 60 * 1000)}
                       maximumDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
                       onChange={handleDateChange}
                       textColor="#000000"
@@ -557,7 +558,7 @@ export default function RideOptionsScreen() {
                 value={tempDate}
                 mode="date"
                 display="default"
-                minimumDate={new Date()}
+                minimumDate={new Date(Date.now() + 15 * 60 * 1000)}
                 maximumDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
                 onChange={handleDateChange}
               />
@@ -632,6 +633,14 @@ export default function RideOptionsScreen() {
         onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
       />
     </SafeAreaView>
+  );
+}
+
+export default function RideOptionsScreen() {
+  return (
+    <ErrorBoundary>
+      <RideOptionsScreenContent />
+    </ErrorBoundary>
   );
 }
 

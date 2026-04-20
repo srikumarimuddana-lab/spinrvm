@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput,
   Platform, ActivityIndicator, BackHandler, Share, KeyboardAvoidingView,
@@ -18,7 +19,7 @@ import Analytics from '@shared/analytics';
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
-export default function RideCompletedScreen() {
+function RideCompletedScreenContent() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const { currentRide, currentDriver, fetchRide, rateRide, clearRide } = useRideStore();
@@ -431,6 +432,14 @@ export default function RideCompletedScreen() {
         onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
       />
     </SafeAreaView>
+  );
+}
+
+export default function RideCompletedScreen() {
+  return (
+    <ErrorBoundary>
+      <RideCompletedScreenContent />
+    </ErrorBoundary>
   );
 }
 

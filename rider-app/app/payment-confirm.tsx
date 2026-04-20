@@ -1,4 +1,5 @@
 import React, { useRef, useState, useMemo } from 'react';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
   Text,
@@ -25,7 +26,7 @@ const PAYMENT_METHODS = [
   { id: 'wallet', name: 'Spinr Wallet', icon: 'wallet', last4: '' },
 ];
 
-export default function PaymentConfirmScreen() {
+function PaymentConfirmScreenContent() {
   const router = useRouter();
   const { pickup, dropoff, selectedVehicle, estimates, createRide, isLoading, scheduledTime } = useRideStore();
   const [selectedPayment, setSelectedPayment] = useState('card');
@@ -343,6 +344,14 @@ export default function PaymentConfirmScreen() {
         onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
       />
     </SafeAreaView>
+  );
+}
+
+export default function PaymentConfirmScreen() {
+  return (
+    <ErrorBoundary>
+      <PaymentConfirmScreenContent />
+    </ErrorBoundary>
   );
 }
 

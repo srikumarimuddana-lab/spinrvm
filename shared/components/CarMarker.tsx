@@ -27,7 +27,7 @@ interface CarMarkerProps {
  * `tracksViewChanges` starts `true` so the native view catches the image
  * after it loads, then flips to `false` to avoid per-frame re-snapshots.
  */
-export const CarMarker: React.FC<CarMarkerProps> = ({
+const CarMarkerComponent: React.FC<CarMarkerProps> = ({
     coordinate,
     heading,
     size = 40,
@@ -76,5 +76,18 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
         </Marker>
     );
 };
+
+function _propsAreEqual(prev: CarMarkerProps, next: CarMarkerProps): boolean {
+    return (
+        prev.coordinate.latitude === next.coordinate.latitude &&
+        prev.coordinate.longitude === next.coordinate.longitude &&
+        prev.heading === next.heading &&
+        prev.size === next.size &&
+        prev.zIndex === next.zIndex &&
+        prev.identifier === next.identifier
+    );
+}
+
+export const CarMarker = React.memo(CarMarkerComponent, _propsAreEqual);
 
 export default CarMarker;

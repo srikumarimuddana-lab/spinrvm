@@ -16,6 +16,7 @@ try:
         delete_allowed_domain,
         get_allowance_request_by_id,
         get_corporate_member_by_id,
+        get_corporate_policy,
         get_corporate_wallet_by_company,
         get_member_allowance,
         list_allowed_domains,
@@ -24,10 +25,12 @@ try:
         list_company_members,
         update_allowance_request,
         update_corporate_member,
+        upsert_corporate_policy,
         upsert_member_allowance,
     )
     from ..dependencies.company_guard import (  # type: ignore
         require_company_admin,
+        require_company_member,
     )
     from ..schemas.corporate import (  # type: ignore
         AllowanceCreate,
@@ -36,6 +39,8 @@ try:
         AllowedDomainCreate,
         MemberInvite,
         MemberUpdate,
+        PolicyCreate,
+        PolicyUpdate,
     )
     from ..services.corporate_allowance_service import apply_grant  # type: ignore
     from ..services.corporate_membership_service import invite_member  # type: ignore
@@ -45,6 +50,7 @@ except ImportError:
         delete_allowed_domain,
         get_allowance_request_by_id,
         get_corporate_member_by_id,
+        get_corporate_policy,
         get_corporate_wallet_by_company,
         get_member_allowance,
         list_allowed_domains,
@@ -53,10 +59,12 @@ except ImportError:
         list_company_members,
         update_allowance_request,
         update_corporate_member,
+        upsert_corporate_policy,
         upsert_member_allowance,
     )
     from dependencies.company_guard import (  # type: ignore
         require_company_admin,
+        require_company_member,
     )
     from schemas.corporate import (  # type: ignore
         AllowanceCreate,
@@ -65,6 +73,8 @@ except ImportError:
         AllowedDomainCreate,
         MemberInvite,
         MemberUpdate,
+        PolicyCreate,
+        PolicyUpdate,
     )
     from services.corporate_allowance_service import apply_grant  # type: ignore
     from services.corporate_membership_service import invite_member  # type: ignore
@@ -263,3 +273,73 @@ async def decide_allowance_request(
         reviewed_by=guard["user"]["id"],
         decision_notes=body.note,
     )
+
+
+# ---------- Policy ----------
+
+@router.get("/policy")
+async def get_policy(
+    company_id: str,
+    guard=Depends(require_company_member),
+):
+    """Return the company's active policy row.
+
+    Accessible to any active company member so the rider Work Profile
+    screen can display the policy summary ("Max $80/ride, Mon–Fri 9am–7pm").
+    Returns an empty dict when no policy has been configured yet.
+    """
+    return await get_corporate_policy(company_id) or {}
+
+
+@router.put("/policy")
+async def replace_policy(
+    company_id: str,
+    body: PolicyCreate,
+    guard=Depends(require_company_admin),
+):
+    """Create or fully replace the company's policy.
+
+    Idempotent — safe to call multiple times; always returns the current state.
+    """
+    patch = body.model_dump()
+    patch["allowed_payment_source"] = patch["allowed_payment_source"].value \
+        if hasattr(patch["allowed_payment_source"], "value") \
+        else patch["allowed_payment_source"]
+
+    # Serialise TimeWindow objects to plain dicts for JSON storage.
+    if patch.get("allowed_time_windows") is not None:
+        patch["allowed_time_windows"] = [
+            w.model_dump() if hasattr(w, "model_dump") else w
+            for w in patch["allowed_time_windows"]
+        ]
+
+    return await upsert_corporate_policy(company_id, patch)
+
+
+@router.patch("/policy")
+async def patch_policy(
+    company_id: str,
+    body: PolicyUpdate,
+    guard=Depends(require_company_admin),
+):
+    """Partially update the company's policy.
+
+    Only the fields present in the request body are changed; omitted
+    fields retain their current values.
+    """
+    patch = body.model_dump(exclude_none=True)
+    if not patch:
+        return await get_corporate_policy(company_id) or {}
+
+    if "allowed_payment_source" in patch and hasattr(
+        patch["allowed_payment_source"], "value"
+    ):
+        patch["allowed_payment_source"] = patch["allowed_payment_source"].value
+
+    if "allowed_time_windows" in patch and patch["allowed_time_windows"] is not None:
+        patch["allowed_time_windows"] = [
+            w.model_dump() if hasattr(w, "model_dump") else w
+            for w in patch["allowed_time_windows"]
+        ]
+
+    return await upsert_corporate_policy(company_id, patch)

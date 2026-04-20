@@ -11,7 +11,7 @@ except ImportError:
 import base64
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -92,7 +92,7 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
     logger.info(f"Account deletion (PIPEDA) requested for user {user_id}")
 
     grace_period_end = (datetime.utcnow().replace(microsecond=0) +
-                        __import__('datetime').timedelta(days=30)).isoformat()
+                        timedelta(days=30)).isoformat()
     now = datetime.utcnow().isoformat()
     try:
         await db_supabase.update_one(

@@ -31,9 +31,11 @@ class PolicyResult:
         failed_rules   Rules that would have failed (empty on full pass).
         bypassed_rules Rules skipped due to policy_override (for audit log).
         policy         The raw policy dict that was evaluated.
+        allowance      The member's allowance row fetched during evaluation.
+                       Empty dict when called via the sync evaluate_policy path.
     """
 
-    __slots__ = ("passed", "failed_rules", "bypassed_rules", "policy")
+    __slots__ = ("passed", "failed_rules", "bypassed_rules", "policy", "allowance")
 
     def __init__(
         self,
@@ -41,19 +43,27 @@ class PolicyResult:
         failed_rules: List[str],
         bypassed_rules: List[str],
         policy: Optional[dict] = None,
+        allowance: Optional[dict] = None,
     ) -> None:
         self.passed = passed
         self.failed_rules = failed_rules
         self.bypassed_rules = bypassed_rules
         self.policy = policy or {}
+        self.allowance = allowance or {}
 
     @classmethod
-    def _from_dict(cls, result: dict, policy: Optional[dict] = None) -> "PolicyResult":
+    def _from_dict(
+        cls,
+        result: dict,
+        policy: Optional[dict] = None,
+        allowance: Optional[dict] = None,
+    ) -> "PolicyResult":
         return cls(
             passed=result.get("pass", True),
             failed_rules=result.get("failed_rules", []),
             bypassed_rules=result.get("bypassed_rules", []),
             policy=policy,
+            allowance=allowance,
         )
 
     def to_dict(self) -> dict:
@@ -127,7 +137,7 @@ async def evaluate_policy_for_ride(
     }
 
     raw = evaluate_policy(policy, ride_context)
-    return PolicyResult._from_dict(raw, policy=policy)
+    return PolicyResult._from_dict(raw, policy=policy, allowance=allowance)
 
 
 # Day-of-week abbreviations → Python weekday index (Mon=0 … Sun=6)

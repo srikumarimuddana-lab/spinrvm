@@ -121,7 +121,7 @@ Legend: `X` covered, `~` partial, `—` not covered.
 | S6 | PII (phone, card tail) leaks in logs or API responses | X | — |
 | S7 | Rider views another rider's ride by guessing ride_id | X | — |
 | S8 | Driver views another driver's earnings | ✅ | P1 — scoped by `current_user.id`, pinned in `test_p1_security.py` |
-| S9 | CORS / CSRF on web-export endpoints | — | P1 |
+| S9 | CORS / CSRF on web-export endpoints | ✅ | P1 — allowlist + wildcard-prod guard; pinned in `test_p1_cors.py` |
 
 ---
 
@@ -164,7 +164,7 @@ Implementation work remaining: P0-4 surge-lock, P0-5 Stripe card charge.
 9. ✅ **Multi-stop E2E** — R11 — closed: `backend/tests/test_p1_multi_stop.py` pins add/remove stop mid-trip (WS driver notification, auth guards, position insertion, bad-index rejection); `rider-app/store/__tests__/rideStore.stops.test.ts` pins pre-ride addStop/removeStop/updateStop; fare-recalculation on mid-trip stop is xfail(strict=False) — not yet implemented
 10. ✅ **Driver offline mid-trip** — E5 — closed: `PUT /drivers/{id}/status` now rejects with 409 when driver has an active ride (driver_accepted/driver_arrived/in_progress); pinned by `backend/tests/test_p1_driver_offline.py` (7 test cases)
 11. ✅ **Token refresh mid-trip** — E11 — closed: refresh mechanism already correct (`shared/api/client.ts` 401→refresh→retry with dedup); `shared/api/__tests__/client.refresh.test.ts` pins 5 client-side scenarios; `backend/tests/test_p1_token_refresh.py` pins 5 backend endpoint scenarios (rotation, invalid token, admin guard, deleted user, replaces reference)
-12. **CORS on web exports** — S9
+12. ✅ **CORS on web exports** — S9 — closed: CORS already correct (explicit allowlist + wildcard-in-production guard + credentials disabled with wildcard); `backend/tests/test_p1_cors.py` pins 8 scenarios: wildcard rejects in production, disables credentials; unlisted origin gets no header; allowed origin reflected with credentials; always-allowed origins present
 
 ### P2 — Completeness
 13. Chat E2E (rider + driver) — R7, D11

@@ -657,6 +657,111 @@ export const patchCompanyPolicy = (
         body: JSON.stringify(body),
     });
 
+/* ── Company allowed domains (Plan 7) ── */
+export interface AllowedDomainRow {
+    company_id: string;
+    domain: string;
+}
+
+export const listAllowedDomains = (companyId: string) =>
+    request<AllowedDomainRow[]>(`/company/${companyId}/allowed-domains`);
+
+export const addAllowedDomain = (companyId: string, domain: string) =>
+    request<AllowedDomainRow>(`/company/${companyId}/allowed-domains`, {
+        method: "POST",
+        body: JSON.stringify({ domain }),
+    });
+
+export const removeAllowedDomain = (companyId: string, domain: string) =>
+    request<{ status: string }>(
+        `/company/${companyId}/allowed-domains/${encodeURIComponent(domain)}`,
+        { method: "DELETE" }
+    );
+
+/* ── Company billing (Plan 6) ── */
+export interface BillingMemberBreakdown {
+    member_id: string;
+    ride_count: number;
+    allowance_total: number;
+    master_total: number;
+    total: number;
+}
+
+export interface BillingSummary {
+    month: string;
+    wallet_balance: number;
+    wallet_currency: string;
+    ride_count: number;
+    allowance_total: number;
+    master_total: number;
+    total: number;
+    avg_fare: number;
+    by_member: BillingMemberBreakdown[];
+}
+
+export interface BillingLineItem {
+    ride_id: string;
+    member_id: string;
+    source_type: string;
+    allowance_debit_amount: number;
+    master_fallback_amount: number;
+    policy_check_result?: string;
+    created_at: string;
+}
+
+export interface BillingStatement {
+    month: string;
+    from: string;
+    to: string;
+    line_items: BillingLineItem[];
+    summary: {
+        ride_count: number;
+        allowance_total: number;
+        master_total: number;
+        total: number;
+        avg_fare: number;
+        by_member: BillingMemberBreakdown[];
+    };
+}
+
+export interface BillingTransaction {
+    id: string;
+    type: string;
+    amount: number;
+    balance_after?: number;
+    notes?: string | null;
+    ride_id?: string | null;
+    member_id?: string | null;
+    stripe_payment_intent_id?: string | null;
+    created_at: string;
+}
+
+export interface BillingTransactionsPage {
+    wallet_id: string;
+    balance: number;
+    currency: string;
+    transactions: BillingTransaction[];
+}
+
+export const getCompanyBillingSummary = (companyId: string, month?: string) => {
+    const qs = month ? `?month=${encodeURIComponent(month)}` : "";
+    return request<BillingSummary>(`/company/${companyId}/billing/summary${qs}`);
+};
+
+export const getCompanyBillingStatement = (companyId: string, month: string) =>
+    request<BillingStatement>(
+        `/company/${companyId}/billing/statements/${encodeURIComponent(month)}`
+    );
+
+export const getCompanyBillingTransactions = (
+    companyId: string,
+    skip = 0,
+    limit = 50
+) =>
+    request<BillingTransactionsPage>(
+        `/company/${companyId}/billing/transactions?skip=${skip}&limit=${limit}`
+    );
+
 /* ── Cloud Messaging (merged with Notifications) ── */
 export const getCloudMessages = (status?: string, audience?: string) => {
     const params = new URLSearchParams();

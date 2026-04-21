@@ -5,7 +5,7 @@ Riders can save a completed ride as a favorite route for one-tap rebooking.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -80,7 +80,7 @@ async def save_favorite_route(req: SaveFavoriteRequest, current_user: dict = Dep
         "dropoff_lng": req.dropoff_lng,
         "vehicle_type_id": req.vehicle_type_id,
         "use_count": 0,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.insert_one("favorite_routes", fav_data)
     return fav_data
@@ -96,7 +96,7 @@ async def use_favorite_route(favorite_id: str, current_user: dict = Depends(get_
     await db.update_one(
         "favorite_routes",
         {"id": favorite_id},
-        {"$set": {"use_count": (fav.get("use_count", 0) or 0) + 1, "last_used_at": datetime.utcnow().isoformat()}},
+        {"$set": {"use_count": (fav.get("use_count", 0) or 0) + 1, "last_used_at": datetime.now(timezone.utc).isoformat()}},
     )
     return fav
 

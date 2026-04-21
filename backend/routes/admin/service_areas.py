@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from fastapi import APIRouter
@@ -68,7 +68,7 @@ async def admin_create_service_area(area: Dict[str, Any]):
         "min_driver_rating": area.get("min_driver_rating", 4.0),
         # Demand heatmap — when true, drivers in this area see ride demand overlay
         "show_demand_heatmap": area.get("show_demand_heatmap", False),
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("service_areas", doc)
     # PERF-001: Invalidate fare cache
@@ -147,8 +147,8 @@ async def admin_update_surge_pricing(area_id: str, surge: Dict[str, Any]):
         "ratio": 0,
         "source": "manual",
         "is_active": surge.get("is_active", False),
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     existing = (lambda _r: _r[0] if _r else None)(
@@ -201,8 +201,8 @@ async def admin_create_area_fee(area_id: str, fee: Dict[str, Any]):
         "description": fee.get("description", ""),
         "conditions": fee.get("conditions", {}),
         "is_active": fee.get("is_active", True),
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("area_fees", doc)
     return doc
@@ -216,7 +216,7 @@ async def admin_update_area_fee(area_id: str, fee_id: str, fee: Dict[str, Any]):
     if "amount" in updates:
         updates["amount"] = float(updates["amount"])
     if updates:
-        updates["updated_at"] = datetime.utcnow().isoformat()
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("area_fees", {"id": fee_id}, updates)
     return {"message": "Area fee updated"}
 

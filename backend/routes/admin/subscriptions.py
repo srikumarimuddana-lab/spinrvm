@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Query
@@ -68,7 +68,7 @@ async def create_subscription_plan(req: SubscriptionPlanCreate):
         "service_areas": req.service_areas,
         "is_active": req.is_active,
         "subscriber_count": 0,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("subscription_plans", plan)
     return plan
@@ -79,7 +79,7 @@ async def update_subscription_plan(plan_id: str, req: SubscriptionPlanUpdate):
     """Update a subscription plan."""
     updates = {k: v for k, v in req.dict().items() if v is not None}
     if updates:
-        updates["updated_at"] = datetime.utcnow().isoformat()
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("subscription_plans", {"id": plan_id}, updates)
     return {"success": True}
 
@@ -117,7 +117,7 @@ async def admin_get_subscription_stats(
 
     area_filter = set(service_area_ids.split(",")) if service_area_ids else None
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if start_date:
         range_start = datetime.fromisoformat(start_date.replace("Z", "").replace("+00:00", ""))
     else:

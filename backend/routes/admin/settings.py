@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter
@@ -63,7 +63,7 @@ async def admin_update_settings(settings: SettingsUpdateRequest):
     payload = {
         "id": "app_settings",
         **update_fields,
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     if existing:
@@ -116,7 +116,7 @@ async def admin_update_heatmap_settings(data: Dict[str, Any]):
     payload = {
         "id": _HEATMAP_SETTINGS_ID,
         **{k: v for k, v in data.items() if k in _DEFAULT_HEATMAP_SETTINGS},
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     existing = (lambda _r: _r[0] if _r else None)(

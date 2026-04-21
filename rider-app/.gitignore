@@ -1,2 +1,5 @@
 bugreport-*.zip
 play-service-account.json
+
+# Jest coverage output
+coverage/

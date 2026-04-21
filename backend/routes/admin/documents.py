@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -34,7 +34,7 @@ async def admin_create_document_requirement(requirement: Dict[str, Any]):
         "document_type": requirement.get("document_type"),
         "is_required": requirement.get("is_required", True),
         "applicable_to": requirement.get("applicable_to", "driver"),  # driver, rider, vehicle
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("document_requirements", doc)
     return {"requirement_id": str(row.get("id") if row and isinstance(row, dict) else "")}
@@ -56,7 +56,7 @@ async def admin_update_document_requirement(requirement_id: str, requirement: Di
         updates["applicable_to"] = requirement.get("applicable_to")
 
     if updates:
-        updates["updated_at"] = datetime.utcnow().isoformat()
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("document_requirements", {"id": requirement_id}, updates)
     return {"message": "Document requirement updated"}
 
@@ -150,7 +150,7 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
     # which is why this endpoint has been silently failing in production.
     updates: Dict[str, Any] = {
         "status": status,
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     if rejection_reason:
         updates["rejection_reason"] = rejection_reason
@@ -185,7 +185,7 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
                     {"id": existing.get("driver_id")},
                     {
                         legacy_field: effective_expiry_iso,
-                        "updated_at": datetime.utcnow().isoformat(),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
                     },
                 )
             except Exception as e:

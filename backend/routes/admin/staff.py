@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -133,7 +133,7 @@ async def create_staff(req: StaffCreateRequest, admin: dict = Depends(get_admin_
         "role": req.role,
         "modules": modules,
         "is_active": True,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "last_login": None,
     }
 
@@ -184,7 +184,7 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest):
         updates["modules"] = [m for m in req.modules if m in AVAILABLE_MODULES]
 
     if updates:
-        updates["updated_at"] = datetime.utcnow().isoformat()
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("admin_staff", {"id": staff_id}, updates)
 
     return {"success": True}

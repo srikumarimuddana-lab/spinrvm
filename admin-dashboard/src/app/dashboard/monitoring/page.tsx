@@ -273,8 +273,12 @@ export default function MonitoringPage() {
     mapHandlesRef.current?.fitArea(areaId);
   }, []);
 
-  // Filter active rides list by service area
+  // Filter active rides list by service area.
+  // The WS tick writes into ridesMapRef.current without re-rendering; we
+  // recompute visibleRides whenever the `counts` state bumps, which is the
+  // signal the map has new data. Reading ref.current here is intentional.
   const visibleRides = useMemo(() => {
+    // eslint-disable-next-line react-hooks/refs
     const rides = Array.from(ridesMapRef.current.values());
     return rides.filter((r) => {
       if (filters.serviceAreaId) {

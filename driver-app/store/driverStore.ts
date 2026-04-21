@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { recordNonFatal } from '../utils/crashlytics';
 
 const DRIVER_RIDE_KEY = '@spinr:driver_active_ride';
 const DRIVER_TERMINAL_STATES = new Set<string>(['idle', 'trip_completed']);
@@ -404,6 +405,9 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             const alreadyTakenDetail = /not assigned|already|no longer|cancelled|canceled/i.test(detail);
             const alreadyTakenStatus = status === 404 || (status === 400 && alreadyTakenDetail);
 
+            if (!alreadyTakenStatus) {
+                recordNonFatal(err, { store: 'driverStore', action: 'acceptRide' });
+            }
             if (alreadyTakenStatus) {
                 set({
                     rideState: 'idle',
@@ -501,6 +505,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             set({ rideState: 'trip_completed', completedRide: res.data, activeRide: null });
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
         } catch (err: any) {
+            recordNonFatal(err, { store: 'driverStore', action: 'completeRide' });
             set({ error: err.response?.data?.detail || 'Failed to complete ride' });
         } finally {
             set({ isLoading: false });
@@ -514,6 +519,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             set({ rideState: 'idle', activeRide: null, incomingRide: null });
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
         } catch (err: any) {
+            recordNonFatal(err, { store: 'driverStore', action: 'cancelRide' });
             set({ error: err.response?.data?.detail || 'Failed to cancel ride' });
         } finally {
             set({ isLoading: false });

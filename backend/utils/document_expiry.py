@@ -8,7 +8,7 @@ their active WebSocket session.
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 try:
     from ..db import db
@@ -27,7 +27,7 @@ EXPIRY_WARNING_DAYS = 7
 
 async def check_expiring_documents():
     """Find drivers with documents expiring within EXPIRY_WARNING_DAYS and notify them."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     warning_cutoff = now + timedelta(days=EXPIRY_WARNING_DAYS)
 
     try:

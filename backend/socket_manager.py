@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict
 
 from fastapi import WebSocket
@@ -108,7 +108,7 @@ class ConnectionManager:
                 logger.warning(f"Failed to send to admin {key}: {e}")
 
     def update_driver_location(self, driver_id: str, lat: float, lng: float):
-        self.driver_locations[driver_id] = {"lat": lat, "lng": lng, "updated_at": datetime.utcnow().isoformat()}
+        self.driver_locations[driver_id] = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc).isoformat()}
 
     def get_driver_location(self, driver_id: str):
         return self.driver_locations.get(driver_id)

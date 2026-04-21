@@ -4,7 +4,7 @@ disputes.py – Payment dispute/refund request endpoints for Spinr.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
@@ -74,8 +74,8 @@ async def create_dispute(
         "requested_amount": req.requested_amount or ride.get("total_fare", 0),
         "original_fare": ride.get("total_fare", 0),
         "status": "open",
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     await db_supabase.insert_one("disputes", dispute)
@@ -157,8 +157,8 @@ async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
         "resolution": req.resolution,
         "refund_amount": req.refund_amount or 0,
         "admin_note": req.admin_note or "",
-        "resolved_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "resolved_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     await db_supabase.update_one("disputes", {"id": dispute_id}, update_data)
@@ -211,7 +211,7 @@ async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
         await db.update_one(
             "disputes",
             {"id": dispute_id},
-            {"$set": {"refund_result": refund_result, "updated_at": datetime.utcnow().isoformat()}},
+            {"$set": {"refund_result": refund_result, "updated_at": datetime.now(timezone.utc).isoformat()}},
         )
 
     return {

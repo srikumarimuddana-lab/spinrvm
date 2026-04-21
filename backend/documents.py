@@ -1,6 +1,6 @@
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -204,7 +204,7 @@ async def _supersede_and_flag_pending_review(
         if side is not None:
             query["side"] = side
         await db_supabase.update_one(
-            "driver_documents", query, {"status": "superseded", "updated_at": datetime.utcnow()}
+            "driver_documents", query, {"status": "superseded", "updated_at": datetime.now(timezone.utc)}
         )
     except Exception as e:
         logger.warning(f"Could not supersede prior docs for driver {driver_id}: {e}")
@@ -216,10 +216,10 @@ async def _supersede_and_flag_pending_review(
             await db_supabase.update_one(
                 "drivers",
                 {"id": driver_id},
-                {"status": "needs_review", "is_online": False, "is_available": False, "updated_at": datetime.utcnow()},
+                {"status": "needs_review", "is_online": False, "is_available": False, "updated_at": datetime.now(timezone.utc)},
             )
         else:
-            await db_supabase.update_one("drivers", {"id": driver_id}, {"updated_at": datetime.utcnow()})
+            await db_supabase.update_one("drivers", {"id": driver_id}, {"updated_at": datetime.now(timezone.utc)})
     except Exception as e:
         logger.warning(f"Could not flag driver {driver_id} for review: {e}")
 
@@ -318,7 +318,7 @@ async def get_document_requirements(
                         "is_mandatory": doc.get("required", True),
                         "requires_back_side": doc.get("requires_back_side", False),
                         "has_expiry": doc.get("has_expiry", False),
-                        "created_at": area.get("created_at", datetime.utcnow().isoformat()),
+                        "created_at": area.get("created_at", datetime.now(timezone.utc).isoformat()),
                     }
                 )
             return result
@@ -372,7 +372,7 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
             "total_rides": 0,
             "lat": 0,
             "lng": 0,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.insert_one("drivers", driver)
         await db.update_one(
@@ -467,8 +467,8 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
         "document_url": doc_data.document_url,
         "side": doc_data.side,
         "status": "pending",
-        "uploaded_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "uploaded_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
     }
 
     try:
@@ -560,8 +560,8 @@ async def upload_driver_document(
         "document_url": url,
         "side": side,
         "status": "pending",
-        "uploaded_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "uploaded_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
     }
 
     await db_supabase.insert_one("driver_documents", doc_record)
@@ -592,7 +592,7 @@ async def admin_create_requirement(req: CreateRequirementRequest):
         "description": req.description,
         "is_mandatory": req.is_mandatory,
         "requires_back_side": req.requires_back_side,
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
     }
     await db_supabase.insert_one("document_requirements", new_req)
     return new_req
@@ -671,7 +671,7 @@ async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
     # Only write columns that exist on the driver_documents Supabase table.
     # `expiry_date` is NOT a column — we propagate it to the legacy
     # drivers.*_expiry_date column below instead.
-    update_data: Dict[str, Any] = {"status": req.status, "updated_at": datetime.utcnow()}
+    update_data: Dict[str, Any] = {"status": req.status, "updated_at": datetime.now(timezone.utc)}
     if req.rejection_reason is not None:
         update_data["rejection_reason"] = req.rejection_reason
 
@@ -724,7 +724,7 @@ async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
                 await db_supabase.update_one(
                     "drivers",
                     {"id": existing.get("driver_id")},
-                    {legacy_field: new_val, "updated_at": datetime.utcnow()},
+                    {legacy_field: new_val, "updated_at": datetime.now(timezone.utc)},
                 )
             except Exception as e:
                 logger.warning(
@@ -794,7 +794,7 @@ async def upload_file(
         storage_key = f"{uuid.uuid4()}{ext}"
         # Generate a safe display name from doc type and timestamp — never
         # echo the original filename back to the caller (12-8).
-        upload_ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        upload_ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         safe_name = f"document_{upload_ts}{ext}"
 
         try:

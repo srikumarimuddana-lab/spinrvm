@@ -7,7 +7,7 @@ to ensure data integrity and prevent security vulnerabilities.
 
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional, Tuple, Union
 
@@ -414,7 +414,7 @@ def validate_datetime(
             raise HTTPException(status_code=400, detail="Invalid datetime format. Use ISO 8601 format.") from None
         return False, None
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     if not allow_future and parsed_dt > now:
         if raise_exception:

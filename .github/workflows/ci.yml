@@ -497,6 +497,43 @@ jobs:
         with:
           sarif_file: 'trivy-image.sarif'
 
+      # INF-006: Sign the image with cosign (keyless, OIDC-based Sigstore).
+      # Only runs on main so feature-branch builds don't require GHCR push
+      # permissions. The signature is written to the registry alongside the
+      # image and can be verified with:
+      #   cosign verify ghcr.io/${{ github.repository }}/spinr-backend:latest \
+      #     --certificate-identity-regexp 'github.com/srikumarimuddana-lab/spinrvm' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      - name: Install cosign
+        if: github.ref == 'refs/heads/main'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Log in to GHCR
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image to GHCR
+        if: github.ref == 'refs/heads/main'
+        run: |
+          docker tag spinr-backend:ci-${{ github.sha }} \
+            ghcr.io/${{ github.repository }}/spinr-backend:${{ github.sha }}
+          docker tag spinr-backend:ci-${{ github.sha }} \
+            ghcr.io/${{ github.repository }}/spinr-backend:latest
+          docker push ghcr.io/${{ github.repository }}/spinr-backend:${{ github.sha }}
+          docker push ghcr.io/${{ github.repository }}/spinr-backend:latest
+
+      - name: Sign image with cosign (keyless OIDC)
+        if: github.ref == 'refs/heads/main'
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign --yes \
+            ghcr.io/${{ github.repository }}/spinr-backend:${{ github.sha }}
+
   # Post-deploy smoke test
   smoke-test:
     name: Post-deploy smoke test

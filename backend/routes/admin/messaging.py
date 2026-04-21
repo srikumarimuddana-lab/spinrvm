@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -93,8 +93,8 @@ async def admin_send_cloud_message(payload: Dict[str, Any]):
         "particular_ids": particular_ids,
         "status": status,
         "scheduled_at": scheduled_at,
-        "sent_at": datetime.utcnow().isoformat() if not is_scheduled else None,
-        "created_at": datetime.utcnow().isoformat(),
+        "sent_at": datetime.now(timezone.utc).isoformat() if not is_scheduled else None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "total_recipients": total_recipients,
         "successful": successful,
         "failed_count": failed_count,

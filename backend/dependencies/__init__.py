@@ -20,9 +20,11 @@ from loguru import logger
 try:
     from . import db_supabase
     from .core.config import settings
+    from .utils.redis_client import redis_get
 except ImportError:
     import db_supabase
     from core.config import settings
+    from utils.redis_client import redis_get
 
 db = db_supabase  # legacy alias
 
@@ -164,7 +166,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                         "id": uid,
                         "phone": phone or "",
                         "role": "rider",  # Always default — never trust token claims
-                        "created_at": datetime.utcnow(),
+                        "created_at": datetime.now(timezone.utc),
                         "profile_complete": False,
                     }
                     await db_supabase.create_user(new_user)
@@ -221,8 +223,17 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         logger.warning(f"Could not look up user from DB: {e}")
 
     if user:
-        # Enforce single-device login: check if the session_id matches the one in DB
         token_session = payload.get("session_id")
+        # Fast-path Redis check: login writes session:{user_id} → session_id with
+        # the access-token TTL. A mismatch here means the user logged in from
+        # another device and this token is stale — reject immediately without
+        # the Postgres read latency. Falls back to the DB comparison when the
+        # key has expired or Redis is unavailable (redis_get returns None).
+        if token_session:
+            redis_session = await redis_get(f"session:{user['id']}")
+            if redis_session is not None and redis_session != token_session:
+                raise HTTPException(status_code=401, detail="ERR_SESSION_EXPIRED")
+        # Enforce single-device login: check if the session_id matches the one in DB
         db_session = user.get("current_session_id")
         if db_session and token_session != db_session:
             raise HTTPException(status_code=401, detail="ERR_SESSION_EXPIRED")
@@ -247,7 +258,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             "id": payload["user_id"],
             "phone": payload.get("phone", ""),
             "role": "rider",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "profile_complete": False,
         }
         try:

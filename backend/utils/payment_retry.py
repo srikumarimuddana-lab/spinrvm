@@ -7,7 +7,7 @@ Also resolves driver payouts stuck as 'pending' after transfer failures.
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 try:
     from ..db import db
@@ -28,7 +28,7 @@ async def update_payout_status(payout_id: str, status: str) -> None:
     await db.update_one(
         "payouts",
         {"id": payout_id},
-        {"$set": {"status": status, "updated_at": datetime.utcnow().isoformat()}},
+        {"$set": {"status": status, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
 
 
@@ -101,7 +101,7 @@ async def retry_failed_payments():
         if isinstance(created, str):
             try:
                 created_dt = datetime.fromisoformat(created.replace("Z", "+00:00").replace("+00:00", ""))
-                if (datetime.utcnow() - created_dt).total_seconds() > 86400:
+                if (datetime.now(timezone.utc) - created_dt).total_seconds() > 86400:
                     continue
             except (ValueError, TypeError):
                 pass
@@ -125,7 +125,7 @@ async def retry_failed_payments():
                         "$set": {
                             "payment_status": "paid",
                             "payment_retry_count": retry_count + 1,
-                            "updated_at": datetime.utcnow().isoformat(),
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
                         }
                     },
                 )
@@ -142,7 +142,7 @@ async def retry_failed_payments():
                         "$set": {
                             "payment_status": "processing",
                             "payment_retry_count": attempt,
-                            "updated_at": datetime.utcnow().isoformat(),
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
                         }
                     },
                 )
@@ -182,7 +182,7 @@ async def retry_failed_payments():
                 {
                     "$set": {
                         "payment_retry_count": retry_count + 1,
-                        "updated_at": datetime.utcnow().isoformat(),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
                     }
                 },
             )

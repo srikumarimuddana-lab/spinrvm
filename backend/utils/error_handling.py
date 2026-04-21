@@ -4,7 +4,7 @@ Provides structured error handling, custom exceptions, and error middleware.
 """
 
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Optional
 
@@ -84,7 +84,7 @@ class SpinrException(Exception):
         self.status_code = status_code
         self.details = details or {}
         self.should_log = should_log
-        self.timestamp = datetime.utcnow().isoformat()
+        self.timestamp = datetime.now(timezone.utc).isoformat()
 
         super().__init__(self.message)
 
@@ -464,7 +464,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
                 "message": "Validation error",
                 "request_id": request_id,
                 "details": {"errors": errors},
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         },
         headers={
@@ -494,7 +494,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
                 "code": exc.status_code,
                 "message": exc.detail,
                 "request_id": request_id,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         },
         headers={
@@ -599,7 +599,7 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
         "code": ErrorCode.INTERNAL_ERROR.value,
         "message": "An unexpected error occurred",
         "request_id": request_id,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     if _is_dev:
         error_body["exception_type"] = type(exc).__name__
@@ -637,7 +637,7 @@ def error_response(
             "code": error_code.value,
             "message": message,
             "details": details,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         },
     }
 

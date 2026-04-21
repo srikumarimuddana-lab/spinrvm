@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -63,8 +63,8 @@ async def admin_create_dispute(dispute: Dict[str, Any]):
         "description": dispute.get("description", ""),
         "status": "pending",
         "refund_amount": dispute.get("refund_amount", 0),
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("disputes", doc)
     return {"success": True, "dispute": doc}
@@ -89,7 +89,7 @@ async def admin_update_dispute(dispute_id: str, dispute: Dict[str, Any]):
     allowed = ["reason", "description", "status", "refund_amount", "user_type"]
     updates = {k: v for k, v in dispute.items() if k in allowed and v is not None}
     if updates:
-        updates["updated_at"] = datetime.utcnow().isoformat()
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("disputes", {"id": dispute_id}, updates)
     return {"message": "Dispute updated"}
 
@@ -100,7 +100,7 @@ async def admin_resolve_dispute(dispute_id: str, resolution: Dict[str, Any]):
     resolution_data = {
         "resolution_status": resolution.get("status"),  # resolved, rejected, pending
         "resolution_notes": resolution.get("notes", ""),
-        "resolved_at": datetime.utcnow().isoformat(),
+        "resolved_at": datetime.now(timezone.utc).isoformat(),
         "resolved_by": resolution.get("resolved_by", "admin"),
     }
 
@@ -138,8 +138,8 @@ async def admin_create_ticket(ticket: Dict[str, Any]):
         "user_name": ticket.get("user_name", "Admin"),
         "user_email": ticket.get("user_email", ""),
         "status": "open",
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("support_tickets", doc)
     return {"success": True, "ticket": doc}
@@ -168,7 +168,7 @@ async def admin_reply_to_ticket(ticket_id: str, reply: Dict[str, Any]):
         "sender_type": "admin",
         "sender_id": "admin-001",  # Could be dynamic based on current admin
         "message": reply.get("message", ""),
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
     # Insert message
@@ -179,7 +179,7 @@ async def admin_reply_to_ticket(ticket_id: str, reply: Dict[str, Any]):
         await db_supabase.update_one(
             "support_tickets",
             {"id": ticket_id},
-            {"status": reply.get("status"), "updated_at": datetime.utcnow().isoformat()},
+            {"status": reply.get("status"), "updated_at": datetime.now(timezone.utc).isoformat()},
         )
 
     return {"message": "Reply sent"}
@@ -189,7 +189,7 @@ async def admin_reply_to_ticket(ticket_id: str, reply: Dict[str, Any]):
 async def admin_close_ticket(ticket_id: str):
     """Close a support ticket."""
     await db_supabase.update_one(
-        "support_tickets", {"id": ticket_id}, {"status": "closed", "closed_at": datetime.utcnow().isoformat()}
+        "support_tickets", {"id": ticket_id}, {"status": "closed", "closed_at": datetime.now(timezone.utc).isoformat()}
     )
     return {"message": "Ticket closed"}
 
@@ -200,7 +200,7 @@ async def admin_update_ticket(ticket_id: str, ticket: Dict[str, Any]):
     allowed = ["subject", "category", "priority", "status"]
     updates = {k: v for k, v in ticket.items() if k in allowed and v is not None}
     if updates:
-        updates["updated_at"] = datetime.utcnow().isoformat()
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("support_tickets", {"id": ticket_id}, updates)
     return {"message": "Ticket updated"}
 
@@ -311,7 +311,7 @@ async def admin_resolve_complaint(complaint_id: str, req: ComplaintResolveReques
             "status": req.status,
             "resolution": req.resolution,
             "resolved_by": "admin",
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
     if not result:

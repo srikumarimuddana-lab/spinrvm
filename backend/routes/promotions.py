@@ -4,7 +4,7 @@ promotions.py – Promo codes & referral system for Spinr.
 
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
@@ -73,7 +73,7 @@ async def validate_promo(
 ):
     """Validate promo code against all rules: usage, expiry, area, user targeting, fare minimum."""
     code = req.code.strip().upper()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     promo = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("promotions", {"code": code}, limit=1))
 
     if not promo:
@@ -231,7 +231,7 @@ async def apply_promo(
         "promo_id": validation["promo_id"],
         "code": validation["code"],
         "discount_applied": validation["discount_amount"],
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("promo_applications", application)
 
@@ -257,7 +257,7 @@ async def get_available_promos(
     current_user: dict = Depends(get_current_user),
 ):
     """Get all promos available to this user, sorted by best discount first."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     promos = await db_supabase.get_rows("promotions", {"is_active": True}, limit=100)
 
     # Pre-fetch user data for targeting checks
@@ -409,8 +409,8 @@ async def admin_create_promo_code(req: CreatePromoCodeRequest):
         "expiry_date": req.expiry_date,
         "is_active": req.is_active,
         "description": req.description or "",
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     await db_supabase.insert_one("promotions", promo)
@@ -420,7 +420,7 @@ async def admin_create_promo_code(req: CreatePromoCodeRequest):
 @admin_router.put("/{promo_id}")
 async def admin_update_promo_code(promo_id: str, req: UpdatePromoCodeRequest):
     """Update an existing promo code."""
-    update_data: Dict[str, Any] = {"updated_at": datetime.utcnow().isoformat()}
+    update_data: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc).isoformat()}
     for field in [
         "discount_type",
         "discount_value",

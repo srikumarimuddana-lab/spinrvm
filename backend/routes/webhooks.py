@@ -11,7 +11,7 @@ except ImportError:
     from features import send_push_notification
     from settings_loader import get_app_settings
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 # IMPORTANT: This router does NOT have a /api/ prefix in the original server.py
@@ -122,7 +122,7 @@ async def stripe_webhook(request: Request):
                 {
                     "payment_status": "paid",
                     "payment_intent_id": payment_intent_id,
-                    "paid_at": datetime.utcnow(),
+                    "paid_at": datetime.now(timezone.utc),
                 },
             )
             logger.info(f"Payment confirmed via webhook for ride {ride_id}")

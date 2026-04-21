@@ -10,7 +10,7 @@ Flow:
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 try:
     from ..db import db
@@ -42,7 +42,7 @@ async def _dispatch_scheduled_ride(ride: dict):
             {
                 "$set": {
                     "scheduled_dispatched": True,
-                    "updated_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
             },
         )
@@ -101,7 +101,7 @@ async def _send_reminder(ride: dict):
 
 async def check_scheduled_rides():
     """Check for scheduled rides that need dispatching or reminders."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     ten_min_from_now = now + timedelta(minutes=10)
 
     try:

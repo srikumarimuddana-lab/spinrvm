@@ -11,7 +11,7 @@ Tiers give bonus multipliers and can be redeemed for wallet credits.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -61,8 +61,8 @@ async def _get_or_create_account(user_id: str) -> dict:
         "points": 0,
         "lifetime_points": 0,
         "tier": "bronze",
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.insert_one("loyalty_accounts", account)
     return account
@@ -149,7 +149,7 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
                 "points": new_balance,
                 "lifetime_points": new_lifetime,
                 "tier": new_tier,
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         },
     )
@@ -163,7 +163,7 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
             "type": "ride_earned",
             "reference_id": ride_id,
             "description": f"Earned {base_points} pts + {bonus_points} bonus ({tier} {multiplier}x)",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
     )
 
@@ -199,7 +199,7 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
     await db.update_one(
         "loyalty_accounts",
         {"id": account["id"]},
-        {"$set": {"points": new_balance, "updated_at": datetime.utcnow().isoformat()}},
+        {"$set": {"points": new_balance, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
 
     # Credit to wallet
@@ -212,7 +212,7 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
         await db.update_one(
             "wallets",
             {"id": wallet["id"]},
-            {"$set": {"balance": float(new_wb), "updated_at": datetime.utcnow().isoformat()}},
+            {"$set": {"balance": float(new_wb), "updated_at": datetime.now(timezone.utc).isoformat()}},
         )
         await _record_transaction(
             wallet_id=wallet["id"],
@@ -233,7 +233,7 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
             "points": -req.points,
             "type": "redeemed",
             "description": f"Redeemed {req.points} pts for ${credit_amount:.2f} wallet credit",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )
 

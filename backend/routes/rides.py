@@ -1,7 +1,7 @@
 import asyncio
 import secrets
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from datetime import timezone as _tz
 from decimal import ROUND_HALF_UP, Decimal
 from typing import List, Optional
@@ -287,8 +287,8 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             {
                 "driver_id": selected_driver["id"],
                 "status": "driver_assigned",
-                "driver_notified_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "driver_notified_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
             },
         )
 
@@ -450,7 +450,7 @@ async def _offer_timeout_handler(
                     "status": "searching",
                     "driver_id": None,
                     "driver_notified_at": None,
-                    "updated_at": datetime.utcnow(),
+                    "updated_at": datetime.now(timezone.utc),
                 }
             },
         )
@@ -607,9 +607,9 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 r_id,
                 {
                     "status": "cancelled",
-                    "cancelled_at": datetime.utcnow(),
+                    "cancelled_at": datetime.now(timezone.utc),
                     "cancellation_reason": "No nearby drivers found. Please try again.",
-                    "updated_at": datetime.utcnow(),
+                    "updated_at": datetime.now(timezone.utc),
                 },
             )
             await manager.send_personal_message(
@@ -853,7 +853,7 @@ async def create_ride(
         payment_method_id=body.payment_method_id,
         status="searching",
         pickup_otp=hash_otp(pickup_otp_plain),
-        ride_requested_at=datetime.utcnow(),
+        ride_requested_at=datetime.now(timezone.utc),
     )
 
     ride_data = ride.dict()
@@ -1276,7 +1276,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         await db.update_one(
             "wallets",
             {"id": wallet["id"]},
-            {"$set": {"balance": float(new_balance), "updated_at": datetime.utcnow().isoformat()}},
+            {"$set": {"balance": float(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
         )
         await _record_transaction(
             wallet_id=wallet["id"],
@@ -1292,7 +1292,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             {
                 "payment_status": "paid",
                 "tip_amount": tip_amount,
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             },
         )
 
@@ -1362,7 +1362,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             "master_fallback_amount": float(_master_debit),
             "member_id": _corp_membership["id"],
             "company_id": _company_id,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         })
 
         # 8. Policy re-check at completion (log only — never strand driver)
@@ -1381,7 +1381,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 "result": "violation",
                 "failed_rules": _completion_eval.get("failed_rules", []),
                 "bypassed_rules": [],
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
             })
 
         await db_supabase.update_ride(
@@ -1389,7 +1389,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             {
                 "payment_status": "paid",
                 "tip_amount": float(tip_amount),
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             },
         )
 
@@ -1416,7 +1416,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                     "payment_status": "paid",
                     "payment_intent_id": outcome.payment_intent_id,
                     "tip_amount": float(tip_amount),
-                    "updated_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
         elif outcome.status == "requires_action":
@@ -1426,7 +1426,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                     "payment_status": "requires_action",
                     "payment_intent_id": outcome.payment_intent_id,
                     "tip_amount": float(tip_amount),
-                    "updated_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             return {
@@ -1441,7 +1441,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 {
                     "payment_status": "failed",
                     "payment_intent_id": outcome.payment_intent_id,
-                    "updated_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             raise HTTPException(
@@ -1462,7 +1462,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 {
                     "payment_status": "paid",
                     "tip_amount": float(tip_amount),
-                    "updated_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
         else:
@@ -1470,7 +1470,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 ride_id,
                 {
                     "payment_status": "failed",
-                    "updated_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             raise HTTPException(
@@ -1561,7 +1561,7 @@ async def share_trip_with_contact(
             {
                 "$set": {
                     "shared_trip_token": share_token,
-                    "shared_trip_token_created_at": datetime.utcnow().isoformat(),
+                    "shared_trip_token_created_at": datetime.now(timezone.utc).isoformat(),
                 }
             },
         )
@@ -1571,7 +1571,7 @@ async def share_trip_with_contact(
     contact_entry = {
         "name": body.contact_name,
         "phone": body.contact_phone,
-        "shared_at": datetime.utcnow().isoformat(),
+        "shared_at": datetime.now(timezone.utc).isoformat(),
     }
     # Avoid duplicates by phone
     if not any(c.get("phone") == body.contact_phone for c in shared_with):
@@ -1632,7 +1632,7 @@ async def track_shared_ride(share_token: str):
 
         try:
             created_dt = datetime.fromisoformat(token_created) if isinstance(token_created, str) else token_created
-            if datetime.utcnow() - created_dt > timedelta(hours=24):
+            if datetime.now(timezone.utc) - created_dt > timedelta(hours=24):
                 raise HTTPException(status_code=404, detail="Share link has expired")
         except (ValueError, TypeError):
             pass  # Malformed timestamp — allow access but log
@@ -1681,7 +1681,7 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
         {
             "rider_rating": rating_data.rating,
             "rider_comment": rating_data.comment or "",
-            "updated_at": datetime.utcnow(),
+            "updated_at": datetime.now(timezone.utc),
         },
     )
 
@@ -1777,7 +1777,7 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
             except ValueError:
                 accepted_at = None
         if accepted_at:
-            time_diff = (datetime.utcnow() - accepted_at).total_seconds()
+            time_diff = (datetime.now(timezone.utc) - accepted_at).total_seconds()
         else:
             time_diff = 0
         if time_diff > 120:  # 2 minutes
@@ -1797,7 +1797,7 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
                     await db.update_one(
                         "wallets",
                         {"id": wallet["id"]},
-                        {"$set": {"balance": new_balance, "updated_at": datetime.utcnow().isoformat()}},
+                        {"$set": {"balance": new_balance, "updated_at": datetime.now(timezone.utc).isoformat()}},
                     )
                     await db.insert_one(
                         "wallet_transactions",
@@ -1811,7 +1811,7 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
                             "reference_id": ride_id,
                             "description": f"Cancellation fee for ride {ride_id}",
                             "metadata": {"ride_id": ride_id, "status_at_cancel": ride.get("status")},
-                            "created_at": datetime.utcnow().isoformat(),
+                            "created_at": datetime.now(timezone.utc).isoformat(),
                         },
                     )
                 await send_push_notification(
@@ -1827,10 +1827,10 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
         ride_id,
         {
             "status": "cancelled",
-            "cancelled_at": datetime.utcnow(),
+            "cancelled_at": datetime.now(timezone.utc),
             "cancellation_fee_admin": charged_admin,
             "cancellation_fee_driver": charged_driver,
-            "updated_at": datetime.utcnow(),
+            "updated_at": datetime.now(timezone.utc),
         },
     )
 
@@ -1915,7 +1915,7 @@ async def add_stop_mid_trip(ride_id: str, req: AddStopMidTripRequest, current_us
     await db.update_one(
         "rides",
         {"id": ride_id},
-        {"$set": {"stops": stops, "updated_at": datetime.utcnow().isoformat()}},
+        {"$set": {"stops": stops, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
 
     # Notify driver via WebSocket
@@ -1950,7 +1950,7 @@ async def remove_stop_mid_trip(ride_id: str, stop_index: int, current_user: dict
     await db.update_one(
         "rides",
         {"id": ride_id},
-        {"$set": {"stops": stops, "updated_at": datetime.utcnow().isoformat()}},
+        {"$set": {"stops": stops, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
 
     # Notify driver
@@ -1997,7 +1997,7 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
         "status": "open",
         "latitude": request.latitude,
         "longitude": request.longitude,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
     await db_supabase.insert_one("emergencies", incident)
@@ -2056,7 +2056,7 @@ async def get_chat_status(ride_id: str, current_user: dict = Depends(get_current
                 except (ValueError, TypeError):
                     completed_at = None
             if completed_at:
-                elapsed = (datetime.utcnow() - completed_at).total_seconds()
+                elapsed = (datetime.now(timezone.utc) - completed_at).total_seconds()
                 remaining = max(0, 86400 - elapsed)
                 if remaining <= 0:
                     return {"available": False, "reason": "Post-trip chat window expired"}
@@ -2199,7 +2199,7 @@ async def send_ride_message(ride_id: str, body: SendMessageRequest, current_user
                     completed_at = datetime.fromisoformat(completed_at.replace("Z", "+00:00").replace("+00:00", ""))
                 except (ValueError, TypeError):
                     completed_at = None
-            if completed_at and (datetime.utcnow() - completed_at).total_seconds() > 86400:
+            if completed_at and (datetime.now(timezone.utc) - completed_at).total_seconds() > 86400:
                 raise HTTPException(status_code=400, detail="Post-trip chat window has expired (24 hours)")
 
     is_rider = ride.get("rider_id") == current_user["id"]
@@ -2215,7 +2215,7 @@ async def send_ride_message(ride_id: str, body: SendMessageRequest, current_user
         "ride_id": ride_id,
         "text": body.text.strip(),
         "sender": sender,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
     await db.insert_one("ride_messages", msg_data)
@@ -2260,9 +2260,9 @@ async def cancel_scheduled_ride(ride_id: str, current_user: dict = Depends(get_c
         ride_id,
         {
             "status": "cancelled",
-            "cancelled_at": datetime.utcnow(),
+            "cancelled_at": datetime.now(timezone.utc),
             "cancellation_reason": "Cancelled by rider (scheduled)",
-            "updated_at": datetime.utcnow(),
+            "updated_at": datetime.now(timezone.utc),
         },
     )
     return {"success": True}
@@ -2278,7 +2278,7 @@ async def simulate_driver_arrival(ride_id: str, current_user: dict = Depends(get
         raise HTTPException(status_code=403, detail="Not authorized")
 
     await db_supabase.update_ride(
-        ride_id, {"status": "driver_arrived", "driver_arrived_at": datetime.utcnow(), "updated_at": datetime.utcnow()}
+        ride_id, {"status": "driver_arrived", "driver_arrived_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
     )
     updated_ride = await db_supabase.get_ride(ride_id)
     return {"success": True, "pickup_otp": updated_ride.get("pickup_otp", "0000")}
@@ -2303,7 +2303,7 @@ async def rider_start_ride(ride_id: str, current_user: dict = Depends(get_curren
         raise HTTPException(status_code=400, detail=f"Cannot start ride with status: {ride.get('status')}")
 
     await db_supabase.update_ride(
-        ride_id, {"status": "in_progress", "ride_started_at": datetime.utcnow(), "updated_at": datetime.utcnow()}
+        ride_id, {"status": "in_progress", "ride_started_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
     )
     return {"success": True}
 

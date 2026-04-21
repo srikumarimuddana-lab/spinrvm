@@ -9,7 +9,7 @@ Prophet/statsmodels for time-series ML forecasting.
 
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 try:
@@ -68,7 +68,7 @@ async def _get_historical_hourly_demand(
 
     Returns a nested dict: {day_of_week: {hour: avg_ride_count}}.
     """
-    start = (datetime.utcnow() - timedelta(days=lookback_days)).isoformat()
+    start = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
 
     try:
         filters: Dict[str, Any] = {"status": "completed"}
@@ -125,7 +125,7 @@ async def forecast_demand(
     historical = await _get_historical_hourly_demand(area_id, lookback_days)
     has_data = any(historical.get(d, {}).get(h, 0) > 0 for d in range(7) for h in range(24))
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     forecasts = []
 
     # Compute the max value for peak detection

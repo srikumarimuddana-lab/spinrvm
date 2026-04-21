@@ -7,7 +7,7 @@ Multi-stop Rides, Safety Toolkit, Push Notifications.
 import asyncio
 import secrets
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -225,8 +225,8 @@ async def create_ticket(req: CreateTicketRequest, user_id: str = Query(...)):
         "category": req.category,
         "status": "open",
         "replies": [],
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
     }
     await db_supabase.insert_one("support_tickets", ticket)
     return ticket
@@ -248,8 +248,8 @@ async def create_safety_report(req: SafetyReportRequest, user_id: str = Depends(
         "status": "open",
         "priority": "critical",
         "replies": [],
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
     }
     await db_supabase.insert_one("support_tickets", ticket)
     return ticket
@@ -313,7 +313,7 @@ async def admin_reply_ticket(ticket_id: str, req: ReplyToTicketRequest):
     reply = {
         "message": req.message,
         "author": "admin",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
     replies = ticket.get("replies", [])
@@ -325,7 +325,7 @@ async def admin_reply_ticket(ticket_id: str, req: ReplyToTicketRequest):
         {
             "replies": replies,
             "status": "in_progress",
-            "updated_at": datetime.utcnow(),
+            "updated_at": datetime.now(timezone.utc),
         },
     )
     return {"status": "replied", "reply": reply}
@@ -335,7 +335,7 @@ async def admin_reply_ticket(ticket_id: str, req: ReplyToTicketRequest):
 async def admin_close_ticket(ticket_id: str):
     """Close a support ticket."""
     result = await db_supabase.update_one(
-        "support_tickets", {"id": ticket_id}, {"status": "closed", "updated_at": datetime.utcnow()}
+        "support_tickets", {"id": ticket_id}, {"status": "closed", "updated_at": datetime.now(timezone.utc)}
     )
     if not result:
         raise HTTPException(status_code=404, detail="Ticket not found")
@@ -362,8 +362,8 @@ async def admin_create_faq(req: CreateFaqRequest):
         "category": req.category,
         "sort_order": req.sort_order,
         "is_active": True,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
     }
     await db_supabase.insert_one("faqs", faq)
     return faq
@@ -372,7 +372,7 @@ async def admin_create_faq(req: CreateFaqRequest):
 @admin_support_router.put("/faqs/{faq_id}")
 async def admin_update_faq(faq_id: str, req: UpdateFaqRequest):
     """Update an existing FAQ."""
-    update_data: Dict[str, Any] = {"updated_at": datetime.utcnow()}
+    update_data: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
     if req.question is not None:
         update_data["question"] = req.question
     if req.answer is not None:
@@ -497,8 +497,8 @@ async def create_area_fee(area_id: str, req: CreateAreaFeeRequest):
         "description": req.description,
         "conditions": req.conditions,
         "is_active": req.is_active,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
     }
     await db_supabase.insert_one("area_fees", fee)
     return fee
@@ -507,7 +507,7 @@ async def create_area_fee(area_id: str, req: CreateAreaFeeRequest):
 @pricing_router.put("/areas/{area_id}/fees/{fee_id}")
 async def update_area_fee(area_id: str, fee_id: str, req: UpdateAreaFeeRequest):
     """Update an area fee."""
-    update_data: Dict[str, Any] = {"updated_at": datetime.utcnow()}
+    update_data: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
     for field in ["fee_name", "fee_type", "calc_mode", "amount", "description", "conditions", "is_active"]:
         val = getattr(req, field)
         if val is not None:
@@ -856,7 +856,7 @@ async def schedule_ride(req: ScheduleRideRequest):
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid scheduled_time format. Use ISO 8601.") from None
 
-    if scheduled_dt < datetime.utcnow() + timedelta(minutes=15):
+    if scheduled_dt < datetime.now(timezone.utc) + timedelta(minutes=15):
         raise HTTPException(status_code=400, detail="Scheduled time must be at least 15 minutes from now.")
 
     # Compute fare like a normal ride
@@ -922,9 +922,9 @@ async def schedule_ride(req: ScheduleRideRequest):
         "is_scheduled": True,
         "scheduled_time": scheduled_dt,
         "stops": req.stops,
-        "ride_requested_at": datetime.utcnow(),
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "ride_requested_at": datetime.now(timezone.utc),
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
     }
 
     await db_supabase.insert_ride(ride)
@@ -947,7 +947,7 @@ async def cancel_scheduled_ride(ride_id: str):
     if ride.get("status") != "scheduled":
         raise HTTPException(status_code=400, detail="Only scheduled rides can be cancelled this way")
 
-    await db_supabase.update_ride(ride_id, {"status": "cancelled", "cancelled_at": datetime.utcnow()})
+    await db_supabase.update_ride(ride_id, {"status": "cancelled", "cancelled_at": datetime.now(timezone.utc)})
     return {"cancelled": True}
 
 
@@ -976,7 +976,7 @@ async def add_stop(ride_id: str, req: AddStopRequest):
     stops.append(new_stop)
     stops.sort(key=lambda s: s.get("order", 0))
 
-    await db_supabase.update_ride(ride_id, {"stops": stops, "updated_at": datetime.utcnow()})
+    await db_supabase.update_ride(ride_id, {"stops": stops, "updated_at": datetime.now(timezone.utc)})
     return {"stops": stops}
 
 
@@ -990,13 +990,13 @@ async def complete_stop(ride_id: str, stop_id: str):
     stops = ride.get("stops", [])
     for stop in stops:
         if stop.get("id") == stop_id:
-            stop["completed_at"] = datetime.utcnow().isoformat()
-            stop["arrived_at"] = stop.get("arrived_at") or datetime.utcnow().isoformat()
+            stop["completed_at"] = datetime.now(timezone.utc).isoformat()
+            stop["arrived_at"] = stop.get("arrived_at") or datetime.now(timezone.utc).isoformat()
             break
     else:
         raise HTTPException(status_code=404, detail="Stop not found")
 
-    await db_supabase.update_ride(ride_id, {"stops": stops, "updated_at": datetime.utcnow()})
+    await db_supabase.update_ride(ride_id, {"stops": stops, "updated_at": datetime.now(timezone.utc)})
     return {"stops": stops}
 
 
@@ -1018,7 +1018,7 @@ async def share_trip(ride_id: str, req: ShareTripRequest):
         {
             "name": req.contact_name,
             "phone": req.contact_phone,
-            "shared_at": datetime.utcnow().isoformat(),
+            "shared_at": datetime.now(timezone.utc).isoformat(),
         }
     )
 
@@ -1208,7 +1208,7 @@ async def check_scheduled_rides():
     """Background task: dispatches scheduled rides when their time arrives."""
     while True:
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             # Find rides scheduled within the next 5 minutes
             window = now + timedelta(minutes=5)
 
@@ -1232,8 +1232,8 @@ async def check_scheduled_rides():
                         ride["id"],
                         {
                             "status": "searching",
-                            "ride_requested_at": datetime.utcnow(),
-                            "updated_at": datetime.utcnow(),
+                            "ride_requested_at": datetime.now(timezone.utc),
+                            "updated_at": datetime.now(timezone.utc),
                         },
                     )
                     logger.info(f"Dispatched scheduled ride {ride['id']}")

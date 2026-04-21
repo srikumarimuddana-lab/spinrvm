@@ -84,7 +84,9 @@ describe('driverStore', () => {
   describe('acceptRide', () => {
     it('should accept ride and transition to navigating_to_pickup', async () => {
       api.post.mockResolvedValueOnce({ data: {} });
-      api.get.mockResolvedValueOnce({ data: { ride: { id: 'ride-1', status: 'driver_assigned' } } });
+      // After acceptance, backend returns driver_accepted (not driver_assigned).
+      // driver_assigned = offer dispatched; driver_accepted = driver confirmed.
+      api.get.mockResolvedValueOnce({ data: { ride: { id: 'ride-1', status: 'driver_accepted' } } });
 
       useDriverStore.getState().setIncomingRide(mockIncomingRide);
       await useDriverStore.getState().acceptRide('ride-1');
@@ -153,7 +155,9 @@ describe('driverStore', () => {
 
       await useDriverStore.getState().fetchActiveRide();
 
-      expect(useDriverStore.getState().rideState).toBe('navigating_to_pickup');
+      // driver_assigned = backend dispatched offer, driver hasn't accepted yet →
+      // resume ride_offered countdown screen rather than navigating_to_pickup.
+      expect(useDriverStore.getState().rideState).toBe('ride_offered');
     });
 
     it('should set rideState for driver_arrived', async () => {

@@ -1,6 +1,6 @@
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -85,6 +85,6 @@ async def admin_update_user_status(user_id: str, status_data: Dict[str, Any]):
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_status}")
 
     await db_supabase.update_one(
-        "users", {"id": user_id}, {"status": new_status, "updated_at": datetime.utcnow().isoformat()}
+        "users", {"id": user_id}, {"status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}
     )
     return {"message": f"User status updated to {new_status}"}

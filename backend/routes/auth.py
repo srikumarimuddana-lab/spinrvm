@@ -274,7 +274,23 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             existing_user = await db_supabase.get_user_by_phone(phone)
             logger.info(f"User search result found: {bool(existing_user)}")
         except Exception as e:
-            logger.warning(f"Could not query user from DB: {e}")
+            # Surface the real underlying Supabase error. DatabaseError
+            # wraps the original exception in .details["original"]; str(e)
+            # only gives the generic "Database operation failed" message.
+            original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+            logger.error(
+                f"get_user_by_phone failed for {phone}: type={type(e).__name__} "
+                f"msg={e} original={original}"
+            )
+            # Refuse to silently fall through to user creation — a DB read
+            # failure is NOT the same as "user doesn't exist". Creating a
+            # new row here generates duplicate accounts on every retry and
+            # locks the real user out of their own profile, wallet, and
+            # ride history. Fail the login so the client retries.
+            raise HTTPException(
+                status_code=503,
+                detail="Service temporarily unavailable, please try again",
+            ) from e
 
         user_agent = request.headers.get("user-agent", "")
         client_ip = get_remote_address(request)
@@ -356,6 +372,11 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 access_expires_at=access_expires_at,
                 refresh_expires_at=refresh_expires_at,
             )
+    except HTTPException:
+        # Already a well-formed HTTP error (e.g. the 503 raised when
+        # get_user_by_phone fails) — let it propagate unchanged instead
+        # of being re-wrapped as a generic 500.
+        raise
     except Exception as e:
         logger.error(f"CRITICAL ERROR IN VERIFY_OTP: {e}")
         import traceback

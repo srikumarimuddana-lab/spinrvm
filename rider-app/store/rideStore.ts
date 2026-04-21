@@ -3,7 +3,6 @@ import { Alert, Linking } from 'react-native';
 import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Alert } from 'react-native';
 import { RideStatus } from '../constants/rideStatus';
 
 const ACTIVE_RIDE_KEY = '@spinr:active_ride';

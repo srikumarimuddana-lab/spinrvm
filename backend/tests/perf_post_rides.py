@@ -34,7 +34,7 @@ import time
 from datetime import datetime
 from statistics import mean
 from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Path bootstrap (mirrors perf_baseline.py)
@@ -271,10 +271,9 @@ def percentile(data: List[float], pct: float) -> float:
 # Benchmark
 # ---------------------------------------------------------------------------
 async def bench_create_ride(samples: int) -> Dict[str, Any]:
-    from backend.server import app  # noqa: E402
-
     import db_supabase  # noqa: E402
     import dependencies  # noqa: E402
+    from backend.server import app  # noqa: E402
     from utils.rate_limiter import default_limiter  # noqa: E402
 
     counter = CallCounter()

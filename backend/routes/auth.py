@@ -1,8 +1,7 @@
 import logging
 import uuid
-import os
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, Optional
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -21,6 +20,8 @@ try:
     from ..schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
     from ..settings_loader import get_app_settings
     from ..sms_service import send_otp_sms
+    from ..utils.crypto import hash_otp
+    from ..utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from ..utils.refresh_tokens import (
         issue_refresh_token,
         lookup_refresh_token,
@@ -28,10 +29,6 @@ try:
         revoke_refresh_token,
     )
     from ..validators import validate_phone
-    from ..utils.redis_client import (
-        redis_get, redis_set, redis_incr, redis_expire, redis_delete
-    )
-    from ..utils.crypto import hash_otp
 except ImportError:
     import db_supabase
     from core.config import settings
@@ -44,6 +41,8 @@ except ImportError:
     from schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
     from settings_loader import get_app_settings
     from sms_service import send_otp_sms
+    from utils.crypto import hash_otp
+    from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from utils.refresh_tokens import (
         issue_refresh_token,
         lookup_refresh_token,
@@ -51,10 +50,6 @@ except ImportError:
         revoke_refresh_token,
     )
     from validators import validate_phone
-    from utils.redis_client import (
-        redis_get, redis_set, redis_incr, redis_expire, redis_delete
-    )
-    from utils.crypto import hash_otp
 
 db = db_supabase  # legacy alias
 
@@ -82,7 +77,7 @@ async def _check_otp_lockout(phone: str) -> None:
         raise
     except Exception as e:
         logger.error(f"Redis unavailable in OTP lockout check: {e}")
-        raise HTTPException(status_code=503, detail="ERR_AUTH_UNAVAILABLE")
+        raise HTTPException(status_code=503, detail="ERR_AUTH_UNAVAILABLE") from None
 
 
 async def _record_otp_failure(phone: str) -> None:
@@ -555,7 +550,7 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
 
     session_id = user.get("current_session_id") or row.get("user_agent") or ""
     token_version = int(user.get("token_version") or 0)
-    access_expires_at = datetime.now(timezone.utc) + timedelta(days=_core_settings.ACCESS_TOKEN_TTL_DAYS)
+    access_expires_at = datetime.now(timezone.utc) + timedelta(days=settings.ACCESS_TOKEN_TTL_DAYS)
     token = create_jwt_token(
         user_id,
         user.get("phone", ""),

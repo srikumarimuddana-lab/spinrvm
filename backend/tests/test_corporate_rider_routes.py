@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-
 _FAKE_USER = {"id": "u1", "phone": "+15550002222"}
 
 

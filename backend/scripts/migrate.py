@@ -17,10 +17,10 @@ Optional:
 """
 
 import argparse
-import os
-import sys
 import glob
 import logging
+import os
+import sys
 from pathlib import Path
 
 logging.basicConfig(

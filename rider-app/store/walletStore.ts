@@ -57,6 +57,7 @@ interface WalletState {
   respondToSplit: (participantId: string, action: 'accept' | 'decline') => Promise<void>;
   paySplitShare: (participantId: string, method: 'wallet' | 'card') => Promise<void>;
   cancelFareSplit: (splitId: string) => Promise<void>;
+  addTip: (rideId: string, amount: number) => Promise<void>;
 
   clearError: () => void;
 }
@@ -185,6 +186,17 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       set({ isLoading: true, error: null });
       await api.post(`/fare-split/${splitId}/cancel`);
       set({ currentSplit: null, isLoading: false });
+    } catch (error: any) {
+      set({ error: error.response?.data?.detail || error.message, isLoading: false });
+      throw error;
+    }
+  },
+
+  addTip: async (rideId: string, amount: number) => {
+    try {
+      set({ isLoading: true, error: null });
+      await api.post(`/rides/${rideId}/tip`, { amount });
+      set({ isLoading: false });
     } catch (error: any) {
       set({ error: error.response?.data?.detail || error.message, isLoading: false });
       throw error;

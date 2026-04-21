@@ -130,6 +130,12 @@ This is intentional (`python -m backend.server` vs top-level). Do not simplify a
 
 **Token lifetimes** — access tokens: 15 min (rider/driver), 12 hr (admin). Refresh tokens: 30 days, stored as SHA-256 hash, rotated on every use. Mobile clients auto-retry 401s via Axios interceptor after token refresh.
 
+**Do not silently swallow errors** — especially DB, auth, payment, and dispatch errors. These are crucial to the system and must surface loudly so the root cause can be fixed, not masked. Rules:
+- Never replace a failing call with a generic fallback path that hides the symptom (e.g. don't fall through to "create new user" when `get_user_by_phone` raises — that produced duplicate accounts).
+- Never `logger.warning(...)` and continue on a DB/auth/payment error. Use `logger.error(...)` with the full underlying exception (for `DatabaseError`, include `e.details["original"]` — `str(e)` alone gives only "Database operation failed").
+- Return a clean `HTTPException` (usually 503 for DB, 502 for upstream) so the client retries, instead of handing back a half-valid response.
+- Before silencing or softening any error during development, STOP and ask the user. "Soft-handling" is a trade-off they get to decide, not a default.
+
 ## Required Environment Variables
 
 **Backend** (`backend/.env`):

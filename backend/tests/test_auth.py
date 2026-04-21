@@ -291,7 +291,9 @@ class TestAuthEndpoints:
     def test_client(self):
         """Create test client with App Check bypassed for unit testing."""
         import sys
+
         from fastapi.testclient import TestClient
+
         from backend.server import app
 
         mock_app_check = MagicMock()
@@ -439,6 +441,7 @@ async def test_old_token_rejected_after_version_rotation():
     """JWT minted with token_version=1 must be rejected 401 after DB rotates to 2."""
     from fastapi import HTTPException
     from fastapi.security import HTTPAuthorizationCredentials
+
     from backend.dependencies import create_jwt_token, get_current_user
 
     user_id = "driver_rotation_test_001"

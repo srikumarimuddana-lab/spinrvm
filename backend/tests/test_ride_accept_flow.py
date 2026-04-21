@@ -31,10 +31,9 @@ nothing — just removed the pin from the map without calling the API).
 
 import asyncio
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-
 
 RIDER_ID = "rider-abc"
 DRIVER_USER_ID = "driver-user-xyz"
@@ -148,8 +147,9 @@ class TestAcceptRideFlipsStatus:
         {success:true}. Returning success here is exactly what caused
         the bug in the first place — client thinks it worked but the
         rider keeps polling a `searching` row."""
-        from backend.routes import drivers as drivers_mod
         from fastapi import HTTPException
+
+        from backend.routes import drivers as drivers_mod
 
         pre_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
         # Stale row after the "write" — simulates the silent-no-op case.
@@ -293,9 +293,10 @@ class TestAdminCancelRide:
     def test_cancel_rejects_terminal_states(self):
         """Admin cannot 'cancel' an already-completed or already-cancelled
         ride — the endpoint should 400 with no DB write."""
+        from fastapi import HTTPException
+
         from backend.routes.admin import rides as admin_rides
         from backend.routes.admin.rides import AdminCancelRideRequest
-        from fastapi import HTTPException
 
         update_ride_mock = AsyncMock()
         with patch(

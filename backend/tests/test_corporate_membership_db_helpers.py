@@ -60,8 +60,10 @@ async def test_get_member_by_invite_token_returns_row():
 
 @pytest.mark.asyncio
 async def test_upsert_allowance_inserts_when_absent():
-    existing = MagicMock(); existing.data = []
-    inserted = MagicMock(); inserted.data = [{"id": "a1", "member_id": "m1", "used": 0}]
+    existing = MagicMock()
+    existing.data = []
+    inserted = MagicMock()
+    inserted.data = [{"id": "a1", "member_id": "m1", "used": 0}]
     with patch("db_supabase.supabase") as mock_sb:
         (
             mock_sb.table.return_value
@@ -82,8 +84,10 @@ async def test_upsert_allowance_inserts_when_absent():
 
 @pytest.mark.asyncio
 async def test_upsert_allowance_updates_when_present():
-    existing = MagicMock(); existing.data = [{"id": "a1", "member_id": "m1", "used": 50}]
-    updated = MagicMock(); updated.data = [{"id": "a1", "amount": 700}]
+    existing = MagicMock()
+    existing.data = [{"id": "a1", "member_id": "m1", "used": 50}]
+    updated = MagicMock()
+    updated.data = [{"id": "a1", "amount": 700}]
     with patch("db_supabase.supabase") as mock_sb:
         (
             mock_sb.table.return_value
@@ -107,7 +111,8 @@ async def test_upsert_allowance_updates_when_present():
 
 @pytest.mark.asyncio
 async def test_list_pending_requests_orders_desc():
-    fake = MagicMock(); fake.data = [{"id": "r1"}]
+    fake = MagicMock()
+    fake.data = [{"id": "r1"}]
     with patch("db_supabase.supabase") as mock_sb:
         chain = (
             mock_sb.table.return_value
@@ -153,7 +158,8 @@ async def test_add_allowed_domain_inserts_lowercase():
 
 @pytest.mark.asyncio
 async def test_list_allowances_due_for_reset_filters():
-    fake = MagicMock(); fake.data = [{"id": "a1", "period_end": "2026-03-31"}]
+    fake = MagicMock()
+    fake.data = [{"id": "a1", "period_end": "2026-03-31"}]
     with patch("db_supabase.supabase") as mock_sb:
         chain = (
             mock_sb.table.return_value

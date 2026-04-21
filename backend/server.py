@@ -45,6 +45,17 @@ init_firebase()
 
 app = FastAPI(title="Spinr API", version="1.0.0", lifespan=lifespan, redirect_slashes=False)
 
+
+# Railway's healthcheckPath in railway.json is /health. If that endpoint
+# returns anything other than 2xx the deployment never goes live and every
+# request to the public domain is answered with "Application failed to
+# respond". Mount it on the root app (not behind /api) so the probe hits it
+# before any auth middleware.
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
+
+
 # Initialize middleware
 init_middleware(app)
 

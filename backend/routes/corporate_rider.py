@@ -163,56 +163,38 @@ async def my_rides(
     to: Optional[str] = None,
     current_user: dict = Depends(get_current_user),
 ):
-    """Return the caller's Work rides for a company, joined from ride_payment_sources.
+    """Return this rider's work rides for the given company.
 
-    Query params:
-      from_  ISO-8601 date/datetime lower bound on ride_payment_sources.created_at (inclusive)
-      to     ISO-8601 date/datetime upper bound (inclusive)
-
-    Each item is the ride row augmented with payment source fields:
-      allowance_debit_amount, master_fallback_amount, source_type
+    Joins ride_payment_sources (written at process_payment time) back to
+    the rides table so the rider app can show the Work tab ride history.
     """
     membership = await _ensure_member(current_user, company_id)
+    member_id = membership["id"]
 
-    payment_sources = await get_rows(
-        "ride_payment_sources",
-        {"member_id": membership["id"]},
-        order="created_at",
-        desc=True,
-        limit=200,
-    )
+    filters: dict = {"company_id": company_id, "member_id": member_id}
+    if from_:
+        filters["created_at"] = {"$gte": from_}
 
-    if not payment_sources:
+    rps_rows = await get_rows("ride_payment_sources", filters, limit=100)
+
+    # Apply `to` date ceiling in Python — db helper only supports one
+    # comparison operator per key in a single filter dict.
+    if to and rps_rows:
+        rps_rows = [r for r in rps_rows if (r.get("created_at") or "") <= to]
+
+    if not rps_rows:
         return []
 
-    # Apply optional date-range filter on the payment source created_at.
-    if from_ or to:
-        filtered = []
-        for ps in payment_sources:
-            created = ps.get("created_at") or ""
-            if from_ and created < from_:
-                continue
-            if to and created > to:
-                continue
-            filtered.append(ps)
-        payment_sources = filtered
+    ride_ids = [r["ride_id"] for r in rps_rows]
+    rides_list = await get_rows("rides", {"id": {"$in": ride_ids}}, limit=len(ride_ids))
+    rides_by_id = {r["id"]: r for r in rides_list}
 
-    # Hydrate each payment source with the full ride row.
-    result = []
-    for ps in payment_sources:
-        ride_id = ps.get("ride_id")
-        if not ride_id:
-            continue
-        ride = await get_ride(ride_id) or {}
-        result.append({
-            **ride,
-            "allowance_debit_amount": ps.get("allowance_debit_amount"),
-            "master_fallback_amount": ps.get("master_fallback_amount"),
-            "source_type": ps.get("source_type"),
-            "payment_source": ps,
-        })
-
-    return result
+    rps_by_ride = {r["ride_id"]: r for r in rps_rows}
+    return [
+        {**rides_by_id[rid], "payment_source": rps_by_ride[rid]}
+        for rid in ride_ids
+        if rid in rides_by_id
+    ]
 
 
 @router.post("/{company_id}/allowance-requests")

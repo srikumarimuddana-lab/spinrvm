@@ -288,7 +288,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   applyPromo: (promo) => set({ appliedPromo: promo }),
 
   // Sync offline queued requests when back online.
-  // Queue entry shape: { id, type, rideId, payload, retries, timestamp }
+  // Queue entry shape: { id, type, rideId, data, retryCount, timestamp }
   // Supported types: create_ride | cancel_ride | rate_ride | tip | emergency
   syncOfflineRequests: async () => {
     try {
@@ -299,8 +299,8 @@ export const useRideStore = create<RideState>((set, get) => ({
         id: string;
         type: 'create_ride' | 'cancel_ride' | 'rate_ride' | 'tip' | 'emergency';
         rideId?: string;
-        payload?: any;
-        retries?: number;
+        data?: any;
+        retryCount?: number;
         timestamp?: number;
       }> = JSON.parse(queueStr);
       if (queue.length === 0) return;
@@ -312,25 +312,25 @@ export const useRideStore = create<RideState>((set, get) => ({
         try {
           switch (request.type) {
             case 'create_ride':
-              await api.post('/rides', request.payload);
+              await api.post('/rides', request.data);
               break;
             case 'cancel_ride':
               if (request.rideId) await api.post(`/rides/${request.rideId}/cancel`);
               break;
             case 'rate_ride':
-              if (request.rideId) await api.post(`/rides/${request.rideId}/rate`, request.payload);
+              if (request.rideId) await api.post(`/rides/${request.rideId}/rate`, request.data);
               break;
             case 'tip':
-              if (request.rideId) await api.post(`/rides/${request.rideId}/tip`, request.payload);
+              if (request.rideId) await api.post(`/rides/${request.rideId}/tip`, request.data);
               break;
             case 'emergency':
-              if (request.rideId) await api.post(`/rides/${request.rideId}/emergency`, request.payload);
+              if (request.rideId) await api.post(`/rides/${request.rideId}/emergency`, request.data);
               break;
           }
           successfulSyncs.push(request.id);
         } catch {
-          request.retries = (request.retries || 0) + 1;
-          if (request.retries >= 3) {
+          request.retryCount = (request.retryCount || 0) + 1;
+          if (request.retryCount >= 3) {
             failedPermanently.push(request.id);
           }
         }
@@ -506,7 +506,8 @@ export const useRideStore = create<RideState>((set, get) => ({
         'Could not reach the server. Please call 911 directly.',
         [{ text: 'Call 911', onPress: () => Linking.openURL('tel:911') }]
       );
-      throw error;
+      // Swallow the error — caller does not need to handle this; the Alert is
+      // the user-facing feedback. Rethrowing would crash uncaught promise chains.
     }
   },
 

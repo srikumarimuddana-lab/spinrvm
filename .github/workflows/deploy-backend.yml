@@ -8,51 +8,52 @@ on:
       - 'backend/**'
       - 'railway.json'
       - '.github/workflows/deploy-backend.yml'
-  # Allow manual re-runs from the Actions tab (needed when a merge's
-  # deploy failed — previously there was no way to retry without
-  # pushing a new commit to backend/**).
   workflow_dispatch:
+
+# Authentication setup (one-time):
+#   Railway v4 requires a project-scoped token (NOT an account/personal token).
+#   Steps:
+#     1. Railway Dashboard → your project → Settings → Tokens → New Token
+#        Token type: must be "Project Token" (not Team or Personal)
+#     2. GitHub → repo → Settings → Secrets → Actions → RAILWAY_TOKEN = <token>
+#
+# The --ci flag was removed in Railway CLI v4. Non-interactive mode is
+# automatic when RAILWAY_TOKEN is set in the environment.
+#
+# Alternative (no tokens needed at all):
+#   Connect Railway directly to this repo via:
+#   Railway Dashboard → Service → Settings → Source → Connect Repo → main
+#   Railway will auto-deploy on every push to main, making this workflow
+#   file unnecessary for deployments.
 
 jobs:
   deploy:
-    name: Deploy
+    name: Deploy to Railway
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
 
-      # Pin the Railway CLI so an upstream breaking change (a flag
-      # rename or new required arg) can't silently start returning
-      # exit code 1 on every merge the way it has done since early
-      # April. Bump this when an intentional upgrade is tested.
-      - name: Install Railway CLI (pinned)
-        run: npm i -g @railway/cli@3.20.0
+      - name: Verify RAILWAY_TOKEN is set
+        run: |
+          if [ -z "${{ secrets.RAILWAY_TOKEN }}" ]; then
+            echo "::error title=Missing secret::RAILWAY_TOKEN is not set."
+            echo ""
+            echo "Railway Dashboard → project → Settings → Tokens → New Token"
+            echo "Token type: Project Token (not Personal or Team)"
+            echo "Then: GitHub → repo → Settings → Secrets → RAILWAY_TOKEN"
+            exit 1
+          fi
+          echo "RAILWAY_TOKEN is set (length=${#RAILWAY_TOKEN})."
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+      - name: Install Railway CLI v4
+        run: npm i -g @railway/cli@4.40.2
 
       - name: Show Railway CLI version
         run: railway --version
 
-      # Fail fast with a readable error if the secret is missing or
-      # empty — previously this surfaced as "Process completed with
-      # exit code 1" from `railway up` and was indistinguishable from
-      # a real build failure.
-      - name: Verify RAILWAY_TOKEN secret is present
+      - name: Deploy to Railway
+        run: railway up --service backend
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          if [ -z "${RAILWAY_TOKEN}" ]; then
-            echo "::error::RAILWAY_TOKEN secret is not set in repo Settings → Secrets."
-            echo "Generate a project token at Railway → Project → Settings → Tokens"
-            echo "and add it as the RAILWAY_TOKEN repository secret."
-            exit 1
-          fi
-          echo "RAILWAY_TOKEN is set (length=${#RAILWAY_TOKEN})."
-
-      - name: Deploy
-        run: railway up --service backend --ci
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          # Optional — set in repo secrets when using an account-scoped
-          # token. Project-scoped tokens infer the project automatically.
-          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}

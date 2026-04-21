@@ -10,7 +10,7 @@ sends `{"type": "auth_success"}` right after `manager.connect()` to close that
 window. These tests pin that behavior.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient

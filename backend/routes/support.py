@@ -89,8 +89,9 @@ async def support_chat(
 ):
     """Send a message to the Gemini AI support bot and receive a reply."""
     try:
-        import google.generativeai as genai  # noqa: PLC0415
         import os
+
+        import google.generativeai as genai  # noqa: PLC0415
 
         api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
         if not api_key:

@@ -7,10 +7,9 @@ branch on Redis availability. The fallback is intentionally NOT thread-safe
 for TTL expiry — it uses `time.monotonic()` for best-effort expiry only.
 Production deployments must supply REDIS_URL.
 """
-import time
-import json
-import os
 import logging
+import os
+import time
 from typing import Optional
 
 logger = logging.getLogger(__name__)

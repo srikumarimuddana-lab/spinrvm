@@ -1047,7 +1047,8 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
     payment_method = (ride.get("payment_method") or "card").lower()
 
     if payment_method == "wallet":
-        from decimal import Decimal, ROUND_HALF_UP
+        from decimal import ROUND_HALF_UP, Decimal
+
         from .wallet import _record_transaction, get_or_create_wallet
 
         wallet = await get_or_create_wallet(current_user["id"])

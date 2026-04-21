@@ -30,7 +30,23 @@ _APP_CHECK_ENFORCEMENT = True
 #   - WebSocket connections (no HTTP headers)
 #   - OpenAPI docs served by FastAPI
 #   - Health / readiness probes
-_APP_CHECK_EXEMPT_PREFIXES = ("/ws/", "/docs", "/redoc", "/openapi.json", "/health")
+#   - Admin dashboard API (/api/admin/*): the dashboard is a Next.js web
+#     app, not a Firebase-registered mobile build, so it cannot attach a
+#     X-Firebase-AppCheck header. Admin endpoints are already gated by the
+#     admin JWT (get_admin_user dependency, see routes/admin/__init__.py)
+#     and the login endpoint is rate-limited (5/min/IP in
+#     routes/admin/auth.py), so the attack surface is bounded. Without this
+#     exemption /api/admin/auth/login returns 401 "App Check token
+#     required" before the login handler runs, and the dashboard at
+#     spinrvm.vercel.app can never authenticate.
+_APP_CHECK_EXEMPT_PREFIXES = (
+    "/ws/",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/health",
+    "/api/admin/",
+)
 
 
 class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):

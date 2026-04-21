@@ -317,13 +317,17 @@ jobs:
             "https://api.render.com/v1/services/${{ secrets.RENDER_BACKEND_SERVICE_ID }}/deploys" \
             -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}"
 
-      - name: Deploy to Railway (alternative)
+      - name: Deploy to Railway (fallback)
         if: failure()
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          npm i -g @railway/cli
-          railway up --service backend --ci
+          if [ -z "${{ secrets.RAILWAY_DEPLOY_HOOK_URL }}" ]; then
+            echo "RAILWAY_DEPLOY_HOOK_URL not set — skipping Railway fallback."
+            exit 0
+          fi
+          http_status=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${{ secrets.RAILWAY_DEPLOY_HOOK_URL }}")
+          echo "Railway responded with HTTP $http_status"
+          [[ "$http_status" -ge 200 && "$http_status" -lt 300 ]]
 
   # Deploy Frontend
   deploy-frontend:

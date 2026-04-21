@@ -82,6 +82,30 @@ except ImportError:
     from services.corporate_policy_service import evaluate_policy, evaluate_policy_for_ride  # type: ignore
 
 db = db_supabase  # legacy alias
+
+
+async def _require_ride_in_state_rider(ride_id: str, rider_id: str, allowed_states: tuple) -> dict:
+    """Load a rider's ride only if it is in one of allowed_states.
+
+    Raises 409 if the ride exists but is in the wrong state.
+    Raises 404 if the ride doesn't exist or isn't owned by this rider.
+    """
+    ride = await db.find_one(
+        "rides",
+        {"id": ride_id, "rider_id": rider_id, "status": {"$in": list(allowed_states)}},
+    )
+    if ride:
+        return ride
+    existing = await db.find_one("rides", {"id": ride_id, "rider_id": rider_id})
+    if existing:
+        current = existing.get("status", "unknown")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Ride is in status '{current}'; cannot perform this action from that state (allowed: {list(allowed_states)}).",
+        )
+    raise HTTPException(status_code=404, detail="Ride not found or unauthorized")
+
+
 dispatch = DispatchService(db_supabase)  # module-level instance for legacy call sites
 
 # ── Decimal helpers for accurate currency arithmetic ──────────────────────────
@@ -770,6 +794,38 @@ async def create_ride(
     driver_earnings = _round(base_fare + distance_fare + time_fare)
     admin_earnings = _round(booking_fee + airport_fee)
 
+    # Pre-dispatch corporate policy check (spec §4 — booking phase).
+    # Only runs when rider explicitly books with company_allowance payment method.
+    _corp_member_id: Optional[str] = None
+    if body.corporate_account_id and body.payment_method == "company_allowance":
+        try:
+            from ..services.corporate_policy_service import evaluate_policy  # type: ignore
+        except ImportError:
+            from services.corporate_policy_service import evaluate_policy  # type: ignore
+
+        _policy_result = await evaluate_policy(
+            corporate_account_id=body.corporate_account_id,
+            rider_id=current_user["id"],
+            estimated_fare=total_fare,
+            ride_type="standard",
+            pickup_time=datetime.utcnow(),
+        )
+        if not _policy_result.allowed:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "message": _policy_result.reason,
+                    "failed_rules": _policy_result.failed_rules,
+                },
+            )
+        _corp_members = await db_supabase.get_rows(
+            "corporate_members",
+            {"company_id": body.corporate_account_id, "user_id": current_user["id"], "status": "active"},
+            limit=1,
+        )
+        if _corp_members:
+            _corp_member_id = _corp_members[0]["id"]
+
     pickup_otp_plain = generate_pickup_otp()
     ride = Ride(
         rider_id=current_user["id"],
@@ -801,6 +857,10 @@ async def create_ride(
     )
 
     ride_data = ride.dict()
+    if body.corporate_account_id:
+        ride_data["corporate_account_id"] = body.corporate_account_id
+    if _corp_member_id:
+        ride_data["corporate_member_id"] = _corp_member_id
     if service_area_id:
         ride_data["service_area_id"] = service_area_id
     # Preserve the original planned (straight-line) distance. ride.distance_km
@@ -1146,13 +1206,20 @@ class ProcessPaymentRequest(BaseModel):
 @api_router.post("/{ride_id}/process-payment")
 async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user: dict = Depends(get_current_user)):
     """Process payment for completed ride. Charges rider's card for fare + tip."""
-    tip_amount = float(req.tip_amount)
+    tip_amount = req.tip_amount  # already Decimal, validated by ProcessPaymentRequest
 
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("rider_id") != current_user.get("id"):
         raise HTTPException(status_code=403, detail="Not authorized")
+
+    _ride_status = ride.get("status", "")
+    if _ride_status != "trip_completed":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Ride is in status '{_ride_status}'; payment requires trip_completed state.",
+        )
 
     # IDEMPOTENCY: if already paid, return success without charging again
     if ride.get("payment_status") in ("paid", "processing"):
@@ -1178,14 +1245,15 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
     if tip_amount > 500:
         raise HTTPException(status_code=400, detail="Tip amount exceeds maximum ($500)")
 
-    total_charge = (ride.get("total_fare", 0) or 0) + tip_amount
+    def _q(v) -> Decimal:
+        return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    total_charge = _q(ride.get("total_fare", 0) or 0) + _q(tip_amount)
 
     # Branch on payment method.
     payment_method = (ride.get("payment_method") or "card").lower()
 
     if payment_method == "wallet":
-        from decimal import ROUND_HALF_UP, Decimal
-
         from .wallet import _record_transaction, get_or_create_wallet
 
         wallet = await get_or_create_wallet(current_user["id"])
@@ -1195,11 +1263,8 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
             raise HTTPException(status_code=403, detail="Wallet is suspended")
 
-        def _q(v) -> Decimal:
-            return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
         old_balance = _q(wallet.get("balance", 0))
-        debit = _q(total_charge)
+        debit = total_charge
         if old_balance < debit:
             await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
             raise HTTPException(
@@ -1232,8 +1297,6 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         )
 
     elif payment_method == "company_allowance":
-        from decimal import Decimal as _Dec
-
         _company_id = ride.get("corporate_account_id")
         if not _company_id:
             raise HTTPException(status_code=400, detail="Corporate account not set on ride")
@@ -1255,13 +1318,13 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         _total = _round(_d(str(total_charge)))
         if _corp_allowance.get("type") == "unlimited":
             _allowance_debit = _total
-            _master_debit = _round(_Dec("0"))
+            _master_debit = _round(Decimal("0"))
         else:
             _remaining = _round(
                 _d(str(_corp_allowance.get("amount") or 0))
                 - _d(str(max(float(_corp_allowance.get("used") or 0), 0.0)))
             )
-            _remaining = max(_remaining, _round(_Dec("0")))
+            _remaining = max(_remaining, _round(Decimal("0")))
             _allowance_debit = min(_remaining, _total)
             _master_debit = _total - _allowance_debit
 
@@ -1325,19 +1388,16 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             ride_id,
             {
                 "payment_status": "paid",
-                "tip_amount": tip_amount,
+                "tip_amount": float(tip_amount),
                 "updated_at": datetime.utcnow().isoformat(),
             },
         )
 
     else:
-        # Card path (P0-5): real Stripe charge via charge_ride() helper.
-        # Wallet/company_allowance above are one-step debit-and-done; card is
+        # Card path: real Stripe charge via charge_ride() helper.
         # multi-outcome (succeeded / requires_action / declined / failed).
         rider_user = await db_supabase.get_user_by_id(current_user["id"])
         stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
-        # Prefer the payment method stored on the ride (selected by rider);
-        # fall back to user's default if none was captured at booking time.
         payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
 
         outcome = await charge_ride(
@@ -1355,7 +1415,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 {
                     "payment_status": "paid",
                     "payment_intent_id": outcome.payment_intent_id,
-                    "tip_amount": tip_amount,
+                    "tip_amount": float(tip_amount),
                     "updated_at": datetime.utcnow().isoformat(),
                 },
             )
@@ -1365,7 +1425,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 {
                     "payment_status": "requires_action",
                     "payment_intent_id": outcome.payment_intent_id,
-                    "tip_amount": tip_amount,
+                    "tip_amount": float(tip_amount),
                     "updated_at": datetime.utcnow().isoformat(),
                 },
             )
@@ -1401,7 +1461,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 ride_id,
                 {
                     "payment_status": "paid",
-                    "tip_amount": tip_amount,
+                    "tip_amount": float(tip_amount),
                     "updated_at": datetime.utcnow().isoformat(),
                 },
             )
@@ -1435,11 +1495,11 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
     try:
         from utils.email_receipt import send_receipt_email
 
-        email_sent = await send_receipt_email(ride, rider or {}, driver_info, tip_amount)
+        email_sent = await send_receipt_email(ride, rider or {}, driver_info, float(tip_amount))
     except Exception as e:
         logger.warning(f"Receipt email error: {e}")
 
-    return {"success": True, "charged_amount": total_charge, "email_sent": email_sent}
+    return {"success": True, "charged_amount": float(total_charge), "email_sent": email_sent}
 
 
 # ============================================================
@@ -1683,25 +1743,14 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
 
     diag_logger.info(f"[CANCEL] called ride_id={ride_id} user_id={current_user.get('id')}")
 
-    ride = await db_supabase.get_ride(ride_id)
-    if not ride or ride.get("rider_id") != current_user["id"]:
-        diag_logger.info(
-            f"[CANCEL] not found or unauthorized ride_id={ride_id} "
-            f"ride_exists={ride is not None} "
-            f"ride_rider_id={ride.get('rider_id') if ride else None} "
-            f"caller_id={current_user['id']}"
-        )
-        raise HTTPException(status_code=404, detail="Ride not found or unauthorized")
-
+    ride = await _require_ride_in_state_rider(
+        ride_id,
+        current_user["id"],
+        ("requested", "searching", "driver_assigned", "en_route", "driver_arrived"),
+    )
     diag_logger.info(
         f"[CANCEL] entry ride_id={ride_id} pre_status={ride.get('status')} driver_id={ride.get('driver_id')}"
     )
-
-    if ride.get("status") in ["completed", "cancelled"]:
-        raise HTTPException(status_code=400, detail="Ride already completed or cancelled")
-
-    if ride.get("status") == 'in_progress':
-        raise RideStateError("Cannot cancel after trip has started")
 
     # Calculate cancellation fee based on time since driver accepted
     driver_id = ride.get("driver_id")

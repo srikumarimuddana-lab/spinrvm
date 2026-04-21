@@ -319,15 +319,11 @@ jobs:
 
       - name: Deploy to Railway (fallback)
         if: failure()
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          if [ -z "${{ secrets.RAILWAY_DEPLOY_HOOK_URL }}" ]; then
-            echo "RAILWAY_DEPLOY_HOOK_URL not set — skipping Railway fallback."
-            exit 0
-          fi
-          http_status=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST "${{ secrets.RAILWAY_DEPLOY_HOOK_URL }}")
-          echo "Railway responded with HTTP $http_status"
-          [[ "$http_status" -ge 200 && "$http_status" -lt 300 ]]
+          npm i -g @railway/cli@4.40.2
+          railway up --service backend
 
   # Deploy Frontend
   deploy-frontend:

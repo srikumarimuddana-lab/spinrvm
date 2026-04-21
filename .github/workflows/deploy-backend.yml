@@ -8,47 +8,52 @@ on:
       - 'backend/**'
       - 'railway.json'
       - '.github/workflows/deploy-backend.yml'
-  # Allow manual re-runs from the Actions tab without pushing a new commit.
   workflow_dispatch:
 
-# One-time setup required (do this once, never touch again):
-#   1. Railway Dashboard → your project → Settings → Deploy Hooks
-#   2. Click "Create Deploy Hook" → copy the URL
-#   3. GitHub repo → Settings → Secrets → Actions → New secret:
-#        Name:  RAILWAY_DEPLOY_HOOK_URL
-#        Value: <the URL from step 2>
+# Authentication setup (one-time):
+#   Railway v4 requires a project-scoped token (NOT an account/personal token).
+#   Steps:
+#     1. Railway Dashboard → your project → Settings → Tokens → New Token
+#        Token type: must be "Project Token" (not Team or Personal)
+#     2. GitHub → repo → Settings → Secrets → Actions → RAILWAY_TOKEN = <token>
 #
-# Why a deploy hook instead of `railway up`:
-#   - No CLI to install — zero version-drift risk
-#   - The URL is self-authenticating (no RAILWAY_TOKEN format issues)
-#   - Immune to Railway CLI breaking changes (happened Apr 2026 v3→v4)
+# The --ci flag was removed in Railway CLI v4. Non-interactive mode is
+# automatic when RAILWAY_TOKEN is set in the environment.
+#
+# Alternative (no tokens needed at all):
+#   Connect Railway directly to this repo via:
+#   Railway Dashboard → Service → Settings → Source → Connect Repo → main
+#   Railway will auto-deploy on every push to main, making this workflow
+#   file unnecessary for deployments.
 
 jobs:
   deploy:
     name: Deploy to Railway
     runs-on: ubuntu-latest
     steps:
-      - name: Verify deploy hook secret is configured
-        run: |
-          if [ -z "${{ secrets.RAILWAY_DEPLOY_HOOK_URL }}" ]; then
-            echo "::error title=Missing secret::RAILWAY_DEPLOY_HOOK_URL is not set."
-            echo ""
-            echo "One-time setup:"
-            echo "  1. Railway Dashboard → project → Settings → Deploy Hooks → Create"
-            echo "  2. GitHub → repo → Settings → Secrets → Actions → New secret"
-            echo "     Name:  RAILWAY_DEPLOY_HOOK_URL"
-            echo "     Value: <hook URL from step 1>"
-            exit 1
-          fi
-          echo "RAILWAY_DEPLOY_HOOK_URL is configured."
+      - uses: actions/checkout@v4
 
-      - name: Trigger Railway deploy
+      - name: Verify RAILWAY_TOKEN is set
         run: |
-          http_status=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST "${{ secrets.RAILWAY_DEPLOY_HOOK_URL }}")
-          echo "Railway responded with HTTP $http_status"
-          if [[ "$http_status" -lt 200 || "$http_status" -ge 300 ]]; then
-            echo "::error::Deploy hook returned HTTP $http_status — check the hook URL in secrets."
+          if [ -z "${{ secrets.RAILWAY_TOKEN }}" ]; then
+            echo "::error title=Missing secret::RAILWAY_TOKEN is not set."
+            echo ""
+            echo "Railway Dashboard → project → Settings → Tokens → New Token"
+            echo "Token type: Project Token (not Personal or Team)"
+            echo "Then: GitHub → repo → Settings → Secrets → RAILWAY_TOKEN"
             exit 1
           fi
-          echo "Deploy triggered. Track progress at https://railway.app/dashboard"
+          echo "RAILWAY_TOKEN is set (length=${#RAILWAY_TOKEN})."
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+      - name: Install Railway CLI v4
+        run: npm i -g @railway/cli@4.40.2
+
+      - name: Show Railway CLI version
+        run: railway --version
+
+      - name: Deploy to Railway
+        run: railway up --service backend
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

@@ -22,7 +22,6 @@ import { NextRequest, NextResponse } from "next/server";
  * On logout we delete the cookie AND clear localStorage so both sides are in
  * lockstep — see authStore.logout().
  *
- * NOTE: renamed from `middleware` → `proxy` per Next.js 16 convention.
  */
 
 const PUBLIC_PATHS = ["/login"];
@@ -33,7 +32,7 @@ function isPublic(pathname: string): boolean {
   return PUBLIC_PREFIXES.some((prefix) => pathname.startsWith(prefix));
 }
 
-export function proxy(request: NextRequest) {
+export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Public page — no auth required

@@ -1821,6 +1821,41 @@ async def find_companies_by_email_domain(domain: str) -> List[Dict[str, Any]]:
     return await run_sync(_fn)
 
 
+# ---------- Billing (Plan 6) ----------
+async def list_company_ride_payment_sources(
+    *,
+    company_id: str,
+    from_iso: Optional[str] = None,
+    to_iso: Optional[str] = None,
+    member_id: Optional[str] = None,
+    limit: int = 500,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """Return ride_payment_sources rows for a company, newest first.
+
+    Each row is the source of truth for a work ride's billing split:
+    allowance_debit_amount + master_fallback_amount = total billed to company.
+    """
+    upper = offset + max(limit, 1) - 1
+
+    def _fn():
+        q = (
+            supabase.table("ride_payment_sources")
+            .select("*")
+            .eq("company_id", company_id)
+        )
+        if member_id:
+            q = q.eq("member_id", member_id)
+        if from_iso:
+            q = q.gte("created_at", from_iso)
+        if to_iso:
+            q = q.lte("created_at", to_iso)
+        res = q.order("created_at", desc=True).range(offset, upper).execute()
+        return _rows_from_res(res)
+
+    return await run_sync(_fn)
+
+
 async def get_corporate_policy(company_id: str) -> Optional[Dict[str, Any]]:
     """Fetch the active corporate_policies row for a company."""
     def _fn():

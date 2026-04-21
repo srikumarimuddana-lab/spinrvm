@@ -118,9 +118,9 @@ async def do_accept_invite(
     try:
         company, member = await accept_invite(token=body.token, user_id=current_user["id"])
     except InviteNotFound:
-        raise HTTPException(status_code=404, detail="invite not found")
+        raise HTTPException(status_code=404, detail="invite not found") from None
     except InviteAlreadyConsumed:
-        raise HTTPException(status_code=409, detail="invite already used")
+        raise HTTPException(status_code=409, detail="invite already used") from None
     return {"company": company, "member": member}
 
 

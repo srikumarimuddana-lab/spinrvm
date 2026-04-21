@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     # Rate limiting
     RATE_LIMIT: str = "10/minute"
     # Redis configuration
-    # Generic base URL (e.g. redis://localhost:6379/0). If specialized URLs below 
+    # Generic base URL (e.g. redis://localhost:6379/0). If specialized URLs below
     # are unset, they fall back to this.
     REDIS_URL: str = ""
 

@@ -1,8 +1,8 @@
+import hashlib
 import secrets
 import string
-import hashlib
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
+from typing import Optional
 
 import jwt
 from fastapi import Depends, HTTPException

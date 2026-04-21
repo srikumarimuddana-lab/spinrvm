@@ -2,8 +2,8 @@
 import pytest
 
 from validators import (
-    validate_cra_business_number,
     validate_canadian_tax_region,
+    validate_cra_business_number,
     validate_email_domain,
 )
 

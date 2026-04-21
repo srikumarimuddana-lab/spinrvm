@@ -1,7 +1,7 @@
 """Tests for error handling utilities (tasks 10-3 through 10-6)."""
 
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
@@ -189,6 +189,7 @@ class TestValidationExceptionHandlerError:
 class TestSupabaseClientTimeout:
     def test_explicit_timeout_configured(self):
         import httpx
+
         import supabase_client as sc
 
         if sc.supabase is None:

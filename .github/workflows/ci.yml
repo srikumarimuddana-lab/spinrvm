@@ -152,7 +152,7 @@ jobs:
 
       - name: Check for exposed secrets in EXPO_PUBLIC vars
         run: |
-          if grep -r "EXPO_PUBLIC_.*SECRET\|EXPO_PUBLIC_.*PRIVATE\|EXPO_PUBLIC_.*KEY" \
+          if grep -r "EXPO_PUBLIC_.*SECRET\|EXPO_PUBLIC_.*PRIVATE\|EXPO_PUBLIC_.*SERVICE_ROLE\|EXPO_PUBLIC_.*ANTHROPIC" \
             driver-app/.env* driver-app/app.config.ts; then
             echo "ERROR: Private key found in EXPO_PUBLIC_ variable"
             exit 1

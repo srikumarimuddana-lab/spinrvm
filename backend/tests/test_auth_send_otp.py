@@ -25,7 +25,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 PHONE = "+13065203304"
 
 
@@ -155,8 +154,9 @@ class TestVerifyOtpLockoutHelpers:
             asyncio.run(auth._check_otp_lockout(PHONE))
 
     def test_check_lockout_raises_429_when_locked(self):
-        from backend.routes import auth
         from fastapi import HTTPException
+
+        from backend.routes import auth
 
         with patch("backend.routes.auth.redis_get", AsyncMock(return_value="1")):
             with pytest.raises(HTTPException) as excinfo:

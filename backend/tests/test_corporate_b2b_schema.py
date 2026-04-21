@@ -10,7 +10,6 @@ import pytest
 
 from db_supabase import supabase
 
-
 REQUIRED_TABLES = [
     "corporate_wallets",
     "corporate_wallet_transactions",

@@ -1,8 +1,9 @@
+import decimal
 import json
 import logging
 import os
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
-from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import APIRouter, Query
 

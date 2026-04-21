@@ -22,7 +22,6 @@ from db_supabase import (  # noqa: E402
     update_corporate_stripe_customer_id,
     update_corporate_wallet_config,
 )
-from settings_loader import get_app_settings  # noqa: E402
 from db_supabase import (  # noqa: E402
     update_corporate_account as db_update_corporate_account,
 )
@@ -36,6 +35,7 @@ from schemas.corporate import (  # noqa: E402
 from schemas.corporate import (
     CorporateAccountResponse as CorporateAccountDetailResponse,
 )
+from settings_loader import get_app_settings  # noqa: E402
 from validators import sanitize_string, validate_email, validate_id, validate_phone  # noqa: E402
 
 # Alias for backward compatibility

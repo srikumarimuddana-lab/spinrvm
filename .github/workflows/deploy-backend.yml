@@ -8,6 +8,10 @@ on:
       - 'backend/**'
       - 'railway.json'
       - '.github/workflows/deploy-backend.yml'
+  # Allow manual re-runs from the Actions tab (needed when a merge's
+  # deploy failed — previously there was no way to retry without
+  # pushing a new commit to backend/**).
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -18,10 +22,37 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Install Railway CLI
-        run: npm i -g @railway/cli
+
+      # Pin the Railway CLI so an upstream breaking change (a flag
+      # rename or new required arg) can't silently start returning
+      # exit code 1 on every merge the way it has done since early
+      # April. Bump this when an intentional upgrade is tested.
+      - name: Install Railway CLI (pinned)
+        run: npm i -g @railway/cli@3.20.0
+
+      - name: Show Railway CLI version
+        run: railway --version
+
+      # Fail fast with a readable error if the secret is missing or
+      # empty — previously this surfaced as "Process completed with
+      # exit code 1" from `railway up` and was indistinguishable from
+      # a real build failure.
+      - name: Verify RAILWAY_TOKEN secret is present
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          if [ -z "${RAILWAY_TOKEN}" ]; then
+            echo "::error::RAILWAY_TOKEN secret is not set in repo Settings → Secrets."
+            echo "Generate a project token at Railway → Project → Settings → Tokens"
+            echo "and add it as the RAILWAY_TOKEN repository secret."
+            exit 1
+          fi
+          echo "RAILWAY_TOKEN is set (length=${#RAILWAY_TOKEN})."
+
       - name: Deploy
         run: railway up --service backend --ci
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          # Optional — set in repo secrets when using an account-scoped
+          # token. Project-scoped tokens infer the project automatically.
           RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID }}

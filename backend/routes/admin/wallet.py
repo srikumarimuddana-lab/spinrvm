@@ -6,7 +6,7 @@ here re-checks auth. Credits and debits recorded via this module carry
 ``admin_id`` in the ledger metadata so refunds/adjustments are auditable.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -110,7 +110,7 @@ async def admin_credit_wallet(req: AdminCreditRequest, admin: dict = Depends(get
     await db.update_one(
         "wallets",
         {"id": wallet["id"]},
-        {"$set": {"balance": float(new_balance), "updated_at": datetime.utcnow().isoformat()}},
+        {"$set": {"balance": float(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
     txn = await _record_transaction(
         wallet_id=wallet["id"],
@@ -148,7 +148,7 @@ async def admin_debit_wallet(req: AdminDebitRequest, admin: dict = Depends(get_a
     await db.update_one(
         "wallets",
         {"id": wallet["id"]},
-        {"$set": {"balance": float(new_balance), "updated_at": datetime.utcnow().isoformat()}},
+        {"$set": {"balance": float(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
     txn = await _record_transaction(
         wallet_id=wallet["id"],

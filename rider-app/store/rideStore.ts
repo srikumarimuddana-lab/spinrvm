@@ -4,6 +4,7 @@ import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RideStatus } from '../constants/rideStatus';
+import { recordNonFatal } from '../utils/crashlytics';
 
 const ACTIVE_RIDE_KEY = '@spinr:active_ride';
 const TERMINAL_STATUSES = new Set([RideStatus.COMPLETED, RideStatus.CANCELLED, RideStatus.FAILED]);
@@ -401,6 +402,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       _persistRide(response.data, null);
       return response.data;
     } catch (error: any) {
+      recordNonFatal(error, { store: 'rideStore', action: 'createRide' });
       set({ isLoading: false, error: error.message });
       throw error;
     }
@@ -434,6 +436,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       set({ currentRide: null, currentDriver: null, isLoading: false });
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
     } catch (error: any) {
+      recordNonFatal(error, { store: 'rideStore', action: 'cancelRide' });
       set({ isLoading: false, error: error.message });
     }
   },
@@ -476,6 +479,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
       return response.data;
     } catch (error: any) {
+      recordNonFatal(error, { store: 'rideStore', action: 'completeRide' });
       set({ error: error.message });
     }
   },
@@ -488,6 +492,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         tip_amount: tipAmount || 0,
       });
     } catch (error: any) {
+      recordNonFatal(error, { store: 'rideStore', action: 'rateRide' });
       set({ error: error.message });
       throw error;
     }

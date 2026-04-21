@@ -220,7 +220,7 @@ async def admin_login(request: Request, body: LoginRequest):
             if not staff.get("is_active", True):
                 raise HTTPException(status_code=403, detail="Account is deactivated")
             await db_supabase.update_one(
-                "admin_staff", {"id": staff["id"]}, {"last_login": datetime.utcnow().isoformat()}
+                "admin_staff", {"id": staff["id"]}, {"last_login": datetime.now(timezone.utc).isoformat()}
             )
             modules = staff.get("modules", ["dashboard"])
             token, access_expires_at = _mint_admin_access_token(

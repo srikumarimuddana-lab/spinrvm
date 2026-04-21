@@ -171,7 +171,7 @@ async def send_otp(request: Request, body: SendOTPRequest):
     otp_record = OTPRecord(
         phone=phone,
         code=hash_otp(otp_code),  # stored as SHA-256 hash (SEC-016)
-        expires_at=datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES),
     )
 
     try:
@@ -227,7 +227,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             "id": "dev",
             "phone": phone,
             "code": hash_otp(code),
-            "expires_at": datetime.utcnow() + timedelta(minutes=5),
+            "expires_at": datetime.now(timezone.utc) + timedelta(minutes=5),
         }
     if not otp_record:
         # Wrong code — record the failure (may trigger lockout)
@@ -287,6 +287,13 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 existing_user["current_session_id"] = session_id
             except Exception as e:
                 logger.warning(f"Could not update session_id for existing user: {e}")
+            # Mirror session_id in Redis so revocation propagates instantly across
+            # all replicas without waiting for a Postgres read on every request.
+            await redis_set(
+                f"session:{existing_user['id']}",
+                session_id,
+                ttl=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            )
             user_id = existing_user["id"]
             token_version = int(existing_user.get("token_version") or 0)
             access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -322,7 +329,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 "id": user_id,
                 "phone": phone,
                 "role": "rider",
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
                 "profile_complete": False,
                 "current_session_id": session_id,
                 "token_version": 0,
@@ -331,6 +338,11 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 await db_supabase.create_user(new_user)
             except Exception as e:
                 logger.warning(f"Could not persist new user to DB: {e}")
+            await redis_set(
+                f"session:{user_id}",
+                session_id,
+                ttl=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            )
             access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
             token = create_jwt_token(user_id, phone, session_id=session_id, token_version=0)
             refresh_raw, _, refresh_expires_at = await issue_refresh_token(
@@ -393,7 +405,7 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
             "id": uid,
             "phone": phone,
             "role": "rider",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "profile_complete": False,
             "current_session_id": session_id,
             "token_version": 0,
@@ -578,6 +590,9 @@ async def logout(request: Request, body: LogoutRequest, current_user: dict = Dep
     """
     if body.refresh_token:
         await revoke_refresh_token(body.refresh_token)
+    # Delete the Redis session key so the revocation propagates instantly
+    # to all replicas rather than waiting for the access-token TTL.
+    await redis_delete(f"session:{current_user['id']}")
     return {"success": True}
 
 

@@ -30,6 +30,10 @@ jest.mock('@react-native-firebase/messaging', () => () => ({
   getToken: jest.fn(),
   onMessage: jest.fn(),
 }));
+jest.mock('@react-native-firebase/crashlytics', () => () => ({
+  recordError: jest.fn(),
+  setAttribute: jest.fn(),
+}));
 
 // Mock shared modules
 jest.mock('@shared/api/client', () => ({

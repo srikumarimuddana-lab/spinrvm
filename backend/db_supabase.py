@@ -297,7 +297,7 @@ async def update_driver_location(driver_id: str, lat: float, lng: float):
         # Note: If 'location' is a PostGIS column, we might need to update it too.
         # But failing RPC prevents any update. Direct update is safer for now.
 
-        data = {"lat": lat, "lng": lng, "updated_at": datetime.utcnow().isoformat()}
+        data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc).isoformat()}
         supabase.table("drivers").update(data).eq("id", str(driver_id)).execute()
         return True
 
@@ -375,7 +375,7 @@ async def claim_ride_atomic(ride_id: str, driver_id: str) -> bool:
     if not supabase:
         return False
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
 
     def _claim():
         res = (
@@ -1500,7 +1500,7 @@ async def insert_corporate_member_invite(
                 "invited_email": email,
                 "role": role,
                 "invite_token": invite_token,
-                "invited_at": datetime.utcnow().isoformat(),
+                "invited_at": datetime.now(timezone.utc).isoformat(),
                 "invited_by": invited_by,
                 "policy_override": policy_override,
                 "status": "invited",
@@ -1560,7 +1560,7 @@ async def update_corporate_member(
 ) -> Optional[Dict[str, Any]]:
     if not patch:
         return await get_corporate_member_by_id(member_id)
-    patch = {**patch, "updated_at": datetime.utcnow().isoformat()}
+    patch = {**patch, "updated_at": datetime.now(timezone.utc).isoformat()}
     def _fn():
         res = (
             supabase.table("corporate_members")
@@ -1581,9 +1581,9 @@ async def accept_member_invite(
     patch = {
         "status": "active",
         "user_id": user_id,
-        "joined_at": datetime.utcnow().isoformat(),
+        "joined_at": datetime.now(timezone.utc).isoformat(),
         "invite_token": None,
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     def _fn():
         res = (
@@ -1617,7 +1617,7 @@ async def upsert_member_allowance(
         def _upd():
             res = (
                 supabase.table("corporate_member_allowances")
-                .update({**patch, "updated_at": datetime.utcnow().isoformat()})
+                .update({**patch, "updated_at": datetime.now(timezone.utc).isoformat()})
                 .eq("id", existing["id"])
                 .execute()
             )
@@ -1675,7 +1675,7 @@ async def reset_allowance_period(
                 "period_start": period_start,
                 "period_end": period_end,
                 "auto_approved_this_period": 0,
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             })
             .eq("id", allowance_id)
             .execute()
@@ -1760,7 +1760,7 @@ async def update_allowance_request(
     patch = {
         "status": status,
         "reviewed_by": reviewed_by,
-        "reviewed_at": datetime.utcnow().isoformat(),
+        "reviewed_at": datetime.now(timezone.utc).isoformat(),
         "decision_notes": decision_notes,
     }
     def _fn():
@@ -1881,7 +1881,7 @@ async def upsert_corporate_policy(
     replace they pass the complete desired state.
     """
     existing = await get_corporate_policy(company_id)
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     if existing:
         update_patch = {**patch, "updated_at": now}
 
@@ -1909,3 +1909,13 @@ async def upsert_corporate_policy(
         return _single_row_from_res(res) or insert_doc
 
     return await run_sync(_ins)
+
+
+async def ping() -> None:
+    """Minimal liveness probe — executes a trivial Supabase query to verify
+    the DB connection is functional. Raises on any error so callers can
+    return 503 to load-balancers."""
+    def _check():
+        supabase.table("app_settings").select("key").limit(1).execute()
+
+    await run_sync(_check)

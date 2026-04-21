@@ -1,7 +1,7 @@
 import asyncio
 import hmac
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Union
 
@@ -302,7 +302,7 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
             "total_rides": 0,
             "lat": 0,
             "lng": 0,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             **updates,
         }
         await db_supabase.insert_one("drivers", new_driver)
@@ -318,7 +318,7 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
         updates["is_available"] = False
         logger.info(f"[DRIVER] Driver {driver['id']} updated vehicle info → status set to needs_review")
 
-    updates["updated_at"] = datetime.utcnow().isoformat()
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db_supabase.update_one("drivers", {"id": driver["id"]}, await _encrypt_driver_pii(updates))
     updated = await db_supabase.get_driver_by_id(driver["id"])
     return serialize_doc(await _decrypt_driver_pii(updated))
@@ -350,7 +350,7 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
     query_filters: dict = {}
 
     # Last 7 days
-    cutoff = (datetime.utcnow() - timedelta(days=7)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
     query_filters["created_at"] = {"$gte": cutoff}
     query_filters["service_area_id"] = driver["service_area_id"]
 
@@ -432,8 +432,8 @@ async def register_driver(
     payload = {k: v for k, v in body.items() if k in allowed and v is not None}
 
     if existing:
-        payload["updated_at"] = datetime.utcnow().isoformat()
-        payload["submitted_at"] = datetime.utcnow().isoformat()
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+        payload["submitted_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("drivers", {"id": existing["id"]}, await _encrypt_driver_pii(payload))
         driver = await db_supabase.get_driver_by_id(existing["id"])
         return serialize_doc(await _decrypt_driver_pii(driver))
@@ -454,8 +454,8 @@ async def register_driver(
         "status": "pending",
         "lat": 0.0,
         "lng": 0.0,
-        "created_at": datetime.utcnow().isoformat(),
-        "submitted_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
         **payload,
     }
     await db_supabase.insert_one("drivers", await _encrypt_driver_pii(new_driver))
@@ -538,7 +538,7 @@ async def update_driver_status_self(
     updates = {
         "is_online": is_online,
         "is_available": is_online,
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.update_one("drivers", {"id": driver["id"]}, updates)
     return {"success": True, "is_online": is_online}
@@ -570,7 +570,7 @@ async def set_destination_mode(req: SetDestinationRequest, current_user: dict = 
                 "destination_address": req.address,
                 "destination_lat": req.lat,
                 "destination_lng": req.lng,
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         },
     )
@@ -597,7 +597,7 @@ async def clear_destination_mode(current_user: dict = Depends(get_current_user))
                 "destination_address": None,
                 "destination_lat": None,
                 "destination_lng": None,
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         },
     )
@@ -680,7 +680,7 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
     logger.info(f"Fetching earnings for driver {driver['id']} period {period}")
 
     # Calculate date range
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     # 'today' and 'day' both mean since midnight today
     # 'all' means no date restriction — fetch all-time
     use_date_filter = True
@@ -743,7 +743,7 @@ async def get_driver_daily_earnings(days: int = Query(7), current_user: dict = D
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    start_date = datetime.utcnow() - timedelta(days=days)
+    start_date = datetime.now(timezone.utc) - timedelta(days=days)
 
     # Fetch completed rides in the period using the shared db layer
     try:
@@ -802,7 +802,7 @@ async def get_driver_trip_earnings(
 
     filters: Dict[str, Any] = {"driver_id": driver["id"], "status": "completed"}
     if days is not None:
-        since = datetime.utcnow() - timedelta(days=days)
+        since = datetime.now(timezone.utc) - timedelta(days=days)
         filters["ride_completed_at"] = {"$gte": since.isoformat()}
 
     try:
@@ -848,7 +848,7 @@ async def get_driver_weekly_earnings(weeks: int = Query(4), current_user: dict =
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    start_date = datetime.utcnow() - timedelta(weeks=weeks)
+    start_date = datetime.now(timezone.utc) - timedelta(weeks=weeks)
 
     # Try driver_daily_stats first (pre-aggregated)
     try:
@@ -951,7 +951,7 @@ async def get_driver_monthly_earnings(months: int = Query(6), current_user: dict
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    start_date = datetime.utcnow() - timedelta(days=months * 30)
+    start_date = datetime.now(timezone.utc) - timedelta(days=months * 30)
 
     # Try driver_daily_stats first
     try:
@@ -1036,7 +1036,7 @@ async def get_driver_earnings_comparison(period: str = Query("week"), current_us
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if period == "week":
         current_start = now - timedelta(days=7)
         previous_start = now - timedelta(days=14)
@@ -1198,7 +1198,7 @@ async def update_location_batch(batch: Union[List[dict], dict], current_user: di
     if lat and lng:
         # Update via Supabase wrapper which now handles casting
         # Note: 'heading' column might not exist in Supabase 'drivers' table yet.
-        update_data = {"lat": lat, "lng": lng, "updated_at": datetime.utcnow()}
+        update_data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc)}
         # If heading is supported later, add it back. Currently causing 500 error if column missing.
         # if heading:
         #    update_data['heading'] = heading
@@ -1303,7 +1303,7 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
         return {"url": account_link.url, "mock": False}
     except Exception as e:
         logger.error(f"Stripe error: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
 @api_router.post("/bank-account")
@@ -1330,7 +1330,7 @@ async def save_bank_account(req: BankAccountCreate, current_user: dict = Depends
     account_data["currency"] = "cad"
     account_data["country"] = "CA"
     account_data["is_verified"] = False
-    account_data["created_at"] = datetime.utcnow().isoformat()
+    account_data["created_at"] = datetime.now(timezone.utc).isoformat()
 
     await db_supabase.delete_many("bank_accounts", {"driver_id": driver["id"]})
     await db_supabase.insert_one("bank_accounts", account_data)
@@ -1401,7 +1401,7 @@ async def request_payout(req: PayoutRequest, current_user: dict = Depends(get_cu
         "stripe_payout_id": stripe_payout_id,
         "bank_name": account.get("bank_name") if account else "Stripe Connect",
         "account_last4": account.get("account_number_last4") if account else "****",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("payouts", payout)
     return {"success": True, "payout": serialize_doc(payout)}
@@ -1446,14 +1446,14 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         "total_trips": len(rides),
         "platform_fees": 0,
         "net_earnings": total_earnings,
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
 @api_router.get("/earnings/export")
 async def export_earnings(year: int = Query(None), current_user: dict = Depends(get_current_user)):
     if not year:
-        year = datetime.utcnow().year
+        year = datetime.now(timezone.utc).year
 
     summary_data = await get_t4a_summary(year, current_user)
 
@@ -1525,7 +1525,7 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
         )
 
         export_payload = {
-            "export_generated_at": datetime.utcnow().isoformat() + "Z",
+            "export_generated_at": datetime.now(timezone.utc).isoformat() + "Z",
             "account": {k: v for k, v in user.items() if k not in ("password_hash",)},
             "driver_profile": {k: v for k, v in driver.items() if k not in ("password_hash",)},
             "rides": rides,
@@ -1727,8 +1727,8 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             "$set": {
                 "status": "driver_accepted",
                 "driver_id": driver["id"],
-                "driver_accepted_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "driver_accepted_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
             }
         },
     )
@@ -1775,7 +1775,7 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
         raise HTTPException(status_code=404, detail="Driver not found")
 
     # If assigned, unassign. If searching, just ignore/record decline.
-    await db_supabase.update_ride(ride_id, {"driver_id": None, "status": "searching", "updated_at": datetime.utcnow()})
+    await db_supabase.update_ride(ride_id, {"driver_id": None, "status": "searching", "updated_at": datetime.now(timezone.utc)})
 
     # Record the decline in audit_logs so daily stats can count it
     try:
@@ -1790,7 +1790,7 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
                 "entity_id": ride_id,
                 "user_email": driver["id"],  # reuse user_email column to store driver_id
                 "details": f"driver_id={driver['id']}",
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
             },
         )
     except Exception as _e:
@@ -1842,7 +1842,7 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
             )
 
     await db_supabase.update_ride(
-        ride_id, {"status": "driver_arrived", "driver_arrived_at": datetime.utcnow(), "updated_at": datetime.utcnow()}
+        ride_id, {"status": "driver_arrived", "driver_arrived_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
     )
 
     if ride.get("rider_id"):
@@ -1876,7 +1876,7 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
 
     # OTP correct, start ride
     await db_supabase.update_ride(
-        ride_id, {"status": "in_progress", "ride_started_at": datetime.utcnow(), "updated_at": datetime.utcnow()}
+        ride_id, {"status": "in_progress", "ride_started_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
     )
 
     if ride.get("rider_id"):
@@ -1902,7 +1902,7 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
         raise HTTPException(status_code=404, detail="Driver not found")
 
     await db_supabase.update_ride(
-        ride_id, {"status": "in_progress", "ride_started_at": datetime.utcnow(), "updated_at": datetime.utcnow()}
+        ride_id, {"status": "in_progress", "ride_started_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
     )
 
     ride = await db_supabase.get_ride(ride_id)
@@ -2006,8 +2006,8 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # webhook dispatcher in webhooks.py.
     update_fields: Dict[str, Any] = {
         "status": "completed",
-        "ride_completed_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "ride_completed_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
         "planned_distance_km": planned_distance,
         "actual_distance_km": actual_distance_km,
         "pickup_to_driver_km": pickup_to_driver_km,
@@ -2114,8 +2114,8 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
         ride_id,
         {
             "status": "cancelled",
-            "cancelled_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow(),
+            "cancelled_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
         },
     )
 
@@ -2151,7 +2151,7 @@ async def rate_rider(ride_id: str, rating_data: RideRatingRequest, current_user:
         {
             "rider_rating": rating_data.rating,
             "rider_comment": rating_data.comment,
-            "updated_at": datetime.utcnow(),
+            "updated_at": datetime.now(timezone.utc),
         },
     )
 
@@ -2315,7 +2315,7 @@ async def get_driver_leaderboard(
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if period == "week":
         start = (now - timedelta(days=7)).isoformat()
     elif period == "month":
@@ -2449,7 +2449,7 @@ async def update_driver_status(
             )
 
     if is_online:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Prefer the dynamic driver_documents collection over the legacy
         # top-level expiry fields on the drivers row. The legacy fields are
@@ -2597,7 +2597,7 @@ async def update_driver_status(
             if sub.get("expires_at"):
                 try:
                     exp = datetime.fromisoformat(str(sub["expires_at"]).replace("Z", "+00:00").replace("+00:00", ""))
-                    if exp < datetime.utcnow():
+                    if exp < datetime.now(timezone.utc):
                         await db_supabase.update_one("driver_subscriptions", {"id": sub["id"]}, {"status": "expired"})
                         raise HTTPException(
                             status_code=402,
@@ -2619,7 +2619,7 @@ async def update_driver_status(
     await db_supabase.update_one(
         "drivers",
         {"id": driver_id},
-        {"is_online": is_online, "is_available": is_online, "updated_at": datetime.utcnow().isoformat()},
+        {"is_online": is_online, "is_available": is_online, "updated_at": datetime.now(timezone.utc).isoformat()},
     )
 
     # Verify the update actually landed. db_supabase.update_one silently
@@ -2736,14 +2736,14 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
             exp = datetime.fromisoformat(str(sub["expires_at"]).replace("Z", "+00:00"))
             if exp.tzinfo:
                 exp = exp.replace(tzinfo=None)
-            if exp < datetime.utcnow():
+            if exp < datetime.now(timezone.utc):
                 await db_supabase.update_one("driver_subscriptions", {"id": sub["id"]}, {"status": "expired"})
                 return {"has_subscription": False, "subscription": None, "expired": True}
         except Exception:  # noqa: S110
             pass
 
     # Get today's ride count
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     today_rides = await db_supabase.count_documents(
         "rides",
         {
@@ -2819,10 +2819,10 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
         await db_supabase.update_one(
             "driver_subscriptions",
             {"id": existing["id"]},
-            {"status": "cancelled", "cancelled_at": datetime.utcnow().isoformat()},
+            {"status": "cancelled", "cancelled_at": datetime.now(timezone.utc).isoformat()},
         )
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     expires = now + timedelta(days=plan.get("duration_days", 30))
 
     # Attempt Stripe charge if configured; fall back gracefully if not.
@@ -2957,7 +2957,7 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
         await db.update_one(
             "driver_subscriptions",
             {"id": existing["id"]},
-            {"$set": {"status": "cancelled", "cancelled_at": datetime.utcnow().isoformat()}},
+            {"$set": {"status": "cancelled", "cancelled_at": datetime.now(timezone.utc).isoformat()}},
         )
 
     # Activate.
@@ -3018,7 +3018,7 @@ async def cancel_subscription(current_user: dict = Depends(get_current_user)):
     await db_supabase.update_one(
         "driver_subscriptions",
         {"id": sub["id"]},
-        {"status": "cancelled", "cancelled_at": datetime.utcnow().isoformat()},
+        {"status": "cancelled", "cancelled_at": datetime.now(timezone.utc).isoformat()},
     )
 
     return {"success": True}
@@ -3037,7 +3037,7 @@ async def check_expiring_subscriptions():
     """
     while True:
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             window = now + timedelta(hours=24)
 
             active_subs = await db.get_rows("driver_subscriptions", {"status": "active"}, limit=500)

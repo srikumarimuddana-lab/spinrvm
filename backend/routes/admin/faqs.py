@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Query
@@ -34,7 +34,7 @@ async def admin_create_faq(faq: Dict[str, Any]):
         "answer": faq.get("answer"),
         "category": faq.get("category", "general"),
         "is_active": faq.get("is_active", True),
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("faqs", doc)
     return {"faq_id": str(row.get("id") if row and isinstance(row, dict) else "")}
@@ -54,7 +54,7 @@ async def admin_update_faq(faq_id: str, faq: Dict[str, Any]):
         updates["is_active"] = faq.get("is_active")
 
     if updates:
-        updates["updated_at"] = datetime.utcnow().isoformat()
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("faqs", {"id": faq_id}, updates)
     return {"message": "FAQ updated"}
 
@@ -86,7 +86,7 @@ async def admin_send_notification(notification: Dict[str, Any]):
         "body": body,
         "type": notification_type,
         "audience": audience,
-        "sent_at": datetime.utcnow().isoformat(),
+        "sent_at": datetime.now(timezone.utc).isoformat(),
         "status": "sent",
         "sent_count": 1 if user_id else 0,
     }

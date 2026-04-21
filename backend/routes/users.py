@@ -11,7 +11,7 @@ except ImportError:
 import base64
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ async def request_data_export(current_user: dict = Depends(get_current_user)):
             "id": str(uuid.uuid4()),
             "user_id": user_id,
             "status": "pending",
-            "requested_at": datetime.utcnow().isoformat(),
+            "requested_at": datetime.now(timezone.utc).isoformat(),
         }
         await db_supabase.insert_one("data_export_requests", export_record)
     except Exception as e:
@@ -91,9 +91,9 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     logger.info(f"Account deletion (PIPEDA) requested for user {user_id}")
 
-    grace_period_end = (datetime.utcnow().replace(microsecond=0) +
+    grace_period_end = (datetime.now(timezone.utc).replace(microsecond=0) +
                         timedelta(days=30)).isoformat()
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     try:
         await db_supabase.update_one(
             "users",
@@ -114,7 +114,7 @@ async def delete_account(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     logger.info(f"Account deletion requested for user {user_id}")
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     try:
         # Soft-delete driver record (preserves audit trail)
         await db_supabase.update_one("drivers", {"user_id": user_id}, {"deleted_at": now})

@@ -8,7 +8,7 @@ service_areas.surge_multiplier for areas where surge_source == 'auto'.
 
 import asyncio
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from loguru import logger
@@ -51,7 +51,7 @@ def ratio_to_multiplier(ratio: float) -> float:
 
 async def _count_demand_in_area(area_id: str) -> int:
     """Count active/recent ride requests in a service area."""
-    cutoff = (datetime.utcnow() - timedelta(minutes=DEMAND_WINDOW_MINUTES)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=DEMAND_WINDOW_MINUTES)).isoformat()
     try:
         rides = await db.get_rows(
             "rides",
@@ -172,8 +172,8 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
                     "ratio": metrics["ratio"],
                     "source": "auto",
                     "is_active": new_multiplier > 1.0,
-                    "created_at": datetime.utcnow().isoformat(),
-                    "updated_at": datetime.utcnow().isoformat(),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
 

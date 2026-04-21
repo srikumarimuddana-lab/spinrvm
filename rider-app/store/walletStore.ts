@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import api from '@shared/api/client';
+import { recordNonFatal } from '../utils/crashlytics';
 
 export interface WalletInfo {
   id: string;
@@ -104,6 +105,7 @@ export const useWalletStore = create<WalletState>((set, get) => ({
         set({ wallet: { ...wallet, balance: res.data.balance }, isLoading: false });
       }
     } catch (error: any) {
+      recordNonFatal(error, { store: 'walletStore', action: 'payWithWallet' });
       set({ error: error.response?.data?.detail || error.message, isLoading: false });
       throw error;
     }

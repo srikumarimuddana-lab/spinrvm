@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -79,7 +79,7 @@ async def _log_driver_activity(
                 "description": description,
                 "metadata": metadata or {},
                 "actor": actor,
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
             },
         )
     except Exception as e:
@@ -186,7 +186,7 @@ async def admin_get_driver_stats(
     """
     from collections import defaultdict
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     # Default date range: last 30 days
     if start_date:
         range_start = datetime.fromisoformat(start_date.replace("Z", "+00:00").replace("+00:00", ""))
@@ -221,7 +221,7 @@ async def admin_get_driver_stats(
     all_docs = await db_supabase.get_rows("driver_documents", {"status": "pending"}, limit=10000)
     pending_doc_driver_ids = {d.get("driver_id") for d in all_docs if d.get("driver_id")}
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
     expiry_fields = [
         "license_expiry_date",
         "insurance_expiry_date",
@@ -481,7 +481,7 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
         raise HTTPException(status_code=404, detail="Driver not found")
 
     current_status = driver.get("status", "pending")
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     updates: Dict[str, Any] = {"updated_at": now}
 
     if req.action == "approve":
@@ -535,7 +535,7 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
         await db_supabase.update_one("drivers", {"id": driver_id}, updates)
     except Exception as e:
         logger.error(f"Failed driver action {req.action} on {driver_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
     logger.info(f"[ADMIN] Driver {driver_id} action={req.action} reason={req.reason}")
 
@@ -608,7 +608,7 @@ async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     updates: Dict[str, Any] = {"status": req.status, "updated_at": now}
 
     # Sync is_verified with status
@@ -659,7 +659,7 @@ async def admin_add_driver_note(driver_id: str, req: DriverNoteCreate):
         "driver_id": driver_id,
         "note": req.note.strip(),
         "category": req.category,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("driver_notes", doc)
     await _log_driver_activity(
@@ -710,9 +710,9 @@ async def admin_get_driver_daily_stats(
 ):
     """Get aggregated daily stats for a driver. Default: last 30 days."""
     if not end_date:
-        end_date = datetime.utcnow().date().isoformat()
+        end_date = datetime.now(timezone.utc).date().isoformat()
     if not start_date:
-        start_date = (datetime.utcnow().date() - timedelta(days=30)).isoformat()
+        start_date = (datetime.now(timezone.utc).date() - timedelta(days=30)).isoformat()
 
     stats = await db_supabase.get_rows(
         "driver_daily_stats",
@@ -738,7 +738,7 @@ async def admin_assign_driver_area(driver_id: str, service_area_id: str):
         {"id": driver_id},
         {
             "service_area_id": service_area_id,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
     return {"message": f"Driver assigned to area {service_area_id}"}
@@ -750,7 +750,7 @@ async def admin_get_driver_location_trail(
     hours: int = Query(24),
 ):
     """Get driver's location history (table: driver_location_history)."""
-    cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     locations = await db_supabase.get_rows(
         "driver_location_history",
         {"driver_id": driver_id, "timestamp": {"$gte": cutoff}},

@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -147,7 +147,7 @@ async def admin_cancel_ride(
         raise HTTPException(status_code=400, detail="Ride already completed or cancelled")
 
     reason = (body.reason or "Cancelled by admin").strip()[:500]
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     await db_supabase.update_ride(
         ride_id,
@@ -227,7 +227,7 @@ async def admin_get_stats():
         {"status": {"$in": ["requested", "driver_assigned", "driver_arrived", "in_progress"]}},
     )
     total_users = await db_supabase.count_documents("users", {})
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     rides_today = await db_supabase.count_documents("rides", {"created_at": {"$gte": today_start}})
     completed_today = await db_supabase.get_rows(
         "rides",
@@ -235,7 +235,7 @@ async def admin_get_stats():
         limit=10000,
     )
     revenue_today = sum(float(r.get("total_fare") or 0) for r in (completed_today or []))
-    month_start = (datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)).isoformat()
+    month_start = (datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)).isoformat()
     completed_month = await db_supabase.get_rows(
         "rides",
         {"status": "completed", "ride_completed_at": {"$gte": month_start}},
@@ -273,7 +273,7 @@ async def admin_get_stats():
 @router.get("/rides/stats")
 async def admin_get_ride_stats():
     """Get ride count/revenue stats for today, yesterday, this week, this month, plus daily chart data."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     yesterday_start = today_start - timedelta(days=1)
 
@@ -565,7 +565,7 @@ async def admin_get_earnings(period: str = Query("month")):
     Uses MongoDB aggregation to calculate totals from ride data.
     """
     # Calculate date range
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if period == "day":
         start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
     elif period == "week":

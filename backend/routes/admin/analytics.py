@@ -5,7 +5,7 @@ Provides aggregated operational intelligence for the admin dashboard.
 
 import logging
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -23,7 +23,7 @@ api_router = APIRouter(prefix="/analytics", tags=["Admin Analytics"])
 
 def _parse_date_range(date_range: str) -> datetime:
     """Convert a shorthand range like '7d', '30d', '90d' to a start datetime."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     mapping = {
         "today": timedelta(days=1),
         "7d": timedelta(days=7),
@@ -340,7 +340,7 @@ async def get_surge_history(
     admin: dict = Depends(get_admin_user),
 ):
     """Get surge pricing history for a specific service area (last N hours)."""
-    cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     try:
         records = await db.get_rows(
             "surge_pricing",

@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from firebase_admin import auth as firebase_auth
@@ -43,7 +43,7 @@ async def heartbeat_task(websocket: WebSocket, connection_key: str):
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
             try:
-                await websocket.send_json({"type": "ping", "timestamp": datetime.utcnow().isoformat()})
+                await websocket.send_json({"type": "ping", "timestamp": datetime.now(timezone.utc).isoformat()})
             except Exception:
                 logger.info(f"Heartbeat failed for {connection_key} - connection likely dead")
                 break
@@ -85,7 +85,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                         "id": uid,
                         "phone": phone or "",
                         "role": "rider",
-                        "created_at": datetime.utcnow(),
+                        "created_at": datetime.now(timezone.utc),
                         "profile_complete": False,
                     }
                     await db_supabase.create_user(new_user)
@@ -240,7 +240,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                         "speed": data.get("speed"),
                         "heading": data.get("heading"),
                         "tracking_phase": tracking_phase,
-                        "timestamp": datetime.utcnow(),
+                        "timestamp": datetime.now(timezone.utc),
                     }
                     # 'accuracy' and 'altitude' columns seem missing in Supabase schema, so omitted for now.
 
@@ -311,7 +311,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                                     "tracking_phase": pt.get("tracking_phase", "online_idle"),
                                     "timestamp": datetime.fromisoformat(pt["timestamp"])
                                     if pt.get("timestamp")
-                                    else datetime.utcnow(),
+                                    else datetime.now(timezone.utc),
                                 }
                             )
                         if docs:
@@ -384,7 +384,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                             "ride_id": ride_id,
                             "text": message,
                             "sender": sender,
-                            "timestamp": datetime.utcnow(),
+                            "timestamp": datetime.now(timezone.utc),
                         }
 
                         # Persist message to database

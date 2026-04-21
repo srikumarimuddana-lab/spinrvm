@@ -12,20 +12,19 @@ from core.config import settings
 from utils.rate_limiter import default_limiter, rate_limit_exceeded_handler
 
 # ── Firebase App Check Middleware ─────────────────────────────────────
-# When enforcement_enabled=True the middleware rejects any request to a
-# protected path that is missing a valid X-Firebase-AppCheck token with
-# HTTP 401. Set to False during development or before Firebase Console
-# registration is complete (see IMPORTANT note below).
+# Enforcement is tied to ENV: on in production, off in development/staging.
+# When off, missing or invalid tokens are logged but requests still go
+# through — this lets dev builds (Expo Go, unregistered debug devices)
+# reach the API without Firebase Console setup.
 #
-# IMPORTANT — manual steps required before enabling enforcement:
+# IMPORTANT — before flipping ENV=production, complete these manual steps:
 #   iOS  : register bundle ID with Apple DeviceCheck in
 #          Firebase Console → App Check → Apps
 #   Android: register package name with Play Integrity in
 #          Firebase Console → App Check → Apps
-# Until those steps are done, real devices will be rejected. During local
-# development you can add your debug token in Firebase Console → App Check
-# → Apps → overflow menu → "Manage debug tokens".
-_APP_CHECK_ENFORCEMENT = True
+# Until those steps are done, production devices will get 401s. For local
+# dev builds, add a debug token in Firebase Console → App Check → Apps →
+# overflow menu → "Manage debug tokens".
 
 # Paths that must never require App Check:
 #   - WebSocket connections (no HTTP headers)
@@ -386,9 +385,11 @@ def init_middleware(app):
     app.add_middleware(RequestIDMiddleware)
 
     # Firebase App Check — verify that requests originate from genuine
-    # Spinr builds. Enforcement is enabled; see _APP_CHECK_ENFORCEMENT above
-    # and the IMPORTANT comment for the manual Firebase Console steps needed.
-    app.add_middleware(FirebaseAppCheckMiddleware, enforcement_enabled=_APP_CHECK_ENFORCEMENT)
+    # Spinr builds. Enforced in production; logged-only in dev/staging so
+    # unregistered debug devices aren't blocked. See the IMPORTANT comment
+    # above FirebaseAppCheckMiddleware for the manual Firebase Console
+    # steps required before shipping to production.
+    app.add_middleware(FirebaseAppCheckMiddleware, enforcement_enabled=is_production)
 
     # FIX: Add CORS headers to exception responses (FastAPI bug fix)
     @app.exception_handler(Exception)
@@ -453,5 +454,6 @@ def init_middleware(app):
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
     logger.info(
-        f"Middleware initialized: CORS, Security Headers (HSTS={'on' if is_production else 'off'}), Rate Limiting"
+        f"Middleware initialized: CORS, Security Headers (HSTS={'on' if is_production else 'off'}), "
+        f"App Check enforcement={'on' if is_production else 'off'}, Rate Limiting"
     )

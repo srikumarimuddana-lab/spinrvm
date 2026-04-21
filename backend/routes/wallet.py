@@ -7,7 +7,7 @@ audit trail is immutable.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -45,8 +45,8 @@ async def get_or_create_wallet(user_id: str) -> dict:
         "balance": 0.0,
         "currency": "CAD",
         "is_active": True,
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.insert_one("wallets", wallet_data)
     return wallet_data
@@ -73,7 +73,7 @@ async def _record_transaction(
         "reference_id": reference_id,
         "description": description,
         "metadata": metadata or {},
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.insert_one("wallet_transactions", txn)
     return txn
@@ -125,7 +125,7 @@ async def top_up_wallet(req: TopUpRequest, current_user: dict = Depends(get_curr
     await db.update_one(
         "wallets",
         {"id": wallet["id"]},
-        {"$set": {"balance": float(new_balance), "updated_at": datetime.utcnow().isoformat()}},
+        {"$set": {"balance": float(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
 
     txn = await _record_transaction(
@@ -173,7 +173,7 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
     await db.update_one(
         "wallets",
         {"id": wallet["id"]},
-        {"$set": {"balance": float(new_balance), "updated_at": datetime.utcnow().isoformat()}},
+        {"$set": {"balance": float(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
 
     # Mark ride as paid via wallet
@@ -267,7 +267,7 @@ async def transfer_to_user(req: TransferRequest, current_user: dict = Depends(ge
     await db.update_one(
         "wallets",
         {"id": sender_wallet["id"]},
-        {"$set": {"balance": float(new_sender_balance), "updated_at": datetime.utcnow().isoformat()}},
+        {"$set": {"balance": float(new_sender_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
     await _record_transaction(
         wallet_id=sender_wallet["id"],
@@ -282,7 +282,7 @@ async def transfer_to_user(req: TransferRequest, current_user: dict = Depends(ge
     await db.update_one(
         "wallets",
         {"id": recipient_wallet["id"]},
-        {"$set": {"balance": float(new_recipient_balance), "updated_at": datetime.utcnow().isoformat()}},
+        {"$set": {"balance": float(new_recipient_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
     await _record_transaction(
         wallet_id=recipient_wallet["id"],

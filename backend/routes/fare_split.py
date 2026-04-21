@@ -10,7 +10,7 @@ Flow:
 import logging
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import List
 
@@ -87,8 +87,8 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
         "total_fare": total_fare,
         "split_count": split_count,
         "status": "pending",
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.insert_one("fare_splits", split_data)
 
@@ -104,7 +104,7 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
             "phone": phone,
             "share_amount": share_amount,
             "status": "pending",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.insert_one("fare_split_participants", participant)
         participants.append(participant)
@@ -255,7 +255,7 @@ async def respond_to_split(
             await db.update_one(
                 "fare_splits",
                 {"id": split["id"]},
-                {"$set": {"split_count": active_count, "updated_at": datetime.utcnow().isoformat()}},
+                {"$set": {"split_count": active_count, "updated_at": datetime.now(timezone.utc).isoformat()}},
             )
 
     return {"status": new_status}
@@ -298,7 +298,7 @@ async def pay_split_share(
         await db.update_one(
             "wallets",
             {"id": wallet["id"]},
-            {"$set": {"balance": float(new_balance), "updated_at": datetime.utcnow().isoformat()}},
+            {"$set": {"balance": float(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
         )
         await _record_transaction(
             wallet_id=wallet["id"],
@@ -314,7 +314,7 @@ async def pay_split_share(
     await db.update_one(
         "fare_split_participants",
         {"id": participant_id},
-        {"$set": {"status": "paid", "paid_at": datetime.utcnow().isoformat()}},
+        {"$set": {"status": "paid", "paid_at": datetime.now(timezone.utc).isoformat()}},
     )
 
     # Check if all participants have paid → mark split as completed
@@ -330,7 +330,7 @@ async def pay_split_share(
             await db.update_one(
                 "fare_splits",
                 {"id": split["id"]},
-                {"$set": {"status": "completed", "updated_at": datetime.utcnow().isoformat()}},
+                {"$set": {"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat()}},
             )
 
     return {"status": "paid", "share_amount": share_amount}
@@ -352,7 +352,7 @@ async def cancel_fare_split(split_id: str, current_user: dict = Depends(get_curr
     await db.update_one(
         "fare_splits",
         {"id": split_id},
-        {"$set": {"status": "cancelled", "updated_at": datetime.utcnow().isoformat()}},
+        {"$set": {"status": "cancelled", "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
 
     return {"status": "cancelled"}

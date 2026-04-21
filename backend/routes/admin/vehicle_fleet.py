@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -38,7 +38,7 @@ async def admin_create_vehicle_type(vtype: Dict[str, Any]):
         "price_per_km": vtype.get("price_per_km"),
         "price_per_minute": vtype.get("price_per_minute"),
         "is_active": vtype.get("is_active", True),
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("vehicle_types", doc)
     # PERF-001: Invalidate fare cache
@@ -104,7 +104,7 @@ async def admin_create_fare_config(config: Dict[str, Any]):
         "minimum_fare": config.get("minimum_fare", 0),
         "booking_fee": config.get("booking_fee", 2.0),
         "is_active": config.get("is_active", True),
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("fare_configs", doc)
     # PERF-001: Invalidate fare cache
@@ -197,7 +197,7 @@ async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
                     item["id"],
                     {
                         "status": "driver_notified",
-                        "notified_at": datetime.utcnow().isoformat(),
+                        "notified_at": datetime.now(timezone.utc).isoformat(),
                     },
                 )
     except Exception as e:
@@ -211,12 +211,12 @@ async def admin_resolve_lost_item(item_id: str, req: LostAndFoundResolveRequest)
     """Resolve or mark a lost and found item as unresolved."""
     update_data = {
         "status": req.status,
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     if req.admin_notes:
         update_data["admin_notes"] = req.admin_notes
     if req.status == "resolved":
-        update_data["resolved_at"] = datetime.utcnow().isoformat()
+        update_data["resolved_at"] = datetime.now(timezone.utc).isoformat()
 
     result = await db_supabase.update_lost_and_found(item_id, update_data)
     if not result:
@@ -238,7 +238,7 @@ async def admin_list_lost_and_found(
 async def admin_update_lost_item(item_id: str, req: dict):
     """Update a lost and found item."""
     update = {k: v for k, v in req.items() if k in ("item_description", "status", "admin_notes")}
-    update["updated_at"] = datetime.utcnow().isoformat()
+    update["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db_supabase.update_lost_and_found(item_id, update)
     if not result:
         raise HTTPException(status_code=404, detail="Item not found")

@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
 from fastapi import APIRouter, Query
@@ -30,7 +30,7 @@ async def admin_cleanup_location_history(days: int = 30):
     Also deletes online_idle points older than 24 hours regardless (they are
     never useful for historical analysis).
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     cutoff_historical = (now - timedelta(days=days)).isoformat()
     cutoff_idle = (now - timedelta(hours=24)).isoformat()
 
@@ -94,7 +94,7 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
     if target_date:
         stat_date = datetime.fromisoformat(target_date).date()
     else:
-        stat_date = (datetime.utcnow() - timedelta(days=1)).date()
+        stat_date = (datetime.now(timezone.utc) - timedelta(days=1)).date()
 
     day_start = datetime.combine(stat_date, datetime.min.time())
     day_end = day_start + timedelta(days=1)
@@ -217,7 +217,7 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
             "rides_declined": declines_by_driver.get(driver_id, 0),
             "total_earnings": round(total_earnings, 2),
             "total_tips": round(total_tips, 2),
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
 
         # Upsert
@@ -228,7 +228,7 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
             await db_supabase.update_one("driver_daily_stats", {"id": stat_row["id"]}, stat_row)
             updated += 1
         else:
-            stat_row["created_at"] = datetime.utcnow().isoformat()
+            stat_row["created_at"] = datetime.now(timezone.utc).isoformat()
             await db_supabase.insert_one("driver_daily_stats", stat_row)
             created += 1
 
@@ -264,6 +264,6 @@ async def log_audit(action: str, entity_type: str, entity_id: str, user_email: s
             "entity_id": entity_id,
             "user_email": user_email,
             "details": details,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )

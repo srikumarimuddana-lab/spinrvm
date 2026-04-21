@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
@@ -88,7 +88,7 @@ class OTPRecord(BaseModel):
     code: str
     expires_at: datetime
     verified: bool = False
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
@@ -125,7 +125,7 @@ class AppSettings(BaseModel):
     require_driver_subscription: bool = False
     terms_of_service_text: str = ""
     privacy_policy_text: str = ""
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class ServiceArea(BaseModel):
@@ -137,7 +137,7 @@ class ServiceArea(BaseModel):
     is_airport: bool = False
     airport_fee: Decimal = Decimal("0.0")
     surge_multiplier: float = 1.0
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class VehicleType(BaseModel):
@@ -148,7 +148,7 @@ class VehicleType(BaseModel):
     capacity: int
     image_url: Optional[str] = None
     is_active: bool = True
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class FareConfig(BaseModel):
@@ -161,7 +161,7 @@ class FareConfig(BaseModel):
     minimum_fare: Decimal
     booking_fee: Decimal = Decimal("2.0")
     is_active: bool = True
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class SavedAddress(BaseModel):
@@ -172,7 +172,7 @@ class SavedAddress(BaseModel):
     lat: float
     lng: float
     icon: str = "location"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class SavedAddressCreate(BaseModel):
@@ -216,7 +216,7 @@ class Driver(BaseModel):
     lng: float
     is_online: bool = True
     is_available: bool = True
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @validator('license_plate')
     def _check_license_plate(cls, v: str) -> str:
@@ -266,7 +266,7 @@ class Ride(BaseModel):
     status: str = "searching"
     pickup_otp: str = ""
     # Timeline tracking
-    ride_requested_at: datetime = Field(default_factory=datetime.utcnow)
+    ride_requested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     driver_notified_at: Optional[datetime] = None
     driver_accepted_at: Optional[datetime] = None
     driver_arrived_at: Optional[datetime] = None
@@ -281,8 +281,8 @@ class Ride(BaseModel):
     # Rating
     rider_rating: Optional[int] = None
     rider_comment: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class RideRatingRequest(BaseModel):
@@ -354,7 +354,7 @@ class CreateRideRequest(BaseModel):
         if v is not None:
             from datetime import timedelta
             naive = v.replace(tzinfo=None) if v.tzinfo else v
-            if naive < datetime.utcnow() + timedelta(minutes=5):
+            if naive < datetime.now(timezone.utc) + timedelta(minutes=5):
                 raise ValueError('Scheduled time must be at least 5 minutes in the future')
 
             tz_name: Optional[str] = values.get('scheduled_timezone')

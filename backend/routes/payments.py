@@ -118,7 +118,7 @@ async def create_payment_intent(body: PaymentIntentRequest, current_user: dict =
         return {"client_secret": intent.client_secret, "payment_intent_id": intent.id, "mock": False}
     except Exception as e:
         logger.error(f"Stripe error: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
 @api_router.post("/confirm")
@@ -148,7 +148,7 @@ async def confirm_payment(request: Dict[str, Any], current_user: dict = Depends(
             return {"status": intent.status, "mock": False}
         except Exception as e:
             logger.error(f"Stripe error: {e}")
-            raise HTTPException(status_code=500, detail=str(e)) from e
+            raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
     return {"status": "unknown", "mock": True}
 
@@ -182,7 +182,7 @@ async def create_setup_intent(current_user: dict = Depends(get_current_user)):
         }
     except Exception as e:
         logger.error(f"Stripe error: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
 @api_router.get("/methods")
@@ -223,7 +223,7 @@ async def get_payment_methods(current_user: dict = Depends(get_current_user)):
         }
     except Exception as e:
         logger.error(f"Stripe error: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
 # ─── Cards CRUD via Stripe ───
@@ -387,7 +387,7 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
         raise HTTPException(status_code=400, detail=e.user_message or "Card declined") from e
     except Exception as e:
         logger.error(f"Add card error: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
 @api_router.post("/cards/{card_id}/default")

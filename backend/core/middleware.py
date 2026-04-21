@@ -1,3 +1,4 @@
+import uuid
 from urllib.parse import urlparse
 
 from fastapi import Request
@@ -83,6 +84,25 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
             logger.debug("App Check: token verification failed (enforcement disabled): %s", exc)
 
         return await call_next(request)
+
+# ── Correlation / Request-ID middleware ──────────────────────────────
+# Each request gets a UUID in X-Request-ID (caller may supply their own).
+# The ID is echoed back in the response header and bound to the loguru
+# context so every log line emitted during that request carries it —
+# enabling full end-to-end tracing from mobile client to DB query.
+
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    """Attach a unique X-Request-ID to every request/response pair."""
+
+    async def dispatch(self, request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        request.state.request_id = request_id
+        with logger.contextualize(request_id=request_id):
+            response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
 
 # ── Security response headers ─────────────────────────────────────────
 # Baseline for an API backend. Critical protections: X-Frame-Options
@@ -344,6 +364,10 @@ def init_middleware(app):
     # HSTS is only enabled in production because emitting it over
     # plain-HTTP dev would cause browsers to pin the dev host to HTTPS.
     app.add_middleware(SecurityHeadersMiddleware, enable_hsts=is_production)
+
+    # Request ID — outermost layer so X-Request-ID is present on every
+    # response, including CORS preflights and error responses.
+    app.add_middleware(RequestIDMiddleware)
 
     # Firebase App Check — verify that requests originate from genuine
     # Spinr builds. Enforcement is enabled; see _APP_CHECK_ENFORCEMENT above

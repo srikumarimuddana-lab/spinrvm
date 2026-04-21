@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Query
@@ -37,14 +37,14 @@ async def admin_create_promotion(promotion: Dict[str, Any]):
         "max_uses": promotion.get("max_uses", 0),
         "max_uses_per_user": promotion.get("max_uses_per_user", 1),
         "uses": 0,
-        "valid_from": promotion.get("valid_from", datetime.utcnow().isoformat()),
+        "valid_from": promotion.get("valid_from", datetime.now(timezone.utc).isoformat()),
         "expiry_date": promotion.get("expiry_date"),
         "min_ride_fare": promotion.get("min_ride_fare", 0),
         "first_ride_only": promotion.get("first_ride_only", False),
         "new_user_days": promotion.get("new_user_days", 0),
         "is_active": promotion.get("is_active", True),
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     # Optional JSONB fields that exist in the schema
@@ -139,7 +139,7 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
         logger.warning("promo_applications table may not exist yet")
         all_usage = []
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
 
     # Date range filtering
@@ -240,7 +240,7 @@ async def admin_update_promotion(promotion_id: str, promotion: Dict[str, Any]):
     updates = {k: v for k, v in promotion.items() if k in allowed_fields and v is not None}
 
     if updates:
-        updates["updated_at"] = datetime.utcnow().isoformat()
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         try:
             await db_supabase.update_one("promotions", {"id": promotion_id}, updates)
         except Exception:

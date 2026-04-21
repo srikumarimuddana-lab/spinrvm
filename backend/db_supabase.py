@@ -557,6 +557,26 @@ async def get_otp_record(phone: str, code: str) -> Optional[Dict[str, Any]]:
     )
 
 
+async def get_otp_record_by_phone(phone: str) -> Optional[Dict[str, Any]]:
+    """Fetch the most-recent unverified OTP record for a phone number.
+    Used by verify_otp so the hash comparison can be done in constant time
+    with hmac.compare_digest rather than via a DB equality predicate.
+    """
+    if not supabase:
+        return None
+    return await run_sync(
+        lambda: _single_row_from_res(
+            supabase.table("otp_records")
+            .select("*")
+            .eq("phone", phone)
+            .eq("verified", False)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+    )
+
+
 async def verify_otp_record(record_id: str):
     if not supabase:
         return None
@@ -1867,3 +1887,58 @@ async def find_companies_by_email_domain(domain: str) -> List[Dict[str, Any]]:
         )
         return _rows_from_res(res)
     return await run_sync(_fn)
+
+
+async def get_corporate_policy(company_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch the active corporate_policies row for a company."""
+    def _fn():
+        res = (
+            supabase.table("corporate_policies")
+            .select("*")
+            .eq("company_id", company_id)
+            .eq("active", True)
+            .limit(1)
+            .execute()
+        )
+        return _single_row_from_res(res)
+    return await run_sync(_fn)
+
+
+async def upsert_corporate_policy(
+    company_id: str, patch: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Insert or update the company's policy row.
+
+    The table has a UNIQUE constraint on company_id so we upsert on that
+    column.  Callers pass only the fields they want to change; for a full
+    replace they pass the complete desired state.
+    """
+    existing = await get_corporate_policy(company_id)
+    now = datetime.utcnow().isoformat()
+    if existing:
+        update_patch = {**patch, "updated_at": now}
+
+        def _upd():
+            res = (
+                supabase.table("corporate_policies")
+                .update(update_patch)
+                .eq("id", existing["id"])
+                .execute()
+            )
+            return _single_row_from_res(res) or {**existing, **update_patch}
+
+        return await run_sync(_upd) or existing
+
+    insert_doc = {
+        "company_id": company_id,
+        "active": True,
+        "created_at": now,
+        "updated_at": now,
+        **patch,
+    }
+
+    def _ins():
+        res = supabase.table("corporate_policies").insert(insert_doc).execute()
+        return _single_row_from_res(res) or insert_doc
+
+    return await run_sync(_ins)

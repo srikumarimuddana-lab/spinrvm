@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     # Firebase settings
     FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None
     FIREBASE_DRIVER_APP_ID: str = ""
+    FIREBASE_RIDER_APP_ID: str = ""
 
     # Security settings — no defaults; app refuses to start if unset in production
     JWT_SECRET: str

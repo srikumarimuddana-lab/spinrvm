@@ -1,0 +1,78 @@
+{
+  "common": {
+    "loading": "Cargando...",
+    "error": "Error",
+    "success": "Éxito",
+    "cancel": "Cancelar",
+    "confirm": "Confirmar",
+    "save": "Guardar",
+    "back": "Atrás",
+    "done": "Hecho",
+    "ok": "OK",
+    "close": "Cerrar",
+    "retry": "Intentar de nuevo"
+  },
+  "home": {
+    "whereToGo": "¿A dónde vas?",
+    "searchPlaceholder": "Buscar destino",
+    "nearbyDrivers": "Conductores cercanos",
+    "scheduledRides": "Viajes programados"
+  },
+  "ride": {
+    "chooseRide": "Elige un viaje",
+    "confirmRide": "Confirmar viaje",
+    "scheduleLater": "Programar para más tarde",
+    "noDrivers": "No hay autos disponibles",
+    "findingRides": "Buscando los mejores viajes...",
+    "shareInvoice": "Compartir recibo",
+    "rideComplete": "¡Viaje completado!",
+    "howWasRide": "¿Cómo fue tu viaje?"
+  },
+  "wallet": {
+    "title": "Cartera",
+    "balance": "Saldo disponible",
+    "topUp": "Recargar",
+    "transfer": "Transferir",
+    "recentActivity": "Actividad reciente",
+    "noTransactions": "Sin transacciones",
+    "transferTo": "Transferir a",
+    "recipientPhone": "Teléfono del destinatario",
+    "amount": "Monto",
+    "transferSuccess": "Transferencia enviada exitosamente"
+  },
+  "loyalty": {
+    "title": "Recompensas",
+    "points": "Puntos",
+    "tier": "Nivel",
+    "lifetime": "Puntos de por vida",
+    "redeem": "Canjear puntos",
+    "history": "Historial de puntos",
+    "noHistory": "Sin historial de puntos",
+    "redeemSuccess": "Puntos canjeados exitosamente"
+  },
+  "support": {
+    "title": "Contactar soporte",
+    "howCanWeHelp": "¿Cómo podemos ayudarte hoy?",
+    "submitReport": "Enviar reporte",
+    "faq": "Preguntas frecuentes",
+    "chat": "Chat con asistente IA",
+    "chatPlaceholder": "Haz una pregunta...",
+    "submitting": "Enviando..."
+  },
+  "settings": {
+    "title": "Configuración",
+    "notifications": "Notificaciones",
+    "appearance": "Apariencia",
+    "darkMode": "Modo oscuro",
+    "language": "Idioma",
+    "account": "Cuenta",
+    "about": "Acerca de",
+    "selectLanguage": "Seleccionar idioma"
+  },
+  "languages": {
+    "en": "Inglés",
+    "fr": "Francés",
+    "es": "Español",
+    "zh": "Chino (simplificado)"
+  }
+}

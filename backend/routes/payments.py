@@ -240,9 +240,8 @@ async def get_cards(current_user: dict = Depends(get_current_user)):
         return []
 
     try:
-        stripe.api_key = stripe_secret
-        customer_id = await get_or_create_stripe_customer(current_user["id"])
-        methods = stripe.PaymentMethod.list(customer=customer_id, type="card")
+        customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
+        methods = stripe.PaymentMethod.list(customer=customer_id, type="card", api_key=stripe_secret)
         user = await db_supabase.get_user_by_id(current_user["id"])
         default_pm = user.get("default_payment_method") if user else None
         return [

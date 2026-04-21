@@ -8,15 +8,17 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 try:
     from .. import db_supabase
     from ..dependencies import get_current_user
+    from ..utils.rate_limiter import promo_available_limit, promo_validate_limit
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
+    from utils.rate_limiter import promo_available_limit, promo_validate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,11 @@ api_router = APIRouter(prefix="/promo", tags=["Promotions"])
 class ValidatePromoRequest(BaseModel):
     code: str
     ride_fare: Decimal = Decimal("0.00")  # Decimal for currency precision
+
+
+class ApplyPromoRequest(BaseModel):
+    code: str
+    ride_id: str  # Required for server-side fare verification (R-P1-8)
 
 
 class CreatePromoCodeRequest(BaseModel):
@@ -58,7 +65,9 @@ class UpdatePromoCodeRequest(BaseModel):
 
 
 @api_router.post("/validate")
+@promo_validate_limit
 async def validate_promo(
+    request: Request,
     req: ValidatePromoRequest,
     current_user: dict = Depends(get_current_user),
 ):
@@ -197,12 +206,23 @@ async def validate_promo(
 
 @api_router.post("/apply")
 async def apply_promo(
-    req: ValidatePromoRequest,
+    req: ApplyPromoRequest,
     current_user: dict = Depends(get_current_user),
 ):
-    """Apply a promo code (records usage). Call after ride creation."""
-    # Re-validate
-    validation = await validate_promo(req, current_user)
+    """Apply a promo code (records usage). Call after ride creation.
+    R-P1-8: uses server-stored ride fare, not client-supplied fare.
+    """
+    # Fetch server-side fare to prevent client-manipulated discount inflation.
+    ride = await db_supabase.find_one("rides", {"id": req.ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="ERR_FORBIDDEN")
+    server_fare = Decimal(str(ride.get("total_fare", 0)))
+
+    validate_req = ValidatePromoRequest(code=req.code, ride_fare=server_fare)
+    # Re-validate using server fare
+    validation = await validate_promo(validate_req, current_user)
 
     # Record application
     application = {
@@ -230,7 +250,9 @@ async def apply_promo(
 
 
 @api_router.get("/available")
+@promo_available_limit
 async def get_available_promos(
+    request: Request,
     ride_fare: float = Query(0.0),
     current_user: dict = Depends(get_current_user),
 ):

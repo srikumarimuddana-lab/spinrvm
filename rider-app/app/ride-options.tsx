@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useRef, useMemo } from 'react';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
   Text,
@@ -28,7 +29,7 @@ const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MAP_HEIGHT = 280;
 
-export default function RideOptionsScreen() {
+function RideOptionsScreenContent() {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const router = useRouter();
@@ -43,6 +44,7 @@ export default function RideOptionsScreen() {
     nearbyDrivers,
     selectVehicle,
     isLoading,
+    error: storeError,
     scheduledTime,
     setScheduledTime,
     availablePromos,
@@ -51,6 +53,7 @@ export default function RideOptionsScreen() {
     applyPromo,
   } = useRideStore();
 
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [routeKey, setRouteKey] = useState(0);
   const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
@@ -58,6 +61,7 @@ export default function RideOptionsScreen() {
   const [isScheduling, setIsScheduling] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
+  const [showPromoSheet, setShowPromoSheet] = useState(false);
   const [tempDate, setTempDate] = useState<Date>(new Date(Date.now() + 30 * 60000)); // default 30 min from now
   const [alertState, setAlertState] = useState<{
     visible: boolean;
@@ -68,10 +72,19 @@ export default function RideOptionsScreen() {
   }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = useRef<MapView>(null);
 
+  const handleFetchEstimates = async () => {
+    setFetchError(null);
+    try {
+      await fetchEstimates();
+    } catch {
+      setFetchError('Could not load fares. Tap to retry.');
+    }
+  };
+
   useEffect(() => {
     if (pickup && dropoff) {
       console.log('Platform:', Platform.OS, '| Fetching estimates & nearby drivers for:', pickup.address, 'to', dropoff.address);
-      fetchEstimates();
+      handleFetchEstimates();
       fetchNearbyDrivers();
 
       // Auto-refresh drivers every 10 seconds
@@ -365,21 +378,27 @@ export default function RideOptionsScreen() {
       </View>
 
       {/* Promo Banner */}
-      {appliedPromo && (
+      {(appliedPromo || availablePromos.length > 0) && (
         <TouchableOpacity
           style={styles.promoBanner}
-          onPress={() => router.push('/payment-confirm')}
+          onPress={() => setShowPromoSheet(true)}
           activeOpacity={0.8}
         >
           <Ionicons name="pricetag" size={16} color="#10B981" />
-          <Text style={styles.promoBannerText}>
-            {appliedPromo.discount_type === 'percentage'
-              ? `Save ${appliedPromo.discount_value}% off${appliedPromo.max_discount ? ` ($${appliedPromo.max_discount} max)` : ''}`
-              : `Save $${appliedPromo.discount_value.toFixed(2)} off`}
-            {' · '}
-            <Text style={{ fontWeight: '800' }}>{appliedPromo.code}</Text>
-          </Text>
-          {availablePromos.length > 1 && (
+          {appliedPromo ? (
+            <Text style={styles.promoBannerText}>
+              {appliedPromo.discount_type === 'percentage'
+                ? `Save ${appliedPromo.discount_value}% off${appliedPromo.max_discount ? ` ($${appliedPromo.max_discount} max)` : ''}`
+                : `Save $${appliedPromo.discount_value.toFixed(2)} off`}
+              {' · '}
+              <Text style={{ fontWeight: '800' }}>{appliedPromo.code}</Text>
+            </Text>
+          ) : (
+            <Text style={styles.promoBannerText}>
+              {availablePromos.length} promo{availablePromos.length !== 1 ? 's' : ''} available — tap to select
+            </Text>
+          )}
+          {availablePromos.length > 1 && appliedPromo && (
             <Text style={styles.promoBannerMore}>{availablePromos.length - 1} more</Text>
           )}
           <Ionicons name="chevron-forward" size={14} color="#999" />
@@ -403,7 +422,15 @@ export default function RideOptionsScreen() {
       )}
 
       {/* Vehicle Options */}
-      {isLoading ? (
+      {fetchError ? (
+        <View style={styles.loadingContainer}>
+          <Ionicons name="alert-circle-outline" size={40} color="#EF4444" />
+          <Text style={[styles.loadingText, { color: '#EF4444', marginTop: 10 }]}>{fetchError}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={handleFetchEstimates}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : isLoading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
           <Text style={styles.loadingText}>Finding best rides...</Text>
@@ -544,7 +571,7 @@ export default function RideOptionsScreen() {
                       value={tempDate}
                       mode="date"
                       display="spinner"
-                      minimumDate={new Date()}
+                      minimumDate={new Date(Date.now() + 15 * 60 * 1000)}
                       maximumDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
                       onChange={handleDateChange}
                       textColor="#000000"
@@ -557,7 +584,7 @@ export default function RideOptionsScreen() {
                 value={tempDate}
                 mode="date"
                 display="default"
-                minimumDate={new Date()}
+                minimumDate={new Date(Date.now() + 15 * 60 * 1000)}
                 maximumDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
                 onChange={handleDateChange}
               />
@@ -623,6 +650,75 @@ export default function RideOptionsScreen() {
           </TouchableOpacity>
         </View>
       )}
+      {/* Promo Selection Bottom Sheet */}
+      <Modal
+        visible={showPromoSheet}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowPromoSheet(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowPromoSheet(false)}
+        >
+          <TouchableOpacity activeOpacity={1} style={styles.promoSheet}>
+            <View style={styles.promoSheetHandle} />
+            <Text style={styles.promoSheetTitle}>Available Promos</Text>
+
+            {/* No promo option */}
+            <TouchableOpacity
+              style={[styles.promoRow, !appliedPromo && styles.promoRowSelected]}
+              onPress={() => { applyPromo(null); setShowPromoSheet(false); }}
+            >
+              <View style={styles.promoRowIcon}>
+                <Ionicons name="close-circle-outline" size={22} color={colors.textDim} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.promoRowCode}>No promo</Text>
+                <Text style={styles.promoRowDesc}>Pay full fare</Text>
+              </View>
+              {!appliedPromo && <Ionicons name="checkmark-circle" size={22} color={colors.primary} />}
+            </TouchableOpacity>
+
+            {availablePromos.map((promo: any) => {
+              const isSelected = appliedPromo?.promo_id === promo.promo_id || appliedPromo?.code === promo.code;
+              const discountLabel = promo.discount_type === 'percentage'
+                ? `${promo.discount_value}% off${promo.max_discount ? ` (max $${promo.max_discount})` : ''}`
+                : `$${promo.discount_value.toFixed(2)} off`;
+              return (
+                <TouchableOpacity
+                  key={promo.promo_id || promo.code}
+                  style={[styles.promoRow, isSelected && styles.promoRowSelected]}
+                  onPress={() => { applyPromo(promo); setShowPromoSheet(false); }}
+                >
+                  <View style={[styles.promoRowIcon, { backgroundColor: '#ECFDF5' }]}>
+                    <Ionicons name="pricetag" size={20} color="#10B981" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.promoRowCode}>{promo.code}</Text>
+                    <Text style={styles.promoRowDesc}>{promo.description || discountLabel}</Text>
+                    <Text style={styles.promoRowSaving}>{discountLabel}</Text>
+                  </View>
+                  {isSelected && <Ionicons name="checkmark-circle" size={22} color={colors.primary} />}
+                </TouchableOpacity>
+              );
+            })}
+
+            {availablePromos.length === 0 && (
+              <View style={styles.promoEmpty}>
+                <Ionicons name="gift-outline" size={40} color={colors.border} />
+                <Text style={styles.promoEmptyText}>No promos available right now</Text>
+              </View>
+            )}
+
+            <TouchableOpacity style={styles.promoCloseBtn} onPress={() => setShowPromoSheet(false)}>
+              <Text style={styles.promoCloseBtnText}>Close</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
       <CustomAlert
         visible={alertState.visible}
         title={alertState.title}
@@ -632,6 +728,14 @@ export default function RideOptionsScreen() {
         onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
       />
     </SafeAreaView>
+  );
+}
+
+export default function RideOptionsScreen() {
+  return (
+    <ErrorBoundary>
+      <RideOptionsScreenContent />
+    </ErrorBoundary>
   );
 }
 
@@ -733,6 +837,18 @@ function createStyles(colors: ThemeColors) {
     fontSize: 14,
     fontFamily: 'PlusJakartaSans_400Regular',
     color: colors.textDim,
+  },
+  retryButton: {
+    marginTop: 16,
+    paddingHorizontal: 28,
+    paddingVertical: 12,
+    backgroundColor: colors.primary,
+    borderRadius: 24,
+  },
+  retryButtonText: {
+    color: '#FFF',
+    fontSize: 15,
+    fontFamily: 'PlusJakartaSans_600SemiBold',
   },
   optionsList: {
     flex: 1,
@@ -1010,6 +1126,59 @@ function createStyles(colors: ThemeColors) {
     fontSize: 16,
     color: colors.primary,
     fontFamily: 'PlusJakartaSans_600SemiBold',
+  },
+  // Promo Sheet
+  promoSheet: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingBottom: 32,
+    paddingTop: 12,
+    maxHeight: '80%',
+  },
+  promoSheetHandle: {
+    width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border,
+    alignSelf: 'center', marginBottom: 16,
+  },
+  promoSheetTitle: {
+    fontSize: 18, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text,
+    marginBottom: 16,
+  },
+  promoRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    paddingVertical: 14, paddingHorizontal: 12, borderRadius: 14,
+    marginBottom: 8, backgroundColor: colors.surfaceLight,
+    borderWidth: 1.5, borderColor: 'transparent',
+  },
+  promoRowSelected: {
+    borderColor: colors.primary, backgroundColor: `${colors.primary}10`,
+  },
+  promoRowIcon: {
+    width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center',
+    backgroundColor: colors.surfaceLight,
+  },
+  promoRowCode: {
+    fontSize: 16, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text, letterSpacing: 0.5,
+  },
+  promoRowDesc: {
+    fontSize: 12, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, marginTop: 1,
+  },
+  promoRowSaving: {
+    fontSize: 13, fontFamily: 'PlusJakartaSans_600SemiBold', color: '#10B981', marginTop: 2,
+  },
+  promoEmpty: {
+    alignItems: 'center', paddingVertical: 32, gap: 10,
+  },
+  promoEmptyText: {
+    fontSize: 14, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim,
+  },
+  promoCloseBtn: {
+    marginTop: 8, paddingVertical: 14, borderRadius: 24,
+    backgroundColor: colors.surfaceLight, alignItems: 'center',
+  },
+  promoCloseBtnText: {
+    fontSize: 16, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim,
   },
   fareBreakdown: {
     backgroundColor: colors.surfaceLight,

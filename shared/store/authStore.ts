@@ -150,10 +150,13 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
 
   setTokens: async (token: string, refreshToken: string, expiresIn: number) => {
     const expiresAt = Date.now() + expiresIn * 1000;
+    // Access token is memory-only (wiped on restart, stays within JWT TTL).
+    // Only the refresh token is persisted to hardware-backed secure storage.
     setInMemoryToken(token);
-    await storage.setItem('auth_token', token);
     await storage.setItem('refresh_token', refreshToken);
     await storage.setItem('token_expires_at', String(expiresAt));
+    // Remove any previously-persisted access token from older app versions.
+    await storage.deleteItem('auth_token');
     set({ token, refreshToken, tokenExpiresAt: expiresAt });
   },
 

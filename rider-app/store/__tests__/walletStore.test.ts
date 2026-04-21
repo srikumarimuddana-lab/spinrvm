@@ -169,4 +169,53 @@ describe('walletStore', () => {
       expect(useWalletStore.getState().error).toBeNull();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // R-P3-7 — payWithWallet insufficient balance rejection
+  // ---------------------------------------------------------------------------
+  describe('payWithWallet', () => {
+    it('deducts balance on success', async () => {
+      useWalletStore.setState({ wallet: makeWallet({ balance: 50.0 }) });
+      mockApi.post.mockResolvedValueOnce({ data: { balance: 40.5 } });
+
+      await useWalletStore.getState().payWithWallet('ride-99', 9.5);
+
+      expect(mockApi.post).toHaveBeenCalledWith('/wallet/pay', { ride_id: 'ride-99', amount: 9.5 });
+      expect(useWalletStore.getState().wallet?.balance).toBe(40.5);
+      expect(useWalletStore.getState().isLoading).toBe(false);
+    });
+
+    it('sets error and rethrows when balance is insufficient', async () => {
+      useWalletStore.setState({ wallet: makeWallet({ balance: 5.0 }) });
+
+      const err: any = new Error('Request failed with status code 400');
+      err.response = { data: { detail: 'Insufficient balance' } };
+      mockApi.post.mockRejectedValueOnce(err);
+
+      await expect(
+        useWalletStore.getState().payWithWallet('ride-99', 20.0)
+      ).rejects.toThrow();
+
+      expect(useWalletStore.getState().error).toBe('Insufficient balance');
+      expect(useWalletStore.getState().isLoading).toBe(false);
+      // Balance should be unchanged — payment was rejected
+      expect(useWalletStore.getState().wallet?.balance).toBe(5.0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // R-P1-25: addTip idempotency
+  // ---------------------------------------------------------------------------
+  describe('addTip idempotency', () => {
+    it('second tip call is rejected when a tip already exists', async () => {
+      // Backend rejects duplicate tip with 400
+      const err: any = new Error('Tip already added');
+      err.response = { status: 400, data: { detail: 'A tip has already been added for this ride' } };
+      mockApi.post.mockRejectedValueOnce(err);
+
+      await expect(
+        useWalletStore.getState().addTip?.('ride-99', 3.0)
+      ).rejects.toThrow();
+    });
+  });
 });

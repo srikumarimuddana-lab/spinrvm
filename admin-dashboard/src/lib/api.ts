@@ -607,6 +607,56 @@ export const decideAllowanceRequest = (
         { method: "POST", body: JSON.stringify(body) }
     );
 
+export const updateCompanyMember = (
+    companyId: string,
+    memberId: string,
+    body: { role?: CorporateMemberRole; status?: CorporateMemberStatus; policy_override?: boolean }
+) =>
+    request<CorporateMember>(
+        `/company/${companyId}/members/${memberId}`,
+        { method: "PATCH", body: JSON.stringify(body) }
+    );
+
+/* ── Company policy (Plan 6) ── */
+export type PaymentSourcePolicy = "allowance_only" | "master_only" | "both";
+
+export interface TimeWindowPolicy {
+    day: "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+    start: string;
+    end: string;
+}
+
+export interface CorporatePolicy {
+    id?: string;
+    company_id?: string;
+    active: boolean;
+    max_fare_per_ride?: number | null;
+    allowed_geofence?: Record<string, unknown> | null;
+    allowed_time_windows?: TimeWindowPolicy[] | null;
+    allowed_payment_source: PaymentSourcePolicy;
+}
+
+export const getCompanyPolicy = (companyId: string) =>
+    request<CorporatePolicy | Record<string, never>>(`/company/${companyId}/policy`);
+
+export const putCompanyPolicy = (
+    companyId: string,
+    body: Omit<CorporatePolicy, "id" | "company_id">
+) =>
+    request<CorporatePolicy>(`/company/${companyId}/policy`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+    });
+
+export const patchCompanyPolicy = (
+    companyId: string,
+    body: Partial<Omit<CorporatePolicy, "id" | "company_id">>
+) =>
+    request<CorporatePolicy>(`/company/${companyId}/policy`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+    });
+
 /* ── Cloud Messaging (merged with Notifications) ── */
 export const getCloudMessages = (status?: string, audience?: string) => {
     const params = new URLSearchParams();

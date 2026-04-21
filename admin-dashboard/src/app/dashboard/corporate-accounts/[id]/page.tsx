@@ -35,6 +35,8 @@ import {
     FileText,
     PauseCircle,
     PlayCircle,
+    ShieldCheck,
+    Users,
     Wallet,
     XCircle,
 } from "lucide-react";
@@ -246,6 +248,16 @@ export default function CompanyDetailPage() {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
+                    <Link href={`/dashboard/corporate-accounts/${id}/members`}>
+                        <Button variant="outline">
+                            <Users className="mr-2 h-4 w-4" /> Members
+                        </Button>
+                    </Link>
+                    <Link href={`/dashboard/corporate-accounts/${id}/policy`}>
+                        <Button variant="outline">
+                            <ShieldCheck className="mr-2 h-4 w-4" /> Policy
+                        </Button>
+                    </Link>
                     {company.status !== "suspended" && company.status !== "closed" && (
                         <Button
                             variant="outline"

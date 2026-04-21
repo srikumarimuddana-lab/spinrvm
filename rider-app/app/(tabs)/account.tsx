@@ -11,10 +11,12 @@ import { useAuthStore } from '@shared/store/authStore';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { useWorkProfileStore } from '../../store/workProfileStore';
 
 export default function AccountScreen() {
   const router = useRouter();
   const { user, logout, updateProfileImage } = useAuthStore();
+  const { profiles, workModeEnabled } = useWorkProfileStore();
   const [uploading, setUploading] = useState(false);
   const [alertState, setAlertState] = useState<{
     visible: boolean;
@@ -163,6 +165,15 @@ export default function AccountScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
 
+          {profiles.length > 0 && (
+            <MenuItem
+              icon="briefcase-outline" iconColor="#1D4ED8" iconBg="#DBEAFE"
+              title="Work Profile"
+              subtitle={workModeEnabled ? 'Work mode active' : `${profiles.length} company${profiles.length > 1 ? ' accounts' : ''}`}
+              onPress={() => router.push('/work-profile' as any)}
+              badge={workModeEnabled ? 'Work' : undefined}
+            />
+          )}
           <MenuItem
             icon="person-outline" iconColor={colors.primary} iconBg="#FEF2F2"
             title="Edit Profile" subtitle="Name, email, phone"

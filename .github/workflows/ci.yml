@@ -317,13 +317,13 @@ jobs:
             "https://api.render.com/v1/services/${{ secrets.RENDER_BACKEND_SERVICE_ID }}/deploys" \
             -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}"
 
-      - name: Deploy to Railway (alternative)
+      - name: Deploy to Railway (fallback)
         if: failure()
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          npm i -g @railway/cli
-          railway up --service backend --ci
+          npm i -g @railway/cli@4.40.2
+          railway up --service backend
 
   # Deploy Frontend
   deploy-frontend:

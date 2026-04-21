@@ -688,26 +688,59 @@ class TestPaymentFailureAtComplete:
             "lock. Rider is now blocked from retrying with a card."
         )
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "Card payment path is a stub. See rides.py:1088: "
-            "'Card path is still a stub — Stripe charge to be wired separately'. "
-            "Complete-ride handler marks payment_status='completed' regardless "
-            "of actual charge outcome (drivers.py:1997). A real Stripe decline "
-            "today silently leaves the ride as 'paid' in our DB. Fix: wire "
-            "Stripe PaymentIntent.confirm(), map decline → payment_status="
-            "'failed', surface retry UX."
-        ),
-    )
-    def test_card_decline_marks_payment_failed_and_allows_retry(self):
-        """DOCUMENTS THE GAP — will pass once card path is wired to Stripe.
+    async def test_card_decline_marks_payment_failed_and_allows_retry(self):
+        """Card decline → payment_status='failed', response surfaces card_declined code.
 
-        Expectation: Stripe returns card_declined, rides.payment_status
-        flips to 'failed', process_payment returns an error the client
-        can retry with a different card.
+        Stripe charge is wired (PR#25 / charge_ride helper). This test pins the
+        decline branch: ChargeOutcome(status='declined') must flip payment_status
+        to 'failed' so the rider can retry with a different card.
         """
-        assert False, "card path is a stub; Stripe charge not yet wired"
+        from fastapi import HTTPException
+
+        from backend.routes import rides as rides_mod
+        from backend.utils.stripe_charge import ChargeOutcome
+
+        completed = _ride(
+            status="completed",
+            payment_method="card",
+            total_fare=25.0,
+            payment_method_id="pm_decline",
+            stripe_customer_id="cus_test",
+        )
+
+        update_ride_calls: list[tuple] = []
+
+        async def _capture_update(ride_id, patch):
+            update_ride_calls.append((ride_id, patch))
+
+        declined_outcome = ChargeOutcome(
+            status="declined",
+            error_message="Your card was declined.",
+            decline_code="card_declined",
+        )
+
+        with (
+            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=completed)),
+            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
+            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value={"id": RIDER_ID, "email": "r@s.ca", "stripe_customer_id": "cus_test"})),
+            patch("backend.routes.rides.charge_ride", AsyncMock(return_value=declined_outcome)),
+        ):
+            from backend.routes.rides import ProcessPaymentRequest
+
+            req = ProcessPaymentRequest(tip_amount=0)
+            with pytest.raises(HTTPException) as exc:
+                await rides_mod.process_payment(
+                    ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID}
+                )
+
+        assert exc.value.status_code == 402
+        assert exc.value.detail.get("code") == "card_declined"
+
+        # payment_status must be set to 'failed' so the rider can retry
+        assert any(
+            p.get("payment_status") == "failed"
+            for _, p in update_ride_calls
+        ), "Card decline did not flip payment_status to 'failed' — rider cannot retry."
 
 
 # ── E3: Stripe charge at completion ─────────────────────────────────────────

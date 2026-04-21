@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,9 +8,11 @@ import {
   ActivityIndicator,
   Platform,
   Image,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
@@ -18,8 +20,11 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useRideStore } from '../../store/rideStore';
 import AppMap from '@shared/components/AppMap';
 import CustomAlert from '@shared/components/CustomAlert';
+import { SOSButton } from '@shared/components/SOSButton';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+
+const HOME_DATA_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 const { width, height } = Dimensions.get('window');
 
@@ -36,7 +41,7 @@ const getBackendUrl = () => {
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const { savedAddresses, fetchSavedAddresses, setUserLocation } = useRideStore();
+  const { savedAddresses, fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency } = useRideStore();
   const [showPromo, setShowPromo] = useState(true);
   const [location, setLocation] = useState<any>(null);
   const [region, setRegion] = useState<any>(null);
@@ -48,6 +53,7 @@ export default function HomeScreen() {
     variant: 'info' | 'warning' | 'danger' | 'success';
   }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = useRef<any>(null);
+  const lastFetchedAt = useRef<number>(0);
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -69,53 +75,61 @@ export default function HomeScreen() {
     return null;
   };
 
-  useEffect(() => {
-    (async () => {
-      // 0. Load cached location INSTANTLY (from previous session)
-      const cached = await loadLastLocation();
-      if (cached) {
-        const cachedLoc = { coords: { latitude: cached.lat, longitude: cached.lng } };
-        setLocation(cachedLoc);
-        setUserLocation({ latitude: cached.lat, longitude: cached.lng });
+  const fetchHomeData = useCallback(async () => {
+    // 0. Load cached location INSTANTLY (from previous session)
+    const cached = await loadLastLocation();
+    if (cached) {
+      const cachedLoc = { coords: { latitude: cached.lat, longitude: cached.lng } };
+      setLocation(cachedLoc);
+      setUserLocation({ latitude: cached.lat, longitude: cached.lng });
+    }
+
+    let { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') return;
+
+    // 1. Get last known from OS (cached GPS, faster than full fix)
+    try {
+      const lastKnown = await Location.getLastKnownPositionAsync();
+      if (lastKnown) {
+        setLocation(lastKnown);
+        setUserLocation({ latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude });
+        saveLastLocation(lastKnown.coords.latitude, lastKnown.coords.longitude);
       }
+    } catch {}
 
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
+    // 2. Get accurate position in background; weather + saved places in parallel
+    Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+      .then(loc => {
+        setLocation(loc);
+        setUserLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+        saveLastLocation(loc.coords.latitude, loc.coords.longitude);
 
-      // 1. Get last known from OS (cached GPS, faster than full fix)
-      try {
-        const lastKnown = await Location.getLastKnownPositionAsync();
-        if (lastKnown) {
-          setLocation(lastKnown);
-          setUserLocation({ latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude });
-          saveLastLocation(lastKnown.coords.latitude, lastKnown.coords.longitude);
-        }
-      } catch {}
+        // 3. Weather in parallel with position fix
+        fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.coords.latitude}&longitude=${loc.coords.longitude}&current_weather=true`)
+          .then(r => r.json())
+          .then(data => {
+            if (data?.current_weather?.temperature !== undefined) {
+              setTemperature(Math.round(data.current_weather.temperature));
+            }
+          })
+          .catch(() => {});
+      })
+      .catch(() => {});
 
-      // 2. Get accurate position in background
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
-        .then(loc => {
-          setLocation(loc);
-          setUserLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
-          saveLastLocation(loc.coords.latitude, loc.coords.longitude);
-
-          // 3. Weather in parallel
-          fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.coords.latitude}&longitude=${loc.coords.longitude}&current_weather=true`)
-            .then(r => r.json())
-            .then(data => {
-              if (data?.current_weather?.temperature !== undefined) {
-                setTemperature(Math.round(data.current_weather.temperature));
-              }
-            })
-            .catch(() => {});
-        })
-        .catch(() => {});
-    })();
-  }, []);
-
-  useEffect(() => {
+    // 4. Saved places (independent of GPS fix)
     fetchSavedAddresses();
   }, []);
+
+  // Use useFocusEffect so tab switches don't re-fire all requests unless data
+  // is stale (older than HOME_DATA_TTL_MS). First mount always fetches.
+  useFocusEffect(
+    useCallback(() => {
+      const now = Date.now();
+      if (now - lastFetchedAt.current < HOME_DATA_TTL_MS) return;
+      lastFetchedAt.current = now;
+      fetchHomeData();
+    }, [fetchHomeData])
+  );
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -233,23 +247,19 @@ export default function HomeScreen() {
         </View>
 
         {/* SOS Button - Left Side */}
-        <TouchableOpacity
-          style={styles.sosButton}
-          accessibilityLabel="SOS emergency button"
-          accessibilityRole="button"
-          accessibilityHint="Alerts emergency services"
-          onPress={() => {
-            setAlertState({
-              visible: true,
-              title: 'SOS Triggered',
-              message: 'Emergency services have been alerted. Stay calm and stay where you are.',
-              variant: 'danger',
-            });
-          }}
-        >
-          <Ionicons name="shield-checkmark" size={24} color="#FFFFFF" />
-          <Text style={styles.sosText}>SOS</Text>
-        </TouchableOpacity>
+        <View style={styles.sosButton}>
+          <SOSButton
+            rideId={currentRide?.id}
+            onTrigger={async (rideId, lat, lng) => {
+              if (rideId) {
+                await triggerEmergency(rideId, lat, lng);
+              } else {
+                Linking.openURL('tel:911');
+              }
+            }}
+            size="small"
+          />
+        </View>
 
         {/* Current Location Button - Fixed Logic */}
         <TouchableOpacity style={styles.locationButton} onPress={async () => {
@@ -507,8 +517,8 @@ function createStyles(colors: ThemeColors) {
       padding: 4,
     },
     mapControlButton: {
-      width: 40,
-      height: 40,
+      width: 44,
+      height: 44,
       justifyContent: 'center',
       alignItems: 'center',
     },
@@ -520,24 +530,7 @@ function createStyles(colors: ThemeColors) {
     sosButton: {
       position: 'absolute',
       left: 20,
-      bottom: 20, // Move to bottom like location button
-      backgroundColor: colors.primary,
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingHorizontal: 16,
-      paddingVertical: 10,
-      borderRadius: 24,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.3,
-      shadowRadius: 8,
-      elevation: 6,
-    },
-    sosText: {
-      color: '#FFFFFF',
-      fontSize: 14,
-      fontFamily: 'PlusJakartaSans_700Bold',
-      marginLeft: 8,
+      bottom: 20,
     },
     bottomSheet: {
       backgroundColor: colors.surface,

@@ -1,10 +1,31 @@
 # Module: Rider App
 
-**Status:** Not yet audited
-**Tech stack:** React Native + Expo SDK (expected same as driver app)
+**Status:** Audit plan complete — ready to execute (2026-04-19)
+**Tech stack:** React Native · Expo SDK 54 · React 19 · Expo Router 6 · Zustand 5
 **Bundle ID:** `com.spinr.user`
-**Root folder:** `rider-app/` (assumed — verify actual path)
-**Related backend routes:** `backend/routes/` — auth, rides (rider side), payments, notifications, favorites, addresses, corporate_rider, corporate_wallet
+**Root folder:** `rider-app/`
+**Branch:** `claude/rider-app-audit-iVxpH`
+**Related backend routes:** `backend/routes/` — auth, rides (rider side), payments, notifications, favorites, addresses, corporate_rider, corporate_wallet, promo, fare-split
+
+## Confirmed Structure
+- **36 screens** (Expo Router file-based)
+- **2 stores:** `rideStore.ts` (600+ lines) + `walletStore.ts` (200 lines) + shared `authStore`
+- **WebSocket:** `hooks/useRiderSocket.ts` — `/ws/rider/{userId}`
+- **Payments:** Stripe PaymentIntent + in-app wallet
+- **Push:** Firebase Cloud Messaging via `@react-native-firebase/messaging`
+
+## Audit Plan Files
+- Main plan: `reports/audits/2026-04-19-rider-app-audit-plan-v1.md`
+- Phase A kick-off (D01–D04): `reports/audits/rider-app-phase-a-kickoff.md`
+- Phase B kick-off (D05–D08): `reports/audits/rider-app-phase-b-kickoff.md`
+- Phase C kick-off (D09–D12): `reports/audits/rider-app-phase-c-kickoff.md`
+- Phase D kick-off (D13–D16): `reports/audits/rider-app-phase-d-kickoff.md`
+- Audit findings: `reports/audits/2026-04-19-rider-app-v1.txt` (to be created during execution)
+- P0 sprint: `reports/remediation/rider-P0-critical-fix-now.md`
+- P1 sprint: `reports/remediation/rider-P1-before-beta.md`
+- P2 sprint: `reports/remediation/rider-P2-before-launch.md`
+- P3 sprint: `reports/remediation/rider-P3-hardening.md`
+- P4 roadmap: `reports/remediation/rider-P4-future-features.md`
 
 ---
 

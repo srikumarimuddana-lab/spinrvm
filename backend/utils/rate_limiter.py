@@ -170,8 +170,17 @@ login_rate_limit = default_limiter.limit("5/minute")
 # General API endpoints - more permissive
 api_rate_limit = default_limiter.limit("30/minute")
 
-# Ride creation - prevent spam ride requests
-ride_request_limit = default_limiter.limit("10/minute")
+# Ride creation - prevent spam ride requests (max 5 per minute per user)
+ride_request_limit = default_limiter.limit("5/minute")
+
+# Ride cancellation - max 10 per hour per user (prevents cancellation farming)
+cancel_ride_limit = default_limiter.limit("10/hour")
+
+# Promo enumeration guard - max 20 per minute
+promo_available_limit = default_limiter.limit("20/minute")
+
+# Promo brute-force guard - max 10 per minute
+promo_validate_limit = default_limiter.limit("10/minute")
 
 # Location updates - allow frequent updates for drivers
 location_update_limit = default_limiter.limit("60/minute")

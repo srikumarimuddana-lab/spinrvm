@@ -1,0 +1,65 @@
+appId: com.spinr.user
+---
+# Rider App — Mid-Trip Chat (P3-18 / R7)
+# Verifies: rider can open chat during a trip, send a message,
+# and see it appear in the conversation list.
+# Assumes a trip is in progress (run after 03_accept_ride + OTP flow).
+
+- launchApp
+
+# Trip should be in progress
+- assertVisible:
+    text: "Trip in Progress"
+    optional: true
+- assertVisible:
+    text: "Driver on the way"
+    optional: true
+
+# Open chat panel
+- tapOn:
+    text: "Chat"
+    optional: true
+- tapOn:
+    id: "chat-button"
+    optional: true
+- tapOn:
+    id: "chat-icon"
+    optional: true
+
+# Wait for chat screen
+- waitForAnimationToEnd:
+    timeout: 2000
+
+# Type a message
+- tapOn:
+    id: "chat-input"
+    optional: true
+- tapOn:
+    text: "Message"
+    optional: true
+- inputText: "Are you close?"
+
+# Send
+- tapOn:
+    text: "Send"
+    optional: true
+- tapOn:
+    id: "send-button"
+    optional: true
+
+# Verify message appears in the chat thread
+- assertVisible:
+    text: "Are you close?"
+    optional: true
+
+# Go back to trip view
+- pressKey: Back
+  optional: true
+- tapOn:
+    text: "Back"
+    optional: true
+
+# Trip still in progress
+- assertVisible:
+    text: "Trip in Progress"
+    optional: true

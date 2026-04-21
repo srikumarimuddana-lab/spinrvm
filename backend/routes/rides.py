@@ -2,19 +2,20 @@ import asyncio
 import secrets
 import uuid
 from datetime import datetime
+from datetime import timezone as _tz
 from decimal import ROUND_HALF_UP, Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from loguru import logger
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     from .. import db_supabase
     from ..dependencies import generate_pickup_otp, get_current_user
     from ..features import calculate_airport_fee, calculate_all_fees, send_push_notification
     from ..geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
-    from ..schemas import CreateRideRequest, Ride, RideRatingRequest
+    from ..schemas import CreateRideRequest, DriverPublicView, Ride, RideRatingRequest
     from ..services import DispatchService
     from ..services.dispatch_service import (
         filter_and_rank_drivers,
@@ -22,14 +23,14 @@ try:
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
     from ..utils.crypto import hash_otp
-    from ..utils.rate_limiter import ride_request_limit
+    from ..utils.rate_limiter import cancel_ride_limit, ride_request_limit
     from ..validators import validate_ride_location
 except ImportError:
     import db_supabase
     from dependencies import generate_pickup_otp, get_current_user
     from features import calculate_airport_fee, calculate_all_fees, send_push_notification
     from geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
-    from schemas import CreateRideRequest, Ride, RideRatingRequest
+    from schemas import CreateRideRequest, DriverPublicView, Ride, RideRatingRequest
     from services.dispatch_service import (
         DispatchService,
         filter_and_rank_drivers,
@@ -37,8 +38,10 @@ except ImportError:
     from settings_loader import get_app_settings
     from socket_manager import manager
     from utils.crypto import hash_otp
-    from utils.rate_limiter import ride_request_limit
+    from utils.rate_limiter import cancel_ride_limit, ride_request_limit
     from validators import validate_ride_location
+
+import stripe
 
 from .fares import _fares_for_location_impl, get_fares_for_location
 
@@ -46,6 +49,37 @@ try:
     from ..utils.error_handling import RideStateError
 except ImportError:
     from utils.error_handling import RideStateError
+
+try:
+    from ..utils.estimate_token import (
+        EstimateTokenError,
+        sign_estimate_token,
+        verify_estimate_token,
+    )
+    from ..services import corporate_allowance_service, corporate_wallet_service  # type: ignore
+    from ..services.corporate_policy_service import evaluate_policy  # type: ignore
+except ImportError:
+    from utils.estimate_token import (
+        EstimateTokenError,
+        sign_estimate_token,
+        verify_estimate_token,
+    )
+    from services import corporate_allowance_service, corporate_wallet_service  # type: ignore
+    from services.corporate_policy_service import evaluate_policy  # type: ignore
+
+# Lift to module scope so tests can patch backend.routes.rides.charge_ride
+# directly; the handler's card branch references this bound name.
+try:
+    from ..utils.stripe_charge import charge_ride
+except ImportError:
+    from utils.stripe_charge import charge_ride
+
+try:
+    from ..services import corporate_allowance_service, corporate_wallet_service  # type: ignore
+    from ..services.corporate_policy_service import evaluate_policy, evaluate_policy_for_ride  # type: ignore
+except ImportError:
+    from services import corporate_allowance_service, corporate_wallet_service  # type: ignore
+    from services.corporate_policy_service import evaluate_policy, evaluate_policy_for_ride  # type: ignore
 
 db = db_supabase  # legacy alias
 
@@ -92,6 +126,10 @@ def _f(v: Decimal) -> float:
 
 
 api_router = APIRouter(prefix="/rides", tags=["Rides"])
+
+
+class TipRequest(BaseModel):
+    amount: Decimal = Field(..., gt=0, le=500, description="Tip in CAD (max $500)")
 
 
 async def create_demo_drivers(vehicle_type_id: str, lat: float, lng: float):
@@ -517,6 +555,20 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
             closest = min(nearby_for_type, key=lambda x: x["distance_km"])
             eta_minutes = max(2, int(closest["distance_km"] / 30 * 60) + 1)
 
+        # P0-4 surge-lock: sign a token per vehicle_type so POST /rides can
+        # reuse the surge_multiplier shown here instead of re-reading the
+        # service area (which may have changed between estimate + confirm).
+        estimate_token = sign_estimate_token(
+            rider_id=current_user["id"],
+            vehicle_type_id=vt_id,
+            pickup_lat=request.pickup_lat,
+            pickup_lng=request.pickup_lng,
+            dropoff_lat=request.dropoff_lat,
+            dropoff_lng=request.dropoff_lng,
+            surge_multiplier=_f(surge),
+            total_fare=_f(total_fare),
+        )
+
         estimates.append(
             {
                 "vehicle_type": fare_info["vehicle_type"],
@@ -531,9 +583,52 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
                 "available": is_available,
                 "eta_minutes": eta_minutes,
                 "driver_count": driver_count,
+                "estimate_token": estimate_token,
             }
         )
     return estimates
+
+
+async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
+    """Auto-cancel a ride if it's still ``searching`` after ``timeout_seconds``.
+
+    Matches Uber/Lyft's 5-minute default. Publishes a ``ride_cancelled`` WS
+    message to the rider's channel and fires a push notification so the rider
+    is alerted even if the app is backgrounded.
+
+    Extracted from ``create_ride`` so it can be unit-tested directly — see
+    backend/tests/test_p0_ship_blockers.py::TestNoDriversAvailableTimeout.
+    """
+    await asyncio.sleep(timeout_seconds)
+    try:
+        current_ride = await db_supabase.get_ride(r_id)
+        if current_ride and current_ride.get("status") == "searching":
+            await db_supabase.update_ride(
+                r_id,
+                {
+                    "status": "cancelled",
+                    "cancelled_at": datetime.utcnow(),
+                    "cancellation_reason": "No nearby drivers found. Please try again.",
+                    "updated_at": datetime.utcnow(),
+                },
+            )
+            await manager.send_personal_message(
+                {
+                    "type": "ride_cancelled",
+                    "ride_id": r_id,
+                    "reason": "No nearby drivers available. Your ride has been automatically cancelled.",
+                },
+                f"rider_{current_ride['rider_id']}",
+            )
+            await send_push_notification(
+                current_ride["rider_id"],
+                "Ride Cancelled ❌",
+                "No nearby drivers were found. Your ride has been automatically cancelled. Please try again.",
+                {"type": "ride_cancelled", "ride_id": r_id, "is_auto": True},
+            )
+            logger.info(f"Ride {r_id} auto-cancelled after {timeout_seconds}s - no driver found")
+    except Exception as e:
+        logger.warning(f"Ride timeout handler error for {r_id}: {e}")
 
 
 @api_router.post("")
@@ -548,6 +643,17 @@ async def create_ride(
     # back to ``request`` without also reworking the rate-limit decorator.
     validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
 
+    # R-P1-7: Idempotency — if the client retries after a network drop, return
+    # the previously-created ride instead of charging the rider twice.
+    idempotency_key = request.headers.get("Idempotency-Key")
+    if idempotency_key:
+        existing = await db_supabase.find_one(
+            "rides",
+            {"idempotency_key": idempotency_key, "rider_id": current_user["id"]},
+        )
+        if existing:
+            return existing
+
     # Ban check + payment method validation share a single users-row read.
     # Previously this was two round-trips: ``find_one(users)`` (for card path)
     # + ``get_user_status`` (always). ``status`` lives on the same row.
@@ -557,9 +663,20 @@ async def create_ride(
         raise HTTPException(status_code=403, detail="Your account has been suspended due to policy violations.")
     if user_status == "suspended":
         raise HTTPException(status_code=403, detail="Your account is currently suspended. Please contact support.")
-    if body.payment_method == "card":
+    if body.payment_method == "card" and not body.work_profile:
         if not rider_row or not rider_row.get("stripe_customer_id"):
             raise HTTPException(status_code=400, detail="No payment method on file. Please add a card first.")
+
+    active_statuses = ["searching", "driver_assigned", "driver_accepted", "driver_arrived", "in_progress"]
+    existing_ride = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows(
+            "rides",
+            {"rider_id": current_user["id"], "status": {"$in": active_statuses}},
+            limit=1,
+        )
+    )
+    if existing_ride:
+        raise HTTPException(status_code=409, detail="You already have an active ride")
 
     distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
     duration_minutes = int(distance_km / 30 * 60) + 5
@@ -601,7 +718,37 @@ async def create_ride(
         raise HTTPException(status_code=400, detail="Invalid vehicle type")
 
     # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
-    surge = _d(fare_info.get("surge_multiplier", 1.0))
+    # P0-4 surge-lock: if the client sent back the estimate_token we issued
+    # from /rides/estimate, reuse that surge instead of re-reading the area.
+    # Invalid / expired tokens fall back to current surge — we do not 400
+    # the request, because that would strand a rider mid-confirm if the
+    # token just expired. The worst case of a bad token is parity with the
+    # pre-token behavior (read current surge).
+    current_surge = _d(fare_info.get("surge_multiplier", 1.0))
+    surge = current_surge
+    surge_locked = False
+    if body.estimate_token:
+        try:
+            payload = verify_estimate_token(
+                body.estimate_token,
+                rider_id=current_user["id"],
+                vehicle_type_id=body.vehicle_type_id,
+                pickup_lat=body.pickup_lat,
+                pickup_lng=body.pickup_lng,
+                dropoff_lat=body.dropoff_lat,
+                dropoff_lng=body.dropoff_lng,
+            )
+            surge = _d(payload["sm"])
+            surge_locked = True
+            logger.info(
+                f"Surge locked from estimate_token for rider={current_user['id']} "
+                f"vt={body.vehicle_type_id}: {float(surge)} (current was {float(current_surge)})"
+            )
+        except EstimateTokenError as e:
+            logger.warning(
+                f"estimate_token rejected ({e}); falling back to current surge "
+                f"{float(current_surge)} for rider={current_user['id']}"
+            )
     distance_fare = _round(_d(fare_info["per_km_rate"]) * _d(distance_km) * surge)
     time_fare = _round(_d(fare_info["per_minute_rate"]) * _d(duration_minutes) * surge)
     booking_fee = _d(fare_info.get("booking_fee", 2.0))
@@ -703,6 +850,7 @@ async def create_ride(
         driver_earnings=_f(driver_earnings),
         admin_earnings=_f(admin_earnings),
         payment_method=body.payment_method,
+        payment_method_id=body.payment_method_id,
         status="searching",
         pickup_otp=hash_otp(pickup_otp_plain),
         ride_requested_at=datetime.utcnow(),
@@ -729,6 +877,63 @@ async def create_ride(
     ride_data["tax_amount"] = tax_amount
     ride_data["tax_breakdown"] = fees_result.get("tax_breakdown", {})
     ride_data["grand_total"] = grand_total
+    if idempotency_key:
+        ride_data["idempotency_key"] = idempotency_key
+
+    # ── Corporate work-profile pre-dispatch check ─────────────────────────────
+    # Activated when the rider sends work_profile=true + corporate_account_id.
+    # Policy violation or insufficient funds → reject before a driver is
+    # disturbed. Personal rides (no work_profile flag) skip this block entirely.
+    if body.work_profile and body.corporate_account_id:
+        _corp_company_id = body.corporate_account_id
+
+        # 1. Resolve active membership
+        _memberships = await db_supabase.list_active_memberships_for_user(current_user["id"])
+        _membership = next(
+            (m for m in _memberships if m.get("company_id") == _corp_company_id), None
+        )
+        if not _membership:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": "no_corporate_membership"},
+            )
+
+        # 2–4. Fetch allowance + policy, evaluate all rules.
+        _policy_result = await evaluate_policy_for_ride(
+            corporate_account_id=_corp_company_id,
+            rider_id=current_user["id"],
+            estimated_fare=total_fare,
+            ride_type=body.vehicle_type_id or "standard",
+            pickup_time=datetime.now(_tz.utc),
+            policy_override=_membership.get("policy_override", False),
+        )
+        if not _policy_result.passed:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": "policy_violation", "failed_rules": _policy_result.failed_rules},
+            )
+
+        # 5. Pre-auth buffer check (skip for unlimited allowances).
+        # Uses allowance + policy surfaced by evaluate_policy_for_ride so we
+        # don't need a second round-trip to fetch them separately.
+        _allowance = _policy_result.allowance
+        _policy = _policy_result.policy
+        if _allowance.get("type") != "unlimited":
+            _remaining = _d(str(_allowance.get("amount") or 0)) - _d(
+                str(max(float(_allowance.get("used") or 0), 0.0))
+            )
+            _master_permitted = _policy.get("allowed_payment_source", "both") in (
+                "master_only", "both"
+            )
+            if _remaining < _round(_d(str(_f(total_fare))) * _d("1.5")) and not _master_permitted:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"reason": "allowance_low"},
+                )
+
+        # 6. Tag ride as corporate
+        ride_data["corporate_account_id"] = _corp_company_id
+        ride_data["payment_method"] = "company_allowance"
 
     # ``insert_ride`` returns the row Supabase just wrote — use it directly
     # instead of a follow-up ``get_ride`` round-trip. Fall back to the
@@ -753,45 +958,6 @@ async def create_ride(
     # Small helper to ensure we return a clean dict
     def serialize_doc(doc):
         return doc
-
-    # GAP FIX: Start a background task to auto-cancel if no driver is found within 5 minutes
-    async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
-        """Auto-cancel ride if still 'searching' after timeout (default 5 min, matching Uber/Lyft)."""
-        await asyncio.sleep(timeout_seconds)
-        try:
-            current_ride = await db_supabase.get_ride(r_id)
-            if current_ride and current_ride.get("status") == "searching":
-                await db_supabase.update_ride(
-                    r_id,
-                    {
-                        "status": "cancelled",
-                        "cancelled_at": datetime.utcnow(),
-                        "cancellation_reason": "No nearby drivers found. Please try again.",
-                        "updated_at": datetime.utcnow(),
-                    },
-                )
-                # Notify rider
-                await manager.send_personal_message(
-                    {
-                        "type": "ride_cancelled",
-                        "ride_id": r_id,
-                        "reason": "No nearby drivers available. Your ride has been automatically cancelled.",
-                    },
-                    f"rider_{current_ride['rider_id']}",
-                )
-                # G6: Also send a push notification so the rider gets alerted
-                # even if the app is backgrounded or killed. Previously only
-                # the WS message was sent, which was silently lost if the rider
-                # wasn't actively looking at the app.
-                await send_push_notification(
-                    current_ride["rider_id"],
-                    "Ride Cancelled ❌",
-                    "No nearby drivers were found. Your ride has been automatically cancelled. Please try again.",
-                    {"type": "ride_cancelled", "ride_id": r_id, "is_auto": True},
-                )
-                logger.info(f"Ride {r_id} auto-cancelled after {timeout_seconds}s - no driver found")
-        except Exception as e:
-            logger.warning(f"Ride timeout handler error for {r_id}: {e}")
 
     if updated_ride and updated_ride.get("status") == "searching":
         asyncio.create_task(ride_search_timeout(ride.id))
@@ -869,17 +1035,21 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
 @api_router.get("/history")
 async def get_ride_history(
     limit: int = Query(default=20, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
+    before: Optional[str] = Query(default=None),
     current_user: dict = Depends(get_current_user),
 ):
-    """Get rider's past rides for the activity tab. Only completed or cancelled rides.
-    Any stale rides (searching/assigned but old) are auto-cancelled."""
+    """Get rider's past rides for the activity tab with cursor-based pagination.
+
+    Pass ``before=<ride_id>`` to fetch the page of rides older than that ride.
+    Returns ``next_cursor`` (the id of the last ride in this page) to use as
+    the next ``before`` value, or ``null`` when there are no more pages.
+    """
     all_rides = await db_supabase.get_rows(
         "rides",
         {
             "rider_id": current_user["id"],
         },
-        limit=200,
+        limit=2000,
     )
 
     # Only show rides where a driver was actually assigned and ride started or completed
@@ -892,16 +1062,22 @@ async def get_ride_history(
         if status == "completed":
             result.append(ride)
         elif status == "cancelled" and had_driver:
-            # Only show cancelled rides where a driver was involved
             result.append(ride)
-        # Skip everything else: searching, assigned but never started, auto-expired, etc.
 
     result.sort(key=lambda r: str(r.get("created_at", "")), reverse=True)
 
-    total_count = len(result)
-    rides = result[offset : offset + limit]
+    # Cursor-based pagination: skip rides up to and including the cursor id
+    if before:
+        cursor_idx = next(
+            (i for i, r in enumerate(result) if r.get("id") == before), None
+        )
+        if cursor_idx is not None:
+            result = result[cursor_idx + 1 :]
 
-    return {"rides": rides, "total": total_count, "limit": limit, "offset": offset}
+    rides = result[:limit]
+    next_cursor = rides[-1]["id"] if len(rides) == limit else None
+
+    return {"rides": rides, "limit": limit, "next_cursor": next_cursor}
 
 
 @api_router.get("/{ride_id}")
@@ -935,25 +1111,20 @@ async def get_ride(ride_id: str, current_user: dict = Depends(get_current_user))
     if ride.get("driver_id"):
         assigned_driver = await db_supabase.get_driver_by_id(ride["driver_id"])
         if assigned_driver:
-            ride["driver"] = {
-                "id": assigned_driver.get("id"),
-                "name": assigned_driver.get("name"),
-                "rating": assigned_driver.get("rating"),
-                "total_rides": assigned_driver.get("total_rides"),
-                "profile_image_url": assigned_driver.get("profile_image_url"),
-                "vehicle_make": assigned_driver.get("vehicle_make"),
-                "vehicle_model": assigned_driver.get("vehicle_model"),
-                "vehicle_color": assigned_driver.get("vehicle_color"),
-                "license_plate": assigned_driver.get("license_plate"),
-                "vehicle_year": assigned_driver.get("vehicle_year"),
-                "lat": assigned_driver.get("lat"),
-                "lng": assigned_driver.get("lng"),
-                # NOTE: deliberately excluded: phone, license_number,
-                # vehicle_vin, insurance_expiry_date,
-                # background_check_expiry_date, work_eligibility_expiry_date,
-                # documents, stripe_account_id, fcm_token, user_id,
-                # bank_account details, onboarding flags.
-            }
+            ride["driver"] = DriverPublicView(
+                id=assigned_driver.get("id", ""),
+                name=assigned_driver.get("name", ""),
+                rating=assigned_driver.get("rating"),
+                total_rides=assigned_driver.get("total_rides"),
+                profile_image_url=assigned_driver.get("profile_image_url"),
+                vehicle_make=assigned_driver.get("vehicle_make"),
+                vehicle_model=assigned_driver.get("vehicle_model"),
+                vehicle_color=assigned_driver.get("vehicle_color"),
+                license_plate=assigned_driver.get("license_plate"),
+                vehicle_year=assigned_driver.get("vehicle_year"),
+                lat=assigned_driver.get("lat"),
+                lng=assigned_driver.get("lng"),
+            ).dict()
 
     # Derive free_cancel_seconds_remaining + cancellation_fee from app_settings (UX-001).
     # These allow the frontend to show accurate countdown/fee without hardcoding.
@@ -1003,13 +1174,8 @@ async def get_ride(ride_id: str, current_user: dict = Depends(get_current_user))
 
 
 @api_router.post("/{ride_id}/tip")
-async def add_tip(ride_id: str, request: Request, current_user: dict = Depends(get_current_user)):
-    data = await request.json()
-    tip_amount = float(data.get("amount", 0))
-    if tip_amount <= 0:
-        raise HTTPException(status_code=400, detail="Invalid tip amount")
-    if tip_amount > 500:
-        raise HTTPException(status_code=400, detail="Tip amount exceeds maximum ($500)")
+async def add_tip(ride_id: str, req: TipRequest, current_user: dict = Depends(get_current_user)):
+    tip_amount = float(req.amount)
 
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -1021,6 +1187,10 @@ async def add_tip(ride_id: str, request: Request, current_user: dict = Depends(g
     if ride.get("status") != "completed":
         raise HTTPException(status_code=400, detail="Can only tip completed rides")
 
+    # R-P1-20: Block duplicate tips — one tip per ride.
+    if ride.get("tip_amount", 0) > 0:
+        raise HTTPException(status_code=400, detail="ERR_TIP_DUPLICATE")
+
     new_tip = ride.get("tip_amount", 0) + tip_amount
     new_driver_earnings = ride.get("driver_earnings", 0) + tip_amount
 
@@ -1029,11 +1199,14 @@ async def add_tip(ride_id: str, request: Request, current_user: dict = Depends(g
     return {"success": True, "tip_amount": new_tip}
 
 
+class ProcessPaymentRequest(BaseModel):
+    tip_amount: Decimal = Field(default=Decimal("0"), ge=0, le=500)
+
+
 @api_router.post("/{ride_id}/process-payment")
-async def process_payment(ride_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user: dict = Depends(get_current_user)):
     """Process payment for completed ride. Charges rider's card for fare + tip."""
-    data = await request.json()
-    tip_amount = Decimal(str(data.get("tip_amount", 0) or 0))
+    tip_amount = req.tip_amount  # already Decimal, validated by ProcessPaymentRequest
 
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -1114,156 +1287,199 @@ async def process_payment(ride_id: str, request: Request, current_user: dict = D
             reference_id=ride_id,
             description=f"Ride payment ${float(debit):.2f}",
         )
+        await db_supabase.update_ride(
+            ride_id,
+            {
+                "payment_status": "paid",
+                "tip_amount": tip_amount,
+                "updated_at": datetime.utcnow().isoformat(),
+            },
+        )
 
     elif payment_method == "company_allowance":
-        corporate_account_id = ride.get("corporate_account_id")
-        member_id = ride.get("corporate_member_id")
-        # Fallback: look up member_id for rides booked before migration 36
-        if not member_id and corporate_account_id:
-            _members = await db_supabase.get_rows(
-                "corporate_members",
-                {"company_id": corporate_account_id, "user_id": current_user["id"], "status": "active"},
-                limit=1,
-            )
-            member_id = _members[0]["id"] if _members else None
-        if not corporate_account_id:
+        _company_id = ride.get("corporate_account_id")
+        if not _company_id:
+            raise HTTPException(status_code=400, detail="Corporate account not set on ride")
+
+        # 1. Resolve membership
+        _corp_memberships = await db_supabase.list_active_memberships_for_user(ride["rider_id"])
+        _corp_membership = next(
+            (m for m in _corp_memberships if m.get("company_id") == _company_id), None
+        )
+        if not _corp_membership:
             await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
-            raise HTTPException(status_code=400, detail="No corporate account linked to this ride.")
+            raise HTTPException(status_code=400, detail="Corporate membership not found")
 
-        try:
-            from ..services.corporate_policy_service import evaluate_policy  # type: ignore
-        except ImportError:
-            from services.corporate_policy_service import evaluate_policy  # type: ignore
+        # 2. Fetch allowance and wallet
+        _corp_allowance = await db_supabase.get_member_allowance(_corp_membership["id"]) or {}
+        _corp_wallet = await db_supabase.get_corporate_wallet_by_company(_company_id) or {}
 
-        policy_result = await evaluate_policy(
-            corporate_account_id=corporate_account_id,
+        # 3. Compute split — allowance covers what it can, master covers rest
+        _total = _round(_d(str(total_charge)))
+        if _corp_allowance.get("type") == "unlimited":
+            _allowance_debit = _total
+            _master_debit = _round(Decimal("0"))
+        else:
+            _remaining = _round(
+                _d(str(_corp_allowance.get("amount") or 0))
+                - _d(str(max(float(_corp_allowance.get("used") or 0), 0.0)))
+            )
+            _remaining = max(_remaining, _round(Decimal("0")))
+            _allowance_debit = min(_remaining, _total)
+            _master_debit = _total - _allowance_debit
+
+        # 4. Check master fallback permission
+        _corp_policy = await db_supabase.get_corporate_policy(_company_id) or {}
+        _flag_violation = False
+        if _master_debit > 0 and _corp_policy.get("allowed_payment_source") == "allowance_only":
+            # Debit-and-flag: driver must be paid, never strand the ride
+            _flag_violation = True
+
+        # 5. Apply allowance debit (calls corporate_allowance_apply_delta RPC)
+        if _allowance_debit > 0 and _corp_allowance.get("id") and _corp_wallet.get("id"):
+            await corporate_allowance_service.apply_rollback(
+                wallet_id=_corp_wallet["id"],
+                allowance_id=_corp_allowance["id"],
+                member_id=_corp_membership["id"],
+                amount=float(_allowance_debit),
+                notes=f"ride:{ride_id}:allowance",
+            )
+
+        # 6. Apply master wallet debit (calls corporate_wallet_apply_delta RPC)
+        if _master_debit > 0 and _corp_wallet.get("id"):
+            await corporate_wallet_service.apply_adjustment(
+                wallet_id=_corp_wallet["id"],
+                amount=-float(_master_debit),
+                notes=f"Ride fallback debit {ride_id}",
+                actor_user_id=ride.get("rider_id", "system"),
+            )
+
+        # 7. Insert ride_payment_sources row
+        await db_supabase.insert_one("ride_payment_sources", {
+            "ride_id": ride_id,
+            "source_type": "company_allowance",
+            "allowance_debit_amount": float(_allowance_debit),
+            "master_fallback_amount": float(_master_debit),
+            "member_id": _corp_membership["id"],
+            "company_id": _company_id,
+            "created_at": datetime.utcnow().isoformat(),
+        })
+
+        # 8. Policy re-check at completion (log only — never strand driver)
+        _completion_ctx = {
+            "final_fare": float(_total),
+            "phase": "completion",
+            "allowance": _corp_allowance,
+        }
+        _completion_eval = evaluate_policy(_corp_policy, _completion_ctx)
+        if not _completion_eval["pass"] or _flag_violation:
+            await db_supabase.insert_one("corporate_policy_evaluations", {
+                "ride_id": ride_id,
+                "member_id": _corp_membership["id"],
+                "company_id": _company_id,
+                "phase": "completion",
+                "result": "violation",
+                "failed_rules": _completion_eval.get("failed_rules", []),
+                "bypassed_rules": [],
+                "created_at": datetime.utcnow().isoformat(),
+            })
+
+        await db_supabase.update_ride(
+            ride_id,
+            {
+                "payment_status": "paid",
+                "tip_amount": float(tip_amount),
+                "updated_at": datetime.utcnow().isoformat(),
+            },
+        )
+
+    else:
+        # Card path: real Stripe charge via charge_ride() helper.
+        # multi-outcome (succeeded / requires_action / declined / failed).
+        rider_user = await db_supabase.get_user_by_id(current_user["id"])
+        stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
+        payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
+
+        outcome = await charge_ride(
+            ride=ride,
             rider_id=current_user["id"],
-            estimated_fare=total_charge,
-            ride_type=ride.get("ride_type", "standard"),
-            pickup_time=datetime.utcnow(),
-            member_id=member_id,
+            total_amount=float(total_charge),
+            payment_method_id=payment_method_id,
+            stripe_customer_id=stripe_customer_id,
+            payment_intent_id=ride.get("payment_intent_id"),
         )
 
-        try:
-            await db_supabase.insert_one(
-                "corporate_policy_evaluations",
+        if outcome.status == "succeeded":
+            await db_supabase.update_ride(
+                ride_id,
                 {
-                    "ride_id": ride_id,
-                    "company_id": corporate_account_id,
-                    "result": "pass" if policy_result.allowed else "fail",
-                    "failed_rules": policy_result.failed_rules or None,
-                    "phase": "completion",
+                    "payment_status": "paid",
+                    "payment_intent_id": outcome.payment_intent_id,
+                    "tip_amount": float(tip_amount),
+                    "updated_at": datetime.utcnow().isoformat(),
                 },
             )
-        except Exception as _e:
-            logger.warning(f"[PAYMENT] policy_evaluations insert failed for ride {ride_id}: {_e}")
-
-        allowances = (
-            await db_supabase.get_rows(
-                "corporate_member_allowances",
-                {"member_id": member_id, "status": "active"},
-                limit=1,
-            )
-            if member_id
-            else []
-        )
-        allowance = allowances[0] if allowances else None
-
-        if allowance and allowance.get("type") != "unlimited":
-            remaining = _q(allowance.get("amount") or 0) - _q(allowance.get("used") or 0)
-            allowance_debit = min(remaining, total_charge)
-        else:
-            allowance_debit = total_charge
-        master_fallback = total_charge - allowance_debit
-
-        if allowance and allowance_debit > _q(0):
-            try:
-                from ..services.corporate_allowance_service import _apply  # type: ignore
-            except ImportError:
-                from services.corporate_allowance_service import _apply  # type: ignore
-
-            wallets = await db_supabase.get_rows(
-                "corporate_wallets", {"company_id": corporate_account_id}, limit=1
-            )
-            wallet_id = wallets[0]["id"] if wallets else None
-            if not wallet_id:
-                await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
-                raise HTTPException(status_code=502, detail="Corporate wallet not found.")
-            try:
-                await _apply(
-                    wallet_id=wallet_id,
-                    allowance_id=allowance["id"],
-                    member_id=member_id,
-                    type_="ride_debit",
-                    amount=float(-allowance_debit),
-                    notes=f"ride-{ride_id}",
-                )
-            except Exception as _e:
-                logger.error(f"[PAYMENT] corporate allowance debit failed for ride {ride_id}: {_e}")
-                await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
-                raise HTTPException(status_code=502, detail="Corporate billing error. Please contact support.")
-
-        try:
-            await db_supabase.update_one(
-                "ride_payment_sources",
-                {"ride_id": ride_id},
+        elif outcome.status == "requires_action":
+            await db_supabase.update_ride(
+                ride_id,
                 {
-                    "source_type": "company_allowance",
-                    "company_id": corporate_account_id,
-                    "member_id": member_id,
-                    "allowance_debit_amount": float(allowance_debit),
-                    "master_fallback_amount": float(master_fallback),
-                    "policy_check_result": "pass" if policy_result.allowed else "fail",
-                    "policy_failed_rules": policy_result.failed_rules or None,
+                    "payment_status": "requires_action",
+                    "payment_intent_id": outcome.payment_intent_id,
+                    "tip_amount": float(tip_amount),
+                    "updated_at": datetime.utcnow().isoformat(),
                 },
-                upsert=True,
             )
-        except Exception as _e:
-            logger.warning(f"[PAYMENT] ride_payment_sources upsert failed for ride {ride_id}: {_e}")
-
-    else:  # card
-        import stripe as _stripe
-
-        _settings = await get_app_settings()
-        stripe_secret = _settings.get("stripe_secret_key", "")
-        pm_id = ride.get("payment_method_id")
-
-        if stripe_secret and pm_id:
-            rider_row = await db_supabase.get_user_by_id(current_user["id"])
-            stripe_customer_id = (rider_row or {}).get("stripe_customer_id")
-            amount_cents = int(total_charge * 100)
-            try:
-                _stripe.PaymentIntent.create(
-                    amount=amount_cents,
-                    currency="cad",
-                    customer=stripe_customer_id,
-                    payment_method=pm_id,
-                    confirm=True,
-                    off_session=True,
-                    idempotency_key=f"ride-payment-{ride_id}",
-                    api_key=stripe_secret,
-                )
-            except _stripe.error.CardError as _e:
-                await db_supabase.update_ride(ride_id, {"payment_status": "failed"})
-                raise HTTPException(status_code=402, detail=_e.user_message or "Card declined.")
-            except Exception as _e:
-                logger.error(f"[PAYMENT] Stripe error for ride {ride_id}: {_e}")
-                await db_supabase.update_ride(ride_id, {"payment_status": "failed"})
-                raise HTTPException(status_code=502, detail="Payment processing error. Please try again.")
-        elif not stripe_secret:
-            logger.warning(f"[PAYMENT] Stripe not configured — ride {ride_id} marked paid in dev mode.")
+            return {
+                "success": False,
+                "status": "requires_action",
+                "client_secret": outcome.client_secret,
+                "payment_intent_id": outcome.payment_intent_id,
+            }
+        elif outcome.status == "declined":
+            await db_supabase.update_ride(
+                ride_id,
+                {
+                    "payment_status": "failed",
+                    "payment_intent_id": outcome.payment_intent_id,
+                    "updated_at": datetime.utcnow().isoformat(),
+                },
+            )
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "code": "card_declined",
+                    "decline_code": outcome.decline_code,
+                    "message": outcome.error_message or "Your card was declined.",
+                    "suggested_action": "change_card",
+                },
+            )
+        elif outcome.status == "unconfigured":
+            logger.warning(
+                "Stripe unconfigured — marking ride %s paid without real charge", ride_id
+            )
+            await db_supabase.update_ride(
+                ride_id,
+                {
+                    "payment_status": "paid",
+                    "tip_amount": float(tip_amount),
+                    "updated_at": datetime.utcnow().isoformat(),
+                },
+            )
         else:
-            await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
-            raise HTTPException(status_code=400, detail="No payment method on file for this ride.")
-
-    await db_supabase.update_ride(
-        ride_id,
-        {
-            "payment_status": "paid",
-            "tip_amount": float(tip_amount),
-            "updated_at": datetime.utcnow().isoformat(),
-        },
-    )
+            await db_supabase.update_ride(
+                ride_id,
+                {
+                    "payment_status": "failed",
+                    "updated_at": datetime.utcnow().isoformat(),
+                },
+            )
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "code": "payment_processor_error",
+                    "message": outcome.error_message or "Payment processor error.",
+                },
+            )
 
     # Send receipt email (SendGrid when configured, logs otherwise)
     rider = await db_supabase.get_user_by_id(current_user["id"])
@@ -1517,7 +1733,8 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
 
 
 @api_router.post("/{ride_id}/cancel")
-async def cancel_ride_rider(ride_id: str, current_user: dict = Depends(get_current_user)):
+@cancel_ride_limit
+async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict = Depends(get_current_user)):
     """Rider cancels the ride"""
     try:
         from ..logging_utils import diag_logger  # type: ignore
@@ -2069,11 +2286,18 @@ async def simulate_driver_arrival(ride_id: str, current_user: dict = Depends(get
 
 @api_router.post("/{ride_id}/start")
 async def rider_start_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
-    """Rider-side: Mark ride as in progress (when OTP already verified or used together with driver)."""
+    """Start a ride. Restricted to the assigned driver only (R-P1-17)."""
+    # R-P1-17: Only the assigned driver may mark a ride as started.
+    if not current_user.get("is_driver"):
+        raise HTTPException(status_code=403, detail="ERR_DRIVER_ONLY")
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
-    if ride.get("rider_id") != current_user["id"]:
+    # Verify this driver is the one assigned to the ride
+    driver_row = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
+    if not driver_row or ride.get("driver_id") != driver_row["id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     if ride.get("status") not in ["driver_arrived"]:
         raise HTTPException(status_code=400, detail=f"Cannot start ride with status: {ride.get('status')}")

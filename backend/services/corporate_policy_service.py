@@ -1,187 +1,248 @@
-"""Corporate policy evaluation.
+"""Policy evaluation for corporate ride bookings (v1 stub).
 
-evaluate_policy() checks company policy rules against a ride context.
-Runs at booking (phase='booking') and optionally at completion
-(phase='completion'). Per spec §6: same function, same rules, both phases.
+Public API:
+  evaluate_policy(policy, ride_context) -> dict
+    Pure sync function — no I/O. Safe to call from tests without any DB fixtures.
+
+  evaluate_policy_for_ride(corporate_account_id, rider_id, estimated_fare, ...) -> PolicyResult
+    Async wrapper: fetches policy + allowance from DB, builds context, delegates to
+    evaluate_policy. Use this from route handlers.
 """
 from __future__ import annotations
 
-import zoneinfo
-from dataclasses import dataclass, field
+import logging
 from datetime import datetime
-from decimal import ROUND_HALF_UP, Decimal
-from typing import Any, Dict, List, Literal, Optional
+from decimal import Decimal
+from typing import Dict, List, Optional
 
 try:
-    from .. import db_supabase  # type: ignore
+    import pytz as _pytz
 except ImportError:
-    import db_supabase  # type: ignore
+    _pytz = None  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 
-def _d(v: Any) -> Decimal:
-    return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-
-def _parse_time_minutes(t: str) -> int:
-    parts = t.split(":")
-    return int(parts[0]) * 60 + int(parts[1]) if len(parts) >= 2 else 0
-
-
-@dataclass
 class PolicyResult:
-    allowed: bool
-    payment_source: Literal["company_allowance", "rider_card", "rider_wallet"]
-    reason: str
-    failed_rules: List[str] = field(default_factory=list)
-    policy_snapshot: Dict[str, Any] = field(default_factory=dict)
+    """Structured result from evaluate_policy / evaluate_policy_for_ride.
+
+    Attributes:
+        passed         True when all rules pass (or policy_override active).
+        failed_rules   Rules that would have failed (empty on full pass).
+        bypassed_rules Rules skipped due to policy_override (for audit log).
+        policy         The raw policy dict that was evaluated.
+        allowance      The member's allowance row fetched during evaluation.
+                       Empty dict when called via the sync evaluate_policy path.
+    """
+
+    __slots__ = ("passed", "failed_rules", "bypassed_rules", "skipped_rules", "policy", "allowance")
+
+    def __init__(
+        self,
+        passed: bool,
+        failed_rules: List[str],
+        bypassed_rules: List[str],
+        skipped_rules: Optional[List[str]] = None,
+        policy: Optional[dict] = None,
+        allowance: Optional[dict] = None,
+    ) -> None:
+        self.passed = passed
+        self.failed_rules = failed_rules
+        self.bypassed_rules = bypassed_rules
+        self.skipped_rules = skipped_rules or []
+        self.policy = policy or {}
+        self.allowance = allowance or {}
+
+    @classmethod
+    def _from_dict(
+        cls,
+        result: dict,
+        policy: Optional[dict] = None,
+        allowance: Optional[dict] = None,
+    ) -> "PolicyResult":
+        return cls(
+            passed=result.get("pass", True),
+            failed_rules=result.get("failed_rules", []),
+            bypassed_rules=result.get("bypassed_rules", []),
+            skipped_rules=result.get("skipped_rules", []),
+            policy=policy,
+            allowance=allowance,
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "pass": self.passed,
+            "failed_rules": self.failed_rules,
+            "bypassed_rules": self.bypassed_rules,
+            "skipped_rules": self.skipped_rules,
+        }
 
 
-async def evaluate_policy(
-    *,
+async def evaluate_policy_for_ride(
     corporate_account_id: str,
     rider_id: str,
     estimated_fare: Decimal,
-    ride_type: str,
-    pickup_time: datetime,
-    member_id: Optional[str] = None,
+    ride_type: str,         # "standard" | "xl" | "premium"
+    pickup_time: datetime,  # UTC
+    *,
+    policy_override: bool = False,
 ) -> PolicyResult:
-    """Evaluate corporate policy for a ride booking or completion.
+    """Fetch policy + member allowance from the DB and evaluate all rules.
 
-    Returns PolicyResult with allowed=True if the ride is permitted.
-    payment_source indicates how the fare should be billed.
+    Returns a PolicyResult. Callers should inspect `.passed` and `.failed_rules`.
+    Never raises — a DB failure returns a permissive PolicyResult with a warning
+    so a transient outage cannot silently block every work ride.
     """
-    # 1. Fetch active policy
-    policies = await db_supabase.get_rows(
-        "corporate_policies",
-        {"company_id": corporate_account_id, "active": True},
-        limit=1,
-    )
-    if not policies:
-        return PolicyResult(
-            allowed=True,
-            payment_source="company_allowance",
-            reason="No active policy; allowance billing applies.",
+    try:
+        from ..db_supabase import (  # type: ignore
+            get_corporate_policy,
+            get_member_allowance,
+            list_active_memberships_for_user,
         )
-    policy = policies[0]
-
-    # 2. Resolve member row
-    if not member_id:
-        members = await db_supabase.get_rows(
-            "corporate_members",
-            {"company_id": corporate_account_id, "user_id": rider_id, "status": "active"},
-            limit=1,
+    except ImportError:
+        from db_supabase import (  # type: ignore
+            get_corporate_policy,
+            get_member_allowance,
+            list_active_memberships_for_user,
         )
-        if not members:
-            return PolicyResult(
-                allowed=False,
-                payment_source="rider_card",
-                reason="Rider is not an active member of this company.",
-                failed_rules=["membership"],
-                policy_snapshot=policy,
-            )
-        member = members[0]
-        member_id = member["id"]
-    else:
-        rows = await db_supabase.get_rows("corporate_members", {"id": member_id}, limit=1)
-        member = rows[0] if rows else {}
 
-    # 3. Evaluate rules (policy_override short-circuits all checks per spec §6)
-    failed_rules: List[str] = []
-    bypassed_rules: List[str] = []
-    policy_override = member.get("policy_override", False)
+    policy: dict = {}
+    allowance: dict = {}
 
-    if not policy_override:
-        # Rule 1: max fare per ride
-        max_fare = policy.get("max_fare_per_ride")
-        if max_fare is not None and estimated_fare > _d(max_fare):
-            failed_rules.append("max_fare_per_ride")
+    try:
+        policy = await get_corporate_policy(corporate_account_id) or {}
+    except Exception as exc:
+        logger.warning(
+            "[policy] could not fetch policy for company=%s: %s — treating as no policy",
+            corporate_account_id, exc,
+        )
 
-        # Rule 2: time window checked in company timezone
-        time_windows = policy.get("allowed_time_windows")
-        if time_windows:
-            tz_name = policy.get("timezone") or "America/Toronto"
+    try:
+        memberships = await list_active_memberships_for_user(rider_id)
+        member = next(
+            (m for m in memberships if m.get("company_id") == corporate_account_id), None
+        )
+        if member:
+            allowance = await get_member_allowance(member["id"]) or {}
+            if policy_override is False:
+                policy_override = bool(member.get("policy_override"))
+    except Exception as exc:
+        logger.warning(
+            "[policy] could not fetch allowance for rider=%s company=%s: %s",
+            rider_id, corporate_account_id, exc,
+        )
+
+    ride_context: dict = {
+        "estimated_fare": float(estimated_fare),
+        "ride_type": ride_type,
+        "pickup_time": pickup_time,
+        "allowance": allowance,
+        "policy_override": policy_override,
+    }
+
+    raw = evaluate_policy(policy, ride_context)
+    return PolicyResult._from_dict(raw, policy=policy, allowance=allowance)
+
+
+# Day-of-week abbreviations → Python weekday index (Mon=0 … Sun=6)
+_DOW_MAP: Dict[str, int] = {
+    "mon": 0, "tue": 1, "wed": 2, "thu": 3,
+    "fri": 4, "sat": 5, "sun": 6,
+}
+
+
+def evaluate_policy(policy: dict, ride_context: dict) -> dict:
+    """Evaluate v1 corporate policy rules against a ride context.
+
+    Returns ``{"pass": bool, "failed_rules": list[str], "bypassed_rules": list[str],
+               "skipped_rules": list[str]}``.
+
+    Rules evaluated:
+    - max_fare_per_ride  — estimated_fare (or final_fare) vs policy cap
+    - time_window        — pickup time within allowed day+time windows (company tz)
+    - allowed_payment_source — allowance_only blocks rides with empty allowance
+    - geofence           — DEFERRED: always passes; awaiting PostGIS infrastructure
+
+    If ``ride_context["policy_override"]`` is True all rules are short-circuited
+    but would-be failures are captured in ``bypassed_rules`` for audit.
+    """
+    if not policy:
+        return {"pass": True, "failed_rules": [], "bypassed_rules": []}
+
+    failed: List[str] = []
+
+    # ── Rule 1: max_fare_per_ride ─────────────────────────────────────────────
+    max_fare = policy.get("max_fare_per_ride")
+    if max_fare is not None:
+        fare = ride_context.get("estimated_fare") or ride_context.get("final_fare")
+        if fare is not None and float(fare) > float(max_fare):
+            failed.append("max_fare_per_ride")
+
+    # ── Rule 2: time_window ───────────────────────────────────────────────────
+    windows = policy.get("allowed_time_windows")
+    if windows:
+        pickup_raw = ride_context.get("pickup_time")
+        if pickup_raw:
             try:
-                tz = zoneinfo.ZoneInfo(tz_name)
-            except (zoneinfo.ZoneInfoNotFoundError, KeyError):
-                tz = zoneinfo.ZoneInfo("America/Toronto")
+                if isinstance(pickup_raw, str):
+                    pickup_dt = datetime.fromisoformat(pickup_raw)
+                else:
+                    pickup_dt = pickup_raw
 
-            local_dt = pickup_time.astimezone(tz)
-            day_map = {0: "mon", 1: "tue", 2: "wed", 3: "thu", 4: "fri", 5: "sat", 6: "sun"}
-            pickup_day = day_map[local_dt.weekday()]
-            pickup_min = local_dt.hour * 60 + local_dt.minute
-            in_window = any(
-                w.get("day") == pickup_day
-                and _parse_time_minutes(w.get("start", "00:00")) <= pickup_min
-                <= _parse_time_minutes(w.get("end", "23:59"))
-                for w in time_windows
-            )
-            if not in_window:
-                failed_rules.append("time_window")
-    else:
-        # Record what would have failed so the audit log is complete
-        max_fare = policy.get("max_fare_per_ride")
-        if max_fare is not None and estimated_fare > _d(max_fare):
-            bypassed_rules.append("max_fare_per_ride")
+                tz_name = policy.get("timezone") or "America/Toronto"
+                if _pytz is not None:
+                    tz = _pytz.timezone(tz_name)
+                    if pickup_dt.tzinfo is None:
+                        # Naive datetime — caller provides local company time already
+                        pickup_dt = tz.localize(pickup_dt)
+                    else:
+                        pickup_dt = pickup_dt.astimezone(tz)
 
-    if failed_rules:
-        return PolicyResult(
-            allowed=False,
-            payment_source="rider_card",
-            reason=f"Policy rejected: {', '.join(failed_rules)}",
-            failed_rules=failed_rules,
-            policy_snapshot=policy,
-        )
+                day_idx = pickup_dt.weekday()
+                hhmm = pickup_dt.strftime("%H:%M")
 
-    # 4. Check allowance balance
-    allowances = await db_supabase.get_rows(
-        "corporate_member_allowances",
-        {"member_id": member_id, "status": "active"},
-        limit=1,
-    )
+                in_window = any(
+                    _DOW_MAP.get(w.get("day", "").lower()) == day_idx
+                    and w.get("start", "00:00") <= hhmm <= w.get("end", "23:59")
+                    for w in windows
+                )
+                if not in_window:
+                    failed.append("time_window")
+            except Exception as exc:
+                # Treat parse failures as a pass — never block a ride on a
+                # clock-parsing bug; the audit log will surface the issue.
+                logger.warning("[policy] time_window parse error (treating as pass): %s", exc)
+
+    # ── Rule 3: allowed_payment_source ───────────────────────────────────────
     allowed_source = policy.get("allowed_payment_source", "both")
+    if allowed_source == "allowance_only":
+        allowance = ride_context.get("allowance") or {}
+        if allowance.get("type") != "unlimited":
+            amt = float(allowance.get("amount") or 0)
+            used = float(allowance.get("used") or 0)
+            remaining = amt - max(used, 0.0)
+            if remaining <= 0:
+                failed.append("allowed_payment_source")
 
-    if not allowances:
-        if allowed_source == "allowance_only":
-            return PolicyResult(
-                allowed=False,
-                payment_source="rider_card",
-                reason="No allowance assigned and policy requires allowance_only.",
-                failed_rules=["allowance_empty"],
-                policy_snapshot=policy,
-            )
-        return PolicyResult(
-            allowed=True,
-            payment_source="rider_card",
-            reason="No allowance; billing to rider card.",
-            policy_snapshot=policy,
+    # ── Rule 4: geofence ─────────────────────────────────────────────────────
+    # DEFERRED: PostGIS ST_Contains check against policy["allowed_geofence"].
+    # Both pickup AND dropoff must lie inside at least one polygon in the GeoJSON
+    # FeatureCollection.  Unblocked when supabase_extensions.postgis is available
+    # in the deployment environment.  Until then we warn + pass so a configured
+    # geofence is visible in logs and in the PolicyResult.skipped_rules field.
+    skipped: List[str] = []
+    if policy.get("allowed_geofence"):
+        skipped.append("geofence")
+        logger.warning(
+            "[policy] geofence check deferred (PostGIS unavailable) — "
+            "ride_id=%s company=%s",
+            ride_context.get("ride_id", "unknown"),
+            ride_context.get("corporate_account_id", "unknown"),
         )
 
-    allowance = allowances[0]
-    if allowance.get("type") == "unlimited":
-        remaining = Decimal("999999.99")
-    else:
-        remaining = _d(allowance.get("amount") or 0) - _d(allowance.get("used") or 0)
+    # ── Override: bypass all rules but still surface would-be failures ────────
+    if ride_context.get("policy_override"):
+        return {"pass": True, "failed_rules": [], "bypassed_rules": failed, "skipped_rules": skipped}
 
-    if remaining >= estimated_fare:
-        return PolicyResult(
-            allowed=True,
-            payment_source="company_allowance",
-            reason="Allowance covers fare.",
-            policy_snapshot=policy,
-        )
-
-    if allowed_source in ("both", "master_only"):
-        return PolicyResult(
-            allowed=True,
-            payment_source="rider_card",
-            reason="Allowance exhausted; billing to rider card per policy.",
-            policy_snapshot=policy,
-        )
-
-    return PolicyResult(
-        allowed=False,
-        payment_source="rider_card",
-        reason="Allowance exhausted and policy requires allowance_only.",
-        failed_rules=["allowance_insufficient"],
-        policy_snapshot=policy,
-    )
+    return {"pass": len(failed) == 0, "failed_rules": failed, "bypassed_rules": [], "skipped_rules": skipped}

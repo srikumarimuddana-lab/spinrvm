@@ -1,4 +1,5 @@
-import React, { useRef, useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
   Text,
@@ -9,32 +10,54 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
+import { useWorkProfileStore } from '../store/workProfileStore';
 import CustomAlert from '@shared/components/CustomAlert';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
+import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
 
-const PAYMENT_METHODS = [
-  { id: 'card', name: 'Credit Card', icon: 'card', last4: '4242' },
-  { id: 'wallet', name: 'Spinr Wallet', icon: 'wallet', last4: '' },
-];
+interface CorporateAccount {
+  id: string;
+  company_name: string;
+}
 
-export default function PaymentConfirmScreen() {
+interface SavedCard {
+  id: string;
+  brand: string;
+  last4: string;
+  exp_month: number;
+  exp_year: number;
+  is_default: boolean;
+}
+
+function PaymentConfirmScreenContent() {
   const router = useRouter();
   const { pickup, dropoff, selectedVehicle, estimates, createRide, isLoading, scheduledTime } = useRideStore();
   const [selectedPayment, setSelectedPayment] = useState('card');
+  const [savedCards, setSavedCards] = useState<SavedCard[]>([]);
+  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [promoExpanded, setPromoExpanded] = useState(false);
   const [promoCode, setPromoCode] = useState('');
   const [promoDiscount, setPromoDiscount] = useState(0);
   const [promoValidating, setPromoValidating] = useState(false);
   const [promoApplied, setPromoApplied] = useState(false);
   const [promoMessage, setPromoMessage] = useState('');
+  const { profiles: workProfiles, workModeEnabled, fetchProfiles: fetchWorkProfiles, activeCompanyId } = useWorkProfileStore();
+  const corporateAccounts: CorporateAccount[] = workProfiles
+    .map(p => ({ id: p.company.id ?? '', company_name: p.company.name ?? '' }))
+    .filter(a => a.id);
+  const [useCorporate, setUseCorporate] = useState(workModeEnabled);
+  const [selectedCorporateId, setSelectedCorporateId] = useState<string | null>(
+    workModeEnabled ? (activeCompanyId ?? null) : null,
+  );
   const [alertState, setAlertState] = useState<{
     visible: boolean;
     title: string;
@@ -45,25 +68,61 @@ export default function PaymentConfirmScreen() {
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const { scheduleReminder } = useScheduledRideReminder();
 
   const selectedEstimate = estimates.find((e) => e.vehicle_type.id === selectedVehicle?.id);
 
-  const isSubmitting = useRef(false);
+  useEffect(() => {
+    fetchWorkProfiles();
+  }, []);
+
+  useEffect(() => {
+    api.get('/payments/cards').then((res) => {
+      const cards: SavedCard[] = Array.isArray(res.data) ? res.data : [];
+      setSavedCards(cards);
+      const defaultCard = cards.find((c) => c.is_default) ?? cards[0];
+      if (defaultCard) setSelectedCardId(defaultCard.id);
+    }).catch(() => {});
+  }, []);
+
+  // Keep corporate toggle in sync when work mode is toggled elsewhere
+  useEffect(() => {
+    if (workModeEnabled && corporateAccounts.length > 0) {
+      setUseCorporate(true);
+      setSelectedCorporateId(prev => prev ?? activeCompanyId ?? corporateAccounts[0]?.id ?? null);
+    }
+  }, [workModeEnabled, corporateAccounts.length]);
+
+  const [isBooking, setIsBooking] = useState(false);
   const handleBookRide = async () => {
-    if (isSubmitting.current) return;
-    isSubmitting.current = true;
+    if (isBooking || isLoading) return;
+    setIsBooking(true);
     try {
-      const ride = await createRide(selectedPayment);
+      const corpId = useCorporate && selectedCorporateId ? selectedCorporateId : null;
+      const pmId = selectedPayment === 'card' ? (selectedCardId ?? undefined) : undefined;
+      const ride = await createRide(selectedPayment, corpId, pmId);
       Analytics.rideRequested({
         vehicle_type: selectedVehicle?.name ?? 'unknown',
         estimated_fare: totalFare,
       });
       Analytics.paymentInitiated({ method: selectedPayment, amount: totalFare });
-      router.replace('/driver-arriving?rideId=' + ride.id);
+
+      // Schedule a local 15-min reminder if this is a scheduled ride.
+      // The backend cron also fires an FCM `scheduled_ride_reminder`; this
+      // local notification is a client-side fallback.
+      if (scheduledTime && ride.id) {
+        scheduleReminder(ride.id, scheduledTime).catch(() => {});
+      }
+
+      if (scheduledTime) {
+        router.replace('/(tabs)');
+      } else {
+        router.replace('/driver-arriving?rideId=' + ride.id);
+      }
     } catch (error: any) {
       setAlertState({ visible: true, title: 'Error', message: error.message || 'Failed to book ride', variant: 'danger' });
     } finally {
-      isSubmitting.current = false;
+      setIsBooking(false);
     }
   };
 
@@ -194,41 +253,116 @@ export default function PaymentConfirmScreen() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Payment Method</Text>
-          {PAYMENT_METHODS.map((method) => (
+
+          {/* Saved cards from Stripe */}
+          {savedCards.map((card) => {
+            const isSelected = selectedPayment === 'card' && selectedCardId === card.id;
+            return (
+              <TouchableOpacity
+                key={card.id}
+                style={[styles.paymentOption, isSelected && styles.paymentOptionSelected]}
+                onPress={() => { setSelectedPayment('card'); setSelectedCardId(card.id); }}
+              >
+                <View style={styles.paymentIconContainer}>
+                  <Ionicons name="card" size={24} color={isSelected ? colors.primary : colors.textDim} />
+                </View>
+                <View style={styles.paymentInfo}>
+                  <Text style={styles.paymentName}>{card.brand.charAt(0).toUpperCase() + card.brand.slice(1)}</Text>
+                  <Text style={styles.paymentDetails}>•••• {card.last4}  {card.exp_month}/{String(card.exp_year).slice(-2)}</Text>
+                </View>
+                {isSelected && (
+                  <View style={styles.paymentCheck}>
+                    <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+
+          {/* Show generic card option if no saved cards loaded yet */}
+          {savedCards.length === 0 && (
             <TouchableOpacity
-              key={method.id}
-              style={[
-                styles.paymentOption,
-                selectedPayment === method.id && styles.paymentOptionSelected,
-              ]}
-              onPress={() => setSelectedPayment(method.id)}
+              style={[styles.paymentOption, selectedPayment === 'card' && styles.paymentOptionSelected]}
+              onPress={() => setSelectedPayment('card')}
             >
               <View style={styles.paymentIconContainer}>
-                <Ionicons
-                  name={method.icon as any}
-                  size={24}
-                  color={selectedPayment === method.id ? colors.primary : colors.textDim}
-                />
+                <Ionicons name="card" size={24} color={selectedPayment === 'card' ? colors.primary : colors.textDim} />
               </View>
               <View style={styles.paymentInfo}>
-                <Text style={styles.paymentName}>{method.name}</Text>
-                {method.last4 && (
-                  <Text style={styles.paymentDetails}>•••• {method.last4}</Text>
-                )}
+                <Text style={styles.paymentName}>Credit Card</Text>
               </View>
-              {selectedPayment === method.id && (
+              {selectedPayment === 'card' && (
                 <View style={styles.paymentCheck}>
                   <Ionicons name="checkmark" size={18} color="#FFFFFF" />
                 </View>
               )}
             </TouchableOpacity>
-          ))}
+          )}
+
+          {/* Wallet */}
+          <TouchableOpacity
+            style={[styles.paymentOption, selectedPayment === 'wallet' && styles.paymentOptionSelected]}
+            onPress={() => setSelectedPayment('wallet')}
+          >
+            <View style={styles.paymentIconContainer}>
+              <Ionicons name="wallet" size={24} color={selectedPayment === 'wallet' ? colors.primary : colors.textDim} />
+            </View>
+            <View style={styles.paymentInfo}>
+              <Text style={styles.paymentName}>Spinr Wallet</Text>
+            </View>
+            {selectedPayment === 'wallet' && (
+              <View style={styles.paymentCheck}>
+                <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+              </View>
+            )}
+          </TouchableOpacity>
 
           <TouchableOpacity style={styles.addPaymentButton} onPress={() => router.push('/manage-cards' as any)}>
             <Ionicons name="add" size={20} color={colors.primary} />
             <Text style={styles.addPaymentText}>Add Payment Method</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Corporate Billing */}
+        {corporateAccounts.length > 0 && (
+          <View style={styles.corporateSection}>
+            <View style={styles.corporateRow}>
+              <View style={styles.corporateIconWrap}>
+                <Ionicons name="business" size={20} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.corporateTitle}>Bill to Business</Text>
+                <Text style={styles.corporateSubtitle}>
+                  {useCorporate && selectedCorporateId
+                    ? corporateAccounts.find(a => a.id === selectedCorporateId)?.company_name
+                    : 'Use a corporate account'}
+                </Text>
+              </View>
+              <Switch
+                value={useCorporate}
+                onValueChange={(v) => setUseCorporate(v)}
+                trackColor={{ false: colors.border, true: colors.primary }}
+                thumbColor="#FFF"
+              />
+            </View>
+            {useCorporate && corporateAccounts.length > 1 && (
+              <View style={styles.corporatePicker}>
+                {corporateAccounts.map((acct) => (
+                  <TouchableOpacity
+                    key={acct.id}
+                    style={[styles.corporateOption, selectedCorporateId === acct.id && styles.corporateOptionSelected]}
+                    onPress={() => setSelectedCorporateId(acct.id)}
+                  >
+                    <Text style={[styles.corporateOptionText, selectedCorporateId === acct.id && { color: colors.primary }]}>
+                      {acct.company_name}
+                    </Text>
+                    {selectedCorporateId === acct.id && <Ionicons name="checkmark" size={16} color={colors.primary} />}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
 
         {/* Promo Code */}
         {!promoExpanded ? (
@@ -317,12 +451,12 @@ export default function PaymentConfirmScreen() {
           </View>
         )}
         <TouchableOpacity
-          style={styles.bookButton}
+          style={[styles.bookButton, (isLoading || isBooking) && { opacity: 0.6 }]}
           onPress={handleBookRide}
-          disabled={isLoading}
+          disabled={isLoading || isBooking}
           activeOpacity={0.8}
         >
-          {isLoading ? (
+          {isLoading || isBooking ? (
             <ActivityIndicator color="#FFFFFF" />
           ) : (
             <>
@@ -343,6 +477,14 @@ export default function PaymentConfirmScreen() {
         onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
       />
     </SafeAreaView>
+  );
+}
+
+export default function PaymentConfirmScreen() {
+  return (
+    <ErrorBoundary>
+      <PaymentConfirmScreenContent />
+    </ErrorBoundary>
   );
 }
 
@@ -689,6 +831,57 @@ function createStyles(colors: ThemeColors) {
       fontSize: 18,
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.primary,
+    },
+    corporateSection: {
+      backgroundColor: colors.surface,
+      padding: 16,
+      marginBottom: 12,
+    },
+    corporateRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+    },
+    corporateIconWrap: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.primary + '15',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    corporateTitle: {
+      fontSize: 15,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.text,
+    },
+    corporateSubtitle: {
+      fontSize: 13,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+      marginTop: 2,
+    },
+    corporatePicker: {
+      marginTop: 12,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      paddingTop: 12,
+    },
+    corporateOption: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      borderRadius: 10,
+    },
+    corporateOptionSelected: {
+      backgroundColor: colors.primary + '10',
+    },
+    corporateOptionText: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.text,
     },
     splitButton: {
       flexDirection: 'row',

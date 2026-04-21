@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Modal, FlatList,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -9,17 +9,20 @@ import { useAuthStore } from '@shared/store/authStore';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import i18n, { useTranslation, useLanguageStore, LANGUAGES, type Language } from '../i18n';
 
 export default function SettingsScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
   const { colors, isDark, colorScheme, setTheme } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const { language, setLanguage } = useLanguageStore();
+  const { t } = useTranslation();
 
   const [pushEnabled, setPushEnabled] = useState(true);
   const [emailEnabled, setEmailEnabled] = useState(true);
   const [smsEnabled, setSmsEnabled] = useState(true);
-  const [language, setLanguage] = useState('English');
+  const [showLangModal, setShowLangModal] = useState(false);
   const [alertState, setAlertState] = useState<{
     visible: boolean;
     title: string;
@@ -38,55 +41,46 @@ export default function SettingsScreen() {
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Settings</Text>
+        <Text style={styles.headerTitle}>{t('settings.title')}</Text>
         <View style={{ width: 44 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
         {/* Notifications */}
-        <Text style={styles.sectionTitle}>Notifications</Text>
+        <Text style={styles.sectionTitle}>{t('settings.notifications')}</Text>
         <View style={styles.card}>
           <SettingToggle icon="notifications" iconColor="#F59E0B" iconBg="#FEF3C7"
-            title="Push Notifications" subtitle="Ride updates and alerts"
+            title={t('settings.push_notifications')} subtitle={t('settings.push_notifications_subtitle')}
             value={pushEnabled} onToggle={setPushEnabled} />
           <SettingToggle icon="mail" iconColor="#8B5CF6" iconBg="#EDE9FE"
-            title="Email Notifications" subtitle="Receipts and promotions"
+            title={t('settings.email_notifications')} subtitle={t('settings.email_notifications_subtitle')}
             value={emailEnabled} onToggle={setEmailEnabled} />
           <SettingToggle icon="chatbubble" iconColor="#10B981" iconBg="#ECFDF5"
-            title="SMS Notifications" subtitle="OTP and ride confirmations"
+            title={t('settings.sms_notifications')} subtitle={t('settings.sms_notifications_subtitle')}
             value={smsEnabled} onToggle={setSmsEnabled} />
         </View>
 
         {/* Appearance */}
-        <Text style={styles.sectionTitle}>Appearance</Text>
+        <Text style={styles.sectionTitle}>{t('settings.appearance')}</Text>
         <View style={styles.card}>
           <SettingToggle icon="moon" iconColor="#6366F1" iconBg="#EEF2FF"
-            title="Dark Mode" subtitle="Reduce eye strain at night"
+            title={t('settings.dark_mode')} subtitle={t('settings.dark_mode_subtitle')}
             value={isDark} onToggle={handleDarkModeToggle} />
         </View>
 
         {/* Language */}
-        <Text style={styles.sectionTitle}>Language & Region</Text>
+        <Text style={styles.sectionTitle}>{t('settings.language_region')}</Text>
         <View style={styles.card}>
-          <TouchableOpacity style={styles.row} onPress={() => {
-            setAlertState({
-              visible: true,
-              title: 'Language',
-              message: 'Select your preferred language',
-              variant: 'info',
-              buttons: [
-                { text: 'English', onPress: () => setLanguage('English') },
-                { text: 'French', onPress: () => setLanguage('French') },
-                { text: 'Cancel', style: 'cancel' },
-              ],
-            });
-          }}>
+          <TouchableOpacity style={styles.row} onPress={() => setShowLangModal(true)}>
             <View style={[styles.rowIcon, { backgroundColor: '#DBEAFE' }]}>
               <Ionicons name="globe" size={20} color="#3B82F6" />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Language</Text>
-              <Text style={styles.rowSub}>{language}</Text>
+              <Text style={styles.rowTitle}>{t('settings.language')}</Text>
+              <Text style={styles.rowSub}>
+                {LANGUAGES.find(l => l.code === language)?.flag}{' '}
+                {LANGUAGES.find(l => l.code === language)?.nativeName ?? 'English'}
+              </Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
           </TouchableOpacity>
@@ -96,23 +90,23 @@ export default function SettingsScreen() {
               <Ionicons name="lock-closed" size={20} color={colors.textSecondary} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Privacy & Data</Text>
-              <Text style={styles.rowSub}>Permissions, data management</Text>
+              <Text style={styles.rowTitle}>{t('settings.privacy_data')}</Text>
+              <Text style={styles.rowSub}>{t('settings.privacy_data_subtitle')}</Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
           </TouchableOpacity>
         </View>
 
         {/* Account */}
-        <Text style={styles.sectionTitle}>Account</Text>
+        <Text style={styles.sectionTitle}>{t('settings.account')}</Text>
         <View style={styles.card}>
           <TouchableOpacity style={styles.row} onPress={() => router.push('/manage-cards' as any)}>
             <View style={[styles.rowIcon, { backgroundColor: '#EDE9FE' }]}>
               <Ionicons name="card" size={20} color="#7C3AED" />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Payment Methods</Text>
-              <Text style={styles.rowSub}>Manage your cards</Text>
+              <Text style={styles.rowTitle}>{t('settings.payment_methods')}</Text>
+              <Text style={styles.rowSub}>{t('settings.payment_methods_subtitle')}</Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
           </TouchableOpacity>
@@ -122,22 +116,22 @@ export default function SettingsScreen() {
               <Ionicons name="bookmark" size={20} color="#F59E0B" />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Saved Places</Text>
-              <Text style={styles.rowSub}>Home, work, favourites</Text>
+              <Text style={styles.rowTitle}>{t('settings.saved_places')}</Text>
+              <Text style={styles.rowSub}>{t('settings.saved_places_subtitle')}</Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
           </TouchableOpacity>
         </View>
 
         {/* About */}
-        <Text style={styles.sectionTitle}>About</Text>
+        <Text style={styles.sectionTitle}>{t('settings.about')}</Text>
         <View style={styles.card}>
           <TouchableOpacity style={styles.row} onPress={() => router.push('/legal?type=tos' as any)}>
             <View style={[styles.rowIcon, { backgroundColor: colors.surfaceLight }]}>
               <Ionicons name="document-text" size={20} color={colors.textSecondary} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Terms of Service</Text>
+              <Text style={styles.rowTitle}>{t('settings.tos')}</Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
           </TouchableOpacity>
@@ -147,7 +141,7 @@ export default function SettingsScreen() {
               <Ionicons name="eye" size={20} color={colors.textSecondary} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>Privacy Policy</Text>
+              <Text style={styles.rowTitle}>{t('settings.privacy_policy')}</Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
           </TouchableOpacity>
@@ -155,6 +149,32 @@ export default function SettingsScreen() {
 
         <Text style={styles.version}>Spinr v1.0.2 · {user?.phone || ''}</Text>
       </ScrollView>
+      {/* Language Picker Modal */}
+      <Modal visible={showLangModal} animationType="slide" transparent onRequestClose={() => setShowLangModal(false)}>
+        <TouchableOpacity style={styles.langOverlay} activeOpacity={1} onPress={() => setShowLangModal(false)}>
+          <TouchableOpacity activeOpacity={1} style={styles.langSheet}>
+            <View style={styles.langHandle} />
+            <Text style={styles.langTitle}>Select Language</Text>
+            {LANGUAGES.map((lang) => (
+              <TouchableOpacity
+                key={lang.code}
+                style={[styles.langRow, language === lang.code && styles.langRowActive]}
+                onPress={() => { setLanguage(lang.code as Language); setShowLangModal(false); }}
+              >
+                <Text style={styles.langFlag}>{lang.flag}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.langNative}>{lang.nativeName}</Text>
+                  <Text style={styles.langEnglish}>{lang.name}</Text>
+                </View>
+                {language === lang.code && (
+                  <Ionicons name="checkmark-circle" size={22} color={colors.primary} />
+                )}
+              </TouchableOpacity>
+            ))}
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
       <CustomAlert
         visible={alertState.visible}
         title={alertState.title}
@@ -212,5 +232,23 @@ function createStyles(colors: ThemeColors) {
     rowTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
     rowSub: { fontSize: 12, color: colors.textDim, marginTop: 1 },
     version: { fontSize: 12, color: colors.textDim, textAlign: 'center', marginTop: 24 },
+
+    // Language modal
+    langOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
+    langSheet: {
+      backgroundColor: colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+      paddingHorizontal: 20, paddingBottom: 40, paddingTop: 12,
+    },
+    langHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: 'center', marginBottom: 16 },
+    langTitle: { fontSize: 18, fontWeight: '700', color: colors.text, marginBottom: 16 },
+    langRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14, paddingHorizontal: 12,
+      borderRadius: 14, marginBottom: 8, backgroundColor: colors.surfaceLight,
+      borderWidth: 1.5, borderColor: 'transparent',
+    },
+    langRowActive: { borderColor: colors.primary, backgroundColor: `${colors.primary}10` },
+    langFlag: { fontSize: 28 },
+    langNative: { fontSize: 16, fontWeight: '600', color: colors.text },
+    langEnglish: { fontSize: 12, color: colors.textDim, marginTop: 1 },
   });
 }

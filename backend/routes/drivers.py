@@ -35,12 +35,14 @@ db = db_supabase  # legacy alias
 logger = logging.getLogger(__name__)
 
 # ── Vault encryption for driver PII (P2-5) ───────────────────────────────────
-# licence_number and vehicle_vin are stored as vault.encrypted_text in the DB.
+# licence_number and vehicle_vin live in plain TEXT columns, but the values
+# stored there are vault.secrets UUIDs, not plaintext — actual ciphertext is
+# held in vault.secrets under the drivers_pii_key pgsodium key.
 # The application passes plaintext to encrypt_driver_pii() before writing and
-# calls decrypt_driver_pii() after reading.  Both are Postgres functions created
+# calls decrypt_driver_pii() after reading. Both are Postgres functions created
 # by migration 32_encrypt_sensitive_fields.sql and exposed via Supabase RPC.
-# If vault is not yet configured the helpers fail open (plaintext is stored/
-# returned) so onboarding is never blocked in development environments.
+# Transparent column encryption (vault.encrypted_text) was removed by Supabase
+# in mid-2024; we intentionally keep the columns as TEXT and encrypt explicitly.
 
 _VAULT_PII_FIELDS: frozenset = frozenset({"license_number", "vehicle_vin"})
 

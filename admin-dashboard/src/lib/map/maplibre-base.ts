@@ -11,9 +11,10 @@ import maplibregl from "maplibre-gl";
 export const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 export const MAP_STYLE_POSITRON = "https://tiles.openfreemap.org/styles/positron";
 
-// Toronto by default — matches the existing monitoring map default.
-// MapLibre uses [lng, lat] everywhere (opposite of Leaflet).
-export const DEFAULT_CENTER: [number, number] = [-79.3832, 43.6532];
+// Saskatoon by default — Spinr is a Saskatchewan-first service, so maps
+// should land somewhere operational even before service areas load or
+// the user's geolocation resolves. MapLibre uses [lng, lat] (opposite of Leaflet).
+export const DEFAULT_CENTER: [number, number] = [-106.67, 52.13];
 
 /** Build a styled DOM <div> for a circular map marker. */
 export function makeCircleMarkerEl(opts: {

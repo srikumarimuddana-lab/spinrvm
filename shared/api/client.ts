@@ -80,8 +80,12 @@ const getStoredToken = async (): Promise<string | null> => {
   }
 };
 
-// Helper to get auth header — checks in-memory first, then SecureStore
-const getAuthHeader = async (): Promise<string | null> => {
+// Helper to get auth header — checks in-memory first, then SecureStore.
+// Exported so raw-fetch callers (e.g. multipart uploads in documents.tsx)
+// can reuse the exact same resolution order instead of reading SecureStore
+// directly. The access token is memory-only per authStore.setTokens, so a
+// SecureStore-only lookup always returns null and produces 401s.
+export const getAuthHeader = async (): Promise<string | null> => {
   try {
     // 1. In-memory token (most reliable — set during current session)
     if (_inMemoryToken) {

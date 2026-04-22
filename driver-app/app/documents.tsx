@@ -7,26 +7,18 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import api from '@shared/api/client';
+import api, { getAuthHeader } from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
-// Resolve the stored auth token the same way the shared api client does.
-// Used for the raw fetch() upload below — we can't reuse axios for multipart
-// because its FormData handling is fragile in React Native.
-const getAuthToken = async (): Promise<string | null> => {
-    try {
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-            return localStorage.getItem('auth_token');
-        }
-        const SecureStore = require('expo-secure-store');
-        return await SecureStore.getItemAsync('auth_token');
-    } catch {
-        return null;
-    }
-};
+// Reuse the shared api client's getAuthHeader so we get in-memory-first
+// resolution. authStore.setTokens keeps the access token in memory only
+// (SecureStore is deliberately wiped), so a SecureStore-only lookup here
+// always returned null and produced 401 "No authorization token provided"
+// on every document upload.
+const getAuthToken = getAuthHeader;
 
 // Derive a proper MIME type from a file URI / name.
 // expo-image-picker returns asset.type = 'image' (not a MIME), so we check

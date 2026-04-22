@@ -66,14 +66,17 @@ export default function RideList({
     const [driverFilter, setDriverFilter] = useState("");
 
     // Tab counts. `allRides` holds whatever the current backend query
-    // returned — on the Scheduled tab that is only scheduled rides, so we
-    // surface the server-side totalCount there and leave the other
-    // non-scheduled tab counts blank (we don't have that data to compare).
-    // On every other tab `allRides` is the default feed, so we can
-    // derive status + synthetic-tab counts client-side.
+    // returned. On the Scheduled tab that's scheduled rides only; on
+    // every other tab it's the default feed. We always count
+    // client-side against `allRides` so the badge matches what the
+    // operator actually sees (and never double-reports if the backend
+    // filter lags a deploy). Tabs we can't compute from the current
+    // feed return null and render no badge.
     const onScheduledTab = statusFilter === "scheduled";
     const statusCounts = (s: string): number | null => {
-        if (s === "scheduled") return onScheduledTab ? totalCount : null;
+        if (s === "scheduled") {
+            return allRides.filter(r => r.is_scheduled === true).length;
+        }
         if (onScheduledTab) return null;
         if (s === "all") return allRides.length;
         if (s === "no_driver_found") {

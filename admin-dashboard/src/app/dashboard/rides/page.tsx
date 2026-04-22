@@ -65,16 +65,26 @@ export default function RidesPage() {
             r.driver_phone?.toLowerCase().includes(q) ||
             r.rider_id?.toLowerCase().includes(q) ||
             r.driver_id?.toLowerCase().includes(q);
-        // "no_driver_found" is backed by status=cancelled on the wire; narrow
-        // client-side to the ones auto-cancelled by the dispatcher timeout.
+        // "scheduled" narrows to rides the rider explicitly scheduled
+        // (is_scheduled=true). Even though the backend is also called
+        // with is_scheduled=true for this tab, we narrow client-side too
+        // so a stale feed or an older row with is_scheduled=null never
+        // leaks a non-scheduled ride into the Scheduled tab.
+        //
+        // "no_driver_found" is backed by status=cancelled on the wire;
+        // narrow client-side to the ones auto-cancelled by the
+        // dispatcher timeout (cancellation_type or legacy reason text).
         const matchStatus =
             statusFilter === "all" ||
-            statusFilter === "scheduled" ||
+            (statusFilter === "scheduled" && r.is_scheduled === true) ||
             (statusFilter === "no_driver_found" &&
                 r.status === "cancelled" &&
                 (r.cancellation_type === "no_drivers_found" ||
                     (r.cancellation_reason || "").toLowerCase().includes("no nearby drivers"))) ||
-            r.status === statusFilter;
+            (statusFilter !== "scheduled" &&
+                statusFilter !== "no_driver_found" &&
+                statusFilter !== "all" &&
+                r.status === statusFilter);
         const matchArea = areaFilter === "all" || r.service_area_id === areaFilter;
         let matchDate = true;
         if (dateFrom || dateTo) {

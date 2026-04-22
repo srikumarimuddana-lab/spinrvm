@@ -2079,6 +2079,8 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
             {
                 **base_update,
                 "cancelled_by": "driver",
+                # Migration 38 — coarse attribution for admin filtering.
+                "cancellation_type": "driver_cancel",
                 "cancellation_reason": (reason or "").strip() or None,
             },
         )

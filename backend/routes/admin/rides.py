@@ -35,16 +35,31 @@ async def admin_get_rides(
     limit: int = 50,
     offset: int = 0,
     status: Optional[str] = None,
+    is_scheduled: Optional[bool] = None,
 ):
-    """Get all rides with filters, enriched with rider_name and driver_name. Returns paginated."""
-    filters = {}
+    """Get all rides with filters, enriched with rider_name and driver_name. Returns paginated.
+
+    ``is_scheduled=true`` returns rider-requested scheduled rides (future pickup).
+    These live alongside regular rides with ``status="searching"`` until the
+    dispatcher picks them up at scheduled_time, so an explicit filter is the
+    only way to see the upcoming queue.
+    """
+    filters: Dict[str, Any] = {}
     if status:
         filters["status"] = status
+    if is_scheduled is not None:
+        filters["is_scheduled"] = is_scheduled
 
     # Get total count for pagination
     total_count = await db_supabase.count_documents("rides", filters)
 
-    rides = await db_supabase.get_rows("rides", filters, order="created_at", desc=True, limit=limit, offset=offset)
+    # Scheduled rides sort naturally by scheduled_time (earliest pickup first);
+    # regular rides keep the created_at-desc feed.
+    order_col = "scheduled_time" if is_scheduled else "created_at"
+    order_desc = not is_scheduled
+    rides = await db_supabase.get_rows(
+        "rides", filters, order=order_col, desc=order_desc, limit=limit, offset=offset
+    )
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
     drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
@@ -162,6 +177,10 @@ async def admin_cancel_ride(
                 "cancelled_at": now,
                 "cancellation_reason": reason,
                 "cancelled_by_admin_id": admin_user.get("id"),
+                # Migration 38 — explicit attribution alongside the
+                # admin-id pointer above.
+                "cancelled_by": "admin",
+                "cancellation_type": "admin_cancel",
                 "updated_at": now,
             },
         )

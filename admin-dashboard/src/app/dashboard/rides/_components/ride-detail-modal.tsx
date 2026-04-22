@@ -46,6 +46,11 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
     const [loading, setLoading] = useState(false);
     const [flagTarget, setFlagTarget] = useState<{ type: "rider" | "driver"; name: string } | null>(null);
     const [showComplaint, setShowComplaint] = useState(false);
+    // Which phase polyline the replay map renders. Clicking a phase
+    // card flips this; null hides the replay (before any click).
+    // "all" shows the combined path (Phase 2 + Phase 3 together) for
+    // the quick overview.
+    const [selectedPhase, setSelectedPhase] = useState<"navigating_to_pickup" | "trip_in_progress" | "all" | null>("all");
 
     const loadRide = useCallback(async () => {
         if (!rideId) return;
@@ -60,6 +65,10 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
     useEffect(() => {
         if (open && rideId) loadRide();
         if (!open) setRide(null);
+        // Every open of the modal starts on the "All phases" view so the
+        // user sees the combined route first, then can drill into Phase 2
+        // or Phase 3 by clicking a card.
+        setSelectedPhase("all");
     }, [open, rideId, loadRide]);
 
     if (!open) return null;
@@ -536,79 +545,144 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         {ride.cancelled_at && <TL l="Cancelled" t={ride.cancelled_at} d />}
                                     </div>
 
-                                    {/* Phase distance + duration summary. Duration is
-                                        seconds-per-phase from migration 39's phase_durations
-                                        column, written by complete_ride. Falls back to
-                                        omitting the duration line for legacy rides. */}
+                                    {/* Phase distance + duration cards. Each card is a
+                                        button — clicking replays the polyline for that
+                                        phase on the map below. The "All phases" card
+                                        (phase=all) concatenates navigating_to_pickup +
+                                        trip_in_progress. Duration reads from migration
+                                        39's phase_durations column. */}
                                     {phaseDistances.length > 0 && (
                                         <div className="mt-3 pt-3 border-t">
-                                            <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-2.5">Distance by Phase</p>
-                                            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-                                                {phaseDistances.map(p => {
-                                                    const secs = ride.phase_durations?.[p.phase];
-                                                    const durLabel =
-                                                        typeof secs === "number" && secs > 0
-                                                            ? secs >= 60
-                                                                ? `${Math.round(secs / 60)} min`
-                                                                : `${secs}s`
-                                                            : null;
-                                                    return (
-                                                        <div key={p.phase} className={`rounded-lg px-3 py-2.5 ${PHASE_COLORS[p.phase] || "bg-gray-50 text-gray-600 dark:bg-gray-800/30 dark:text-gray-400"}`}>
-                                                            <p className="text-xs font-bold">{p.distance_km} km</p>
-                                                            <p className="text-[10px] opacity-80">{PHASE_LABELS[p.phase] || p.phase.replace(/_/g, " ")}</p>
-                                                            <p className="text-[9px] opacity-60">
-                                                                {p.points > 0 ? `${p.points} pts` : ""}
-                                                                {p.points > 0 && durLabel ? " · " : ""}
-                                                                {durLabel || ""}
-                                                            </p>
-                                                        </div>
-                                                    );
-                                                })}
+                                            <div className="flex items-center justify-between mb-2.5">
+                                                <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">
+                                                    Distance by Phase
+                                                </p>
+                                                <p className="text-[10px] text-muted-foreground/70">
+                                                    Click a phase to replay
+                                                </p>
                                             </div>
-                                            <div className="flex justify-between mt-2.5 text-xs">
-                                                <span className="text-muted-foreground">Total GPS distance</span>
-                                                <span className="font-bold tabular-nums">{phaseDistances.reduce((s, p) => s + p.distance_km, 0).toFixed(2)} km</span>
+                                            <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
+                                                {/* "All phases" card always shown first */}
+                                                {(() => {
+                                                    const totalKm = phaseDistances.reduce((s, p) => s + p.distance_km, 0);
+                                                    const selected = selectedPhase === "all";
+                                                    return (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setSelectedPhase("all")}
+                                                            className={`text-left rounded-lg px-3 py-2.5 transition ring-offset-1 ring-offset-background bg-muted/60 text-foreground hover:bg-muted ${
+                                                                selected ? "ring-2 ring-primary" : "ring-0"
+                                                            }`}
+                                                        >
+                                                            <p className="text-xs font-bold">{totalKm.toFixed(2)} km</p>
+                                                            <p className="text-[10px] opacity-80">All phases</p>
+                                                            <p className="text-[9px] opacity-60">Full route</p>
+                                                        </button>
+                                                    );
+                                                })()}
+                                                {phaseDistances
+                                                    .filter(p => p.phase === "navigating_to_pickup" || p.phase === "trip_in_progress")
+                                                    .map(p => {
+                                                        const secs = ride.phase_durations?.[p.phase];
+                                                        const durLabel =
+                                                            typeof secs === "number" && secs > 0
+                                                                ? secs >= 60
+                                                                    ? `${Math.round(secs / 60)} min`
+                                                                    : `${secs}s`
+                                                                : null;
+                                                        const selected = selectedPhase === p.phase;
+                                                        const phaseKey = p.phase as "navigating_to_pickup" | "trip_in_progress";
+                                                        return (
+                                                            <button
+                                                                key={p.phase}
+                                                                type="button"
+                                                                onClick={() => setSelectedPhase(phaseKey)}
+                                                                className={`text-left rounded-lg px-3 py-2.5 transition ring-offset-1 ring-offset-background ${
+                                                                    PHASE_COLORS[p.phase] || "bg-gray-50 text-gray-600 dark:bg-gray-800/30 dark:text-gray-400"
+                                                                } hover:brightness-95 dark:hover:brightness-110 ${
+                                                                    selected ? "ring-2 ring-primary" : "ring-0"
+                                                                }`}
+                                                            >
+                                                                <p className="text-xs font-bold">{p.distance_km} km</p>
+                                                                <p className="text-[10px] opacity-80">{PHASE_LABELS[p.phase] || p.phase.replace(/_/g, " ")}</p>
+                                                                <p className="text-[9px] opacity-60">{durLabel || "—"}</p>
+                                                            </button>
+                                                        );
+                                                    })}
                                             </div>
                                         </div>
                                     )}
                                 </Sec>
                             </div>
 
-                            {/* Driver Tracking */}
-                            {ride.location_trail && ride.location_trail.length > 0 && (
-                                <div className="px-6 py-5">
-                                    <Sec title="Driver Tracking">
-                                        <p className="text-xs text-muted-foreground mb-2.5">{ride.location_trail.length} GPS points recorded</p>
-                                        <div className="max-h-[200px] overflow-y-auto rounded-lg border">
-                                            <table className="w-full text-xs">
-                                                <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
-                                                    <tr className="text-muted-foreground">
-                                                        <th className="text-left py-2 px-3 font-semibold">Time</th>
-                                                        <th className="text-left py-2 px-3 font-semibold">Lat</th>
-                                                        <th className="text-left py-2 px-3 font-semibold">Lng</th>
-                                                        <th className="text-left py-2 px-3 font-semibold">Speed</th>
-                                                        <th className="text-left py-2 px-3 font-semibold">Phase</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody className="divide-y divide-border/50">
-                                                    {ride.location_trail.slice(0, 100).map((pt: any, i: number) => (
-                                                        <tr key={i} className="hover:bg-muted/30 transition-colors">
-                                                            <td className="py-1.5 px-3 tabular-nums">{fmtTime(pt.timestamp)}</td>
-                                                            <td className="py-1.5 px-3 font-mono">{pt.lat?.toFixed(5)}</td>
-                                                            <td className="py-1.5 px-3 font-mono">{pt.lng?.toFixed(5)}</td>
-                                                            <td className="py-1.5 px-3 tabular-nums">{pt.speed != null ? `${pt.speed.toFixed(1)} km/h` : "—"}</td>
-                                                            <td className="py-1.5 px-3">{pt.tracking_phase?.replace(/_/g, " ") || "—"}</td>
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                            {ride.location_trail.length > 100 && (
-                                                <p className="text-[10px] text-muted-foreground text-center py-2 bg-muted/30">Showing first 100 of {ride.location_trail.length} points</p>
+                            {/* Phase Replay Map — shows the polyline for the phase
+                                card selected above. Replaces the raw GPS-points
+                                table; operators want to see the path, not a list
+                                of lat/lng rows. Data comes from migration 39's
+                                phase_polylines JSONB (stored at ride completion).
+                                Falls back to the combined route_polyline for
+                                legacy rides that predate phase polylines. */}
+                            {(() => {
+                                const pp = ride.phase_polylines || {};
+                                const pickupPts: { lat: number; lng: number; timestamp?: string }[] =
+                                    Array.isArray(pp.navigating_to_pickup)
+                                        ? pp.navigating_to_pickup.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] }))
+                                        : [];
+                                const tripPts: { lat: number; lng: number; timestamp?: string }[] =
+                                    Array.isArray(pp.trip_in_progress)
+                                        ? pp.trip_in_progress.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] }))
+                                        : [];
+
+                                // Fallback: use combined route_polyline when per-phase
+                                // polylines aren't available (rides before migration 39).
+                                const fallbackCombined: { lat: number; lng: number }[] =
+                                    Array.isArray(ride.route_polyline) && ride.route_polyline.length > 0
+                                        ? ride.route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] }))
+                                        : [];
+
+                                let trail: { lat: number; lng: number; timestamp?: string }[] = [];
+                                let label = "";
+                                if (selectedPhase === "navigating_to_pickup") {
+                                    trail = pickupPts;
+                                    label = "Driver → Pickup";
+                                } else if (selectedPhase === "trip_in_progress") {
+                                    trail = tripPts;
+                                    label = "Pickup → Dropoff";
+                                } else {
+                                    trail = pickupPts.length || tripPts.length ? [...pickupPts, ...tripPts] : fallbackCombined;
+                                    label = "Full route";
+                                }
+
+                                const hasTrail = trail.length > 1;
+                                if (!hasTrail && !ride.pickup_lat) return null;
+
+                                return (
+                                    <div className="px-6 py-5">
+                                        <Sec title="Route Replay">
+                                            <div className="flex items-center justify-between mb-2.5">
+                                                <p className="text-xs text-muted-foreground">{label}</p>
+                                                <p className="text-[10px] text-muted-foreground/70 tabular-nums">
+                                                    {hasTrail ? `${trail.length} GPS points` : "No GPS trail for this phase"}
+                                                </p>
+                                            </div>
+                                            {ride.pickup_lat && ride.dropoff_lat ? (
+                                                <RideRouteMap
+                                                    key={selectedPhase || "all"}
+                                                    pickupLat={ride.pickup_lat}
+                                                    pickupLng={ride.pickup_lng}
+                                                    dropoffLat={ride.dropoff_lat}
+                                                    dropoffLng={ride.dropoff_lng}
+                                                    locationTrail={hasTrail ? trail : undefined}
+                                                />
+                                            ) : (
+                                                <div className="bg-muted/30 rounded-xl h-[280px] flex items-center justify-center text-xs text-muted-foreground">
+                                                    Pickup/dropoff coordinates unavailable
+                                                </div>
                                             )}
-                                        </div>
-                                    </Sec>
-                                </div>
-                            )}
+                                        </Sec>
+                                    </div>
+                                );
+                            })()}
 
                             {/* Metadata */}
                             <div className="px-6 py-4 bg-muted/20">

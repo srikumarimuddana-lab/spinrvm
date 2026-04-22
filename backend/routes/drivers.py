@@ -130,6 +130,72 @@ START_FROM_STATES = ("driver_arrived", "in_progress")
 COMPLETE_FROM_STATES = ("in_progress",)
 
 
+async def _generate_and_store_ride_snapshot(
+    *,
+    ride_id: str,
+    pickup_lat,
+    pickup_lng,
+    dropoff_lat,
+    dropoff_lng,
+    phase_polylines,
+    route_polyline,
+) -> None:
+    """Render the ride's route PNG and upload to Cloudinary.
+
+    Called as a background task from ``complete_ride`` — the driver's
+    request has already returned by the time this runs. Any failure
+    (tile server down, Cloudinary creds missing, Pillow missing) is
+    logged and swallowed; the ride row already has phase_polylines
+    so the drawer and email can always fall back to the live map.
+    """
+    if pickup_lat is None or pickup_lng is None or dropoff_lat is None or dropoff_lng is None:
+        return
+    try:
+        try:
+            from ..utils.route_snapshot import render_ride_snapshot
+            from ..utils.cloudinary import get_cloudinary_service
+        except ImportError:
+            from utils.route_snapshot import render_ride_snapshot  # type: ignore
+            from utils.cloudinary import get_cloudinary_service  # type: ignore
+
+        loop = asyncio.get_event_loop()
+        # Tile fetches + PIL rendering are blocking; punt to the executor.
+        png_bytes = await loop.run_in_executor(
+            None,
+            lambda: render_ride_snapshot(
+                pickup_lat=float(pickup_lat),
+                pickup_lng=float(pickup_lng),
+                dropoff_lat=float(dropoff_lat),
+                dropoff_lng=float(dropoff_lng),
+                phase_polylines=phase_polylines,
+                route_polyline=route_polyline,
+            ),
+        )
+        if not png_bytes:
+            return
+
+        cld = get_cloudinary_service()
+        result = await cld.upload_bytes(
+            data=png_bytes,
+            folder="spinr/ride_snapshots",
+            public_id=f"ride_{ride_id}",
+            tags=["ride_snapshot"],
+        )
+        url = result.get("secure_url") if result.get("success") else None
+        if not url:
+            logger.warning(f"Cloudinary upload returned no URL for ride {ride_id}")
+            return
+
+        # Persist the URL. Wrap in try/except so if migration 41 hasn't
+        # landed yet the write fails gracefully instead of raising.
+        try:
+            await db_supabase.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
+        except Exception as exc:
+            logger.warning(f"route_snapshot_url write failed for ride {ride_id} (migration 41 missing?): {exc}")
+    except Exception as exc:
+        logger.warning(f"Ride snapshot pipeline failed for {ride_id}: {exc}")
+
+
 async def _require_ride_in_state(ride_id: str, driver_id: str, allowed_states: tuple) -> Dict[str, Any]:
     """Load a driver's ride only if it is in one of ``allowed_states``.
 
@@ -2059,6 +2125,24 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     rider = await db_supabase.get_user_by_id(ride.get("rider_id"))
     if rider and rider.get("email"):
         logger.info(f"Sending email receipt for ride {ride_id} to {rider['email']}")
+
+    # Fire-and-forget: render the route PNG from phase_polylines and
+    # upload to Cloudinary so the admin drawer + email receipt can
+    # embed a permanent image URL. Runs as a background task so the
+    # driver's "Complete" response isn't blocked on OSM tile fetches.
+    # Any failure here is swallowed — the snapshot is best-effort and
+    # the ride is already fully persisted with phase data.
+    asyncio.create_task(
+        _generate_and_store_ride_snapshot(
+            ride_id=ride_id,
+            pickup_lat=ride.get("pickup_lat"),
+            pickup_lng=ride.get("pickup_lng"),
+            dropoff_lat=ride.get("dropoff_lat"),
+            dropoff_lng=ride.get("dropoff_lng"),
+            phase_polylines=phase_polylines,
+            route_polyline=route_polyline,
+        )
+    )
 
     # Update driver stats
     await db_supabase.update_one(

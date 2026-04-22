@@ -75,21 +75,48 @@ export default function DriversPage() {
     }, [serviceAreaId, startDate, endDate]);
 
     useEffect(() => { loadData(); }, [loadData]);
-    useEffect(() => { getServiceAreas().then(setAllServiceAreas).catch(() => {}); }, []);
+    // Vehicle-type catalogue + areaId → allowed vt-id set. The map is
+    // unioned from BOTH pricing stores because admins can configure
+    // vehicles for an area either way:
+    //   - fare_configs table (used by fare calc, joins by vehicle_type_id)
+    //   - service_areas.vehicle_pricing JSONB (used by the Service Areas
+    //     admin editor, joins by vehicle type NAME)
+    // Without the JSONB half, the drawer complains "No fare configs"
+    // even after the operator set pricing in the Service Areas page.
     useEffect(() => {
-        getVehicleTypes()
-            .then((vt: any[]) => setVehicleTypes((vt || []).map((v: any) => ({ id: v.id, name: v.name }))))
-            .catch(() => {});
-        getFareConfigs()
-            .then((configs: any[]) => {
+        Promise.all([
+            getServiceAreas(),
+            getVehicleTypes().catch(() => [] as any[]),
+            getFareConfigs().catch(() => [] as any[]),
+        ])
+            .then(([areas, vt, configs]) => {
+                setAllServiceAreas(areas || []);
+                const types: { id: string; name: string }[] = (vt || []).map((v: any) => ({ id: v.id, name: v.name }));
+                setVehicleTypes(types);
+                const byName: Record<string, string> = {};
+                for (const t of types) byName[t.name] = t.id;
+
                 const map: Record<string, Set<string>> = {};
+                // From fare_configs (direct id refs)
                 for (const c of configs || []) {
                     if (c?.is_active === false) continue;
-                    const areaId = c?.service_area_id;
+                    const aId = c?.service_area_id;
                     const vtId = c?.vehicle_type_id;
-                    if (!areaId || !vtId) continue;
-                    if (!map[areaId]) map[areaId] = new Set<string>();
-                    map[areaId].add(vtId);
+                    if (!aId || !vtId) continue;
+                    if (!map[aId]) map[aId] = new Set<string>();
+                    map[aId].add(vtId);
+                }
+                // From service_areas.vehicle_pricing (name-based)
+                for (const area of areas || []) {
+                    const pricing = Array.isArray(area?.vehicle_pricing) ? area.vehicle_pricing : [];
+                    for (const row of pricing) {
+                        const name = row?.vehicle_type;
+                        if (!name) continue;
+                        const vtId = byName[name];
+                        if (!vtId) continue;
+                        if (!map[area.id]) map[area.id] = new Set<string>();
+                        map[area.id].add(vtId);
+                    }
                 }
                 setVehicleTypesByArea(map);
             })

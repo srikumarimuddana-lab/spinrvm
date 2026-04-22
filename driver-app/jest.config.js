@@ -3,6 +3,12 @@ module.exports = {
   setupFiles: ['./jest.setup.js'],
   testPathIgnorePatterns: ['/node_modules/', '/e2e/'],
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx'],
+  // Resolve babel-runtime helpers and other hoisted deps from driver-app's
+  // node_modules even when the file under test lives outside rootDir (e.g.
+  // ../shared/**). Without this, tests that import real shared modules fail
+  // with "Cannot find module '@babel/runtime/helpers/...'" because shared/
+  // has no node_modules of its own.
+  modulePaths: ['<rootDir>/node_modules'],
   transformIgnorePatterns: [
     'node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg|@shared/.*)'
   ],

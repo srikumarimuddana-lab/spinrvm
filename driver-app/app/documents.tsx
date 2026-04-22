@@ -113,25 +113,59 @@ export default function DocumentsScreen() {
             // axios's default transformRequest tries to JSON.stringify the
             // FormData. fetch() in React Native handles multipart bodies
             // natively and sets the boundary correctly, so we use it here.
-            const formData = new FormData();
-            formData.append('file', {
-                uri,
-                name,
-                type: mimeType,
-            } as any);
+            //
+            // Build a fresh FormData per attempt — React Native consumes it
+            // on the first send and passing the same instance into a retry
+            // fires an empty body.
+            const buildFormData = () => {
+                const fd = new FormData();
+                fd.append('file', {
+                    uri,
+                    name,
+                    type: mimeType,
+                } as any);
+                return fd;
+            };
 
-            const token = await getAuthHeader();
             const uploadUrl = `${SpinrConfig.backendUrl}/api/v1/upload`;
 
-            const resp = await fetch(uploadUrl, {
-                method: 'POST',
-                headers: {
-                    // Do NOT set Content-Type — fetch generates it with the boundary.
-                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-                    Accept: 'application/json',
-                },
-                body: formData as any,
-            });
+            const doUpload = async (token: string | null): Promise<Response> => {
+                return fetch(uploadUrl, {
+                    method: 'POST',
+                    headers: {
+                        // Do NOT set Content-Type — fetch generates it with the boundary.
+                        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                        Accept: 'application/json',
+                    },
+                    body: buildFormData() as any,
+                });
+            };
+
+            // Mirror the axios client's silent-refresh-on-401 behavior. Raw
+            // fetch skips the interceptor, so if the access token expired
+            // between screens we have to refresh and retry manually — or the
+            // user sees "No authorization token provided" instead of their
+            // session being transparently restored.
+            let token = await getAuthHeader();
+            if (!token) {
+                const refreshed = await useAuthStore.getState().refreshTokens();
+                token = refreshed ? await getAuthHeader() : null;
+                if (!token) {
+                    throw new Error('Your session has expired. Please log in again.');
+                }
+            }
+
+            let resp = await doUpload(token);
+
+            if (resp.status === 401) {
+                const refreshed = await useAuthStore.getState().refreshTokens();
+                if (refreshed) {
+                    const freshToken = await getAuthHeader();
+                    if (freshToken) {
+                        resp = await doUpload(freshToken);
+                    }
+                }
+            }
 
             if (!resp.ok) {
                 const text = await resp.text().catch(() => '');

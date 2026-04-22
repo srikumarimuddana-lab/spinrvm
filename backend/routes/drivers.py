@@ -140,23 +140,28 @@ async def _generate_and_store_ride_snapshot(
     phase_polylines,
     route_polyline,
 ) -> None:
-    """Render the ride's route PNG and upload to Cloudinary.
+    """Render the ride's route PNG and upload to Supabase Storage.
 
     Called as a background task from ``complete_ride`` — the driver's
     request has already returned by the time this runs. Any failure
-    (tile server down, Cloudinary creds missing, Pillow missing) is
-    logged and swallowed; the ride row already has phase_polylines
-    so the drawer and email can always fall back to the live map.
+    (tile server down, bucket missing, Pillow missing) is logged and
+    swallowed; the ride row already has phase_polylines so the drawer
+    and email can always fall back to the live map.
+
+    Requires a public ``ride-snapshots`` bucket in Supabase Storage.
+    See backend/docs/STORAGE_BUCKETS.md for one-time setup.
     """
     if pickup_lat is None or pickup_lng is None or dropoff_lat is None or dropoff_lng is None:
         return
     try:
         try:
             from ..utils.route_snapshot import render_ride_snapshot
-            from ..utils.cloudinary import get_cloudinary_service
+            from ..supabase_client import supabase  # type: ignore
+            from ..core.config import settings
         except ImportError:
             from utils.route_snapshot import render_ride_snapshot  # type: ignore
-            from utils.cloudinary import get_cloudinary_service  # type: ignore
+            from supabase_client import supabase  # type: ignore
+            from core.config import settings  # type: ignore
 
         loop = asyncio.get_event_loop()
         # Tile fetches + PIL rendering are blocking; punt to the executor.
@@ -174,17 +179,34 @@ async def _generate_and_store_ride_snapshot(
         if not png_bytes:
             return
 
-        cld = get_cloudinary_service()
-        result = await cld.upload_bytes(
-            data=png_bytes,
-            folder="spinr/ride_snapshots",
-            public_id=f"ride_{ride_id}",
-            tags=["ride_snapshot"],
-        )
-        url = result.get("secure_url") if result.get("success") else None
-        if not url:
-            logger.warning(f"Cloudinary upload returned no URL for ride {ride_id}")
+        # Supabase Storage upload. Public bucket, stable filename so a
+        # re-run for the same ride_id overwrites cleanly via upsert.
+        # The public URL never expires — safe for email embeds.
+        bucket = "ride-snapshots"
+        storage_path = f"ride_{ride_id}.png"
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: supabase.storage.from_(bucket).upload(
+                    path=storage_path,
+                    file=png_bytes,
+                    file_options={
+                        "content-type": "image/png",
+                        # supabase-py serialises bools as JSON, so the string
+                        # form is what ends up on the wire; lowercase "true".
+                        "upsert": "true",
+                    },
+                ),
+            )
+        except Exception as upload_exc:
+            logger.warning(f"Supabase Storage upload failed for ride {ride_id}: {upload_exc}")
             return
+
+        base = (settings.SUPABASE_URL or "").rstrip("/")
+        if not base:
+            logger.warning("SUPABASE_URL not configured; cannot build public snapshot URL")
+            return
+        url = f"{base}/storage/v1/object/public/{bucket}/{storage_path}"
 
         # Persist the URL. Wrap in try/except so if migration 41 hasn't
         # landed yet the write fails gracefully instead of raising.

@@ -13,12 +13,6 @@ import SpinrConfig from '@shared/config/spinr.config';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
-// Reuse the shared api client's getAuthHeader so we get in-memory-first
-// resolution. authStore.setTokens keeps the access token in memory only
-// (SecureStore is deliberately wiped), so a SecureStore-only lookup here
-// always returned null and produced 401 "No authorization token provided"
-// on every document upload.
-const getAuthToken = getAuthHeader;
 
 // Derive a proper MIME type from a file URI / name.
 // expo-image-picker returns asset.type = 'image' (not a MIME), so we check
@@ -126,7 +120,7 @@ export default function DocumentsScreen() {
                 type: mimeType,
             } as any);
 
-            const token = await getAuthToken();
+            const token = await getAuthHeader();
             const uploadUrl = `${SpinrConfig.backendUrl}/api/v1/upload`;
 
             const resp = await fetch(uploadUrl, {

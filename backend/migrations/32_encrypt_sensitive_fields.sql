@@ -4,6 +4,15 @@
 -- Prerequisites (run once per Supabase project via the dashboard or CLI):
 --   CREATE EXTENSION IF NOT EXISTS pgsodium;
 -- Supabase projects created after 2023-06 have pgsodium enabled by default.
+--
+-- Encryption model: we DO NOT use Supabase Transparent Column Encryption
+-- (vault.encrypted_text). Supabase removed that surface in mid-2024
+-- because of operational issues (key rotation, PITR, replication).
+-- Instead, license_number and vehicle_vin stay as plain TEXT columns,
+-- and the application explicitly calls encrypt_driver_pii()/decrypt_driver_pii()
+-- via RPC on every write/read. The columns hold vault.secrets UUIDs, not
+-- plaintext — actual ciphertext lives in vault.secrets, encrypted by
+-- pgsodium under the drivers_pii_key key.
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 1. Create a named encryption key for driver PII
@@ -81,23 +90,11 @@ GRANT  EXECUTE ON FUNCTION encrypt_driver_pii(text) TO service_role;
 GRANT  EXECUTE ON FUNCTION decrypt_driver_pii(text) TO service_role;
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 3. Column-type migration to vault.encrypted_text
---    (transparent encryption — DB stores ciphertext, vault key handles it)
+-- 3. Column-level SELECT restrictions
+--    Stored values are vault.secrets UUIDs, not plaintext, so leaking them
+--    wouldn't reveal PII on its own — but the service role should still be
+--    the only one reading them. anon / authenticated must go through an
+--    explicit endpoint that returns redacted/masked values.
 -- ─────────────────────────────────────────────────────────────────────────────
-
-ALTER TABLE drivers
-  ALTER COLUMN license_number SET DATA TYPE vault.encrypted_text;
-
-ALTER TABLE vehicles
-  ALTER COLUMN vin SET DATA TYPE vault.encrypted_text;
-
-COMMENT ON COLUMN drivers.license_number
-  IS 'Vault-encrypted (pgsodium). Read via decrypt_driver_pii() or vault.decrypted_secrets.';
-COMMENT ON COLUMN vehicles.vin
-  IS 'Vault-encrypted (pgsodium). Read via decrypt_driver_pii() or vault.decrypted_secrets.';
-
--- ─────────────────────────────────────────────────────────────────────────────
--- 4. Row-level: strip direct SELECT access to these columns from non-service roles
--- ─────────────────────────────────────────────────────────────────────────────
-REVOKE SELECT (license_number) ON TABLE drivers    FROM anon, authenticated;
-REVOKE SELECT (vin)            ON TABLE vehicles   FROM anon, authenticated;
+REVOKE SELECT (license_number) ON TABLE drivers  FROM anon, authenticated;
+REVOKE SELECT (vin)            ON TABLE vehicles FROM anon, authenticated;

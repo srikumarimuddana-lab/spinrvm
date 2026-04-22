@@ -225,14 +225,45 @@ export default function MonitoringPage() {
     getServiceAreas()
       .then((areas: any[]) =>
         setServiceAreas(
-          areas.map((a) => ({
-            id: a.id,
-            name: a.name,
-            geojson: a.geojson ?? null,
-            fallbackCenter: a.center_lat && a.center_lng
-              ? { lat: a.center_lat, lng: a.center_lng }
-              : null,
-          }))
+          areas.map((a) => {
+            // Backend stores the shape under `polygon` (may be a raw
+            // GeoJSON Polygon or an array of {lat,lng} — see
+            // getAreaPolygon() in the service-areas admin page).
+            // Normalise to a GeoJSON Polygon for fitBoundsToGeoJSON(), and
+            // compute a centroid fallback so fitArea() can still centre
+            // the map when the area has no polygon drawn yet.
+            const raw = a.polygon ?? a.geojson;
+            let geojson: GeoJSON.Polygon | null = null;
+            let fallbackCenter: { lat: number; lng: number } | null = null;
+            if (raw?.type === "Polygon" && Array.isArray(raw.coordinates)) {
+              geojson = raw as GeoJSON.Polygon;
+            } else if (Array.isArray(raw) && raw.length > 0 && raw[0]?.lat !== undefined) {
+              const ring = raw.map(
+                (p: { lat: number; lng: number }) => [p.lng, p.lat] as GeoJSON.Position,
+              );
+              const first = ring[0];
+              const last = ring[ring.length - 1];
+              if (first[0] !== last[0] || first[1] !== last[1]) ring.push(first);
+              geojson = { type: "Polygon", coordinates: [ring] };
+            }
+            if (geojson) {
+              const ring = geojson.coordinates[0];
+              const pts =
+                ring.length > 1 &&
+                ring[0][0] === ring[ring.length - 1][0] &&
+                ring[0][1] === ring[ring.length - 1][1]
+                  ? ring.slice(0, -1)
+                  : ring;
+              const sum = pts.reduce(
+                (acc, [lng, lat]) => ({ lng: acc.lng + lng, lat: acc.lat + lat }),
+                { lng: 0, lat: 0 },
+              );
+              fallbackCenter = { lng: sum.lng / pts.length, lat: sum.lat / pts.length };
+            } else if (a.center_lat && a.center_lng) {
+              fallbackCenter = { lat: a.center_lat, lng: a.center_lng };
+            }
+            return { id: a.id, name: a.name, geojson, fallbackCenter };
+          })
         )
       )
       .catch(() => {});
@@ -281,6 +312,19 @@ export default function MonitoringPage() {
     if (availableVehicleTypes.some((v) => v.id === filters.vehicleTypeId)) return;
     setFilters((f) => ({ ...f, vehicleTypeId: null }));
   }, [availableVehicleTypes, filters.vehicleTypeId]);
+
+  // When the operator picks a different service area (Saskatoon → Regina,
+  // etc.), fly the map to that area so they actually see the city they
+  // just selected. serviceAreas is a dep so the fit re-runs once the
+  // list loads in — if the user somehow lands on the page with a
+  // preselected area, we still centre on it. We deliberately don't move
+  // the map when "All Areas" is chosen; the driver auto-fit handles that.
+  useEffect(() => {
+    if (!filters.serviceAreaId) return;
+    const area = serviceAreas.find((a) => a.id === filters.serviceAreaId);
+    if (!area) return;
+    mapHandlesRef.current?.fitArea(filters.serviceAreaId);
+  }, [filters.serviceAreaId, serviceAreas]);
 
   // Poll data
   useEffect(() => {

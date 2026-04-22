@@ -42,6 +42,17 @@ export default function ProfileScreen() {
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [docRequirements, setDocRequirements] = useState<Array<{id: string; name: string; description?: string}>>([]);
   const [driverDocs, setDriverDocs] = useState<Array<any>>([]);
+  // Company contact info from the admin Settings → Company Info card.
+  // Fetched once on mount via the public /company-info endpoint.
+  const [companyInfo, setCompanyInfo] = useState<{
+    name?: string; address?: string; phone?: string; email?: string; website?: string;
+  }>({});
+
+  useEffect(() => {
+    api.get('/company-info')
+      .then(res => setCompanyInfo(res?.data || {}))
+      .catch(() => {});
+  }, []);
 
   // Edit modal state
   const [showEditModal, setShowEditModal] = useState(false);
@@ -503,6 +514,19 @@ export default function ProfileScreen() {
                     <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
+                {/* Spinr Pass subscription. The destination screen itself
+                    gates plans on the driver's service-area
+                    spinr_pass_enabled flag — if the area has it off the
+                    screen renders a friendly "free mode" message, so the
+                    menu entry can always be visible. */}
+                <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/subscription' as any)}>
+                    <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.1)' }]}>
+                        <Ionicons name="card" size={18} color="#10B981" />
+                    </View>
+                    <Text style={styles.actionText}>Spinr Pass</Text>
+                    <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                </TouchableOpacity>
+                <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/referral' as any)}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.1)' }]}>
                         <Ionicons name="gift" size={18} color={'#F59E0B'} />
@@ -535,6 +559,19 @@ export default function ProfileScreen() {
                 </TouchableOpacity>
             </View>
             </View>
+
+            {/* Company contact info — populated from admin Settings →
+                Company Info. Any fields the admin leaves empty simply
+                don't render, so the block collapses gracefully. */}
+            {(companyInfo.address || companyInfo.phone || companyInfo.email || companyInfo.website) && (
+              <View style={styles.companySection}>
+                <Text style={styles.companyName}>{companyInfo.name || 'Spinr'}</Text>
+                {!!companyInfo.address && <Text style={styles.companyLine}>{companyInfo.address}</Text>}
+                {!!companyInfo.phone && <Text style={styles.companyLine}>{companyInfo.phone}</Text>}
+                {!!companyInfo.email && <Text style={styles.companyLine}>{companyInfo.email}</Text>}
+                {!!companyInfo.website && <Text style={styles.companyLine}>{companyInfo.website}</Text>}
+              </View>
+            )}
         </View>
       </ScrollView>
 
@@ -1056,6 +1093,25 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     color: colors.text,
     fontSize: 15,
     fontWeight: '600',
+  },
+  companySection: {
+    marginHorizontal: 16,
+    marginTop: 24,
+    marginBottom: 40,
+    paddingTop: 16,
+    alignItems: 'center',
+  },
+  companyName: {
+    color: colors.textDim,
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  companyLine: {
+    color: colors.textDim,
+    fontSize: 11,
+    marginTop: 2,
+    textAlign: 'center',
   },
   rejectionBox: {
     marginHorizontal: 16,

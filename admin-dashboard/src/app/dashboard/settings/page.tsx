@@ -309,6 +309,59 @@ export default function SettingsPage() {
                             </div>
                         </CardContent>
                     </Card>
+
+                    {/* Company Info — surfaced in rider & driver apps
+                        via GET /api/company-info (public endpoint). */}
+                    <Card className="border-border/50 lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle className="text-base">Company Info (shown in apps)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 grid gap-4 sm:grid-cols-2">
+                            <div className="space-y-2">
+                                <Label>Company Name</Label>
+                                <Input
+                                    value={settings.company_name || ""}
+                                    onChange={(e) => update("company_name", e.target.value)}
+                                    placeholder="Spinr"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Phone</Label>
+                                <Input
+                                    value={settings.company_phone || ""}
+                                    onChange={(e) => update("company_phone", e.target.value)}
+                                    placeholder="+1 306 555 0100"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Email</Label>
+                                <Input
+                                    type="email"
+                                    value={settings.company_email || ""}
+                                    onChange={(e) => update("company_email", e.target.value)}
+                                    placeholder="support@spinr.ca"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Website</Label>
+                                <Input
+                                    value={settings.company_website || ""}
+                                    onChange={(e) => update("company_website", e.target.value)}
+                                    placeholder="https://spinr.ca"
+                                />
+                            </div>
+                            <div className="space-y-2 sm:col-span-2">
+                                <Label>Address</Label>
+                                <Textarea
+                                    value={settings.company_address || ""}
+                                    onChange={(e) => update("company_address", e.target.value)}
+                                    placeholder="123 Example St, Saskatoon, SK S7K 1A1"
+                                    className="min-h-[70px]"
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
                 </div>
             )}
         </div>

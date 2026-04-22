@@ -395,19 +395,27 @@ export default function RideList({
                                     </td>
                                     <td className="py-3 px-4 text-right hidden md:table-cell tabular-nums">
                                         {(() => {
-                                            const { toPickupKm, tripKm, totalKm } = rideDistances(ride);
-                                            if (totalKm == null) {
-                                                return <p className="text-xs text-muted-foreground">—</p>;
-                                            }
+                                            const { toPickupKm, tripKm } = rideDistances(ride);
+                                            const planned = ride.planned_distance_km != null ? Number(ride.planned_distance_km) : null;
+                                            // Three explicit numbers per SGI/ops request: planned vs
+                                            // actual driver→pickup vs actual pickup→dropoff.
+                                            // Each row falls back to "—" so missing data is obvious.
+                                            const Row = ({ k, label, accent }: { k: number | null; label: string; accent?: boolean }) => (
+                                                <div className="flex items-center justify-end gap-1.5 leading-tight">
+                                                    <span className={`text-[10px] uppercase tracking-wide ${accent ? "text-foreground/60 font-semibold" : "text-muted-foreground"}`}>
+                                                        {label}
+                                                    </span>
+                                                    <span className={accent ? "text-sm font-bold whitespace-nowrap" : "text-xs whitespace-nowrap"}>
+                                                        {k == null ? "—" : `${fmtKm(k)} km`}
+                                                    </span>
+                                                </div>
+                                            );
                                             return (
-                                                <>
-                                                    <p className="text-sm font-semibold whitespace-nowrap">
-                                                        {fmtKm(totalKm)} km
-                                                    </p>
-                                                    <p className="text-[10px] text-muted-foreground whitespace-nowrap">
-                                                        pickup {fmtKm(toPickupKm) || "—"} · trip {fmtKm(tripKm) || "—"}
-                                                    </p>
-                                                </>
+                                                <div className="space-y-0.5">
+                                                    <Row k={planned} label="Plan" />
+                                                    <Row k={toPickupKm} label="Pickup" />
+                                                    <Row k={tripKm} label="Trip" accent />
+                                                </div>
                                             );
                                         })()}
                                     </td>

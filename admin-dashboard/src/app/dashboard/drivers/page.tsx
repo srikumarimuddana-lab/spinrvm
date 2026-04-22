@@ -58,6 +58,9 @@ export default function DriversPage() {
     const [vehicleTypes, setVehicleTypes] = useState<{ id: string; name: string }[]>([]);
     const [vehicleTypesByArea, setVehicleTypesByArea] = useState<Record<string, Set<string>>>({});
     const [serviceAreaId, setServiceAreaId] = useState<string>("");
+    // Vehicle-type filter on the drivers list (client-side — same
+    // shape as serviceAreaId, "" means no filter).
+    const [vehicleTypeFilter, setVehicleTypeFilter] = useState<string>("");
     const [startDate, setStartDate] = useState("");
     const [endDate, setEndDate] = useState("");
     const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
@@ -146,7 +149,8 @@ export default function DriversPage() {
         if (statusFilter === "needs_review") matchStatus = d.status === "needs_review";
         if (statusFilter === "suspended") matchStatus = d.status === "suspended";
         if (statusFilter === "banned") matchStatus = d.status === "banned";
-        return matchSearch && matchStatus;
+        const matchVehicleType = !vehicleTypeFilter || d.vehicle_type_id === vehicleTypeFilter;
+        return matchSearch && matchStatus && matchVehicleType;
     });
 
     // Sort
@@ -158,6 +162,17 @@ export default function DriversPage() {
         else if (sortKey === "total_earnings") { av = a.total_earnings || 0; bv = b.total_earnings || 0; }
         else if (sortKey === "created_at") { av = a.created_at || ""; bv = b.created_at || ""; }
         else if (sortKey === "region") { av = (serviceAreas.find(sa => sa.id === a.service_area_id)?.name || "zzz").toLowerCase(); bv = (serviceAreas.find(sa => sa.id === b.service_area_id)?.name || "zzz").toLowerCase(); }
+        else if (sortKey === "vehicle_type") {
+            // Sort by vehicle-type NAME (resolved from the catalogue);
+            // drivers with no type go to the end of ascending / top of
+            // descending so "Not assigned" is easy to spot.
+            av = (vehicleTypes.find(vt => vt.id === a.vehicle_type_id)?.name || "zzz").toLowerCase();
+            bv = (vehicleTypes.find(vt => vt.id === b.vehicle_type_id)?.name || "zzz").toLowerCase();
+        }
+        else if (sortKey === "is_online") {
+            // Booleans compared as 0/1: desc → online first; asc → offline first.
+            av = a.is_online ? 1 : 0; bv = b.is_online ? 1 : 0;
+        }
         else { av = (a[sortKey] || "").toString().toLowerCase(); bv = (b[sortKey] || "").toString().toLowerCase(); }
         if (av < bv) return sortDir === "asc" ? -1 : 1;
         if (av > bv) return sortDir === "asc" ? 1 : -1;
@@ -227,12 +242,22 @@ export default function DriversPage() {
                         </Select>
                     </div>
                     <div className="flex items-center gap-1.5">
+                        <Car className="h-4 w-4 text-muted-foreground" />
+                        <Select value={vehicleTypeFilter || "all"} onValueChange={(v) => setVehicleTypeFilter(v === "all" ? "" : v)}>
+                            <SelectTrigger className="h-9 text-xs w-[160px]"><SelectValue placeholder="All Vehicle Types" /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Vehicle Types</SelectItem>
+                                {vehicleTypes.map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div className="flex items-center gap-1.5">
                         <CalendarRange className="h-4 w-4 text-muted-foreground" />
                         <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="h-9 w-[140px] text-xs" />
                         <span className="text-xs text-muted-foreground">to</span>
                         <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="h-9 w-[140px] text-xs" />
                     </div>
-                    {(serviceAreaId || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
+                    {(serviceAreaId || vehicleTypeFilter || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
                     <Button variant="outline" size="sm" onClick={handleExport} disabled={filtered.length === 0}><Download className="h-4 w-4" /> Export</Button>
                 </div>
             </div>
@@ -258,6 +283,8 @@ export default function DriversPage() {
                                 <TableHead className="h-11 pl-5 w-20"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Actions</span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("name")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Driver<SortIcon col="name" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("status")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Status<SortIcon col="status" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("is_online")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Online<SortIcon col="is_online" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("vehicle_type")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Vehicle Type<SortIcon col="vehicle_type" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("vehicle_make")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Vehicle<SortIcon col="vehicle_make" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none text-center" onClick={() => handleSort("rating")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Rating<SortIcon col="rating" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none text-center" onClick={() => handleSort("total_rides")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Rides<SortIcon col="total_rides" /></span></TableHead>
@@ -272,6 +299,8 @@ export default function DriversPage() {
                                     <TableCell><div className="h-8 w-16 bg-muted rounded" /></TableCell>
                                     <TableCell className="py-4"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-muted" /><div className="space-y-2"><div className="h-3 w-24 bg-muted rounded" /><div className="h-2 w-16 bg-muted rounded" /></div></div></TableCell>
                                     <TableCell><div className="h-4 w-16 bg-muted rounded" /></TableCell>
+                                    <TableCell><div className="h-4 w-12 bg-muted rounded" /></TableCell>
+                                    <TableCell><div className="h-3 w-16 bg-muted rounded" /></TableCell>
                                     <TableCell><div className="h-3 w-20 bg-muted rounded" /></TableCell>
                                     <TableCell><div className="h-4 w-8 bg-muted rounded mx-auto" /></TableCell>
                                     <TableCell><div className="h-4 w-8 bg-muted rounded mx-auto" /></TableCell>
@@ -281,7 +310,7 @@ export default function DriversPage() {
                                 </TableRow>
                             )) : sorted.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={9} className="text-center py-20 text-muted-foreground"><Users className="h-12 w-12 mx-auto mb-3 opacity-20" /><p className="text-base font-medium">No drivers found</p><p className="text-sm mt-1">Try adjusting your search or filters</p></TableCell>
+                                    <TableCell colSpan={11} className="text-center py-20 text-muted-foreground"><Users className="h-12 w-12 mx-auto mb-3 opacity-20" /><p className="text-base font-medium">No drivers found</p><p className="text-sm mt-1">Try adjusting your search or filters</p></TableCell>
                                 </TableRow>
                             ) : sorted.map(driver => {
                                 const areaName = serviceAreas.find(a => a.id === driver.service_area_id)?.name;
@@ -312,6 +341,17 @@ export default function DriversPage() {
                                                 : <Badge variant="default" className="bg-blue-100 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 text-[10px] px-1.5 py-0 border-blue-200 dark:border-blue-800"><ShieldAlert className="h-3 w-3 mr-1" />Pending</Badge>}
                                                 <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${driver.is_online ? "border-emerald-300 text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10" : ""}`}>{driver.is_online ? "Online" : "Offline"}</Badge>
                                             </div>
+                                        </TableCell>
+                                        <TableCell>
+                                            <Badge variant={driver.is_online ? "default" : "outline"} className={driver.is_online ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800" : "text-[10px] px-1.5 py-0 text-muted-foreground"}>
+                                                <span className={`h-1.5 w-1.5 rounded-full mr-1 ${driver.is_online ? "bg-emerald-500" : "bg-gray-400"}`} />
+                                                {driver.is_online ? "Online" : "Offline"}
+                                            </Badge>
+                                        </TableCell>
+                                        <TableCell>
+                                            <span className="text-xs text-foreground/80">
+                                                {vehicleTypes.find(v => v.id === driver.vehicle_type_id)?.name || <span className="text-muted-foreground/60 italic">—</span>}
+                                            </span>
                                         </TableCell>
                                         <TableCell>
                                             <div className="flex flex-col gap-1 text-xs">
@@ -433,11 +473,17 @@ export default function DriversPage() {
                                             // active type.
                                             const areaId = ef("service_area_id");
                                             const allowed = areaId ? vehicleTypesByArea[areaId] : null;
-                                            const availableTypes = allowed
-                                                ? vehicleTypes.filter(v => allowed.has(v.id))
-                                                : areaId
-                                                    ? []
-                                                    : vehicleTypes;
+                                            // The dropdown is NEVER disabled — admins must
+                                            // be able to recover any driver from a bad
+                                            // state (vehicle type deleted, area
+                                            // mis-configured, etc.). When the area has no
+                                            // active fare_configs we still show every
+                                            // catalogue type and warn inline so the
+                                            // operator knows configs are missing.
+                                            const areaHasConfigs = !!allowed && allowed.size > 0;
+                                            const availableTypes = areaHasConfigs
+                                                ? vehicleTypes.filter(v => allowed!.has(v.id))
+                                                : vehicleTypes;
                                             const currentTypeId = ef("vehicle_type_id");
                                             const currentInList = availableTypes.some(v => v.id === currentTypeId);
                                             return (
@@ -447,10 +493,9 @@ export default function DriversPage() {
                                                         <Select
                                                             value={currentTypeId || "none"}
                                                             onValueChange={v => setEf("vehicle_type_id", v === "none" ? "" : v)}
-                                                            disabled={!!areaId && availableTypes.length === 0}
                                                         >
                                                             <SelectTrigger className="h-9 text-sm">
-                                                                <SelectValue placeholder={areaId && availableTypes.length === 0 ? "No vehicles configured for this area" : "Select vehicle type"} />
+                                                                <SelectValue placeholder="Select vehicle type" />
                                                             </SelectTrigger>
                                                             <SelectContent>
                                                                 <SelectItem value="none">Not assigned</SelectItem>
@@ -459,11 +504,16 @@ export default function DriversPage() {
                                                                 ))}
                                                                 {currentTypeId && !currentInList && (
                                                                     <SelectItem value={currentTypeId}>
-                                                                        {vehicleTypes.find(v => v.id === currentTypeId)?.name || currentTypeId.slice(0, 8)} (not in this area)
+                                                                        {vehicleTypes.find(v => v.id === currentTypeId)?.name || currentTypeId.slice(0, 8)} (deleted)
                                                                     </SelectItem>
                                                                 )}
                                                             </SelectContent>
                                                         </Select>
+                                                        {areaId && !areaHasConfigs && (
+                                                            <p className="text-[10px] text-amber-600 mt-1">
+                                                                No fare configs for this area — set them up in Service Areas → Vehicle Pricing.
+                                                            </p>
+                                                        )}
                                                     </div>
                                                     <EditField label="Make" value={ef("vehicle_make")} onChange={v => setEf("vehicle_make", v)} />
                                                     <EditField label="Model" value={ef("vehicle_model")} onChange={v => setEf("vehicle_model", v)} />

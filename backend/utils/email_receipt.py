@@ -6,6 +6,11 @@ Generates HTML receipt and sends via email (SendGrid when configured, logs other
 import logging
 from datetime import datetime
 
+try:
+    from .datetime_utils import parse_iso_utc
+except ImportError:
+    from utils.datetime_utils import parse_iso_utc
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,13 +25,9 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: flo
             "name", "Driver"
         )
 
-    ride_date = ride.get("ride_completed_at") or ride.get("created_at") or ""
-    if ride_date:
-        try:
-            dt = datetime.fromisoformat(str(ride_date).replace("Z", "+00:00").replace("+00:00", ""))
-            ride_date = dt.strftime("%B %d, %Y at %I:%M %p")
-        except Exception:  # noqa: S110
-            pass
+    ride_date_raw = ride.get("ride_completed_at") or ride.get("created_at") or ""
+    dt = parse_iso_utc(ride_date_raw)
+    ride_date = dt.strftime("%B %d, %Y at %I:%M %p") if dt else str(ride_date_raw)
 
     return f"""
     <!DOCTYPE html>

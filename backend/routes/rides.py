@@ -46,8 +46,10 @@ import stripe
 from .fares import _fares_for_location_impl, get_fares_for_location
 
 try:
+    from ..utils.datetime_utils import parse_iso_utc
     from ..utils.error_handling import RideStateError
 except ImportError:
+    from utils.datetime_utils import parse_iso_utc
     from utils.error_handling import RideStateError
 
 try:
@@ -1816,16 +1818,8 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
 
     # Calculate fee if driver was already assigned and some time passed (e.g. 2 mins)
     elif driver_id and ride.get("driver_accepted_at"):
-        accepted_at = ride["driver_accepted_at"]
-        if isinstance(accepted_at, str):
-            try:
-                accepted_at = datetime.fromisoformat(accepted_at.replace("Z", "+00:00").replace("+00:00", ""))
-            except ValueError:
-                accepted_at = None
-        if accepted_at:
-            time_diff = (datetime.now(timezone.utc) - accepted_at).total_seconds()
-        else:
-            time_diff = 0
+        accepted_at = parse_iso_utc(ride["driver_accepted_at"])
+        time_diff = (datetime.now(timezone.utc) - accepted_at).total_seconds() if accepted_at else 0
         if time_diff > 120:  # 2 minutes
             charged_admin = cancellation_fee_admin
             charged_driver = cancellation_fee_driver
@@ -2094,20 +2088,14 @@ async def get_chat_status(ride_id: str, current_user: dict = Depends(get_current
         return {"available": False, "reason": "Ride was cancelled"}
 
     if status == "completed":
-        completed_at = ride.get("ride_completed_at") or ride.get("updated_at")
+        completed_at = parse_iso_utc(ride.get("ride_completed_at") or ride.get("updated_at"))
         if completed_at:
-            if isinstance(completed_at, str):
-                try:
-                    completed_at = datetime.fromisoformat(completed_at.replace("Z", "+00:00").replace("+00:00", ""))
-                except (ValueError, TypeError):
-                    completed_at = None
-            if completed_at:
-                elapsed = (datetime.now(timezone.utc) - completed_at).total_seconds()
-                remaining = max(0, 86400 - elapsed)
-                if remaining <= 0:
-                    return {"available": False, "reason": "Post-trip chat window expired"}
-                hours_left = int(remaining // 3600)
-                return {"available": True, "post_trip": True, "hours_remaining": hours_left}
+            elapsed = (datetime.now(timezone.utc) - completed_at).total_seconds()
+            remaining = max(0, 86400 - elapsed)
+            if remaining <= 0:
+                return {"available": False, "reason": "Post-trip chat window expired"}
+            hours_left = int(remaining // 3600)
+            return {"available": True, "post_trip": True, "hours_remaining": hours_left}
         return {"available": True, "post_trip": True, "hours_remaining": 24}
 
     # Active ride — chat is fully available
@@ -2238,15 +2226,9 @@ async def send_ride_message(ride_id: str, body: SendMessageRequest, current_user
 
     # Post-trip chat window: allow messages for 24h after completion
     if ride.get("status") == "completed":
-        completed_at = ride.get("ride_completed_at") or ride.get("updated_at")
-        if completed_at:
-            if isinstance(completed_at, str):
-                try:
-                    completed_at = datetime.fromisoformat(completed_at.replace("Z", "+00:00").replace("+00:00", ""))
-                except (ValueError, TypeError):
-                    completed_at = None
-            if completed_at and (datetime.now(timezone.utc) - completed_at).total_seconds() > 86400:
-                raise HTTPException(status_code=400, detail="Post-trip chat window has expired (24 hours)")
+        completed_at = parse_iso_utc(ride.get("ride_completed_at") or ride.get("updated_at"))
+        if completed_at and (datetime.now(timezone.utc) - completed_at).total_seconds() > 86400:
+            raise HTTPException(status_code=400, detail="Post-trip chat window has expired (24 hours)")
 
     is_rider = ride.get("rider_id") == current_user["id"]
     driver = await db.find_one("drivers", {"user_id": current_user["id"]})

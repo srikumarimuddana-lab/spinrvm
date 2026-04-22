@@ -573,6 +573,44 @@ async def upload_driver_document(
     return doc_record
 
 
+@documents_router.delete("/documents/{document_id}")
+async def delete_driver_document(
+    document_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Remove one of the authenticated driver's uploaded documents.
+
+    Drivers can delete pending documents (e.g. wrong side uploaded,
+    replaced with a clearer photo). Once the document is approved by
+    an admin the delete is blocked — approved records must be kept
+    for audit and are rotated only by uploading a replacement that
+    supersedes them via the requirement linkage.
+    """
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    doc = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("driver_documents", {"id": document_id}, limit=1)
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if doc.get("driver_id") != driver["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this document")
+
+    if doc.get("status") == "approved":
+        raise HTTPException(
+            status_code=409,
+            detail="Approved documents cannot be deleted. Upload a replacement to supersede it.",
+        )
+
+    await db_supabase.delete_many("driver_documents", {"id": document_id})
+    return {"success": True}
+
+
 # --- Admin Endpoints ---
 
 

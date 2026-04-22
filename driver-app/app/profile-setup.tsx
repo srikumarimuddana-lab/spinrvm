@@ -104,8 +104,9 @@ export default function ProfileSetupScreen() {
       // Fetch service areas
       let areas: any[] = [];
       try {
-        const areasRes = await api.get('/admin/service-areas');
-        areas = (areasRes.data || []).filter((a: any) => a.is_active);
+        // Public endpoint — returns only active areas, no admin auth required.
+        const areasRes = await api.get('/service-areas');
+        areas = areasRes.data || [];
       } catch {
         areas = [
           { id: 'saskatoon', name: 'Saskatoon, SK', city: 'Saskatoon' },

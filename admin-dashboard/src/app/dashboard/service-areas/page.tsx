@@ -517,6 +517,14 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
 
   const handleSave = async () => {
     setSaving(true);
+    // Only stamp surge_source="manual" if the operator actually
+    // changed one of the surge fields since load. If they didn't
+    // touch surge we leave surge_source alone so surge_engine keeps
+    // running against this area. This lets admins save unrelated
+    // fields (name, radius, etc.) without freezing auto-surge.
+    const surgeTouched =
+      form.surge_active !== (area.surge_active !== undefined ? area.surge_active : !!area.surge_enabled) ||
+      parseFloat(String(form.surge_multiplier)) !== parseFloat(String(area.surge_multiplier ?? 1.0));
     const updates: any = {
       name: form.name,
       city: form.city,
@@ -530,6 +538,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       surge_active: form.surge_active,
       surge_multiplier: parseFloat(String(form.surge_multiplier)) || 1.0,
     };
+    if (surgeTouched) updates.surge_source = "manual";
     if (pendingPolygon) {
       updates.polygon = pendingPolygon;
     }
@@ -578,10 +587,32 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
 
       {/* Surge pricing — lives here now, no separate /dashboard/pricing page */}
       <div>
-        <h4 className="font-bold text-gray-800 mb-2">Surge Pricing</h4>
+        <div className="flex items-center justify-between mb-2">
+          <h4 className="font-bold text-gray-800">Surge Pricing</h4>
+          {area.surge_source === "manual" && (
+            <button
+              type="button"
+              onClick={async () => {
+                // Hand this area back to surge_engine. The engine
+                // will recompute a multiplier on its next tick
+                // based on demand vs available drivers.
+                await onSave({ surge_source: "auto" });
+              }}
+              className="text-[11px] text-blue-600 hover:underline font-semibold"
+            >
+              Reset to auto-surge
+            </button>
+          )}
+        </div>
         <p className="text-sm text-gray-500 mb-3">
           Temporarily raise fares in this area during high-demand periods. When active,
           every vehicle's fare is multiplied by the surge factor.
+          {area.surge_source === "auto" && (
+            <span className="text-blue-600"> Currently auto-managed by the surge engine; editing these fields will switch it to manual.</span>
+          )}
+          {area.surge_source === "manual" && (
+            <span className="text-amber-600"> Currently on manual override — surge engine will not touch this area until you reset.</span>
+          )}
         </p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
           <div className="flex items-center gap-2 pt-1">

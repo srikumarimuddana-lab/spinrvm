@@ -90,52 +90,6 @@ class CloudinaryService:
             logger.error(f"Failed to upload image to Cloudinary: {e}")
             return {"success": False, "error": str(e)}
 
-    async def upload_bytes(
-        self,
-        data: bytes,
-        folder: str = "spinr",
-        public_id: Optional[str] = None,
-        tags: Optional[List[str]] = None,
-        content_type: str = "image/png",
-    ) -> Dict[str, Any]:
-        """Upload raw image bytes (in-memory) to Cloudinary.
-
-        Used by the ride-route snapshot pipeline, which renders a PNG
-        in-process (no temp file on disk). ``public_id`` should be
-        deterministic for idempotent uploads — Cloudinary replaces the
-        asset in place when the public_id matches an existing one.
-        """
-        if not self.configured:
-            logger.info(f"[MOCK] Would upload {len(data)} bytes to folder={folder} public_id={public_id}")
-            return {
-                "success": True,
-                "secure_url": f"https://mock.cloudinary.com/{folder}/{public_id or 'asset'}.png",
-                "public_id": public_id or "mock_image",
-            }
-
-        try:
-            # cloudinary-py accepts bytes via a "data:" URI or a
-            # file-like object. BytesIO is the cleanest route and
-            # doesn't require base64-encoding the whole payload.
-            import io
-
-            buf = io.BytesIO(data)
-            buf.name = f"{public_id or 'asset'}.png"
-            upload_options: Dict[str, Any] = {
-                "folder": folder,
-                "tags": tags or [],
-                "resource_type": "image",
-                "overwrite": True,
-            }
-            if public_id:
-                upload_options["public_id"] = public_id
-            result = cloudinary.uploader.upload(buf, **upload_options)
-            logger.info(f"Bytes uploaded to Cloudinary: {result['public_id']}")
-            return {"success": True, "secure_url": result["secure_url"], "public_id": result["public_id"]}
-        except Exception as e:
-            logger.error(f"Failed to upload bytes to Cloudinary: {e}")
-            return {"success": False, "error": str(e)}
-
     async def upload_from_url(
         self, image_url: str, folder: str = "spinr", public_id: Optional[str] = None, tags: Optional[List[str]] = None
     ) -> Dict[str, Any]:

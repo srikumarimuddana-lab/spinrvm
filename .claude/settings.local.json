@@ -54,7 +54,10 @@
       "Bash(npx --no tsc --noEmit)",
       "Bash(yarn tsc *)",
       "Bash(curl -sS -o /dev/null -w \"Backend status: %{http_code}\\\\nTime: %{time_total}s\\\\n\" https://spinr-backend-production.up.railway.app/health)",
-      "Bash(powershell.exe -Command \"ipconfig\")"
+      "Bash(powershell.exe -Command \"ipconfig\")",
+      "Bash(curl *)",
+      "Bash(yarn test *)",
+      "Bash(npx --no-install jest --testPathPattern=\"crashlytics|store\" --passWithNoTests)"
     ]
   }
 }

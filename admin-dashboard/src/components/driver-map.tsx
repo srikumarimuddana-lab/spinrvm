@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
+    DEFAULT_CENTER,
     MAP_STYLE_URL,
     addStandardControls,
     fitBoundsToPoints,
@@ -57,7 +58,7 @@ export default function DriverMap({ drivers, serviceAreas = [], selectedArea = "
         const map = new maplibregl.Map({
             container: containerRef.current,
             style: MAP_STYLE_URL,
-            center: [-79.4, 43.7], // Toronto
+            center: DEFAULT_CENTER,
             zoom: 11,
         });
         addStandardControls(map);

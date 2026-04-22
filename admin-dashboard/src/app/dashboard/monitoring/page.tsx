@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Radio, X } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
 
-import { adminCancelRide, getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTypes } from "@/lib/api";
+import { adminCancelRide, getFareConfigs, getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTypes } from "@/lib/api";
 import { useMonitoringSocket } from "@/hooks/use-monitoring-socket";
 
 import { MonitoringMap, MapHandles, MonitoringServiceArea } from "./monitoring-map";
@@ -47,6 +47,12 @@ export default function MonitoringPage() {
   const [selectedRide, setSelectedRide] = useState<MonitoringRide | null>(null);
   const [serviceAreas, setServiceAreas] = useState<MonitoringServiceArea[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<{ id: string; name: string }[]>([]);
+  // serviceAreaId → set of vehicle_type_ids with an active fare config.
+  // Used to narrow the toolbar's vehicle-type dropdown when an area is
+  // selected (e.g. picking "Regina" hides vehicle types that have no
+  // Regina fare config). An empty/missing set means the area has no
+  // configured vehicle types; the dropdown shows "No vehicles configured".
+  const [vehicleTypesByArea, setVehicleTypesByArea] = useState<Record<string, Set<string>>>({});
   const [alerts, setAlerts] = useState<AlertEvent[]>([]);
 
   // ── Auth token for WebSocket ────────────────────────────────────────
@@ -236,7 +242,45 @@ export default function MonitoringPage() {
         setVehicleTypes(vt.map((v) => ({ id: v.id, name: v.name })))
       )
       .catch(() => {});
+
+    // Build serviceAreaId → vehicleTypeId set from active fare configs.
+    // Silently falling back to {} (empty map) keeps the current behavior
+    // — the "All Vehicles" option shows everything when an area isn't
+    // selected; only the per-area filter depends on this mapping.
+    getFareConfigs()
+      .then((configs: any[]) => {
+        const map: Record<string, Set<string>> = {};
+        for (const c of configs || []) {
+          if (c?.is_active === false) continue;
+          const areaId = c?.service_area_id;
+          const vtId = c?.vehicle_type_id;
+          if (!areaId || !vtId) continue;
+          if (!map[areaId]) map[areaId] = new Set<string>();
+          map[areaId].add(vtId);
+        }
+        setVehicleTypesByArea(map);
+      })
+      .catch(() => {});
   }, []);
+
+  // Vehicle types available for the current area filter. When no area is
+  // selected we show all; when an area is selected we narrow to the
+  // vehicle types configured for it (empty allowed — the toolbar surfaces
+  // an "empty" hint so the operator knows there's nothing to pick).
+  const availableVehicleTypes = useMemo(() => {
+    if (!filters.serviceAreaId) return vehicleTypes;
+    const allowed = vehicleTypesByArea[filters.serviceAreaId];
+    if (!allowed) return [];
+    return vehicleTypes.filter((v) => allowed.has(v.id));
+  }, [filters.serviceAreaId, vehicleTypes, vehicleTypesByArea]);
+
+  // If the selected vehicle type is no longer valid for the chosen area,
+  // auto-clear it so the filter doesn't silently hide every driver.
+  useEffect(() => {
+    if (!filters.vehicleTypeId) return;
+    if (availableVehicleTypes.some((v) => v.id === filters.vehicleTypeId)) return;
+    setFilters((f) => ({ ...f, vehicleTypeId: null }));
+  }, [availableVehicleTypes, filters.vehicleTypeId]);
 
   // Poll data
   useEffect(() => {
@@ -324,7 +368,7 @@ export default function MonitoringPage() {
         followMode={followMode}
         onFollowToggle={() => setFollowMode((f) => !f)}
         serviceAreas={serviceAreas}
-        vehicleTypes={vehicleTypes}
+        vehicleTypes={availableVehicleTypes}
         wsStatus={wsStatus}
       />
 

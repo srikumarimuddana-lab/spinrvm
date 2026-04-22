@@ -15,6 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
+import { DEFAULT_LATITUDE, DEFAULT_LONGITUDE } from '../constants/geo';
 import { useRideStore } from '../store/rideStore';
 import { useAuthStore } from '@shared/store/authStore';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -102,7 +103,7 @@ export default function SearchDestinationScreen() {
               });
             } catch (e) {
               console.warn('Could not get current location, using fallback:', e);
-              loc = { coords: { latitude: 43.6532, longitude: -79.3832 } };
+              loc = { coords: { latitude: DEFAULT_LATITUDE, longitude: DEFAULT_LONGITUDE } };
             }
             setUserLocation({
               latitude: loc.coords.latitude,

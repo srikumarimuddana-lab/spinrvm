@@ -224,6 +224,31 @@ async def _supersede_and_flag_pending_review(
         logger.warning(f"Could not flag driver {driver_id} for review: {e}")
 
 
+def _extract_signed_url(res: Any) -> str:
+    """
+    Pull the URL out of supabase-py's create_signed_url() response, tolerating
+    both the legacy object-with-`.data.signed_url` shape and the current dict
+    shape with a `signedURL` / `signedUrl` / `signed_url` key. Railway was
+    500-ing with "'dict' object has no attribute 'data'" after supabase-py
+    flipped the return type.
+    """
+    if isinstance(res, dict):
+        url = res.get("signedURL") or res.get("signedUrl") or res.get("signed_url")
+        if not url:
+            raise RuntimeError(f"create_signed_url returned no URL: {res!r}")
+        return url
+    data = getattr(res, "data", None)
+    if data is None:
+        raise RuntimeError(f"create_signed_url returned unexpected shape: {res!r}")
+    if isinstance(data, dict):
+        url = data.get("signedURL") or data.get("signedUrl") or data.get("signed_url")
+    else:
+        url = getattr(data, "signed_url", None) or getattr(data, "signedURL", None)
+    if not url:
+        raise RuntimeError(f"create_signed_url missing URL field: {res!r}")
+    return url
+
+
 async def save_upload(file: UploadFile) -> str:
     file_ext = os.path.splitext(file.filename)[1]
     filename = f"{uuid.uuid4()}{file_ext}"
@@ -236,7 +261,7 @@ async def save_upload(file: UploadFile) -> str:
         )
 
         url_res = supabase.storage.from_("driver-documents").create_signed_url(filename, 3600)
-        return url_res.data.signed_url
+        return _extract_signed_url(url_res)
     except Exception as e:
         logger.error(f"Failed to upload to Supabase Storage: {e}")
         raise HTTPException(status_code=500, detail=f"Could not save file: {e}") from e
@@ -803,6 +828,12 @@ async def upload_file(
     returns the public URL. The previous base64-in-DB approach caused
     2+ minute timeouts for large images.
     """
+    logger.info(
+        "[upload] hit /api/v1/upload user=%s filename=%s content_type=%s",
+        (current_user or {}).get("id"),
+        getattr(file, "filename", None),
+        getattr(file, "content_type", None),
+    )
     try:
         content_length = request.headers.get('content-length')
         if content_length and int(content_length) > MAX_FILE_SIZE:
@@ -836,14 +867,22 @@ async def upload_file(
         safe_name = f"document_{upload_ts}{ext}"
 
         try:
-            supabase.storage.from_("driver-documents").upload(
+            logger.info("[upload] storage.upload begin key=%s size=%s", storage_key, size)
+            upload_res = supabase.storage.from_("driver-documents").upload(
                 file=content,
                 path=storage_key,
                 file_options={"content-type": content_type},
             )
-            public_url = supabase.storage.from_("driver-documents").create_signed_url(storage_key, 3600).data.signed_url
+            logger.info("[upload] storage.upload done type=%s", type(upload_res).__name__)
+            signed_res = supabase.storage.from_("driver-documents").create_signed_url(storage_key, 3600)
+            logger.info(
+                "[upload] create_signed_url returned type=%s repr=%r",
+                type(signed_res).__name__,
+                signed_res,
+            )
+            public_url = _extract_signed_url(signed_res)
         except Exception as e:
-            logger.error(f"Supabase Storage upload failed: {e}")
+            logger.exception("Supabase Storage upload failed: %s", e)
             raise HTTPException(status_code=500, detail=f"Storage upload failed: {e}") from e
 
         return {

@@ -94,7 +94,28 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             # Fallback to legacy JWT
             try:
                 payload = verify_jwt_token(token)
-                user = await db_supabase.get_user_by_id(payload["user_id"])
+                # Admin tokens are minted with a `role` claim and have no row
+                # in the `users` table (admin-001 is env-var creds; admin_staff
+                # rows live in a separate table). Without this branch the
+                # lookup returns None and the client is told
+                # invalid_token_or_user_not_found — which the monitoring
+                # hook reacts to with exponential-backoff reconnects, i.e.
+                # the repeating "WebSocket failed" loop seen in the admin
+                # live-monitoring console. Mirrors get_current_user() in
+                # dependencies/__init__.py.
+                _admin_roles = {
+                    "admin", "super_admin", "operations",
+                    "support", "finance", "custom",
+                }
+                if payload.get("role") in _admin_roles and payload.get("email"):
+                    user = {
+                        "id": payload["user_id"],
+                        "email": payload.get("email"),
+                        "phone": payload.get("phone", ""),
+                        "role": payload["role"],
+                    }
+                else:
+                    user = await db_supabase.get_user_by_id(payload["user_id"])
             except Exception:
                 user = None
 

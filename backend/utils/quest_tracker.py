@@ -9,8 +9,10 @@ from datetime import datetime, timezone
 
 try:
     from ..db import db
+    from .datetime_utils import parse_iso_utc
 except ImportError:
     from db import db
+    from utils.datetime_utils import parse_iso_utc
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +62,7 @@ async def update_quest_progress_on_ride_complete(driver_id: str, ride: dict):
                 completed_at = ride.get("completed_at") or ride.get("updated_at")
                 if completed_at:
                     if isinstance(completed_at, str):
-                        try:
-                            completed_at = datetime.fromisoformat(
-                                completed_at.replace("Z", "+00:00").replace("+00:00", "")
-                            )
-                        except ValueError:
-                            completed_at = datetime.now(timezone.utc)
+                        completed_at = parse_iso_utc(completed_at) or datetime.now(timezone.utc)
                     hour = completed_at.hour
                     if 7 <= hour <= 9 or 17 <= hour <= 20:
                         new_value += 1

@@ -7,8 +7,10 @@ from fastapi import APIRouter, Query
 
 try:
     from ... import db_supabase
+    from ...utils.datetime_utils import parse_iso_utc
 except ImportError:
     import db_supabase
+    from utils.datetime_utils import parse_iso_utc
 
 db = db_supabase  # legacy alias
 
@@ -164,14 +166,12 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         first_online_at = None
         last_online_at = None
         if points:
-            try:
-                first_online_at = points[0].get("timestamp")
-                last_online_at = points[-1].get("timestamp")
-                t_first = datetime.fromisoformat(str(first_online_at).replace("Z", "+00:00").replace("+00:00", ""))
-                t_last = datetime.fromisoformat(str(last_online_at).replace("Z", "+00:00").replace("+00:00", ""))
+            first_online_at = points[0].get("timestamp")
+            last_online_at = points[-1].get("timestamp")
+            t_first = parse_iso_utc(first_online_at)
+            t_last = parse_iso_utc(last_online_at)
+            if t_first and t_last:
                 online_minutes = max(0, int((t_last - t_first).total_seconds() / 60))
-            except Exception as _exc:
-                logger.debug(f"Could not compute online_minutes for driver {driver_id}: {_exc}")
 
         # Per-phase distances
         idle_km = 0.0

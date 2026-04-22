@@ -18,6 +18,7 @@ try:
     from ..schemas import Driver, RideRatingRequest
     from ..socket_manager import manager
     from ..utils.crypto import hash_otp
+    from ..utils.datetime_utils import parse_iso_utc
     from ..utils.error_handling import RideStateError
 except ImportError:
     import db_supabase
@@ -28,6 +29,7 @@ except ImportError:
     from schemas import Driver, RideRatingRequest
     from socket_manager import manager
     from utils.crypto import hash_otp
+    from utils.datetime_utils import parse_iso_utc
     from utils.error_handling import RideStateError
 
 db = db_supabase  # legacy alias
@@ -2568,22 +2570,17 @@ async def update_driver_status(
                     detail="You need an active Spinr Pass subscription to go online. Subscribe from your dashboard.",
                 )
 
-            # Check expiry on the active subscription row.
+            # Check expiry on the active subscription row. parse_iso_utc
+            # returns None on malformed values — we let those through rather
+            # than blocking a driver from going online because of a data bug.
             if sub.get("expires_at"):
-                try:
-                    exp = datetime.fromisoformat(str(sub["expires_at"]).replace("Z", "+00:00").replace("+00:00", ""))
-                    if exp < datetime.now(timezone.utc):
-                        await db_supabase.update_one("driver_subscriptions", {"id": sub["id"]}, {"status": "expired"})
-                        raise HTTPException(
-                            status_code=402,
-                            detail="Your Spinr Pass has expired. Please renew to go online.",
-                        )
-                except HTTPException:
-                    raise
-                except Exception:  # noqa: S110
-                    # Malformed expiry string, unparseable date, etc. — let
-                    # the driver go online rather than blocking on a data bug.
-                    pass
+                exp = parse_iso_utc(sub["expires_at"])
+                if exp is not None and exp < datetime.now(timezone.utc):
+                    await db_supabase.update_one("driver_subscriptions", {"id": sub["id"]}, {"status": "expired"})
+                    raise HTTPException(
+                        status_code=402,
+                        detail="Your Spinr Pass has expired. Please renew to go online.",
+                    )
 
     logger.info(
         f"[GO-ONLINE] handler CALL update_one driver_id={driver_id} "

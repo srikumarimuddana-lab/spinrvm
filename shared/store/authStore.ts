@@ -264,6 +264,63 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
       }
     }
 
+    // ── No valid stored access token — try silent refresh ──
+    // setTokens() keeps the access token in memory only but persists the
+    // refresh token. On cold start (memory wiped), this is the normal path
+    // to restore a session without forcing the user back to the OTP screen.
+    const storedRefresh = await storage.getItem('refresh_token');
+    if (storedRefresh) {
+      const refreshed = await get().refreshTokens();
+      if (refreshed) {
+        const newToken = get().token;
+        try {
+          const meRes = await api.get('/auth/me');
+          const userData = meRes.data as User;
+          await appCache.set(CACHE_KEYS.USER_PROFILE, userData, CACHE_CONFIG.USER_PROFILE_TTL);
+
+          let driverData: Driver | null = null;
+          const looksLikeDriver =
+            !!(userData as any).is_driver ||
+            (userData as any).role === 'driver' ||
+            !!(userData as any).driver_onboarding_status;
+          if (looksLikeDriver) {
+            try {
+              const driverRes = await api.get('/drivers/me');
+              driverData = driverRes.data as Driver;
+              await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, CACHE_CONFIG.USER_PROFILE_TTL);
+            } catch (e: any) {
+              if (e?.response?.status === 404) {
+                if (__DEV__) console.log('[Auth] No driver row on refresh-init — auto-registering');
+                try {
+                  const regRes = await api.post('/drivers/register', {});
+                  driverData = regRes.data as Driver;
+                  await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, CACHE_CONFIG.USER_PROFILE_TTL);
+                } catch (regErr) {
+                  if (__DEV__) console.log('[Auth] Auto-register failed on refresh-init:', regErr);
+                }
+              } else {
+                if (__DEV__) console.log('Failed to fetch driver data on refresh-init');
+              }
+            }
+          }
+
+          set({
+            user: userData,
+            driver: driverData,
+            token: newToken,
+            isInitialized: true,
+            isLoading: false,
+          });
+          return;
+        } catch (e) {
+          if (__DEV__) console.log('[Auth] Profile hydration after refresh failed:', e);
+          // refreshTokens() already stored new tokens; if /auth/me fails
+          // here, treat it as a failed session and fall through.
+        }
+      }
+      // refreshTokens() on failure already called logout() which cleared state.
+    }
+
     // ── No valid stored token ──
     // Check Firebase as a secondary auth source (only useful when firebase
     // phone-auth is actively configured and the user signed in via it).

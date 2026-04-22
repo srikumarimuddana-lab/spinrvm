@@ -149,16 +149,29 @@ async def admin_cancel_ride(
     reason = (body.reason or "Cancelled by admin").strip()[:500]
     now = datetime.now(timezone.utc)
 
-    await db_supabase.update_ride(
-        ride_id,
-        {
-            "status": "cancelled",
-            "cancelled_at": now,
-            "cancellation_reason": reason,
-            "cancelled_by_admin_id": admin_user.get("id"),
-            "updated_at": now,
-        },
-    )
+    # Wrap the update so a DatabaseError surfaces the actual Supabase
+    # complaint ("column X does not exist", RLS denial, etc.) instead of
+    # vanishing into the global 503 handler. Migration 37 added the
+    # cancellation columns; older envs without it would otherwise produce
+    # a silent 503 with no clue in the logs.
+    try:
+        await db_supabase.update_ride(
+            ride_id,
+            {
+                "status": "cancelled",
+                "cancelled_at": now,
+                "cancellation_reason": reason,
+                "cancelled_by_admin_id": admin_user.get("id"),
+                "updated_at": now,
+            },
+        )
+    except Exception as e:
+        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+        logger.error(
+            f"admin_cancel_ride: update failed ride_id={ride_id} "
+            f"admin_id={admin_user.get('id')} err={original or e}"
+        )
+        raise
 
     verify = await db_supabase.get_ride(ride_id)
     if not verify or verify.get("status") != "cancelled":

@@ -177,19 +177,40 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                     </Sec>
                                     <div>
                                         <h4 className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-2.5">Map</h4>
-                                        {ride.pickup_lat && ride.dropoff_lat ? (
-                                            <RideRouteMap
-                                                pickupLat={ride.pickup_lat} pickupLng={ride.pickup_lng}
-                                                dropoffLat={ride.dropoff_lat} dropoffLng={ride.dropoff_lng}
-                                                locationTrail={
-                                                    // Prefer stored downsampled polyline (set on completion)
-                                                    // over raw trail so we don't hit driver_location_history
-                                                    Array.isArray(ride.route_polyline) && ride.route_polyline.length > 0
-                                                        ? ride.route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] }))
-                                                        : ride.location_trail
-                                                }
-                                            />
-                                        ) : (
+                                        {ride.pickup_lat && ride.dropoff_lat ? (() => {
+                                            // Per-phase polylines (migration 39) carry the real
+                                            // road-following paths. If we have them, render
+                                            // Phase 2 + Phase 3 as two distinct colored lines
+                                            // and skip the straight dashed reference entirely.
+                                            const pp = ride.phase_polylines || {};
+                                            const pickupTrail: { lat: number; lng: number; timestamp?: string }[] =
+                                                Array.isArray(pp.navigating_to_pickup)
+                                                    ? pp.navigating_to_pickup.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] }))
+                                                    : [];
+                                            const tripTrail: { lat: number; lng: number; timestamp?: string }[] =
+                                                Array.isArray(pp.trip_in_progress)
+                                                    ? pp.trip_in_progress.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] }))
+                                                    : [];
+                                            // Legacy fallback for rides before migration 39 —
+                                            // use the combined route_polyline or raw trail.
+                                            const legacyTrail =
+                                                Array.isArray(ride.route_polyline) && ride.route_polyline.length > 0
+                                                    ? ride.route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] }))
+                                                    : ride.location_trail;
+                                            return (
+                                                <RideRouteMap
+                                                    pickupLat={ride.pickup_lat} pickupLng={ride.pickup_lng}
+                                                    dropoffLat={ride.dropoff_lat} dropoffLng={ride.dropoff_lng}
+                                                    pickupTrail={pickupTrail.length > 1 ? pickupTrail : undefined}
+                                                    tripTrail={tripTrail.length > 1 ? tripTrail : undefined}
+                                                    locationTrail={
+                                                        pickupTrail.length > 1 || tripTrail.length > 1
+                                                            ? undefined
+                                                            : legacyTrail
+                                                    }
+                                                />
+                                            );
+                                        })() : (
                                             <div className="bg-muted/30 rounded-xl h-[280px] flex flex-col items-center justify-center gap-2">
                                                 <MapPin className="h-8 w-8 text-muted-foreground/20" />
                                                 <p className="text-xs text-muted-foreground">No map data available</p>

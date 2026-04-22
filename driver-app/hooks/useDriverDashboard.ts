@@ -431,6 +431,27 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         }
         break;
 
+      // Rider tipped a completed ride. Backend rides.py emits this right
+      // after persisting the tip so the driver sees it immediately
+      // instead of only after the next earnings refresh.
+      case 'tip_received': {
+        const amount = typeof data.amount === 'number' ? data.amount : 0;
+        if (amount > 0) {
+          Vibration.vibrate([0, 200, 100, 200]);
+          const riderName = typeof data.rider_name === 'string' && data.rider_name
+            ? data.rider_name
+            : 'Your rider';
+          showDashAlert(
+            'You got a tip! 💸',
+            `${riderName} tipped you $${amount.toFixed(2)}.`,
+            'success',
+          );
+          // Pull the fresh totals so the earnings chip updates on screen.
+          fetchEarnings('today');
+        }
+        break;
+      }
+
       default:
         console.warn('[WS] Unknown message type received:', data.type);
         break;

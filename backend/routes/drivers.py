@@ -1897,7 +1897,9 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # need to join against driver_location_history for historical rides.
     planned_distance = ride.get("planned_distance_km") or ride.get("distance_km", 0) or 0
     actual_distance_km = planned_distance
-    phase_distances = {}
+    phase_distances: Dict[str, float] = {}
+    phase_durations: Dict[str, int] = {}
+    phase_polylines: Dict[str, list] = {}
     pickup_to_driver_km = 0.0
     route_polyline = []
     gps_points_count = 0
@@ -1915,15 +1917,28 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         gps_points_count = len(all_breadcrumbs)
 
         if gps_points_count >= 2:
-            # Compute per-phase distances (attribute segment to current point's phase)
+            # Compute per-phase distances (attribute each segment to the
+            # current point's phase) and per-phase durations from the
+            # timestamp deltas. Phase 1 (online_idle) is not expected
+            # against a ride_id but tolerated if it shows up.
             phase_totals: Dict[str, float] = {}
+            phase_secs: Dict[str, float] = {}
             for i in range(1, len(all_breadcrumbs)):
                 prev = all_breadcrumbs[i - 1]
                 curr = all_breadcrumbs[i]
                 phase = curr.get("tracking_phase") or "unknown"
-                seg = calculate_distance(prev["lat"], prev["lng"], curr["lat"], curr["lng"])
-                phase_totals[phase] = phase_totals.get(phase, 0.0) + seg
+                seg_km = calculate_distance(prev["lat"], prev["lng"], curr["lat"], curr["lng"])
+                phase_totals[phase] = phase_totals.get(phase, 0.0) + seg_km
+                # Duration: only count if the gap is reasonable (< 5 min)
+                # to avoid one stale breadcrumb inflating a phase by hours.
+                t_prev = parse_iso_utc(prev.get("timestamp"))
+                t_curr = parse_iso_utc(curr.get("timestamp"))
+                if t_prev and t_curr:
+                    delta = (t_curr - t_prev).total_seconds()
+                    if 0 < delta <= 300:
+                        phase_secs[phase] = phase_secs.get(phase, 0.0) + delta
             phase_distances = {k: round(v, 3) for k, v in phase_totals.items()}
+            phase_durations = {k: int(round(v)) for k, v in phase_secs.items()}
 
             # Actual distance = trip_in_progress only (the paid portion)
             actual_distance_km = round(phase_distances.get("trip_in_progress", 0.0), 2)
@@ -1932,16 +1947,38 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
             pickup_to_driver_km = round(phase_distances.get("navigating_to_pickup", 0.0), 2)
 
-            # Downsample route polyline to max ~200 points for fast rendering.
-            # Keep trip_in_progress + navigating_to_pickup (drop idle noise).
+            # Per-phase polylines for SGI / dispute tooling. Each phase is
+            # downsampled to MAX_PER_PHASE points so a long trip's payload
+            # stays bounded. Stored as [lat, lng, iso_ts] tuples so the
+            # admin can replay the trip with timing on the detail map.
+            MAX_PER_PHASE = 150
+            phases_to_split = ("navigating_to_pickup", "trip_in_progress")
+            for phase in phases_to_split:
+                pts = [b for b in all_breadcrumbs if b.get("tracking_phase") == phase]
+                if not pts:
+                    continue
+                step = max(1, len(pts) // MAX_PER_PHASE)
+                sampled = pts[::step]
+                if sampled and sampled[-1] is not pts[-1]:
+                    sampled.append(pts[-1])
+                phase_polylines[phase] = [
+                    [
+                        round(p["lat"], 6),
+                        round(p["lng"], 6),
+                        str(p.get("timestamp") or ""),
+                    ]
+                    for p in sampled
+                ]
+
+            # Legacy combined polyline (kept for the existing ride-detail
+            # map renderer that hasn't moved to phase_polylines yet).
             trip_points = [
-                b for b in all_breadcrumbs if b.get("tracking_phase") in ("navigating_to_pickup", "trip_in_progress")
+                b for b in all_breadcrumbs if b.get("tracking_phase") in phases_to_split
             ]
             if trip_points:
                 MAX_POINTS = 200
                 step = max(1, len(trip_points) // MAX_POINTS)
                 sampled = trip_points[::step]
-                # Always include the last point so the polyline ends at dropoff
                 if sampled and sampled[-1] is not trip_points[-1]:
                     sampled.append(trip_points[-1])
                 route_polyline = [
@@ -1967,6 +2004,8 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         "actual_distance_km": actual_distance_km,
         "pickup_to_driver_km": pickup_to_driver_km,
         "phase_distances": phase_distances,
+        "phase_durations": phase_durations,
+        "phase_polylines": phase_polylines,
         "route_polyline": route_polyline,
         "gps_points_count": gps_points_count,
     }

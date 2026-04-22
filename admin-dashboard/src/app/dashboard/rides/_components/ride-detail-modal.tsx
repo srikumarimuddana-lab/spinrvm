@@ -527,18 +527,34 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         {ride.cancelled_at && <TL l="Cancelled" t={ride.cancelled_at} d />}
                                     </div>
 
-                                    {/* Phase distance summary */}
+                                    {/* Phase distance + duration summary. Duration is
+                                        seconds-per-phase from migration 39's phase_durations
+                                        column, written by complete_ride. Falls back to
+                                        omitting the duration line for legacy rides. */}
                                     {phaseDistances.length > 0 && (
                                         <div className="mt-3 pt-3 border-t">
                                             <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-2.5">Distance by Phase</p>
                                             <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-                                                {phaseDistances.map(p => (
-                                                    <div key={p.phase} className={`rounded-lg px-3 py-2.5 ${PHASE_COLORS[p.phase] || "bg-gray-50 text-gray-600 dark:bg-gray-800/30 dark:text-gray-400"}`}>
-                                                        <p className="text-xs font-bold">{p.distance_km} km</p>
-                                                        <p className="text-[10px] opacity-80">{PHASE_LABELS[p.phase] || p.phase.replace(/_/g, " ")}</p>
-                                                        <p className="text-[9px] opacity-60">{p.points} pts</p>
-                                                    </div>
-                                                ))}
+                                                {phaseDistances.map(p => {
+                                                    const secs = ride.phase_durations?.[p.phase];
+                                                    const durLabel =
+                                                        typeof secs === "number" && secs > 0
+                                                            ? secs >= 60
+                                                                ? `${Math.round(secs / 60)} min`
+                                                                : `${secs}s`
+                                                            : null;
+                                                    return (
+                                                        <div key={p.phase} className={`rounded-lg px-3 py-2.5 ${PHASE_COLORS[p.phase] || "bg-gray-50 text-gray-600 dark:bg-gray-800/30 dark:text-gray-400"}`}>
+                                                            <p className="text-xs font-bold">{p.distance_km} km</p>
+                                                            <p className="text-[10px] opacity-80">{PHASE_LABELS[p.phase] || p.phase.replace(/_/g, " ")}</p>
+                                                            <p className="text-[9px] opacity-60">
+                                                                {p.points > 0 ? `${p.points} pts` : ""}
+                                                                {p.points > 0 && durLabel ? " · " : ""}
+                                                                {durLabel || ""}
+                                                            </p>
+                                                        </div>
+                                                    );
+                                                })}
                                             </div>
                                             <div className="flex justify-between mt-2.5 text-xs">
                                                 <span className="text-muted-foreground">Total GPS distance</span>

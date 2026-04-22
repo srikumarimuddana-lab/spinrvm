@@ -656,7 +656,11 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     fetchTripEarnings: async (limit = 20, offset = 0) => {
         try {
             const res = await api.get(`/drivers/earnings/trips?limit=${limit}&offset=${offset}`);
-            set({ tripEarnings: res.data || [] });
+            // Backend returns { trips, limit, offset } — pull out the array.
+            // Previously set res.data directly, which left the store holding
+            // an object; earnings.tsx then called .map() on it and threw
+            // "undefined is not a function".
+            set({ tripEarnings: res.data?.trips || [] });
         } catch (err) {
             console.log('Fetch trip earnings error:', err);
         }

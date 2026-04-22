@@ -153,7 +153,16 @@ async def build_fares_for_area(matched_area, vehicle_types):
     if not matched_area:
         return _build_default_fares(vehicle_types)
 
-    surge = matched_area.get("surge_multiplier", 1.0)
+    # Surge is gated on surge_active so an operator can park a
+    # multiplier > 1.0 without having it silently applied when the
+    # toggle is off. Matches surge_engine.py's convention (only
+    # writes multiplier when active) and the admin UI toggle under
+    # Service Areas → General.
+    surge = (
+        matched_area.get("surge_multiplier", 1.0)
+        if matched_area.get("surge_active", False)
+        else 1.0
+    )
 
     # Name → pricing row from vehicle_pricing JSONB (source of truth).
     # Field names: vehicle_type (NAME), base_fare, per_km, per_min,

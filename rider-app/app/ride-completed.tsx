@@ -92,7 +92,9 @@ function RideCompletedScreenContent() {
       `╚══════════════════════════════╝`,
       ``,
       `📅 ${rideDate}`,
-      `🆔 Ride: ${currentRide?.id?.slice(0, 8).toUpperCase() ?? '—'}`,
+      // Prefer the human-readable SPR-XXXXXX ride_code (migration 40);
+      // fall back to a truncated UUID for rides that predate the code.
+      `🆔 Ride: ${currentRide?.ride_code || currentRide?.id?.slice(0, 8).toUpperCase() || '—'}`,
       ``,
       `▸ FROM  ${currentRide?.pickup_address || '—'}`,
       `▸ TO    ${currentRide?.dropoff_address || '—'}`,

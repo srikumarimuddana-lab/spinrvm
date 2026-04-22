@@ -36,7 +36,7 @@ const FAQS = [
   },
   {
     q: 'My driver never showed up — what do I do?',
-    a: 'If the driver marked the trip as a no-show, you will not be charged. Contact support with your ride ID and we will investigate.',
+    a: 'If the driver marked the trip as a no-show, you will not be charged. Contact support with your ride code (shown on the receipt, e.g. SPR-XXXXXX) and we will investigate.',
   },
   {
     q: 'How does Spinr Wallet work?',

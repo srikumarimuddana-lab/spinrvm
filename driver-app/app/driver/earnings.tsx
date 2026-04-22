@@ -312,7 +312,11 @@ function EarningsScreen() {
                             })
                           : ''}
                       </Text>
-                      <Text style={styles.bookingIdText}>ID: #{String(trip.ride_id).substring(0, 8).toUpperCase()}</Text>
+                      <Text style={styles.bookingIdText}>
+                        {trip.ride_code
+                          ? trip.ride_code
+                          : `ID: #${String(trip.ride_id).substring(0, 8).toUpperCase()}`}
+                      </Text>
                     </View>
                   </View>
 

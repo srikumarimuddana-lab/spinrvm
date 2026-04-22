@@ -138,7 +138,11 @@ export default function RidesScreen() {
           </View>
           <View style={{ alignItems: 'flex-end' }}>
             <Text style={styles.dateText}>{formattedDate}</Text>
-            <Text style={styles.bookingIdText}>ID: #{String(item.id).substring(0, 8).toUpperCase()}</Text>
+            <Text style={styles.bookingIdText}>
+              {item.ride_code
+                ? item.ride_code
+                : `ID: #${String(item.id).substring(0, 8).toUpperCase()}`}
+            </Text>
           </View>
         </View>
 

@@ -1175,7 +1175,11 @@ async def get_ride(ride_id: str, current_user: dict = Depends(get_current_user))
 
 @api_router.post("/{ride_id}/tip")
 async def add_tip(ride_id: str, req: TipRequest, current_user: dict = Depends(get_current_user)):
-    tip_amount = float(req.amount)
+    # Money arithmetic uses Decimal per CLAUDE.md. The old `float(req.amount)`
+    # path drifted when summed with existing driver_earnings.
+    tip_amount = _round(_d(req.amount))
+    if tip_amount <= 0:
+        raise HTTPException(status_code=400, detail="Tip amount must be greater than zero")
 
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -1188,15 +1192,57 @@ async def add_tip(ride_id: str, req: TipRequest, current_user: dict = Depends(ge
         raise HTTPException(status_code=400, detail="Can only tip completed rides")
 
     # R-P1-20: Block duplicate tips — one tip per ride.
-    if ride.get("tip_amount", 0) > 0:
+    existing_tip = _d(ride.get("tip_amount") or 0)
+    if existing_tip > 0:
         raise HTTPException(status_code=400, detail="ERR_TIP_DUPLICATE")
 
-    new_tip = ride.get("tip_amount", 0) + tip_amount
-    new_driver_earnings = ride.get("driver_earnings", 0) + tip_amount
+    existing_earnings = _d(ride.get("driver_earnings") or 0)
+    new_tip = _round(existing_tip + tip_amount)
+    new_driver_earnings = _round(existing_earnings + tip_amount)
 
-    await db_supabase.update_ride(ride_id, {"tip_amount": new_tip, "driver_earnings": new_driver_earnings})
+    await db_supabase.update_ride(
+        ride_id,
+        {"tip_amount": _f(new_tip), "driver_earnings": _f(new_driver_earnings)},
+    )
 
-    return {"success": True, "tip_amount": new_tip}
+    # Notify the assigned driver so the tip shows up immediately instead
+    # of only after the next earnings refresh. Best-effort — the tip has
+    # already been persisted, so a failed notification must not surface
+    # as a rider-facing error.
+    driver_user_id = None
+    driver_row_id = ride.get("driver_id")
+    if driver_row_id:
+        try:
+            driver = await db_supabase.get_driver_by_id(driver_row_id)
+            driver_user_id = driver.get("user_id") if driver else None
+        except Exception as exc:
+            logger.warning(f"[TIP] Could not resolve driver user_id for ride {ride_id}: {exc}")
+
+    if driver_user_id:
+        rider = await db_supabase.get_user_by_id(ride["rider_id"]) or {}
+        rider_name = (rider.get("first_name") or "Your rider").strip() or "Your rider"
+        payload = {
+            "type": "tip_received",
+            "ride_id": str(ride_id),
+            "amount": _f(tip_amount),
+            "new_total": _f(new_tip),
+            "rider_name": rider_name,
+        }
+        try:
+            await manager.send_personal_message(payload, f"driver_{driver_user_id}")
+        except Exception as exc:
+            logger.warning(f"[TIP] WS notify driver {driver_user_id} failed: {exc}")
+        try:
+            await send_push_notification(
+                driver_user_id,
+                "You got a tip! 💸",
+                f"{rider_name} tipped you ${tip_amount:.2f}",
+                data={"type": "tip_received", "ride_id": str(ride_id), "amount": f"{tip_amount:.2f}"},
+            )
+        except Exception as exc:
+            logger.warning(f"[TIP] Push notify driver {driver_user_id} failed: {exc}")
+
+    return {"success": True, "tip_amount": _f(new_tip)}
 
 
 class ProcessPaymentRequest(BaseModel):

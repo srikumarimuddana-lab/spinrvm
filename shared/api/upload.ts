@@ -1,4 +1,5 @@
 import SpinrConfig from '../config/spinr.config';
+import { getAuthHeader } from './client';
 
 /**
  * Uploads a file to the backend server.
@@ -17,9 +18,16 @@ export async function uploadFile(uri: string, name: string, type: string): Promi
     } as any);
 
     try {
+        // Auth: /api/v1/upload is behind get_current_user, so we MUST attach
+        // the access token. getAuthHeader resolves from the in-memory store
+        // (see shared/api/client.ts) because authStore.setTokens no longer
+        // persists access tokens to SecureStore.
+        const token = await getAuthHeader();
+
         // We do NOT set Content-Type header so that the browser/engine sets the boundary correctly
         const response = await fetch(`${SpinrConfig.backendUrl}/api/v1/upload`, {
             method: 'POST',
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
             body: formData,
         });
 

@@ -116,7 +116,8 @@ async def check_scheduled_rides():
             order="scheduled_time",
         )
     except Exception as e:
-        logger.error(f"Failed to fetch scheduled rides: {e}")
+        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+        logger.error(f"Failed to fetch scheduled rides: {e} | original={original}")
         return
 
     for ride in scheduled:

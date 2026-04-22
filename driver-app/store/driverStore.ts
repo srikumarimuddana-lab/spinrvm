@@ -310,7 +310,6 @@ interface DriverState {
     hydrateDriverRideState: () => Promise<void>;
     resetRideState: () => void;
     rateRider: (rideId: string, rating: number, comment?: string) => Promise<void>;
-    submitTip: (rideId: string, amount: number) => Promise<boolean>;
     clearError: () => void;
 }
 
@@ -720,16 +719,6 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await api.post(`/drivers/rides/${rideId}/rate-rider`, { rating, comment: comment || '' });
         } catch (err: any) {
             set({ error: err.response?.data?.detail || 'Failed to rate rider' });
-        }
-    },
-
-    submitTip: async (rideId: string, amount: number): Promise<boolean> => {
-        try {
-            await api.post(`/rides/${rideId}/tip`, { amount });
-            return true;
-        } catch (err: any) {
-            set({ error: err.response?.data?.detail || 'Failed to submit tip' });
-            return false;
         }
     },
 

@@ -93,7 +93,8 @@ export default function LegalScreen() {
 
     const fetchLegalContent = async () => {
         try {
-            const response = await fetch(`${SpinrConfig.backendUrl}/legal/content`);
+            // Public endpoint — no auth, no /api/v1 prefix (mounted at root).
+            const response = await fetch(`${SpinrConfig.backendUrl}/settings/legal`);
             const data = await response.json();
             setPrivacyText(data.privacy_policy_text || STATIC_PRIVACY_POLICY);
             setTosText(data.terms_of_service_text || STATIC_TERMS_OF_SERVICE);

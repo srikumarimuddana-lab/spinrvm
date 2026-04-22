@@ -481,69 +481,14 @@ async def register_driver(
     return serialize_doc(new_driver)
 
 
-class PushTokenPayload(BaseModel):
-    push_token: str
-    platform: Optional[str] = None
-
-
-@api_router.post("/push-token")
-async def register_driver_push_token(
-    payload: PushTokenPayload,
-    current_user: dict = Depends(get_current_user),
-):
-    """
-    Register the driver-app's push token so the dispatch path can deliver
-    `new_ride_offer` push notifications as a fallback when the WebSocket
-    isn't connected.
-
-    The driver-app's useDriverDashboard.ts calls this with an Expo push
-    token from Notifications.getExpoPushTokenAsync(). We store it on the
-    user row. features.py:send_push_notification detects Expo tokens
-    (ExponentPushToken[...]) and routes them via Expo's /push/send API;
-    native FCM tokens are sent via Firebase Admin SDK.
-    """
-    diag_logger.info(
-        f"[PUSH-TOKEN] register user_id={current_user.get('id')} "
-        f"platform={payload.platform} "
-        f"token_prefix={(payload.push_token or '')[:20]}..."
-    )
-    try:
-        # Only write fcm_token — the users table may not have a
-        # push_platform column (the previous version tried to write it
-        # and hit PGRST204 "column not found in schema cache").
-        await db_supabase.update_one("users", {"id": current_user["id"]}, {"fcm_token": payload.push_token})
-        diag_logger.info(f"[PUSH-TOKEN] saved fcm_token for user_id={current_user['id']}")
-    except Exception as e:
-        diag_logger.info(f"[PUSH-TOKEN] update failed: {e}")
-        raise HTTPException(status_code=500, detail="Failed to store push token") from e
-
-    return {"success": True}
-
-
-@api_router.post("/status")
-async def update_driver_status_self(
-    is_online: bool = Query(...),
-    current_user: dict = Depends(get_current_user),
-):
-    """
-    Toggle the authenticated driver's online status.
-
-    Called by `updateDriverStatus()` in the shared authStore when the driver
-    flips the Go Online switch.
-    """
-    driver = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
-    )
-    if not driver:
-        raise HTTPException(status_code=404, detail="Driver not found")
-
-    updates = {
-        "is_online": is_online,
-        "is_available": is_online,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db_supabase.update_one("drivers", {"id": driver["id"]}, updates)
-    return {"success": True, "is_online": is_online}
+# Push token registration happens via POST /notifications/register-token
+# (routes/notifications.py), which writes to both push_tokens and users.fcm_token.
+# The previous POST /drivers/push-token duplicated that surface without the
+# push_tokens row, so it was removed to keep a single registration path.
+#
+# Driver online/offline toggling happens via PUT /drivers/{driver_id}/status
+# (further down in this file). POST /drivers/status was a never-wired
+# duplicate and has been removed.
 
 
 # ── Destination Mode ─────────────────────────────────────────────────
@@ -2115,17 +2060,32 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
     if ride.get("status") == 'trip_in_progress':
         raise RideStateError("Cannot cancel a trip that is already in progress")
 
-    # Only write columns guaranteed to exist. cancelled_by and
-    # cancellation_reason may not be in the Supabase schema — including
-    # them causes PGRST204 which crashes the whole cancel with 500.
-    await db_supabase.update_ride(
-        ride_id,
-        {
-            "status": "cancelled",
-            "cancelled_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
-        },
-    )
+    now = datetime.now(timezone.utc)
+    base_update = {
+        "status": "cancelled",
+        "cancelled_at": now,
+        "updated_at": now,
+    }
+
+    # Try to persist cancelled_by / cancellation_reason for audit. These
+    # columns may not exist in older Supabase schemas — PGRST204 on an
+    # unknown column would crash the whole cancel. Fall back to the
+    # minimal update so the cancellation still succeeds.
+    try:
+        await db_supabase.update_ride(
+            ride_id,
+            {
+                **base_update,
+                "cancelled_by": "driver",
+                "cancellation_reason": (reason or "").strip() or None,
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            f"[CANCEL] cancelled_by/cancellation_reason write failed "
+            f"(likely PGRST204); retrying minimal update: {exc}"
+        )
+        await db_supabase.update_ride(ride_id, base_update)
 
     # Make driver available again
     await db_supabase.set_driver_available(driver["id"], True)

@@ -59,6 +59,31 @@ async def get_vehicle_types():
     return serialize_doc(types)
 
 
+@api_router.get("/service-areas")
+async def get_public_service_areas():
+    """Active service areas (public).
+
+    Driver onboarding (become-driver, profile-setup) and the rider app both
+    need a list of operating regions without admin auth. Returns only
+    active areas with the minimum fields the UI needs; admins use
+    /admin/service-areas for the full record including surge config.
+    """
+    areas = await db_supabase.get_rows(
+        "service_areas", {"is_active": True}, order="name", limit=500
+    )
+    return [
+        {
+            "id": a.get("id"),
+            "name": a.get("name"),
+            "city": a.get("city"),
+            "province": a.get("province"),
+            "country": a.get("country"),
+            "parent_service_area_id": a.get("parent_service_area_id"),
+        }
+        for a in areas
+    ]
+
+
 def _build_default_fares(vt_list, surge=1.0):
     """Default fare rows when no service area / fare_configs apply.
 

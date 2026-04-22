@@ -123,7 +123,12 @@ export default function SettingsScreen() {
             return;
         }
         try {
-            await api.delete('/users/profile');
+            // PIPEDA-compliant 30-day grace window: DELETE /users/account
+            // schedules the deletion rather than executing it immediately, so
+            // drivers can recover the account by contacting support within 30
+            // days. DELETE /users/profile (immediate, irreversible) is reserved
+            // for internal admin tooling.
+            await api.delete('/users/account');
             setShowDeleteStep2(false);
             await logout();
             router.replace('/login' as any);
@@ -413,7 +418,7 @@ export default function SettingsScreen() {
             <CustomAlert
                 visible={showDeleteStep1}
                 title="Delete Account"
-                message={'This action is PERMANENT and cannot be undone.\n\nAll your data, earnings history, ride records, and account information will be permanently deleted.'}
+                message={'Your account will be scheduled for deletion with a 30-day recovery window.\n\nYou can reactivate by contacting support within 30 days; after that, all your data, earnings history, and ride records are permanently deleted.'}
                 variant="danger"
                 icon="trash-outline"
                 buttons={[

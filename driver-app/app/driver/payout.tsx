@@ -173,10 +173,19 @@ function PayoutScreen() {
     const handleDownloadT4A = async () => {
         setDownloadingT4A(true);
         try {
-            const res = await api.get('/payouts/t4a');
+            // CRA T4A is generated per tax year — default to the most recently
+            // completed year so drivers don't get an in-progress year's partial total.
+            const year = new Date().getFullYear() - 1;
+            const res = await api.get(`/drivers/t4a/${year}`);
             const url = res.data?.url || res.data?.file_url;
             if (url) {
                 await Linking.openURL(url);
+            } else if (res.data?.total_earnings != null) {
+                showAlert(
+                    `T4A Summary — ${res.data.year}`,
+                    `Total earnings: $${Number(res.data.total_earnings).toFixed(2)}\nTotal trips: ${res.data.total_trips}\nNet earnings: $${Number(res.data.net_earnings).toFixed(2)}\n\nA downloadable PDF will be available once tax documents are finalized.`,
+                    'info',
+                );
             } else {
                 showAlert('Unavailable', 'T4A document is not yet available. Please try again later.', 'warning');
             }
@@ -190,10 +199,16 @@ function PayoutScreen() {
     const handleDownloadCSV = async () => {
         setDownloadingCSV(true);
         try {
-            const res = await api.get('/payouts/csv');
+            const year = new Date().getFullYear();
+            const res = await api.get(`/drivers/earnings/export?year=${year}`);
             const url = res.data?.url || res.data?.file_url;
             if (url) {
                 await Linking.openURL(url);
+            } else if (res.data?.data) {
+                // Backend returns { data: <csv-string>, filename }. Open a data: URL
+                // so the OS share sheet can hand it to Mail/Drive/Files.
+                const encoded = encodeURIComponent(res.data.data);
+                await Linking.openURL(`data:text/csv;charset=utf-8,${encoded}`);
             } else {
                 showAlert('Unavailable', 'Earnings CSV is not yet available. Please try again later.', 'warning');
             }

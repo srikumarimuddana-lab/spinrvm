@@ -505,6 +505,11 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     search_radius_km: area.search_radius_km || 10,
     min_driver_rating: area.min_driver_rating || 4.0,
     show_demand_heatmap: area.show_demand_heatmap || false,
+    // Surge is per-area now — no separate Pricing page. surge_active
+    // gates whether build_fares_for_area multiplies the fare;
+    // surge_multiplier is the factor (1.0 = off, 1.5 = +50%, etc.).
+    surge_active: area.surge_active !== undefined ? area.surge_active : !!area.surge_enabled,
+    surge_multiplier: area.surge_multiplier ?? 1.0,
   });
   const [pendingPolygon, setPendingPolygon] = useState<any>(null);
   const [saving, setSaving] = useState(false);
@@ -522,6 +527,8 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       search_radius_km: parseFloat(String(form.search_radius_km)) || 10,
       min_driver_rating: parseFloat(String(form.min_driver_rating)) || 4.0,
       show_demand_heatmap: form.show_demand_heatmap,
+      surge_active: form.surge_active,
+      surge_multiplier: parseFloat(String(form.surge_multiplier)) || 1.0,
     };
     if (pendingPolygon) {
       updates.polygon = pendingPolygon;
@@ -566,6 +573,39 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
             {form.show_demand_heatmap ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
           </button>
           <span className="text-xs text-gray-400">Show ride demand overlay to drivers</span>
+        </div>
+      </div>
+
+      {/* Surge pricing — lives here now, no separate /dashboard/pricing page */}
+      <div>
+        <h4 className="font-bold text-gray-800 mb-2">Surge Pricing</h4>
+        <p className="text-sm text-gray-500 mb-3">
+          Temporarily raise fares in this area during high-demand periods. When active,
+          every vehicle's fare is multiplied by the surge factor.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+          <div className="flex items-center gap-2 pt-1">
+            <button type="button" onClick={() => setForm({ ...form, surge_active: !form.surge_active })}>
+              {form.surge_active ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
+            </button>
+            <label className="text-xs font-semibold text-gray-500">
+              Surge {form.surge_active ? "ON" : "off"}
+            </label>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Surge Multiplier</label>
+            <input
+              className="w-full border rounded-lg px-3 py-2 text-sm"
+              type="number"
+              step="0.1"
+              min="1"
+              max="5"
+              value={form.surge_multiplier}
+              onChange={e => setForm({ ...form, surge_multiplier: e.target.value as any })}
+              disabled={!form.surge_active}
+            />
+          </div>
+          <p className="text-[11px] text-gray-400 pb-2">1.0 = no surge · 1.5 = +50% · 2.0 = double</p>
         </div>
       </div>
 

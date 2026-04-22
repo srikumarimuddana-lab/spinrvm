@@ -34,8 +34,8 @@ export default function RideRouteMap({ pickupLat, pickupLng, dropoffLat, dropoff
             style: MAP_STYLE_URL,
             center: [(pickupLng + dropoffLng) / 2, (pickupLat + dropoffLat) / 2],
             zoom: 13,
-            // Mirror the original Leaflet map which disabled zoom controls
-            // for this static-summary view.
+            // Static-summary view — no zoom buttons, just a compact
+            // attribution badge so the map stays distraction-free.
             attributionControl: { compact: true },
         });
         mapRef.current = map;

@@ -29,6 +29,11 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: flo
     dt = parse_iso_utc(ride_date_raw)
     ride_date = dt.strftime("%B %d, %Y at %I:%M %p") if dt else str(ride_date_raw)
 
+    # Prefer the human-readable ride_code (migration 40); fall back to a
+    # truncated UUID for rides that predate the code column. Shown in the
+    # receipt so the rider can quote it to support.
+    ride_ref = ride.get("ride_code") or (str(ride.get("id", ""))[:8].upper() or "—")
+
     return f"""
     <!DOCTYPE html>
     <html>
@@ -51,6 +56,7 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: flo
         <tr><td style="padding:20px 24px;text-align:center;">
         <p style="color:#ee2b2b;font-size:42px;font-weight:800;margin:0;">${total:.2f} CAD</p>
           <p style="color:#999;font-size:12px;margin:4px 0 0;">{ride_date}</p>
+          <p style="color:#999;font-size:11px;margin:6px 0 0;letter-spacing:0.5px;">Ride <strong style="color:#1a1a1a;font-weight:700;">{ride_ref}</strong></p>
         </td></tr>
 
         <!-- Route -->

@@ -177,11 +177,23 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                     </Sec>
                                     <div>
                                         <h4 className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-2.5">Map</h4>
-                                        {ride.pickup_lat && ride.dropoff_lat ? (() => {
-                                            // Per-phase polylines (migration 39) carry the real
-                                            // road-following paths. If we have them, render
-                                            // Phase 2 + Phase 3 as two distinct colored lines
-                                            // and skip the straight dashed reference entirely.
+                                        {ride.route_snapshot_url ? (
+                                            // Cached server-rendered PNG from phase_polylines
+                                            // (migration 41). A plain <img> — one HTTP request
+                                            // against Cloudinary's CDN, no MapLibre re-init
+                                            // every time the drawer opens. This is the
+                                            // default for any completed ride.
+                                            <img
+                                                src={ride.route_snapshot_url}
+                                                alt="Ride route"
+                                                loading="lazy"
+                                                className="w-full h-[280px] rounded-xl object-cover bg-muted/30"
+                                            />
+                                        ) : ride.pickup_lat && ride.dropoff_lat ? (() => {
+                                            // No snapshot yet (in-flight ride, snapshot job
+                                            // still running, or legacy ride from before
+                                            // migration 41). Fall back to the live MapLibre
+                                            // map rendering phase polylines directly.
                                             const pp = ride.phase_polylines || {};
                                             const pickupTrail: { lat: number; lng: number; timestamp?: string }[] =
                                                 Array.isArray(pp.navigating_to_pickup)
@@ -191,8 +203,6 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 Array.isArray(pp.trip_in_progress)
                                                     ? pp.trip_in_progress.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] }))
                                                     : [];
-                                            // Legacy fallback for rides before migration 39 —
-                                            // use the combined route_polyline or raw trail.
                                             const legacyTrail =
                                                 Array.isArray(ride.route_polyline) && ride.route_polyline.length > 0
                                                     ? ride.route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] }))

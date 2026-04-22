@@ -450,3 +450,50 @@ class TestDocumentRegressions:
 
             result = await get_driver_documents(current_user=mock_user)
             assert result == [], "Expected empty list when driver profile is absent, not an exception"
+
+
+class TestExtractSignedUrl:
+    """
+    Pins the fix for Railway 500 "'dict' object has no attribute 'data'".
+    supabase-py's create_signed_url() return shape changed between versions;
+    the helper now tolerates both dict and object responses so uploads don't
+    500 after a library bump.
+    """
+
+    def test_dict_with_signed_url_camel(self):
+        from documents import _extract_signed_url
+        res = {"signedURL": "https://cdn.example/abc?token=1", "path": "abc.pdf"}
+        assert _extract_signed_url(res) == "https://cdn.example/abc?token=1"
+
+    def test_dict_with_signed_url_snake(self):
+        from documents import _extract_signed_url
+        res = {"signed_url": "https://cdn.example/def?token=2"}
+        assert _extract_signed_url(res) == "https://cdn.example/def?token=2"
+
+    def test_dict_with_signed_url_lower_camel(self):
+        from documents import _extract_signed_url
+        res = {"signedUrl": "https://cdn.example/ghi?token=3"}
+        assert _extract_signed_url(res) == "https://cdn.example/ghi?token=3"
+
+    def test_legacy_object_shape(self):
+        """The old supabase-py shape: APIResponse.data.signed_url."""
+        from documents import _extract_signed_url
+        data = MagicMock(signed_url="https://cdn.example/legacy?token=4")
+        res = MagicMock(data=data)
+        assert _extract_signed_url(res) == "https://cdn.example/legacy?token=4"
+
+    def test_object_with_dict_data(self):
+        """Hybrid shape: object wrapper, dict payload."""
+        from documents import _extract_signed_url
+        res = MagicMock(data={"signedURL": "https://cdn.example/hybrid?token=5"})
+        assert _extract_signed_url(res) == "https://cdn.example/hybrid?token=5"
+
+    def test_dict_missing_url_raises(self):
+        from documents import _extract_signed_url
+        with pytest.raises(RuntimeError, match="no URL"):
+            _extract_signed_url({"path": "abc.pdf"})
+
+    def test_unknown_shape_raises(self):
+        from documents import _extract_signed_url
+        with pytest.raises(RuntimeError, match="unexpected shape"):
+            _extract_signed_url("just a string")

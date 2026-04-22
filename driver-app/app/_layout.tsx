@@ -13,7 +13,6 @@ import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
 import { captureMessage, setUser } from '@shared/services/errorReporting';
-import LogRocket from '@logrocket/react-native';
 import {
   initFirebaseServices,
   requestPushPermissionAndGetToken,
@@ -32,6 +31,18 @@ if (canUseNotifications) {
     Notifications = require('expo-notifications');
   } catch (e) {
     console.log('[Push] expo-notifications unavailable:', e);
+  }
+}
+
+// @logrocket/react-native ships a native module that isn't linked in Expo Go
+// — importing it eagerly throws on module-load. Lazy-require so the app
+// mounts in Expo Go / web, and no-op the init/identify calls there.
+let LogRocket: any = null;
+if (!isExpoGo && Platform.OS !== 'web') {
+  try {
+    LogRocket = require('@logrocket/react-native').default ?? require('@logrocket/react-native');
+  } catch (e) {
+    console.log('[LogRocket] unavailable:', e);
   }
 }
 
@@ -82,7 +93,7 @@ export default function RootLayout() {
   // that isn't linked there, so calling init would throw. Same gating
   // pattern as @shared/services/firebase.
   useEffect(() => {
-    if (isExpoGo) return;
+    if (!LogRocket) return;
     try {
       LogRocket.init('gfuign/spinr');
     } catch (e) {
@@ -180,7 +191,7 @@ export default function RootLayout() {
         const uid = useAuthStore.getState().user?.id;
         if (uid) {
           setUser(uid, { role: 'driver' });
-          if (!isExpoGo) {
+          if (LogRocket) {
             try { LogRocket.identify(uid, { role: 'driver' }); } catch (e) { console.log('[LogRocket] identify failed:', e); }
           }
         }

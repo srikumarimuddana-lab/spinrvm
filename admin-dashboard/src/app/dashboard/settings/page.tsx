@@ -256,32 +256,6 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
-                    {/* General */}
-                    <Card className="border-border/50">
-                        <CardHeader>
-                            <CardTitle className="text-base">General</CardTitle>
-                        </CardHeader>
-                        <Separator />
-                        <CardContent className="pt-4 space-y-4">
-                            <div className="space-y-2">
-                                <Label>App Name</Label>
-                                <Input
-                                    value={settings.app_name || "Spinr"}
-                                    onChange={(e) => update("app_name", e.target.value)}
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Support Email</Label>
-                                <Input
-                                    type="email"
-                                    value={settings.support_email || ""}
-                                    onChange={(e) => update("support_email", e.target.value)}
-                                    placeholder="support@spinr.app"
-                                />
-                            </div>
-                        </CardContent>
-                    </Card>
-
                     {/* Legal Documents */}
                     <Card className="border-border/50 lg:col-span-2">
                         <CardHeader>

@@ -2475,14 +2475,17 @@ async def update_driver_status(
             approved_docs = []
 
         def _parse_expiry(val):
+            # Return a tz-AWARE UTC datetime (or None). Comparisons below
+            # are against `now = datetime.now(timezone.utc)`, which is
+            # aware — mixing naive + aware throws TypeError at compare.
             if not val:
                 return None
             if isinstance(val, datetime):
-                return val.replace(tzinfo=None) if val.tzinfo else val
+                return val if val.tzinfo else val.replace(tzinfo=timezone.utc)
             if isinstance(val, str):
                 try:
-                    dt = datetime.fromisoformat(val.replace("Z", "+00:00").replace("+00:00", ""))
-                    return dt.replace(tzinfo=None) if dt.tzinfo else dt
+                    dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+                    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
                 except ValueError:
                     return None
             return None
@@ -2538,9 +2541,13 @@ async def update_driver_status(
             if expiry_val:
                 if isinstance(expiry_val, str):
                     try:
-                        expiry_val = datetime.fromisoformat(expiry_val.replace("Z", "+00:00").replace("+00:00", ""))
+                        expiry_val = datetime.fromisoformat(expiry_val.replace("Z", "+00:00"))
                     except ValueError:
                         continue
+                # Treat naive datetimes as UTC — matches _parse_expiry above
+                # so both paths produce tz-aware values comparable to `now`.
+                if expiry_val.tzinfo is None:
+                    expiry_val = expiry_val.replace(tzinfo=timezone.utc)
                 if expiry_val < now:
                     raise HTTPException(
                         status_code=400,

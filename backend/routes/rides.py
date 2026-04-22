@@ -48,9 +48,11 @@ from .fares import _fares_for_location_impl, get_fares_for_location
 try:
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.error_handling import RideStateError
+    from ..utils.ride_code import generate_ride_code
 except ImportError:
     from utils.datetime_utils import parse_iso_utc
     from utils.error_handling import RideStateError
+    from utils.ride_code import generate_ride_code
 
 try:
     from ..utils.estimate_token import (
@@ -953,7 +955,35 @@ async def create_ride(
     # ``insert_ride`` returns the row Supabase just wrote — use it directly
     # instead of a follow-up ``get_ride`` round-trip. Fall back to the
     # local ride_data if the driver returns None (e.g. stub DB in tests).
-    inserted = await db_supabase.insert_ride(ride_data)
+    #
+    # ride_code (migration 40) is a short SPR-XXXXXX string operators and
+    # riders can quote. The UUID in ride_data["id"] stays primary key.
+    # On the astronomically-unlikely unique-constraint collision we retry
+    # with a fresh code; on PGRST204 ("column does not exist", migration
+    # hasn't landed yet) fall back to inserting without the code.
+    inserted = None
+    last_exc: Optional[Exception] = None
+    for _attempt in range(3):
+        ride_data["ride_code"] = generate_ride_code()
+        try:
+            inserted = await db_supabase.insert_ride(ride_data)
+            break
+        except Exception as e:
+            last_exc = e
+            msg = str(e).lower()
+            if "column" in msg or "pgrst204" in msg:
+                ride_data.pop("ride_code", None)
+                inserted = await db_supabase.insert_ride(ride_data)
+                break
+            if "unique" in msg or "duplicate" in msg or "23505" in msg:
+                continue  # retry with a new code
+            raise
+    else:
+        logger.error(
+            f"create_ride: could not allocate unique ride_code after 3 tries: {last_exc}"
+        )
+        raise HTTPException(status_code=503, detail="Could not allocate ride code")
+
     fresh_ride = inserted or ride_data
 
     # Match driver — pass the fresh ride through so the dispatch path

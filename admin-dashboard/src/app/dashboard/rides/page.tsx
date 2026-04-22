@@ -59,6 +59,7 @@ export default function RidesPage() {
             r.pickup_address?.toLowerCase().includes(q) ||
             r.dropoff_address?.toLowerCase().includes(q) ||
             r.id?.toLowerCase().includes(q) ||
+            r.ride_code?.toLowerCase().includes(q) ||
             r.rider_name?.toLowerCase().includes(q) ||
             r.rider_phone?.toLowerCase().includes(q) ||
             r.driver_name?.toLowerCase().includes(q) ||

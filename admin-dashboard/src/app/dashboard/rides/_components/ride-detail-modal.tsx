@@ -105,7 +105,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
             <Dialog open={open} onOpenChange={v => !v && onClose()}>
                 <DialogContent className="sm:max-w-5xl max-h-[90vh] overflow-y-auto p-0" showCloseButton={true}>
                     <DialogTitle className="sr-only">
-                        {ride ? `Ride ${ride.id}` : "Ride Details"}
+                        {ride ? `Ride ${ride.ride_code || ride.id}` : "Ride Details"}
                     </DialogTitle>
                     {loading || !ride ? (
                         <div className="flex flex-col items-center justify-center py-24">
@@ -118,7 +118,16 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                             <div className="px-6 py-5 bg-muted/20">
                                 <div className="flex items-start justify-between gap-4">
                                     <div className="flex-1 min-w-0">
-                                        <p className="text-[11px] text-muted-foreground font-mono mb-1.5">Ride ID: {ride.id}</p>
+                                        {ride.ride_code ? (
+                                            <>
+                                                <p className="text-base font-bold tracking-wide mb-0.5">{ride.ride_code}</p>
+                                                <p className="text-[10px] text-muted-foreground/70 font-mono mb-2 truncate" title={ride.id}>
+                                                    UUID: {ride.id}
+                                                </p>
+                                            </>
+                                        ) : (
+                                            <p className="text-[11px] text-muted-foreground font-mono mb-1.5">Ride ID: {ride.id}</p>
+                                        )}
                                         <div className="flex items-center gap-2.5 flex-wrap">
                                             {getStatusBadge(ride.status)}
                                             {isRideLive(ride.status) && (

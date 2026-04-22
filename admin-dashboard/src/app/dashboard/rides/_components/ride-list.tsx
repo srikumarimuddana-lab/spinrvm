@@ -4,7 +4,7 @@ import { useState, useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/utils";
 import { Car, Search, Clock, CheckCircle, XCircle, MapPin, Loader, Download, ChevronRight, ChevronLeft, User, SlidersHorizontal, ArrowUpDown, ArrowUp, ArrowDown, CalendarRange, X, CalendarClock, UserX } from "lucide-react";
-import { getStatusBadge, fmtTime } from "./ride-ui-helpers";
+import { getStatusBadge, fmtTime, fmtKm, rideDistances } from "./ride-ui-helpers";
 import { exportToCsv } from "@/lib/export-csv";
 
 // Synthetic status values not present on the rides row itself:
@@ -172,9 +172,26 @@ export default function RideList({
                         </div>
                         <button
                             onClick={() => exportToCsv("rides", sortedRides, [
-                                { key: "id", label: "ID" }, { key: "pickup_address", label: "Pickup" }, { key: "dropoff_address", label: "Dropoff" },
-                                { key: "status", label: "Status" }, { key: "total_fare", label: "Fare" }, { key: "tip_amount", label: "Tip" },
-                                { key: "distance_km", label: "km" }, { key: "duration_minutes", label: "min" }, { key: "created_at", label: "Date" },
+                                { key: "id", label: "ID" },
+                                { key: "pickup_address", label: "Pickup" },
+                                { key: "dropoff_address", label: "Dropoff" },
+                                { key: "status", label: "Status" },
+                                { key: "total_fare", label: "Fare" },
+                                { key: "tip_amount", label: "Tip" },
+                                // Per-phase km for SGI / insurance reporting.
+                                // rideDistances() prefers the GPS-tracked
+                                // phase_distances JSONB and falls back to
+                                // scalar columns on older rides.
+                                { label: "To Pickup km", value: (r) => fmtKm(rideDistances(r).toPickupKm) },
+                                { label: "Trip km", value: (r) => fmtKm(rideDistances(r).tripKm) },
+                                { label: "Total km", value: (r) => fmtKm(rideDistances(r).totalKm) },
+                                { key: "planned_distance_km", label: "Planned km" },
+                                { key: "duration_minutes", label: "Min" },
+                                { key: "driver_name", label: "Driver" },
+                                { key: "driver_id", label: "Driver ID" },
+                                { key: "rider_name", label: "Rider" },
+                                { key: "created_at", label: "Requested At" },
+                                { key: "ride_completed_at", label: "Completed At" },
                             ])}
                             className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground px-3 py-1.5 rounded-lg border hover:bg-muted transition"
                         >
@@ -323,6 +340,11 @@ export default function RideList({
                                     </div>
                                 </th>
                                 <th className="text-right py-2 px-4 hidden md:table-cell">
+                                    <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                                        Distance
+                                    </span>
+                                </th>
+                                <th className="text-right py-2 px-4 hidden md:table-cell">
                                     <button onClick={() => handleSort("created_at")} className="flex items-center gap-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider hover:text-foreground transition ml-auto">
                                         Date <SortIcon col="created_at" />
                                     </button>
@@ -370,6 +392,24 @@ export default function RideList({
                                         {(ride.tip_amount || 0) > 0 && (
                                             <p className="text-[10px] font-semibold text-emerald-600 mt-0.5">+{formatCurrency(ride.tip_amount)} tip</p>
                                         )}
+                                    </td>
+                                    <td className="py-3 px-4 text-right hidden md:table-cell tabular-nums">
+                                        {(() => {
+                                            const { toPickupKm, tripKm, totalKm } = rideDistances(ride);
+                                            if (totalKm == null) {
+                                                return <p className="text-xs text-muted-foreground">—</p>;
+                                            }
+                                            return (
+                                                <>
+                                                    <p className="text-sm font-semibold whitespace-nowrap">
+                                                        {fmtKm(totalKm)} km
+                                                    </p>
+                                                    <p className="text-[10px] text-muted-foreground whitespace-nowrap">
+                                                        pickup {fmtKm(toPickupKm) || "—"} · trip {fmtKm(tripKm) || "—"}
+                                                    </p>
+                                                </>
+                                            );
+                                        })()}
                                     </td>
                                     <td className="py-3 px-4 text-right hidden md:table-cell">
                                         {ride.is_scheduled && ride.scheduled_time ? (

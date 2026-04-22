@@ -1,0 +1,218 @@
+{
+  "timestamp": "2026-04-22T16:53:00Z",
+  "repo": "srikumarimuddana-lab/spinrvm",
+  "branch": "claude/config-audit-inventory-HZugv",
+  "model_pinned": "claude-opus-4-7",
+  "model_running": "claude-opus-4-7",
+  "model_in_attribution": "claude-sonnet-4-6",
+  "stats": {
+    "total_commands": 5,
+    "settings_allow_rules": 45,
+    "settings_deny_rules": 14,
+    "local_settings_allow_rules": 59,
+    "local_settings_deny_rules": 0,
+    "enabled_plugins": 1,
+    "marketplaces": 1,
+    "commit_trailers_claude": 54,
+    "commits_with_opus_47": 19,
+    "commits_with_sonnet_46": 28,
+    "total_commits_history": 310,
+    "graphify_nodes": 4804,
+    "graphify_edges": 9726,
+    "graphify_communities": 413,
+    "findings_p0": 6,
+    "findings_p1": 7,
+    "findings_p2": 8
+  },
+  "findings": [
+    {
+      "id": "P0-001",
+      "severity": "P0",
+      "category": "permissions-conflict",
+      "title": "settings.local.json silently overrides deny rules in settings.json",
+      "file": ".claude/settings.local.json:7-11,37-38",
+      "details": "settings.json:59-60 denies 'Bash(git push origin main*)' and 'Bash(git push origin develop*)'. settings.local.json:7 explicitly allows 'Bash(git push origin main)' and lines 8-11 allow '--force-with-lease' variants to main and sprint branches. Line 38 allows 'Bash(git push:*)' which matches any push target including protected branches. Line 37 'Bash(git reset:*)' also supersedes the narrower deny on 'git reset --hard*'. This nullifies the CI/branch protection intent of settings.json.",
+      "remediation": "Delete lines 7, 8-11, 37, 38 from settings.local.json. If force-push to a feature branch is genuinely needed, scope it: 'Bash(git push origin sprint1/* --force-with-lease)'."
+    },
+    {
+      "id": "P0-002",
+      "severity": "P0",
+      "category": "hooks-not-installed",
+      "title": "Pre-commit hook is not installed in .git/hooks/",
+      "file": ".git/hooks/pre-commit",
+      "details": "Only pre-commit.sample exists in .git/hooks/. The script at .claude/hooks/pre-commit (secrets, forbidden files, PII, branch, money gates) is dormant. Every safety gate documented in CLAUDE.md and .agents/workflows/pre-commit.md is bypassed for local commits.",
+      "remediation": "Run 'cp .claude/hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit' or add a SessionStart hook that installs it automatically."
+    },
+    {
+      "id": "P0-003",
+      "severity": "P0",
+      "category": "arbitrary-code-execution",
+      "title": "Broad interpreter and shell patterns in settings.local.json",
+      "file": ".claude/settings.local.json:35-36,51-52,58",
+      "details": "'Bash(python3 -c :*)' (unmatched quote), 'Bash(python:*)', 'Bash(python3 *)', 'Bash(py *)', 'Bash(curl *)' all grant arbitrary code execution or arbitrary network egress. A hijacked prompt could exfiltrate secrets via curl or run destructive Python one-liners.",
+      "remediation": "Replace with explicit commands: 'Bash(python3 -m pytest*)', 'Bash(python3 -m py_compile*)', 'Bash(curl -sS -o /dev/null -w * https://spinr-backend-production.up.railway.app/health)'. Remove the wildcard python/curl entries entirely."
+    },
+    {
+      "id": "P0-004",
+      "severity": "P0",
+      "category": "model-drift",
+      "title": "Attribution trailer pinned to stale model name (claude-sonnet-4-6)",
+      "file": ".claude/settings.json:7",
+      "details": "settings.json pins model to 'claude-opus-4-7' (line 2) but attribution.commit references 'claude-sonnet-4-6'. Git history confirms 28 commits carry sonnet-4-6 attribution vs 19 with opus-4-7 — commits are being trailered with the wrong model name.",
+      "remediation": "Edit settings.json:7 to 'Co-developed with Claude Code (claude-opus-4-7)\\n\\nCo-Authored-By: Claude <noreply@anthropic.com>'."
+    },
+    {
+      "id": "P0-005",
+      "severity": "P0",
+      "category": "dead-windows-paths",
+      "title": "Windows-machine paths embedded in settings.local.json",
+      "file": ".claude/settings.local.json:20,25,26,28,45,46,57",
+      "details": "Paths '/c/Users/TabUsrDskOff111/spinr/spinr/backend/requirements.txt' and '//c/Users/swarn/.claude/plugins/cache/*' reference developer machines that are not this Linux container. On Linux these never match. On the original Windows host they may have unintended scope. 'Bash(powershell.exe -Command ipconfig)' (line 57) is Windows-only. These are drift artefacts from previous developers.",
+      "remediation": "Delete lines 18-30, 45-46, 57 from settings.local.json. Replace pip-audit/trufflehog entries with cross-platform forms: 'Bash(pip-audit -r backend/requirements.txt)', 'Bash(trufflehog git file://.*)'."
+    },
+    {
+      "id": "P0-006",
+      "severity": "P0",
+      "category": "launch-config-swap",
+      "title": "launch.json has rider-app / driver-app swapped",
+      "file": ".claude/launch.json:11-21",
+      "details": "'Rider App (Metro)' (line 11) launches 'frontend' on 8081. 'Driver App (Metro)' (line 17) launches 'rider-app' on 8082. Per CLAUDE.md surfaces table, rider-app/ is the rider and driver-app/ is the driver. No Metro config here launches driver-app/.",
+      "remediation": "Rider App → --prefix rider-app. Driver App → --prefix driver-app. Remove the legacy 'frontend/' entry or rename to 'Frontend (legacy)'."
+    },
+    {
+      "id": "P1-001",
+      "severity": "P1",
+      "category": "plugin-supply-chain",
+      "title": "andrej-karpathy-skills plugin is unpinned",
+      "file": ".claude/settings.json:82",
+      "details": "'andrej-karpathy-skills@karpathy-skills': true has no version pin. marketplace.json declares version 1.0.0 but the repo at forrestchang/andrej-karpathy-skills receives commits (last observed 2026-04-20). Auto-updates change prompts that Claude Code receives at session start.",
+      "remediation": "Pin to an explicit commit SHA or tag via the marketplace manifest, or mirror the plugin into the repo and reference locally."
+    },
+    {
+      "id": "P1-002",
+      "severity": "P1",
+      "category": "hook-coverage",
+      "title": "No SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / PreCompact hooks",
+      "file": ".claude/settings.json",
+      "details": "Only the user-scope ~/.claude/settings.json defines a Stop hook (stop-hook-git-check.sh). Project scope defines zero. A SessionStart hook would pre-warm deps for each surface (satisfies Phase 2.13). A PreToolUse hook on Write could re-verify the float-money rule.",
+      "remediation": "Add SessionStart to install .git/hooks/pre-commit and run 'yarn install' in rider-app/driver-app/admin-dashboard on first tool call."
+    },
+    {
+      "id": "P1-003",
+      "severity": "P1",
+      "category": "doc-triangulation",
+      "title": "Contradictions across CLAUDE.md, ARCHITECTURE.md, .agents/docs/architecture.md",
+      "file": ".agents/docs/architecture.md:41,22",
+      "details": "Python version: CLAUDE.md + ARCHITECTURE.md say 3.12; .agents/docs/architecture.md:41 says '3.11+'. Token expiry: CLAUDE.md says 15 min access / 30 day refresh; .agents/docs/architecture.md:22 says 'Token expiry: 30 days (consider reducing)'. Surface count: CLAUDE.md lists 5 (adds 'shared/'); .agents/docs/architecture.md lists 4. db.py coexistence is listed as debt in the nested doc but CLAUDE.md only names db_supabase.py.",
+      "remediation": "Mark .agents/docs/architecture.md as superseded by CLAUDE.md + ARCHITECTURE.md, or update to match. Add a 'last reconciled' footer."
+    },
+    {
+      "id": "P1-004",
+      "severity": "P1",
+      "category": "hook-gate-gap",
+      "title": "Secret regex missing GitHub fine-grained token prefixes",
+      "file": ".claude/hooks/pre-commit:23",
+      "details": "Only 'ghp_[a-zA-Z0-9]{36}' is detected. Modern GitHub tokens include gho_ (OAuth), ghu_ (user-to-server), ghs_ (server-to-server), ghr_ (refresh). A compromised OAuth or App token would slip past.",
+      "remediation": "Change to 'gh[pousr]_[a-zA-Z0-9]{36}' and also add Anthropic admin keys 'sk-ant-admin-*', Slack webhooks 'T[A-Z0-9]{8}/B[A-Z0-9]{8}/', and AWS access keys 'AKIA[0-9A-Z]{16}'."
+    },
+    {
+      "id": "P1-005",
+      "severity": "P1",
+      "category": "hook-gate-gap",
+      "title": "PII-in-logs regex only checks ADDED lines",
+      "file": ".claude/hooks/pre-commit:62",
+      "details": "'git diff --cached --diff-filter=A' restricts to newly added files. A change that appends a console.log(lat) to an existing file passes the gate.",
+      "remediation": "Drop --diff-filter=A from all gates. Scan any added line regardless of file novelty."
+    },
+    {
+      "id": "P1-006",
+      "severity": "P1",
+      "category": "permissions-dead-path",
+      "title": "Write(frontend/**) allows writes to a legacy surface",
+      "file": ".claude/settings.json:44",
+      "details": "CLAUDE.md lists 5 surfaces and does not include frontend/. CI comment in .github/workflows/ci.yml:175 confirms 'frontend/ is the legacy combined app'. Granting Claude write access encourages edits to dead code.",
+      "remediation": "Remove 'Write(frontend/**)' from settings.json allow list. If legacy access is needed temporarily, move to settings.local.json with a TODO for removal."
+    },
+    {
+      "id": "P1-007",
+      "severity": "P1",
+      "category": "attribution-consistency",
+      "title": "256 of 310 historical commits have no Claude attribution trailer",
+      "file": "git history",
+      "details": "Only 54 of 310 commits bear 'Co-Authored-By: Claude'. 28 of those reference sonnet-4-6, 19 reference opus-4-7, 7 reference neither. This is drift from both the current pinned model and the old sonnet-4-6 string.",
+      "remediation": "Not retroactively fixable. Ensure the /commit slash command and Claude harness both emit the corrected opus-4-7 trailer going forward."
+    },
+    {
+      "id": "P2-001",
+      "severity": "P2",
+      "category": "empty-dirs",
+      "title": "memory/ and discovery/ are stale scaffolding",
+      "file": "memory/.gitkeep, discovery/",
+      "details": "memory/ contains only .gitkeep. discovery/ is a sandbox with package.json + _layout.tsx but no references from CLAUDE.md, the rider app, or admin.",
+      "remediation": "Archive both under docs/archive/ or delete. Document purpose if either is active."
+    },
+    {
+      "id": "P2-002",
+      "severity": "P2",
+      "category": "adjacent-dirs",
+      "title": ".kilo/, .emergent/, .maestro/, audit-framework/ are undocumented in CLAUDE.md",
+      "file": ".kilo/, .emergent/, .maestro/, audit-framework/",
+      "details": ".maestro/ is Mobile E2E test definitions. .emergent/ has summary.txt + markers/. .kilo/ holds plans. audit-framework/ looks recent (April 22). None of these are mentioned in CLAUDE.md so Claude receives no guidance on whether to touch them.",
+      "remediation": "Add a 'Claude-adjacent directories' subsection to CLAUDE.md. Default each to read-only in permissions."
+    },
+    {
+      "id": "P2-003",
+      "severity": "P2",
+      "category": "dead-files",
+      "title": "8 duplicate code_review_report_2026*.json files in repo root",
+      "file": "code_review_report_*.json (7 files of 72KB each)",
+      "details": "code_review_report_20260326_{163444,163509,181043,181149,181200,181313,181419}.json are byte-identical 72,187 byte duplicates. Unclear why they are committed.",
+      "remediation": "Move to docs/audit/ archive or delete. Add 'code_review_report_*.json' to .gitignore."
+    },
+    {
+      "id": "P2-004",
+      "severity": "P2",
+      "category": "sessionstart-readiness",
+      "title": "No surface has a SessionStart hook to pre-warm deps",
+      "file": ".claude/settings.json",
+      "details": "Claude Code on the web cannot run 'pytest', 'yarn test', 'npm test' without manual install. No surface has scaffolded a SessionStart hook.",
+      "remediation": "Invoke /session-start-hook skill to scaffold one that runs pip install, yarn install, npm ci in each surface."
+    },
+    {
+      "id": "P2-005",
+      "severity": "P2",
+      "category": "graphify-freshness",
+      "title": "Graphify graph is 3 days behind most recent commits",
+      "file": "graphify-out/manifest.json",
+      "details": "Graph last generated 2026-04-19. Commits 9ccf22b, 019f589, 1f8dcab on 2026-04-22 have not been incorporated. CLAUDE.md directs Claude to rebuild after modifying code, but since this audit is read-only no rebuild is warranted.",
+      "remediation": "Defer to next code-editing session. Rebuild command in CLAUDE.md:12."
+    },
+    {
+      "id": "P2-006",
+      "severity": "P2",
+      "category": "legacy-settings",
+      "title": "sprint1/* force-push allow rules are outdated",
+      "file": ".claude/settings.local.json:9-11",
+      "details": "--force-with-lease allows for sprint1/backend-security, sprint1/admin-hardening, sprint1/cicd-hardening. No sprint1/* branch currently exists locally or in the output of 'git branch -a'.",
+      "remediation": "Delete lines 9-11."
+    },
+    {
+      "id": "P2-007",
+      "severity": "P2",
+      "category": "god-node-cross-ref",
+      "title": "Graphify god nodes partially unreferenced in CLAUDE.md",
+      "file": "CLAUDE.md",
+      "details": "Top 10 god nodes from graphify-out/GRAPH_REPORT.md:427: get_rows (230 edges), request, update_one, Error, AgentTask, BaseAgent, run_sync, KnowledgeEntry, RideStateError, TaskStatus. CLAUDE.md mentions run_sync (line 91) and the ride state machine (maps to RideStateError) but does not mention AgentTask/BaseAgent/KnowledgeEntry — these live in agents/ which CLAUDE.md never describes.",
+      "remediation": "Add a short 'agents/ package (Python)' subsection to CLAUDE.md pointing to agents/base_agent.py and agents/orchestrator.py."
+    },
+    {
+      "id": "P2-008",
+      "severity": "P2",
+      "category": "hook-test-coverage",
+      "title": "Pre-commit hook has no unit tests",
+      "file": ".claude/hooks/pre-commit",
+      "details": "No file in tests/ or elsewhere exercises the regex patterns. Regression against a gate cannot be caught.",
+      "remediation": "Add tests/hooks/test_pre_commit.sh that stages synthetic diffs (fake sk_live, fake .env, console.log(lat)) and asserts exit code 1."
+    }
+  ]
+}

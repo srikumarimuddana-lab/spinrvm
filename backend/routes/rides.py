@@ -611,6 +611,10 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                     "status": "cancelled",
                     "cancelled_at": datetime.now(timezone.utc),
                     "cancellation_reason": "No nearby drivers found. Please try again.",
+                    # Migration 38 — explicit attribution so the admin
+                    # panel can filter this out from regular cancels.
+                    "cancelled_by": "system",
+                    "cancellation_type": "no_drivers_found",
                     "updated_at": datetime.now(timezone.utc),
                 },
             )
@@ -1870,6 +1874,9 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
             "cancelled_at": datetime.now(timezone.utc),
             "cancellation_fee_admin": charged_admin,
             "cancellation_fee_driver": charged_driver,
+            # Migration 38 — rider pressed Cancel on their own ride.
+            "cancelled_by": "rider",
+            "cancellation_type": "rider_cancel",
             "updated_at": datetime.now(timezone.utc),
         },
     )
@@ -2290,6 +2297,10 @@ async def cancel_scheduled_ride(ride_id: str, current_user: dict = Depends(get_c
             "status": "cancelled",
             "cancelled_at": datetime.now(timezone.utc),
             "cancellation_reason": "Cancelled by rider (scheduled)",
+            # Migration 38 — rider cancelled their own scheduled ride
+            # before dispatch.
+            "cancelled_by": "rider",
+            "cancellation_type": "rider_cancel",
             "updated_at": datetime.now(timezone.utc),
         },
     )

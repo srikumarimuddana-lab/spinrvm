@@ -411,6 +411,30 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                             {ride.status === "cancelled" && (
                                 <div className="px-6 py-5">
                                     <Sec title="Cancellation">
+                                        <FR
+                                            l="Cancelled by"
+                                            v={
+                                                ride.cancelled_by
+                                                    ? String(ride.cancelled_by)
+                                                        .replace(/_/g, " ")
+                                                        .replace(/\b\w/g, (c: string) => c.toUpperCase())
+                                                    : "—"
+                                            }
+                                            t
+                                        />
+                                        <FR
+                                            l="Type"
+                                            v={
+                                                ride.cancellation_type === "no_drivers_found"
+                                                    ? "No drivers found"
+                                                    : ride.cancellation_type
+                                                      ? String(ride.cancellation_type)
+                                                            .replace(/_/g, " ")
+                                                            .replace(/\b\w/g, (c: string) => c.toUpperCase())
+                                                      : "—"
+                                            }
+                                            t
+                                        />
                                         <FR l="Reason" v={ride.cancellation_reason || "—"} t />
                                         <FR l="Driver fee" v={ride.cancellation_fee_driver} />
                                         <FR l="Admin fee" v={ride.cancellation_fee_admin} />

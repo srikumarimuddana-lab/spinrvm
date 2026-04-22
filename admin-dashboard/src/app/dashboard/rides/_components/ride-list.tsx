@@ -3,17 +3,26 @@
 import { useState, useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/utils";
-import { Car, Search, Clock, CheckCircle, XCircle, MapPin, Loader, Download, ChevronRight, ChevronLeft, User, SlidersHorizontal, ArrowUpDown, ArrowUp, ArrowDown, CalendarRange, X } from "lucide-react";
+import { Car, Search, Clock, CheckCircle, XCircle, MapPin, Loader, Download, ChevronRight, ChevronLeft, User, SlidersHorizontal, ArrowUpDown, ArrowUp, ArrowDown, CalendarRange, X, CalendarClock, UserX } from "lucide-react";
 import { getStatusBadge, fmtTime } from "./ride-ui-helpers";
 import { exportToCsv } from "@/lib/export-csv";
 
+// Synthetic status values not present on the rides row itself:
+//   - "scheduled"       — is_scheduled=true AND not yet dispatched
+//   - "no_driver_found" — status=cancelled AND cancellation_type=no_drivers_found
+//                         (auto-cancelled after the 5-min search timeout)
+// These are materialised in the filter function below; the backend is
+// queried with is_scheduled=true for "scheduled" so the queue is sorted
+// by scheduled_time and paginated correctly.
 const STATUS_TABS = [
     { value: "all", label: "All", icon: Car },
+    { value: "scheduled", label: "Scheduled", icon: CalendarClock },
     { value: "searching", label: "Searching", icon: Loader },
     { value: "driver_assigned", label: "Assigned", icon: MapPin },
     { value: "in_progress", label: "In Progress", icon: Clock },
     { value: "completed", label: "Completed", icon: CheckCircle },
     { value: "cancelled", label: "Cancelled", icon: XCircle },
+    { value: "no_driver_found", label: "No Driver Found", icon: UserX },
 ];
 
 type SortKey = "status" | "pickup_address" | "rider_name" | "driver_name" | "total_fare" | "created_at";
@@ -56,7 +65,29 @@ export default function RideList({
     const [riderFilter, setRiderFilter] = useState("");
     const [driverFilter, setDriverFilter] = useState("");
 
-    const statusCounts = (s: string) => s === "all" ? allRides.length : allRides.filter(r => r.status === s).length;
+    // Tab counts. `allRides` holds whatever the current backend query
+    // returned — on the Scheduled tab that is only scheduled rides, so we
+    // surface the server-side totalCount there and leave the other
+    // non-scheduled tab counts blank (we don't have that data to compare).
+    // On every other tab `allRides` is the default feed, so we can
+    // derive status + synthetic-tab counts client-side.
+    const onScheduledTab = statusFilter === "scheduled";
+    const statusCounts = (s: string): number | null => {
+        if (s === "scheduled") return onScheduledTab ? totalCount : null;
+        if (onScheduledTab) return null;
+        if (s === "all") return allRides.length;
+        if (s === "no_driver_found") {
+            return allRides.filter(
+                r =>
+                    r.status === "cancelled" &&
+                    (r.cancellation_type === "no_drivers_found" ||
+                        (r.cancellation_reason || "")
+                            .toLowerCase()
+                            .includes("no nearby drivers")),
+            ).length;
+        }
+        return allRides.filter(r => r.status === s).length;
+    };
 
     const handleSort = (key: SortKey) => {
         if (sortKey === key) {
@@ -151,22 +182,27 @@ export default function RideList({
 
                 {/* Status Tabs */}
                 <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-                    {STATUS_TABS.map(tab => (
-                        <button key={tab.value} onClick={() => onStatusChange(tab.value)}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
-                                statusFilter === tab.value
-                                    ? "bg-primary text-white shadow-sm"
-                                    : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
-                            }`}>
-                            <tab.icon className="h-3.5 w-3.5" />
-                            {tab.label}
-                            <span className={`ml-0.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
-                                statusFilter === tab.value ? "bg-white/20" : "bg-background text-muted-foreground"
-                            }`}>
-                                {statusCounts(tab.value)}
-                            </span>
-                        </button>
-                    ))}
+                    {STATUS_TABS.map(tab => {
+                        const count = statusCounts(tab.value);
+                        return (
+                            <button key={tab.value} onClick={() => onStatusChange(tab.value)}
+                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
+                                    statusFilter === tab.value
+                                        ? "bg-primary text-white shadow-sm"
+                                        : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
+                                }`}>
+                                <tab.icon className="h-3.5 w-3.5" />
+                                {tab.label}
+                                {count !== null && (
+                                    <span className={`ml-0.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
+                                        statusFilter === tab.value ? "bg-white/20" : "bg-background text-muted-foreground"
+                                    }`}>
+                                        {count}
+                                    </span>
+                                )}
+                            </button>
+                        );
+                    })}
                 </div>
 
                 {/* Search + Date Filter */}
@@ -333,7 +369,18 @@ export default function RideList({
                                         )}
                                     </td>
                                     <td className="py-3 px-4 text-right hidden md:table-cell">
-                                        <p className="text-xs text-muted-foreground whitespace-nowrap">{fmtTime(ride.created_at)}</p>
+                                        {ride.is_scheduled && ride.scheduled_time ? (
+                                            <>
+                                                <p className="text-xs font-semibold text-primary whitespace-nowrap">
+                                                    {fmtTime(ride.scheduled_time)}
+                                                </p>
+                                                <p className="text-[10px] text-muted-foreground whitespace-nowrap">
+                                                    scheduled · booked {fmtTime(ride.created_at)}
+                                                </p>
+                                            </>
+                                        ) : (
+                                            <p className="text-xs text-muted-foreground whitespace-nowrap">{fmtTime(ride.created_at)}</p>
+                                        )}
                                     </td>
                                     <td className="py-3 pr-4">
                                         <ChevronRight className="h-4 w-4 text-muted-foreground/30 group-hover:text-muted-foreground/60 transition-colors" />

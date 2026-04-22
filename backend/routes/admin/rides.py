@@ -164,33 +164,35 @@ async def admin_cancel_ride(
     reason = (body.reason or "Cancelled by admin").strip()[:500]
     now = datetime.now(timezone.utc)
 
-    # Wrap the update so a DatabaseError surfaces the actual Supabase
-    # complaint ("column X does not exist", RLS denial, etc.) instead of
-    # vanishing into the global 503 handler. Migration 37 added the
-    # cancellation columns; older envs without it would otherwise produce
-    # a silent 503 with no clue in the logs.
+    # Build the update in layers so we can gracefully degrade when the
+    # target schema is behind.  Migration 37 added cancelled_at /
+    # cancellation_reason / cancelled_by_admin_id; migration 38 added
+    # cancelled_by / cancellation_type.  If either set of columns isn't
+    # present yet, retry with a smaller payload so the admin's cancel
+    # button still works instead of 503ing.
+    minimal = {"status": "cancelled", "updated_at": now}
+    with_37 = {
+        **minimal,
+        "cancelled_at": now,
+        "cancellation_reason": reason,
+        "cancelled_by_admin_id": admin_user.get("id"),
+    }
+    with_38 = {**with_37, "cancelled_by": "admin", "cancellation_type": "admin_cancel"}
     try:
-        await db_supabase.update_ride(
-            ride_id,
-            {
-                "status": "cancelled",
-                "cancelled_at": now,
-                "cancellation_reason": reason,
-                "cancelled_by_admin_id": admin_user.get("id"),
-                # Migration 38 — explicit attribution alongside the
-                # admin-id pointer above.
-                "cancelled_by": "admin",
-                "cancellation_type": "admin_cancel",
-                "updated_at": now,
-            },
+        await db_supabase.update_ride(ride_id, with_38)
+    except Exception as e38:
+        logger.warning(
+            f"admin_cancel_ride: attribution write failed ({e38}); retrying without mig-38 fields"
         )
-    except Exception as e:
-        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
-        logger.error(
-            f"admin_cancel_ride: update failed ride_id={ride_id} "
-            f"admin_id={admin_user.get('id')} err={original or e}"
-        )
-        raise
+        try:
+            await db_supabase.update_ride(ride_id, with_37)
+        except Exception as e37:
+            original = getattr(e37, "details", {}).get("original") if hasattr(e37, "details") else None
+            logger.error(
+                f"admin_cancel_ride: update failed ride_id={ride_id} "
+                f"admin_id={admin_user.get('id')} err={original or e37}"
+            )
+            raise
 
     verify = await db_supabase.get_ride(ride_id)
     if not verify or verify.get("status") != "cancelled":

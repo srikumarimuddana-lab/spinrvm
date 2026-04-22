@@ -605,19 +605,28 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
     try:
         current_ride = await db_supabase.get_ride(r_id)
         if current_ride and current_ride.get("status") == "searching":
-            await db_supabase.update_ride(
-                r_id,
-                {
-                    "status": "cancelled",
-                    "cancelled_at": datetime.now(timezone.utc),
-                    "cancellation_reason": "No nearby drivers found. Please try again.",
-                    # Migration 38 — explicit attribution so the admin
-                    # panel can filter this out from regular cancels.
-                    "cancelled_by": "system",
-                    "cancellation_type": "no_drivers_found",
-                    "updated_at": datetime.now(timezone.utc),
-                },
-            )
+            now = datetime.now(timezone.utc)
+            base_update = {
+                "status": "cancelled",
+                "cancelled_at": now,
+                "cancellation_reason": "No nearby drivers found. Please try again.",
+                "updated_at": now,
+            }
+            # Migration 38 adds cancelled_by / cancellation_type so the
+            # admin panel can filter "No Driver Found" separately. Fall
+            # back to base_update on PGRST204 ("column does not exist")
+            # so the rider-facing cancel still succeeds before the
+            # migration lands in prod.
+            try:
+                await db_supabase.update_ride(
+                    r_id,
+                    {**base_update, "cancelled_by": "system", "cancellation_type": "no_drivers_found"},
+                )
+            except Exception as _col_exc:
+                logger.warning(
+                    f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
+                )
+                await db_supabase.update_ride(r_id, base_update)
             await manager.send_personal_message(
                 {
                     "type": "ride_cancelled",
@@ -1867,19 +1876,27 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
         except Exception as fee_err:
             logger.warning(f"[CANCEL] cancellation fee payout failed for driver {driver_id}: {fee_err}")
 
-    await db_supabase.update_ride(
-        ride_id,
-        {
-            "status": "cancelled",
-            "cancelled_at": datetime.now(timezone.utc),
-            "cancellation_fee_admin": charged_admin,
-            "cancellation_fee_driver": charged_driver,
-            # Migration 38 — rider pressed Cancel on their own ride.
-            "cancelled_by": "rider",
-            "cancellation_type": "rider_cancel",
-            "updated_at": datetime.now(timezone.utc),
-        },
-    )
+    _now = datetime.now(timezone.utc)
+    _base_update = {
+        "status": "cancelled",
+        "cancelled_at": _now,
+        "cancellation_fee_admin": charged_admin,
+        "cancellation_fee_driver": charged_driver,
+        "updated_at": _now,
+    }
+    # Migration 38 — attribution. Fall back to the legacy payload on
+    # PGRST204 so the rider's cancel button never 503s if the column
+    # isn't in prod yet.
+    try:
+        await db_supabase.update_ride(
+            ride_id,
+            {**_base_update, "cancelled_by": "rider", "cancellation_type": "rider_cancel"},
+        )
+    except Exception as _col_exc:
+        logger.warning(
+            f"[CANCEL] attribution write failed ({_col_exc}); retrying minimal"
+        )
+        await db_supabase.update_ride(ride_id, _base_update)
 
     # Verify the cancel actually landed in the database. Same class of
     # silent-failure we hit with go-online and accept: the update_one wrapper
@@ -2291,19 +2308,23 @@ async def cancel_scheduled_ride(ride_id: str, current_user: dict = Depends(get_c
     if ride.get("status") in ["completed", "cancelled"]:
         raise HTTPException(status_code=400, detail="Ride is already completed or cancelled")
 
-    await db_supabase.update_ride(
-        ride_id,
-        {
-            "status": "cancelled",
-            "cancelled_at": datetime.now(timezone.utc),
-            "cancellation_reason": "Cancelled by rider (scheduled)",
-            # Migration 38 — rider cancelled their own scheduled ride
-            # before dispatch.
-            "cancelled_by": "rider",
-            "cancellation_type": "rider_cancel",
-            "updated_at": datetime.now(timezone.utc),
-        },
-    )
+    _now = datetime.now(timezone.utc)
+    _base = {
+        "status": "cancelled",
+        "cancelled_at": _now,
+        "cancellation_reason": "Cancelled by rider (scheduled)",
+        "updated_at": _now,
+    }
+    try:
+        await db_supabase.update_ride(
+            ride_id,
+            {**_base, "cancelled_by": "rider", "cancellation_type": "rider_cancel"},
+        )
+    except Exception as _col_exc:
+        logger.warning(
+            f"[SCHED-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
+        )
+        await db_supabase.update_ride(ride_id, _base)
     return {"success": True}
 
 

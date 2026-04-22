@@ -2735,11 +2735,23 @@ async def update_driver_status(
         f"pre_update_row_is_online={driver.get('is_online')} "
         f"pre_update_row_is_available={driver.get('is_available')}"
     )
-    await db_supabase.update_one(
-        "drivers",
-        {"id": driver_id},
-        {"is_online": is_online, "is_available": is_online, "updated_at": datetime.now(timezone.utc).isoformat()},
-    )
+    # last_status_changed_at (migration 42) gets bumped only when
+    # is_online actually flips — idempotent toggles (same value) shouldn't
+    # reset the "online since / offline since" clock the admin UI shows.
+    # On PGRST204 (column missing pre-migration) fall back to the legacy
+    # payload so the flip itself still lands.
+    _now_iso = datetime.now(timezone.utc).isoformat()
+    _base = {"is_online": is_online, "is_available": is_online, "updated_at": _now_iso}
+    status_flipped = bool(driver.get("is_online")) != bool(is_online)
+    _payload = {**_base, "last_status_changed_at": _now_iso} if status_flipped else _base
+    try:
+        await db_supabase.update_one("drivers", {"id": driver_id}, _payload)
+    except Exception as _col_exc:
+        if "column" in str(_col_exc).lower() or "pgrst204" in str(_col_exc).lower():
+            logger.warning(f"[GO-ONLINE] last_status_changed_at missing; retrying minimal: {_col_exc}")
+            await db_supabase.update_one("drivers", {"id": driver_id}, _base)
+        else:
+            raise
 
     # Verify the update actually landed. db_supabase.update_one silently
     # returns None if the write matched zero rows (RLS deny, schema cache miss,

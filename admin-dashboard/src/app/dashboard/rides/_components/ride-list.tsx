@@ -172,7 +172,8 @@ export default function RideList({
                         </div>
                         <button
                             onClick={() => exportToCsv("rides", sortedRides, [
-                                { key: "id", label: "ID" },
+                                { key: "ride_code", label: "Ride Code" },
+                                { key: "id", label: "UUID" },
                                 { key: "pickup_address", label: "Pickup" },
                                 { key: "dropoff_address", label: "Dropoff" },
                                 { key: "status", label: "Status" },
@@ -229,7 +230,7 @@ export default function RideList({
                 <div className="flex items-center gap-2 mt-3">
                     <div className="relative flex-1">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input placeholder="Search by rider/driver name, phone, address, or ID..."
+                        <Input placeholder="Search by ride code, name, phone, address, or ID..."
                             value={search} onChange={e => onSearchChange(e.target.value)}
                             className="pl-9 h-9 text-sm bg-background" />
                     </div>
@@ -360,6 +361,11 @@ export default function RideList({
                                     }`}>
                                     <td className="py-3 px-5">{getStatusBadge(ride.status)}</td>
                                     <td className="py-3 px-4 max-w-[320px]">
+                                        {ride.ride_code && (
+                                            <p className="text-[11px] font-bold tracking-wide text-primary/80 mb-0.5">
+                                                {ride.ride_code}
+                                            </p>
+                                        )}
                                         <p className="text-sm font-medium truncate">{ride.pickup_address || "—"}</p>
                                         <p className="text-xs text-muted-foreground truncate mt-0.5">
                                             <span className="text-muted-foreground/60">to</span> {ride.dropoff_address || "—"}

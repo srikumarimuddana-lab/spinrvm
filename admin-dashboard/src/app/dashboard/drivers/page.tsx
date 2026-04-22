@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { getDriverStats, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas } from "@/lib/api";
+import { getDriverStats, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs } from "@/lib/api";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -51,6 +51,12 @@ export default function DriversPage() {
     const [editForm, setEditForm] = useState<Record<string, any>>({});
     const [saving, setSaving] = useState(false);
     const [allServiceAreas, setAllServiceAreas] = useState<any[]>([]);
+    // Vehicle types catalogue + serviceAreaId → allowed type IDs map,
+    // built from active fare_configs — same narrowing the monitoring
+    // page uses so picking an area here shows only vehicle types
+    // actually configured for it.
+    const [vehicleTypes, setVehicleTypes] = useState<{ id: string; name: string }[]>([]);
+    const [vehicleTypesByArea, setVehicleTypesByArea] = useState<Record<string, Set<string>>>({});
     const [serviceAreaId, setServiceAreaId] = useState<string>("");
     const [startDate, setStartDate] = useState("");
     const [endDate, setEndDate] = useState("");
@@ -67,6 +73,25 @@ export default function DriversPage() {
 
     useEffect(() => { loadData(); }, [loadData]);
     useEffect(() => { getServiceAreas().then(setAllServiceAreas).catch(() => {}); }, []);
+    useEffect(() => {
+        getVehicleTypes()
+            .then((vt: any[]) => setVehicleTypes((vt || []).map((v: any) => ({ id: v.id, name: v.name }))))
+            .catch(() => {});
+        getFareConfigs()
+            .then((configs: any[]) => {
+                const map: Record<string, Set<string>> = {};
+                for (const c of configs || []) {
+                    if (c?.is_active === false) continue;
+                    const areaId = c?.service_area_id;
+                    const vtId = c?.vehicle_type_id;
+                    if (!areaId || !vtId) continue;
+                    if (!map[areaId]) map[areaId] = new Set<string>();
+                    map[areaId].add(vtId);
+                }
+                setVehicleTypesByArea(map);
+            })
+            .catch(() => {});
+    }, []);
     useEffect(() => { if (!selected?.id) { setDriverDocs([]); return; } setDocsLoading(true); getDriverDocuments(selected.id).then((d) => setDriverDocs(Array.isArray(d) ? d : [])).catch(() => setDriverDocs([])).finally(() => setDocsLoading(false)); }, [selected?.id]);
     useEffect(() => { setEditing(false); setEditForm({}); }, [selected?.id]);
 
@@ -98,7 +123,7 @@ export default function DriversPage() {
         setVerifying(false);
     };
 
-    const startEditing = () => { if (!selected) return; setEditForm({ first_name: selected.first_name || "", last_name: selected.last_name || "", email: selected.email || "", phone: selected.phone || "", city: selected.city || "", service_area_id: selected.service_area_id || "", vehicle_make: selected.vehicle_make || "", vehicle_model: selected.vehicle_model || "", vehicle_color: selected.vehicle_color || "", vehicle_year: selected.vehicle_year || "", license_plate: selected.license_plate || "", vehicle_vin: selected.vehicle_vin || "" }); setEditing(true); };
+    const startEditing = () => { if (!selected) return; setEditForm({ first_name: selected.first_name || "", last_name: selected.last_name || "", email: selected.email || "", phone: selected.phone || "", city: selected.city || "", service_area_id: selected.service_area_id || "", vehicle_type_id: selected.vehicle_type_id || "", vehicle_make: selected.vehicle_make || "", vehicle_model: selected.vehicle_model || "", vehicle_color: selected.vehicle_color || "", vehicle_year: selected.vehicle_year || "", license_plate: selected.license_plate || "", vehicle_vin: selected.vehicle_vin || "" }); setEditing(true); };
 
     const saveEdits = async () => {
         if (!selected) return;
@@ -400,17 +425,57 @@ export default function DriversPage() {
                                         )}
                                     </DetailSection>
                                     <DetailSection title="Vehicle Information" icon={Car}>
-                                        {editing ? (
+                                        {editing ? (() => {
+                                            // Narrow vehicle-type options to the types with
+                                            // active fare_configs for the currently-selected
+                                            // service area — same convention the monitoring
+                                            // filter uses. No area selected → show every
+                                            // active type.
+                                            const areaId = ef("service_area_id");
+                                            const allowed = areaId ? vehicleTypesByArea[areaId] : null;
+                                            const availableTypes = allowed
+                                                ? vehicleTypes.filter(v => allowed.has(v.id))
+                                                : areaId
+                                                    ? []
+                                                    : vehicleTypes;
+                                            const currentTypeId = ef("vehicle_type_id");
+                                            const currentInList = availableTypes.some(v => v.id === currentTypeId);
+                                            return (
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                    <div>
+                                                        <label className="text-[11px] text-muted-foreground mb-1 block">Vehicle Type</label>
+                                                        <Select
+                                                            value={currentTypeId || "none"}
+                                                            onValueChange={v => setEf("vehicle_type_id", v === "none" ? "" : v)}
+                                                            disabled={!!areaId && availableTypes.length === 0}
+                                                        >
+                                                            <SelectTrigger className="h-9 text-sm">
+                                                                <SelectValue placeholder={areaId && availableTypes.length === 0 ? "No vehicles configured for this area" : "Select vehicle type"} />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                <SelectItem value="none">Not assigned</SelectItem>
+                                                                {availableTypes.map(v => (
+                                                                    <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>
+                                                                ))}
+                                                                {currentTypeId && !currentInList && (
+                                                                    <SelectItem value={currentTypeId}>
+                                                                        {vehicleTypes.find(v => v.id === currentTypeId)?.name || currentTypeId.slice(0, 8)} (not in this area)
+                                                                    </SelectItem>
+                                                                )}
+                                                            </SelectContent>
+                                                        </Select>
+                                                    </div>
+                                                    <EditField label="Make" value={ef("vehicle_make")} onChange={v => setEf("vehicle_make", v)} />
+                                                    <EditField label="Model" value={ef("vehicle_model")} onChange={v => setEf("vehicle_model", v)} />
+                                                    <EditField label="Color" value={ef("vehicle_color")} onChange={v => setEf("vehicle_color", v)} />
+                                                    <EditField label="Year" value={ef("vehicle_year")} onChange={v => setEf("vehicle_year", v)} />
+                                                    <EditField label="License Plate" value={ef("license_plate")} onChange={v => setEf("license_plate", v)} />
+                                                    <EditField label="VIN" value={ef("vehicle_vin")} onChange={v => setEf("vehicle_vin", v)} />
+                                                </div>
+                                            );
+                                        })() : (
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                                <EditField label="Make" value={ef("vehicle_make")} onChange={v => setEf("vehicle_make", v)} />
-                                                <EditField label="Model" value={ef("vehicle_model")} onChange={v => setEf("vehicle_model", v)} />
-                                                <EditField label="Color" value={ef("vehicle_color")} onChange={v => setEf("vehicle_color", v)} />
-                                                <EditField label="Year" value={ef("vehicle_year")} onChange={v => setEf("vehicle_year", v)} />
-                                                <EditField label="License Plate" value={ef("license_plate")} onChange={v => setEf("license_plate", v)} />
-                                                <EditField label="VIN" value={ef("vehicle_vin")} onChange={v => setEf("vehicle_vin", v)} />
-                                            </div>
-                                        ) : (
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                <DetailField icon={Car} label="Vehicle Type" value={vehicleTypes.find(v => v.id === selected.vehicle_type_id)?.name || (selected.vehicle_type_id ? selected.vehicle_type_id.slice(0, 8) : "Not assigned")} />
                                                 <DetailField icon={Car} label="Vehicle" value={`${selected.vehicle_color || ""} ${selected.vehicle_make || ""} ${selected.vehicle_model || ""}`.trim() || "\u2014"} />
                                                 <DetailField icon={CalendarRange} label="Year" value={selected.vehicle_year || "\u2014"} />
                                                 <DetailField icon={FileText} label="License Plate" value={selected.license_plate || "\u2014"} mono />

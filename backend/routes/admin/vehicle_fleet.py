@@ -74,7 +74,68 @@ async def admin_update_vehicle_type(type_id: str, vtype: Dict[str, Any]):
 
 @router.delete("/vehicle-types/{type_id}")
 async def admin_delete_vehicle_type(type_id: str):
-    """Delete vehicle type."""
+    """Delete a vehicle type — only if nothing still references it.
+
+    Vehicle types are parents of two structures:
+
+      * fare_configs.vehicle_type_id (real FK — TEXT REFERENCES
+        vehicle_types(id)); Postgres would reject the delete on
+        RESTRICT or silently cascade on CASCADE, but we want a
+        controlled 409 with the usage list the operator can act on.
+      * service_areas.vehicle_pricing (JSONB array keyed by NAME, no
+        FK). Orphans silently without this check — operator sees a
+        stale "Economy" row with no matching vehicle_types entry.
+
+    Block the delete when either exists and return 409 with the list
+    of affected areas / fare_configs. Operator clears them first in
+    Service Areas → <area> → Vehicle Pricing, then re-tries the
+    delete.
+    """
+    vt = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("vehicle_types", {"id": type_id}, limit=1)
+    )
+    if not vt:
+        raise HTTPException(status_code=404, detail="Vehicle type not found")
+    vt_name = vt.get("name") or ""
+
+    # fare_configs referencing this type
+    fare_cfg_rows = await db_supabase.get_rows(
+        "fare_configs", {"vehicle_type_id": type_id}, limit=500
+    )
+    fare_cfg_count = len(fare_cfg_rows or [])
+
+    # service_areas whose vehicle_pricing JSONB array contains a row
+    # with this name. JSONB contains-filter across unknown array
+    # positions is awkward in PostgREST, so pull all areas and scan
+    # client-side — admins rarely have >50 areas.
+    all_areas = await db_supabase.get_rows("service_areas", limit=1000)
+    area_names_using_it: list[str] = []
+    for area in all_areas or []:
+        pricing = area.get("vehicle_pricing") or []
+        if not isinstance(pricing, list):
+            continue
+        for row in pricing:
+            if isinstance(row, dict) and row.get("vehicle_type") == vt_name:
+                area_names_using_it.append(area.get("name") or area.get("id"))
+                break
+
+    if fare_cfg_count > 0 or area_names_using_it:
+        parts = []
+        if area_names_using_it:
+            preview = ", ".join(area_names_using_it[:5])
+            more = f" and {len(area_names_using_it) - 5} more" if len(area_names_using_it) > 5 else ""
+            parts.append(f"{len(area_names_using_it)} service area(s): {preview}{more}")
+        if fare_cfg_count > 0:
+            parts.append(f"{fare_cfg_count} fare config(s)")
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot delete '{vt_name}' — still used by "
+                + " and ".join(parts)
+                + ". Remove those references first in Service Areas → Vehicle Pricing."
+            ),
+        )
+
     await db_supabase.delete_many("vehicle_types", {"id": type_id})
     # PERF-001: Invalidate fare cache
     await invalidate_fare_cache()

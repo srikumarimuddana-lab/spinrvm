@@ -69,3 +69,23 @@ async def get_legal_settings():
         "terms_of_service_text": tos if tos else _TOS_PLACEHOLDER,
         "privacy_policy_text": privacy if privacy else _PRIVACY_PLACEHOLDER,
     }
+
+
+
+@api_router.get("/company-info")
+async def get_company_info():
+    """Public company / support info embedded by rider + driver apps.
+
+    Business-card data — nothing sensitive. Surfaced in the Support
+    screen of the rider app and the Profile screen of the driver app
+    so ops can update address / phone / email in one place (admin
+    Settings → Company Info) and both apps pick it up on next fetch.
+    """
+    settings = await get_app_settings()
+    return {
+        "name": settings.get("company_name", "Spinr") or "Spinr",
+        "address": settings.get("company_address", "") or "",
+        "phone": settings.get("company_phone", "") or "",
+        "email": settings.get("company_email", "") or "",
+        "website": settings.get("company_website", "") or "",
+    }

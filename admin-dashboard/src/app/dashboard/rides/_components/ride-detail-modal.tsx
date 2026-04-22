@@ -46,11 +46,12 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
     const [loading, setLoading] = useState(false);
     const [flagTarget, setFlagTarget] = useState<{ type: "rider" | "driver"; name: string } | null>(null);
     const [showComplaint, setShowComplaint] = useState(false);
-    // Which phase polyline the replay map renders. Clicking a phase
-    // card flips this; null hides the replay (before any click).
-    // "all" shows the combined path (Phase 2 + Phase 3 together) for
-    // the quick overview.
-    const [selectedPhase, setSelectedPhase] = useState<"navigating_to_pickup" | "trip_in_progress" | "all" | null>("all");
+    // Which polyline the replay map renders:
+    //   "pickup"  — Phase 2 GPS trail (driver → pickup)
+    //   "actual"  — Phase 3 GPS trail (pickup → dropoff, actual)
+    //   "planned" — straight-line reference pickup → dropoff
+    // Default is "actual" — the answer to "did this ride happen?".
+    const [selectedPhase, setSelectedPhase] = useState<"pickup" | "actual" | "planned">("actual");
 
     const loadRide = useCallback(async () => {
         if (!rideId) return;
@@ -65,10 +66,9 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
     useEffect(() => {
         if (open && rideId) loadRide();
         if (!open) setRide(null);
-        // Every open of the modal starts on the "All phases" view so the
-        // user sees the combined route first, then can drill into Phase 2
-        // or Phase 3 by clicking a card.
-        setSelectedPhase("all");
+        // Every open of the modal resets to the Actual Trip view so the
+        // operator sees the real recorded path first.
+        setSelectedPhase("actual");
     }, [open, rideId, loadRide]);
 
     if (!open) return null;
@@ -151,83 +151,32 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                 </div>
                             </div>
 
-                            {/* Route + Map */}
+                            {/* Route addresses. The top map was removed — all
+                                route visualisation lives in the Route Replay
+                                section below, which has three explicit
+                                options (Pickup / Actual Trip / Planned Trip). */}
                             <div className="px-6 py-5">
-                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                                    <Sec title="Route">
-                                        <div className="flex gap-3">
-                                            <div className="flex flex-col items-center pt-1">
-                                                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-emerald-200 dark:ring-emerald-900/50" />
-                                                <div className="w-0.5 flex-1 bg-border my-1.5" />
-                                                <div className="w-2.5 h-2.5 rounded-full bg-primary ring-2 ring-primary/20" />
-                                            </div>
-                                            <div className="flex-1">
-                                                <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Pickup</p>
-                                                <p className="text-sm font-medium mt-0.5">{ride.pickup_address || "—"}</p>
-                                                <div className="h-4" />
-                                                <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Dropoff</p>
-                                                <p className="text-sm font-medium mt-0.5">{ride.dropoff_address || "—"}</p>
-                                            </div>
+                                <Sec title="Route">
+                                    <div className="flex gap-3">
+                                        <div className="flex flex-col items-center pt-1">
+                                            <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-emerald-200 dark:ring-emerald-900/50" />
+                                            <div className="w-0.5 flex-1 bg-border my-1.5" />
+                                            <div className="w-2.5 h-2.5 rounded-full bg-primary ring-2 ring-primary/20" />
                                         </div>
-                                        <div className="flex gap-2 mt-3 pt-3 border-t">
-                                            <MStat label="Distance" value={`${(ride.distance_km || 0).toFixed(1)} km`} icon={Route} />
-                                            <MStat label="Duration" value={`${ride.duration_minutes || 0} min`} icon={Clock} />
-                                            <MStat label="Surge" value={`${ride.surge_multiplier || 1.0}x`} icon={Percent} />
+                                        <div className="flex-1">
+                                            <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Pickup</p>
+                                            <p className="text-sm font-medium mt-0.5">{ride.pickup_address || "—"}</p>
+                                            <div className="h-4" />
+                                            <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Dropoff</p>
+                                            <p className="text-sm font-medium mt-0.5">{ride.dropoff_address || "—"}</p>
                                         </div>
-                                    </Sec>
-                                    <div>
-                                        <h4 className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-2.5">Map</h4>
-                                        {ride.route_snapshot_url ? (
-                                            // Cached server-rendered PNG from phase_polylines
-                                            // (migration 41). A plain <img> — one HTTP request
-                                            // against Cloudinary's CDN, no MapLibre re-init
-                                            // every time the drawer opens. This is the
-                                            // default for any completed ride.
-                                            <img
-                                                src={ride.route_snapshot_url}
-                                                alt="Ride route"
-                                                loading="lazy"
-                                                className="w-full h-[280px] rounded-xl object-cover bg-muted/30"
-                                            />
-                                        ) : ride.pickup_lat && ride.dropoff_lat ? (() => {
-                                            // No snapshot yet (in-flight ride, snapshot job
-                                            // still running, or legacy ride from before
-                                            // migration 41). Fall back to the live MapLibre
-                                            // map rendering phase polylines directly.
-                                            const pp = ride.phase_polylines || {};
-                                            const pickupTrail: { lat: number; lng: number; timestamp?: string }[] =
-                                                Array.isArray(pp.navigating_to_pickup)
-                                                    ? pp.navigating_to_pickup.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] }))
-                                                    : [];
-                                            const tripTrail: { lat: number; lng: number; timestamp?: string }[] =
-                                                Array.isArray(pp.trip_in_progress)
-                                                    ? pp.trip_in_progress.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] }))
-                                                    : [];
-                                            const legacyTrail =
-                                                Array.isArray(ride.route_polyline) && ride.route_polyline.length > 0
-                                                    ? ride.route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] }))
-                                                    : ride.location_trail;
-                                            return (
-                                                <RideRouteMap
-                                                    pickupLat={ride.pickup_lat} pickupLng={ride.pickup_lng}
-                                                    dropoffLat={ride.dropoff_lat} dropoffLng={ride.dropoff_lng}
-                                                    pickupTrail={pickupTrail.length > 1 ? pickupTrail : undefined}
-                                                    tripTrail={tripTrail.length > 1 ? tripTrail : undefined}
-                                                    locationTrail={
-                                                        pickupTrail.length > 1 || tripTrail.length > 1
-                                                            ? undefined
-                                                            : legacyTrail
-                                                    }
-                                                />
-                                            );
-                                        })() : (
-                                            <div className="bg-muted/30 rounded-xl h-[280px] flex flex-col items-center justify-center gap-2">
-                                                <MapPin className="h-8 w-8 text-muted-foreground/20" />
-                                                <p className="text-xs text-muted-foreground">No map data available</p>
-                                            </div>
-                                        )}
                                     </div>
-                                </div>
+                                    <div className="flex gap-2 mt-3 pt-3 border-t">
+                                        <MStat label="Distance" value={`${(ride.distance_km || 0).toFixed(1)} km`} icon={Route} />
+                                        <MStat label="Duration" value={`${ride.duration_minutes || 0} min`} icon={Clock} />
+                                        <MStat label="Surge" value={`${ride.surge_multiplier || 1.0}x`} icon={Percent} />
+                                    </div>
+                                </Sec>
                             </div>
 
                             {/* Customer & Driver */}
@@ -576,84 +525,97 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         {ride.cancelled_at && <TL l="Cancelled" t={ride.cancelled_at} d />}
                                     </div>
 
-                                    {/* Phase distance + duration cards. Each card is a
-                                        button — clicking replays the polyline for that
-                                        phase on the map below. The "All phases" card
-                                        (phase=all) concatenates navigating_to_pickup +
-                                        trip_in_progress. Duration reads from migration
-                                        39's phase_durations column. */}
-                                    {phaseDistances.length > 0 && (
-                                        <div className="mt-3 pt-3 border-t">
-                                            <div className="flex items-center justify-between mb-2.5">
-                                                <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">
-                                                    Distance by Phase
-                                                </p>
-                                                <p className="text-[10px] text-muted-foreground/70">
-                                                    Click a phase to replay
-                                                </p>
-                                            </div>
-                                            <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">
-                                                {/* "All phases" card always shown first */}
-                                                {(() => {
-                                                    const totalKm = phaseDistances.reduce((s, p) => s + p.distance_km, 0);
-                                                    const selected = selectedPhase === "all";
+                                    {/* Three-way route selector: Pickup / Actual Trip /
+                                        Planned Trip. Clicking a card replays the
+                                        corresponding polyline on the map below. Pickup +
+                                        Actual Trip come from migration 39's
+                                        phase_polylines (real GPS). Planned is the
+                                        straight-line pickup→dropoff reference — we
+                                        don't yet store a road-snapped planned route. */}
+                                    <div className="mt-3 pt-3 border-t">
+                                        <div className="flex items-center justify-between mb-2.5">
+                                            <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">
+                                                Route Views
+                                            </p>
+                                            <p className="text-[10px] text-muted-foreground/70">
+                                                Click to replay on map below
+                                            </p>
+                                        </div>
+                                        <div className="grid grid-cols-3 gap-2">
+                                            {(() => {
+                                                const pickupKm = ride.phase_distances?.navigating_to_pickup;
+                                                const pickupSecs = ride.phase_durations?.navigating_to_pickup;
+                                                const tripKm = ride.phase_distances?.trip_in_progress ?? ride.actual_distance_km;
+                                                const tripSecs = ride.phase_durations?.trip_in_progress;
+                                                const plannedKm = ride.planned_distance_km;
+                                                const fmtDur = (s: number | undefined) =>
+                                                    typeof s === "number" && s > 0
+                                                        ? s >= 60
+                                                            ? `${Math.round(s / 60)} min`
+                                                            : `${s}s`
+                                                        : null;
+                                                const fmtKm = (v: number | undefined | null) =>
+                                                    typeof v === "number" ? `${Number(v).toFixed(2)} km` : "—";
+                                                type CardKey = "pickup" | "actual" | "planned";
+                                                const cards: {
+                                                    key: CardKey;
+                                                    label: string;
+                                                    km: string;
+                                                    sub: string | null;
+                                                    colorCls: string;
+                                                }[] = [
+                                                    {
+                                                        key: "pickup",
+                                                        label: "Pickup",
+                                                        km: fmtKm(pickupKm),
+                                                        sub: fmtDur(pickupSecs),
+                                                        colorCls: PHASE_COLORS.navigating_to_pickup,
+                                                    },
+                                                    {
+                                                        key: "actual",
+                                                        label: "Actual Trip",
+                                                        km: fmtKm(tripKm),
+                                                        sub: fmtDur(tripSecs),
+                                                        colorCls: PHASE_COLORS.trip_in_progress,
+                                                    },
+                                                    {
+                                                        key: "planned",
+                                                        label: "Planned Trip",
+                                                        km: fmtKm(plannedKm),
+                                                        sub: "Straight-line reference",
+                                                        colorCls: "bg-muted/60 text-foreground",
+                                                    },
+                                                ];
+                                                return cards.map((c) => {
+                                                    const selected = selectedPhase === c.key;
                                                     return (
                                                         <button
+                                                            key={c.key}
                                                             type="button"
-                                                            onClick={() => setSelectedPhase("all")}
-                                                            className={`text-left rounded-lg px-3 py-2.5 transition ring-offset-1 ring-offset-background bg-muted/60 text-foreground hover:bg-muted ${
+                                                            onClick={() => setSelectedPhase(c.key)}
+                                                            className={`text-left rounded-lg px-3 py-2.5 transition ring-offset-1 ring-offset-background ${c.colorCls} hover:brightness-95 dark:hover:brightness-110 ${
                                                                 selected ? "ring-2 ring-primary" : "ring-0"
                                                             }`}
                                                         >
-                                                            <p className="text-xs font-bold">{totalKm.toFixed(2)} km</p>
-                                                            <p className="text-[10px] opacity-80">All phases</p>
-                                                            <p className="text-[9px] opacity-60">Full route</p>
+                                                            <p className="text-xs font-bold">{c.km}</p>
+                                                            <p className="text-[10px] opacity-80">{c.label}</p>
+                                                            <p className="text-[9px] opacity-60">{c.sub || "—"}</p>
                                                         </button>
                                                     );
-                                                })()}
-                                                {phaseDistances
-                                                    .filter(p => p.phase === "navigating_to_pickup" || p.phase === "trip_in_progress")
-                                                    .map(p => {
-                                                        const secs = ride.phase_durations?.[p.phase];
-                                                        const durLabel =
-                                                            typeof secs === "number" && secs > 0
-                                                                ? secs >= 60
-                                                                    ? `${Math.round(secs / 60)} min`
-                                                                    : `${secs}s`
-                                                                : null;
-                                                        const selected = selectedPhase === p.phase;
-                                                        const phaseKey = p.phase as "navigating_to_pickup" | "trip_in_progress";
-                                                        return (
-                                                            <button
-                                                                key={p.phase}
-                                                                type="button"
-                                                                onClick={() => setSelectedPhase(phaseKey)}
-                                                                className={`text-left rounded-lg px-3 py-2.5 transition ring-offset-1 ring-offset-background ${
-                                                                    PHASE_COLORS[p.phase] || "bg-gray-50 text-gray-600 dark:bg-gray-800/30 dark:text-gray-400"
-                                                                } hover:brightness-95 dark:hover:brightness-110 ${
-                                                                    selected ? "ring-2 ring-primary" : "ring-0"
-                                                                }`}
-                                                            >
-                                                                <p className="text-xs font-bold">{p.distance_km} km</p>
-                                                                <p className="text-[10px] opacity-80">{PHASE_LABELS[p.phase] || p.phase.replace(/_/g, " ")}</p>
-                                                                <p className="text-[9px] opacity-60">{durLabel || "—"}</p>
-                                                            </button>
-                                                        );
-                                                    })}
-                                            </div>
+                                                });
+                                            })()}
                                         </div>
-                                    )}
+                                    </div>
                                 </Sec>
                             </div>
 
-                            {/* Phase Replay Map — shows the polyline for the phase
-                                card selected above. Replaces the raw GPS-points
-                                table; operators want to see the path, not a list
-                                of lat/lng rows. Data comes from migration 39's
-                                phase_polylines JSONB (stored at ride completion).
-                                Falls back to the combined route_polyline for
-                                legacy rides that predate phase polylines. */}
+                            {/* Route Replay — shows the map for the selected view.
+                                Pickup / Actual Trip use the real GPS polylines from
+                                migration 39. Planned uses a straight-line reference
+                                since we don't store a road-snapped planned route. */}
                             {(() => {
+                                if (!ride.pickup_lat || !ride.dropoff_lat) return null;
+
                                 const pp = ride.phase_polylines || {};
                                 const pickupPts: { lat: number; lng: number; timestamp?: string }[] =
                                     Array.isArray(pp.navigating_to_pickup)
@@ -664,52 +626,62 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         ? pp.trip_in_progress.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] }))
                                         : [];
 
-                                // Fallback: use combined route_polyline when per-phase
-                                // polylines aren't available (rides before migration 39).
-                                const fallbackCombined: { lat: number; lng: number }[] =
-                                    Array.isArray(ride.route_polyline) && ride.route_polyline.length > 0
-                                        ? ride.route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] }))
-                                        : [];
-
-                                let trail: { lat: number; lng: number; timestamp?: string }[] = [];
                                 let label = "";
-                                if (selectedPhase === "navigating_to_pickup") {
-                                    trail = pickupPts;
-                                    label = "Driver → Pickup";
-                                } else if (selectedPhase === "trip_in_progress") {
-                                    trail = tripPts;
-                                    label = "Pickup → Dropoff";
-                                } else {
-                                    trail = pickupPts.length || tripPts.length ? [...pickupPts, ...tripPts] : fallbackCombined;
-                                    label = "Full route";
-                                }
+                                let emptyHint: string | null = null;
+                                let trailForMap: { lat: number; lng: number; timestamp?: string }[] | undefined;
+                                let pickupProp: typeof pickupPts | undefined;
+                                let tripProp: typeof tripPts | undefined;
 
-                                const hasTrail = trail.length > 1;
-                                if (!hasTrail && !ride.pickup_lat) return null;
+                                if (selectedPhase === "pickup") {
+                                    label = "Driver → Pickup (actual GPS)";
+                                    if (pickupPts.length > 1) {
+                                        pickupProp = pickupPts;
+                                    } else {
+                                        emptyHint = "No Phase 2 GPS trail for this ride";
+                                    }
+                                } else if (selectedPhase === "actual") {
+                                    label = "Pickup → Dropoff (actual GPS)";
+                                    if (tripPts.length > 1) {
+                                        tripProp = tripPts;
+                                    } else {
+                                        // Fall back to legacy combined polyline for pre-
+                                        // migration-39 rides that still have route_polyline.
+                                        const legacy =
+                                            Array.isArray(ride.route_polyline) && ride.route_polyline.length > 1
+                                                ? ride.route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] }))
+                                                : [];
+                                        if (legacy.length > 1) {
+                                            trailForMap = legacy;
+                                        } else {
+                                            emptyHint = "No trip GPS trail for this ride";
+                                        }
+                                    }
+                                } else {
+                                    // planned — straight-line reference rendered by
+                                    // RideRouteMap's built-in dashed fallback when no
+                                    // trails are passed in.
+                                    label = "Planned Trip (straight-line reference)";
+                                }
 
                                 return (
                                     <div className="px-6 py-5">
                                         <Sec title="Route Replay">
                                             <div className="flex items-center justify-between mb-2.5">
                                                 <p className="text-xs text-muted-foreground">{label}</p>
-                                                <p className="text-[10px] text-muted-foreground/70 tabular-nums">
-                                                    {hasTrail ? `${trail.length} GPS points` : "No GPS trail for this phase"}
-                                                </p>
+                                                {emptyHint && (
+                                                    <p className="text-[10px] text-muted-foreground/70">{emptyHint}</p>
+                                                )}
                                             </div>
-                                            {ride.pickup_lat && ride.dropoff_lat ? (
-                                                <RideRouteMap
-                                                    key={selectedPhase || "all"}
-                                                    pickupLat={ride.pickup_lat}
-                                                    pickupLng={ride.pickup_lng}
-                                                    dropoffLat={ride.dropoff_lat}
-                                                    dropoffLng={ride.dropoff_lng}
-                                                    locationTrail={hasTrail ? trail : undefined}
-                                                />
-                                            ) : (
-                                                <div className="bg-muted/30 rounded-xl h-[280px] flex items-center justify-center text-xs text-muted-foreground">
-                                                    Pickup/dropoff coordinates unavailable
-                                                </div>
-                                            )}
+                                            <RideRouteMap
+                                                key={selectedPhase}
+                                                pickupLat={ride.pickup_lat}
+                                                pickupLng={ride.pickup_lng}
+                                                dropoffLat={ride.dropoff_lat}
+                                                dropoffLng={ride.dropoff_lng}
+                                                pickupTrail={pickupProp}
+                                                tripTrail={tripProp}
+                                                locationTrail={trailForMap}
+                                            />
                                         </Sec>
                                     </div>
                                 );

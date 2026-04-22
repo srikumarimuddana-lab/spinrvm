@@ -343,10 +343,18 @@ export default function DriversPage() {
                                             </div>
                                         </TableCell>
                                         <TableCell>
-                                            <Badge variant={driver.is_online ? "default" : "outline"} className={driver.is_online ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800" : "text-[10px] px-1.5 py-0 text-muted-foreground"}>
-                                                <span className={`h-1.5 w-1.5 rounded-full mr-1 ${driver.is_online ? "bg-emerald-500" : "bg-gray-400"}`} />
-                                                {driver.is_online ? "Online" : "Offline"}
-                                            </Badge>
+                                            <div className="flex flex-col gap-0.5 items-start">
+                                                <Badge variant={driver.is_online ? "default" : "outline"} className={driver.is_online ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800" : "text-[10px] px-1.5 py-0 text-muted-foreground"}>
+                                                    <span className={`h-1.5 w-1.5 rounded-full mr-1 ${driver.is_online ? "bg-emerald-500" : "bg-gray-400"}`} />
+                                                    {driver.is_online ? "Online" : "Offline"}
+                                                </Badge>
+                                                {driver.last_status_changed_at && (
+                                                    <span className="text-[10px] text-muted-foreground whitespace-nowrap" title={new Date(driver.last_status_changed_at).toLocaleString()}>
+                                                        {driver.is_online ? "since " : "since "}
+                                                        {new Date(driver.last_status_changed_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                                                    </span>
+                                                )}
+                                            </div>
                                         </TableCell>
                                         <TableCell>
                                             <span className="text-xs text-foreground/80">
@@ -412,7 +420,14 @@ export default function DriversPage() {
                                                 : selected.status === "suspended" ? <Badge className="bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"><Pause className="h-3 w-3" /> Suspended</Badge>
                                                 : selected.status === "banned" ? <Badge className="bg-red-200 text-red-800 dark:bg-red-900/40 dark:text-red-400"><Ban className="h-3 w-3" /> Banned</Badge>
                                                 : <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"><ShieldAlert className="h-3 w-3" /> Pending</Badge>}
-                                                <Badge variant="outline" className={selected.is_online ? "border-emerald-300 text-emerald-600" : ""}>{selected.is_online ? "Online" : "Offline"}</Badge>
+                                                <Badge variant="outline" className={selected.is_online ? "border-emerald-300 text-emerald-600" : ""}>
+                                                    {selected.is_online ? "Online" : "Offline"}
+                                                    {selected.last_status_changed_at && (
+                                                        <span className="ml-1.5 text-[10px] opacity-70">
+                                                            since {new Date(selected.last_status_changed_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                                                        </span>
+                                                    )}
+                                                </Badge>
                                                 {selected.subscription_status === "active" && <Badge className="bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400"><CreditCard className="h-3 w-3" /> Spinr Pass</Badge>}
                                             </div>
                                         </div>

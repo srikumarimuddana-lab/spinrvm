@@ -13,10 +13,12 @@ try:
     from ..db import db
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
+    from .datetime_utils import parse_iso_utc
 except ImportError:
     from db import db
     from features import send_push_notification
     from settings_loader import get_app_settings
+    from utils.datetime_utils import parse_iso_utc
 
 logger = logging.getLogger(__name__)
 
@@ -97,14 +99,9 @@ async def retry_failed_payments():
             continue
 
         # Skip rides older than 24 hours
-        created = ride.get("created_at", "")
-        if isinstance(created, str):
-            try:
-                created_dt = datetime.fromisoformat(created.replace("Z", "+00:00").replace("+00:00", ""))
-                if (datetime.now(timezone.utc) - created_dt).total_seconds() > 86400:
-                    continue
-            except (ValueError, TypeError):
-                pass
+        created_dt = parse_iso_utc(ride.get("created_at"))
+        if created_dt is not None and (datetime.now(timezone.utc) - created_dt).total_seconds() > 86400:
+            continue
 
         payment_intent_id = ride.get("payment_intent_id")
         if not payment_intent_id or not stripe_secret:

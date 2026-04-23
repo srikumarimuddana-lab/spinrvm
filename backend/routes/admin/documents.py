@@ -166,15 +166,26 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
     if status == "approved":
         effective_expiry_iso = new_expiry_iso
 
-        req_row = None
-        try:
-            req_row = (lambda _r: _r[0] if _r else None)(
-                await db_supabase.get_rows("document_requirements", {"id": existing.get("requirement_id")}, limit=1)
-            )
-        except Exception:
-            req_row = None
+        # Derive a requirement name for keyword-based legacy-field mapping.
+        # Service-area uploads store the slug in requirement_key and the human
+        # label in document_type; requirement_id is NULL. Fall back through
+        # those so the license/insurance/inspection/background keywords in
+        # _legacy_expiry_field_for_requirement still match.
+        req_name: Optional[str] = None
+        existing_req_id = existing.get("requirement_id")
+        if existing_req_id:
+            try:
+                req_row = (lambda _r: _r[0] if _r else None)(
+                    await db_supabase.get_rows("document_requirements", {"id": existing_req_id}, limit=1)
+                )
+                if req_row:
+                    req_name = req_row.get("name")
+            except Exception:
+                req_name = None
+        if not req_name:
+            req_name = existing.get("document_type") or existing.get("requirement_key")
 
-        legacy_field = _legacy_expiry_field_for_requirement(req_row.get("name") if req_row else None)
+        legacy_field = _legacy_expiry_field_for_requirement(req_name)
         if legacy_field:
             # If admin did not supply a new expiry, clear the stale legacy
             # value (None) so the go-online check skips it instead of

@@ -160,6 +160,11 @@ function RideInProgressScreenContent() {
     }
 
     const liveTrackingUrl = `https://spinr-track.app/${shareToken}`;
+    // Include the human-readable ride code so the recipient can quote it
+    // to support without guessing at a truncated UUID.
+    const rideRef = currentRide?.ride_code
+      ? `🆔 RIDE CODE: ${currentRide.ride_code}\n`
+      : '';
     const tripDetails = `
 🚗 TRACK MY SPINR RIDE - LIVE LOCATION
 
@@ -174,7 +179,7 @@ function RideInProgressScreenContent() {
 
 ⏱️ ESTIMATED ARRIVAL: ${estimatedTime} (${eta} min left)
 
-🔴 LIVE TRACKING LINK:
+${rideRef}🔴 LIVE TRACKING LINK:
 ${liveTrackingUrl}
 
 I've shared my live location with you for safety.

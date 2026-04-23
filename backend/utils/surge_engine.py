@@ -125,7 +125,8 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
     try:
         areas = await db.get_rows("service_areas", {"is_active": True}, limit=100)
     except Exception as e:
-        logger.error(f"Surge: failed to fetch service areas: {e}")
+        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+        logger.error(f"Surge: failed to fetch service areas: {e} | original={original}")
         return results
 
     for area in areas:

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -19,6 +19,7 @@ import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useAuthStore } from '@shared/store/authStore';
+import api from '@shared/api/client';
 
 // ── Static FAQ data ───────────────────────────────────────────────────────────
 const FAQS = [
@@ -36,7 +37,7 @@ const FAQS = [
   },
   {
     q: 'My driver never showed up — what do I do?',
-    a: 'If the driver marked the trip as a no-show, you will not be charged. Contact support with your ride ID and we will investigate.',
+    a: 'If the driver marked the trip as a no-show, you will not be charged. Contact support with your ride code (shown on the receipt, e.g. SPR-XXXXXX) and we will investigate.',
   },
   {
     q: 'How does Spinr Wallet work?',
@@ -115,6 +116,15 @@ export default function SupportScreen() {
 
   const [activeTab, setActiveTab] = useState<Tab>('faq');
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
+  // Public company info — surfaced at the bottom of both tabs so
+  // riders always see the phone/email/address for live support
+  // reachable from anywhere in the app.
+  const [companyInfo, setCompanyInfo] = useState<{
+    name?: string; address?: string; phone?: string; email?: string; website?: string;
+  }>({});
+  useEffect(() => {
+    api.get('/company-info').then(r => setCompanyInfo(r?.data || {})).catch(() => {});
+  }, []);
 
   // Contact form
   const [issue, setIssue] = useState('');
@@ -277,6 +287,16 @@ export default function SupportScreen() {
             <Text style={styles.stillNeedHelpText}>Still need help? Ask our AI assistant</Text>
             <Ionicons name="chevron-forward" size={16} color={colors.primary} />
           </TouchableOpacity>
+
+          {(companyInfo.address || companyInfo.phone || companyInfo.email || companyInfo.website) && (
+            <View style={styles.companySection}>
+              <Text style={styles.companyName}>{companyInfo.name || 'Spinr'}</Text>
+              {!!companyInfo.address && <Text style={styles.companyLine}>{companyInfo.address}</Text>}
+              {!!companyInfo.phone && <Text style={styles.companyLine}>{companyInfo.phone}</Text>}
+              {!!companyInfo.email && <Text style={styles.companyLine}>{companyInfo.email}</Text>}
+              {!!companyInfo.website && <Text style={styles.companyLine}>{companyInfo.website}</Text>}
+            </View>
+          )}
         </ScrollView>
       )}
 
@@ -425,6 +445,24 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: `${colors.primary}10`, borderRadius: 14, padding: 16,
     },
     stillNeedHelpText: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.primary },
+    companySection: {
+        marginTop: 24,
+        paddingTop: 16,
+        paddingBottom: 24,
+        alignItems: 'center',
+    },
+    companyName: {
+        color: colors.textDim,
+        fontSize: 13,
+        fontWeight: '700',
+        marginBottom: 6,
+    },
+    companyLine: {
+        color: colors.textDim,
+        fontSize: 11,
+        marginTop: 2,
+        textAlign: 'center',
+    },
 
     // Chat
     chatList: { padding: 16, paddingBottom: 8 },

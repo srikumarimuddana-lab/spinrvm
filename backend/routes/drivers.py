@@ -18,6 +18,7 @@ try:
     from ..schemas import Driver, RideRatingRequest
     from ..socket_manager import manager
     from ..utils.crypto import hash_otp
+    from ..utils.datetime_utils import parse_iso_utc
     from ..utils.error_handling import RideStateError
 except ImportError:
     import db_supabase
@@ -28,6 +29,7 @@ except ImportError:
     from schemas import Driver, RideRatingRequest
     from socket_manager import manager
     from utils.crypto import hash_otp
+    from utils.datetime_utils import parse_iso_utc
     from utils.error_handling import RideStateError
 
 db = db_supabase  # legacy alias
@@ -126,6 +128,94 @@ ARRIVE_FROM_STATES = ("driver_assigned", "driver_accepted", "driver_arrived")
 # in_progress is idempotent for both (retry after network blip).
 START_FROM_STATES = ("driver_arrived", "in_progress")
 COMPLETE_FROM_STATES = ("in_progress",)
+
+
+async def _generate_and_store_ride_snapshot(
+    *,
+    ride_id: str,
+    pickup_lat,
+    pickup_lng,
+    dropoff_lat,
+    dropoff_lng,
+    phase_polylines,
+    route_polyline,
+) -> None:
+    """Render the ride's route PNG and upload to Supabase Storage.
+
+    Called as a background task from ``complete_ride`` — the driver's
+    request has already returned by the time this runs. Any failure
+    (tile server down, bucket missing, Pillow missing) is logged and
+    swallowed; the ride row already has phase_polylines so the drawer
+    and email can always fall back to the live map.
+
+    Requires a public ``ride-snapshots`` bucket in Supabase Storage.
+    See backend/docs/STORAGE_BUCKETS.md for one-time setup.
+    """
+    if pickup_lat is None or pickup_lng is None or dropoff_lat is None or dropoff_lng is None:
+        return
+    try:
+        try:
+            from ..utils.route_snapshot import render_ride_snapshot
+            from ..supabase_client import supabase  # type: ignore
+            from ..core.config import settings
+        except ImportError:
+            from utils.route_snapshot import render_ride_snapshot  # type: ignore
+            from supabase_client import supabase  # type: ignore
+            from core.config import settings  # type: ignore
+
+        loop = asyncio.get_event_loop()
+        # Tile fetches + PIL rendering are blocking; punt to the executor.
+        png_bytes = await loop.run_in_executor(
+            None,
+            lambda: render_ride_snapshot(
+                pickup_lat=float(pickup_lat),
+                pickup_lng=float(pickup_lng),
+                dropoff_lat=float(dropoff_lat),
+                dropoff_lng=float(dropoff_lng),
+                phase_polylines=phase_polylines,
+                route_polyline=route_polyline,
+            ),
+        )
+        if not png_bytes:
+            return
+
+        # Supabase Storage upload. Public bucket, stable filename so a
+        # re-run for the same ride_id overwrites cleanly via upsert.
+        # The public URL never expires — safe for email embeds.
+        bucket = "ride-snapshots"
+        storage_path = f"ride_{ride_id}.png"
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: supabase.storage.from_(bucket).upload(
+                    path=storage_path,
+                    file=png_bytes,
+                    file_options={
+                        "content-type": "image/png",
+                        # supabase-py serialises bools as JSON, so the string
+                        # form is what ends up on the wire; lowercase "true".
+                        "upsert": "true",
+                    },
+                ),
+            )
+        except Exception as upload_exc:
+            logger.warning(f"Supabase Storage upload failed for ride {ride_id}: {upload_exc}")
+            return
+
+        base = (settings.SUPABASE_URL or "").rstrip("/")
+        if not base:
+            logger.warning("SUPABASE_URL not configured; cannot build public snapshot URL")
+            return
+        url = f"{base}/storage/v1/object/public/{bucket}/{storage_path}"
+
+        # Persist the URL. Wrap in try/except so if migration 41 hasn't
+        # landed yet the write fails gracefully instead of raising.
+        try:
+            await db_supabase.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
+        except Exception as exc:
+            logger.warning(f"route_snapshot_url write failed for ride {ride_id} (migration 41 missing?): {exc}")
+    except Exception as exc:
+        logger.warning(f"Ride snapshot pipeline failed for {ride_id}: {exc}")
 
 
 async def _require_ride_in_state(ride_id: str, driver_id: str, allowed_states: tuple) -> Dict[str, Any]:
@@ -1056,7 +1146,15 @@ async def get_nearby_drivers_public(
     current_user: dict = Depends(get_current_user),
 ):
     """Get nearby active drivers for riders. Filters by service area + vehicle type."""
-    query = {"is_online": True, "is_available": True}
+    # is_verified + status='active' prevent unverified / suspended / needs_review
+    # drivers from appearing on the rider map even if their is_online flag is
+    # stale.
+    query = {
+        "is_online": True,
+        "is_available": True,
+        "is_verified": True,
+        "status": "active",
+    }
     if vehicle_type:
         query["vehicle_type_id"] = vehicle_type
 
@@ -1895,7 +1993,9 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # need to join against driver_location_history for historical rides.
     planned_distance = ride.get("planned_distance_km") or ride.get("distance_km", 0) or 0
     actual_distance_km = planned_distance
-    phase_distances = {}
+    phase_distances: Dict[str, float] = {}
+    phase_durations: Dict[str, int] = {}
+    phase_polylines: Dict[str, list] = {}
     pickup_to_driver_km = 0.0
     route_polyline = []
     gps_points_count = 0
@@ -1913,15 +2013,28 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         gps_points_count = len(all_breadcrumbs)
 
         if gps_points_count >= 2:
-            # Compute per-phase distances (attribute segment to current point's phase)
+            # Compute per-phase distances (attribute each segment to the
+            # current point's phase) and per-phase durations from the
+            # timestamp deltas. Phase 1 (online_idle) is not expected
+            # against a ride_id but tolerated if it shows up.
             phase_totals: Dict[str, float] = {}
+            phase_secs: Dict[str, float] = {}
             for i in range(1, len(all_breadcrumbs)):
                 prev = all_breadcrumbs[i - 1]
                 curr = all_breadcrumbs[i]
                 phase = curr.get("tracking_phase") or "unknown"
-                seg = calculate_distance(prev["lat"], prev["lng"], curr["lat"], curr["lng"])
-                phase_totals[phase] = phase_totals.get(phase, 0.0) + seg
+                seg_km = calculate_distance(prev["lat"], prev["lng"], curr["lat"], curr["lng"])
+                phase_totals[phase] = phase_totals.get(phase, 0.0) + seg_km
+                # Duration: only count if the gap is reasonable (< 5 min)
+                # to avoid one stale breadcrumb inflating a phase by hours.
+                t_prev = parse_iso_utc(prev.get("timestamp"))
+                t_curr = parse_iso_utc(curr.get("timestamp"))
+                if t_prev and t_curr:
+                    delta = (t_curr - t_prev).total_seconds()
+                    if 0 < delta <= 300:
+                        phase_secs[phase] = phase_secs.get(phase, 0.0) + delta
             phase_distances = {k: round(v, 3) for k, v in phase_totals.items()}
+            phase_durations = {k: int(round(v)) for k, v in phase_secs.items()}
 
             # Actual distance = trip_in_progress only (the paid portion)
             actual_distance_km = round(phase_distances.get("trip_in_progress", 0.0), 2)
@@ -1930,16 +2043,38 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
             pickup_to_driver_km = round(phase_distances.get("navigating_to_pickup", 0.0), 2)
 
-            # Downsample route polyline to max ~200 points for fast rendering.
-            # Keep trip_in_progress + navigating_to_pickup (drop idle noise).
+            # Per-phase polylines for SGI / dispute tooling. Each phase is
+            # downsampled to MAX_PER_PHASE points so a long trip's payload
+            # stays bounded. Stored as [lat, lng, iso_ts] tuples so the
+            # admin can replay the trip with timing on the detail map.
+            MAX_PER_PHASE = 150
+            phases_to_split = ("navigating_to_pickup", "trip_in_progress")
+            for phase in phases_to_split:
+                pts = [b for b in all_breadcrumbs if b.get("tracking_phase") == phase]
+                if not pts:
+                    continue
+                step = max(1, len(pts) // MAX_PER_PHASE)
+                sampled = pts[::step]
+                if sampled and sampled[-1] is not pts[-1]:
+                    sampled.append(pts[-1])
+                phase_polylines[phase] = [
+                    [
+                        round(p["lat"], 6),
+                        round(p["lng"], 6),
+                        str(p.get("timestamp") or ""),
+                    ]
+                    for p in sampled
+                ]
+
+            # Legacy combined polyline (kept for the existing ride-detail
+            # map renderer that hasn't moved to phase_polylines yet).
             trip_points = [
-                b for b in all_breadcrumbs if b.get("tracking_phase") in ("navigating_to_pickup", "trip_in_progress")
+                b for b in all_breadcrumbs if b.get("tracking_phase") in phases_to_split
             ]
             if trip_points:
                 MAX_POINTS = 200
                 step = max(1, len(trip_points) // MAX_POINTS)
                 sampled = trip_points[::step]
-                # Always include the last point so the polyline ends at dropoff
                 if sampled and sampled[-1] is not trip_points[-1]:
                     sampled.append(trip_points[-1])
                 route_polyline = [
@@ -1965,6 +2100,8 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         "actual_distance_km": actual_distance_km,
         "pickup_to_driver_km": pickup_to_driver_km,
         "phase_distances": phase_distances,
+        "phase_durations": phase_durations,
+        "phase_polylines": phase_polylines,
         "route_polyline": route_polyline,
         "gps_points_count": gps_points_count,
     }
@@ -2018,6 +2155,24 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     rider = await db_supabase.get_user_by_id(ride.get("rider_id"))
     if rider and rider.get("email"):
         logger.info(f"Sending email receipt for ride {ride_id} to {rider['email']}")
+
+    # Fire-and-forget: render the route PNG from phase_polylines and
+    # upload to Cloudinary so the admin drawer + email receipt can
+    # embed a permanent image URL. Runs as a background task so the
+    # driver's "Complete" response isn't blocked on OSM tile fetches.
+    # Any failure here is swallowed — the snapshot is best-effort and
+    # the ride is already fully persisted with phase data.
+    asyncio.create_task(
+        _generate_and_store_ride_snapshot(
+            ride_id=ride_id,
+            pickup_lat=ride.get("pickup_lat"),
+            pickup_lng=ride.get("pickup_lng"),
+            dropoff_lat=ride.get("dropoff_lat"),
+            dropoff_lng=ride.get("dropoff_lng"),
+            phase_polylines=phase_polylines,
+            route_polyline=route_polyline,
+        )
+    )
 
     # Update driver stats
     await db_supabase.update_one(
@@ -2077,6 +2232,8 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
             {
                 **base_update,
                 "cancelled_by": "driver",
+                # Migration 38 — coarse attribution for admin filtering.
+                "cancellation_type": "driver_cancel",
                 "cancellation_reason": (reason or "").strip() or None,
             },
         )
@@ -2454,18 +2611,44 @@ async def update_driver_status(
 
         # For each mandatory requirement, the latest approved doc wins. If
         # it has an expiry and that expiry is in the past, block.
-        try:
-            requirements = await db_supabase.get_rows("driver_requirements", {}, limit=100)
-        except Exception:
-            requirements = []
-        mandatory_reqs = [r for r in (requirements or []) if r.get("is_mandatory")]
+        # Requirements come from the driver's service-area required_documents
+        # (slug-keyed) — the global document_requirements table is legacy and
+        # misses slug-based uploads where requirement_id is NULL.
+        mandatory_reqs: list = []
+        if driver.get("service_area_id"):
+            try:
+                area_row = (lambda _r: _r[0] if _r else None)(
+                    await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1)
+                )
+                if area_row:
+                    mandatory_reqs = [
+                        r for r in (area_row.get("required_documents") or []) if r.get("required", True)
+                    ]
+            except Exception:
+                mandatory_reqs = []
+
+        def _matches_req(doc: Dict[str, Any], req: Dict[str, Any]) -> bool:
+            req_key = (req.get("key") or "").lower()
+            req_label = (req.get("label") or "").lower()
+            req_id = req.get("id")
+            dkey = (doc.get("requirement_key") or "").lower()
+            if dkey and dkey == req_key:
+                return True
+            drid = doc.get("requirement_id")
+            if drid and (drid == req_id or (isinstance(drid, str) and drid.lower() == req_key)):
+                return True
+            dt = (doc.get("document_type") or "").lower()
+            if dt and (dt == req_label or dt == req_key.replace("_", " ")):
+                return True
+            if dt and req_key and req_key.replace("_", "") in dt.replace(" ", "").replace("_", ""):
+                return True
+            return False
 
         covered_legacy_fields = set()
         for req_row in mandatory_reqs:
-            req_id = req_row.get("id")
-            req_name = req_row.get("name") or "Document"
+            req_name = req_row.get("label") or req_row.get("key") or "Document"
             # Pick the most recent approved doc for this requirement.
-            docs = [d for d in approved_docs if d.get("requirement_id") == req_id]
+            docs = [d for d in approved_docs if _matches_req(d, req_row)]
             if not docs:
                 continue
             docs.sort(key=lambda d: str(d.get("uploaded_at") or ""), reverse=True)
@@ -2568,22 +2751,17 @@ async def update_driver_status(
                     detail="You need an active Spinr Pass subscription to go online. Subscribe from your dashboard.",
                 )
 
-            # Check expiry on the active subscription row.
+            # Check expiry on the active subscription row. parse_iso_utc
+            # returns None on malformed values — we let those through rather
+            # than blocking a driver from going online because of a data bug.
             if sub.get("expires_at"):
-                try:
-                    exp = datetime.fromisoformat(str(sub["expires_at"]).replace("Z", "+00:00").replace("+00:00", ""))
-                    if exp < datetime.now(timezone.utc):
-                        await db_supabase.update_one("driver_subscriptions", {"id": sub["id"]}, {"status": "expired"})
-                        raise HTTPException(
-                            status_code=402,
-                            detail="Your Spinr Pass has expired. Please renew to go online.",
-                        )
-                except HTTPException:
-                    raise
-                except Exception:  # noqa: S110
-                    # Malformed expiry string, unparseable date, etc. — let
-                    # the driver go online rather than blocking on a data bug.
-                    pass
+                exp = parse_iso_utc(sub["expires_at"])
+                if exp is not None and exp < datetime.now(timezone.utc):
+                    await db_supabase.update_one("driver_subscriptions", {"id": sub["id"]}, {"status": "expired"})
+                    raise HTTPException(
+                        status_code=402,
+                        detail="Your Spinr Pass has expired. Please renew to go online.",
+                    )
 
     logger.info(
         f"[GO-ONLINE] handler CALL update_one driver_id={driver_id} "
@@ -2591,11 +2769,38 @@ async def update_driver_status(
         f"pre_update_row_is_online={driver.get('is_online')} "
         f"pre_update_row_is_available={driver.get('is_available')}"
     )
-    await db_supabase.update_one(
-        "drivers",
-        {"id": driver_id},
-        {"is_online": is_online, "is_available": is_online, "updated_at": datetime.now(timezone.utc).isoformat()},
-    )
+    # last_status_changed_at (migration 42) gets bumped only when
+    # is_online actually flips — idempotent toggles (same value) shouldn't
+    # reset the "online since / offline since" clock the admin UI shows.
+    # On PGRST204 (column missing pre-migration) fall back to the legacy
+    # payload so the flip itself still lands.
+    _now_iso = datetime.now(timezone.utc).isoformat()
+    _base = {"is_online": is_online, "is_available": is_online, "updated_at": _now_iso}
+    status_flipped = bool(driver.get("is_online")) != bool(is_online)
+    _payload = {**_base, "last_status_changed_at": _now_iso} if status_flipped else _base
+    try:
+        await db_supabase.update_one("drivers", {"id": driver_id}, _payload)
+    except Exception as _col_exc:
+        # db_supabase.run_sync wraps PostgREST APIErrors in DatabaseError, so
+        # str(_col_exc) is the generic "Database operation failed" sentinel —
+        # the real column-missing text lives in details['original'] and the
+        # __cause__ chain. Inspect both before deciding whether to fall back.
+        if not status_flipped:
+            raise
+        _detail = ""
+        _details_attr = getattr(_col_exc, "details", None)
+        if isinstance(_details_attr, dict):
+            _detail = str(_details_attr.get("original") or "")
+        _cause_text = str(getattr(_col_exc, "__cause__", "") or "")
+        _combined = f"{_col_exc} {_detail} {_cause_text}".lower()
+        if "last_status_changed_at" in _combined or "pgrst204" in _combined:
+            logger.warning(
+                f"[GO-ONLINE] last_status_changed_at missing; retrying minimal. "
+                f"original={_detail or _col_exc}"
+            )
+            await db_supabase.update_one("drivers", {"id": driver_id}, _base)
+        else:
+            raise
 
     # Verify the update actually landed. db_supabase.update_one silently
     # returns None if the write matched zero rows (RLS deny, schema cache miss,

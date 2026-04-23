@@ -122,10 +122,18 @@ export const getStats = () =>
     }>("/api/admin/stats");
 
 /* ── Rides ────────────────────────────────── */
-export const getRides = (limit = 50, offset = 0) =>
-    request<{ rides: any[]; total_count: number; limit: number; offset: number }>(
-        `/api/admin/rides?limit=${limit}&offset=${offset}`
+export const getRides = (
+    limit = 50,
+    offset = 0,
+    opts?: { isScheduled?: boolean; status?: string },
+) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    if (opts?.isScheduled !== undefined) params.set("is_scheduled", String(opts.isScheduled));
+    if (opts?.status) params.set("status", opts.status);
+    return request<{ rides: any[]; total_count: number; limit: number; offset: number }>(
+        `/api/admin/rides?${params.toString()}`,
     );
+};
 export const getRideDetails = (id: string) =>
     request<any>(`/api/admin/rides/${id}/details`);
 export const getRideStats = () =>

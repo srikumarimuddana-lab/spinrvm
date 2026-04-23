@@ -6,6 +6,11 @@ Generates HTML receipt and sends via email (SendGrid when configured, logs other
 import logging
 from datetime import datetime
 
+try:
+    from .datetime_utils import parse_iso_utc
+except ImportError:
+    from utils.datetime_utils import parse_iso_utc
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,13 +25,31 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: flo
             "name", "Driver"
         )
 
-    ride_date = ride.get("ride_completed_at") or ride.get("created_at") or ""
-    if ride_date:
-        try:
-            dt = datetime.fromisoformat(str(ride_date).replace("Z", "+00:00").replace("+00:00", ""))
-            ride_date = dt.strftime("%B %d, %Y at %I:%M %p")
-        except Exception:  # noqa: S110
-            pass
+    ride_date_raw = ride.get("ride_completed_at") or ride.get("created_at") or ""
+    dt = parse_iso_utc(ride_date_raw)
+    ride_date = dt.strftime("%B %d, %Y at %I:%M %p") if dt else str(ride_date_raw)
+
+    # Prefer the human-readable ride_code (migration 40); fall back to a
+    # truncated UUID for rides that predate the code column. Shown in the
+    # receipt so the rider can quote it to support.
+    ride_ref = ride.get("ride_code") or (str(ride.get("id", ""))[:8].upper() or "—")
+
+    # Route map snapshot (migration 41). Rendered from phase_polylines at
+    # ride completion and uploaded to Cloudinary. Present only when the
+    # snapshot pipeline succeeded; legacy rides without a snapshot get a
+    # receipt without the map section (the route addresses below still
+    # carry the essential info).
+    route_snapshot_url = ride.get("route_snapshot_url") or ""
+    route_snapshot_html = (
+        f"""
+        <tr><td style="padding:0 24px 16px;">
+          <img src="{route_snapshot_url}" alt="Your route" width="472"
+               style="width:100%;max-width:472px;height:auto;border-radius:12px;display:block;" />
+        </td></tr>
+        """
+        if route_snapshot_url
+        else ""
+    )
 
     return f"""
     <!DOCTYPE html>
@@ -50,8 +73,11 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: flo
         <tr><td style="padding:20px 24px;text-align:center;">
         <p style="color:#ee2b2b;font-size:42px;font-weight:800;margin:0;">${total:.2f} CAD</p>
           <p style="color:#999;font-size:12px;margin:4px 0 0;">{ride_date}</p>
+          <p style="color:#999;font-size:11px;margin:6px 0 0;letter-spacing:0.5px;">Ride <strong style="color:#1a1a1a;font-weight:700;">{ride_ref}</strong></p>
         </td></tr>
 
+        <!-- Route map (only rendered when snapshot exists) -->
+        {route_snapshot_html}
         <!-- Route -->
         <tr><td style="padding:0 24px 16px;">
         <table width="100%" style="background:#f9f9f9;border-radius:12px;padding:16px;">

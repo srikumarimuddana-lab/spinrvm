@@ -246,7 +246,7 @@ function PayoutScreen() {
                 </View>
             </LinearGradient>
 
-            <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+            <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
             <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 140 }} keyboardShouldPersistTaps="handled"
                     automaticallyAdjustKeyboardInsets={true} showsVerticalScrollIndicator={false}>
                 {/* Balance Card */}

@@ -14,10 +14,12 @@ from pydantic import BaseModel
 try:
     from .. import db_supabase
     from ..dependencies import get_current_user
+    from ..utils.datetime_utils import parse_iso_utc
     from ..utils.rate_limiter import promo_available_limit, promo_validate_limit
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
+    from utils.datetime_utils import parse_iso_utc
     from utils.rate_limiter import promo_available_limit, promo_validate_limit
 
 logger = logging.getLogger(__name__)
@@ -136,13 +138,9 @@ async def validate_promo(
     if new_user_days > 0:
         user = await db_supabase.get_user_by_id(current_user["id"])
         if user and user.get("created_at"):
-            try:
-                created = datetime.fromisoformat(str(user["created_at"]).replace("Z", "+00:00").replace("+00:00", ""))
-                if (now - created).days > new_user_days:
-                    raise HTTPException(status_code=400, detail="This promo is for new users only")
-            except (ValueError, HTTPException) as e:
-                if isinstance(e, HTTPException):
-                    raise  # noqa: E701
+            created = parse_iso_utc(user["created_at"])
+            if created is not None and (now - created).days > new_user_days:
+                raise HTTPException(status_code=400, detail="This promo is for new users only")
 
     # 8. Inactive user targeting (no rides in X days)
     inactive_days = promo.get("inactive_days", 0)
@@ -315,8 +313,8 @@ async def get_available_promos(
             # New user only
             new_days = p.get("new_user_days", 0)
             if new_days > 0 and user and user.get("created_at"):
-                created = datetime.fromisoformat(str(user["created_at"]).replace("Z", "+00:00").replace("+00:00", ""))
-                if (now - created).days > new_days:
+                created = parse_iso_utc(user["created_at"])
+                if created is not None and (now - created).days > new_days:
                     continue  # noqa: E701
 
             # Inactive user targeting

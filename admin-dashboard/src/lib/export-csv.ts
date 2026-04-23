@@ -1,27 +1,40 @@
 /**
  * Export an array of objects to a CSV file and trigger download.
+ *
+ * Columns may specify either a `key` (simple property lookup) or a `value`
+ * function that receives the row and returns the cell value. `value`
+ * wins when both are supplied; this lets callers flatten JSONB columns
+ * (e.g. rides.phase_distances.trip_in_progress) without mutating the
+ * source data.
  */
-export function exportToCsv(filename: string, rows: Record<string, any>[], columns?: { key: string; label: string }[]) {
+export type CsvColumn = {
+    key?: string;
+    label: string;
+    value?: (row: Record<string, any>) => unknown;
+};
+
+export function exportToCsv(
+    filename: string,
+    rows: Record<string, any>[],
+    columns?: CsvColumn[],
+) {
     if (rows.length === 0) return;
 
-    // Determine columns: use provided or auto-detect from keys
-    const cols = columns || Object.keys(rows[0]).map((k) => ({ key: k, label: k }));
+    const cols: CsvColumn[] =
+        columns || Object.keys(rows[0]).map((k) => ({ key: k, label: k }));
 
-    // Header row
     const header = cols.map((c) => `"${c.label}"`).join(",");
 
-    // Data rows
     const csvRows = rows.map((row) =>
         cols
             .map((c) => {
-                let val = row[c.key];
+                let val = c.value ? c.value(row) : c.key ? row[c.key] : "";
                 if (val === null || val === undefined) val = "";
                 if (typeof val === "object") val = JSON.stringify(val);
-                // Escape quotes
                 val = String(val).replace(/"/g, '""');
                 return `"${val}"`;
             })
-            .join(",")
+            .join(","),
     );
 
     const csv = [header, ...csvRows].join("\n");

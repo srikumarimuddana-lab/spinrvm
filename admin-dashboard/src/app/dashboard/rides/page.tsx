@@ -21,10 +21,16 @@ export default function RidesPage() {
     const [dateTo, setDateTo] = useState("");
     const [selectedRideId, setSelectedRideId] = useState<string | null>(null);
 
-    const loadRides = useCallback(async (p: number) => {
+    // Scheduled rides live as status="searching" + is_scheduled=true until
+    // their scheduled_time, so they are not on the default feed — re-query
+    // the backend when the operator picks the Scheduled tab. Every other
+    // tab keeps the original client-side status filter (so per-tab counts
+    // work from a single loaded batch).
+    const loadRides = useCallback(async (p: number, tab: string) => {
         setLoading(true);
         try {
-            const res = await getRides(PAGE_SIZE, p * PAGE_SIZE);
+            const opts = tab === "scheduled" ? { isScheduled: true } : undefined;
+            const res = await getRides(PAGE_SIZE, p * PAGE_SIZE, opts);
             setRides(res.rides);
             setTotalCount(res.total_count);
         } catch {}
@@ -32,14 +38,19 @@ export default function RidesPage() {
     }, []);
 
     useEffect(() => {
-        Promise.all([loadRides(0), getServiceAreas().catch(() => [])])
+        Promise.all([loadRides(0, statusFilter), getServiceAreas().catch(() => [])])
             .then(([_, a]) => { if (a) setAreas(a as any); })
             .catch(() => {});
-    }, [loadRides]);
+    }, [loadRides, statusFilter]);
 
     const handlePageChange = (newPage: number) => {
         setPage(newPage);
-        loadRides(newPage);
+        loadRides(newPage, statusFilter);
+    };
+
+    const handleStatusChange = (tab: string) => {
+        setStatusFilter(tab);
+        setPage(0);
     };
 
     const filtered = rides.filter(r => {
@@ -48,13 +59,33 @@ export default function RidesPage() {
             r.pickup_address?.toLowerCase().includes(q) ||
             r.dropoff_address?.toLowerCase().includes(q) ||
             r.id?.toLowerCase().includes(q) ||
+            r.ride_code?.toLowerCase().includes(q) ||
             r.rider_name?.toLowerCase().includes(q) ||
             r.rider_phone?.toLowerCase().includes(q) ||
             r.driver_name?.toLowerCase().includes(q) ||
             r.driver_phone?.toLowerCase().includes(q) ||
             r.rider_id?.toLowerCase().includes(q) ||
             r.driver_id?.toLowerCase().includes(q);
-        const matchStatus = statusFilter === "all" || r.status === statusFilter;
+        // "scheduled" narrows to rides the rider explicitly scheduled
+        // (is_scheduled=true). Even though the backend is also called
+        // with is_scheduled=true for this tab, we narrow client-side too
+        // so a stale feed or an older row with is_scheduled=null never
+        // leaks a non-scheduled ride into the Scheduled tab.
+        //
+        // "no_driver_found" is backed by status=cancelled on the wire;
+        // narrow client-side to the ones auto-cancelled by the
+        // dispatcher timeout (cancellation_type or legacy reason text).
+        const matchStatus =
+            statusFilter === "all" ||
+            (statusFilter === "scheduled" && r.is_scheduled === true) ||
+            (statusFilter === "no_driver_found" &&
+                r.status === "cancelled" &&
+                (r.cancellation_type === "no_drivers_found" ||
+                    (r.cancellation_reason || "").toLowerCase().includes("no nearby drivers"))) ||
+            (statusFilter !== "scheduled" &&
+                statusFilter !== "no_driver_found" &&
+                statusFilter !== "all" &&
+                r.status === statusFilter);
         const matchArea = areaFilter === "all" || r.service_area_id === areaFilter;
         let matchDate = true;
         if (dateFrom || dateTo) {
@@ -91,7 +122,7 @@ export default function RidesPage() {
                 search={search}
                 onSearchChange={setSearch}
                 statusFilter={statusFilter}
-                onStatusChange={setStatusFilter}
+                onStatusChange={handleStatusChange}
                 areaFilter={areaFilter}
                 onAreaChange={setAreaFilter}
                 dateFrom={dateFrom}

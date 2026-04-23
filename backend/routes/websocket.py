@@ -35,17 +35,105 @@ WS_MAX_MESSAGES_PER_SECOND = 30
 WS_MAX_MESSAGE_SIZE = 64 * 1024  # 64 KB max message payload
 
 
-async def heartbeat_task(websocket: WebSocket, connection_key: str):
-    """Background task that sends periodic ping messages to keep the connection alive
-    and detect dead connections early. This is critical for rideshare apps where
-    a silently disconnected driver would miss ride offers."""
+async def _handle_driver_ws_offline(connection_key: str | None, user: dict | None) -> None:
+    """When a driver's WebSocket drops, flip their DB row offline so the
+    admin panel and dispatch engine see reality.
+
+    Without this, `drivers.is_online` stays True forever after a single Go
+    Online toggle — through app closes, crashes, network drops — so admins
+    see phantom online drivers and dispatch picks drivers whose app isn't
+    running. is_online is now treated as "driver has intent AND active
+    socket"; on reconnect the driver must tap Go Online again, matching
+    standard rideshare behavior.
+    """
+    if not connection_key or not connection_key.startswith("driver_") or not user:
+        return
+    # If a newer WS has already reconnected under the same key, the driver is
+    # actually still present — don't flip them offline just because this older
+    # socket's disconnect handler fired late.
+    if connection_key in manager.active_connections:
+        return
+    try:
+        driver_profile_off = await db.find_one("drivers", {"user_id": user["id"]})
+        if not driver_profile_off:
+            return
+        driver_id = driver_profile_off["id"]
+        # Only write if we're actually changing state — skip the write for
+        # drivers who were already offline (e.g. WS opened but never toggled
+        # online), to avoid unnecessary DB churn and updated_at bumps.
+        if driver_profile_off.get("is_online") or driver_profile_off.get("is_available"):
+            try:
+                await db_supabase.update_one(
+                    "drivers",
+                    {"id": driver_id},
+                    {
+                        "is_online": False,
+                        "is_available": False,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            except Exception as _db_exc:
+                logger.warning(
+                    f"[WS] Could not flip driver {driver_id} offline on disconnect: {_db_exc}"
+                )
+        await manager.broadcast_to_admins(
+            {
+                "type": "driver_status_changed",
+                "driver_id": driver_id,
+                "is_online": False,
+            }
+        )
+    except Exception as _exc:
+        logger.warning(f"[WS] offline-on-disconnect handler failed for {connection_key}: {_exc}")
+
+
+async def heartbeat_task(
+    websocket: WebSocket,
+    connection_key: str,
+    conn_state: dict,
+):
+    """Background task that sends periodic ping messages to keep the connection
+    alive and detect dead connections early. Critical for rideshare apps where
+    a silently disconnected driver would miss ride offers.
+
+    Detection works in two ways:
+
+    1. If the ping itself fails to send (TCP buffer rejected, RST received),
+       close the socket immediately — pre-existing behavior.
+    2. If pings keep succeeding but the client hasn't sent a pong recently
+       (phone died mid-connection, airplane mode, OS killed the app in the
+       background — all cases where there's no clean close frame), we close
+       the socket after a grace window. `conn_state["last_pong_at"]` is
+       updated by the pong-handler branch in the main receive loop.
+
+    Either path raises ``WebSocketDisconnect`` in the receive loop, which
+    triggers ``_handle_driver_ws_offline`` and flips the DB row.
+    """
+    loop = asyncio.get_event_loop()
+    # Tolerate one missed ping window before giving up — HEARTBEAT_INTERVAL
+    # for the ping to go out, HEARTBEAT_TIMEOUT for the pong to come back,
+    # plus one interval of slack for mobile network latency.
+    stale_threshold = (HEARTBEAT_INTERVAL * 2) + HEARTBEAT_TIMEOUT
     try:
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
             try:
-                await websocket.send_json({"type": "ping", "timestamp": datetime.now(timezone.utc).isoformat()})
+                await websocket.send_json(
+                    {"type": "ping", "timestamp": datetime.now(timezone.utc).isoformat()}
+                )
             except Exception:
-                logger.info(f"Heartbeat failed for {connection_key} - connection likely dead")
+                logger.info(f"Heartbeat send failed for {connection_key} — connection likely dead")
+                break
+            last_pong = conn_state.get("last_pong_at", 0.0)
+            if loop.time() - last_pong > stale_threshold:
+                logger.info(
+                    f"[WS] {connection_key} no pong for {loop.time() - last_pong:.1f}s — "
+                    f"closing stale connection"
+                )
+                try:
+                    await websocket.close(code=1001)  # 1001 = going away
+                except Exception:  # noqa: S110
+                    pass
                 break
     except asyncio.CancelledError:
         pass
@@ -94,7 +182,28 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             # Fallback to legacy JWT
             try:
                 payload = verify_jwt_token(token)
-                user = await db_supabase.get_user_by_id(payload["user_id"])
+                # Admin tokens are minted with a `role` claim and have no row
+                # in the `users` table (admin-001 is env-var creds; admin_staff
+                # rows live in a separate table). Without this branch the
+                # lookup returns None and the client is told
+                # invalid_token_or_user_not_found — which the monitoring
+                # hook reacts to with exponential-backoff reconnects, i.e.
+                # the repeating "WebSocket failed" loop seen in the admin
+                # live-monitoring console. Mirrors get_current_user() in
+                # dependencies/__init__.py.
+                _admin_roles = {
+                    "admin", "super_admin", "operations",
+                    "support", "finance", "custom",
+                }
+                if payload.get("role") in _admin_roles and payload.get("email"):
+                    user = {
+                        "id": payload["user_id"],
+                        "email": payload.get("email"),
+                        "phone": payload.get("phone", ""),
+                        "role": payload["role"],
+                    }
+                else:
+                    user = await db_supabase.get_user_by_id(payload["user_id"])
             except Exception:
                 user = None
 
@@ -130,7 +239,11 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
         # socket is broken (observed: repeated online toggles on Railway).
         await websocket.send_json({"type": "auth_success", "client_type": client_type})
 
-        # Notify admins that a driver came online
+        # Notify admins the driver's socket reconnected. Reflect whatever
+        # the DB says about is_online — don't assume reconnect == online,
+        # because the driver might still be toggled off (e.g. they opened
+        # the app but haven't hit Go Online yet). Admins should always see
+        # intent-based status, not socket-presence.
         if client_type == "driver":
             driver_profile_for_status = await db.find_one("drivers", {"user_id": user["id"]})
             if driver_profile_for_status:
@@ -138,12 +251,16 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                     {
                         "type": "driver_status_changed",
                         "driver_id": driver_profile_for_status["id"],
-                        "is_online": True,
+                        "is_online": bool(driver_profile_for_status.get("is_online")),
                     }
                 )
 
-        # GAP FIX: Start heartbeat background task
-        hb_task = asyncio.create_task(heartbeat_task(websocket, connection_key))
+        # GAP FIX: Start heartbeat background task. conn_state is shared with
+        # heartbeat_task so it can detect stale connections — every pong the
+        # client sends bumps last_pong_at; the heartbeat closes the socket
+        # if pongs stop arriving (phone died, app killed, airplane mode).
+        conn_state: dict = {"last_pong_at": asyncio.get_event_loop().time()}
+        hb_task = asyncio.create_task(heartbeat_task(websocket, connection_key, conn_state))
 
         # Rate limiting state
         _msg_timestamps: list = []
@@ -173,9 +290,12 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 continue
             _msg_timestamps.append(now_ts)
 
-            # GAP FIX: Handle pong responses (client acknowledges our ping)
+            # GAP FIX: Handle pong responses (client acknowledges our ping).
+            # Bump last_pong_at so heartbeat_task knows the client is alive —
+            # without this, the staleness check inside heartbeat_task would
+            # treat every connection as dead after a few intervals.
             if data.get("type") == "pong":
-                # Client is alive, nothing to do
+                conn_state["last_pong_at"] = asyncio.get_event_loop().time()
                 continue
 
             if data.get("type") in ("driver_location", "location_update"):
@@ -342,8 +462,17 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 lng = data.get("lng")
                 radius = data.get("radius", 5)  # km
                 if lat and lng:
+                    # is_verified + status='active' prevent unverified / suspended
+                    # drivers from being broadcast to riders via the realtime map.
                     drivers = await db_supabase.get_rows(
-                        "drivers", {"is_online": True, "is_available": True}, limit=100
+                        "drivers",
+                        {
+                            "is_online": True,
+                            "is_available": True,
+                            "is_verified": True,
+                            "status": "active",
+                        },
+                        limit=100,
                     )
 
                     nearby = []
@@ -401,21 +530,12 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 logger.warning(f"Unknown WS message type: {data.get('type')}")
 
     except WebSocketDisconnect:
-        if connection_key and connection_key.startswith("driver_"):
-            # Notify admins the driver went offline
-            driver_profile_off = await db.find_one("drivers", {"user_id": user["id"]}) if user else None
-            if driver_profile_off:
-                await manager.broadcast_to_admins(
-                    {
-                        "type": "driver_status_changed",
-                        "driver_id": driver_profile_off["id"],
-                        "is_online": False,
-                    }
-                )
+        await _handle_driver_ws_offline(connection_key, user)
         if connection_key:
             manager.disconnect(connection_key)
     except Exception as e:
         logger.exception(f"WebSocket error: {e}")
+        await _handle_driver_ws_offline(connection_key, user)
         if connection_key:
             manager.disconnect(connection_key)
         try:

@@ -8,6 +8,7 @@ import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJa
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
+import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useRideStore } from '../store/rideStore';
@@ -160,7 +161,6 @@ export default function RootLayout() {
   useEffect(() => {
     (async () => {
       try {
-        const api = (await import('@shared/api/client')).default;
         const res = await api.get<{ stripe_publishable_key?: string }>('/settings');
         const key = res.data?.stripe_publishable_key;
         if (key) setStripePublishableKey(key);
@@ -255,7 +255,6 @@ export default function RootLayout() {
       try {
         const fcmToken = await requestPushPermissionAndGetToken();
         if (!fcmToken) return;
-        const api = (await import('@shared/api/client')).default;
         await api.post('/notifications/register-token', {
           token: fcmToken,
           platform: Platform.OS,
@@ -280,7 +279,6 @@ export default function RootLayout() {
     // silently fail when Firebase rotates the device token.
     const unsubTokenRefresh = onTokenRefresh(async (newToken: string) => {
       try {
-        const api = (await import('@shared/api/client')).default;
         await api.post('/notifications/register-token', {
           token: newToken,
           platform: Platform.OS,

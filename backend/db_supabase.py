@@ -123,6 +123,7 @@ async def run_sync(func: Callable[[], T]) -> T:
         exc_str_lower = exc_str.lower()
         if "duplicate key" in exc_str_lower or "unique constraint" in exc_str_lower or "23505" in exc_str:
             raise DuplicateRecordError(details={"original": exc_str}) from exc
+        logger.error(f"[DB] Supabase call failed ({exc_name}): {exc_str}")
         raise DatabaseError(details={"original": exc_str}) from exc
 
 
@@ -488,7 +489,15 @@ async def insert_ride(payload: Dict[str, Any]):
     if not supabase:
         raise RuntimeError("Supabase client not configured")
     payload = _serialize_for_api(payload)
-    return await run_sync(lambda: _single_row_from_res(supabase.table("rides").insert(payload).execute()))
+    logger.info(f"[DEBUG-INSERT-RIDE] payload keys: {sorted(payload.keys())}")
+    logger.info(f"[DEBUG-INSERT-RIDE] full payload: {payload}")
+    try:
+        result = await run_sync(lambda: _single_row_from_res(supabase.table("rides").insert(payload).execute()))
+        logger.info(f"[DEBUG-INSERT-RIDE] SUCCESS ride_id={payload.get('id')}")
+        return result
+    except Exception as e:
+        logger.error(f"[DEBUG-INSERT-RIDE] FAILED: {e}")
+        raise
 
 
 async def update_ride(ride_id: str, updates: Dict[str, Any]):

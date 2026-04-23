@@ -168,9 +168,18 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
       const { token, refresh_token: newRefresh, expires_in } = res.data as any;
       await get().setTokens(token, newRefresh, expires_in);
       return true;
-    } catch (e) {
-      console.log('[Auth] Token refresh failed — logging out');
-      await get().logout();
+    } catch (e: any) {
+      // Only wipe the session when the server explicitly rejects the refresh
+      // token (401). Network errors, timeouts, and 5xx are transient — keeping
+      // the refresh token lets the next app launch / request try again instead
+      // of forcing the user back to the OTP screen on a flaky connection.
+      const status = e?.response?.status;
+      if (status === 401) {
+        console.log('[Auth] Refresh token rejected (401) — logging out');
+        await get().logout();
+      } else {
+        console.log('[Auth] Token refresh failed transiently, keeping session:', status ?? e?.message);
+      }
       return false;
     }
   },

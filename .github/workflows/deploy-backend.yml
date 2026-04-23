@@ -53,6 +53,24 @@ jobs:
       - name: Show Railway CLI version
         run: railway --version
 
+      # Diagnostic: print the list of services in this project so we can
+      # see the exact service name to pass to `railway up --service <name>`.
+      # The Railway service is not always called "backend" — it may be
+      # "spinr-backend", "api", "web", or the auto-generated GitHub repo
+      # name. `railway status` emits the project + services summary.
+      - name: List Railway services (diagnostic)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          echo "===== railway status ====="
+          railway status || true
+          echo ""
+          echo "===== railway status --json ====="
+          railway status --json || true
+          echo ""
+          echo "===== railway service list ====="
+          railway service list || true
+
       - name: Deploy to Railway
         run: railway up --service backend
         env:

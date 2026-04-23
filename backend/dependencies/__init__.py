@@ -183,9 +183,10 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 db_session = user.get("current_session_id")
                 if db_session and token_session and token_session != db_session:
                     raise HTTPException(status_code=401, detail="ERR_SESSION_EXPIRED")
-                driver = (lambda _r: _r[0] if _r else None)(
-                    await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
-                )
+                # Cached (30s) — get_current_user runs on every
+                # authenticated request so this lookup used to dominate
+                # the Supabase read load.
+                driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
                 user["is_driver"] = True if driver else False
             return user
     except HTTPException:
@@ -289,9 +290,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         return user
 
     try:
-        driver = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
-        )
+        # Cached driver-by-user lookup (30s). Same reason as the Firebase
+        # path above — this is the JWT hot path for every API call.
+        driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
         user["is_driver"] = True if driver else False
     except (DatabaseError, ServiceUnavailableException):
         # Treat the drivers lookup the same as the users lookup — if the

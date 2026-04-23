@@ -234,7 +234,7 @@ export default function AddressesScreen() {
             >
                 <KeyboardAvoidingView
                     style={{ flex: 1 }}
-                    behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                 >
                 <Pressable style={styles.modalOverlay} onPress={() => setShowAddModal(false)}>
                     <Pressable style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom + 12, 24) }]} onPress={(e) => e.stopPropagation()}>

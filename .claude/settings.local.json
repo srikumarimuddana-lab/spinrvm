@@ -57,7 +57,8 @@
       "Bash(powershell.exe -Command \"ipconfig\")",
       "Bash(curl *)",
       "Bash(yarn test *)",
-      "Bash(npx --no-install jest --testPathPattern=\"crashlytics|store\" --passWithNoTests)"
+      "Bash(npx --no-install jest --testPathPattern=\"crashlytics|store\" --passWithNoTests)",
+      "Bash(npx --no-install tsc --noEmit --project tsconfig.json)"
     ]
   }
 }

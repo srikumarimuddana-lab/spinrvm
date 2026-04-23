@@ -449,6 +449,46 @@ def init_middleware(app):
 
     app.add_middleware(RelativeRedirectMiddleware)
 
+    # Deadline propagation — clients send `X-Deadline-Ms: <epoch-ms>`
+    # (derived from their local axios / fetch timeout). The backend
+    # stashes the deadline on a contextvar so any code running inside
+    # the request coroutine can consult it — most importantly
+    # db_supabase.run_sync, which checks remaining budget before each
+    # retry sleep. If the client has already given up, we skip the
+    # retry and fail fast instead of burning thread-pool workers on a
+    # doomed request.
+    #
+    # Absent header = no deadline enforced (current behaviour).
+    from utils.deadline import set_request_deadline
+
+    class DeadlineMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            deadline_header = request.headers.get("x-deadline-ms")
+            token = None
+            if deadline_header:
+                try:
+                    deadline_epoch_ms = int(deadline_header)
+                    import time as _t
+                    now_epoch_ms = int(_t.time() * 1000)
+                    remaining_ms = deadline_epoch_ms - now_epoch_ms
+                    # Convert the client's epoch deadline into a
+                    # monotonic-clock one so comparisons inside the
+                    # request (which may run for many seconds) aren't
+                    # affected by system clock jumps.
+                    monotonic_deadline = _t.monotonic() + (remaining_ms / 1000.0)
+                    request.state.deadline_monotonic = monotonic_deadline
+                    token = set_request_deadline(monotonic_deadline)
+                except (ValueError, TypeError):
+                    # Malformed header — ignore silently. Not worth a 400.
+                    pass
+            try:
+                return await call_next(request)
+            finally:
+                if token is not None:
+                    set_request_deadline(None, reset_token=token)
+
+    app.add_middleware(DeadlineMiddleware)
+
     # Rate Limiting Middleware
     app.state.limiter = default_limiter
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)

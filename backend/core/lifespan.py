@@ -57,6 +57,29 @@ async def cleanup_database(db):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifespan events"""
+    # Size the default ThreadPoolExecutor that run_in_executor() uses.
+    # Every Supabase call goes through run_sync() → run_in_executor(),
+    # and each call pins one thread for its entire DB roundtrip (plus
+    # any blocking retry is on asyncio.sleep — not pinning — so the
+    # pool is only loaded during actual wire time).
+    #
+    # Python's default is min(32, os.cpu_count() + 4), which on a 2-vCPU
+    # Railway instance works out to 6 threads. Under any realistic load
+    # that's the bottleneck: at ~200ms average PostgREST latency, 6
+    # threads cap us at 30 concurrent DB RPS. Bumping to 64 gives us
+    # ~300 concurrent RPS headroom while still being well within the
+    # memory budget (each thread is ~8 MB stack).
+    #
+    # Override with BACKEND_EXECUTOR_WORKERS env var if needed.
+    import asyncio as _asyncio_lifespan
+    import os as _os
+    from concurrent.futures import ThreadPoolExecutor as _Executor
+
+    executor_size = int(_os.environ.get("BACKEND_EXECUTOR_WORKERS", "64"))
+    loop = _asyncio_lifespan.get_event_loop()
+    loop.set_default_executor(_Executor(max_workers=executor_size, thread_name_prefix="spinr-db"))
+    logger.info(f"Default executor sized to {executor_size} workers")
+
     # Initialize database
     logger.info("Initializing database connection...")
     try:

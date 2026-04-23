@@ -19,10 +19,12 @@ except ImportError:
     from supabase_client import supabase  # type: ignore
 
 try:
+    from .utils.deadline import deadline_exhausted as _deadline_exhausted  # type: ignore
     from .utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
     from .utils.metrics import inc as _metric_inc, set_gauge as _metric_gauge  # type: ignore
     from .utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set  # type: ignore
 except ImportError:
+    from utils.deadline import deadline_exhausted as _deadline_exhausted  # type: ignore
     from utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
     from utils.metrics import inc as _metric_inc, set_gauge as _metric_gauge  # type: ignore
     from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set  # type: ignore
@@ -219,6 +221,24 @@ async def run_sync(
                 break
 
             if attempt < len(backoffs):
+                # Deadline check — if the client already gave up
+                # (X-Deadline-Ms in the past, or less than the next
+                # backoff's worth of budget left), skip the retry and
+                # fail fast. Frees the worker for a request whose
+                # client is still listening. No-op when no deadline is
+                # set (absent header).
+                next_backoff = backoffs[attempt]
+                if _deadline_exhausted(now_margin_seconds=next_backoff):
+                    _metric_inc(
+                        "spinr_db_retry_skipped_total",
+                        {"reason": "deadline_exhausted", "policy": retry_policy},
+                    )
+                    logger.warning(
+                        f"Supabase transient failure ({exc_name}) — client deadline exhausted, "
+                        f"skipping {next_backoff}s retry"
+                    )
+                    break
+
                 # Check the fleet-wide retry budget BEFORE sleeping. If
                 # we're out of budget, skip the remaining retries and
                 # let the original transient error propagate (as a
@@ -234,7 +254,7 @@ async def run_sync(
                     )
                     break
 
-                delay = _jittered(backoffs[attempt])
+                delay = _jittered(next_backoff)
                 _metric_inc(
                     "spinr_db_retry_total",
                     {"policy": retry_policy, "reason": exc_name},

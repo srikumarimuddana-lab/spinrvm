@@ -70,7 +70,31 @@ async def _sweep_once() -> int:
     if not online_drivers:
         return 0
 
-    ids = [d["id"] for d in online_drivers if d.get("id")]
+    # Grace period — a driver who just flipped online needs time for the WS
+    # to connect and mark_present to land. Without this buffer, a sweeper
+    # tick landing in the gap between the Go-Online DB write and presence
+    # registration would race the handler's verify step and bounce the
+    # driver right back offline (the bug surfaced as 500s on tap-to-go-online).
+    now = datetime.now(timezone.utc)
+    grace_seconds = SWEEP_INTERVAL_SECONDS * 2  # 120s → always >= one full tick
+
+    def _within_grace(d: dict) -> bool:
+        ts_str = d.get("last_status_changed_at")
+        if not ts_str:
+            return False
+        try:
+            ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            return (now - ts).total_seconds() < grace_seconds
+        except Exception:
+            return False
+
+    eligible = [d for d in online_drivers if not _within_grace(d)]
+    if not eligible:
+        return 0
+
+    ids = [d["id"] for d in eligible if d.get("id")]
     try:
         present = await present_driver_ids(ids)
     except Exception as exc:
@@ -80,11 +104,11 @@ async def _sweep_once() -> int:
         logger.warning(f"[presence_sweeper] presence lookup failed, skipping tick: {exc}")
         return 0
 
-    ghosts = [d for d in online_drivers if d["id"] not in present]
+    ghosts = [d for d in eligible if d["id"] not in present]
     if not ghosts:
         return 0
 
-    now_iso = datetime.now(timezone.utc).isoformat()
+    now_iso = now.isoformat()
     flipped = 0
     for d in ghosts:
         try:

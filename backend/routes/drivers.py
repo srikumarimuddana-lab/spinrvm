@@ -2781,8 +2781,23 @@ async def update_driver_status(
     try:
         await db_supabase.update_one("drivers", {"id": driver_id}, _payload)
     except Exception as _col_exc:
-        if "column" in str(_col_exc).lower() or "pgrst204" in str(_col_exc).lower():
-            logger.warning(f"[GO-ONLINE] last_status_changed_at missing; retrying minimal: {_col_exc}")
+        # db_supabase.run_sync wraps PostgREST APIErrors in DatabaseError, so
+        # str(_col_exc) is the generic "Database operation failed" sentinel —
+        # the real column-missing text lives in details['original'] and the
+        # __cause__ chain. Inspect both before deciding whether to fall back.
+        if not status_flipped:
+            raise
+        _detail = ""
+        _details_attr = getattr(_col_exc, "details", None)
+        if isinstance(_details_attr, dict):
+            _detail = str(_details_attr.get("original") or "")
+        _cause_text = str(getattr(_col_exc, "__cause__", "") or "")
+        _combined = f"{_col_exc} {_detail} {_cause_text}".lower()
+        if "last_status_changed_at" in _combined or "pgrst204" in _combined:
+            logger.warning(
+                f"[GO-ONLINE] last_status_changed_at missing; retrying minimal. "
+                f"original={_detail or _col_exc}"
+            )
             await db_supabase.update_one("drivers", {"id": driver_id}, _base)
         else:
             raise

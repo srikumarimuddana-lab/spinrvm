@@ -535,6 +535,21 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
   },
 
   logout: async () => {
+    // Uber/Lyft-style: a driver explicitly signing out must flip offline
+    // before the socket drops and tokens get wiped. Without this, the
+    // admin live-monitoring map (and any rider mid-match) would keep
+    // seeing the driver as online until their presence TTL expired. We
+    // swallow errors — a flaky network shouldn't block the user from
+    // signing out — and fall through to the normal cleanup.
+    const { driver, token } = get();
+    if (driver?.id && token) {
+      try {
+        await api.put(`/drivers/${driver.id}/status`, { is_online: false });
+      } catch (error) {
+        if (__DEV__) console.log('[Auth] go-offline on logout failed (non-fatal):', error);
+      }
+    }
+
     try {
       if (typeof auth.onAuthStateChanged === 'function') {
         await signOut(auth);

@@ -589,7 +589,13 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOnline, user?.id]);
 
-  // Re-connect when app returns to foreground (mobile networks drop on background)
+  // Uber/Lyft-style presence: proactively close the WebSocket when the
+  // app backgrounds so the backend clears Redis presence immediately
+  // (via the disconnect handler), instead of waiting for the 90 s TTL
+  // to expire. Reconnect on return to foreground. Mobile OSes suspend
+  // background sockets silently — without this the driver shows as
+  // online to admins and can even receive ride offers after the app
+  // was swiped away.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active' && isOnlineRef.current && userRef.current) {
@@ -602,6 +608,13 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           reconnectAttemptRef.current = 0;
           connectWebSocket();
         }
+      } else if ((nextState === 'background' || nextState === 'inactive') && wsRef.current) {
+        // Clean close so the backend disconnect handler fires promptly
+        // and clears presence + flips the driver offline in the admin
+        // live-monitoring view. 1001 = "going away".
+        try {
+          wsRef.current.close(1001, 'app_backgrounded');
+        } catch {}
       }
     });
     return () => sub.remove();

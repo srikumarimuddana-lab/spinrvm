@@ -219,6 +219,65 @@ bare `{"error": ...}`?
 
 ---
 
+## Output Schema (REQUIRED)
+
+Every finding in `2026-04-23-backend-api-v1.txt` MUST also appear in a
+machine-readable block at the end of the file under a `===FINDINGS-YAML===`
+fence. Downstream tooling (cross-audit dedup, regression tracking, ticket
+auto-generation) depends on this contract.
+
+```yaml
+===FINDINGS-YAML===
+- id: B-02-1                             # B = backend · <dim> · <seq>
+  severity: CRITICAL                     # CRITICAL|HIGH|MEDIUM|LOW|PASS|RECOMMENDATION
+  dimension: 02                          # 01..16 (+17..22 if adopted)
+  title: "JWT role claim trusted for non-admin tokens"   # ≤80 chars
+  evidence:
+    file: backend/routes/rides.py
+    lines: [412, 418]
+    snippet: "if claims.get('role') == 'driver': ..."    # ≤5 lines
+  root_cause: "Role read from JWT instead of users table."
+  impact: "Privilege escalation — rider token forged with role=driver accepts rides."
+  fix:                                   # ≤3 imperative bullets
+    - "Replace claims['role'] with get_user_role(user_id)."
+    - "Add regression test for forged role claim."
+  effort_hours: 3
+  regression_test: "backend/tests/test_auth.py::test_role_not_trusted_from_jwt"
+  sprint: P0                             # P0..P4
+  owners: [backend]
+  regulations: [PIPEDA, PCI-DSS]         # empty list if none
+  confidence: high                       # high=code read · med=inferred · low=hypothesis
+  duplicate_of: null                     # prior finding ID if rediscovered
+===END-FINDINGS-YAML===
+```
+
+### Mandatory rules
+- No `CRITICAL` or `HIGH` finding without `file` + `lines` + `snippet`. Otherwise
+  downgrade to `RECOMMENDATION` and mark `confidence: low`.
+- Before emitting a finding, grep for prior-audit matches:
+  `grep -E "file:.*<path>" reports/audits/2026-04-18-driver-app-*.txt reports/audits/2026-04-19-rider-app-v1.txt`
+  If a match exists with the same root cause, set `duplicate_of: <prior_id>` and skip.
+- Live secrets (Stripe `sk_live_`, Supabase service-role) found in code: redact
+  in `snippet` as `"sk_live_[REDACTED]"`; never paste the literal value.
+
+### Done-sentinel
+After the YAML block, emit on its own line:
+```
+===AUDIT-COMPLETE=== dimensions_run=<N> findings=<N> critical=<N> high=<N>
+```
+Driver scripts detect truncation by the absence of this line.
+
+### Self-review pass (run before emitting the sentinel)
+1. Re-read every `CRITICAL`/`HIGH` — confirm `file:line` still exists.
+2. Group by `file`; if ≥3 findings target the same file, check whether they
+   share a root cause → collapse into one with sub-bullets.
+3. Severity calibration: does each `CRITICAL` meet "app crash / data breach /
+   complete feature failure in production"? If not → `HIGH`.
+4. Cross-check `regulations` field: any PII handler without `PIPEDA`? Any
+   Stripe path without `PCI-DSS`? Any SMS/email without `CASL`?
+
+---
+
 ## Remediation Sprints
 
 | Sprint | Priority | File to create |

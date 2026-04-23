@@ -205,6 +205,67 @@ grep -rn "Content-Security-Policy\|X-Frame-Options\|Strict-Transport" \
 
 ---
 
+## Output Schema (REQUIRED)
+
+Every finding in `2026-04-23-admin-panel-v1.txt` MUST also appear in a
+machine-readable block at the end of the file under a `===FINDINGS-YAML===`
+fence. Admin-panel findings carry elevated blast radius — the schema captures
+that explicitly.
+
+```yaml
+===FINDINGS-YAML===
+- id: A-02-1                             # A = admin · <dim> · <seq>
+  severity: CRITICAL                     # CRITICAL|HIGH|MEDIUM|LOW|PASS|RECOMMENDATION
+  dimension: 02                          # 01..16 (+17..22 if adopted)
+  title: "Admin login has no MFA enforcement"
+  evidence:
+    file: backend/routes/admin/auth.py
+    lines: [88, 124]
+    snippet: "if password_ok: issue_admin_jwt(...)"      # ≤5 lines
+  root_cause: "MFA step absent; only password checked."
+  impact: "Single-factor compromise = full-tenant breach (every rider/driver)."
+  blast_radius: org-wide                 # self | user | org-wide
+  fix:
+    - "Add TOTP enrolment + challenge step post-password."
+    - "Reject issued JWTs that lack an `mfa_verified` claim."
+  effort_hours: 16
+  regression_test: "admin-dashboard/playwright/admin-mfa.spec.ts"
+  sprint: P0
+  owners: [backend, admin]
+  regulations: [PIPEDA, PCI-DSS, SOC2]
+  confidence: high
+  duplicate_of: null
+===END-FINDINGS-YAML===
+```
+
+### Mandatory rules
+- No `CRITICAL` or `HIGH` without `file` + `lines` + `snippet`. Otherwise
+  downgrade to `RECOMMENDATION` and mark `confidence: low`.
+- Admin severity ladder is **one step up** from consumer-side:
+  - Consumer CRITICAL → Admin CRITICAL
+  - Consumer HIGH → Admin CRITICAL if exploit yields bulk PII or bulk mutation
+  - Consumer MEDIUM → Admin HIGH if it affects admin-only routes
+- Live secrets found in admin code: redact in `snippet`; never paste the literal.
+- Prior-audit dedup: grep
+  `reports/audits/2026-04-18-driver-app-*.txt reports/audits/2026-04-19-rider-app-v1.txt`
+  for same `file:line`; set `duplicate_of` if rediscovered.
+
+### Done-sentinel
+```
+===AUDIT-COMPLETE=== dimensions_run=<N> findings=<N> critical=<N> high=<N>
+```
+
+### Self-review pass (run before emitting the sentinel)
+1. Every mutation endpoint under `backend/routes/admin/*` → did you produce at
+   least one `PASS` or finding on (a) role check (b) audit log row? If not, you
+   haven't read it — go back.
+2. Every destructive admin action → is `blast_radius: org-wide` tagged?
+3. Every PII-viewing endpoint → does it appear in a `PIPEDA`-tagged finding?
+4. `admin-dashboard/src/` direct-to-Supabase usage with service-role key →
+   CRITICAL if any hit.
+
+---
+
 ## Remediation Sprints
 
 | Sprint | Priority | File to create |

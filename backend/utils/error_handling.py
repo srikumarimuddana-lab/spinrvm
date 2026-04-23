@@ -409,9 +409,23 @@ async def spinr_exception_handler(request: Request, exc: SpinrException) -> JSON
     request_id = _uuid.uuid4().hex[:12]
 
     if exc.should_log:
-        logger.warning(
-            f"SpinrException: {exc.error_code.name} - {exc.message}",
-            extra={"path": request.url.path, "method": request.method, "error_code": exc.error_code.value},
+        # Per CLAUDE.md: DB / auth / payment errors must surface loudly with
+        # the underlying cause — `exc.message` on DatabaseError is the
+        # generic "Database operation failed" sentinel; the real Postgres /
+        # supabase-py exception string lives in `exc.details['original']`.
+        # 5xx are logged at ERROR with that original cause so the root cause
+        # is visible; 4xx stay at WARNING.
+        original = (exc.details or {}).get("original")
+        log_fn = logger.error if exc.status_code >= 500 else logger.warning
+        log_fn(
+            f"SpinrException: {exc.error_code.name} - {exc.message}"
+            + (f" | original={original}" if original else ""),
+            extra={
+                "path": request.url.path,
+                "method": request.method,
+                "error_code": exc.error_code.value,
+                "details": exc.details,
+            },
         )
 
     content = exc.to_dict()

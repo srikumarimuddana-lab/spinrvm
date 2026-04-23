@@ -15,12 +15,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { useDriverStore } from '../../store/driverStore';
-import EarningsBarChart from '../../components/charts/EarningsBarChart';
-import EarningsLineChart from '../../components/charts/EarningsLineChart';
+import { useDriverStore } from '../../../store/driverStore';
+import EarningsBarChart from '../../../components/charts/EarningsBarChart';
+import EarningsLineChart from '../../../components/charts/EarningsLineChart';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { useLanguageStore } from '../../store/languageStore';
+import { useLanguageStore } from '../../../store/languageStore';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 
 const { width } = Dimensions.get('window');

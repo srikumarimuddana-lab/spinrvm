@@ -4,7 +4,7 @@ import CustomAlert from '@shared/components/CustomAlert';
 import MapView, { Marker, Polyline, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
-import { useDriverStore } from '../../store/driverStore';
+import { useDriverStore } from '../../../store/driverStore';
 import { useAuthStore } from '@shared/store/authStore';
 import {
   DriverTopBar,
@@ -12,12 +12,12 @@ import {
   ActiveRidePanel,
   TripCompletedPanel,
   MapControls,
-} from '../../components/dashboard';
-import { useDriverDashboard } from '../../hooks/useDriverDashboard';
-import { CarMarker } from '../../components/CarMarker';
+} from '../../../components/dashboard';
+import { useDriverDashboard } from '../../../hooks/useDriverDashboard';
+import { CarMarker } from '../../../components/CarMarker';
 import { SOSButton } from '@shared/components/SOSButton';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
-import { useLanguageStore } from '../../store/languageStore';
+import { useLanguageStore } from '../../../store/languageStore';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';

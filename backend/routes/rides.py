@@ -1306,10 +1306,10 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         raise HTTPException(status_code=403, detail="Not authorized")
 
     _ride_status = ride.get("status", "")
-    if _ride_status != "trip_completed":
+    if _ride_status != "completed":
         raise HTTPException(
             status_code=409,
-            detail=f"Ride is in status '{_ride_status}'; payment requires trip_completed state.",
+            detail=f"Ride is in status '{_ride_status}'; payment requires completed state.",
         )
 
     # IDEMPOTENCY: if already paid, return success without charging again
@@ -1382,7 +1382,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             ride_id,
             {
                 "payment_status": "paid",
-                "tip_amount": tip_amount,
+                "tip_amount": float(tip_amount),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
         )
@@ -1783,7 +1783,7 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
     if rating_data.tip_amount > 0:
         new_tip = ride.get("tip_amount", 0) + rating_data.tip_amount
         new_driver_earnings = ride.get("driver_earnings", 0) + rating_data.tip_amount
-    await db_supabase.update_ride(ride_id, {"tip_amount": new_tip, "driver_earnings": new_driver_earnings})
+        await db_supabase.update_ride(ride_id, {"tip_amount": new_tip, "driver_earnings": new_driver_earnings})
 
     # Aggregate driver rating accurately
     driver = await db_supabase.get_driver_by_id(driver_id)
@@ -1794,15 +1794,15 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
 
         if rated_rides:
             average_rating = round(sum(rated_rides) / len(rated_rides), 2)
-    await db_supabase.update_one(
-        "drivers",
-        {"id": driver_id},
-        {
-            "rating": average_rating,
-            "average_rating": average_rating,
-            "total_ratings": len(rated_rides),
-        },
-    )
+            await db_supabase.update_one(
+                "drivers",
+                {"id": driver_id},
+                {
+                    "rating": average_rating,
+                    "average_rating": average_rating,
+                    "total_ratings": len(rated_rides),
+                },
+            )
 
     # G19: Notify the driver that they received a rating. This creates a
     # feedback loop — drivers see their rating improve/decline in real time

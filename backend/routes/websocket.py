@@ -363,8 +363,17 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 lng = data.get("lng")
                 radius = data.get("radius", 5)  # km
                 if lat and lng:
+                    # is_verified + status='active' prevent unverified / suspended
+                    # drivers from being broadcast to riders via the realtime map.
                     drivers = await db_supabase.get_rows(
-                        "drivers", {"is_online": True, "is_available": True}, limit=100
+                        "drivers",
+                        {
+                            "is_online": True,
+                            "is_available": True,
+                            "is_verified": True,
+                            "status": "active",
+                        },
+                        limit=100,
                     )
 
                     nearby = []

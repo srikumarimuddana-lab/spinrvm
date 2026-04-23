@@ -1146,7 +1146,15 @@ async def get_nearby_drivers_public(
     current_user: dict = Depends(get_current_user),
 ):
     """Get nearby active drivers for riders. Filters by service area + vehicle type."""
-    query = {"is_online": True, "is_available": True}
+    # is_verified + status='active' prevent unverified / suspended / needs_review
+    # drivers from appearing on the rider map even if their is_online flag is
+    # stale.
+    query = {
+        "is_online": True,
+        "is_available": True,
+        "is_verified": True,
+        "status": "active",
+    }
     if vehicle_type:
         query["vehicle_type_id"] = vehicle_type
 
@@ -2603,18 +2611,44 @@ async def update_driver_status(
 
         # For each mandatory requirement, the latest approved doc wins. If
         # it has an expiry and that expiry is in the past, block.
-        try:
-            requirements = await db_supabase.get_rows("document_requirements", {}, limit=100)
-        except Exception:
-            requirements = []
-        mandatory_reqs = [r for r in (requirements or []) if r.get("is_mandatory")]
+        # Requirements come from the driver's service-area required_documents
+        # (slug-keyed) — the global document_requirements table is legacy and
+        # misses slug-based uploads where requirement_id is NULL.
+        mandatory_reqs: list = []
+        if driver.get("service_area_id"):
+            try:
+                area_row = (lambda _r: _r[0] if _r else None)(
+                    await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1)
+                )
+                if area_row:
+                    mandatory_reqs = [
+                        r for r in (area_row.get("required_documents") or []) if r.get("required", True)
+                    ]
+            except Exception:
+                mandatory_reqs = []
+
+        def _matches_req(doc: Dict[str, Any], req: Dict[str, Any]) -> bool:
+            req_key = (req.get("key") or "").lower()
+            req_label = (req.get("label") or "").lower()
+            req_id = req.get("id")
+            dkey = (doc.get("requirement_key") or "").lower()
+            if dkey and dkey == req_key:
+                return True
+            drid = doc.get("requirement_id")
+            if drid and (drid == req_id or (isinstance(drid, str) and drid.lower() == req_key)):
+                return True
+            dt = (doc.get("document_type") or "").lower()
+            if dt and (dt == req_label or dt == req_key.replace("_", " ")):
+                return True
+            if dt and req_key and req_key.replace("_", "") in dt.replace(" ", "").replace("_", ""):
+                return True
+            return False
 
         covered_legacy_fields = set()
         for req_row in mandatory_reqs:
-            req_id = req_row.get("id")
-            req_name = req_row.get("name") or "Document"
+            req_name = req_row.get("label") or req_row.get("key") or "Document"
             # Pick the most recent approved doc for this requirement.
-            docs = [d for d in approved_docs if d.get("requirement_id") == req_id]
+            docs = [d for d in approved_docs if _matches_req(d, req_row)]
             if not docs:
                 continue
             docs.sort(key=lambda d: str(d.get("uploaded_at") or ""), reverse=True)

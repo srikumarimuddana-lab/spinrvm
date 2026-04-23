@@ -146,35 +146,68 @@ async def derive_driver_onboarding_status(
         return _result("suspended")
 
     # Step 4: documents
-    # Fetch requirements + driver's submitted docs.
-    try:
-        requirements = await db_supabase.get_rows("document_requirements", {}, limit=100)
-    except Exception:
-        requirements = []
+    # Requirements come from the driver's service-area `required_documents`
+    # (slug-keyed, same source the driver app's upload UI uses). The global
+    # `document_requirements` table is legacy — matching against it misses
+    # slug-based uploads (requirement_id column holds NULL for non-UUID keys;
+    # the slug lives in requirement_key when migration 28 is applied).
     try:
         documents = await db_supabase.get_rows("driver_documents", {"driver_id": driver["id"]}, limit=200)
     except Exception:
         documents = []
+    # Superseded docs are historical — don't let stale approved-then-expired
+    # rows trigger documents_expired after a re-upload.
+    documents = [d for d in (documents or []) if d.get("status") != "superseded"]
 
-    mandatory_reqs = [r for r in (requirements or []) if r.get("is_mandatory")]
+    area_requirements: list = []
+    if driver.get("service_area_id"):
+        try:
+            area = (lambda _r: _r[0] if _r else None)(
+                await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1)
+            )
+            if area:
+                area_requirements = area.get("required_documents") or []
+        except Exception:
+            area_requirements = []
 
-    # Index docs by requirement_id for quick lookup. Prefer the most recent
-    # per requirement if multiple (front/back sides share the requirement_id).
-    docs_by_req: Dict[str, list] = {}
-    for d in documents or []:
-        docs_by_req.setdefault(d.get("requirement_id"), []).append(d)
+    mandatory_reqs = [r for r in area_requirements if r.get("required", True)]
+
+    def _docs_for_req(req: Dict[str, Any]) -> list:
+        """Match docs to a service-area requirement using the same strategies
+        as the admin panel: requirement_key (slug) → requirement_id (UUID or
+        legacy slug) → document_type vs label/key."""
+        req_key = (req.get("key") or "").lower()
+        req_label = (req.get("label") or "").lower()
+        req_id = req.get("id")
+        out = []
+        for d in documents:
+            dkey = (d.get("requirement_key") or "").lower()
+            if dkey and dkey == req_key:
+                out.append(d)
+                continue
+            drid = d.get("requirement_id")
+            if drid and (drid == req_id or (isinstance(drid, str) and drid.lower() == req_key)):
+                out.append(d)
+                continue
+            dt = (d.get("document_type") or "").lower()
+            if dt and (dt == req_label or dt == req_key.replace("_", " ")):
+                out.append(d)
+                continue
+            if dt and req_key and req_key.replace("_", "") in dt.replace(" ", "").replace("_", ""):
+                out.append(d)
+        return out
 
     # Check: are any mandatory requirements missing entirely?
     missing_any = False
     for req in mandatory_reqs:
-        if not docs_by_req.get(req.get("id")):
+        if not _docs_for_req(req):
             missing_any = True
             break
     if missing_any:
         return _result("documents_required")
 
     # Check: are any docs rejected?
-    has_rejected = any((d.get("status") == "rejected") for d in documents or [])
+    has_rejected = any((d.get("status") == "rejected") for d in documents)
     if has_rejected:
         return _result("documents_rejected")
 
@@ -182,8 +215,7 @@ async def derive_driver_onboarding_status(
     now = datetime.now(timezone.utc)
     has_expired = False
     for req in mandatory_reqs:
-        reqdocs = docs_by_req.get(req.get("id"), [])
-        for d in reqdocs:
+        for d in _docs_for_req(req):
             if d.get("status") != "approved":
                 continue
             exp = _parse_date(d.get("expiry_date") or d.get("expires_at"))

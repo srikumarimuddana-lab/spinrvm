@@ -205,6 +205,37 @@ grep -rn "Content-Security-Policy\|X-Frame-Options\|Strict-Transport" \
 
 ---
 
+## Regulatory Matrix (REQUIRED tagging)
+
+Canonical reference: `audit-framework/regulatory-matrix.md`. Admin panel
+findings carry amplified regulatory exposure — a single misconfigured admin
+route can be the breach vector for every Canadian regulation in this table.
+
+| ID | Where it bites in admin panel | Concrete check |
+|---|---|---|
+| PIPEDA | `routes/admin/users.py`, `routes/admin/documents.py`, dashboard | DSAR fulfillment UI · audit-logged PII reveal · 72 h breach-notification runbook accessible from admin |
+| CPPA | Surge / promo admin, algorithm settings | Algorithmic Impact Assessment linked from admin UI · override log |
+| CASL | `routes/admin/messaging.py`, broadcast tool | Consent-audience filter cannot be overridden · unsubscribe list honoured · sender-ID template locked |
+| OLA | admin-dashboard i18n, admin-generated notices | Every admin-created customer-facing notice requires EN+FR before publish |
+| ACA | admin-dashboard UX | WCAG 2.1 AA on admin web; accessibility feedback mechanism linked |
+| AML | `routes/admin/wallet.py`, corporate admin | Threshold + suspicious-txn dashboards · FINTRAC export format · STR approval workflow |
+| CRA | `routes/admin/*` payout / tax | T4A generator UI · GST/HST registration field required on corporate onboarding |
+| SK-TNC | `routes/admin/drivers.py`, `service_areas.py` | Permit # CRUD · per-municipality service-area gating · accessibility-fleet % report |
+| SGI | `routes/admin/documents.py` | Insurance expiry override requires dual approval + audit row |
+| SK-PST | `routes/admin/settings.py`, reporting | Tax rate configurable by region · change requires finance role + audit row |
+| SK-HRC | `routes/admin/support.py`, dispute | Service-animal + WAV complaint intake flow · driver-training compliance tracker |
+| PCI-DSS | admin-dashboard payment screens | No PAN displayed · last-4 only · reveal button forbidden or dual-control |
+| SOC2 | admin-dashboard, `routes/admin/staff.py` | Quarterly access review · MFA enforced · audit log immutable · privileged JIT |
+| WCAG | admin-dashboard | Keyboard nav · screen-reader labels · contrast AA · focus order |
+| SAFE-CRC/DRV/VEH | `routes/admin/drivers.py`, `documents.py` | Override of expired credential requires dual approval + justification + audit |
+
+Untagged CRITICAL/HIGH findings will be rejected during self-review.
+Admin audit must also produce a **"regulator-ready export" inventory** —
+list every endpoint that produces CRA / FINTRAC / OPC data in the required
+format.
+
+---
+
 ## Output Schema (REQUIRED)
 
 Every finding in `2026-04-23-admin-panel-v1.txt` MUST also appear in a

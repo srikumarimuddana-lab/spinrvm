@@ -219,6 +219,35 @@ bare `{"error": ...}`?
 
 ---
 
+## Regulatory Matrix (REQUIRED tagging)
+
+Canonical reference: `audit-framework/regulatory-matrix.md`. Every finding
+tags one or more IDs from the table below in its `regulations:` field. If a
+dimension lists a regulation here and you produce neither a finding nor a
+PASS for it, you haven't audited it — go back.
+
+| ID | Where it bites in backend/ | Concrete check |
+|---|---|---|
+| PIPEDA | `routes/users.py`, `routes/auth.py`, DB schema | DSAR endpoint exists · breach notification path · Canadian region pinned for Supabase |
+| CPPA | `services/fare_service.py`, surge engine | Explanation payload available for every price quoted |
+| CASL | `routes/notifications.py`, SMS helpers, email templates | Consent ledger table · unsubscribe path · sender ID in every outbound message |
+| OLA | Every `HTTPException(detail=...)` + push/SMS/email templates | French parity — no hardcoded English error strings |
+| AML | `routes/wallet.py`, `routes/corporate_*.py` | $10k aggregate threshold flag · KYC on corporate sign-up · STR pipeline hook |
+| CRA | `services/fare_service.py`, payout flow, corporate invoices | T4A trigger ≥$500/yr · GST/HST + PST line-items · BN-9 validation on corporate |
+| COMP | Surge engine, fare estimator | Upfront price disclosed before booking · surge cap policy in code |
+| E911 | `routes/safety.py`, SOS endpoint | Rider GPS forwarded to emergency contact + pre-filled 911 SMS fallback |
+| CRTC | SMS vendor integration | Verified sender · STOP/HELP keywords · Twilio compliance hooks |
+| SK-TNC | `routes/drivers.py`, dispatch | Driver permit # · vehicle permit # stored · checked at dispatch |
+| SGI | Driver document model, dispatch | Insurance expiry **blocks** dispatch (not just warns) |
+| SK-PST | Fare calculator, receipts | 6% PST line item on taxable portion |
+| PCI-DSS | `routes/payments.py`, webhooks | No PAN at rest · HMAC signature + timestamp window on webhooks · tokenised-only card flow |
+| SOC2 | Observability, change mgmt | Audit log immutability · deployment approval trail |
+| SAFE-CRC/DRV/VEH | `utils/document_expiry.py`, dispatch | Expired credentials produce a HARD dispatch block |
+
+Untagged CRITICAL/HIGH findings will be rejected during self-review.
+
+---
+
 ## Output Schema (REQUIRED)
 
 Every finding in `2026-04-23-backend-api-v1.txt` MUST also appear in a

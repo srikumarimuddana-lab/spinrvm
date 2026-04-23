@@ -19,7 +19,7 @@ try:
     from ..socket_manager import manager
     from ..utils.crypto import hash_otp
     from ..utils.datetime_utils import parse_iso_utc
-    from ..utils.driver_presence import clear_presence, mark_present
+    from ..utils.driver_presence import clear_presence, mark_present, present_driver_ids
     from ..utils.error_handling import RideStateError
     from ..utils.idempotency import idempotent_endpoint
 except ImportError:
@@ -32,7 +32,7 @@ except ImportError:
     from socket_manager import manager
     from utils.crypto import hash_otp
     from utils.datetime_utils import parse_iso_utc
-    from utils.driver_presence import clear_presence, mark_present
+    from utils.driver_presence import clear_presence, mark_present, present_driver_ids
     from utils.error_handling import RideStateError
     from utils.idempotency import idempotent_endpoint
 
@@ -1164,6 +1164,19 @@ async def get_nearby_drivers_public(
 
     # Get all matching drivers — service area filtering by distance (not polygon yet)
     drivers = await db_supabase.get_rows("drivers", query, limit=100)
+
+    # Presence filter: hide drivers whose app is not reachable (force-killed,
+    # phone dead, backgrounded past the TTL). Without this, the rider sees
+    # ghost cars on the map and tries to book someone who will never receive
+    # the offer. Safe-fallback: if presence lookup fails, show DB state —
+    # dispatch still filters on presence so a ghost booking cannot complete.
+    try:
+        driver_ids = [d["id"] for d in drivers if d.get("id")]
+        present = await present_driver_ids(driver_ids) if driver_ids else set()
+        if present:
+            drivers = [d for d in drivers if d["id"] in present]
+    except Exception as exc:
+        logger.warning(f"/drivers/nearby presence filter failed, using DB state: {exc}")
 
     # Manual filtering by distance
     nearby = []

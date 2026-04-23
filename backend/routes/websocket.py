@@ -63,7 +63,9 @@ async def _handle_driver_ws_offline(connection_key: str | None, user: dict | Non
         # Only write if we're actually changing state — skip the write for
         # drivers who were already offline (e.g. WS opened but never toggled
         # online), to avoid unnecessary DB churn and updated_at bumps.
-        if driver_profile_off.get("is_online") or driver_profile_off.get("is_available"):
+        was_online = bool(driver_profile_off.get("is_online"))
+        if was_online or driver_profile_off.get("is_available"):
+            now_iso = datetime.now(timezone.utc).isoformat()
             try:
                 await db_supabase.update_one(
                     "drivers",
@@ -71,13 +73,36 @@ async def _handle_driver_ws_offline(connection_key: str | None, user: dict | Non
                     {
                         "is_online": False,
                         "is_available": False,
-                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                        "updated_at": now_iso,
+                        # Bump last_status_changed_at so admin "offline since …"
+                        # reflects the actual disconnect time.
+                        "last_status_changed_at": now_iso,
                     },
                 )
             except Exception as _db_exc:
                 logger.warning(
                     f"[WS] Could not flip driver {driver_id} offline on disconnect: {_db_exc}"
                 )
+            # Audit trail — only when the driver was actually intent-online,
+            # so idle-socket disconnects (driver opened app, never tapped go
+            # online) don't spam the log with no-op events.
+            if was_online:
+                try:
+                    await db_supabase.insert_one(
+                        "driver_activity_log",
+                        {
+                            "id": str(uuid.uuid4()),
+                            "driver_id": driver_id,
+                            "event_type": "went_offline",
+                            "title": "Went offline (socket disconnected)",
+                            "description": "Driver WebSocket closed — app was backgrounded, force-killed, or lost network.",
+                            "metadata": {"reason": "ws_disconnect", "source": "websocket"},
+                            "actor": "system",
+                            "created_at": now_iso,
+                        },
+                    )
+                except Exception as _log_exc:
+                    logger.warning(f"[WS] activity log insert failed for {driver_id}: {_log_exc}")
         await manager.broadcast_to_admins(
             {
                 "type": "driver_status_changed",

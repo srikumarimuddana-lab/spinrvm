@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
 
 try:
@@ -94,9 +95,31 @@ async def _sweep_once() -> int:
                     "is_online": False,
                     "is_available": False,
                     "updated_at": now_iso,
+                    # Bump last_status_changed_at so admin "offline since …"
+                    # reflects the sweep time, not the last vehicle-edit.
+                    "last_status_changed_at": now_iso,
                 },
             )
             flipped += 1
+            # Audit trail: record the system-initiated flip so operators
+            # investigating "why is this driver offline" can see that the
+            # app stopped heartbeating, not that the driver tapped off.
+            try:
+                await db_supabase.insert_one(
+                    "driver_activity_log",
+                    {
+                        "id": str(uuid.uuid4()),
+                        "driver_id": d["id"],
+                        "event_type": "went_offline",
+                        "title": "Went offline (presence timeout)",
+                        "description": "System flipped driver offline — app heartbeat stopped within the presence TTL window.",
+                        "metadata": {"reason": "presence_timeout", "source": "presence_sweeper"},
+                        "actor": "system",
+                        "created_at": now_iso,
+                    },
+                )
+            except Exception as _log_exc:  # pragma: no cover - best effort
+                logger.warning(f"[presence_sweeper] activity log insert failed for {d['id']}: {_log_exc}")
             # Notify admin live-monitoring clients so the badge updates
             # without a page reload.
             try:

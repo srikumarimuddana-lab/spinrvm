@@ -162,7 +162,77 @@ grep -rn "Content-Security-Policy\|X-Frame-Options\|Strict-Transport" \
 | B | 01, 11, 12 | Feature map + CORS/headers/CSP + PII gating + audit logging | 6–9 h |
 | C | 09, 10, 14 | Playwright + Vitest coverage + error surfaces + bulk-query perf | 6–9 h |
 | D | 15 | WCAG 2.1 AA pass on admin-dashboard (web) | 3–4 h |
-| **Total** | **10** | | **~22–32 h** |
+| **E** | **17, 18, 19, 20, 21, 22** | **Observability · DR/BCP · Fraud ops · Reconciliation tools · Threat model · Third-party (admin view)** | **7–10 h** |
+| **Total** | **16** | | **~29–42 h** |
+
+### Phase A sub-tasks (D02–D04)
+- A.1 Admin auth: MFA enforcement on `routes/admin/auth.py`; password policy (≥16 char, bcrypt cost ≥12); session idle ≤30 min; IP-allowlist middleware for admin routes; failed-login alerting.
+- A.2 Secrets: separate admin JWT secret from rider/driver; admin API keys rotated ≥annually; NO `SUPABASE_SERVICE_ROLE_KEY` embedded in `admin-dashboard/` (must call backend).
+- A.3 Input validation: every POST/PUT/PATCH/DELETE in `routes/admin/*` has a Pydantic schema; bulk operation bodies have explicit list caps; CSV/file imports have magic-byte + size caps.
+
+### Phase B sub-tasks (D01, D11, D12)
+- B.1 Feature completeness: inventory every `routes/admin/*.py` (19 files); confirm each has role gate (not just `is_admin=True`), input schema, audit-log write, error-sanitised responses.
+- B.2 Security headers + CORS: Next.js `next.config.ts` HSTS + CSP + X-Frame-Options DENY + X-Content-Type-Options nosniff + Referrer-Policy; admin backend CORS allow-list enumerated; cookies HttpOnly/Secure/SameSite=Strict; session not in localStorage.
+- B.3 Compliance: every admin mutation writes an append-only audit row (who / what / when / which record / before+after); audit log has no DELETE grant; view-as-user writes a consent + audit row; PII REVEAL actions audit-logged; DSAR fulfillment UI; 72 h breach-notification runbook linked from admin.
+
+### Phase C sub-tasks (D09–D10, D14)
+- C.1 Test coverage: Playwright E2E for login + MFA + at least one destructive action (driver suspend, promo create, bulk message); Vitest for admin UI components + role gating; backend `pytest` on `routes/admin/*` with bulk-input edge cases.
+- C.2 Error handling: `routes/admin/*` never leaks stack traces; 500s carry `request_id` only; failed-login errors don't disclose whether email exists.
+- C.3 Performance: every list endpoint paginated (no "export all users" without approval); bulk-mutation endpoints EXPLAIN ANALYZEd; admin-dashboard bundle size budget; data-grid virtualisation for >1000 rows.
+
+### Phase D sub-task (D15)
+- D.1 Accessibility: WCAG 2.1 AA on admin-dashboard — contrast AA 4.5:1; keyboard nav end-to-end; screen-reader labels on all interactive elements; focus order; accessible-name for every icon button; modals trap focus; forms announce errors; Dynamic Type not broken by CSS.
+
+### Phase E sub-tasks (D17–D22) — NEW
+
+Admin panel is the highest-blast-radius attack surface. Every E-phase
+finding is evaluated at **one step up** from the consumer-side equivalent.
+
+- E.1 **Observability (D17)**
+  - Every admin action emits a structured log with `admin_id`, `action`, `target_record_id`, `before`, `after`, `request_id`.
+  - Audit log + application log are separate pipelines (admin cannot tamper with their own trail).
+  - Alert on: admin login from new device / new country / outside business hours; bulk-mutation fire; PII REVEAL above a threshold.
+  - Admin dashboard has its own SLI — approval latency, support TTFR, data-export queue depth.
+  - Output: findings per bullet in `dimensions/17-observability.md`.
+
+- E.2 **DR / BCP (D18)**
+  - Admin-originated actions (suspend driver, refund ride, create promo) work during partial outage.
+  - Rollback procedure for bulk actions (e.g. "undo last bulk suspend") documented + tested.
+  - Break-glass admin account (hardware key only, dual-authorisation, paged on use).
+  - Admin password-reset path audited for social-engineering resistance.
+  - Output: findings per bullet in `dimensions/18-dr-bcp.md`.
+
+- E.3 **Fraud (D19) — admin side**
+  - Admin-fraud analyst role + review queues exist as separate UI surface.
+  - Every freeze/suspend/refund has an appeal path + audit row.
+  - "View as user" impersonation is consent-gated + audit-logged + watermarked + time-limited.
+  - No admin action can bypass fraud controls silently (e.g. admin cannot promo-bomb their own test accounts without a trail).
+  - Output: findings per bullet in `dimensions/19-fraud.md`.
+
+- E.4 **Financial Reconciliation (D20) — admin view**
+  - Admin dashboard has a "reconciliation status" widget showing daily delta.
+  - Manual adjustments by admin write to the same append-only `financial_events` table; no parallel admin-only ledger.
+  - CRA / FINTRAC export endpoints produce regulator-format files (not ad-hoc CSV).
+  - Segregation of duties: finance role can adjust; operations role cannot.
+  - Output: findings per bullet in `dimensions/20-financial-reconciliation.md`.
+
+- E.5 **Threat Model (D21) — admin-panel specific**
+  - Scenarios to rule in or out:
+    - Compromised admin token → blast radius
+    - Malicious admin insider exfiltrating PII via data-export or "view-as-user"
+    - Bulk-mutation abuse (suspend all drivers in a city)
+    - CSRF / ClickJack on admin UI
+    - Admin UI XSS → session theft
+    - Broadcast-messaging abuse (CASL violation via compromised admin)
+  - Each scenario: mitigation + detection + blast-radius tag.
+  - Output: `docs/threat-model/admin-panel.md` + findings per bullet in `dimensions/21-threat-model.md`.
+
+- E.6 **Third-Party Risk (D22) — admin-specific**
+  - Admin-dashboard dependencies (Next.js 16, Playwright, Sentry, any UI library) — lockfile pinned, npm audit clean.
+  - Admin-facing vendors (Sentry collects admin PII on errors? confirm PII scrub).
+  - Admin-dashboard Docker image (if containerised) pinned + scanned.
+  - Admin UI communicates with backend via authenticated API only — never embeds `SUPABASE_SERVICE_ROLE_KEY`.
+  - Output: findings per bullet in `dimensions/22-third-party.md`.
 
 ---
 

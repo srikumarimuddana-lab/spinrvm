@@ -141,7 +141,78 @@ grep -n "create_task\|asyncio\.create_task" backend/core/lifespan.py
 | B | 07, 08, 11 | Ride state machine + Stripe + Security headers/CORS/rate limits | 7–10 h |
 | C | 09, 10, 12 | Test coverage + Error handling + PIPEDA/PCI/RLS | 8–12 h |
 | D | 14 | Performance: N+1 queries, index coverage, WS fan-out, BG loops | 2–3 h |
-| **Total** | **11** | | **~25–36 h** |
+| **E** | **17, 18, 19, 20, 21, 22** | **Observability · DR/BCP · Fraud · Reconciliation · Threat model · Third-party** | **8–12 h** |
+| **Total** | **17** | | **~33–48 h** |
+
+### Phase A sub-tasks (D01–D04)
+- A.1 Feature completeness: inventory routers mounted in `backend/server.py`; confirm every public route has a Pydantic model, auth dependency, and docstring.
+- A.2 Authentication: walk `routes/auth.py` end-to-end (OTP send → verify → JWT issue → refresh → revoke → logout-all); audit `utils/refresh_tokens.py`, `utils/crypto.py`.
+- A.3 Encryption & secrets: `core/config.py` startup validation; Supabase Vault use (migration 32); SAFE-* expiry vs dispatch enforcement.
+- A.4 Input validation: every route's Pydantic schema; `validators.py` (GPS, phone, money); webhook signature windows; file upload magic-byte.
+
+### Phase B sub-tasks (D07–D08, D11)
+- B.1 Ride state machine: `_require_ride_in_state_*` coverage on every transition; atomic accept (`claim_ride_atomic`); CANCELLED vs TRIP_STARTED invariant; WS event parity per transition.
+- B.2 Payments: Stripe `PaymentIntent` idempotency; webhook `claim_stripe_event`; timestamp-tolerance window; Connect transfer flow; corporate wallet delta via `corporate_wallet_apply_delta` only.
+- B.3 Security headers & CORS: `core/middleware.py` allow_origins (prod enumerated), HSTS, CSP, X-Content-Type-Options; SlowAPI per-route limits; App Check middleware enforcement.
+
+### Phase C sub-tasks (D09–D10, D12)
+- C.1 Test coverage: `pytest --cov` baseline vs gate (P3-4 depth); per-router test count; backend regression-test coverage of each closed P0–P3 item.
+- C.2 Error handling: `utils/error_handling.py` exception hierarchy; `request_id` propagation; no `logger.warning` on DB/auth/payment (CLAUDE.md rule); 503 vs 502 vs 500 discipline.
+- C.3 Compliance: RLS per table (`migrations/`); PII column encryption + REVOKE (migration 32); DSAR endpoint `/drivers/me/export-data` coverage + 30-d SLA; soft-delete + retention-horizon purge job; data-residency (Supabase region).
+
+### Phase D sub-task (D14)
+- D.1 Performance: `EXPLAIN ANALYZE` on dispatch hot path; index coverage for WHERE/ORDER BY in migrations; pagination on every list endpoint; WS fan-out budget (`ws_pubsub.py`); 7 background loop replay-safety + liveness metrics.
+
+### Phase E sub-tasks (D17–D22) — NEW
+
+These six dimensions are often skipped at launch "because it works on my machine". They are the ones the first incident will surface. Run them before beta.
+
+- E.1 **Observability (D17)**
+  - Structured JSON logging: every log line has `ts`, `level`, `request_id`, `user_id`, `route`, `event`, `duration_ms`.
+  - Grep: no `logger.warning` on `routes/auth.py`, `routes/payments.py`, `routes/webhooks.py`, `routes/rides.py`, `db_supabase.py` — these MUST be `logger.error` with full exception (CLAUDE.md).
+  - SLI/SLO docs committed: dispatch p95, WS delivery, Stripe webhook lag, FCM success rate.
+  - Background-loop heartbeats: each of the 7 asyncio loops emits a metric + log every run; alert on 2× missed interval.
+  - Mobile crash reporting: PII scrub rules, source-map upload CI step, ANR telemetry.
+  - Output: at least one finding or PASS per bullet in `dimensions/17-observability.md`.
+
+- E.2 **DR / BCP (D18)**
+  - Declared RTO/RPO per surface (dispatch, API, admin, payments).
+  - Supabase region = Canadian — confirm in project settings.
+  - PITR retention ≥ 7 days; off-Supabase logical backup cron.
+  - Graceful degradation paths for Stripe/Twilio/FCM/Maps outages (circuit breakers, queued settlement).
+  - Feature-flag kill switches for onboarding, dispatch, payments.
+  - Restore drill evidence (past 90 days).
+  - Output: findings per bullet in `dimensions/18-dr-bcp.md`.
+
+- E.3 **Fraud (D19)**
+  - Device fingerprint + install-id on signup; velocity rules.
+  - Impossible-travel GPS plausibility check in `validators.py`.
+  - Stripe Radar rules (Canadian BINs) and chargeback evidence bundling.
+  - Promo / referral abuse guards (first-ride caps, self-referral detection).
+  - OFAC/PEP screening on corporate accounts.
+  - Output: findings per bullet in `dimensions/19-fraud.md`.
+
+- E.4 **Financial Reconciliation (D20)**
+  - Daily cron: Stripe ↔ DB ↔ wallet ↔ payout deltas = 0; any non-zero pages on-call.
+  - Wallet mutation discipline: zero direct `UPDATE wallets SET` outside `corporate_wallet_apply_delta`.
+  - Tax ledger: GST 5% + SK-PST 6% line-itemised on receipt and stored as separate columns.
+  - T4A generator — confirm it actually produces a PDF (links to P4-7 PARTIAL).
+  - Append-only `financial_events` table with 7-year retention (CRA).
+  - Output: findings per bullet in `dimensions/20-financial-reconciliation.md`.
+
+- E.5 **Threat Model (D21)**
+  - STRIDE per asset (ride record · fare calc · driver-PII · Stripe conn · admin JWT · service-role key · WS channel · background loops).
+  - Ride-share-specific scenarios: fake driver, GPS spoofing, surge manipulation, SIM-swap OTP, cancellation-fee farming, SOS abuse, corporate wallet siphon.
+  - Detection for each threat (not just "mitigated" — "can we see it happen?").
+  - Output: threat-model document under `docs/threat-model/backend.md` or equivalent + findings per bullet in `dimensions/21-threat-model.md`.
+
+- E.6 **Third-Party Risk (D22)**
+  - `docs/vendor-inventory.md` exists with Supabase, Stripe, Firebase (Auth/FCM/AppCheck/Crashlytics), Google Maps, Twilio, Gemini, Railway, Vercel, Sentry (if used), Cloudinary (if used).
+  - DPA on file per vendor; breach-notification contact recorded; sub-processor list reviewed annually.
+  - Data residency declared per vendor; cross-border flows disclosed in privacy policy (Gemini US is the usual miss).
+  - Secrets rotation cadence documented + tested; lockfiles committed; pip-audit + npm audit clean.
+  - Docker base image scanned + non-root user + pinned digest.
+  - Output: findings per bullet in `dimensions/22-third-party.md`.
 
 ---
 

@@ -305,6 +305,57 @@ Driver scripts detect truncation by the absence of this line.
 4. Cross-check `regulations` field: any PII handler without `PIPEDA`? Any
    Stripe path without `PCI-DSS`? Any SMS/email without `CASL`?
 
+### Worked examples (gold standard — match this exact format)
+
+One HIGH finding:
+```yaml
+- id: B-08-3
+  severity: HIGH
+  dimension: 08
+  title: "Stripe webhook lacks timestamp-window check — replay risk"
+  evidence:
+    file: backend/routes/webhooks.py
+    lines: [62, 78]
+    snippet: |
+      sig = request.headers.get("Stripe-Signature")
+      event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+  root_cause: "construct_event verifies HMAC but tolerance defaults to 300s Stripe-side — we don't clamp it."
+  impact: "Captured webhook can be replayed days later; claim_stripe_event dedups by event_id but not all downstream effects are idempotent (e.g. reconciliation log)."
+  fix:
+    - "Pass tolerance=300 explicitly to construct_event."
+    - "Reject any event with timestamp > tolerance and log as security event."
+    - "Add regression test in tests/test_webhooks.py for stale timestamp."
+  effort_hours: 2
+  regression_test: "backend/tests/test_webhooks.py::test_stale_webhook_rejected"
+  sprint: P0
+  owners: [backend]
+  regulations: [PCI-DSS]
+  confidence: high
+  duplicate_of: null
+```
+
+One PASS finding (document intentional correctness — do not skip these):
+```yaml
+- id: B-07-1
+  severity: PASS
+  dimension: 07
+  title: "Atomic ride-accept filter prevents two-driver race"
+  evidence:
+    file: backend/db_supabase.py
+    lines: [425, 448, 460, 465]
+    snippet: ".update({...}).eq(\"id\", ride_id).in_(\"status\", [\"searching\", \"driver_assigned\"])"
+  root_cause: null
+  impact: null
+  fix: []
+  effort_hours: 0
+  regression_test: "backend/tests/test_rides.py::test_no_double_accept"
+  sprint: null
+  owners: []
+  regulations: [SK-CPPA]
+  confidence: high
+  duplicate_of: null
+```
+
 ---
 
 ## Remediation Sprints

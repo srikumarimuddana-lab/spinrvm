@@ -295,6 +295,60 @@ that explicitly.
 4. `admin-dashboard/src/` direct-to-Supabase usage with service-role key →
    CRITICAL if any hit.
 
+### Worked examples (gold standard — match this exact format)
+
+One CRITICAL finding:
+```yaml
+- id: A-02-1
+  severity: CRITICAL
+  dimension: 02
+  title: "Admin login issues JWT after password-only challenge — no MFA gate"
+  evidence:
+    file: backend/routes/admin/auth.py
+    lines: [88, 124]
+    snippet: |
+      if bcrypt.checkpw(password.encode(), admin_row["password_hash"].encode()):
+          token = issue_admin_jwt(admin_row)
+          return {"access_token": token}
+  root_cause: "Password verification directly issues JWT; no TOTP/hardware challenge step."
+  impact: "Single-factor compromise of any admin account = full-tenant breach (every rider, driver, payment record, promo config)."
+  blast_radius: org-wide
+  fix:
+    - "Insert TOTP/WebAuthn challenge between password verify and JWT issue."
+    - "Require `mfa_verified: true` claim in admin JWT; middleware rejects tokens without it."
+    - "Add Playwright test for MFA-required login at admin-dashboard/playwright/admin-mfa.spec.ts."
+  effort_hours: 16
+  regression_test: "admin-dashboard/playwright/admin-mfa.spec.ts"
+  sprint: P0
+  owners: [backend, admin]
+  regulations: [PIPEDA, PCI-DSS, SOC2]
+  confidence: high
+  duplicate_of: null
+```
+
+One PASS finding:
+```yaml
+- id: A-12-1
+  severity: PASS
+  dimension: 12
+  title: "Driver PII column revoked from anon/authenticated roles"
+  evidence:
+    file: backend/migrations/32_encrypt_sensitive_fields.sql
+    lines: [99]
+    snippet: "REVOKE SELECT (license_number) ON TABLE drivers FROM anon, authenticated;"
+  root_cause: null
+  impact: null
+  fix: []
+  effort_hours: 0
+  blast_radius: self
+  regression_test: null
+  sprint: null
+  owners: []
+  regulations: [PIPEDA, SAFE-DRV]
+  confidence: high
+  duplicate_of: null
+```
+
 ---
 
 ## Remediation Sprints

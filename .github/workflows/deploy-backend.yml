@@ -53,11 +53,10 @@ jobs:
       - name: Show Railway CLI version
         run: railway --version
 
-      # Diagnostic: print the list of services in this project so we can
-      # see the exact service name to pass to `railway up --service <name>`.
-      # The Railway service is not always called "backend" — it may be
-      # "spinr-backend", "api", "web", or the auto-generated GitHub repo
-      # name. `railway status` emits the project + services summary.
+      # Diagnostic: print the list of services in this project.
+      # Service name is assumed to be "spinr-backend" based on the test-env
+      # URL (spinr-backend-test.up.railway.app). If deploy fails with
+      # "Service not found", check this output for the exact name.
       - name: List Railway services (diagnostic)
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
@@ -72,6 +71,6 @@ jobs:
           railway service list || true
 
       - name: Deploy to Railway
-        run: railway up --service backend
+        run: railway up --service spinr-backend
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

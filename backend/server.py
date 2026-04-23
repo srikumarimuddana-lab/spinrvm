@@ -58,6 +58,24 @@ async def health():
     return {"status": "healthy"}
 
 
+# Prometheus-style metrics exposition. Scraped by Grafana / Railway
+# observability add-ons. No auth (it's numbers only — no PII) and
+# mounted at the root so the scraper doesn't need /api/v1 knowledge.
+# Counters cover: DB retries by policy/reason, cache hit/miss by
+# prefix, circuit-breaker state, and call-level totals. See
+# utils/metrics.py for the counter definitions.
+from fastapi import Response as _MetricsResponse  # noqa: E402
+
+
+@app.get("/metrics")
+async def metrics() -> _MetricsResponse:
+    from utils.metrics import render_prometheus
+    return _MetricsResponse(
+        content=render_prometheus(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
+
 # Initialize middleware
 init_middleware(app)
 

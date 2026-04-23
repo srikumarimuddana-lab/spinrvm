@@ -20,6 +20,7 @@ try:
     from ..utils.crypto import hash_otp
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.error_handling import RideStateError
+    from ..utils.idempotency import idempotent_endpoint
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user, get_current_user
@@ -31,6 +32,7 @@ except ImportError:
     from utils.crypto import hash_otp
     from utils.datetime_utils import parse_iso_utc
     from utils.error_handling import RideStateError
+    from utils.idempotency import idempotent_endpoint
 
 db = db_supabase  # legacy alias
 
@@ -1395,7 +1397,12 @@ async def delete_bank_account(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.post("/payouts")
-async def request_payout(req: PayoutRequest, current_user: dict = Depends(get_current_user)):
+@idempotent_endpoint(scope="driver_payout")
+async def request_payout(
+    req: PayoutRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
     )

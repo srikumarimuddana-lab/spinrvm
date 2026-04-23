@@ -1,9 +1,10 @@
 import asyncio
 import json as _json
+import random as _random
 import re
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 try:
     import httpx as _httpx
@@ -19,10 +20,12 @@ except ImportError:
 
 try:
     from .utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
-    from .utils.redis_client import redis_delete, redis_get, redis_set  # type: ignore
+    from .utils.metrics import inc as _metric_inc, set_gauge as _metric_gauge  # type: ignore
+    from .utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set  # type: ignore
 except ImportError:
     from utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
-    from utils.redis_client import redis_delete, redis_get, redis_set  # type: ignore
+    from utils.metrics import inc as _metric_inc, set_gauge as _metric_gauge  # type: ignore
+    from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set  # type: ignore
 
 import time as _time
 from typing import Callable, TypeVar
@@ -100,7 +103,68 @@ class _CircuitBreaker:
 _breaker = _CircuitBreaker()
 
 
-async def run_sync(func: Callable[[], T]) -> T:
+# ── Retry policy per call class ──────────────────────────────────────
+# Different DB call classes have different retry semantics. Hot reads
+# want many retries (cheap, safe). Idempotent writes want one. Non-
+# idempotent writes MUST NOT retry — duplicate INSERTs double-book
+# rides or double-charge wallets. Callers pass retry_policy into
+# run_sync; default is "read" for backwards-compat.
+
+RetryPolicy = Literal["read", "idempotent_write", "write"]
+_BACKOFFS_BY_POLICY: Dict[str, list] = {
+    "read": [0.5, 1.5],          # 3 attempts, ~2s worst-case
+    "idempotent_write": [0.75],  # 2 attempts, ~0.75s worst-case
+    "write": [],                 # 1 attempt, no retry
+}
+
+# ── Global retry budget ──────────────────────────────────────────────
+# Cap total retry RPS across the fleet so a Supabase outage can't
+# amplify load via retries. Implemented as a per-second Redis counter.
+# When the budget for the current second is exhausted, retries are
+# skipped and the original error is returned to the caller.
+#
+# Default: 50 retries/sec fleet-wide. Override with RETRY_BUDGET_PER_SEC
+# env var. Set to 0 to disable the budget check entirely (don't do this
+# in prod). Fails open on Redis errors so the budget never becomes a
+# new SPOF.
+
+import os as _os
+
+_RETRY_BUDGET_PER_SEC = int(_os.environ.get("RETRY_BUDGET_PER_SEC", "50"))
+
+
+async def _consume_retry_token() -> bool:
+    """Reserve one retry from the global per-second budget. Return True
+    if allowed, False if the budget is exhausted for this second."""
+    if _RETRY_BUDGET_PER_SEC <= 0:
+        return True  # budget disabled
+    try:
+        import time as _t
+        second = int(_t.time())
+        key = f"spinr:retry_budget:{second}"
+        count = await redis_incr(key)
+        if count == 1:
+            # First increment in this second — attach a 5s TTL so the
+            # key expires well after the second is over. No global
+            # cleanup job needed.
+            await redis_expire(key, 5)
+        return count <= _RETRY_BUDGET_PER_SEC
+    except Exception as exc:
+        logger.debug(f"[RETRY] Budget check failed (fail-open): {exc}")
+        return True
+
+
+def _jittered(delay: float) -> float:
+    """Multiply the backoff by 0.5 + random() to spread retries so 1000
+    clients don't hit Supabase at exactly the same moment. Classic
+    "full jitter" pattern (AWS Architecture Blog, 2015)."""
+    return delay * (0.5 + _random.random())
+
+
+async def run_sync(
+    func: Callable[[], T],
+    retry_policy: RetryPolicy = "read",
+) -> T:
     """Run a synchronous Supabase call in a thread and retry on transient
     HTTP/2 connection errors. Two flavors show up in practice:
       - h2.ConnectionTerminated / GOAWAY when the stream limit is reached on
@@ -109,22 +173,31 @@ async def run_sync(func: Callable[[], T]) -> T:
         drops the HTTP/2 connection mid-response (observed on Railway with
         larger result sets — e.g. the 5000-row heatmap query).
 
-    Retries up to 2 times (3 attempts total) with exponential backoff
-    (500ms, 1500ms). A single 250ms retry used to miss the typical
-    GOAWAY burst window (~1s), which surfaced as user-facing
-    "Supabase transient failure" / 503 errors on the rider app."""
+    Retry behaviour is policy-gated:
+      - read: 3 attempts, exponential backoff 500ms→1500ms with jitter.
+      - idempotent_write: 2 attempts, 750ms with jitter.
+      - write: 1 attempt, no retry (non-idempotent; the caller is
+        responsible for making the operation safe to replay).
+
+    All retries also consume one token from the global per-second
+    retry budget — if the budget is exhausted, the retry is skipped
+    and the original error is raised, preventing retry storms from
+    amplifying a Supabase outage.
+    """
     if not _breaker.should_allow():
+        _metric_inc("spinr_db_calls_rejected_total", {"reason": "circuit_open"})
         raise ServiceUnavailableException("database")
 
     loop = asyncio.get_running_loop()
-    # Initial attempt plus two retries with exponential backoff.
-    backoffs = [0.5, 1.5]
+    backoffs = _BACKOFFS_BY_POLICY.get(retry_policy, _BACKOFFS_BY_POLICY["read"])
     last_exc: Exception | None = None
+    _metric_inc("spinr_db_calls_total", {"policy": retry_policy})
 
     for attempt in range(len(backoffs) + 1):
         try:
             result = await loop.run_in_executor(None, func)  # type: ignore
             _breaker.record_success()
+            _metric_gauge("spinr_db_circuit_state", 0, {"state": "closed"})
             return result
         except Exception as exc:
             last_exc = exc
@@ -146,10 +219,29 @@ async def run_sync(func: Callable[[], T]) -> T:
                 break
 
             if attempt < len(backoffs):
-                delay = backoffs[attempt]
+                # Check the fleet-wide retry budget BEFORE sleeping. If
+                # we're out of budget, skip the remaining retries and
+                # let the original transient error propagate (as a
+                # clean 503 via DatabaseError below).
+                if not await _consume_retry_token():
+                    _metric_inc(
+                        "spinr_db_retry_skipped_total",
+                        {"reason": "budget_exhausted", "policy": retry_policy},
+                    )
+                    logger.warning(
+                        f"Supabase transient failure ({exc_name}) — retry budget exhausted, "
+                        f"returning 503 instead of retrying"
+                    )
+                    break
+
+                delay = _jittered(backoffs[attempt])
+                _metric_inc(
+                    "spinr_db_retry_total",
+                    {"policy": retry_policy, "reason": exc_name},
+                )
                 logger.warning(
                     f"Supabase transient failure ({exc_name}) on attempt {attempt + 1}, "
-                    f"retrying in {delay}s: {exc}"
+                    f"retrying in {delay:.2f}s: {exc}"
                 )
                 await asyncio.sleep(delay)
                 continue
@@ -160,12 +252,19 @@ async def run_sync(func: Callable[[], T]) -> T:
             )
 
     _breaker.record_failure()
+    _metric_gauge(
+        "spinr_db_circuit_state",
+        1 if _breaker._state == "open" else (0.5 if _breaker._state == "half_open" else 0),
+        {"state": _breaker._state},
+    )
     assert last_exc is not None  # loop above always records an exception before breaking
     exc_str = str(last_exc)
     exc_name = type(last_exc).__name__
     exc_str_lower = exc_str.lower()
     if "duplicate key" in exc_str_lower or "unique constraint" in exc_str_lower or "23505" in exc_str:
+        _metric_inc("spinr_db_errors_total", {"kind": "duplicate_key"})
         raise DuplicateRecordError(details={"original": exc_str}) from last_exc
+    _metric_inc("spinr_db_errors_total", {"kind": "database_error"})
     logger.error(f"[DB] Supabase call failed ({exc_name}): {exc_str}")
     raise DatabaseError(details={"original": exc_str}) from last_exc
 
@@ -257,6 +356,19 @@ def _driver_by_user_cache_key(user_id: str) -> str:
     return f"cache:driver:by_user:{user_id}"
 
 
+def _metric_prefix_for_key(key: str) -> str:
+    """Map a cache key to a stable low-cardinality prefix label.
+
+    `cache:user:12345` → "user", `cache:driver:by_user:abc` → "driver_by_user".
+    Keeps the metric label set bounded — we never want per-user-id labels."""
+    parts = key.split(":", 3)
+    if len(parts) < 2:
+        return "unknown"
+    if len(parts) >= 3 and parts[1] == "driver" and parts[2] == "by_user":
+        return "driver_by_user"
+    return parts[1]
+
+
 async def _read_cached_row(key: str) -> Optional[Dict[str, Any]]:
     """Return the cached row, or None on miss / corrupt entry.
 
@@ -265,19 +377,26 @@ async def _read_cached_row(key: str) -> Optional[Dict[str, Any]]:
     (never looked up) — but since `None` has the same meaning for both,
     we collapse them in the caller.
     """
+    prefix = _metric_prefix_for_key(key)
     try:
         raw = await redis_get(key)
     except Exception as exc:
+        _metric_inc("spinr_cache_error_total", {"prefix": prefix, "op": "get"})
         logger.debug(f"[CACHE] redis_get failed for {key}: {exc}")
         return None
     if raw is None:
+        _metric_inc("spinr_cache_miss_total", {"prefix": prefix})
         return None
     if raw == _NEGATIVE_CACHE_SENTINEL:
+        _metric_inc("spinr_cache_hit_total", {"prefix": prefix, "kind": "negative"})
         return {}  # caller treats empty dict as "negative hit"
     try:
-        return _json.loads(raw)
+        value = _json.loads(raw)
+        _metric_inc("spinr_cache_hit_total", {"prefix": prefix, "kind": "positive"})
+        return value
     except Exception:
         # Corrupt entry — treat as miss, best-effort delete so we don't loop.
+        _metric_inc("spinr_cache_error_total", {"prefix": prefix, "op": "decode"})
         try:
             await redis_delete(key)
         except Exception:

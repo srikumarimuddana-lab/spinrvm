@@ -2604,7 +2604,7 @@ async def update_driver_status(
         # For each mandatory requirement, the latest approved doc wins. If
         # it has an expiry and that expiry is in the past, block.
         try:
-            requirements = await db_supabase.get_rows("driver_requirements", {}, limit=100)
+            requirements = await db_supabase.get_rows("document_requirements", {}, limit=100)
         except Exception:
             requirements = []
         mandatory_reqs = [r for r in (requirements or []) if r.get("is_mandatory")]

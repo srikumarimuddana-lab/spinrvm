@@ -148,7 +148,7 @@ async def derive_driver_onboarding_status(
     # Step 4: documents
     # Fetch requirements + driver's submitted docs.
     try:
-        requirements = await db_supabase.get_rows("driver_requirements", {}, limit=100)
+        requirements = await db_supabase.get_rows("document_requirements", {}, limit=100)
     except Exception:
         requirements = []
     try:

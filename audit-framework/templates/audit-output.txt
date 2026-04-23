@@ -12,6 +12,8 @@ AUDIT GROUND RULES
 • OTP is 4 digits by design — compensating controls documented, NOT flagged.
 • Hard-coded dev values (OTP "1234", test keys) → severity LOW/RECOMMENDATION only.
 • Severity scale: CRITICAL | HIGH | MEDIUM | LOW | PASS | RECOMMENDATION
+• CRITICAL/HIGH require file:line:snippet evidence — no evidence → downgrade to RECOMMENDATION.
+• Every finding must tag ≥1 regulation ID from audit-framework/regulatory-matrix.md.
 • See audit-framework/ground-rules.md for full list.
 
 PRE-AUDIT CHECKS
@@ -79,6 +81,35 @@ P1-1  [task-finding-ref]  Short description
 ── P3: HARDENING (Before Scale) ──────────────────────────────────────────────
 
 ── P4: FUTURE FEATURES ───────────────────────────────────────────────────────
+
+================================================================================
+FINDINGS YAML
+================================================================================
+
+===FINDINGS-YAML===
+- id: "[task]-[finding]"
+  severity: HIGH
+  dimension: "[task number]"
+  evidence:
+    file: path/to/file.ts
+    lines: [42, 43]
+    snippet: "relevant code snippet"
+    test_file: null
+    test_lines: null
+  root_cause: "one sentence root cause"
+  impact: "user/business impact"
+  fix: "concrete change description"
+  effort_hours: 4
+  regression_test: "what regression test to add"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: self
+===END-FINDINGS-YAML===
+
+===AUDIT-COMPLETE=== module=[module] version=v[N] dimensions=[list] findings=[N] critical=[N] high=[N] medium=[N] low=[N]
 
 ================================================================================
 END OF AUDIT — [module] v[N]

@@ -1,5 +1,6 @@
 # Module: Driver App
 
+**Status:** v4 audit complete (2026-04-18) · 258 findings · Verification 89% complete (2026-04-23)
 **Tech stack:** React Native + Expo SDK 54 (Android + iOS)
 **Bundle ID:** `com.spinr.driver`
 **Root folder:** `driver-app/`
@@ -20,7 +21,7 @@
 | 06 | Real-time | Required | GPS tracking + WebSocket dispatch |
 | 07 | State machine | Required | Ride lifecycle |
 | 08 | Payments | Required | Stripe Connect payouts |
-| 09 | Test coverage | Required | Jest + Maestro |
+| 09 | Test coverage | Required | Jest + Playwright-style E2E |
 | 10 | Error handling | Required | Offline queue, ErrorBoundary |
 | 11 | Security headers | Partial | Backend headers affect this app |
 | 12 | Compliance | Required | PIPEDA, PCI-DSS, document expiry |
@@ -28,6 +29,16 @@
 | 14 | Performance | Required | Often skipped — don't |
 | 15 | Accessibility | Required | AODA + App Store review |
 | 16 | i18n / French | Required | Official Languages Act |
+| 17 | Observability | Required | Crash analytics, Sentry/Firebase Crashlytics, structured error events |
+| 18 | DR / BCP | Required | Offline mode, graceful WS reconnect, trip data not lost on crash |
+| 19 | Fraud | Required | GPS spoof, fake trips, quest/bonus abuse, SOS misuse |
+| 20 | Financial reconciliation | Partial | Payout display must match backend; T4A download wiring |
+| 21 | Threat model / STRIDE | Required | Driver-specific: impersonation, cloned app, SIM-swap, rating manipulation |
+| 22 | Third-party risk | Partial | Expo SDK, Google Maps, Firebase, Stripe deps; SBOM for mobile |
+
+**Total applicable dimensions: 22** (all dimensions apply)
+
+**Phase E kickoff file** (D17–D22): `reports/audits/driver-app-phase-e-kickoff.md` — create before v5 re-audit.
 
 ---
 

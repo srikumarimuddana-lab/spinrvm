@@ -484,6 +484,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // edge proxy rejects plain ws:// with "Invalid Sec-WebSocket-Accept response".
     const useSecure = API_URL.startsWith('https');
     const wsUrl = `${API_URL.replace(/^https?/, useSecure ? 'wss' : 'ws')}/ws/driver/${currentUser.id}`;
+    // Flip the banner to 'reconnecting' the moment we start connecting.
+    // The initial state is 'disconnected', which renders as the red
+    // "Connection Lost" banner — if we leave it there during the TLS +
+    // auth-handshake window (easily 1–2 s on Railway cold starts), the
+    // driver sees an alarming banner while the socket is actually coming
+    // up fine. 'reconnecting' renders as the amber "Reconnecting…" state
+    // which correctly signals work-in-progress.
+    setConnectionState('reconnecting');
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

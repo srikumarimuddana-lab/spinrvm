@@ -153,3 +153,166 @@ async def redis_delete_pattern(pattern: str) -> int:
     for k in keys:
         _local_delete(k)
     return len(keys)
+
+
+# ── Observability helpers ─────────────────────────────────────────────────────
+#
+# Two functions for monitoring how much of Redis we're using:
+#
+#   get_redis_stats()       — O(1) / O(log N) INFO + DBSIZE. Cheap enough
+#                             to expose on every /metrics scrape.
+#
+#   count_keys_by_prefix()  — SCAN-based per-prefix key count. O(total_keys)
+#                             so it's NOT for per-request use. Call it on
+#                             an admin endpoint or a once-a-minute background
+#                             loop. Uses SCAN with COUNT hint so it doesn't
+#                             block Redis like KEYS would.
+#
+# Both gracefully degrade to the in-process fallback dict so dev/test without
+# REDIS_URL still returns meaningful numbers.
+
+# Key prefixes we care about — keeps the admin dashboard rendering stable
+# even when new prefixes appear. Add to this list as the app grows.
+KNOWN_KEY_PREFIXES = [
+    "cache:user:",              # get_user_by_id cache
+    "cache:driver:",            # get_driver_by_id cache
+    "cache:driver:by_user:",    # get_driver_by_user_id_cached cache
+    "idem:",                    # idempotency-key response cache
+    "session:",                 # login session lookup
+    "otp:",                     # OTP records + lockout
+    "ratelimit:",               # slowapi rate limiter
+    "spinr:retry_budget:",      # per-second retry budget counter
+    "spinr:ws:",                # WebSocket pub/sub channel state
+    "fares:",                   # per-area fare config cache
+]
+
+
+async def get_redis_stats() -> dict:
+    """Return a summary of Redis memory/keys suitable for /metrics and
+    an admin dashboard. O(1) — no SCAN — so safe to call per request.
+
+    Shape is stable across the Redis-connected and in-process-fallback
+    cases: callers can render the dict uniformly.
+    """
+    r = await _get_redis()
+    if r is None:
+        # In-process dict fallback. Best-effort memory estimation by
+        # summing string sizes — good enough for a dev-mode gauge.
+        total_bytes = 0
+        for entry in _local.values():
+            v = entry.get("value", "")
+            if isinstance(v, str):
+                total_bytes += len(v.encode("utf-8"))
+        return {
+            "backend": "in_process",
+            "connected": False,
+            "used_memory_bytes": total_bytes,
+            "used_memory_human": _humanize_bytes(total_bytes),
+            "maxmemory_bytes": 0,
+            "maxmemory_human": "unlimited",
+            "maxmemory_policy": "noeviction",
+            "used_memory_percent": None,
+            "used_memory_peak_bytes": total_bytes,
+            "total_keys": len(_local),
+            "keyspace_hits_total": None,
+            "keyspace_misses_total": None,
+            "evicted_keys_total": 0,
+            "expired_keys_total": 0,
+            "total_commands_processed": None,
+            "connected_clients": 1,
+            "uptime_seconds": None,
+        }
+
+    try:
+        info_mem = await r.info("memory")
+        info_stats = await r.info("stats")
+        info_clients = await r.info("clients")
+        info_server = await r.info("server")
+        dbsize = await r.dbsize()
+    except Exception as exc:
+        logger.warning(f"[REDIS] INFO failed: {exc}")
+        return {"backend": "redis", "connected": False, "error": str(exc)}
+
+    used = int(info_mem.get("used_memory", 0) or 0)
+    maxmem = int(info_mem.get("maxmemory", 0) or 0)
+    percent = (used / maxmem * 100) if maxmem > 0 else None
+
+    return {
+        "backend": "redis",
+        "connected": True,
+        "used_memory_bytes": used,
+        "used_memory_human": info_mem.get("used_memory_human", _humanize_bytes(used)),
+        "maxmemory_bytes": maxmem,
+        "maxmemory_human": info_mem.get("maxmemory_human", "unlimited" if maxmem == 0 else _humanize_bytes(maxmem)),
+        "maxmemory_policy": info_mem.get("maxmemory_policy", "noeviction"),
+        "used_memory_percent": percent,
+        "used_memory_peak_bytes": int(info_mem.get("used_memory_peak", 0) or 0),
+        "total_keys": int(dbsize or 0),
+        "keyspace_hits_total": int(info_stats.get("keyspace_hits", 0) or 0),
+        "keyspace_misses_total": int(info_stats.get("keyspace_misses", 0) or 0),
+        "evicted_keys_total": int(info_stats.get("evicted_keys", 0) or 0),
+        "expired_keys_total": int(info_stats.get("expired_keys", 0) or 0),
+        "total_commands_processed": int(info_stats.get("total_commands_processed", 0) or 0),
+        "connected_clients": int(info_clients.get("connected_clients", 0) or 0),
+        "uptime_seconds": int(info_server.get("uptime_in_seconds", 0) or 0),
+    }
+
+
+async def count_keys_by_prefix(prefixes: Optional[list] = None, scan_count: int = 500) -> dict:
+    """Count keys under each prefix. Uses SCAN so it's safe on prod,
+    but it's O(total_keys) — call on admin endpoints or a slow loop,
+    NOT per request.
+
+    Returns `{prefix: count}` with every supplied prefix present
+    (including zeroes) so the dashboard can render a stable row set.
+    Unmatched keys are totaled under the pseudo-prefix "__other__".
+    """
+    target_prefixes = list(prefixes) if prefixes is not None else list(KNOWN_KEY_PREFIXES)
+    counts: dict = {p: 0 for p in target_prefixes}
+    counts["__other__"] = 0
+
+    r = await _get_redis()
+    if r is None:
+        for k in _local.keys():
+            matched = False
+            for p in target_prefixes:
+                if k.startswith(p):
+                    counts[p] += 1
+                    matched = True
+                    break
+            if not matched:
+                counts["__other__"] += 1
+        return counts
+
+    try:
+        async for key in r.scan_iter(match="*", count=scan_count):
+            k = key.decode() if isinstance(key, bytes) else key
+            matched = False
+            for p in target_prefixes:
+                if k.startswith(p):
+                    counts[p] += 1
+                    matched = True
+                    break
+            if not matched:
+                counts["__other__"] += 1
+    except Exception as exc:
+        logger.warning(f"[REDIS] SCAN for prefix counts failed: {exc}")
+
+    return counts
+
+
+def _humanize_bytes(n: int) -> str:
+    """Format bytes as a short human string (e.g. 12.3M, 2.1G)."""
+    if n < 0:
+        return "0B"
+    units = ["B", "K", "M", "G", "T"]
+    size = float(n)
+    unit = units[0]
+    for u in units:
+        if size < 1024:
+            unit = u
+            break
+        size /= 1024
+    if unit == "B":
+        return f"{int(size)}{unit}"
+    return f"{size:.1f}{unit}"

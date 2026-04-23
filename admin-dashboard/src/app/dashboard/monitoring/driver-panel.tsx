@@ -22,6 +22,11 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
         .toUpperCase()
         .slice(0, 2);
 
+    // Stale = driver tapped "Go Online" but their app hasn't pinged us within
+    // the presence TTL (~90 s). Effective is_online is already false here, so
+    // the main badge shows Offline — this pill just explains *why* to the operator.
+    const isStale = driver.intent_online === true && driver.is_present === false;
+
     return (
         <div className="flex h-full flex-col overflow-hidden">
             {/* Header */}
@@ -34,12 +39,23 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                     <p className="truncate font-semibold">{driver.name}</p>
                     <p className="text-xs text-muted-foreground">{driver.phone}</p>
                 </div>
-                <Badge
-                    variant={driver.is_online ? "default" : "secondary"}
-                    className={driver.is_online ? "bg-green-500 hover:bg-green-500" : ""}
-                >
-                    {driver.is_online ? (driver.active_ride_id ? "On Ride" : "Online") : "Offline"}
-                </Badge>
+                <div className="flex flex-col items-end gap-1">
+                    <Badge
+                        variant={driver.is_online ? "default" : "secondary"}
+                        className={driver.is_online ? "bg-green-500 hover:bg-green-500" : ""}
+                    >
+                        {driver.is_online ? (driver.active_ride_id ? "On Ride" : "Online") : "Offline"}
+                    </Badge>
+                    {isStale && (
+                        <Badge
+                            variant="outline"
+                            className="border-amber-500/50 text-[10px] text-amber-600"
+                            title="Driver tapped Go Online but their app is not reachable (no heartbeat within 90s)."
+                        >
+                            Stale
+                        </Badge>
+                    )}
+                </div>
             </div>
 
             <Tabs defaultValue="overview" className="flex flex-1 flex-col overflow-hidden">

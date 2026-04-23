@@ -10,10 +10,12 @@ try:
     from .. import db_supabase
     from ..dependencies import verify_jwt_token
     from ..socket_manager import manager
+    from ..utils.driver_presence import clear_presence, mark_present
 except ImportError:
     import db_supabase
     from dependencies import verify_jwt_token
     from socket_manager import manager
+    from utils.driver_presence import clear_presence, mark_present
 
 db = db_supabase  # legacy alias
 
@@ -149,6 +151,10 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
     user = None
     connection_key = None
     hb_task = None
+    # Track the driver row id when this socket authenticates as a driver so
+    # the disconnect / error branches can clear Redis presence regardless of
+    # where the drop happened.
+    current_driver_id: str | None = None
 
     try:
         # Require the first message to be an auth message containing a token
@@ -247,10 +253,15 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
         if client_type == "driver":
             driver_profile_for_status = await db.find_one("drivers", {"user_id": user["id"]})
             if driver_profile_for_status:
+                current_driver_id = driver_profile_for_status["id"]
+                # Uber/Lyft-style presence: socket is alive → driver is present.
+                # Expires after PRESENCE_TTL if the socket dies without a
+                # clean disconnect. Refreshed on every pong and location ping.
+                await mark_present(current_driver_id)
                 await manager.broadcast_to_admins(
                     {
                         "type": "driver_status_changed",
-                        "driver_id": driver_profile_for_status["id"],
+                        "driver_id": current_driver_id,
                         "is_online": bool(driver_profile_for_status.get("is_online")),
                     }
                 )
@@ -296,6 +307,10 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             # treat every connection as dead after a few intervals.
             if data.get("type") == "pong":
                 conn_state["last_pong_at"] = asyncio.get_event_loop().time()
+                # Refresh presence TTL on every heartbeat — this is the
+                # primary signal that the driver is still reachable.
+                if current_driver_id:
+                    await mark_present(current_driver_id)
                 continue
 
             if data.get("type") in ("driver_location", "location_update"):
@@ -324,6 +339,10 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 if driver_id and lat and lng and is_valid_driver:
                     manager.update_driver_location(driver_id, lat, lng)
                     await db_supabase.update_driver_location(driver_id, lat, lng)
+                    # Location pings are an even stronger liveness signal
+                    # than pongs — fresh GPS proves the app is running and
+                    # foregrounded, not just that TCP is open.
+                    await mark_present(driver_id)
 
                     # ── Persist GPS breadcrumb ──────────────────────
                     active_ride = (lambda _r: _r[0] if _r else None)(
@@ -530,11 +549,15 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 logger.warning(f"Unknown WS message type: {data.get('type')}")
 
     except WebSocketDisconnect:
+        if current_driver_id:
+            await clear_presence(current_driver_id)
         await _handle_driver_ws_offline(connection_key, user)
         if connection_key:
             manager.disconnect(connection_key)
     except Exception as e:
         logger.exception(f"WebSocket error: {e}")
+        if current_driver_id:
+            await clear_presence(current_driver_id)
         await _handle_driver_ws_offline(connection_key, user)
         if connection_key:
             manager.disconnect(connection_key)

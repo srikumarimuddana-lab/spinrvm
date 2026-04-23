@@ -11,6 +11,7 @@ try:
     from ...db_supabase import _breaker as _db_breaker
     from ...dependencies import get_admin_user
     from ...supabase_client import supabase
+    from ...utils.driver_presence import PRESENCE_TTL, present_driver_ids
     from ...utils.metrics import snapshot as _metrics_snapshot
     from ...utils.redis_client import KNOWN_KEY_PREFIXES, count_keys_by_prefix, get_redis_stats, redis_delete_pattern
 except ImportError:
@@ -18,6 +19,7 @@ except ImportError:
     from db_supabase import _rows_from_res, run_sync
     from dependencies import get_admin_user
     from supabase_client import supabase
+    from utils.driver_presence import PRESENCE_TTL, present_driver_ids  # type: ignore
     from utils.metrics import snapshot as _metrics_snapshot  # type: ignore
     from utils.redis_client import KNOWN_KEY_PREFIXES, count_keys_by_prefix, get_redis_stats, redis_delete_pattern  # type: ignore
 
@@ -84,11 +86,20 @@ async def get_monitoring_drivers(current_admin: dict = Depends(get_admin_user)) 
     )
     active_ride_by_driver = {r["driver_id"]: r["id"] for r in _rows_from_res(rides_res)}
 
+    # Uber/Lyft-style presence: the DB `is_online` flag is "intent" (the
+    # driver tapped Go Online), presence is "proof" (their app is still
+    # talking to us). A driver is truly online iff both are true — this
+    # is what fixes the ghost-online bug where `is_online=true` sticks
+    # after the app crashes.
+    present_ids = await present_driver_ids(driver_ids)
+
     result = []
     for d in drivers:
         user = users_by_id.get(d.get("user_id", ""), {})
         first = user.get("first_name") or ""
         last = user.get("last_name") or ""
+        intent_online = bool(d.get("is_online"))
+        is_present = d["id"] in present_ids
         result.append(
             {
                 "id": d["id"],
@@ -97,8 +108,17 @@ async def get_monitoring_drivers(current_admin: dict = Depends(get_admin_user)) 
                 "photo_url": user.get("profile_image"),
                 "lat": d.get("lat"),
                 "lng": d.get("lng"),
-                "is_online": bool(d.get("is_online")),
-                "is_available": bool(d.get("is_available")),
+                # Effective online state (what dashboards should show as the
+                # green badge). Intent AND proof — stops admins seeing ghost
+                # drivers whose sockets died an hour ago.
+                "is_online": intent_online and is_present,
+                # Raw signals, kept on the payload so the dashboard can
+                # tell an operator "intent says yes, but we haven't heard
+                # from them in 90s" when the two disagree.
+                "intent_online": intent_online,
+                "is_present": is_present,
+                "presence_ttl": PRESENCE_TTL,
+                "is_available": bool(d.get("is_available")) and is_present,
                 "vehicle_make": d.get("vehicle_make"),
                 "vehicle_model": d.get("vehicle_model"),
                 "vehicle_color": d.get("vehicle_color"),
@@ -238,6 +258,7 @@ async def get_redis_health(current_admin: dict = Depends(get_admin_user)) -> Dic
         "ratelimit:":             "SlowAPI rate-limit counters",
         "spinr:retry_budget:":    "Per-second global retry budget counter",
         "spinr:ws:":              "WebSocket pub/sub state",
+        "spinr:presence:driver:": "Driver presence heartbeat (90s TTL)",
         "fares:":                 "Per-area fare config cache (5min TTL)",
         "__other__":              "Keys outside known prefixes",
     }

@@ -7,7 +7,16 @@ export interface MonitoringDriver {
   photo_url: string | null;
   lat: number | null;
   lng: number | null;
+  // Effective online state — intent (DB is_online) AND presence (Redis TTL
+  // heartbeat). A driver whose app was force-killed shows as offline here
+  // even while the DB row still says is_online=true.
   is_online: boolean;
+  // Driver tapped "Go Online". Stale if the app died mid-shift.
+  intent_online?: boolean;
+  // Driver's WebSocket heartbeat / location ping is still fresh.
+  is_present?: boolean;
+  // TTL seconds for interpreting is_present in tooltips (default 90 s).
+  presence_ttl?: number;
   is_available: boolean;
   vehicle_make: string | null;
   vehicle_model: string | null;

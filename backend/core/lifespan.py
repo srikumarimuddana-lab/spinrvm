@@ -174,6 +174,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import allowance reset loop: {e}")
 
+    # Driver presence sweeper — reconciles drivers.is_online against Redis
+    # presence heartbeats every 60s, so ghost-online rows (app killed,
+    # phone dead) flip offline without manual intervention. Dispatch
+    # already filters on live presence; this keeps admin and analytics
+    # tables honest.
+    try:
+        from utils.presence_sweeper import presence_sweeper_loop
+
+        _spawn("presence_sweeper (60s)", presence_sweeper_loop)
+    except Exception as e:
+        logger.warning(f"Failed to import presence sweeper loop: {e}")
+
     app.state.background_tasks = background_tasks
 
     # WebSocket pub/sub (audit P0-B3): before this, socket sends were

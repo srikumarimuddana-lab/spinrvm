@@ -19,6 +19,7 @@ try:
     from ..socket_manager import manager
     from ..utils.crypto import hash_otp
     from ..utils.datetime_utils import parse_iso_utc
+    from ..utils.driver_presence import clear_presence, mark_present, present_driver_ids
     from ..utils.error_handling import RideStateError
     from ..utils.idempotency import idempotent_endpoint
 except ImportError:
@@ -31,6 +32,7 @@ except ImportError:
     from socket_manager import manager
     from utils.crypto import hash_otp
     from utils.datetime_utils import parse_iso_utc
+    from utils.driver_presence import clear_presence, mark_present, present_driver_ids
     from utils.error_handling import RideStateError
     from utils.idempotency import idempotent_endpoint
 
@@ -1163,6 +1165,19 @@ async def get_nearby_drivers_public(
     # Get all matching drivers — service area filtering by distance (not polygon yet)
     drivers = await db_supabase.get_rows("drivers", query, limit=100)
 
+    # Presence filter: hide drivers whose app is not reachable (force-killed,
+    # phone dead, backgrounded past the TTL). Without this, the rider sees
+    # ghost cars on the map and tries to book someone who will never receive
+    # the offer. Safe-fallback: if presence lookup fails, show DB state —
+    # dispatch still filters on presence so a ghost booking cannot complete.
+    try:
+        driver_ids = [d["id"] for d in drivers if d.get("id")]
+        present = await present_driver_ids(driver_ids) if driver_ids else set()
+        if present:
+            drivers = [d for d in drivers if d["id"] in present]
+    except Exception as exc:
+        logger.warning(f"/drivers/nearby presence filter failed, using DB state: {exc}")
+
     # Manual filtering by distance
     nearby = []
     for d in drivers:
@@ -1254,6 +1269,15 @@ async def update_location_batch(batch: Union[List[dict], dict], current_user: di
         # Also sync to generic lat/lng fields if they exist to support legacy queries
         # (Though update_one might not support setting multiple top-level fields easily if we rely on $set mapping)
         # Let's trust db.drivers.update_one to handle the schema or the wrapper.
+
+        # Keep presence alive even when the driver's WebSocket briefly
+        # drops but the REST location batch keeps flowing (e.g. phone on
+        # cellular switching towers).
+        driver_row = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+        )
+        if driver_row and driver_row.get("is_online"):
+            await mark_present(driver_row["id"])
 
     return {"success": True}
 
@@ -2841,6 +2865,16 @@ async def update_driver_status(
                 "may be misconfigured — verify SUPABASE_SERVICE_ROLE_KEY."
             ),
         )
+
+    # Presence: Go Online is the strongest possible liveness signal — the
+    # driver is actively using the app. Refresh the TTL now so dispatch can
+    # see them immediately without waiting for the next WS heartbeat. Go
+    # Offline clears the key so admin monitoring and dispatch drop them
+    # from the pool without waiting for the 90 s TTL to expire.
+    if is_online:
+        await mark_present(driver_id)
+    else:
+        await clear_presence(driver_id)
 
     return {"success": True, "is_online": is_online}
 

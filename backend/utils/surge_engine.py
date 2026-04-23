@@ -16,9 +16,11 @@ from loguru import logger
 try:
     from db import db
     from geo_utils import get_service_area_polygon, point_in_polygon
+    from utils.driver_presence import present_driver_ids
 except ImportError:
     from ..db import db
     from ..geo_utils import get_service_area_polygon, point_in_polygon
+    from .driver_presence import present_driver_ids
 
 # ── Surge tier mapping ───────────────────────────────────────────────
 # Maps demand/supply ratio to multiplier. Thresholds are tuned for a
@@ -77,6 +79,19 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
 
     try:
         drivers = await db.get_rows("drivers", {"is_online": True, "is_available": True}, limit=500)
+
+        # Presence filter: ghost-online drivers (app force-killed, phone dead)
+        # shouldn't count as "supply" or we'd compute a lower surge than the
+        # real market needs. Safe-fallback: if presence lookup fails, trust
+        # the DB rows — worst case surge is slightly under-pricing for one
+        # tick, never over-pricing based on a Redis outage.
+        try:
+            driver_ids = [d["id"] for d in drivers if d.get("id")]
+            present = await present_driver_ids(driver_ids) if driver_ids else set()
+            if present:
+                drivers = [d for d in drivers if d["id"] in present]
+        except Exception as exc:
+            logger.warning(f"Surge: presence filter failed, using DB state: {exc}")
 
         count = 0
         for d in drivers:

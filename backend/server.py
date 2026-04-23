@@ -28,6 +28,7 @@ from routes.fare_split import api_router as fare_split_router
 from routes.fares import api_router as fares_router
 from routes.favorites import api_router as favorites_router
 from routes.loyalty import api_router as loyalty_router
+from routes.maps import api_router as maps_router
 from routes.notifications import api_router as notifications_router
 from routes.payments import api_router as payments_router
 from routes.promotions import api_router as promotions_router
@@ -145,6 +146,7 @@ v1_api_router.include_router(support_chat_router)
 v1_api_router.include_router(pricing_router)
 v1_api_router.include_router(faqs_router)
 v1_api_router.include_router(safety_router)
+v1_api_router.include_router(maps_router)
 
 # Include API routers
 app.include_router(v1_api_router, prefix="/api/v1")

@@ -175,8 +175,10 @@ async def redis_delete_pattern(pattern: str) -> int:
 # even when new prefixes appear. Add to this list as the app grows.
 KNOWN_KEY_PREFIXES = [
     "cache:user:",              # get_user_by_id cache
-    "cache:driver:",            # get_driver_by_id cache
+    # Order: more-specific prefix first so count_keys_by_prefix doesn't
+    # mis-attribute `cache:driver:by_user:*` keys to `cache:driver:*`.
     "cache:driver:by_user:",    # get_driver_by_user_id_cached cache
+    "cache:driver:",            # get_driver_by_id cache
     "idem:",                    # idempotency-key response cache
     "session:",                 # login session lookup
     "otp:",                     # OTP records + lockout
@@ -184,6 +186,14 @@ KNOWN_KEY_PREFIXES = [
     "spinr:retry_budget:",      # per-second retry budget counter
     "spinr:ws:",                # WebSocket pub/sub channel state
     "fares:",                   # per-area fare config cache
+    "gmaps:dir:",               # Google Maps Directions cache (120s TTL)
+    # More specific prefixes must come BEFORE their shorter parents so
+    # count_keys_by_prefix (which stops on the first match) attributes
+    # correctly — `gmaps:geo:rev:` must be tested before `gmaps:geo:`.
+    "gmaps:geo:rev:",           # Google Maps reverse geocoding (7d TTL)
+    "gmaps:geo:",               # Google Maps forward geocoding (7d TTL)
+    "gmaps:place:ac:",          # Places Autocomplete (60s TTL)
+    "gmaps:place:det:",         # Place Details (7d TTL)
 ]
 
 

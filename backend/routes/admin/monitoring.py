@@ -40,6 +40,11 @@ _FLUSHABLE_PREFIXES = {
     "idem:",
     "fares:",
     "spinr:retry_budget:",
+    "gmaps:dir:",
+    "gmaps:geo:",
+    "gmaps:geo:rev:",
+    "gmaps:place:ac:",
+    "gmaps:place:det:",
 }
 
 
@@ -239,6 +244,11 @@ async def get_redis_health(current_admin: dict = Depends(get_admin_user)) -> Dic
         "spinr:retry_budget:":    "Per-second global retry budget counter",
         "spinr:ws:":              "WebSocket pub/sub state",
         "fares:":                 "Per-area fare config cache (5min TTL)",
+        "gmaps:dir:":             "Google Maps Directions cache (120s TTL)",
+        "gmaps:geo:":             "Google Maps forward geocoding (7d TTL)",
+        "gmaps:geo:rev:":         "Google Maps reverse geocoding (7d TTL)",
+        "gmaps:place:ac:":        "Places Autocomplete cache (60s TTL)",
+        "gmaps:place:det:":       "Place Details cache (7d TTL)",
         "__other__":              "Keys outside known prefixes",
     }
     prefixes_with_meta = [

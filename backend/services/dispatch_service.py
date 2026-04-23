@@ -168,12 +168,19 @@ class DispatchService:
         return algorithm, min_rating, search_radius_km
 
     async def find_candidate_drivers(self, ride: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Online + available drivers for the ride's vehicle type."""
+        """Online + available + verified drivers for the ride's vehicle type.
+
+        is_verified + status='active' gate unverified / suspended / needs_review
+        drivers out of dispatch even if their is_online flag got left on (e.g.
+        status flipped server-side after they toggled online).
+        """
         return await self.db.get_rows(
             "drivers",
             {
                 "is_online": True,
                 "is_available": True,
+                "is_verified": True,
+                "status": "active",
                 "vehicle_type_id": ride["vehicle_type_id"],
             },
             limit=500,

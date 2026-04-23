@@ -14,8 +14,10 @@ from typing import Any, Dict, List, Optional
 
 try:
     from ..db import db
+    from .datetime_utils import parse_iso_utc
 except ImportError:
     from db import db
+    from utils.datetime_utils import parse_iso_utc
 
 logger = logging.getLogger(__name__)
 
@@ -87,14 +89,10 @@ async def _get_historical_hourly_demand(
         if area_id and r.get("service_area_id") != area_id:
             continue
 
-        try:
-            dt = datetime.fromisoformat(created.replace("Z", "+00:00").replace("+00:00", ""))
-            day = dt.weekday()
-            hour = dt.hour
-            date_key = dt.strftime("%Y-%m-%d")
-            buckets[day][hour].append(date_key)
-        except (ValueError, TypeError):
+        dt = parse_iso_utc(created)
+        if dt is None:
             continue
+        buckets[dt.weekday()][dt.hour].append(dt.strftime("%Y-%m-%d"))
 
     # Average per unique day (not per ride)
     result: Dict[int, Dict[int, float]] = {}

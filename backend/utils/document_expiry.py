@@ -14,10 +14,12 @@ try:
     from ..db import db
     from ..features import send_push_notification
     from ..socket_manager import manager
+    from .datetime_utils import parse_iso_utc
 except ImportError:
     from db import db
     from features import send_push_notification
     from socket_manager import manager
+    from utils.datetime_utils import parse_iso_utc
 
 logger = logging.getLogger(__name__)
 
@@ -57,25 +59,21 @@ async def check_expiring_documents():
             expiry_val = driver.get(field)
             if not expiry_val:
                 continue
-            try:
-                if isinstance(expiry_val, str):
-                    expiry_dt = datetime.fromisoformat(expiry_val.replace("Z", "+00:00").replace("+00:00", ""))
-                else:
-                    expiry_dt = expiry_val
-
-                # P2-6: process docs that have already expired OR expire within the
-                # warning window.  Without this gate the original code only processed
-                # future expiries (now < expiry_dt), silently skipping expired docs.
-                if not (expiry_dt < now or expiry_dt < warning_cutoff):
-                    continue
-
-                if expiry_dt <= now:
-                    expired_docs.append(label)
-                else:
-                    days_left = (expiry_dt - now).days
-                    expiring_docs.append({"label": label, "days_left": days_left})
-            except (ValueError, TypeError):
+            expiry_dt = parse_iso_utc(expiry_val)
+            if expiry_dt is None:
                 continue
+
+            # P2-6: process docs that have already expired OR expire within the
+            # warning window.  Without this gate the original code only processed
+            # future expiries (now < expiry_dt), silently skipping expired docs.
+            if not (expiry_dt < now or expiry_dt < warning_cutoff):
+                continue
+
+            if expiry_dt <= now:
+                expired_docs.append(label)
+            else:
+                days_left = (expiry_dt - now).days
+                expiring_docs.append({"label": label, "days_left": days_left})
 
         # Also check document_files / driver_documents for expiry_date
         try:
@@ -85,25 +83,18 @@ async def check_expiring_documents():
                 limit=20,
             )
             for doc in docs:
-                exp = doc.get("expiry_date") or doc.get("expires_at")
-                if not exp:
+                exp_dt = parse_iso_utc(doc.get("expiry_date") or doc.get("expires_at"))
+                if exp_dt is None:
                     continue
-                try:
-                    if isinstance(exp, str):
-                        exp_dt = datetime.fromisoformat(exp.replace("Z", "+00:00").replace("+00:00", ""))
-                    else:
-                        exp_dt = exp
-                    doc_name = doc.get("requirement_name") or doc.get("type") or "Document"
-                    # P2-6: same gate — process expired OR expiring within warning window
-                    if not (exp_dt < now or exp_dt < warning_cutoff):
-                        continue
-                    if exp_dt <= now:
-                        expired_docs.append(doc_name)
-                    else:
-                        days_left = (exp_dt - now).days
-                        expiring_docs.append({"label": doc_name, "days_left": days_left})
-                except (ValueError, TypeError):
+                doc_name = doc.get("requirement_name") or doc.get("type") or "Document"
+                # P2-6: same gate — process expired OR expiring within warning window
+                if not (exp_dt < now or exp_dt < warning_cutoff):
                     continue
+                if exp_dt <= now:
+                    expired_docs.append(doc_name)
+                else:
+                    days_left = (exp_dt - now).days
+                    expiring_docs.append({"label": doc_name, "days_left": days_left})
         except Exception as e:
             logger.debug(f"Failed to check driver_documents: {e}")
 
@@ -174,19 +165,9 @@ async def check_expiring_documents():
         # that they must reach the driver even if a 7-day reminder was sent
         # within the past 24 h.
         if days_left >= 2:
-            last_warned = driver.get("doc_expiry_warned_at")
-            if last_warned:
-                try:
-                    if isinstance(last_warned, str):
-                        warned_dt = datetime.fromisoformat(
-                            last_warned.replace("Z", "+00:00").replace("+00:00", "")
-                        )
-                    else:
-                        warned_dt = last_warned
-                    if (now - warned_dt).total_seconds() < 86400:
-                        continue
-                except (ValueError, TypeError):
-                    pass
+            warned_dt = parse_iso_utc(driver.get("doc_expiry_warned_at"))
+            if warned_dt is not None and (now - warned_dt).total_seconds() < 86400:
+                continue
 
         try:
             await send_push_notification(

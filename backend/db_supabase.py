@@ -1,6 +1,7 @@
 import asyncio
 import re
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 try:
@@ -142,20 +143,30 @@ async def run_sync(func: Callable[[], T]) -> T:
     _breaker.record_failure()
     assert last_exc is not None  # loop above always records an exception before breaking
     exc_str = str(last_exc)
+    exc_name = type(last_exc).__name__
     exc_str_lower = exc_str.lower()
     if "duplicate key" in exc_str_lower or "unique constraint" in exc_str_lower or "23505" in exc_str:
         raise DuplicateRecordError(details={"original": exc_str}) from last_exc
+    logger.error(f"[DB] Supabase call failed ({exc_name}): {exc_str}")
     raise DatabaseError(details={"original": exc_str}) from last_exc
 
 
 def _serialize_for_api(data: Any) -> Any:
-    """Recursively convert datetime/date objects to ISO format strings."""
+    """Recursively prepare a payload for Supabase/PostgREST JSON encoding.
+
+    Converts datetime/date → ISO strings and Decimal → float. Decimal
+    conversion matches the _f() convention used throughout fare code and
+    catches Pydantic models whose Decimal-typed fields leak through
+    .dict() (e.g. Ride.base_fare, Ride.tip_amount) without a manual _f().
+    """
     if isinstance(data, dict):
         return {k: _serialize_for_api(v) for k, v in data.items()}
     if isinstance(data, list):
         return [_serialize_for_api(v) for v in data]
     if isinstance(data, (datetime, date)):
         return data.isoformat()
+    if isinstance(data, Decimal):
+        return float(data)
     return data
 
 
@@ -510,7 +521,15 @@ async def insert_ride(payload: Dict[str, Any]):
     if not supabase:
         raise RuntimeError("Supabase client not configured")
     payload = _serialize_for_api(payload)
-    return await run_sync(lambda: _single_row_from_res(supabase.table("rides").insert(payload).execute()))
+    logger.info(f"[DEBUG-INSERT-RIDE] payload keys: {sorted(payload.keys())}")
+    logger.info(f"[DEBUG-INSERT-RIDE] full payload: {payload}")
+    try:
+        result = await run_sync(lambda: _single_row_from_res(supabase.table("rides").insert(payload).execute()))
+        logger.info(f"[DEBUG-INSERT-RIDE] SUCCESS ride_id={payload.get('id')}")
+        return result
+    except Exception as e:
+        logger.error(f"[DEBUG-INSERT-RIDE] FAILED: {e}")
+        raise
 
 
 async def update_ride(ride_id: str, updates: Dict[str, Any]):

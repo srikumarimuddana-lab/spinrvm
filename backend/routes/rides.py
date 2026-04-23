@@ -46,9 +46,13 @@ import stripe
 from .fares import _fares_for_location_impl, get_fares_for_location
 
 try:
+    from ..utils.datetime_utils import parse_iso_utc
     from ..utils.error_handling import RideStateError
+    from ..utils.ride_code import generate_ride_code
 except ImportError:
+    from utils.datetime_utils import parse_iso_utc
     from utils.error_handling import RideStateError
+    from utils.ride_code import generate_ride_code
 
 try:
     from ..utils.estimate_token import (
@@ -603,15 +607,28 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
     try:
         current_ride = await db_supabase.get_ride(r_id)
         if current_ride and current_ride.get("status") == "searching":
-            await db_supabase.update_ride(
-                r_id,
-                {
-                    "status": "cancelled",
-                    "cancelled_at": datetime.now(timezone.utc),
-                    "cancellation_reason": "No nearby drivers found. Please try again.",
-                    "updated_at": datetime.now(timezone.utc),
-                },
-            )
+            now = datetime.now(timezone.utc)
+            base_update = {
+                "status": "cancelled",
+                "cancelled_at": now,
+                "cancellation_reason": "No nearby drivers found. Please try again.",
+                "updated_at": now,
+            }
+            # Migration 38 adds cancelled_by / cancellation_type so the
+            # admin panel can filter "No Driver Found" separately. Fall
+            # back to base_update on PGRST204 ("column does not exist")
+            # so the rider-facing cancel still succeeds before the
+            # migration lands in prod.
+            try:
+                await db_supabase.update_ride(
+                    r_id,
+                    {**base_update, "cancelled_by": "system", "cancellation_type": "no_drivers_found"},
+                )
+            except Exception as _col_exc:
+                logger.warning(
+                    f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
+                )
+                await db_supabase.update_ride(r_id, base_update)
             await manager.send_personal_message(
                 {
                     "type": "ride_cancelled",
@@ -938,7 +955,35 @@ async def create_ride(
     # ``insert_ride`` returns the row Supabase just wrote — use it directly
     # instead of a follow-up ``get_ride`` round-trip. Fall back to the
     # local ride_data if the driver returns None (e.g. stub DB in tests).
-    inserted = await db_supabase.insert_ride(ride_data)
+    #
+    # ride_code (migration 40) is a short SPR-XXXXXX string operators and
+    # riders can quote. The UUID in ride_data["id"] stays primary key.
+    # On the astronomically-unlikely unique-constraint collision we retry
+    # with a fresh code; on PGRST204 ("column does not exist", migration
+    # hasn't landed yet) fall back to inserting without the code.
+    inserted = None
+    last_exc: Optional[Exception] = None
+    for _attempt in range(3):
+        ride_data["ride_code"] = generate_ride_code()
+        try:
+            inserted = await db_supabase.insert_ride(ride_data)
+            break
+        except Exception as e:
+            last_exc = e
+            msg = str(e).lower()
+            if "column" in msg or "pgrst204" in msg:
+                ride_data.pop("ride_code", None)
+                inserted = await db_supabase.insert_ride(ride_data)
+                break
+            if "unique" in msg or "duplicate" in msg or "23505" in msg:
+                continue  # retry with a new code
+            raise
+    else:
+        logger.error(
+            f"create_ride: could not allocate unique ride_code after 3 tries: {last_exc}"
+        )
+        raise HTTPException(status_code=503, detail="Could not allocate ride code")
+
     fresh_ride = inserted or ride_data
 
     # Match driver — pass the fresh ride through so the dispatch path
@@ -1261,10 +1306,10 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         raise HTTPException(status_code=403, detail="Not authorized")
 
     _ride_status = ride.get("status", "")
-    if _ride_status != "trip_completed":
+    if _ride_status != "completed":
         raise HTTPException(
             status_code=409,
-            detail=f"Ride is in status '{_ride_status}'; payment requires trip_completed state.",
+            detail=f"Ride is in status '{_ride_status}'; payment requires completed state.",
         )
 
     # IDEMPOTENCY: if already paid, return success without charging again
@@ -1337,7 +1382,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             ride_id,
             {
                 "payment_status": "paid",
-                "tip_amount": tip_amount,
+                "tip_amount": float(tip_amount),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
         )
@@ -1738,7 +1783,7 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
     if rating_data.tip_amount > 0:
         new_tip = ride.get("tip_amount", 0) + rating_data.tip_amount
         new_driver_earnings = ride.get("driver_earnings", 0) + rating_data.tip_amount
-    await db_supabase.update_ride(ride_id, {"tip_amount": new_tip, "driver_earnings": new_driver_earnings})
+        await db_supabase.update_ride(ride_id, {"tip_amount": new_tip, "driver_earnings": new_driver_earnings})
 
     # Aggregate driver rating accurately
     driver = await db_supabase.get_driver_by_id(driver_id)
@@ -1749,15 +1794,15 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
 
         if rated_rides:
             average_rating = round(sum(rated_rides) / len(rated_rides), 2)
-    await db_supabase.update_one(
-        "drivers",
-        {"id": driver_id},
-        {
-            "rating": average_rating,
-            "average_rating": average_rating,
-            "total_ratings": len(rated_rides),
-        },
-    )
+            await db_supabase.update_one(
+                "drivers",
+                {"id": driver_id},
+                {
+                    "rating": average_rating,
+                    "average_rating": average_rating,
+                    "total_ratings": len(rated_rides),
+                },
+            )
 
     # G19: Notify the driver that they received a rating. This creates a
     # feedback loop — drivers see their rating improve/decline in real time
@@ -1816,16 +1861,8 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
 
     # Calculate fee if driver was already assigned and some time passed (e.g. 2 mins)
     elif driver_id and ride.get("driver_accepted_at"):
-        accepted_at = ride["driver_accepted_at"]
-        if isinstance(accepted_at, str):
-            try:
-                accepted_at = datetime.fromisoformat(accepted_at.replace("Z", "+00:00").replace("+00:00", ""))
-            except ValueError:
-                accepted_at = None
-        if accepted_at:
-            time_diff = (datetime.now(timezone.utc) - accepted_at).total_seconds()
-        else:
-            time_diff = 0
+        accepted_at = parse_iso_utc(ride["driver_accepted_at"])
+        time_diff = (datetime.now(timezone.utc) - accepted_at).total_seconds() if accepted_at else 0
         if time_diff > 120:  # 2 minutes
             charged_admin = cancellation_fee_admin
             charged_driver = cancellation_fee_driver
@@ -1869,16 +1906,27 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
         except Exception as fee_err:
             logger.warning(f"[CANCEL] cancellation fee payout failed for driver {driver_id}: {fee_err}")
 
-    await db_supabase.update_ride(
-        ride_id,
-        {
-            "status": "cancelled",
-            "cancelled_at": datetime.now(timezone.utc),
-            "cancellation_fee_admin": charged_admin,
-            "cancellation_fee_driver": charged_driver,
-            "updated_at": datetime.now(timezone.utc),
-        },
-    )
+    _now = datetime.now(timezone.utc)
+    _base_update = {
+        "status": "cancelled",
+        "cancelled_at": _now,
+        "cancellation_fee_admin": charged_admin,
+        "cancellation_fee_driver": charged_driver,
+        "updated_at": _now,
+    }
+    # Migration 38 — attribution. Fall back to the legacy payload on
+    # PGRST204 so the rider's cancel button never 503s if the column
+    # isn't in prod yet.
+    try:
+        await db_supabase.update_ride(
+            ride_id,
+            {**_base_update, "cancelled_by": "rider", "cancellation_type": "rider_cancel"},
+        )
+    except Exception as _col_exc:
+        logger.warning(
+            f"[CANCEL] attribution write failed ({_col_exc}); retrying minimal"
+        )
+        await db_supabase.update_ride(ride_id, _base_update)
 
     # Verify the cancel actually landed in the database. Same class of
     # silent-failure we hit with go-online and accept: the update_one wrapper
@@ -2094,20 +2142,14 @@ async def get_chat_status(ride_id: str, current_user: dict = Depends(get_current
         return {"available": False, "reason": "Ride was cancelled"}
 
     if status == "completed":
-        completed_at = ride.get("ride_completed_at") or ride.get("updated_at")
+        completed_at = parse_iso_utc(ride.get("ride_completed_at") or ride.get("updated_at"))
         if completed_at:
-            if isinstance(completed_at, str):
-                try:
-                    completed_at = datetime.fromisoformat(completed_at.replace("Z", "+00:00").replace("+00:00", ""))
-                except (ValueError, TypeError):
-                    completed_at = None
-            if completed_at:
-                elapsed = (datetime.now(timezone.utc) - completed_at).total_seconds()
-                remaining = max(0, 86400 - elapsed)
-                if remaining <= 0:
-                    return {"available": False, "reason": "Post-trip chat window expired"}
-                hours_left = int(remaining // 3600)
-                return {"available": True, "post_trip": True, "hours_remaining": hours_left}
+            elapsed = (datetime.now(timezone.utc) - completed_at).total_seconds()
+            remaining = max(0, 86400 - elapsed)
+            if remaining <= 0:
+                return {"available": False, "reason": "Post-trip chat window expired"}
+            hours_left = int(remaining // 3600)
+            return {"available": True, "post_trip": True, "hours_remaining": hours_left}
         return {"available": True, "post_trip": True, "hours_remaining": 24}
 
     # Active ride — chat is fully available
@@ -2238,15 +2280,9 @@ async def send_ride_message(ride_id: str, body: SendMessageRequest, current_user
 
     # Post-trip chat window: allow messages for 24h after completion
     if ride.get("status") == "completed":
-        completed_at = ride.get("ride_completed_at") or ride.get("updated_at")
-        if completed_at:
-            if isinstance(completed_at, str):
-                try:
-                    completed_at = datetime.fromisoformat(completed_at.replace("Z", "+00:00").replace("+00:00", ""))
-                except (ValueError, TypeError):
-                    completed_at = None
-            if completed_at and (datetime.now(timezone.utc) - completed_at).total_seconds() > 86400:
-                raise HTTPException(status_code=400, detail="Post-trip chat window has expired (24 hours)")
+        completed_at = parse_iso_utc(ride.get("ride_completed_at") or ride.get("updated_at"))
+        if completed_at and (datetime.now(timezone.utc) - completed_at).total_seconds() > 86400:
+            raise HTTPException(status_code=400, detail="Post-trip chat window has expired (24 hours)")
 
     is_rider = ride.get("rider_id") == current_user["id"]
     driver = await db.find_one("drivers", {"user_id": current_user["id"]})
@@ -2302,15 +2338,23 @@ async def cancel_scheduled_ride(ride_id: str, current_user: dict = Depends(get_c
     if ride.get("status") in ["completed", "cancelled"]:
         raise HTTPException(status_code=400, detail="Ride is already completed or cancelled")
 
-    await db_supabase.update_ride(
-        ride_id,
-        {
-            "status": "cancelled",
-            "cancelled_at": datetime.now(timezone.utc),
-            "cancellation_reason": "Cancelled by rider (scheduled)",
-            "updated_at": datetime.now(timezone.utc),
-        },
-    )
+    _now = datetime.now(timezone.utc)
+    _base = {
+        "status": "cancelled",
+        "cancelled_at": _now,
+        "cancellation_reason": "Cancelled by rider (scheduled)",
+        "updated_at": _now,
+    }
+    try:
+        await db_supabase.update_ride(
+            ride_id,
+            {**_base, "cancelled_by": "rider", "cancellation_type": "rider_cancel"},
+        )
+    except Exception as _col_exc:
+        logger.warning(
+            f"[SCHED-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
+        )
+        await db_supabase.update_ride(ride_id, _base)
     return {"success": True}
 
 

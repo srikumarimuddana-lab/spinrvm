@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Radio, X } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
 
-import { adminCancelRide, getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTypes } from "@/lib/api";
+import { adminCancelRide, getFareConfigs, getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTypes } from "@/lib/api";
 import { useMonitoringSocket } from "@/hooks/use-monitoring-socket";
 
 import { MonitoringMap, MapHandles, MonitoringServiceArea } from "./monitoring-map";
@@ -47,6 +47,12 @@ export default function MonitoringPage() {
   const [selectedRide, setSelectedRide] = useState<MonitoringRide | null>(null);
   const [serviceAreas, setServiceAreas] = useState<MonitoringServiceArea[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<{ id: string; name: string }[]>([]);
+  // serviceAreaId → set of vehicle_type_ids with an active fare config.
+  // Used to narrow the toolbar's vehicle-type dropdown when an area is
+  // selected (e.g. picking "Regina" hides vehicle types that have no
+  // Regina fare config). An empty/missing set means the area has no
+  // configured vehicle types; the dropdown shows "No vehicles configured".
+  const [vehicleTypesByArea, setVehicleTypesByArea] = useState<Record<string, Set<string>>>({});
   const [alerts, setAlerts] = useState<AlertEvent[]>([]);
 
   // ── Auth token for WebSocket ────────────────────────────────────────
@@ -214,29 +220,126 @@ export default function MonitoringPage() {
     refreshCounts();
   }, [applyDriver, applyRide, refreshCounts]);
 
-  // Load service areas + vehicle types once
+  // Load service areas + vehicle types + pricing sources once. The
+  // serviceAreaId → vehicleTypeId map is unioned from BOTH pricing
+  // stores (fare_configs table AND service_areas.vehicle_pricing
+  // JSONB) — admins can configure vehicles in either place, and
+  // reading only one source caused the drawer to complain "No fare
+  // configs" even when pricing was set via the Service Areas admin.
   useEffect(() => {
-    getServiceAreas()
-      .then((areas: any[]) =>
-        setServiceAreas(
-          areas.map((a) => ({
-            id: a.id,
-            name: a.name,
-            geojson: a.geojson ?? null,
-            fallbackCenter: a.center_lat && a.center_lng
-              ? { lat: a.center_lat, lng: a.center_lng }
-              : null,
-          }))
-        )
-      )
-      .catch(() => {});
+    Promise.all([
+      getServiceAreas(),
+      getVehicleTypes().catch(() => [] as any[]),
+      getFareConfigs().catch(() => [] as any[]),
+    ])
+      .then(([rawAreas, vt, configs]) => {
+        const areas: any[] = rawAreas || [];
 
-    getVehicleTypes()
-      .then((vt: any[]) =>
-        setVehicleTypes(vt.map((v) => ({ id: v.id, name: v.name })))
-      )
+        setServiceAreas(
+          areas.map((a) => {
+            // Backend stores the shape under `polygon` (may be a raw
+            // GeoJSON Polygon or an array of {lat,lng} — see
+            // getAreaPolygon() in the service-areas admin page).
+            // Normalise to a GeoJSON Polygon for fitBoundsToGeoJSON(), and
+            // compute a centroid fallback so fitArea() can still centre
+            // the map when the area has no polygon drawn yet.
+            const raw = a.polygon ?? a.geojson;
+            let geojson: GeoJSON.Polygon | null = null;
+            let fallbackCenter: { lat: number; lng: number } | null = null;
+            if (raw?.type === "Polygon" && Array.isArray(raw.coordinates)) {
+              geojson = raw as GeoJSON.Polygon;
+            } else if (Array.isArray(raw) && raw.length > 0 && raw[0]?.lat !== undefined) {
+              const ring = raw.map(
+                (p: { lat: number; lng: number }) => [p.lng, p.lat] as GeoJSON.Position,
+              );
+              const first = ring[0];
+              const last = ring[ring.length - 1];
+              if (first[0] !== last[0] || first[1] !== last[1]) ring.push(first);
+              geojson = { type: "Polygon", coordinates: [ring] };
+            }
+            if (geojson) {
+              const ring = geojson.coordinates[0];
+              const pts =
+                ring.length > 1 &&
+                ring[0][0] === ring[ring.length - 1][0] &&
+                ring[0][1] === ring[ring.length - 1][1]
+                  ? ring.slice(0, -1)
+                  : ring;
+              const sum = pts.reduce(
+                (acc, [lng, lat]) => ({ lng: acc.lng + lng, lat: acc.lat + lat }),
+                { lng: 0, lat: 0 },
+              );
+              fallbackCenter = { lng: sum.lng / pts.length, lat: sum.lat / pts.length };
+            } else if (a.center_lat && a.center_lng) {
+              fallbackCenter = { lat: a.center_lat, lng: a.center_lng };
+            }
+            return { id: a.id, name: a.name, geojson, fallbackCenter };
+          }),
+        );
+
+        const types = (vt || []).map((v: any) => ({ id: v.id, name: v.name }));
+        setVehicleTypes(types);
+        const byName: Record<string, string> = {};
+        for (const t of types) byName[t.name] = t.id;
+
+        const map: Record<string, Set<string>> = {};
+        // From fare_configs (direct id refs)
+        for (const c of configs || []) {
+          if (c?.is_active === false) continue;
+          const aId = c?.service_area_id;
+          const vtId = c?.vehicle_type_id;
+          if (!aId || !vtId) continue;
+          if (!map[aId]) map[aId] = new Set<string>();
+          map[aId].add(vtId);
+        }
+        // From service_areas.vehicle_pricing JSONB (name-based)
+        for (const area of areas) {
+          const pricing = Array.isArray(area?.vehicle_pricing) ? area.vehicle_pricing : [];
+          for (const row of pricing) {
+            const name = row?.vehicle_type;
+            if (!name) continue;
+            const vtId = byName[name];
+            if (!vtId) continue;
+            if (!map[area.id]) map[area.id] = new Set<string>();
+            map[area.id].add(vtId);
+          }
+        }
+        setVehicleTypesByArea(map);
+      })
       .catch(() => {});
   }, []);
+
+  // Vehicle types available for the current area filter. When no area is
+  // selected we show all; when an area is selected we narrow to the
+  // vehicle types configured for it (empty allowed — the toolbar surfaces
+  // an "empty" hint so the operator knows there's nothing to pick).
+  const availableVehicleTypes = useMemo(() => {
+    if (!filters.serviceAreaId) return vehicleTypes;
+    const allowed = vehicleTypesByArea[filters.serviceAreaId];
+    if (!allowed) return [];
+    return vehicleTypes.filter((v) => allowed.has(v.id));
+  }, [filters.serviceAreaId, vehicleTypes, vehicleTypesByArea]);
+
+  // If the selected vehicle type is no longer valid for the chosen area,
+  // auto-clear it so the filter doesn't silently hide every driver.
+  useEffect(() => {
+    if (!filters.vehicleTypeId) return;
+    if (availableVehicleTypes.some((v) => v.id === filters.vehicleTypeId)) return;
+    setFilters((f) => ({ ...f, vehicleTypeId: null }));
+  }, [availableVehicleTypes, filters.vehicleTypeId]);
+
+  // When the operator picks a different service area (Saskatoon → Regina,
+  // etc.), fly the map to that area so they actually see the city they
+  // just selected. serviceAreas is a dep so the fit re-runs once the
+  // list loads in — if the user somehow lands on the page with a
+  // preselected area, we still centre on it. We deliberately don't move
+  // the map when "All Areas" is chosen; the driver auto-fit handles that.
+  useEffect(() => {
+    if (!filters.serviceAreaId) return;
+    const area = serviceAreas.find((a) => a.id === filters.serviceAreaId);
+    if (!area) return;
+    mapHandlesRef.current?.fitArea(filters.serviceAreaId);
+  }, [filters.serviceAreaId, serviceAreas]);
 
   // Poll data
   useEffect(() => {
@@ -324,7 +427,7 @@ export default function MonitoringPage() {
         followMode={followMode}
         onFollowToggle={() => setFollowMode((f) => !f)}
         serviceAreas={serviceAreas}
-        vehicleTypes={vehicleTypes}
+        vehicleTypes={availableVehicleTypes}
         wsStatus={wsStatus}
       />
 

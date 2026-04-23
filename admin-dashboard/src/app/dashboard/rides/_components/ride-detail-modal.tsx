@@ -46,6 +46,12 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
     const [loading, setLoading] = useState(false);
     const [flagTarget, setFlagTarget] = useState<{ type: "rider" | "driver"; name: string } | null>(null);
     const [showComplaint, setShowComplaint] = useState(false);
+    // Which polyline the replay map renders:
+    //   "pickup"  — Phase 2 GPS trail (driver → pickup)
+    //   "actual"  — Phase 3 GPS trail (pickup → dropoff, actual)
+    //   "planned" — straight-line reference pickup → dropoff
+    // Default is "actual" — the answer to "did this ride happen?".
+    const [selectedPhase, setSelectedPhase] = useState<"pickup" | "actual" | "planned">("actual");
 
     const loadRide = useCallback(async () => {
         if (!rideId) return;
@@ -60,6 +66,9 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
     useEffect(() => {
         if (open && rideId) loadRide();
         if (!open) setRide(null);
+        // Every open of the modal resets to the Actual Trip view so the
+        // operator sees the real recorded path first.
+        setSelectedPhase("actual");
     }, [open, rideId, loadRide]);
 
     if (!open) return null;
@@ -105,7 +114,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
             <Dialog open={open} onOpenChange={v => !v && onClose()}>
                 <DialogContent className="sm:max-w-5xl max-h-[90vh] overflow-y-auto p-0" showCloseButton={true}>
                     <DialogTitle className="sr-only">
-                        {ride ? `Ride ${ride.id}` : "Ride Details"}
+                        {ride ? `Ride ${ride.ride_code || ride.id}` : "Ride Details"}
                     </DialogTitle>
                     {loading || !ride ? (
                         <div className="flex flex-col items-center justify-center py-24">
@@ -118,7 +127,16 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                             <div className="px-6 py-5 bg-muted/20">
                                 <div className="flex items-start justify-between gap-4">
                                     <div className="flex-1 min-w-0">
-                                        <p className="text-[11px] text-muted-foreground font-mono mb-1.5">Ride ID: {ride.id}</p>
+                                        {ride.ride_code ? (
+                                            <>
+                                                <p className="text-base font-bold tracking-wide mb-0.5">{ride.ride_code}</p>
+                                                <p className="text-[10px] text-muted-foreground/70 font-mono mb-2 truncate" title={ride.id}>
+                                                    UUID: {ride.id}
+                                                </p>
+                                            </>
+                                        ) : (
+                                            <p className="text-[11px] text-muted-foreground font-mono mb-1.5">Ride ID: {ride.id}</p>
+                                        )}
                                         <div className="flex items-center gap-2.5 flex-wrap">
                                             {getStatusBadge(ride.status)}
                                             {isRideLive(ride.status) && (
@@ -133,52 +151,32 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                 </div>
                             </div>
 
-                            {/* Route + Map */}
+                            {/* Route addresses. The top map was removed — all
+                                route visualisation lives in the Route Replay
+                                section below, which has three explicit
+                                options (Pickup / Actual Trip / Planned Trip). */}
                             <div className="px-6 py-5">
-                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                                    <Sec title="Route">
-                                        <div className="flex gap-3">
-                                            <div className="flex flex-col items-center pt-1">
-                                                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-emerald-200 dark:ring-emerald-900/50" />
-                                                <div className="w-0.5 flex-1 bg-border my-1.5" />
-                                                <div className="w-2.5 h-2.5 rounded-full bg-primary ring-2 ring-primary/20" />
-                                            </div>
-                                            <div className="flex-1">
-                                                <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Pickup</p>
-                                                <p className="text-sm font-medium mt-0.5">{ride.pickup_address || "—"}</p>
-                                                <div className="h-4" />
-                                                <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Dropoff</p>
-                                                <p className="text-sm font-medium mt-0.5">{ride.dropoff_address || "—"}</p>
-                                            </div>
+                                <Sec title="Route">
+                                    <div className="flex gap-3">
+                                        <div className="flex flex-col items-center pt-1">
+                                            <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-emerald-200 dark:ring-emerald-900/50" />
+                                            <div className="w-0.5 flex-1 bg-border my-1.5" />
+                                            <div className="w-2.5 h-2.5 rounded-full bg-primary ring-2 ring-primary/20" />
                                         </div>
-                                        <div className="flex gap-2 mt-3 pt-3 border-t">
-                                            <MStat label="Distance" value={`${(ride.distance_km || 0).toFixed(1)} km`} icon={Route} />
-                                            <MStat label="Duration" value={`${ride.duration_minutes || 0} min`} icon={Clock} />
-                                            <MStat label="Surge" value={`${ride.surge_multiplier || 1.0}x`} icon={Percent} />
+                                        <div className="flex-1">
+                                            <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Pickup</p>
+                                            <p className="text-sm font-medium mt-0.5">{ride.pickup_address || "—"}</p>
+                                            <div className="h-4" />
+                                            <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Dropoff</p>
+                                            <p className="text-sm font-medium mt-0.5">{ride.dropoff_address || "—"}</p>
                                         </div>
-                                    </Sec>
-                                    <div>
-                                        <h4 className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-2.5">Map</h4>
-                                        {ride.pickup_lat && ride.dropoff_lat ? (
-                                            <RideRouteMap
-                                                pickupLat={ride.pickup_lat} pickupLng={ride.pickup_lng}
-                                                dropoffLat={ride.dropoff_lat} dropoffLng={ride.dropoff_lng}
-                                                locationTrail={
-                                                    // Prefer stored downsampled polyline (set on completion)
-                                                    // over raw trail so we don't hit driver_location_history
-                                                    Array.isArray(ride.route_polyline) && ride.route_polyline.length > 0
-                                                        ? ride.route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] }))
-                                                        : ride.location_trail
-                                                }
-                                            />
-                                        ) : (
-                                            <div className="bg-muted/30 rounded-xl h-[280px] flex flex-col items-center justify-center gap-2">
-                                                <MapPin className="h-8 w-8 text-muted-foreground/20" />
-                                                <p className="text-xs text-muted-foreground">No map data available</p>
-                                            </div>
-                                        )}
                                     </div>
-                                </div>
+                                    <div className="flex gap-2 mt-3 pt-3 border-t">
+                                        <MStat label="Distance" value={`${(ride.distance_km || 0).toFixed(1)} km`} icon={Route} />
+                                        <MStat label="Duration" value={`${ride.duration_minutes || 0} min`} icon={Clock} />
+                                        <MStat label="Surge" value={`${ride.surge_multiplier || 1.0}x`} icon={Percent} />
+                                    </div>
+                                </Sec>
                             </div>
 
                             {/* Customer & Driver */}
@@ -411,6 +409,30 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                             {ride.status === "cancelled" && (
                                 <div className="px-6 py-5">
                                     <Sec title="Cancellation">
+                                        <FR
+                                            l="Cancelled by"
+                                            v={
+                                                ride.cancelled_by
+                                                    ? String(ride.cancelled_by)
+                                                        .replace(/_/g, " ")
+                                                        .replace(/\b\w/g, (c: string) => c.toUpperCase())
+                                                    : "—"
+                                            }
+                                            t
+                                        />
+                                        <FR
+                                            l="Type"
+                                            v={
+                                                ride.cancellation_type === "no_drivers_found"
+                                                    ? "No drivers found"
+                                                    : ride.cancellation_type
+                                                      ? String(ride.cancellation_type)
+                                                            .replace(/_/g, " ")
+                                                            .replace(/\b\w/g, (c: string) => c.toUpperCase())
+                                                      : "—"
+                                            }
+                                            t
+                                        />
                                         <FR l="Reason" v={ride.cancellation_reason || "—"} t />
                                         <FR l="Driver fee" v={ride.cancellation_fee_driver} />
                                         <FR l="Admin fee" v={ride.cancellation_fee_admin} />
@@ -503,63 +525,167 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         {ride.cancelled_at && <TL l="Cancelled" t={ride.cancelled_at} d />}
                                     </div>
 
-                                    {/* Phase distance summary */}
-                                    {phaseDistances.length > 0 && (
-                                        <div className="mt-3 pt-3 border-t">
-                                            <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider mb-2.5">Distance by Phase</p>
-                                            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-                                                {phaseDistances.map(p => (
-                                                    <div key={p.phase} className={`rounded-lg px-3 py-2.5 ${PHASE_COLORS[p.phase] || "bg-gray-50 text-gray-600 dark:bg-gray-800/30 dark:text-gray-400"}`}>
-                                                        <p className="text-xs font-bold">{p.distance_km} km</p>
-                                                        <p className="text-[10px] opacity-80">{PHASE_LABELS[p.phase] || p.phase.replace(/_/g, " ")}</p>
-                                                        <p className="text-[9px] opacity-60">{p.points} pts</p>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                            <div className="flex justify-between mt-2.5 text-xs">
-                                                <span className="text-muted-foreground">Total GPS distance</span>
-                                                <span className="font-bold tabular-nums">{phaseDistances.reduce((s, p) => s + p.distance_km, 0).toFixed(2)} km</span>
-                                            </div>
+                                    {/* Three-way route selector: Pickup / Actual Trip /
+                                        Planned Trip. Clicking a card replays the
+                                        corresponding polyline on the map below. Pickup +
+                                        Actual Trip come from migration 39's
+                                        phase_polylines (real GPS). Planned is the
+                                        straight-line pickup→dropoff reference — we
+                                        don't yet store a road-snapped planned route. */}
+                                    <div className="mt-3 pt-3 border-t">
+                                        <div className="flex items-center justify-between mb-2.5">
+                                            <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">
+                                                Route Views
+                                            </p>
+                                            <p className="text-[10px] text-muted-foreground/70">
+                                                Click to replay on map below
+                                            </p>
                                         </div>
-                                    )}
+                                        <div className="grid grid-cols-3 gap-2">
+                                            {(() => {
+                                                const pickupKm = ride.phase_distances?.navigating_to_pickup;
+                                                const pickupSecs = ride.phase_durations?.navigating_to_pickup;
+                                                const tripKm = ride.phase_distances?.trip_in_progress ?? ride.actual_distance_km;
+                                                const tripSecs = ride.phase_durations?.trip_in_progress;
+                                                const plannedKm = ride.planned_distance_km;
+                                                const fmtDur = (s: number | undefined) =>
+                                                    typeof s === "number" && s > 0
+                                                        ? s >= 60
+                                                            ? `${Math.round(s / 60)} min`
+                                                            : `${s}s`
+                                                        : null;
+                                                const fmtKm = (v: number | undefined | null) =>
+                                                    typeof v === "number" ? `${Number(v).toFixed(2)} km` : "—";
+                                                type CardKey = "pickup" | "actual" | "planned";
+                                                const cards: {
+                                                    key: CardKey;
+                                                    label: string;
+                                                    km: string;
+                                                    sub: string | null;
+                                                    colorCls: string;
+                                                }[] = [
+                                                    {
+                                                        key: "pickup",
+                                                        label: "Pickup",
+                                                        km: fmtKm(pickupKm),
+                                                        sub: fmtDur(pickupSecs),
+                                                        colorCls: PHASE_COLORS.navigating_to_pickup,
+                                                    },
+                                                    {
+                                                        key: "actual",
+                                                        label: "Actual Trip",
+                                                        km: fmtKm(tripKm),
+                                                        sub: fmtDur(tripSecs),
+                                                        colorCls: PHASE_COLORS.trip_in_progress,
+                                                    },
+                                                    {
+                                                        key: "planned",
+                                                        label: "Planned Trip",
+                                                        km: fmtKm(plannedKm),
+                                                        sub: "Straight-line reference",
+                                                        colorCls: "bg-muted/60 text-foreground",
+                                                    },
+                                                ];
+                                                return cards.map((c) => {
+                                                    const selected = selectedPhase === c.key;
+                                                    return (
+                                                        <button
+                                                            key={c.key}
+                                                            type="button"
+                                                            onClick={() => setSelectedPhase(c.key)}
+                                                            className={`text-left rounded-lg px-3 py-2.5 transition ring-offset-1 ring-offset-background ${c.colorCls} hover:brightness-95 dark:hover:brightness-110 ${
+                                                                selected ? "ring-2 ring-primary" : "ring-0"
+                                                            }`}
+                                                        >
+                                                            <p className="text-xs font-bold">{c.km}</p>
+                                                            <p className="text-[10px] opacity-80">{c.label}</p>
+                                                            <p className="text-[9px] opacity-60">{c.sub || "—"}</p>
+                                                        </button>
+                                                    );
+                                                });
+                                            })()}
+                                        </div>
+                                    </div>
                                 </Sec>
                             </div>
 
-                            {/* Driver Tracking */}
-                            {ride.location_trail && ride.location_trail.length > 0 && (
-                                <div className="px-6 py-5">
-                                    <Sec title="Driver Tracking">
-                                        <p className="text-xs text-muted-foreground mb-2.5">{ride.location_trail.length} GPS points recorded</p>
-                                        <div className="max-h-[200px] overflow-y-auto rounded-lg border">
-                                            <table className="w-full text-xs">
-                                                <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
-                                                    <tr className="text-muted-foreground">
-                                                        <th className="text-left py-2 px-3 font-semibold">Time</th>
-                                                        <th className="text-left py-2 px-3 font-semibold">Lat</th>
-                                                        <th className="text-left py-2 px-3 font-semibold">Lng</th>
-                                                        <th className="text-left py-2 px-3 font-semibold">Speed</th>
-                                                        <th className="text-left py-2 px-3 font-semibold">Phase</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody className="divide-y divide-border/50">
-                                                    {ride.location_trail.slice(0, 100).map((pt: any, i: number) => (
-                                                        <tr key={i} className="hover:bg-muted/30 transition-colors">
-                                                            <td className="py-1.5 px-3 tabular-nums">{fmtTime(pt.timestamp)}</td>
-                                                            <td className="py-1.5 px-3 font-mono">{pt.lat?.toFixed(5)}</td>
-                                                            <td className="py-1.5 px-3 font-mono">{pt.lng?.toFixed(5)}</td>
-                                                            <td className="py-1.5 px-3 tabular-nums">{pt.speed != null ? `${pt.speed.toFixed(1)} km/h` : "—"}</td>
-                                                            <td className="py-1.5 px-3">{pt.tracking_phase?.replace(/_/g, " ") || "—"}</td>
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                            {ride.location_trail.length > 100 && (
-                                                <p className="text-[10px] text-muted-foreground text-center py-2 bg-muted/30">Showing first 100 of {ride.location_trail.length} points</p>
-                                            )}
-                                        </div>
-                                    </Sec>
-                                </div>
-                            )}
+                            {/* Route Replay — shows the map for the selected view.
+                                Pickup / Actual Trip use the real GPS polylines from
+                                migration 39. Planned uses a straight-line reference
+                                since we don't store a road-snapped planned route. */}
+                            {(() => {
+                                if (!ride.pickup_lat || !ride.dropoff_lat) return null;
+
+                                const pp = ride.phase_polylines || {};
+                                const pickupPts: { lat: number; lng: number; timestamp?: string }[] =
+                                    Array.isArray(pp.navigating_to_pickup)
+                                        ? pp.navigating_to_pickup.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] }))
+                                        : [];
+                                const tripPts: { lat: number; lng: number; timestamp?: string }[] =
+                                    Array.isArray(pp.trip_in_progress)
+                                        ? pp.trip_in_progress.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] }))
+                                        : [];
+
+                                let label = "";
+                                let emptyHint: string | null = null;
+                                let trailForMap: { lat: number; lng: number; timestamp?: string }[] | undefined;
+                                let pickupProp: typeof pickupPts | undefined;
+                                let tripProp: typeof tripPts | undefined;
+
+                                if (selectedPhase === "pickup") {
+                                    label = "Driver → Pickup (actual GPS)";
+                                    if (pickupPts.length > 1) {
+                                        pickupProp = pickupPts;
+                                    } else {
+                                        emptyHint = "No Phase 2 GPS trail for this ride";
+                                    }
+                                } else if (selectedPhase === "actual") {
+                                    label = "Pickup → Dropoff (actual GPS)";
+                                    if (tripPts.length > 1) {
+                                        tripProp = tripPts;
+                                    } else {
+                                        // Fall back to legacy combined polyline for pre-
+                                        // migration-39 rides that still have route_polyline.
+                                        const legacy =
+                                            Array.isArray(ride.route_polyline) && ride.route_polyline.length > 1
+                                                ? ride.route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] }))
+                                                : [];
+                                        if (legacy.length > 1) {
+                                            trailForMap = legacy;
+                                        } else {
+                                            emptyHint = "No trip GPS trail for this ride";
+                                        }
+                                    }
+                                } else {
+                                    // planned — straight-line reference rendered by
+                                    // RideRouteMap's built-in dashed fallback when no
+                                    // trails are passed in.
+                                    label = "Planned Trip (straight-line reference)";
+                                }
+
+                                return (
+                                    <div className="px-6 py-5">
+                                        <Sec title="Route Replay">
+                                            <div className="flex items-center justify-between mb-2.5">
+                                                <p className="text-xs text-muted-foreground">{label}</p>
+                                                {emptyHint && (
+                                                    <p className="text-[10px] text-muted-foreground/70">{emptyHint}</p>
+                                                )}
+                                            </div>
+                                            <RideRouteMap
+                                                key={selectedPhase}
+                                                pickupLat={ride.pickup_lat}
+                                                pickupLng={ride.pickup_lng}
+                                                dropoffLat={ride.dropoff_lat}
+                                                dropoffLng={ride.dropoff_lng}
+                                                pickupTrail={pickupProp}
+                                                tripTrail={tripProp}
+                                                locationTrail={trailForMap}
+                                            />
+                                        </Sec>
+                                    </div>
+                                );
+                            })()}
 
                             {/* Metadata */}
                             <div className="px-6 py-4 bg-muted/20">

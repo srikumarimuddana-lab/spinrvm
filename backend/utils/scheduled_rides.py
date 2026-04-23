@@ -15,9 +15,11 @@ from datetime import datetime, timedelta, timezone
 try:
     from ..db import db
     from ..features import send_push_notification
+    from .datetime_utils import parse_iso_utc
 except ImportError:
     from db import db
     from features import send_push_notification
+    from utils.datetime_utils import parse_iso_utc
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +118,8 @@ async def check_scheduled_rides():
             order="scheduled_time",
         )
     except Exception as e:
-        logger.error(f"Failed to fetch scheduled rides: {e}")
+        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+        logger.error(f"Failed to fetch scheduled rides: {e} | original={original}")
         return
 
     for ride in scheduled:
@@ -124,14 +127,8 @@ async def check_scheduled_rides():
         if not scheduled_time_str:
             continue
 
-        try:
-            if isinstance(scheduled_time_str, str):
-                # Handle various ISO formats
-                clean = scheduled_time_str.replace("Z", "+00:00").replace("+00:00", "")
-                scheduled_time = datetime.fromisoformat(clean)
-            else:
-                scheduled_time = scheduled_time_str
-        except (ValueError, TypeError):
+        scheduled_time = parse_iso_utc(scheduled_time_str)
+        if scheduled_time is None:
             continue
 
         already_dispatched = ride.get("scheduled_dispatched", False)

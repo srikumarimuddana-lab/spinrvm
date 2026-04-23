@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
+import { DEFAULT_LATITUDE, DEFAULT_LONGITUDE } from '../../constants/geo';
 import { useRideStore } from '../../store/rideStore';
 import AppMap from '@shared/components/AppMap';
 import CustomAlert from '@shared/components/CustomAlert';
@@ -272,7 +273,7 @@ export default function HomeScreen() {
                   loc = await Location.getCurrentPositionAsync({});
                 } catch (e) {
                   console.warn('Could not get current location, using fallback:', e);
-                  loc = { coords: { latitude: 43.6532, longitude: -79.3832 } };
+                  loc = { coords: { latitude: DEFAULT_LATITUDE, longitude: DEFAULT_LONGITUDE } };
                 }
                 setLocation(loc);
               }

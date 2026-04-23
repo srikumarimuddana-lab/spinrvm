@@ -64,6 +64,12 @@ twilio>=9.10.5
 # Cloud
 boto3>=1.42.89
 
+# Map snapshot rendering (ride route PNG for drawer + email invoice).
+# staticmap composites OSM tiles + our phase_polylines server-side.
+# Pillow is a transitive dep; pin it explicitly for clarity.
+staticmap>=0.5.7
+Pillow>=10.4.0
+
 # Error monitoring
 sentry-sdk>=2.58.0
 

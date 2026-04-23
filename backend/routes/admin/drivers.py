@@ -9,9 +9,11 @@ from pydantic import BaseModel
 try:
     from ... import db_supabase
     from ...features import send_push_notification
+    from ...utils.datetime_utils import parse_iso_utc
 except ImportError:
     import db_supabase
     from features import send_push_notification
+    from utils.datetime_utils import parse_iso_utc
 
 db = db_supabase  # legacy alias
 
@@ -187,18 +189,18 @@ async def admin_get_driver_stats(
     from collections import defaultdict
 
     now = datetime.now(timezone.utc)
-    # Default date range: last 30 days
-    if start_date:
-        range_start = datetime.fromisoformat(start_date.replace("Z", "+00:00").replace("+00:00", ""))
-    else:
+    # Default date range: last 30 days. parse_iso_utc always returns a
+    # UTC-aware datetime (or None) so comparisons below match `now`.
+    range_start = parse_iso_utc(start_date) if start_date else None
+    if range_start is None:
         range_start = now - timedelta(days=30)
     range_start = range_start.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    if end_date:
-        range_end = datetime.fromisoformat(end_date.replace("Z", "+00:00").replace("+00:00", ""))
-        range_end = range_end.replace(hour=23, minute=59, second=59, microsecond=0)
-    else:
+    range_end = parse_iso_utc(end_date) if end_date else None
+    if range_end is None:
         range_end = now
+    else:
+        range_end = range_end.replace(hour=23, minute=59, second=59, microsecond=0)
 
     # Fetch all service areas for lookups
     service_areas = await db_supabase.get_rows("service_areas", order="name", limit=200)
@@ -304,12 +306,8 @@ async def admin_get_driver_stats(
     # Driver joins per day
     daily_joins: Dict[str, int] = defaultdict(int)
     for d in enriched_drivers:
-        ca = d.get("created_at")
-        if not ca:
-            continue
-        try:
-            dt = datetime.fromisoformat(str(ca).replace("Z", "+00:00").replace("+00:00", ""))
-        except Exception:  # noqa: S112
+        dt = parse_iso_utc(d.get("created_at"))
+        if dt is None:
             continue
         if range_start <= dt <= range_end:
             day_key = dt.strftime("%Y-%m-%d")
@@ -326,12 +324,8 @@ async def admin_get_driver_stats(
     daily_rides: Dict[str, int] = defaultdict(int)
     daily_earnings: Dict[str, float] = defaultdict(float)
     for r in relevant_rides:
-        ca = r.get("created_at")
-        if not ca:
-            continue
-        try:
-            dt = datetime.fromisoformat(str(ca).replace("Z", "+00:00").replace("+00:00", ""))
-        except Exception:  # noqa: S112
+        dt = parse_iso_utc(r.get("created_at"))
+        if dt is None:
             continue
         if range_start <= dt <= range_end:
             day_key = dt.strftime("%Y-%m-%d")

@@ -11,6 +11,14 @@ if (__DEV__) console.log('API Client configured with URL:', API_URL);
 // Request timeout in milliseconds
 const REQUEST_TIMEOUT = 15000;
 
+// Propagate the client's timeout to the backend as an absolute epoch-ms
+// deadline. The backend's DeadlineMiddleware reads this and uses it to
+// skip DB retries once the client has already given up — frees backend
+// thread-pool workers for requests that aren't already doomed.
+function deadlineHeader(timeoutMs: number = REQUEST_TIMEOUT): Record<string, string> {
+  return { 'X-Deadline-Ms': String(Date.now() + timeoutMs) };
+}
+
 // Helper function to wrap fetch with timeout
 const fetchWithTimeout = async (
   url: string,
@@ -244,6 +252,7 @@ const client = {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...deadlineHeader(),
       ...config?.headers,
     };
     if (token) {
@@ -265,6 +274,7 @@ const client = {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...deadlineHeader(),
       ...config?.headers,
     };
     if (token) {
@@ -314,6 +324,7 @@ const client = {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...deadlineHeader(),
       ...config?.headers,
     };
     if (token) {
@@ -336,6 +347,7 @@ const client = {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...deadlineHeader(),
       ...config?.headers,
     };
     if (token) {

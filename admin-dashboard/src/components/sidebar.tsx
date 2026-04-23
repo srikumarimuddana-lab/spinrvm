@@ -7,7 +7,7 @@ import {
     LayoutDashboard, Car, Users, DollarSign, Settings, MapPin, Ticket,
     HelpCircle, Flame, Building2, LifeBuoy,
     LogOut, Menu, FileText, X, CreditCard, ChevronLeft, ChevronRight,
-    Sun, Moon, Shield, Cloud, Trophy, TrendingUp,
+    Sun, Moon, Shield, Cloud, Trophy, TrendingUp, Activity,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
@@ -74,6 +74,7 @@ const NAV_GROUPS: NavGroup[] = [
     {
         title: "System",
         items: [
+            { href: "/dashboard/monitoring/redis", label: "Redis & Infra", icon: Activity, module: "settings" },
             { href: "/dashboard/audit-logs", label: "Audit Logs", icon: Shield, module: "settings" },
             { href: "/dashboard/settings", label: "Settings", icon: Settings, module: "settings" },
             { href: "/dashboard/staff", label: "Staff", icon: Users, module: "staff" },

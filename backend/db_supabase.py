@@ -81,49 +81,71 @@ _breaker = _CircuitBreaker()
 
 
 async def run_sync(func: Callable[[], T]) -> T:
-    """Run a synchronous Supabase call in a thread and retry once on transient
+    """Run a synchronous Supabase call in a thread and retry on transient
     HTTP/2 connection errors. Two flavors show up in practice:
       - h2.ConnectionTerminated / GOAWAY when the stream limit is reached on
         a long-lived connection.
       - httpx.RemoteProtocolError("Server disconnected") when Supabase's edge
         drops the HTTP/2 connection mid-response (observed on Railway with
-        larger result sets — e.g. the 5000-row heatmap query)."""
+        larger result sets — e.g. the 5000-row heatmap query).
+
+    Retries up to 2 times (3 attempts total) with exponential backoff
+    (500ms, 1500ms). A single 250ms retry used to miss the typical
+    GOAWAY burst window (~1s), which surfaced as user-facing
+    "Supabase transient failure" / 503 errors on the rider app."""
     if not _breaker.should_allow():
         raise ServiceUnavailableException("database")
+
     loop = asyncio.get_running_loop()
-    try:
-        result = await loop.run_in_executor(None, func)  # type: ignore
-        _breaker.record_success()
-        return result
-    except Exception as exc:
-        exc_name = type(exc).__name__
-        exc_str = str(exc)
-        is_conn_terminated = "ConnectionTerminated" in exc_name or "ConnectionTerminated" in exc_str
-        is_remote_disconnect = (
-            "RemoteProtocolError" in exc_name
-            or "Server disconnected" in exc_str
-            or "ConnectionClosed" in exc_name
-        )
-        is_timeout = _HTTPX_TIMEOUT_EXC is not None and isinstance(exc, _HTTPX_TIMEOUT_EXC)
-        if is_conn_terminated or is_remote_disconnect or is_timeout:
-            logger.warning(f"Supabase transient failure ({exc_name}) — retrying once: {exc}")
-            await asyncio.sleep(0.25)
-            try:
-                result = await loop.run_in_executor(None, func)  # type: ignore
-                _breaker.record_success()
-                return result
-            except Exception as retry_exc:
-                _breaker.record_failure()
-                retry_str = str(retry_exc)
-                retry_str_lower = retry_str.lower()
-                if "duplicate key" in retry_str_lower or "unique constraint" in retry_str_lower or "23505" in retry_str:
-                    raise DuplicateRecordError(details={"original": retry_str}) from retry_exc
-                raise DatabaseError(details={"original": retry_str}) from retry_exc
-        _breaker.record_failure()
-        exc_str_lower = exc_str.lower()
-        if "duplicate key" in exc_str_lower or "unique constraint" in exc_str_lower or "23505" in exc_str:
-            raise DuplicateRecordError(details={"original": exc_str}) from exc
-        raise DatabaseError(details={"original": exc_str}) from exc
+    # Initial attempt plus two retries with exponential backoff.
+    backoffs = [0.5, 1.5]
+    last_exc: Exception | None = None
+
+    for attempt in range(len(backoffs) + 1):
+        try:
+            result = await loop.run_in_executor(None, func)  # type: ignore
+            _breaker.record_success()
+            return result
+        except Exception as exc:
+            last_exc = exc
+            exc_name = type(exc).__name__
+            exc_str = str(exc)
+            is_conn_terminated = "ConnectionTerminated" in exc_name or "ConnectionTerminated" in exc_str
+            is_remote_disconnect = (
+                "RemoteProtocolError" in exc_name
+                or "Server disconnected" in exc_str
+                or "ConnectionClosed" in exc_name
+            )
+            is_timeout = _HTTPX_TIMEOUT_EXC is not None and isinstance(exc, _HTTPX_TIMEOUT_EXC)
+            is_transient = is_conn_terminated or is_remote_disconnect or is_timeout
+
+            # Non-transient errors (duplicate key, constraint violations,
+            # PGRST204 column-not-found, etc.) are final — don't waste
+            # retries on them.
+            if not is_transient:
+                break
+
+            if attempt < len(backoffs):
+                delay = backoffs[attempt]
+                logger.warning(
+                    f"Supabase transient failure ({exc_name}) on attempt {attempt + 1}, "
+                    f"retrying in {delay}s: {exc}"
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            # Out of retries — fall through to the failure path below.
+            logger.error(
+                f"Supabase transient failure ({exc_name}) exhausted retries: {exc}"
+            )
+
+    _breaker.record_failure()
+    assert last_exc is not None  # loop above always records an exception before breaking
+    exc_str = str(last_exc)
+    exc_str_lower = exc_str.lower()
+    if "duplicate key" in exc_str_lower or "unique constraint" in exc_str_lower or "23505" in exc_str:
+        raise DuplicateRecordError(details={"original": exc_str}) from last_exc
+    raise DatabaseError(details={"original": exc_str}) from last_exc
 
 
 def _serialize_for_api(data: Any) -> Any:

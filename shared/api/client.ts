@@ -173,6 +173,22 @@ const handleApiError = async (response: Response, method: string, url: string, r
     }
   }
 
+  // On 503 (Supabase transient — see db_supabase.run_sync), retry once
+  // after a short delay before surfacing the error. The backend's
+  // run_sync already does its own 2-retry exponential-backoff loop, so
+  // a 503 here means the burst outlasted ~2s of retries server-side.
+  // Giving the rider-app one more shot after another 1.5s catches
+  // longer Supabase edge hiccups without the user seeing
+  // "Service temporarily unavailable: database" mid-booking.
+  if (response.status === 503 && retryFn && url !== '/auth/refresh') {
+    await new Promise(r => setTimeout(r, 1500));
+    try {
+      return retryFn() as any;
+    } catch {
+      // retry threw — fall through to the original error surface below
+    }
+  }
+
   const errorData = await response.json().catch(() => ({}));
   const message = extractErrorMessage(errorData);
   const requestId = response.headers.get('x-request-id') || errorData?.error?.request_id;

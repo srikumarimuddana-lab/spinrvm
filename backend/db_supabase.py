@@ -1,6 +1,7 @@
 import asyncio
 import re
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 try:
@@ -128,13 +129,21 @@ async def run_sync(func: Callable[[], T]) -> T:
 
 
 def _serialize_for_api(data: Any) -> Any:
-    """Recursively convert datetime/date objects to ISO format strings."""
+    """Recursively prepare a payload for Supabase/PostgREST JSON encoding.
+
+    Converts datetime/date → ISO strings and Decimal → float. Decimal
+    conversion matches the _f() convention used throughout fare code and
+    catches Pydantic models whose Decimal-typed fields leak through
+    .dict() (e.g. Ride.base_fare, Ride.tip_amount) without a manual _f().
+    """
     if isinstance(data, dict):
         return {k: _serialize_for_api(v) for k, v in data.items()}
     if isinstance(data, list):
         return [_serialize_for_api(v) for v in data]
     if isinstance(data, (datetime, date)):
         return data.isoformat()
+    if isinstance(data, Decimal):
+        return float(data)
     return data
 
 

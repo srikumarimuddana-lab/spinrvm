@@ -23,6 +23,7 @@ try:
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
     from ..utils.crypto import hash_otp
+    from ..utils.idempotency import idempotent_endpoint
     from ..utils.rate_limiter import cancel_ride_limit, ride_request_limit
     from ..validators import validate_ride_location
 except ImportError:
@@ -38,6 +39,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from socket_manager import manager
     from utils.crypto import hash_otp
+    from utils.idempotency import idempotent_endpoint
     from utils.rate_limiter import cancel_ride_limit, ride_request_limit
     from validators import validate_ride_location
 
@@ -650,6 +652,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
 
 @api_router.post("")
 @ride_request_limit
+@idempotent_endpoint(scope="ride_create")
 async def create_ride(
     request: Request, body: CreateRideRequest, current_user: dict = Depends(get_current_user)
 ):
@@ -1219,7 +1222,13 @@ async def get_ride(ride_id: str, current_user: dict = Depends(get_current_user))
 
 
 @api_router.post("/{ride_id}/tip")
-async def add_tip(ride_id: str, req: TipRequest, current_user: dict = Depends(get_current_user)):
+@idempotent_endpoint(scope="ride_tip")
+async def add_tip(
+    ride_id: str,
+    req: TipRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
     # Money arithmetic uses Decimal per CLAUDE.md. The old `float(req.amount)`
     # path drifted when summed with existing driver_earnings.
     tip_amount = _round(_d(req.amount))

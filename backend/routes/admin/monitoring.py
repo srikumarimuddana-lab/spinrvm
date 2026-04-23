@@ -355,12 +355,26 @@ async def get_infrastructure_stats(current_admin: dict = Depends(get_admin_user)
     # The default executor doesn't expose active/idle counts — we can
     # at least report the configured max worker count so ops knows the
     # ceiling.
+    #
+    # `_default_executor` is a private attribute on the pure-Python
+    # BaseEventLoop but the C-accelerated `_asyncio.Loop` used by
+    # Python 3.12 does not expose it, so direct attribute access raises
+    # AttributeError. Fall back to the env var that lifespan reads, then
+    # to None. Never let this crash the endpoint — it's diagnostic only.
     import asyncio as _asyncio
-    loop = _asyncio.get_running_loop()
-    executor = loop._default_executor  # type: ignore[attr-defined]
-    max_workers = None
-    if executor is not None and hasattr(executor, "_max_workers"):
-        max_workers = getattr(executor, "_max_workers", None)
+    max_workers: Optional[int] = None
+    try:
+        loop = _asyncio.get_running_loop()
+        executor = getattr(loop, "_default_executor", None)
+        if executor is not None:
+            max_workers = getattr(executor, "_max_workers", None)
+    except Exception:
+        pass
+    if max_workers is None:
+        try:
+            max_workers = int(os.environ.get("BACKEND_EXECUTOR_WORKERS", "0")) or None
+        except ValueError:
+            max_workers = None
 
     # DB circuit breaker snapshot
     db_circuit = {

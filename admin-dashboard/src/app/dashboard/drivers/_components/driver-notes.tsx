@@ -8,6 +8,7 @@ import {
     MessageSquare, Plus, Trash2, AlertTriangle, FileText, ShieldCheck,
     Flag, Clock, Loader2, StickyNote,
 } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 const CATEGORIES = [
     { value: "general", label: "General", icon: MessageSquare, color: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
@@ -28,6 +29,7 @@ function fmtDateTime(d: string) {
 }
 
 export default function DriverNotes({ driverId }: { driverId: string }) {
+    const { toast } = useToast();
     const [notes, setNotes] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [adding, setAdding] = useState(false);
@@ -56,8 +58,9 @@ export default function DriverNotes({ driverId }: { driverId: string }) {
             setNewCategory("general");
             setAdding(false);
             loadNotes();
+            toast({ title: "Note added" });
         } catch (e: any) {
-            alert(e?.message || "Failed to add note");
+            toast({ variant: "destructive", title: "Failed to add note", description: e?.message ?? "Please try again." });
         }
         setSaving(false);
     };
@@ -68,7 +71,10 @@ export default function DriverNotes({ driverId }: { driverId: string }) {
         try {
             await deleteDriverNote(noteId);
             loadNotes();
-        } catch {}
+            toast({ title: "Note deleted" });
+        } catch (e: any) {
+            toast({ variant: "destructive", title: "Delete failed", description: e?.message ?? "Please try again." });
+        }
         setDeleting(null);
     };
 

@@ -6,6 +6,7 @@ import { useAuthStore } from "@/store/authStore";
 
 import { adminCancelRide, getFareConfigs, getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTypes } from "@/lib/api";
 import { useMonitoringSocket } from "@/hooks/use-monitoring-socket";
+import { useToast } from "@/components/ui/use-toast";
 
 import { MonitoringMap, MapHandles, MonitoringServiceArea } from "./monitoring-map";
 import { MonitoringToolbar } from "./toolbar";
@@ -24,6 +25,7 @@ import type {
 const POLL_INTERVAL_MS = 15_000;
 
 export default function MonitoringPage() {
+  const { toast } = useToast();
   // ── Refs: source-of-truth maps (never trigger re-renders) ──────────
   const driversMapRef = useRef<Map<string, MonitoringDriver>>(new Map());
   const ridesMapRef = useRef<Map<string, MonitoringRide>>(new Map());
@@ -574,15 +576,18 @@ export default function MonitoringPage() {
                   if (reason === null) return; // user hit Cancel on the prompt
                   try {
                     await adminCancelRide(id, reason || "Cancelled by admin");
+                    toast({ title: "Ride cancelled" });
                     ridesMapRef.current.delete(id);
                     mapHandlesRef.current?.removeRideMarkers(id);
                     refreshCounts();
                     setSelected(null);
                     setSelectedRide(null);
                   } catch (err: any) {
-                    window.alert(
-                      `Failed to cancel ride: ${err?.message ?? "unknown error"}`,
-                    );
+                    toast({
+                      variant: "destructive",
+                      title: "Cancel failed",
+                      description: err?.message ?? "Please try again.",
+                    });
                   }
                 }}
               />

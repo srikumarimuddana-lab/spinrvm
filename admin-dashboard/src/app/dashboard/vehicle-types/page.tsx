@@ -21,6 +21,7 @@ import {
     DialogTrigger,
 } from "@/components/ui/dialog";
 import { Car, Plus, Pencil, Trash2, Users, Image as ImageIcon } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 interface VehicleType {
     id: string;
@@ -49,6 +50,7 @@ export default function VehicleTypesPage() {
     const [editingId, setEditingId] = useState<string | null>(null);
     const [form, setForm] = useState(EMPTY_FORM);
     const [saving, setSaving] = useState(false);
+    const { toast } = useToast();
 
     const fetchTypes = () => {
         setLoading(true);
@@ -91,8 +93,17 @@ export default function VehicleTypesPage() {
             }
             setDialogOpen(false);
             fetchTypes();
-        } catch (err) {
+            toast({
+                title: editingId ? "Vehicle type updated" : "Vehicle type created",
+                description: form.name,
+            });
+        } catch (err: any) {
             console.error("Error saving vehicle type:", err);
+            toast({
+                variant: "destructive",
+                title: "Save failed",
+                description: err?.message ?? "Please try again.",
+            });
         } finally {
             setSaving(false);
         }
@@ -103,12 +114,17 @@ export default function VehicleTypesPage() {
         try {
             await deleteVehicleType(id);
             fetchTypes();
+            toast({ title: "Vehicle type deleted" });
         } catch (err: any) {
             // 409 from the backend means the type is still referenced by a
             // service area or fare config. Show the message so the operator
             // knows where to clean up before re-trying the delete.
             console.error("Error deleting vehicle type:", err);
-            alert(err?.message || "Could not delete vehicle type");
+            toast({
+                variant: "destructive",
+                title: "Could not delete",
+                description: err?.message ?? "Vehicle type is still in use.",
+            });
         }
     };
 
@@ -120,8 +136,17 @@ export default function VehicleTypesPage() {
                     t.id === vt.id ? { ...t, is_active: !t.is_active } : t
                 )
             );
-        } catch (err) {
+            toast({
+                title: vt.is_active ? "Deactivated" : "Activated",
+                description: vt.name,
+            });
+        } catch (err: any) {
             console.error("Error toggling vehicle type:", err);
+            toast({
+                variant: "destructive",
+                title: "Toggle failed",
+                description: err?.message ?? "Please try again.",
+            });
         }
     };
 

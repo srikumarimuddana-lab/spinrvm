@@ -5,6 +5,7 @@ import { flagRideParticipant } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { AlertTriangle } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 const FLAG_REASONS = [
     { value: "vomited_in_car", label: "Vomited in car" },
@@ -25,6 +26,7 @@ interface Props {
 }
 
 export default function RideFlagForm({ open, onClose, rideId, targetType, targetName, onFlagged }: Props) {
+    const { toast } = useToast();
     const [reason, setReason] = useState("");
     const [description, setDescription] = useState("");
     const [loading, setLoading] = useState(false);
@@ -35,16 +37,20 @@ export default function RideFlagForm({ open, onClose, rideId, targetType, target
         try {
             const result = await flagRideParticipant(rideId, { target_type: targetType, reason, description: description || undefined });
             if (result.auto_banned) {
-                alert(`${targetType === "rider" ? "Rider" : "Driver"} has been AUTO-BANNED (${result.active_flag_count} flags).`);
+                toast({
+                    variant: "destructive",
+                    title: `${targetType === "rider" ? "Rider" : "Driver"} auto-banned`,
+                    description: `${result.active_flag_count} active flags triggered an automatic ban.`,
+                });
             } else {
-                alert(`Flag added. Active flags: ${result.active_flag_count}/3`);
+                toast({ title: "Flag added", description: `Active flags: ${result.active_flag_count}/3` });
             }
             onFlagged();
             onClose();
             setReason("");
             setDescription("");
         } catch (e: any) {
-            alert(e.message || "Failed to flag");
+            toast({ variant: "destructive", title: "Failed to flag", description: e?.message ?? "Please try again." });
         } finally {
             setLoading(false);
         }

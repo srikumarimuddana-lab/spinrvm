@@ -3,6 +3,7 @@
 import { useEffect, useState, lazy, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans, createSubscriptionPlan, updateSubscriptionPlan, deleteSubscriptionPlan, getDriverSubscriptions, getAreaFees, createAreaFee, updateAreaFee, deleteAreaFee, getVehicleTypes } from "@/lib/api";
+import { useToast } from "@/components/ui/use-toast";
 import { Infinity as InfinityIcon } from "lucide-react";
 import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, X, FileText, GripVertical, Clock, ShieldCheck, ShieldAlert, CheckCircle, AlertTriangle, Image, Plane, Radar } from "lucide-react";
 
@@ -49,6 +50,7 @@ function getAreaCenter(area: any): { lat: number; lng: number } {
 
 export default function ServiceAreasPage() {
   const router = useRouter();
+  const { toast } = useToast();
   const [areas, setAreas] = useState<any[]>([]);
   const [plans, setPlans] = useState<any[]>([]);
   // Existing vehicle types (from /api/admin/vehicle-types) so the
@@ -135,13 +137,20 @@ export default function ServiceAreasPage() {
       setShowCreate(false);
       setCreateForm({ name: "", city: "", province: "SK", preset: "", polygon: [], polygonText: "", is_active: true, is_airport: false });
       load();
-    } catch (e: any) { alert(e?.message || "Failed to create"); }
+      toast({ title: "Service area created", description: createForm.name });
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Create failed", description: e?.message ?? "Please try again." });
+    }
   };
 
   const handleCreateAirportSubRegion = async (parentId: string) => {
     const parent = areas.find(a => a.id === parentId);
     if (!airportForm.name || airportForm.polygon.length < 3) {
-      alert("Please enter a name and draw the airport boundary on the map.");
+      toast({
+        variant: "destructive",
+        title: "Missing info",
+        description: "Please enter a name and draw the airport boundary on the map.",
+      });
       return;
     }
     try {
@@ -155,10 +164,14 @@ export default function ServiceAreasPage() {
         parent_service_area_id: parentId,
         airport_fee: airportForm.airport_fee,
       });
+      const createdName = airportForm.name;
       setAddAirportFor(null);
       setAirportForm({ name: "", airport_fee: 2.0, polygon: [] });
       load();
-    } catch (e: any) { alert(e?.message || "Failed to create airport zone"); }
+      toast({ title: "Airport zone created", description: createdName });
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Create failed", description: e?.message ?? "Failed to create airport zone" });
+    }
   };
 
   const handleFieldUpdate = async (areaId: string, field: string, value: any) => {
@@ -171,7 +184,10 @@ export default function ServiceAreasPage() {
         }
         return a;
       }));
-    } catch (e: any) { alert("Failed to update: " + (e?.message || "")); }
+      toast({ title: "Area updated", description: field });
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Update failed", description: e?.message ?? "Please try again." });
+    }
   };
 
   const handleVehiclePricingUpdate = async (areaId: string, pricing: any[]) => {
@@ -180,8 +196,13 @@ export default function ServiceAreasPage() {
 
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
-    await deleteServiceArea(id);
-    load();
+    try {
+      await deleteServiceArea(id);
+      load();
+      toast({ title: "Service area deleted", description: name });
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Delete failed", description: e?.message ?? "Please try again." });
+    }
   };
 
   return (
@@ -325,7 +346,10 @@ export default function ServiceAreasPage() {
                           try {
                             await updateServiceArea(area.id, updates);
                             setAreas(prev => prev.map(a => a.id === area.id ? { ...a, ...updates } : a));
-                          } catch (e: any) { alert("Failed to save: " + (e?.message || "")); }
+                            toast({ title: "Area saved", description: area.name });
+                          } catch (e: any) {
+                            toast({ variant: "destructive", title: "Save failed", description: e?.message ?? "Please try again." });
+                          }
                         }} onDelete={() => handleDelete(area.id, area.name)} />
                       )}
 
@@ -1012,6 +1036,7 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
     areaId: string; area: any; fees: any[]; loading: boolean;
     onReload: () => void; onFieldUpdate: (areaId: string, field: string, value: any) => void;
 }) {
+    const { toast } = useToast();
     const [editingFee, setEditingFee] = useState<any>(null);
     const [saving, setSaving] = useState(false);
 
@@ -1034,17 +1059,32 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
         try {
             await createAreaFee(areaId, { fee_name: 'New Fee', fee_type: 'custom', calc_mode: 'flat', amount: 0, is_active: true });
             onReload();
-        } catch (e: any) { alert(e?.message || 'Failed'); }
+            toast({ title: "Fee added" });
+        } catch (e: any) {
+            toast({ variant: "destructive", title: "Create failed", description: e?.message ?? "Please try again." });
+        }
         setSaving(false);
     };
 
     const handleUpdate = async (feeId: string, data: any) => {
-        try { await updateAreaFee(areaId, feeId, data); onReload(); } catch (e: any) { alert(e?.message || 'Failed'); }
+        try {
+            await updateAreaFee(areaId, feeId, data);
+            onReload();
+            toast({ title: "Fee updated" });
+        } catch (e: any) {
+            toast({ variant: "destructive", title: "Update failed", description: e?.message ?? "Please try again." });
+        }
     };
 
     const handleDelete = async (feeId: string) => {
         if (!confirm('Delete this fee?')) return;
-        try { await deleteAreaFee(areaId, feeId); onReload(); } catch (e: any) { alert(e?.message || 'Failed'); }
+        try {
+            await deleteAreaFee(areaId, feeId);
+            onReload();
+            toast({ title: "Fee deleted" });
+        } catch (e: any) {
+            toast({ variant: "destructive", title: "Delete failed", description: e?.message ?? "Please try again." });
+        }
     };
 
     return (
@@ -1261,6 +1301,7 @@ const DURATION_OPTIONS = [
 function SpinrPassAreaTab({ area, plans, onToggle, onPlansChanged }: {
   area: any; plans: any[]; onToggle: (v: boolean) => void; onPlansChanged: () => void;
 }) {
+  const { toast } = useToast();
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [subs, setSubs] = useState<any[]>([]);
@@ -1285,8 +1326,12 @@ function SpinrPassAreaTab({ area, plans, onToggle, onPlansChanged }: {
     try {
       if (editingId) { await updateSubscriptionPlan(editingId, data); }
       else { await createSubscriptionPlan(data); }
+      const name = form.name;
       resetForm(); onPlansChanged();
-    } catch (e: any) { alert(e?.message || "Failed to save plan"); }
+      toast({ title: editingId ? "Plan updated" : "Plan created", description: name });
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Save failed", description: e?.message ?? "Failed to save plan" });
+    }
   };
 
   const handleEdit = (p: any) => {
@@ -1297,11 +1342,23 @@ function SpinrPassAreaTab({ area, plans, onToggle, onPlansChanged }: {
 
   const handleDeletePlan = async (p: any) => {
     if (!confirm(`Delete "${p.name}" plan?`)) return;
-    await deleteSubscriptionPlan(p.id); onPlansChanged();
+    try {
+      await deleteSubscriptionPlan(p.id);
+      onPlansChanged();
+      toast({ title: "Plan deleted", description: p.name });
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Delete failed", description: e?.message ?? "Please try again." });
+    }
   };
 
   const handleTogglePlan = async (p: any) => {
-    await updateSubscriptionPlan(p.id, { is_active: !p.is_active }); onPlansChanged();
+    try {
+      await updateSubscriptionPlan(p.id, { is_active: !p.is_active });
+      onPlansChanged();
+      toast({ title: p.is_active ? "Plan deactivated" : "Plan activated", description: p.name });
+    } catch (e: any) {
+      toast({ variant: "destructive", title: "Toggle failed", description: e?.message ?? "Please try again." });
+    }
   };
 
   const getDurationLabel = (days: number) => DURATION_OPTIONS.find(d => d.value === days)?.label || `${days} days`;

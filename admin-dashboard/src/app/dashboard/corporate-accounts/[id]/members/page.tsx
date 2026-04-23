@@ -55,6 +55,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 import AllowanceDialog from "./allowance-dialog";
+import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_COLORS: Record<CorporateMember["status"], string> = {
     invited: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
@@ -144,6 +145,7 @@ function DecisionDialog({ request, approve, onConfirm, onCancel, busy }: Decisio
 }
 
 export default function CompanyMembersPage() {
+    const { toast } = useToast();
     const { id } = useParams<{ id: string }>();
     const companyId = id as string;
 
@@ -188,11 +190,13 @@ export default function CompanyMembersPage() {
         setInviting(true);
         try {
             const res = await inviteCompanyMember(companyId, { email: inviteEmail, role: inviteRole });
+            const invitedEmail = inviteEmail;
             setInviteEmail("");
             setInviteUrl(res.invite_url);
             refresh();
+            toast({ title: "Invitation sent", description: invitedEmail });
         } catch (e: any) {
-            alert(e?.message ?? "Invite failed");
+            toast({ variant: "destructive", title: "Invite failed", description: e?.message ?? "Please try again." });
         } finally {
             setInviting(false);
         }
@@ -203,8 +207,9 @@ export default function CompanyMembersPage() {
         try {
             await removeCompanyMember(companyId, memberId);
             refresh();
+            toast({ title: "Member removed" });
         } catch (e: any) {
-            alert(e?.message ?? "Remove failed");
+            toast({ variant: "destructive", title: "Remove failed", description: e?.message ?? "Please try again." });
         }
     }
 
@@ -212,8 +217,9 @@ export default function CompanyMembersPage() {
         try {
             await updateCompanyMember(companyId, member.id, { status: newStatus });
             refresh();
+            toast({ title: newStatus === "active" ? "Member activated" : "Member suspended" });
         } catch (e: any) {
-            alert(e?.message ?? "Status change failed");
+            toast({ variant: "destructive", title: "Status change failed", description: e?.message ?? "Please try again." });
         }
     }
 
@@ -225,10 +231,12 @@ export default function CompanyMembersPage() {
                 approve: decisionTarget.approve,
                 note: note.trim() || undefined,
             });
+            const approved = decisionTarget.approve;
             setDecisionTarget(null);
             refresh();
+            toast({ title: approved ? "Request approved" : "Request rejected" });
         } catch (e: any) {
-            alert(e?.message ?? "Decision failed");
+            toast({ variant: "destructive", title: "Decision failed", description: e?.message ?? "Please try again." });
         } finally {
             setDecisionBusy(false);
         }

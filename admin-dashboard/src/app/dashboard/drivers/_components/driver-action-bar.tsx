@@ -10,6 +10,7 @@ import {
     ShieldCheck, ShieldAlert, Ban, UserX, UserCheck, AlertTriangle,
     Pause, Play, XCircle, CheckCircle, Loader2, ShieldOff,
 } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 type DriverStatus = "pending" | "active" | "needs_review" | "suspended" | "banned";
 
@@ -33,6 +34,7 @@ const STATUS_CONFIG: Record<DriverStatus, { label: string; color: string; bg: st
 };
 
 export default function DriverActionBar({ driver, onActionComplete }: DriverActionBarProps) {
+    const { toast } = useToast();
     const [actionDialog, setActionDialog] = useState<{ action: string; title: string; description: string; requiresReason: boolean; buttonLabel: string; buttonClass: string } | null>(null);
     const [reason, setReason] = useState("");
     const [loading, setLoading] = useState(false);
@@ -50,6 +52,7 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
         if (!actionDialog) return;
         if (actionDialog.requiresReason && !reason.trim()) return;
         setLoading(true);
+        const title = actionDialog.title;
         try {
             if (actionDialog.action.startsWith("override_")) {
                 const targetStatus = actionDialog.action.replace("override_", "");
@@ -59,8 +62,9 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
             }
             setActionDialog(null);
             onActionComplete();
+            toast({ title: `${title} — done` });
         } catch (e: any) {
-            alert(e?.message || "Action failed");
+            toast({ variant: "destructive", title: "Action failed", description: e?.message ?? "Please try again." });
         } finally {
             setLoading(false);
         }

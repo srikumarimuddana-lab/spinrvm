@@ -37,8 +37,10 @@ import {
     RefreshCw,
     XCircle,
 } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 export default function KybQueuePage() {
+    const { toast } = useToast();
     const [rows, setRows] = useState<CorporateAccount[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
@@ -72,8 +74,9 @@ export default function KybQueuePage() {
         try {
             await reviewKyb(id, { approve: true });
             await load();
+            toast({ title: "KYB approved" });
         } catch (e: any) {
-            alert(e?.message ?? "Approval failed");
+            toast({ variant: "destructive", title: "Approval failed", description: e?.message ?? "Please try again." });
         } finally {
             setBusyId(null);
         }
@@ -91,8 +94,9 @@ export default function KybQueuePage() {
             setRejectTarget(null);
             setRejectNote("");
             await load();
+            toast({ title: "KYB rejected" });
         } catch (e: any) {
-            alert(e?.message ?? "Rejection failed");
+            toast({ variant: "destructive", title: "Rejection failed", description: e?.message ?? "Please try again." });
         } finally {
             setBusyId(null);
         }

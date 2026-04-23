@@ -17,12 +17,14 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Save, Check } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 export default function SettingsPage() {
     const [settings, setSettings] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
+    const { toast } = useToast();
 
     useEffect(() => {
         getSettings()
@@ -40,7 +42,13 @@ export default function SettingsPage() {
             setSettings(updated);
             setSaved(true);
             setTimeout(() => setSaved(false), 2000);
-        } catch {
+            toast({ title: "Settings saved" });
+        } catch (err: any) {
+            toast({
+                variant: "destructive",
+                title: "Save failed",
+                description: err?.message ?? "Please try again.",
+            });
         } finally {
             setSaving(false);
         }

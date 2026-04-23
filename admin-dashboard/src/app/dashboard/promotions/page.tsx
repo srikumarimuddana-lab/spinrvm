@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { getPromotions, createPromotion, updatePromotion, deletePromotion, getPromoUsage, getPromoStats, getUsers } from "@/lib/api";
+import { useToast } from "@/components/ui/use-toast";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
 // --- Types ---
@@ -100,6 +101,7 @@ function getPromoStatus(p: PromoCode): string {
 // --- Component ---
 
 export default function PromotionsPage() {
+    const { toast } = useToast();
     const [promos, setPromos] = useState<PromoCode[]>([]);
     const [usage, setUsage] = useState<PromoUsageRecord[]>([]);
     const [stats, setStats] = useState<PromoStatsData | null>(null);
@@ -280,7 +282,10 @@ export default function PromotionsPage() {
     };
 
     const handleSave = async () => {
-        if (!form.code.trim() || !form.discount_value) { alert("Please fill in code and discount value."); return; }
+        if (!form.code.trim() || !form.discount_value) {
+            toast({ variant: "destructive", title: "Missing info", description: "Please fill in code and discount value." });
+            return;
+        }
         setSaving(true);
         try {
             const isPrivateTab = promoTab === "private" || (editingPromo?.promo_type === "private");
@@ -303,22 +308,33 @@ export default function PromotionsPage() {
             setDialogOpen(false);
             resetForm();
             await fetchAll();
+            toast({ title: editingPromo ? "Promo updated" : "Promo created", description: payload.code });
         } catch (error: any) {
-            alert(`Failed to save: ${error.message}`);
+            toast({ variant: "destructive", title: "Save failed", description: error?.message ?? "Please try again." });
         } finally {
             setSaving(false);
         }
     };
 
     const toggleActive = async (p: PromoCode) => {
-        try { await updatePromotion(p.id, { is_active: !p.is_active }); await fetchAll(); }
-        catch (e: any) { alert(`Failed: ${e.message}`); }
+        try {
+            await updatePromotion(p.id, { is_active: !p.is_active });
+            await fetchAll();
+            toast({ title: p.is_active ? "Promo deactivated" : "Promo activated", description: p.code });
+        } catch (e: any) {
+            toast({ variant: "destructive", title: "Toggle failed", description: e?.message ?? "Please try again." });
+        }
     };
 
     const handleDelete = async (id: string) => {
         if (!confirm("Delete this promo code?")) return;
-        try { await deletePromotion(id); await fetchAll(); }
-        catch (e: any) { alert(`Failed: ${e.message}`); }
+        try {
+            await deletePromotion(id);
+            await fetchAll();
+            toast({ title: "Promo deleted" });
+        } catch (e: any) {
+            toast({ variant: "destructive", title: "Delete failed", description: e?.message ?? "Please try again." });
+        }
     };
 
     const toggleUserSelection = (opt: UserOption) => {

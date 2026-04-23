@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { FileWarning, Search, CheckCircle, XCircle, Clock, Plus, Trash2, Eye, RefreshCw, AlertCircle } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
+import { useToast } from "@/components/ui/use-toast";
 
 const S_CFG: Record<string, { l: string; c: string }> = {
     open: { l: "Open", c: "bg-amber-500/15 text-amber-600" },
@@ -24,6 +25,7 @@ const S_CFG: Record<string, { l: string; c: string }> = {
 const CATS = ["rude_behavior", "unsafe_driving", "vehicle_condition", "route_issue", "overcharge", "harassment", "other"];
 
 export default function ComplaintsTab() {
+    const { toast } = useToast();
     const { areas } = useServiceAreas();
     const [items, setItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -48,16 +50,30 @@ export default function ComplaintsTab() {
     const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
 
     const handleCreate = async () => {
-        if (!form.ride_id.trim() || !form.description.trim()) { alert("Enter ride ID and description."); return; }
+        if (!form.ride_id.trim() || !form.description.trim()) { toast({ variant: "destructive", title: "Missing info", description: "Enter ride ID and description." }); return; }
         setSaving(true);
-        try { await createRideComplaint(form.ride_id, { against_type: form.against_type, category: form.category, description: form.description, service_area_id: form.service_area_id || null }); setDialogOpen(false); setForm({ ride_id: "", against_type: "driver", category: "other", description: "", service_area_id: "" }); load(); }
-        catch (e: any) { alert(e.message); } finally { setSaving(false); }
+        try {
+            await createRideComplaint(form.ride_id, { against_type: form.against_type, category: form.category, description: form.description, service_area_id: form.service_area_id || null });
+            setDialogOpen(false);
+            setForm({ ride_id: "", against_type: "driver", category: "other", description: "", service_area_id: "" });
+            load();
+            toast({ title: "Complaint filed" });
+        } catch (e: any) {
+            toast({ variant: "destructive", title: "Failed to file complaint", description: e?.message ?? "Please try again." });
+        } finally { setSaving(false); }
     };
 
     const handleResolve = async (status: string) => {
         if (!selected) return;
-        try { await resolveComplaint(selected.id, { status, resolution: resolution.trim() || status }); setSelected(null); setResolution(""); load(); }
-        catch (e: any) { alert(e.message); }
+        try {
+            await resolveComplaint(selected.id, { status, resolution: resolution.trim() || status });
+            setSelected(null);
+            setResolution("");
+            load();
+            toast({ title: status === "resolved" ? "Complaint resolved" : "Complaint dismissed" });
+        } catch (e: any) {
+            toast({ variant: "destructive", title: "Update failed", description: e?.message ?? "Please try again." });
+        }
     };
 
     return (
@@ -95,7 +111,7 @@ export default function ComplaintsTab() {
                             <TableCell className="text-[10px] text-muted-foreground">{formatDate(c.created_at)}</TableCell>
                             <TableCell className="text-right"><div className="flex justify-end gap-0.5">
                                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setSelected(c); setResolution(""); }}><Eye className="h-3.5 w-3.5" /></Button>
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); if (confirm("Delete?")) deleteComplaint(c.id).then(load); }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); if (confirm("Delete?")) deleteComplaint(c.id).then(() => { toast({ title: "Complaint deleted" }); load(); }).catch((err) => toast({ variant: "destructive", title: "Delete failed", description: err?.message ?? "Please try again." })); }}><Trash2 className="h-3.5 w-3.5" /></Button>
                             </div></TableCell>
                         </TableRow>
                     ))}</TableBody></Table>}

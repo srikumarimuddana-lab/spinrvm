@@ -51,6 +51,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Building2, Plus, Pencil, Trash2, Search, Mail, Phone, RefreshCw, ShieldCheck } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
     pending_verification: "bg-yellow-100 text-yellow-800 hover:bg-yellow-100",
@@ -68,6 +69,7 @@ function StatusPill({ status }: { status: CompanyStatus }) {
 }
 
 export default function CorporateAccountsPage() {
+    const { toast } = useToast();
     const [accounts, setAccounts] = useState<CorporateAccount[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
@@ -150,9 +152,13 @@ export default function CorporateAccountsPage() {
             }
             setIsDialogOpen(false);
             fetchAccounts();
-        } catch (error) {
+            toast({
+                title: currentAccount ? "Account updated" : "Account created",
+                description: (formData as any).name,
+            });
+        } catch (error: any) {
             console.error("Failed to save account:", error);
-            alert("Failed to save account. Please try again.");
+            toast({ variant: "destructive", title: "Save failed", description: error?.message ?? "Please try again." });
         } finally {
             setFormLoading(false);
         }
@@ -165,9 +171,10 @@ export default function CorporateAccountsPage() {
             await deleteCorporateAccount(currentAccount.id);
             setIsDeleteDialogOpen(false);
             fetchAccounts();
-        } catch (error) {
+            toast({ title: "Account deleted", description: currentAccount.name });
+        } catch (error: any) {
             console.error("Failed to delete account:", error);
-            alert("Failed to delete account.");
+            toast({ variant: "destructive", title: "Delete failed", description: error?.message ?? "Please try again." });
         } finally {
             setFormLoading(false);
         }

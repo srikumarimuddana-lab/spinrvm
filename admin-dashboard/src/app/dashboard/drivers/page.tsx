@@ -19,6 +19,7 @@ import AreaStatsTable from "./_components/area-stats-table";
 import DriverActionBar from "./_components/driver-action-bar";
 import DriverNotes from "./_components/driver-notes";
 import DriverTimeline from "./_components/driver-timeline";
+import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_TABS = [
     { value: "all", label: "All", icon: Users },
@@ -31,6 +32,7 @@ const STATUS_TABS = [
 ];
 
 export default function DriversPage() {
+    const { toast } = useToast();
     const [data, setData] = useState<any>(null);
     const [drivers, setDrivers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -129,7 +131,14 @@ export default function DriversPage() {
 
     const handleReviewDoc = async (docId: string, status: "approved" | "rejected", reason?: string, expiry?: string) => {
         setDocBusy(docId);
-        try { await reviewDocument(docId, status, reason, expiry ? new Date(expiry).toISOString() : undefined); await reloadDriverDocs(); loadData(); } catch (e: any) { alert("Could not update document: " + (e?.message || "unknown error")); } finally { setDocBusy(null); }
+        try {
+            await reviewDocument(docId, status, reason, expiry ? new Date(expiry).toISOString() : undefined);
+            await reloadDriverDocs();
+            loadData();
+            toast({ title: status === "approved" ? "Document approved" : "Document rejected" });
+        } catch (e: any) {
+            toast({ variant: "destructive", title: "Update failed", description: e?.message ?? "Could not update document." });
+        } finally { setDocBusy(null); }
     };
 
     const openReviewDialog = (docId: string, action: "approved" | "rejected") => {
@@ -161,7 +170,16 @@ export default function DriversPage() {
         for (const [k, v] of Object.entries(editForm)) { if (v !== (selected[k] || "")) changes[k] = v; }
         if (Object.keys(changes).length === 0) { setEditing(false); return; }
         setSaving(true);
-        try { await updateDriver(selected.id, changes); const updated = { ...selected, ...changes }; setSelected(updated); setDrivers(prev => prev.map(d => d.id === selected.id ? { ...d, ...changes } : d)); setEditing(false); } catch (e: any) { alert("Failed to save: " + (e?.message || "unknown error")); } finally { setSaving(false); }
+        try {
+            await updateDriver(selected.id, changes);
+            const updated = { ...selected, ...changes };
+            setSelected(updated);
+            setDrivers(prev => prev.map(d => d.id === selected.id ? { ...d, ...changes } : d));
+            setEditing(false);
+            toast({ title: "Driver updated" });
+        } catch (e: any) {
+            toast({ variant: "destructive", title: "Save failed", description: e?.message ?? "Please try again." });
+        } finally { setSaving(false); }
     };
 
     const ef = (field: string) => editForm[field] ?? "";

@@ -18,6 +18,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { MessageSquare, CheckCircle, Plus, Trash2, Pencil, Send, Search, RefreshCw, HelpCircle, Clock, Inbox } from "lucide-react";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
+import { useToast } from "@/components/ui/use-toast";
 
 const CATEGORIES = ["general", "rides", "payments", "account", "safety", "driver", "technical"];
 const PRIORITIES = ["low", "medium", "high", "urgent"];
@@ -40,6 +41,7 @@ export default function TicketsTab() {
 }
 
 function TicketsList() {
+    const { toast } = useToast();
     const { areas } = useServiceAreas();
     const [tickets, setTickets] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -67,13 +69,16 @@ function TicketsList() {
     const reset = () => { setForm({ subject: "", category: "general", priority: "medium", message: "", user_name: "", user_email: "", service_area_id: "" }); setEditing(null); };
 
     const handleSave = async () => {
-        if (!form.subject.trim()) { alert("Enter a subject."); return; }
+        if (!form.subject.trim()) { toast({ variant: "destructive", title: "Subject required" }); return; }
         setSaving(true);
         try {
             if (editing) await updateTicket(editing.id, { subject: form.subject, category: form.category, priority: form.priority, service_area_id: form.service_area_id || null });
             else await createTicket({ ...form, service_area_id: form.service_area_id || null });
             setDialogOpen(false); reset(); load();
-        } catch (e: any) { alert(e.message); } finally { setSaving(false); }
+            toast({ title: editing ? "Ticket updated" : "Ticket created" });
+        } catch (e: any) {
+            toast({ variant: "destructive", title: "Save failed", description: e?.message ?? "Please try again." });
+        } finally { setSaving(false); }
     };
 
     const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
@@ -113,7 +118,7 @@ function TicketsList() {
                                 <TableCell className="text-[10px] text-muted-foreground">{formatDate(t.created_at)}</TableCell>
                                 <TableCell className="text-right"><div className="flex justify-end gap-0.5">
                                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setEditing(t); setForm({ subject: t.subject || "", category: t.category || "general", priority: t.priority || "medium", message: t.message || "", user_name: t.user_name || "", user_email: t.user_email || "", service_area_id: t.service_area_id || "" }); setDialogOpen(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
-                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); if (confirm("Delete?")) { deleteTicket(t.id).then(load); if (selected?.id === t.id) setSelected(null); } }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); if (confirm("Delete?")) { deleteTicket(t.id).then(() => { toast({ title: "Ticket deleted" }); load(); if (selected?.id === t.id) setSelected(null); }).catch((err) => toast({ variant: "destructive", title: "Delete failed", description: err?.message ?? "Please try again." })); } }}><Trash2 className="h-3.5 w-3.5" /></Button>
                                 </div></TableCell>
                             </TableRow>
                         ))}</TableBody></Table>}
@@ -141,8 +146,8 @@ function TicketsList() {
                                     <>
                                         <Textarea placeholder="Type a reply..." value={reply} onChange={(e) => setReply(e.target.value)} rows={2} className="text-xs" />
                                         <div className="flex gap-2">
-                                            <Button size="sm" className="flex-1" onClick={() => { if (reply.trim()) { setReplying(true); replyToTicket(selected.id, reply.trim()).then(() => { setReply(""); load(); }).finally(() => setReplying(false)); } }} disabled={replying || !reply.trim()}><Send className="mr-1.5 h-3.5 w-3.5" />{replying ? "..." : "Reply"}</Button>
-                                            <Button size="sm" variant="outline" onClick={() => { closeTicket(selected.id).then(() => { setSelected(null); load(); }); }}><CheckCircle className="mr-1.5 h-3.5 w-3.5" />Close</Button>
+                                            <Button size="sm" className="flex-1" onClick={() => { if (reply.trim()) { setReplying(true); replyToTicket(selected.id, reply.trim()).then(() => { setReply(""); load(); toast({ title: "Reply sent" }); }).catch((err) => toast({ variant: "destructive", title: "Reply failed", description: err?.message ?? "Please try again." })).finally(() => setReplying(false)); } }} disabled={replying || !reply.trim()}><Send className="mr-1.5 h-3.5 w-3.5" />{replying ? "..." : "Reply"}</Button>
+                                            <Button size="sm" variant="outline" onClick={() => { closeTicket(selected.id).then(() => { setSelected(null); load(); toast({ title: "Ticket closed" }); }).catch((err) => toast({ variant: "destructive", title: "Close failed", description: err?.message ?? "Please try again." })); }}><CheckCircle className="mr-1.5 h-3.5 w-3.5" />Close</Button>
                                         </div>
                                     </>
                                 )}
@@ -177,6 +182,7 @@ function TicketsList() {
 }
 
 function FaqsList() {
+    const { toast } = useToast();
     const [faqs, setFaqs] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -186,7 +192,20 @@ function FaqsList() {
     const load = () => { setLoading(true); getFaqs().then(setFaqs).catch(() => setFaqs([])).finally(() => setLoading(false)); };
     useEffect(() => { load(); }, []);
 
-    const handleSave = async () => { try { if (editing) await updateFaq(editing.id, form); else await createFaq(form); setDialogOpen(false); setEditing(null); setForm({ question: "", answer: "", category: "" }); load(); } catch {} };
+    const handleSave = async () => {
+        const wasEditing = !!editing;
+        try {
+            if (editing) await updateFaq(editing.id, form);
+            else await createFaq(form);
+            setDialogOpen(false);
+            setEditing(null);
+            setForm({ question: "", answer: "", category: "" });
+            load();
+            toast({ title: wasEditing ? "FAQ updated" : "FAQ created" });
+        } catch (e: any) {
+            toast({ variant: "destructive", title: "Save failed", description: e?.message ?? "Please try again." });
+        }
+    };
 
     return (
         <div className="space-y-4">
@@ -199,7 +218,7 @@ function FaqsList() {
                         <TableRow key={f.id}><TableCell className="font-medium max-w-[280px] truncate text-sm">{f.question}</TableCell><TableCell className="text-xs text-muted-foreground">{f.category || "General"}</TableCell>
                             <TableCell className="text-right"><div className="flex justify-end gap-0.5">
                                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditing(f); setForm({ question: f.question || "", answer: f.answer || "", category: f.category || "" }); setDialogOpen(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => { if (confirm("Delete?")) deleteFaq(f.id).then(load); }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => { if (confirm("Delete?")) deleteFaq(f.id).then(() => { toast({ title: "FAQ deleted" }); load(); }).catch((err) => toast({ variant: "destructive", title: "Delete failed", description: err?.message ?? "Please try again." })); }}><Trash2 className="h-3.5 w-3.5" /></Button>
                             </div></TableCell>
                         </TableRow>
                     ))}</TableBody></Table>}

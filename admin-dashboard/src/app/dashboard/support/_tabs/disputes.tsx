@@ -14,6 +14,7 @@ import { HelpCircle, Search, CheckCircle, XCircle, Clock, Plus, Pencil, Trash2, 
 import { formatDate } from "@/lib/utils";
 import { getDisputes, createDispute, updateDispute, resolveDispute, deleteDispute } from "@/lib/api";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
+import { useToast } from "@/components/ui/use-toast";
 
 const S_CFG: Record<string, { l: string; i: any; c: string }> = {
     pending: { l: "Pending", i: Clock, c: "bg-amber-500/15 text-amber-600" },
@@ -24,6 +25,7 @@ const S_CFG: Record<string, { l: string; i: any; c: string }> = {
 const TYPES = [{ v: "fare", l: "Fare Dispute" }, { v: "behavior", l: "Behavior Issue" }, { v: "route", l: "Route Issue" }, { v: "safety", l: "Safety Concern" }, { v: "damage", l: "Vehicle Damage" }, { v: "other", l: "Other" }];
 
 export default function DisputesTab() {
+    const { toast } = useToast();
     const { areas } = useServiceAreas();
     const [disputes, setDisputes] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -57,18 +59,30 @@ export default function DisputesTab() {
     const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
 
     const handleSave = async () => {
-        if (!form.description.trim()) { alert("Enter a description."); return; }
+        if (!form.description.trim()) { toast({ variant: "destructive", title: "Description required" }); return; }
+        const wasEditing = !!editing;
         setSaving(true);
         try {
             if (editing) await updateDispute(editing.id, { reason: form.reason, description: form.description, refund_amount: form.refund_amount ? parseFloat(form.refund_amount) : 0, user_type: form.user_type, service_area_id: form.service_area_id || null });
             else await createDispute({ ride_id: form.ride_id || null, user_name: form.user_name, user_type: form.user_type, reason: form.reason, description: form.description, refund_amount: form.refund_amount ? parseFloat(form.refund_amount) : 0, service_area_id: form.service_area_id || null });
             setDialogOpen(false); reset(); load();
-        } catch (e: any) { alert(e.message); } finally { setSaving(false); }
+            toast({ title: wasEditing ? "Dispute updated" : "Dispute created" });
+        } catch (e: any) {
+            toast({ variant: "destructive", title: "Save failed", description: e?.message ?? "Please try again." });
+        } finally { setSaving(false); }
     };
 
     const handleResolve = async (status: string) => {
-        if (!selected || !resolution.trim()) { alert("Enter resolution notes."); return; }
-        try { await resolveDispute(selected.id, { resolution: status, admin_note: resolution.trim() }); setSelected(null); setResolution(""); load(); } catch (e: any) { alert(e.message); }
+        if (!selected || !resolution.trim()) { toast({ variant: "destructive", title: "Resolution notes required" }); return; }
+        try {
+            await resolveDispute(selected.id, { resolution: status, admin_note: resolution.trim() });
+            setSelected(null);
+            setResolution("");
+            load();
+            toast({ title: status === "approved" ? "Dispute resolved" : "Dispute rejected" });
+        } catch (e: any) {
+            toast({ variant: "destructive", title: "Update failed", description: e?.message ?? "Please try again." });
+        }
     };
 
     return (
@@ -108,7 +122,7 @@ export default function DisputesTab() {
                                 <TableCell className="text-right"><div className="flex justify-end gap-0.5">
                                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setSelected(d); setResolution(""); }}><Eye className="h-3.5 w-3.5" /></Button>
                                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setEditing(d); setForm({ ride_id: d.ride_id || "", user_name: d.user_name || "", user_type: d.user_type || "rider", reason: d.dispute_type || "fare", description: d.description || "", refund_amount: d.refund_amount ? String(d.refund_amount) : "", service_area_id: d.service_area_id || "" }); setDialogOpen(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
-                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); if (confirm("Delete?")) deleteDispute(d.id).then(load); }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); if (confirm("Delete?")) deleteDispute(d.id).then(() => { toast({ title: "Dispute deleted" }); load(); }).catch((err) => toast({ variant: "destructive", title: "Delete failed", description: err?.message ?? "Please try again." })); }}><Trash2 className="h-3.5 w-3.5" /></Button>
                                 </div></TableCell>
                             </TableRow>
                         );

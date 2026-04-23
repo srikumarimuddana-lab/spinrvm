@@ -28,6 +28,7 @@ import {
     getCloudMessages, sendCloudMessage, getCloudMessageStats,
     deleteCloudMessage, getUsers, getDrivers,
 } from "@/lib/api";
+import { useToast } from "@/components/ui/use-toast";
 
 // --- Types ---
 
@@ -97,6 +98,7 @@ const emptyStats: MessageStats = { total_messages: 0, total_sent: 0, total_sched
 // --- Component ---
 
 export default function CloudMessagingPage() {
+    const { toast } = useToast();
     const [messages, setMessages] = useState<CloudMessage[]>([]);
     const [stats, setStats] = useState<MessageStats>(emptyStats);
     const [loading, setLoading] = useState(true);
@@ -220,15 +222,27 @@ export default function CloudMessagingPage() {
     useEffect(() => { setHistoryPage(1); }, [search, statusFilter, audienceFilter, dateFrom, dateTo]);
 
     const handleSend = async () => {
-        if (!form.title.trim() || !form.description.trim()) { alert("Please fill in title and description."); return; }
+        if (!form.title.trim() || !form.description.trim()) {
+            toast({ variant: "destructive", title: "Missing info", description: "Please fill in title and description." });
+            return;
+        }
         const isParticular = form.audience === "particular_customer" || form.audience === "particular_driver";
-        if (isParticular && form.particular_ids.length === 0) { alert("Please select at least one user/driver."); return; }
-        if (form.is_scheduled && !form.scheduled_at) { alert("Please select a date and time."); return; }
+        if (isParticular && form.particular_ids.length === 0) {
+            toast({ variant: "destructive", title: "Missing recipients", description: "Please select at least one user/driver." });
+            return;
+        }
+        if (form.is_scheduled && !form.scheduled_at) {
+            toast({ variant: "destructive", title: "Missing schedule", description: "Please select a date and time." });
+            return;
+        }
         const channels: string[] = [];
         if (form.send_push) channels.push("push");
         if (form.send_email) channels.push("email");
         if (form.send_sms) channels.push("sms");
-        if (channels.length === 0) { alert("Please select at least one delivery channel."); return; }
+        if (channels.length === 0) {
+            toast({ variant: "destructive", title: "No channel", description: "Please select at least one delivery channel." });
+            return;
+        }
 
         setSending(true);
         try {
@@ -246,8 +260,12 @@ export default function CloudMessagingPage() {
             await sendCloudMessage(payload);
             await fetchData();
             resetForm();
+            toast({
+                title: form.is_scheduled ? "Message scheduled" : "Message sent",
+                description: form.title,
+            });
         } catch (error: any) {
-            alert(`Failed to send: ${error.message || "Unknown error"}`);
+            toast({ variant: "destructive", title: "Send failed", description: error?.message ?? "Unknown error" });
         } finally {
             setSending(false);
         }
@@ -262,8 +280,13 @@ export default function CloudMessagingPage() {
 
     const handleDelete = async (id: string) => {
         if (!confirm("Cancel this message?")) return;
-        try { await deleteCloudMessage(id); } catch { /* continue */ }
-        setMessages((prev) => prev.filter((m) => m.id !== id));
+        try {
+            await deleteCloudMessage(id);
+            setMessages((prev) => prev.filter((m) => m.id !== id));
+            toast({ title: "Message cancelled" });
+        } catch (e: any) {
+            toast({ variant: "destructive", title: "Cancel failed", description: e?.message ?? "Please try again." });
+        }
     };
 
     const handleExport = () => {

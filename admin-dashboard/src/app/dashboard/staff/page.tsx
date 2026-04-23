@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { getStaff, createStaff, updateStaff, deleteStaff } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { Users, Plus, Shield, Eye, EyeOff, Trash2, Edit, Check, X } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 const ALL_MODULES = [
   { key: "dashboard", label: "Dashboard" },
@@ -55,6 +56,7 @@ interface Staff {
 
 export default function StaffPage() {
   const { user } = useAuthStore();
+  const { toast } = useToast();
   const [staff, setStaff] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -109,14 +111,20 @@ export default function StaffPage() {
           role: form.role,
           modules: form.modules,
         });
+        toast({ title: "Staff updated", description: `${form.first_name} ${form.last_name}` });
       } else {
         if (!form.password) return;
         await createStaff(form);
+        toast({ title: "Staff created", description: `${form.first_name} ${form.last_name}` });
       }
       resetForm();
       loadStaff();
     } catch (e: any) {
-      alert(e?.message || "Failed to save staff member");
+      toast({
+        variant: "destructive",
+        title: "Save failed",
+        description: e?.message ?? "Failed to save staff member",
+      });
     }
   };
 
@@ -134,14 +142,35 @@ export default function StaffPage() {
   };
 
   const handleToggleActive = async (s: Staff) => {
-    await updateStaff(s.id, { is_active: !s.is_active });
-    loadStaff();
+    try {
+      await updateStaff(s.id, { is_active: !s.is_active });
+      loadStaff();
+      toast({
+        title: s.is_active ? "Staff disabled" : "Staff enabled",
+        description: `${s.first_name} ${s.last_name}`,
+      });
+    } catch (e: any) {
+      toast({
+        variant: "destructive",
+        title: "Toggle failed",
+        description: e?.message ?? "Please try again.",
+      });
+    }
   };
 
   const handleDelete = async (s: Staff) => {
     if (!confirm(`Delete ${s.first_name} ${s.last_name}? This cannot be undone.`)) return;
-    await deleteStaff(s.id);
-    loadStaff();
+    try {
+      await deleteStaff(s.id);
+      loadStaff();
+      toast({ title: "Staff deleted", description: `${s.first_name} ${s.last_name}` });
+    } catch (e: any) {
+      toast({
+        variant: "destructive",
+        title: "Delete failed",
+        description: e?.message ?? "Please try again.",
+      });
+    }
   };
 
   const resetForm = () => {

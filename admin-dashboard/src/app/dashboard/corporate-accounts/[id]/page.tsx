@@ -40,6 +40,7 @@ import {
     Wallet,
     XCircle,
 } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
     pending_verification: "bg-yellow-100 text-yellow-800 hover:bg-yellow-100",
@@ -98,6 +99,7 @@ function formatDate(iso?: string | null) {
 }
 
 export default function CompanyDetailPage() {
+    const { toast } = useToast();
     const params = useParams<{ id: string }>();
     const id = params?.id;
 
@@ -154,8 +156,9 @@ export default function CompanyDetailPage() {
         try {
             await walletAdjust(id, { amount, notes: notes.trim() });
             await loadWallet();
+            toast({ title: "Wallet adjusted", description: `${amount >= 0 ? "+" : ""}${amount} CAD` });
         } catch (e: any) {
-            alert(e?.message ?? "Adjustment failed");
+            toast({ variant: "destructive", title: "Adjustment failed", description: e?.message ?? "Please try again." });
         } finally {
             setWalletBusy(false);
         }
@@ -169,8 +172,11 @@ export default function CompanyDetailPage() {
                 auto_topup_enabled: !wallet.auto_topup_enabled,
             });
             await loadWallet();
+            toast({
+                title: wallet.auto_topup_enabled ? "Auto top-up disabled" : "Auto top-up enabled",
+            });
         } catch (e: any) {
-            alert(e?.message ?? "Failed to toggle auto top-up");
+            toast({ variant: "destructive", title: "Toggle failed", description: e?.message ?? "Failed to toggle auto top-up" });
         } finally {
             setWalletBusy(false);
         }
@@ -193,8 +199,9 @@ export default function CompanyDetailPage() {
             setCompany(updated);
             setPendingTransition(null);
             setReason("");
+            toast({ title: "Status updated", description: cfg.targetStatus });
         } catch (e: any) {
-            alert(e?.message ?? "Status change failed");
+            toast({ variant: "destructive", title: "Status change failed", description: e?.message ?? "Please try again." });
         } finally {
             setTransitioning(false);
         }

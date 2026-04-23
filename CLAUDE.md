@@ -136,6 +136,17 @@ This is intentional (`python -m backend.server` vs top-level). Do not simplify a
 - Return a clean `HTTPException` (usually 503 for DB, 502 for upstream) so the client retries, instead of handing back a half-valid response.
 - Before silencing or softening any error during development, STOP and ask the user. "Soft-handling" is a trade-off they get to decide, not a default.
 
+**Admin dashboard submit feedback** — every mutating action in `admin-dashboard/` (create, update, delete, publish, flush, send, approve, reject, etc.) MUST show a toast on BOTH success and error. No silent saves, no `alert()`, no console-only errors. Use the project's own toast primitive:
+```tsx
+import { useToast } from "@/components/ui/use-toast";
+const { toast } = useToast();
+// success
+toast({ title: "Saved", description: "Vehicle type updated." });
+// error
+toast({ variant: "destructive", title: "Save failed", description: err?.message ?? "Please try again." });
+```
+Do NOT introduce `sonner` or a second toast library — the admin already has one. Replace any `alert(...)` call you find in a submit handler with a `toast({ variant: "destructive", ... })` while you're in the file.
+
 ## Required Environment Variables
 
 **Backend** (`backend/.env`):

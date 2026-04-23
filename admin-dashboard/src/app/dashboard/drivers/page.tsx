@@ -687,9 +687,17 @@ export default function DriversPage() {
                                                 { key: "background_check",     label: "Background Check",   has_expiry: true },
                                             ]).map(rd => {
                                                 const matchingDocs = activeDocs.filter(d => {
-                                                    if (d.requirement_id) return d.requirement_id === rd.key;
+                                                    // 1. Best: match by requirement_key (slug stored since migration 28)
+                                                    if (d.requirement_key) return d.requirement_key === rd.key;
+                                                    // 2. Match by requirement_id (UUID or legacy string key)
+                                                    if (d.requirement_id) return d.requirement_id === (rd as any).id || d.requirement_id === rd.key;
+                                                    // 3. Match document_type against the label or key
                                                     const dt = (d.document_type || "").toLowerCase();
-                                                    return dt === rd.label.toLowerCase() || dt.replace(/[^a-z0-9]/g, "_").includes(rd.key.replace(/[^a-z0-9]/g, "_"));
+                                                    const label = rd.label.toLowerCase();
+                                                    const key = rd.key.toLowerCase().replace(/_/g, " ");
+                                                    if (dt === label || dt === key) return true;
+                                                    // 4. Fuzzy fallback: key slug appears inside document_type
+                                                    return dt.replace(/[^a-z0-9]/g, "_").includes(rd.key.replace(/[^a-z0-9]/g, "_"));
                                                 });
                                                 const hasApproved = matchingDocs.some(d => d.status === "approved");
                                                 const hasPending = matchingDocs.some(d => d.status === "pending");

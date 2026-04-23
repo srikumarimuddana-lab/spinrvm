@@ -183,6 +183,7 @@ KNOWN_KEY_PREFIXES = [
     "ratelimit:",               # slowapi rate limiter
     "spinr:retry_budget:",      # per-second retry budget counter
     "spinr:ws:",                # WebSocket pub/sub channel state
+    "spinr:presence:driver:",   # Uber/Lyft-style driver presence (TTL heartbeat)
     "fares:",                   # per-area fare config cache
 ]
 

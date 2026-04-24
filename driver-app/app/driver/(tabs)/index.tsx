@@ -77,6 +77,7 @@ function DriverDashboard() {
     showDashAlert,
     closeDashAlert,
     wsError,
+    refreshLocation,
   } = useDriverDashboard();
 
   // Route polyline coordinates for active rides
@@ -606,6 +607,7 @@ function DriverDashboard() {
         mapRef={mapRef}
         location={location}
         currentRegionRef={currentRegionRef}
+        onRecenter={() => refreshLocation(false)}
       />
 
       {/* Bottom Panels */}

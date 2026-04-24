@@ -304,32 +304,29 @@ export default function HomeScreen() {
           />
         </View>
 
-        {/* Current Location Button - Fixed Logic */}
+        {/* Current Location Button — always fetches a fresh fix. Tapping
+            this is an explicit user request for "where am I now", so we
+            bypass any cached state and hit getCurrentPositionAsync. */}
         <TouchableOpacity style={styles.locationButton} onPress={async () => {
-          if (mapRef.current) {
-            let loc = location;
-            if (!loc) {
-              const { status } = await Location.requestForegroundPermissionsAsync();
-              if (status === 'granted') {
-                try {
-                  loc = await Location.getCurrentPositionAsync({});
-                } catch (e) {
-                  console.warn('Could not get current location, using fallback:', e);
-                  loc = { coords: { latitude: DEFAULT_LATITUDE, longitude: DEFAULT_LONGITUDE } };
-                }
-                setLocation(loc);
-              }
-            }
-
-            if (loc) {
-              mapRef.current.animateToRegion({
-                latitude: loc.coords.latitude,
-                longitude: loc.coords.longitude,
-                latitudeDelta: 0.01, // Zoom level
-                longitudeDelta: 0.01,
-              }, 1000);
-            }
+          if (!mapRef.current) return;
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status !== 'granted') return;
+          let loc: any;
+          try {
+            loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          } catch (e) {
+            console.warn('Could not get current location, using fallback:', e);
+            loc = location ?? { coords: { latitude: DEFAULT_LATITUDE, longitude: DEFAULT_LONGITUDE } };
           }
+          setLocation(loc);
+          setUserLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
+          saveLastLocation(loc.coords.latitude, loc.coords.longitude);
+          mapRef.current.animateToRegion({
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          }, 1000);
         }}>
           <Ionicons name="locate" size={24} color={colors.text} />
         </TouchableOpacity>

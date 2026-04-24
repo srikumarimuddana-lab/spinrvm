@@ -43,6 +43,7 @@ interface UseDriverDashboardReturn {
   toggleOnline: () => Promise<void>;
   openNavigation: (lat: number, lng: number, label: string) => void;
   uploadLocationBatch: () => Promise<void>;
+  refreshLocation: (useCache: boolean) => Promise<Location.LocationObject | null>;
 
   // Refs for external use
   mapRef: React.RefObject<any>;
@@ -223,7 +224,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     }
 
     const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') return;
+    if (status !== 'granted') return null;
 
     if (useCache) {
       try {
@@ -232,16 +233,18 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       } catch {}
     }
 
-    Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
-      .then(loc => {
-        setLocation(loc);
-        locationRef.current = loc;
-        try {
-          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-          AsyncStorage.setItem('spinr_driver_last_location', JSON.stringify({ lat: loc.coords.latitude, lng: loc.coords.longitude }));
-        } catch {}
-      })
-      .catch(() => {});
+    try {
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      setLocation(loc);
+      locationRef.current = loc;
+      try {
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        AsyncStorage.setItem('spinr_driver_last_location', JSON.stringify({ lat: loc.coords.latitude, lng: loc.coords.longitude }));
+      } catch {}
+      return loc;
+    } catch {
+      return null;
+    }
   }, []);
 
   useEffect(() => {
@@ -855,6 +858,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     toggleOnline,
     openNavigation,
     uploadLocationBatch,
+    refreshLocation,
 
     // Refs
     mapRef,

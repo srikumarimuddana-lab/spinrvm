@@ -628,10 +628,15 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           reconnectAttemptRef.current = 0;
           connectWebSocket();
         }
-      } else if ((nextState === 'background' || nextState === 'inactive') && wsRef.current) {
-        // Clean close so the backend disconnect handler fires promptly
-        // and clears presence + flips the driver offline in the admin
-        // live-monitoring view. 1001 = "going away".
+      } else if (nextState === 'background' && wsRef.current) {
+        // iOS fires 'inactive' for transient foreground interruptions —
+        // permission dialogs (e.g. background-location prompt on Go
+        // Online), incoming calls, Control Center, the app switcher
+        // preview. Closing the WS on those events caused the backend
+        // disconnect handler to flip the driver offline milliseconds
+        // after they tapped Go Online (the permission prompt itself
+        // triggered a close). Only treat a true 'background' transition
+        // as "driver has left the app". 1001 = "going away".
         try {
           wsRef.current.close(1001, 'app_backgrounded');
         } catch {}

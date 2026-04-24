@@ -55,7 +55,10 @@
       "Write(.claude/hooks/**)",
       "Write(.claude/context/**)",
       "Write(.github/workflows/claude.yml)",
-      "Write(.github/workflows/claude-review.yml)"
+      "Write(.github/workflows/claude-review.yml)",
+      "Write(.github/workflows/pr-checks.yml)",
+      "Write(.github/pull_request_template.md)",
+      "Write(.github/labeler.yml)"
     ],
     "deny": [
       "Bash(rm -rf*)",

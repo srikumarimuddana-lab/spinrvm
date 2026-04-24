@@ -686,9 +686,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     setIsOnline(next);
     try {
       await updateDriverStatus(next);
-      if (next) {
-        await Location.requestBackgroundPermissionsAsync();
-      }
     } catch (err: any) {
       setIsOnline(!next);
 
@@ -708,6 +705,28 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           "Cannot Go Online",
           err.response?.data?.detail || "Failed to update status. Please try again.",
           'danger'
+        );
+      }
+      return;
+    }
+
+    // Ask for background location AFTER the status update resolved.
+    // Keeping this in the same try block would roll the UI back to
+    // offline on any permission failure even though the backend
+    // already has is_online=true — the mismatch drivers see as
+    // "tapped Go Online, app shows offline a second later".
+    // Android is strict about background-location ("Allow all the
+    // time" vs "While using") and reject flows can throw from this
+    // call; a rejection should NOT undo a successful Go Online, it
+    // should just warn that background tracking is unavailable.
+    if (next) {
+      try {
+        await Location.requestBackgroundPermissionsAsync();
+      } catch {
+        showDashAlert(
+          "Background location needed",
+          "You're online, but background location is required to keep getting ride offers while the app is minimized. Enable 'Allow all the time' in Settings.",
+          'warning'
         );
       }
     }

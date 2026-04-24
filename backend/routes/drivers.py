@@ -3291,13 +3291,32 @@ async def cancel_subscription(current_user: dict = Depends(get_current_user)):
 
 
 async def check_expiring_subscriptions():
-    """Background task: sends push notifications to drivers whose
-    Spinr Pass expires within 24 hours.
+    """Background task: handles Spinr Pass expiry end-to-end.
 
-    Runs periodically (every 6 hours) from the FastAPI lifespan.
-    Marks warned subscriptions with `expiry_warned: true` so the
-    driver isn't notified more than once.
+    Two jobs, both run every 6 hours from the FastAPI lifespan:
+
+    1. **Warn** drivers whose active subscription expires within 24 h
+       (push notification, once per subscription via ``expiry_warned``).
+    2. **Enforce** expiry on subscriptions whose ``expires_at`` is in the
+       past — but only when the admin toggle
+       ``require_driver_subscription`` is on. Enforcement:
+         - mark the sub row ``status='expired'``
+         - if the driver is currently ``is_online``, flip them offline,
+           clear Redis presence, disconnect any active WebSocket, and
+           push a notification explaining why.
+         - broadcast ``driver_status_changed`` to admin monitoring.
+
+    Without step 2, a subscription-gated driver could stay online and
+    keep accepting rides past their paid-for period: the Go-Online path
+    re-checks the sub, but drivers who were already online when their
+    sub expired would never hit that gate until they voluntarily tapped
+    off and back on.
     """
+    try:
+        from ..settings_loader import get_app_settings  # type: ignore
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+
     while True:
         try:
             now = datetime.now(timezone.utc)
@@ -3305,22 +3324,128 @@ async def check_expiring_subscriptions():
 
             active_subs = await db.get_rows("driver_subscriptions", {"status": "active"}, limit=500)
 
-            warned_count = 0
-            for sub in active_subs:
-                if sub.get("expiry_warned"):
-                    continue
+            # Only enforce the offline flip when the admin has turned on
+            # the subscription gate — otherwise expiry is purely advisory.
+            try:
+                app_settings = await get_app_settings()
+                require_sub = bool(app_settings.get("require_driver_subscription", False))
+            except Exception as e:
+                logger.warning(f"[SUB-EXPIRY] get_app_settings failed, skipping enforcement this tick: {e}")
+                require_sub = False
 
+            warned_count = 0
+            enforced_count = 0
+            for sub in active_subs:
                 expires_at = sub.get("expires_at")
                 if not expires_at:
                     continue
 
                 if isinstance(expires_at, str):
                     try:
-                        expires_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00")).replace(tzinfo=None)
+                        expires_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                        if expires_dt.tzinfo is None:
+                            expires_dt = expires_dt.replace(tzinfo=timezone.utc)
                     except ValueError:
                         continue
                 else:
                     expires_dt = expires_at
+                    if expires_dt.tzinfo is None:
+                        expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+
+                # ── Enforcement branch: already expired ──────────────────
+                if expires_dt <= now:
+                    try:
+                        await db.update_one(
+                            "driver_subscriptions",
+                            {"id": sub["id"]},
+                            {"status": "expired"},
+                        )
+                    except Exception as e:
+                        logger.warning(f"[SUB-EXPIRY] Failed to mark sub {sub['id']} expired: {e}")
+                        continue
+
+                    if not require_sub:
+                        # Gate is off — just flip the row state, leave the
+                        # driver alone. (They'll re-gate on next Go Online
+                        # if the admin turns enforcement back on.)
+                        continue
+
+                    driver = await db.find_one("drivers", {"id": sub["driver_id"]})
+                    if not driver or not driver.get("is_online"):
+                        continue
+
+                    try:
+                        await db.update_one(
+                            "drivers",
+                            {"id": driver["id"]},
+                            {
+                                "is_online": False,
+                                "is_available": False,
+                                "updated_at": now.isoformat(),
+                                "last_status_changed_at": now.isoformat(),
+                            },
+                        )
+                    except Exception as e:
+                        logger.error(f"[SUB-EXPIRY] Failed to flip driver {driver['id']} offline: {e}")
+                        continue
+
+                    try:
+                        await clear_presence(driver["id"])
+                    except Exception as e:
+                        logger.warning(f"[SUB-EXPIRY] clear_presence failed for {driver['id']}: {e}")
+
+                    if driver.get("user_id"):
+                        manager.disconnect(f"driver_{driver['user_id']}")
+
+                    try:
+                        await db.insert_one(
+                            "driver_activity_log",
+                            {
+                                "id": str(uuid.uuid4()),
+                                "driver_id": driver["id"],
+                                "event_type": "went_offline",
+                                "title": "Went offline (Spinr Pass expired)",
+                                "description": "System flipped driver offline — active subscription expired and Spinr Pass is required to drive.",
+                                "metadata": {
+                                    "reason": "subscription_expired",
+                                    "source": "check_expiring_subscriptions",
+                                    "subscription_id": sub["id"],
+                                },
+                                "actor": "system",
+                                "created_at": now.isoformat(),
+                            },
+                        )
+                    except Exception as e:
+                        logger.warning(f"[SUB-EXPIRY] activity log insert failed for {driver['id']}: {e}")
+
+                    if driver.get("user_id"):
+                        try:
+                            await send_push_notification(
+                                driver["user_id"],
+                                "Spinr Pass expired",
+                                "Your Spinr Pass has expired and you've been set offline. Renew from your dashboard to keep driving.",
+                                {"type": "subscription_expired", "driver_id": driver["id"]},
+                            )
+                        except Exception as e:
+                            logger.warning(f"[SUB-EXPIRY] Push failed for driver {driver['id']}: {e}")
+
+                    try:
+                        await manager.broadcast_to_admins(
+                            {
+                                "type": "driver_status_changed",
+                                "driver_id": driver["id"],
+                                "is_online": False,
+                            }
+                        )
+                    except Exception:
+                        pass
+
+                    enforced_count += 1
+                    continue
+
+                # ── Warning branch: expires within 24 h ───────────────────
+                if sub.get("expiry_warned"):
+                    continue
 
                 if now < expires_dt <= window:
                     driver = await db.find_one("drivers", {"id": sub["driver_id"]})
@@ -3344,7 +3469,10 @@ async def check_expiring_subscriptions():
                         {"$set": {"expiry_warned": True}},
                     )
 
-            logger.info(f"[SUB-EXPIRY] Check complete. {len(active_subs)} scanned, {warned_count} warned.")
+            logger.info(
+                f"[SUB-EXPIRY] Check complete. {len(active_subs)} scanned, "
+                f"{warned_count} warned, {enforced_count} enforced offline."
+            )
 
         except Exception as e:
             logger.warning(f"[SUB-EXPIRY] Background check error: {e}")

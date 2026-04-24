@@ -35,94 +35,77 @@ WS_MAX_MESSAGES_PER_SECOND = 30
 WS_MAX_MESSAGE_SIZE = 64 * 1024  # 64 KB max message payload
 
 
-async def _handle_driver_ws_offline(connection_key: str | None, user: dict | None) -> None:
-    """When a driver's WebSocket drops, flip their DB row offline so the
-    admin panel and dispatch engine see reality.
+async def _handle_driver_ws_disconnect(connection_key: str | None, user: dict | None) -> None:
+    """Narrow post-disconnect hook: surface "socket dropped" to admins.
 
-    Without this, `drivers.is_online` stays True forever after a single Go
-    Online toggle — through app closes, crashes, network drops — so admins
-    see phantom online drivers and dispatch picks drivers whose app isn't
-    running. is_online is now treated as "driver has intent AND active
-    socket"; on reconnect the driver must tap Go Online again, matching
-    standard rideshare behavior.
+    Intent (``drivers.is_online``) and reachability (Redis presence) are now
+    separated Uber/Lyft-style. The socket dying does NOT mean the driver
+    tapped Stop — the app could be momentarily backgrounded, on a flaky
+    tunnel, or restarting after an OS memory pressure kill. Flipping
+    ``is_online=False`` here produced the "driver taps Go Online, phone
+    shows offline a second later" bug because the iOS background-location
+    permission dialog sends the app into 'inactive', which closed the WS,
+    which ran this handler, which overwrote the Go-Online write.
+
+    So this function deliberately does NOT write to the drivers table.
+    It only:
+
+    1. Broadcasts a ``driver_connection_lost`` admin event so the live
+       monitoring dashboard can show "intent: online / reachable: no" —
+       the same visual distinction Uber's ops console makes.
+    2. Records a best-effort audit entry so operators can see *why* the
+       driver stopped appearing in dispatch (socket died) even though
+       the DB still says online.
+
+    Reconciliation is handled elsewhere: the presence sweeper flips
+    ``is_online=False`` for drivers whose presence TTL has expired for
+    longer than the grace window, and dispatch already filters on live
+    presence so ghost-online rows can't be routed to.
     """
-    logger.info(
-        f"[GO-ONLINE] _handle_driver_ws_offline ENTER connection_key={connection_key} "
-        f"user_id={(user or {}).get('id')}"
-    )
     if not connection_key or not connection_key.startswith("driver_") or not user:
-        logger.info(f"[GO-ONLINE] _handle_driver_ws_offline SKIP (bad args) connection_key={connection_key}")
         return
-    # If a newer WS has already reconnected under the same key, the driver is
-    # actually still present — don't flip them offline just because this older
-    # socket's disconnect handler fired late.
+    # A newer WS reconnecting under the same key means this late-firing
+    # disconnect is stale — nothing to broadcast.
     if connection_key in manager.active_connections:
-        logger.info(f"[GO-ONLINE] _handle_driver_ws_offline SKIP (newer WS present) connection_key={connection_key}")
         return
     try:
         driver_profile_off = await db.find_one("drivers", {"user_id": user["id"]})
         if not driver_profile_off:
-            logger.info(f"[GO-ONLINE] _handle_driver_ws_offline SKIP (no driver row) user_id={user['id']}")
             return
         driver_id = driver_profile_off["id"]
-        logger.info(
-            f"[GO-ONLINE] _handle_driver_ws_offline FLIPPING driver_id={driver_id} "
-            f"pre_is_online={driver_profile_off.get('is_online')} "
-            f"pre_is_available={driver_profile_off.get('is_available')} "
-            f"last_status_changed_at={driver_profile_off.get('last_status_changed_at')}"
-        )
-        # Only write if we're actually changing state — skip the write for
-        # drivers who were already offline (e.g. WS opened but never toggled
-        # online), to avoid unnecessary DB churn and updated_at bumps.
         was_online = bool(driver_profile_off.get("is_online"))
-        if was_online or driver_profile_off.get("is_available"):
+
+        # Only log + broadcast for drivers who were actually intent-online;
+        # idle sockets (app open, never tapped Go Online) disconnecting is
+        # not operationally interesting.
+        if was_online:
             now_iso = datetime.now(timezone.utc).isoformat()
             try:
-                await db_supabase.update_one(
-                    "drivers",
-                    {"id": driver_id},
+                await db_supabase.insert_one(
+                    "driver_activity_log",
                     {
-                        "is_online": False,
-                        "is_available": False,
-                        "updated_at": now_iso,
-                        # Bump last_status_changed_at so admin "offline since …"
-                        # reflects the actual disconnect time.
-                        "last_status_changed_at": now_iso,
+                        "id": str(uuid.uuid4()),
+                        "driver_id": driver_id,
+                        "event_type": "connection_lost",
+                        "title": "Connection lost",
+                        "description": "Driver WebSocket closed — app backgrounded, force-killed, or lost network. Intent stays online; presence sweeper will reconcile if the app doesn't reconnect.",
+                        "metadata": {"reason": "ws_disconnect", "source": "websocket"},
+                        "actor": "system",
+                        "created_at": now_iso,
                     },
                 )
-            except Exception as _db_exc:
-                logger.warning(
-                    f"[WS] Could not flip driver {driver_id} offline on disconnect: {_db_exc}"
-                )
-            # Audit trail — only when the driver was actually intent-online,
-            # so idle-socket disconnects (driver opened app, never tapped go
-            # online) don't spam the log with no-op events.
-            if was_online:
-                try:
-                    await db_supabase.insert_one(
-                        "driver_activity_log",
-                        {
-                            "id": str(uuid.uuid4()),
-                            "driver_id": driver_id,
-                            "event_type": "went_offline",
-                            "title": "Went offline (socket disconnected)",
-                            "description": "Driver WebSocket closed — app was backgrounded, force-killed, or lost network.",
-                            "metadata": {"reason": "ws_disconnect", "source": "websocket"},
-                            "actor": "system",
-                            "created_at": now_iso,
-                        },
-                    )
-                except Exception as _log_exc:
-                    logger.warning(f"[WS] activity log insert failed for {driver_id}: {_log_exc}")
-        await manager.broadcast_to_admins(
-            {
-                "type": "driver_status_changed",
-                "driver_id": driver_id,
-                "is_online": False,
-            }
-        )
+            except Exception as _log_exc:
+                logger.warning(f"[WS] activity log insert failed for {driver_id}: {_log_exc}")
+
+            await manager.broadcast_to_admins(
+                {
+                    "type": "driver_connection_lost",
+                    "driver_id": driver_id,
+                    "is_reachable": False,
+                }
+            )
     except Exception as _exc:
-        logger.warning(f"[WS] offline-on-disconnect handler failed for {connection_key}: {_exc}")
+        logger.warning(f"[WS] disconnect handler failed for {connection_key}: {_exc}")
 
 
 async def heartbeat_task(
@@ -145,7 +128,10 @@ async def heartbeat_task(
        updated by the pong-handler branch in the main receive loop.
 
     Either path raises ``WebSocketDisconnect`` in the receive loop, which
-    triggers ``_handle_driver_ws_offline`` and flips the DB row.
+    clears Redis presence and triggers ``_handle_driver_ws_disconnect`` to
+    notify admins — but does NOT write ``is_online=False``. See the
+    presence sweeper for the reconciliation layer that actually flips
+    ``is_online`` when a driver stays unreachable past the grace window.
     """
     loop = asyncio.get_event_loop()
     # Tolerate one missed ping window before giving up — HEARTBEAT_INTERVAL
@@ -592,7 +578,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             manager.disconnect(connection_key)
             if current_driver_id:
                 await clear_presence(current_driver_id)
-            await _handle_driver_ws_offline(connection_key, user)
+            await _handle_driver_ws_disconnect(connection_key, user)
     except Exception as e:
         still_current = bool(
             connection_key and manager.active_connections.get(connection_key) is websocket
@@ -605,7 +591,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             manager.disconnect(connection_key)
             if current_driver_id:
                 await clear_presence(current_driver_id)
-            await _handle_driver_ws_offline(connection_key, user)
+            await _handle_driver_ws_disconnect(connection_key, user)
         try:
             await websocket.close()
         except Exception:  # noqa: S110

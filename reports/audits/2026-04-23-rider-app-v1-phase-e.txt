@@ -802,5 +802,347 @@ FINDINGS YAML — D18
 
 ================================================================================
 END OF D18 — rider-app Phase E
-Next: D19 Fraud (append below when E-3 re-run completes)
+================================================================================
+
+================================================================================
+TASK 19 — FRAUD DETECTION
+================================================================================
+Note: first run of D19 truncated before emitting YAML; re-run with tight
+output budget. Human-readable summaries below derived from YAML entries.
+
+[19-1] CRITICAL | Rating field-name mismatch — driver ratings silently broken
+File: backend/routes/rides.py:1773,1793
+Finding: Line 1773 writes the rating to field `rider_rating`; line 1793
+reads `driver_rating` when computing the driver's aggregate rating. Mismatch
+causes average_rating to never update. Drivers effectively unrated; dispatch
+and fraud-detection signals (RT-3) are degraded.
+Fix: Unify on `driver_rating` (what the driver received). Update line 1773.
+Effort: 1 h
+Risk score: 64 (CRITICAL × org × certain) — P0
+Regulations: SK-CPPA
+Owner: backend
+
+[19-2] HIGH | POST /rides/{id}/rate lacks idempotency; rider can re-rate
+File: backend/routes/rides.py:1763
+Finding: rate endpoint unconditionally overwrites the rating field. A rider
+can submit multiple ratings for one ride, inflating or deflating driver score.
+Fix: Reject re-rating with 409 if ride.rider_rating is not null; or mint a
+one-time ride-completion token. Effort: 2 h
+Risk score: 64 (HIGH × org × likely) — P0
+Regulations: SK-CPPA
+Owner: backend
+
+[19-3] HIGH | SOS endpoint has no rate limit or false-SOS flagging
+File: backend/routes/rides.py:2068,2097
+Finding: POST /rides/{id}/emergency inserts the incident but has no rate
+limit per user/ride and no abuse scoring. A bad actor can flood admin
+dashboards with 100+ false SOS events/min, drowning real emergencies.
+Fix: Limit 1 SOS per ride (or 5/user/day). Flag accounts with ≥3 false-SOS
+in 24h for manual review. Log volume for SRE alerting. Effort: 4 h
+Risk score: 48 (HIGH × org × likely) — P1
+Regulations: SK-CPPA
+Owner: backend
+
+[19-4] HIGH | first_ride_only promo has no PII / payment-method freshness check
+File: backend/routes/promotions.py:131,133
+Finding: Promo only checks ride_count > 0. No velocity limit on PII hash
+(name+address) or payment-method reuse. Fraudster spins up N devices, N
+accounts, stacks N first-ride promos.
+Fix: Fingerprint promo_applications with PII hash; reject second use. Or
+require payment method enrolled ≥ 1 day before first-ride promo. Effort: 3 h
+Risk score: 48 (HIGH × org × likely) — P1
+Regulations: SK-CPPA
+Owner: backend
+
+[19-5] HIGH | Fare-split total_fare not validated against actual ride fare
+File: backend/routes/fare_split.py:77,149
+Finding: Split computed from ride.grand_total with no assertion that it
+equals the ride's actual charged amount. Requester can inflate grand_total,
+participants over-pay, requester pockets the difference.
+Fix: Assert total_fare == ride.total_fare (or grand_total post-fees). Log
+mismatch as fraud signal; fail split creation. Effort: 2 h
+Risk score: 48 (HIGH × org × likely) — P1
+Regulations: SK-CPPA
+Owner: backend
+
+[19-6] HIGH | Firebase rider audience check is null-tolerant (DV-10 duplicate)
+File: backend/dependencies/__init__.py:151,152
+Finding: `rider_app_id = getattr(settings, "FIREBASE_RIDER_APP_ID", None)`
+and audience validation runs only `if rider_app_id`. Unset env var → no
+validation → driver Firebase token is accepted on rider endpoints.
+Fix: Make FIREBASE_RIDER_APP_ID a required setting (fail startup if missing).
+Always enforce aud == rider_app_id. Effort: 1 h
+Risk score: 64 (HIGH × org × likely) — P1 · duplicate_of: DV-10
+Regulations: SK-CPPA
+Owner: backend
+
+[19-7] MEDIUM | Tip submission is cumulative on retry — double-charge risk
+File: backend/routes/rides.py:1783,1786
+Finding: `new_tip = old_tip + rating_data.tip_amount`. Idempotent retry of
+POST /rides/{id}/rate doubles the tip.
+Fix: Check ride.tip_amount == 0 before applying, or key by ride's `rated_at`
+timestamp + a tip_applied flag. Effort: 2 h
+Risk score: 32 (MEDIUM × org × possible) — P1
+Regulations: SK-CPPA
+Owner: backend
+
+[19-8] MEDIUM | Tip zero-path may reference undefined locals
+File: backend/routes/rides.py:1786
+Finding: Line 1786 updates driver earnings; if tip_amount==0 the `if` at
+1783 is false but the update outside it may reference new_tip which was
+defined inside the conditional. Dead-path code smell — also a safety gap
+signaling missing init.
+Fix: Move the line inside the `if` or init new_tip = ride.tip_amount before
+the conditional. Effort: 1 h
+Risk score: 16 (MEDIUM × org × possible) — P2
+Regulations: —
+Owner: backend
+
+[19-9] MEDIUM | Failed promo-validate attempts not logged for fraud analysis
+File: backend/routes/promotions.py:69,70
+Finding: validate_promo rejects invalid codes via HTTPException but does
+not persist rejection attempts with user_id/reason. Brute-force promo
+attacks are invisible to SRE.
+Fix: Log all validate failures to an audit table (user_id, code, reason, ts).
+Alert on >10 failures/user/hour. Effort: 2 h
+Risk score: 32 (MEDIUM × org × possible) — P2
+Regulations: SK-CPPA
+Owner: backend
+
+================================================================================
+FINDINGS YAML — D19
+================================================================================
+
+===FINDINGS-YAML===
+- id: "19-1"
+  severity: CRITICAL
+  dimension: "19"
+  evidence:
+    file: backend/routes/rides.py
+    lines: [1773, 1793]
+    snippet: "writes rider_rating (1773); reads driver_rating for avg (1793) — field-name mismatch"
+    test_file: null
+    test_lines: null
+  root_cause: "Rating write uses rider_rating field; aggregate read uses driver_rating. Fields diverge — avg never updates."
+  impact: "Drivers effectively unrated. Dispatch and fraud signals (RT-3) degraded; rider manipulation undetected."
+  fix: "Unify on driver_rating (the rating the driver received); update line 1773."
+  effort_hours: 1
+  regression_test: "POST /rides/{id}/rate; verify driver's average_rating changes on next GET /drivers/{id}."
+  sprint: P0
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: certain
+  risk_score: 64
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "19-2"
+  severity: HIGH
+  dimension: "19"
+  evidence:
+    file: backend/routes/rides.py
+    lines: [1763]
+    snippet: "rate_driver endpoint — no existing-rating check, no idempotency token"
+    test_file: null
+    test_lines: null
+  root_cause: "Rate endpoint unconditionally overwrites. No check for prior rating on the ride."
+  impact: "Rider can submit multiple ratings per ride; coordinated rating attacks possible."
+  fix: "Reject with 409 if ride.rider_rating is not null; or issue one-time rating token on ride completion."
+  effort_hours: 2
+  regression_test: "Submit rating twice to same ride; verify second returns 409."
+  sprint: P0
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 64
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "19-3"
+  severity: HIGH
+  dimension: "19"
+  evidence:
+    file: backend/routes/rides.py
+    lines: [2068, 2097]
+    snippet: "SOS emergency endpoint — no per-user/ride rate limit or false-SOS flag"
+    test_file: null
+    test_lines: null
+  root_cause: "POST /rides/{id}/emergency inserts the event with no limit and no abuse scoring."
+  impact: "Bad actor floods admin dashboard with false SOS; real emergencies diluted; E911 responder capacity drained."
+  fix: "1 SOS per ride cap; 5/user/day soft cap; ≥3 false-SOS/24h flags for review; log volume for SRE alert."
+  effort_hours: 4
+  regression_test: "Trigger SOS twice on same ride; second rejected. Run volume simulation; verify flag fires at 3/24h."
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 48
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "19-4"
+  severity: HIGH
+  dimension: "19"
+  evidence:
+    file: backend/routes/promotions.py
+    lines: [131, 133]
+    snippet: "first_ride_only checks completed-ride count > 0 only; no PII / payment-method freshness"
+    test_file: null
+    test_lines: null
+  root_cause: "Promo validation trusts new-account signal alone; no velocity on PII hash or payment method."
+  impact: "Sybil fraud — N devices, N accounts, N stacked first-ride promos."
+  fix: "Fingerprint promo_applications with PII hash (name+address); reject repeat. Or require payment method ≥1d old."
+  effort_hours: 3
+  regression_test: "Two accounts, same payment method; only one qualifies for first-ride promo."
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 48
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "19-5"
+  severity: HIGH
+  dimension: "19"
+  evidence:
+    file: backend/routes/fare_split.py
+    lines: [77, 149]
+    snippet: "fare_split.total_fare = ride.grand_total — no ≤ actual-charged-amount check"
+    test_file: null
+    test_lines: null
+  root_cause: "Split creation trusts the ride.grand_total without server-side validation against the actual charged amount."
+  impact: "Requester inflates grand_total, participants over-pay, requester pockets the spread."
+  fix: "Assert total_fare == ride.total_fare (or grand_total post-fees). Log mismatch; fail creation."
+  effort_hours: 2
+  regression_test: "Ride total $10; split w/ total_fare=$15 rejected or auto-clamped to $10."
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 48
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "19-6"
+  severity: HIGH
+  dimension: "19"
+  evidence:
+    file: backend/dependencies/__init__.py
+    lines: [151, 152]
+    snippet: "rider_app_id = getattr(settings, 'FIREBASE_RIDER_APP_ID', None); if rider_app_id: ..."
+    test_file: null
+    test_lines: null
+  root_cause: "Audience validation runs only when the env var is set; unset var silently disables cross-audience protection."
+  impact: "Driver-issued Firebase token accepted on rider endpoints → cross-app account takeover."
+  fix: "Make FIREBASE_RIDER_APP_ID required at startup; always enforce aud == rider_app_id."
+  effort_hours: 1
+  regression_test: "Unset the var → startup fails. Set → driver token rejected on rider /rides/create."
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["SK-CPPA", "PIPEDA"]
+  confidence: high
+  duplicate_of: "DV-10"
+  blast_radius: org
+  likelihood: likely
+  risk_score: 64
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "19-7"
+  severity: MEDIUM
+  dimension: "19"
+  evidence:
+    file: backend/routes/rides.py
+    lines: [1783, 1786]
+    snippet: "new_tip = old_tip + rating_data.tip_amount — cumulative on retry"
+    test_file: null
+    test_lines: null
+  root_cause: "Tip addition is not idempotent. Retry / app crash between POST and response doubles the charge."
+  impact: "Accidental or deliberate double-tip drains rider wallet; small but repeatable."
+  fix: "Check ride.tip_amount == 0 before applying; or use rated_at timestamp + tip_applied flag."
+  effort_hours: 2
+  regression_test: "Rate + tip twice; verify ride.tip_amount unchanged on second submit."
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "19-8"
+  severity: MEDIUM
+  dimension: "19"
+  evidence:
+    file: backend/routes/rides.py
+    lines: [1786]
+    snippet: "driver earnings update may reference new_tip defined only inside the tip>0 branch"
+    test_file: null
+    test_lines: null
+  root_cause: "Zero-tip path may reference a local defined inside a conditional. Safety gap even if currently unreachable."
+  impact: "Potential NameError in future refactor; signals missing init / defensive pattern."
+  fix: "Move update into the if-block, or init new_tip = ride.tip_amount before the conditional."
+  effort_hours: 1
+  regression_test: "Rate with tip_amount=0; verify no crash and ride.tip_amount unchanged."
+  sprint: P2
+  owners: ["backend"]
+  regulations: []
+  confidence: medium
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "19-9"
+  severity: MEDIUM
+  dimension: "19"
+  evidence:
+    file: backend/routes/promotions.py
+    lines: [69, 70]
+    snippet: "validate_promo rejects via HTTPException but does not log failed attempts"
+    test_file: null
+    test_lines: null
+  root_cause: "Failed promo validation attempts are not persisted; no fraud-analyst queue."
+  impact: "Brute-force promo code attempts invisible to SRE; coordinated attacks detected late."
+  fix: "Log failures (user_id, code, reason, ts) to audit table; alert on >10/user/hour."
+  effort_hours: 2
+  regression_test: "Spam /promo/validate with bad codes; audit log rows present; alert triggers at threshold."
+  sprint: P2
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: medium
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+===END-FINDINGS-YAML===
+
+===AUDIT-COMPLETE=== dim=19 module=rider-app findings=9 actionable=9 critical=1 high=5 medium=3
+
+================================================================================
+END OF D19 — rider-app Phase E
+Next: D20 Financial Reconciliation + D21 STRIDE (next pair)
 ================================================================================

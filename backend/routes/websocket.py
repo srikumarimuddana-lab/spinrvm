@@ -48,18 +48,31 @@ async def _handle_driver_ws_offline(connection_key: str | None, user: dict | Non
     socket"; on reconnect the driver must tap Go Online again, matching
     standard rideshare behavior.
     """
+    logger.info(
+        f"[GO-ONLINE] _handle_driver_ws_offline ENTER connection_key={connection_key} "
+        f"user_id={(user or {}).get('id')}"
+    )
     if not connection_key or not connection_key.startswith("driver_") or not user:
+        logger.info(f"[GO-ONLINE] _handle_driver_ws_offline SKIP (bad args) connection_key={connection_key}")
         return
     # If a newer WS has already reconnected under the same key, the driver is
     # actually still present — don't flip them offline just because this older
     # socket's disconnect handler fired late.
     if connection_key in manager.active_connections:
+        logger.info(f"[GO-ONLINE] _handle_driver_ws_offline SKIP (newer WS present) connection_key={connection_key}")
         return
     try:
         driver_profile_off = await db.find_one("drivers", {"user_id": user["id"]})
         if not driver_profile_off:
+            logger.info(f"[GO-ONLINE] _handle_driver_ws_offline SKIP (no driver row) user_id={user['id']}")
             return
         driver_id = driver_profile_off["id"]
+        logger.info(
+            f"[GO-ONLINE] _handle_driver_ws_offline FLIPPING driver_id={driver_id} "
+            f"pre_is_online={driver_profile_off.get('is_online')} "
+            f"pre_is_available={driver_profile_off.get('is_available')} "
+            f"last_status_changed_at={driver_profile_off.get('last_status_changed_at')}"
+        )
         # Only write if we're actually changing state — skip the write for
         # drivers who were already offline (e.g. WS opened but never toggled
         # online), to avoid unnecessary DB churn and updated_at bumps.
@@ -573,14 +586,22 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             else:
                 logger.warning(f"Unknown WS message type: {data.get('type')}")
 
-    except WebSocketDisconnect:
+    except WebSocketDisconnect as _wsd:
+        logger.info(
+            f"[GO-ONLINE] WS branch=WebSocketDisconnect connection_key={connection_key} "
+            f"code={getattr(_wsd, 'code', None)} reason={getattr(_wsd, 'reason', None)} "
+            f"current_driver_id={current_driver_id}"
+        )
         if current_driver_id:
             await clear_presence(current_driver_id)
         await _handle_driver_ws_offline(connection_key, user)
         if connection_key:
             manager.disconnect(connection_key)
     except Exception as e:
-        logger.exception(f"WebSocket error: {e}")
+        logger.exception(
+            f"[GO-ONLINE] WS branch=Exception connection_key={connection_key} "
+            f"current_driver_id={current_driver_id} err={e}"
+        )
         if current_driver_id:
             await clear_presence(current_driver_id)
         await _handle_driver_ws_offline(connection_key, user)

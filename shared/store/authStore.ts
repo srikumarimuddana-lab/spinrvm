@@ -6,6 +6,31 @@ import { PhoneAuthProvider, signInWithCredential, signOut, User as FirebaseUser 
 import api, { setInMemoryToken, setRefreshCallback } from '../api/client';
 import { appCache, CACHE_KEYS, CACHE_CONFIG } from '../cache';
 
+// Wipe every auth artifact from local storage. Called whenever initialize
+// lands in a "no valid session" state so stale refresh tokens from a past
+// session can never wedge the next cold start. Previously the Firebase
+// timeout + no-Firebase-user paths left `refresh_token` in SecureStore,
+// which is why users had to uninstall to recover from a failed refresh
+// that returned anything other than 401 (5xx, timeout, "Network request
+// failed"). Safe to call even when nothing is stored — deleteItem is a
+// no-op on missing keys.
+async function clearAuthStorage(): Promise<void> {
+  try {
+    if (Platform.OS === 'web') {
+      sessionStorage.removeItem('auth_token');
+      sessionStorage.removeItem('refresh_token');
+      sessionStorage.removeItem('token_expires_at');
+      return;
+    }
+    await SecureStore.deleteItemAsync('auth_token');
+    await SecureStore.deleteItemAsync('refresh_token');
+    await SecureStore.deleteItemAsync('token_expires_at');
+  } catch (e) {
+    // Best-effort — never let a storage error block the login screen.
+    if (__DEV__) console.log('[Auth] clearAuthStorage failed:', e);
+  }
+}
+
 // Platform-safe secure storage
 // Web uses sessionStorage (clears on tab close) instead of localStorage
 // to reduce token exposure in browser storage.
@@ -340,7 +365,10 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
         const state = get();
         if (!state.isInitialized) {
           if (__DEV__) console.log('[Auth] Firebase init timed out - forcing completion with no session');
-          set({ user: null, driver: null, token: null, isInitialized: true, isLoading: false });
+          // Clear leftover tokens so the next launch isn't wedged on the
+          // same stale state — this is the no-uninstall recovery path.
+          clearAuthStorage();
+          set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false });
         }
       }, 4000);
 
@@ -387,14 +415,20 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
         } else {
           // No Firebase user AND no stored token → truly logged out
           if (__DEV__) console.log('[Auth] No Firebase user, no stored token → logged out');
+          // Belt-and-suspenders: even if earlier paths already cleared
+          // these, make absolutely sure nothing lingers. Fixes the
+          // "uninstall required" class of bugs where a transient (non-401)
+          // refresh failure left refresh_token in SecureStore.
+          await clearAuthStorage();
           await appCache.clearUserCache();
-          set({ user: null, driver: null, token: null, isInitialized: true, isLoading: false });
+          set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false });
         }
       });
     } else {
       // Firebase not available at all
       if (__DEV__) console.log('[Auth] No stored token, no Firebase → logged out');
-      set({ user: null, driver: null, token: null, isInitialized: true, isLoading: false });
+      await clearAuthStorage();
+      set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false });
     }
   },
 

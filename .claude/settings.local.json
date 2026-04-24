@@ -58,7 +58,9 @@
       "Bash(curl *)",
       "Bash(yarn test *)",
       "Bash(npx --no-install jest --testPathPattern=\"crashlytics|store\" --passWithNoTests)",
-      "Bash(npx --no-install tsc --noEmit --project tsconfig.json)"
+      "Bash(npx --no-install tsc --noEmit --project tsconfig.json)",
+      "Bash(ruff check *)",
+      "Bash(yarn jest *)"
     ]
   }
 }

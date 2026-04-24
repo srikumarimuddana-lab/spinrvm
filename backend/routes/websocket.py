@@ -599,10 +599,15 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             f"current_driver_id={current_driver_id} still_current={still_current}"
         )
         if still_current:
+            # Remove ourselves from the manager dict FIRST. _handle_driver_ws_offline's
+            # "newer WS present" check looks at whether the key is still populated
+            # after we leave — with manager.disconnect happening after, the check
+            # was always tripping on the current socket and the offline flip never
+            # ran on a clean disconnect.
+            manager.disconnect(connection_key)
             if current_driver_id:
                 await clear_presence(current_driver_id)
             await _handle_driver_ws_offline(connection_key, user)
-            manager.disconnect(connection_key)
     except Exception as e:
         still_current = bool(
             connection_key and manager.active_connections.get(connection_key) is websocket
@@ -612,10 +617,10 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             f"current_driver_id={current_driver_id} still_current={still_current} err={e}"
         )
         if still_current:
+            manager.disconnect(connection_key)
             if current_driver_id:
                 await clear_presence(current_driver_id)
             await _handle_driver_ws_offline(connection_key, user)
-            manager.disconnect(connection_key)
         try:
             await websocket.close()
         except Exception:  # noqa: S110

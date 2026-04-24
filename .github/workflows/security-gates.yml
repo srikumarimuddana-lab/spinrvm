@@ -72,8 +72,13 @@ jobs:
           fi
       - name: Lint
         working-directory: ${{ matrix.module }}
+        # Respects the repo's own lint script (e.g. admin-dashboard intentionally
+        # allows --max-warnings 600). Security gates are baselining — module
+        # owners tune strictness in their own package.json.
         run: |
-          yarn lint --max-warnings 0 || npm run lint -- --max-warnings 0 || true
+          if [ -f yarn.lock ]; then yarn lint || true
+          else npm run lint || true
+          fi
 
   # G3 — Semgrep with Spinr-specific ruleset + public registry rules
   semgrep:

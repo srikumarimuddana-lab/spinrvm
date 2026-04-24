@@ -339,3 +339,329 @@ jobs:
               await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body: out });
             }
 
+  expand-sections:
+    name: Expand conditional template sections
+    # Skip when the sender is the github-actions bot — prevents infinite
+    # loop when this job itself edits the PR body.
+    if: github.event.pull_request.draft == false && github.event.sender.login != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Append Tier 5–7 subsections when diff warrants
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Appends per-area subsection templates to the PR body based on
+            // which files changed. Each section carries an idempotency
+            // marker so this step never double-appends.
+
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+
+            // ---- Detect diff shape --------------------------------------
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number: pr.number, per_page: 100,
+            });
+            const paths = files.map(f => f.filename);
+            const touched = (re) => paths.some(p => re.test(p));
+
+            const MONEY_RE = /^backend\/(services\/(fare_|corporate_)|routes\/(payments|wallet|fares|tips|payouts|corporate)|utils\/(surge_engine|payment_retry))/;
+            const MIGRATION_RE = /^backend\/migrations\//;
+            const UI_RE = /^(rider-app|driver-app|admin-dashboard)\/.*\.(tsx|jsx|ts|js)$/;
+            const AUTH_RE = /^backend\/(routes\/auth|routes\/admin\/auth|utils\/crypto|utils\/rate_limiter)/;
+            const LIFESPAN_RE = /^backend\/core\/lifespan\.py$/;
+            const RLS_RE = /^backend\/migrations\/.*(rls|policy).*\.sql$/i;
+            const SAFETY_RE = /^backend\/(routes\/(safety|sos)|services\/insurance_|utils\/emergency_)/;
+
+            const hasMoney = touched(MONEY_RE);
+            const hasMigration = touched(MIGRATION_RE);
+            const hasUI = touched(UI_RE);
+            const hasAuth = touched(AUTH_RE);
+            const hasBgJob = touched(LIFESPAN_RE);
+            const hasRLS = touched(RLS_RE);
+            const hasSafety = touched(SAFETY_RE);
+
+            // ---- Detect type/risk from body ----------------------------
+            const body = pr.body || '';
+            const typeLine = body.match(/\*\*Type\*\*[^\n]*/i)?.[0] || '';
+            const typeMatch = typeLine.match(/:\s*`?([a-z]+)`?/i);
+            const type = typeMatch ? typeMatch[1].toLowerCase() : null;
+            const riskLine = body.match(/\*\*Risk\*\*[^\n]*/i)?.[0] || '';
+            const riskMatch = riskLine.match(/:\s*`?(low|medium|high)`?/i);
+            const risk = riskMatch ? riskMatch[1].toLowerCase() : null;
+            const isTrivial = type === 'trivial';
+            const isBugFix = type === 'fix';
+            const isHighRisk = risk === 'high';
+
+            if (isTrivial) {
+              core.info('type=trivial — skipping section expansion.');
+              return;
+            }
+
+            // ---- Section templates (each with idempotency marker) ------
+            const sections = [];
+            const add = (marker, heading, bullets) => {
+              if (body.includes(marker)) return; // already appended
+              sections.push([
+                marker,
+                '## ' + heading,
+                '',
+                ...bullets,
+              ].join('\n'));
+            };
+
+            if (hasMigration) {
+              add('<!-- spinr-expanded:migration -->',
+                'Tier 5 · Migration details',
+                [
+                  '- **Migration file**: `backend/migrations/NN_*.sql`',
+                  '- **Next sequence number verified**: `[ ]`',
+                  '- **Reversible on paper**: describe rollback (drop column / revert default / etc.)',
+                  '- **Forward-compatible with in-flight traffic**: `[ ]` — old backend can still read/write against new schema',
+                  '- **Indexes added for new query patterns**: `[ ]` or N/A',
+                  '- **RLS policies ship in the same migration for any new user-data table**: `[ ]` or N/A',
+                  '- **Run-time estimate on prod data**: < 30 s (flag if longer and attach plan)',
+                ]);
+            }
+
+            if (hasMoney) {
+              add('<!-- spinr-expanded:money -->',
+                'Tier 5 · Money-touching details',
+                [
+                  '- **Decimal-only arithmetic** — no floats touch fare/wallet/surge math: `[ ]`',
+                  '- **Stripe idempotency**: `claim_stripe_event` called before processing webhook (N/A if not webhook): `[ ]`',
+                  '- **Surge cap 2.5× respected** (or manual override with documented justification): `[ ]`',
+                  '- **Corporate billing priority preserved** (rider wallet → card → allowance → master fallback): `[ ]`',
+                  '- **Receipt line-items remain transparent** — no hidden "service fee": `[ ]`',
+                  '- **PST/GST line items correct** (if receipt-facing): `[ ]` or N/A',
+                  '- **Before/after fare on a sample trip** (attach): ',
+                ]);
+            }
+
+            if (hasUI) {
+              add('<!-- spinr-expanded:ui -->',
+                'Tier 5 · UI change details',
+                [
+                  '- **Screenshots / screen recording attached** (iOS + Android if RN): `[ ]`',
+                  '- **Accessibility** — labels, contrast, screen reader: `[ ]` or N/A',
+                  '- **Dark mode verified** (if theme-aware): `[ ]` or N/A',
+                  '- **i18n / localization strings added** (if user-visible copy): `[ ]` or N/A',
+                  '- **Tested on smallest supported device width**: `[ ]`',
+                ]);
+            }
+
+            if (hasAuth) {
+              add('<!-- spinr-expanded:auth -->',
+                'Tier 5 · Auth / RLS details',
+                [
+                  '- **JWT claims unchanged** (or downstream consumers listed): `[ ]`',
+                  '- **Rider/driver role re-read from DB on every request** — never trusted from JWT: `[ ]`',
+                  '- **OTP policy preserved** (SHA-256 at rest, 5/hr → 24h lockout, dev bypass gated by `ENV`): `[ ]` or N/A',
+                  '- **Rate limits added/updated** for new auth endpoint: `[ ]` or N/A',
+                  '- **Both allowed and denied paths covered by tests**: `[ ]`',
+                ]);
+            }
+
+            if (hasBgJob) {
+              add('<!-- spinr-expanded:background-job -->',
+                'Tier 5 · Background-loop details',
+                [
+                  '- **Replay-safety mechanism** (claim flag / idempotency key / atomic DB claim / Redis leader lock) — pick one and name it: ',
+                  '- **Loop interval**: `N s` — justify if < 30 s',
+                  '- **Shutdown-safe** — in-flight work either finishes or is resumable next tick: `[ ]`',
+                  '- **Metric emitted per tick** (`spinr.<domain>.<metric>`): ',
+                  '- **Failure mode** — what happens if the tick throws? (Sentry only? retry next tick? backoff?)',
+                ]);
+            }
+
+            if (hasRLS) {
+              add('<!-- spinr-expanded:rls -->',
+                'Tier 5 · RLS policy details',
+                [
+                  '- **Policies enumerate SELECT / INSERT / UPDATE / DELETE explicitly** — never `FOR ALL` on user-writable tables: `[ ]`',
+                  '- **Both allowed and denied paths tested against anon key**: `[ ]`',
+                  '- **Service role bypass still intentional and documented**: `[ ]`',
+                ]);
+            }
+
+            if (hasSafety) {
+              add('<!-- spinr-expanded:safety -->',
+                'Tier 5 · Safety details',
+                [
+                  '- **Insurance period derivation correct** (derive from ride state, not UI): `[ ]`',
+                  '- **`driver_insurance_periods` rows append-only** — no update/delete: `[ ]`',
+                  '- **SOS never auto-dials 911** — only offers one-tap: `[ ]` or N/A',
+                  '- **Emergency-contact fan-out tested end-to-end**: `[ ]` or N/A',
+                ]);
+            }
+
+            if (isBugFix) {
+              add('<!-- spinr-expanded:bug-fix -->',
+                'Tier 6 · Bug-fix notes',
+                [
+                  '- **Root cause (one paragraph)**: ',
+                  '- **How it was introduced** (commit/PR link or "unknown — pre-dates history"): ',
+                  '- **Why it was not caught earlier** (missing test / missing alert / dormant path): ',
+                  '- **Regression test added that fails without this fix**: `[ ]` or explain',
+                  '- **Backport needed?**: `none` | `staging` | `hotfix-to-main`',
+                ]);
+            }
+
+            if (isHighRisk) {
+              add('<!-- spinr-expanded:risk-high -->',
+                'Tier 7 · High-risk stop condition & unmerge trigger',
+                [
+                  '- **Stop condition** — what signal (metric, alert, log pattern) tells us to roll back and within what window: ',
+                  '- **Unmerge trigger** — who decides, and how fast: ',
+                  '- **Rollback command verified** (not just written down): `[ ]`',
+                  '- **On-call informed before merge**: `[ ]`',
+                ]);
+            }
+
+            if (sections.length === 0) {
+              core.info('No new sections to append.');
+              return;
+            }
+
+            const appended = '\n\n' + sections.join('\n\n') + '\n';
+            const newBody = body.trimEnd() + appended;
+
+            await github.rest.pulls.update({
+              owner, repo, pull_number: pr.number, body: newBody,
+            });
+            core.info('Appended ' + sections.length + ' section(s) to PR body.');
+
+  auto-summary:
+    name: Auto-summary comment
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Post/update PR auto-summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Posts a single comment that summarises:
+            //   - declared type/risk/audience
+            //   - surfaces touched (inferred from diff)
+            //   - compliance flags that look warranted vs ticked
+            //   - size bucket
+            // Upserted via marker; comment body is advisory only.
+
+            const MARKER = '<!-- spinr-auto-summary -->';
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+            const body = pr.body || '';
+
+            // ---- Parse declared fields ---------------------------------
+            const findLine = (label) => {
+              const m = body.match(new RegExp('\\*\\*' + label + '\\*\\*[^\\n]*', 'i'));
+              return m ? m[0] : '';
+            };
+            const pickEnum = (line, re) => (line.match(re) || [])[1] || null;
+
+            const type = pickEnum(findLine('Type'), /:\s*`?([a-z]+)`?/i);
+            const risk = pickEnum(findLine('Risk'), /:\s*`?(low|medium|high)`?/i);
+            const audience = pickEnum(findLine('User-visible change'), /:\s*`?(none|riders|drivers|admins|corporate)`?/i);
+            const blast = pickEnum(findLine('Blast radius'), /:\s*`?(isolated|single-surface|multi-surface|cross-cutting)`?/i);
+
+            // Compliance tick detection (same pattern used in required-fields)
+            const ticked = (label) => {
+              const line = body.match(new RegExp('\\[\\s*x\\s*\\]\\s*\\*\\*' + label, 'i'));
+              return !!line;
+            };
+            const declared = {
+              money: ticked('Money-touching'),
+              pipeda: ticked('PIPEDA-relevant'),
+              sk: ticked('SK Transportation Act'),
+              authrls: ticked('Auth / RLS'),
+              safety: ticked('Safety'),
+              sdk: ticked('Third-party SDK added'),
+              sharedBreak: ticked('Breaking change to'),
+            };
+
+            // ---- Diff-derived facts ------------------------------------
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number: pr.number, per_page: 100,
+            });
+            const paths = files.map(f => f.filename);
+            const touched = (re) => paths.some(p => re.test(p));
+
+            const facts = {
+              money: touched(/^backend\/(services\/(fare_|corporate_)|routes\/(payments|wallet|fares|tips|payouts|corporate)|utils\/(surge_engine|payment_retry))/),
+              migration: touched(/^backend\/migrations\//),
+              authrls: touched(/^backend\/(routes\/auth|routes\/admin\/auth|utils\/crypto|utils\/rate_limiter|migrations\/.*(rls|policy))/i),
+              safety: touched(/^backend\/(routes\/(safety|sos)|services\/insurance_|utils\/emergency_)/),
+              shared: touched(/^shared\//),
+              infra: touched(/^(\.github\/workflows|scripts|Dockerfile|docker-compose|railway|render|vercel)/),
+            };
+
+            // Mismatches: diff says X but declaration didn't tick the box
+            const mismatches = [];
+            if (facts.money && !declared.money) mismatches.push('Diff touches money paths — tick **Money-touching**.');
+            if (facts.authrls && !declared.authrls) mismatches.push('Diff touches auth/RLS paths — tick **Auth / RLS**.');
+            if (facts.safety && !declared.safety) mismatches.push('Diff touches safety paths — tick **Safety**.');
+
+            // Surface breakdown
+            const surfaces = {
+              backend: paths.filter(p => p.startsWith('backend/')).length,
+              rider: paths.filter(p => p.startsWith('rider-app/')).length,
+              driver: paths.filter(p => p.startsWith('driver-app/')).length,
+              admin: paths.filter(p => p.startsWith('admin-dashboard/')).length,
+              shared: paths.filter(p => p.startsWith('shared/')).length,
+              migrations: paths.filter(p => p.startsWith('backend/migrations/')).length,
+              infra: paths.filter(p => /^(\.github\/workflows|scripts|Dockerfile|docker-compose|railway|render|vercel)/.test(p)).length,
+            };
+            const surfaceLine = Object.entries(surfaces)
+              .filter(([, n]) => n > 0)
+              .map(([k, n]) => '`' + k + '` (' + n + ')')
+              .join(' · ') || '_none detected_';
+
+            const total = pr.additions + pr.deletions;
+            const sizeBucket =
+              total < 100 ? 'small' :
+              total < 500 ? 'medium' :
+              total < 1500 ? 'large' : 'extra-large';
+
+            // ---- Build comment -----------------------------------------
+            const lines = [
+              MARKER,
+              '### :mag: PR auto-summary',
+              '',
+              '| Field | Declared | Notes |',
+              '|---|---|---|',
+              '| Type | ' + (type ? '`' + type + '`' : '_missing_') + ' | |',
+              '| Risk | ' + (risk ? '`' + risk + '`' : '_missing_') + ' | ' + (risk === 'high' ? ':warning: Tier 7 stop condition required' : '') + ' |',
+              '| Audience | ' + (audience ? '`' + audience + '`' : '_missing_') + ' | |',
+              '| Blast radius | ' + (blast ? '`' + blast + '`' : '_missing_') + ' | |',
+              '| Size | `' + sizeBucket + '` | ' + pr.changed_files + ' files · ' + total + ' lines |',
+              '',
+              '**Surfaces touched (from diff):** ' + surfaceLine,
+              '',
+            ];
+
+            if (mismatches.length) {
+              lines.push('**:warning: Declaration vs diff — double-check:**');
+              lines.push('');
+              mismatches.forEach(m => lines.push('- ' + m));
+              lines.push('');
+            }
+
+            lines.push('_Advisory — refreshed on every PR edit. Fields are parsed from the PR body; if something looks wrong, check the template._');
+            const out = lines.join('\n');
+
+            // ---- Upsert -------------------------------------------------
+            const comments = await github.rest.issues.listComments({
+              owner, repo, issue_number: pr.number, per_page: 100,
+            });
+            const existing = comments.data.find(c => c.body && c.body.includes(MARKER));
+            if (existing) {
+              if (existing.body === out) {
+                core.info('Auto-summary unchanged.');
+                return;
+              }
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: out });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body: out });
+            }
+

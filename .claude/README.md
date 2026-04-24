@@ -2,6 +2,20 @@
 
 This folder configures how Claude Code works with the Spinr monorepo. Everything here is checked in **except** `settings.local.json` (machine-local, gitignored) and anything with secrets.
 
+PR hygiene is owned jointly by this folder and `.github/`:
+
+```
+.github/
+├── pull_request_template.md         # Tier 1–4 template; Tier 5–7 expanded by workflow
+├── labeler.yml                      # surface:* / area:* / risk:* path-based labels
+└── workflows/
+    ├── pr-checks.yml                # auto-label, size-advisory, required-fields,
+    │                                # merge-conflict-detect, expand-sections, auto-summary
+    └── claude-review.yml            # spinr-* agent review with Impact cross-check
+```
+
+The `/pr` command auto-fills the template from the diff; the `pr-checks` workflow then validates, expands conditional sections, and posts an advisory summary; `claude-review.yml` runs the deep agent audit on top.
+
 ## Layout
 
 ```
@@ -87,7 +101,22 @@ All hooks exit 0. None block Claude's tool calls — they advise and auto-format
 | Non-trivial design decision | `/adr` |
 | Generic pre-commit scan | `/review` (existing) |
 | Broad security sweep | `spinr-security-auditor` via Agent tool |
-| PR opened on GitHub | `.github/workflows/claude-review.yml` auto-triggers |
+| Opening a PR | `/pr` — fills the tiered template from the diff |
+| PR opened on GitHub | `.github/workflows/pr-checks.yml` validates + expands; `claude-review.yml` runs the agent audit |
+
+## PR pipeline (what fires when a PR opens)
+
+| Job (in `pr-checks.yml`) | Effect | Blocks merge? |
+|---|---|---|
+| `auto-label` | Applies `surface:*` / `area:*` / `risk:*` labels from changed paths | no |
+| `size-advisory` | Posts a single comment if the PR exceeds 15 files or 500 lines; cleans up if it shrinks | no |
+| `required-fields` | Verifies Tier 1 (always) and Tier 2/4 (when `Type ≠ trivial`) are filled — no `<placeholders>` | **yes** |
+| `merge-conflict-detect` | If `git log --merges base..head` is non-empty, applies `debug:merge-conflict` and prompts for a Tier 7 note | no |
+| `expand-sections` | Appends Tier 5–7 subsection templates (migration / money / UI / auth / bg-loop / RLS / safety / bug-fix / high-risk) based on what the diff touches; idempotent | no |
+| `auto-summary` | Posts/updates a comment summarising declared type/risk/audience and flagging declaration-vs-diff mismatches | no |
+| `claude-review.yml` | Runs `spinr-security-auditor` + (conditionally) `spinr-money-auditor` and `spinr-migration-reviewer`, including each agent's IMPACT MISMATCHES cross-check against the PR body | no |
+
+`Type: trivial` (formatting / typo / comment / lockfile-only) skips Tier 2–4 enforcement and the section expander. The `scope contract` checkbox is the author's attestation that the diff matches the declared type — abusing `trivial` is a review-time finding.
 
 ## Permissions model
 

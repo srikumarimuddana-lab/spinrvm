@@ -35,8 +35,9 @@
 | 20 | Financial reconciliation | Partial | Payout display must match backend; T4A download wiring |
 | 21 | Threat model / STRIDE | Required | Driver-specific: impersonation, cloned app, SIM-swap, rating manipulation |
 | 22 | Third-party risk | Partial | Expo SDK, Google Maps, Firebase, Stripe deps; SBOM for mobile |
+| 23 | Mobile binary / release artifact | Required | Signed APK/IPA, MobSF, PrivacyInfo.xcprivacy, TLS pinning, App Check, SBOM |
 
-**Total applicable dimensions: 22** (all dimensions apply)
+**Total applicable dimensions: 23** (all dimensions apply)
 
 **Phase E kickoff file** (D17–D22): `reports/audits/driver-app-phase-e-kickoff.md` — create before v5 re-audit.
 

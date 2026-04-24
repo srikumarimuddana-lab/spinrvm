@@ -10,7 +10,7 @@ Use this guide every time you audit a module. Following these steps consistently
 2. Read `audit-framework/ground-rules.md` — know what not to flag
 3. Open the target module file: `audit-framework/modules/[module].md`
 4. Read `audit-framework/regulatory-matrix.md` — know which regulation IDs apply per module
-5. Decide which dimensions to run (full audit = all 22; targeted = pick relevant ones)
+5. Decide which dimensions to run (full audit = all 22 for backend/admin, all 23 for mobile; targeted = pick relevant ones)
 
 ---
 
@@ -94,7 +94,7 @@ After completing P0 items and before beta testing:
 |---|---|
 | Full production-readiness audit | 01–22 |
 | Quick security review | 02, 03, 04, 11, 12, 21 |
-| Pre-App Store submission | 05, 14, 15, 16 + check PrivacyInfo.xcprivacy |
+| Pre-App Store submission | 05, 14, 15, 16, 23 |
 | New payment feature | 04, 07, 08, 20 |
 | After major refactor | 01, 07, 09, 10 |
 | Compliance / privacy review | 12, 15, 16, 17, 22 |
@@ -130,7 +130,9 @@ After completing P0 items and before beta testing:
 | E | 20 Financial reconciliation | 3–4 hours |
 | E | 21 Threat model / STRIDE | 4–6 hours |
 | E | 22 Third-party risk | 2–3 hours |
-| — | **Full audit total** | **~55–75 hours** |
+| F | 23 Mobile binary / release artifact (mobile only) | 3–4 hours |
+| — | **Full audit total (mobile)** | **~58–79 hours** |
+| — | **Full audit total (non-mobile)** | **~55–75 hours** |
 
 ---
 

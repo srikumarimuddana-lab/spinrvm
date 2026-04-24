@@ -56,8 +56,9 @@
 | 20 | Financial reconciliation | Required | Rider wallet balance, fare-split debits, corporate wallet display |
 | 21 | Threat model / STRIDE | Required | Rider-specific: impersonation, GPS spoof, SOS abuse, payment bypass |
 | 22 | Third-party risk | Partial | Expo SDK, Google Maps, Firebase, Stripe; corporate SSO if added |
+| 23 | Mobile binary / release artifact | Required | Signed APK/IPA, MobSF, PrivacyInfo.xcprivacy, TLS pinning, App Check, SBOM |
 
-**Total applicable dimensions: 22** (all dimensions apply)
+**Total applicable dimensions: 23** (all dimensions apply)
 
 **Phase E kickoff file** (D17–D22): `reports/audits/rider-app-phase-e-kickoff.md` — create before v2 re-audit.
 

@@ -1844,6 +1844,9 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             "Your driver has accepted the ride and is on the way.",
             data={"type": "driver_accepted", "ride_id": str(ride_id)},
         )
+    await manager.broadcast_ride_status(
+        ride_id, "driver_accepted", rider_id=(ride or {}).get("rider_id")
+    )
 
     return {"success": True}
 
@@ -1935,6 +1938,9 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
             "Your driver has arrived at the pickup location.",
             data={"type": "driver_arrived", "ride_id": str(ride_id)},
         )
+    await manager.broadcast_ride_status(
+        ride_id, "driver_arrived", rider_id=ride.get("rider_id")
+    )
 
     return {"success": True}
 
@@ -1969,6 +1975,9 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
             "Your ride has started. Have a safe trip!",
             data={"type": "ride_started", "ride_id": str(ride_id)},
         )
+    await manager.broadcast_ride_status(
+        ride_id, "in_progress", rider_id=ride.get("rider_id")
+    )
 
     return {"success": True}
 
@@ -1996,6 +2005,9 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
             "Your ride has started. Have a safe trip!",
             data={"type": "ride_started", "ride_id": str(ride_id)},
         )
+    await manager.broadcast_ride_status(
+        ride_id, "in_progress", rider_id=(ride or {}).get("rider_id")
+    )
     return {"success": True}
 
 
@@ -2228,6 +2240,22 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             data={"type": "ride_completed", "ride_id": str(ride_id)},
         )
 
+    total_fare = (completed_ride or {}).get("total_fare", ride.get("total_fare", 0))
+    await manager.broadcast_ride_status(
+        ride_id,
+        "completed",
+        rider_id=(completed_ride or {}).get("rider_id"),
+        total_fare=total_fare,
+    )
+    # Keep the specific ``ride_completed`` event on admin too for dashboards
+    # that switch directly on the event name rather than status.
+    try:
+        await manager.broadcast_to_admins(
+            {"type": "ride_completed", "ride_id": ride_id, "total_fare": total_fare}
+        )
+    except Exception as _exc:  # pragma: no cover - best effort
+        logger.warning(f"complete_ride: admin broadcast failed: {_exc}")
+
     return serialize_doc(completed_ride)
 
 
@@ -2289,6 +2317,20 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
             "Your driver has cancelled the ride.",
             data={"type": "ride_cancelled", "ride_id": str(ride_id)},
         )
+    await manager.broadcast_ride_status(
+        ride_id,
+        "cancelled",
+        rider_id=(ride or {}).get("rider_id"),
+        reason="driver_cancelled",
+    )
+    # Keep the specific ``ride_cancelled`` event on admin for dashboards
+    # that switch on event name.
+    try:
+        await manager.broadcast_to_admins(
+            {"type": "ride_cancelled", "ride_id": ride_id, "reason": "driver_cancelled"}
+        )
+    except Exception as _exc:  # pragma: no cover - best effort
+        logger.warning(f"driver cancel admin broadcast failed: {_exc}")
 
     return {"success": True}
 

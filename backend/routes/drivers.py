@@ -2228,6 +2228,17 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             data={"type": "ride_completed", "ride_id": str(ride_id)},
         )
 
+    try:
+        await manager.broadcast_to_admins(
+            {
+                "type": "ride_completed",
+                "ride_id": ride_id,
+                "total_fare": (completed_ride or {}).get("total_fare", ride.get("total_fare", 0)),
+            }
+        )
+    except Exception as _exc:  # pragma: no cover - best effort
+        logger.warning(f"complete_ride: admin broadcast failed: {_exc}")
+
     return serialize_doc(completed_ride)
 
 
@@ -2289,6 +2300,12 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
             "Your driver has cancelled the ride.",
             data={"type": "ride_cancelled", "ride_id": str(ride_id)},
         )
+    try:
+        await manager.broadcast_to_admins(
+            {"type": "ride_cancelled", "ride_id": ride_id, "reason": "driver_cancelled"}
+        )
+    except Exception as _exc:  # pragma: no cover - best effort
+        logger.warning(f"driver cancel admin broadcast failed: {_exc}")
 
     return {"success": True}
 

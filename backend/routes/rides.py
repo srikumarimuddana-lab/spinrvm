@@ -303,11 +303,10 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             f"user_id={selected_driver.get('user_id')} name={selected_driver.get('name')}"
         )
 
-        # Notify rider via WebSocket
-        await manager.send_personal_message(
-            {"type": "driver_assigned", "ride_id": ride_id, "driver_id": selected_driver["id"]},
-            f"rider_{ride['rider_id']}",
-        )
+        # No rider-facing WS event here — the rider app waits for
+        # ``driver_accepted`` (emitted when the driver actually taps
+        # Accept). Notifying on bare assignment caused premature "driver
+        # found" banners that reverted if the driver timed out.
 
         # Look up the rider so we can include name/rating in the dispatch
         # payload sent to the driver-app. Missing fields are fine — the
@@ -639,6 +638,12 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 },
                 f"rider_{current_ride['rider_id']}",
             )
+            try:
+                await manager.broadcast_to_admins(
+                    {"type": "ride_cancelled", "ride_id": r_id, "reason": "no_drivers_found", "is_auto": True}
+                )
+            except Exception as _exc:  # pragma: no cover - best effort
+                logger.warning(f"ride timeout admin broadcast failed: {_exc}")
             await send_push_notification(
                 current_ride["rider_id"],
                 "Ride Cancelled ❌",
@@ -988,6 +993,28 @@ async def create_ride(
         raise HTTPException(status_code=503, detail="Could not allocate ride code")
 
     fresh_ride = inserted or ride_data
+
+    # Let admin live-monitoring see the request before dispatch starts —
+    # previously the dashboard only observed a ride once a driver accepted,
+    # which made it impossible to watch an unassigned ride sit in queue.
+    try:
+        await manager.broadcast_to_admins(
+            {
+                "type": "ride_requested",
+                "ride_id": ride.id,
+                "rider_id": fresh_ride.get("rider_id"),
+                "pickup_address": fresh_ride.get("pickup_address"),
+                "dropoff_address": fresh_ride.get("dropoff_address"),
+                "pickup_lat": fresh_ride.get("pickup_lat"),
+                "pickup_lng": fresh_ride.get("pickup_lng"),
+                "dropoff_lat": fresh_ride.get("dropoff_lat"),
+                "dropoff_lng": fresh_ride.get("dropoff_lng"),
+                "fare": fresh_ride.get("total_fare"),
+                "status": fresh_ride.get("status"),
+            }
+        )
+    except Exception as _exc:  # pragma: no cover - best effort
+        logger.warning(f"create_ride: admin broadcast failed: {_exc}")
 
     # Match driver — pass the fresh ride through so the dispatch path
     # doesn't re-fetch the row we just inserted.
@@ -1983,6 +2010,13 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
                 f"driver_{driver['user_id']}",
             )
 
+    try:
+        await manager.broadcast_to_admins(
+            {"type": "ride_cancelled", "ride_id": ride_id, "reason": "rider_cancelled"}
+        )
+    except Exception as _exc:  # pragma: no cover - best effort
+        logger.warning(f"rider cancel admin broadcast failed: {_exc}")
+
     return {"success": True, "cancellation_fee": charged_admin + charged_driver}
 
 
@@ -2105,8 +2139,13 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
 
     await db_supabase.insert_one("emergencies", incident)
 
-    # Notify admin dashboard via Websocket
-    await manager.send_personal_message({"type": "emergency_alert", "incident": incident}, "admin_notifications")
+    # Notify admin dashboard via Websocket — broadcast across every
+    # replica's admin connections. The previous ``admin_notifications``
+    # client_id pointed at no real socket, so alerts silently disappeared.
+    try:
+        await manager.broadcast_to_admins({"type": "emergency_alert", "incident": incident})
+    except Exception as _exc:  # pragma: no cover - best effort
+        logger.warning(f"emergency_alert admin broadcast failed: {_exc}")
     logger.critical(f"EMERGENCY ALERT TRIGGERED for ride {ride_id} by user {current_user['id']}")
 
     # GAP FIX: Notify emergency contacts via SMS/push

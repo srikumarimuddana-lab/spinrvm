@@ -1,4 +1,5 @@
 # backend/routes/admin/monitoring.py
+import asyncio
 import os
 import time as _time
 from typing import Any, Dict, List, Optional
@@ -64,34 +65,39 @@ async def get_monitoring_drivers(current_admin: dict = Depends(get_admin_user)) 
         return []
 
     user_ids = [d["user_id"] for d in drivers if d.get("user_id")]
-    users_res = await run_sync(
-        lambda: (
-            supabase.table("users")
-            .select("id, first_name, last_name, phone, profile_image")
-            .in_("id", user_ids)
-            .execute()
-        )
+    driver_ids = [d["id"] for d in drivers]
+
+    # Fan out the three dependent lookups concurrently. They each only
+    # depend on the drivers result; serialising them previously turned
+    # every /drivers call into 4x the PostgREST round-trip time, which
+    # on a Railway → Supabase flake could balloon past 90s before the
+    # circuit breaker tripped.
+    users_res, rides_res, present_ids = await asyncio.gather(
+        run_sync(
+            lambda: (
+                supabase.table("users")
+                .select("id, first_name, last_name, phone, profile_image")
+                .in_("id", user_ids)
+                .execute()
+            )
+        ),
+        run_sync(
+            lambda: (
+                supabase.table("rides")
+                .select("id, driver_id")
+                .in_("status", ON_RIDE_STATUSES)
+                .in_("driver_id", driver_ids)
+                .execute()
+            )
+        ),
+        # Uber/Lyft-style presence: the DB `is_online` flag is "intent"
+        # (the driver tapped Go Online), presence is "proof" (their app
+        # is still talking to us). A driver is truly online iff both
+        # are true.
+        present_driver_ids(driver_ids),
     )
     users_by_id = {u["id"]: u for u in _rows_from_res(users_res)}
-
-    driver_ids = [d["id"] for d in drivers]
-    rides_res = await run_sync(
-        lambda: (
-            supabase.table("rides")
-            .select("id, driver_id")
-            .in_("status", ON_RIDE_STATUSES)
-            .in_("driver_id", driver_ids)
-            .execute()
-        )
-    )
     active_ride_by_driver = {r["driver_id"]: r["id"] for r in _rows_from_res(rides_res)}
-
-    # Uber/Lyft-style presence: the DB `is_online` flag is "intent" (the
-    # driver tapped Go Online), presence is "proof" (their app is still
-    # talking to us). A driver is truly online iff both are true — this
-    # is what fixes the ghost-online bug where `is_online=true` sticks
-    # after the app crashes.
-    present_ids = await present_driver_ids(driver_ids)
 
     result = []
     for d in drivers:
@@ -156,19 +162,25 @@ async def get_monitoring_rides(current_admin: dict = Depends(get_admin_user)) ->
     rider_ids = list({r["rider_id"] for r in rides if r.get("rider_id")})
     driver_ids = list({r["driver_id"] for r in rides if r.get("driver_id")})
 
-    riders_res = await run_sync(
-        lambda: (
-            supabase.table("users")
-            .select("id, first_name, last_name, phone, profile_image")
-            .in_("id", rider_ids)
-            .execute()
-        )
+    # Riders and the drivers-table lookup are independent — gather them
+    # so the endpoint pays one PostgREST round-trip instead of two.
+    # The driver_users lookup still waits on drivers_map_res because it
+    # needs the user_ids from that row, but everything before it now
+    # runs in parallel.
+    riders_res, drivers_map_res = await asyncio.gather(
+        run_sync(
+            lambda: (
+                supabase.table("users")
+                .select("id, first_name, last_name, phone, profile_image")
+                .in_("id", rider_ids)
+                .execute()
+            )
+        ),
+        run_sync(
+            lambda: supabase.table("drivers").select("id, user_id, lat, lng").in_("id", driver_ids).execute()
+        ),
     )
     riders_by_id = {u["id"]: u for u in _rows_from_res(riders_res)}
-
-    drivers_map_res = await run_sync(
-        lambda: supabase.table("drivers").select("id, user_id, lat, lng").in_("id", driver_ids).execute()
-    )
     drivers_rows = _rows_from_res(drivers_map_res)
     drivers_by_id = {d["id"]: d for d in drivers_rows}
 

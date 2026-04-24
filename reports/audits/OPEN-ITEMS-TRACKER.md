@@ -17,6 +17,27 @@ Re-build this tracker after every audit run or verification pass.
 | **Blast radius** | self = single user · org = every rider/driver · regulator = filing deadline |
 | **Owner** | one of: backend, driver-app, rider-app, shared, admin, infra, data, devops, legal, compliance, product, ext-* |
 | **Regulations** | IDs from `audit-framework/regulatory-matrix.md` |
+| **Risk score** | `severity × blast × likelihood` — see formula below |
+
+### Risk-Score Formula (added 2026-04-24)
+
+```
+risk_score = severity_weight × blast_weight × likelihood_weight
+
+severity_weight:   CRITICAL=16  HIGH=8  MEDIUM=4  LOW=2  RECOMMENDATION=1
+blast_weight:      regulator=4  org=2   self=1
+likelihood_weight: certain=4    likely=3  possible=2  rare=1
+```
+
+**Sprint thresholds:**
+- **≥ 64** → P0 (fix now; e.g. CRITICAL × regulator × likely = 192)
+- **32–63** → P1 (this sprint)
+- **16–31** → P2 (before launch)
+- **8–15** → P3 (hardening)
+- **< 8** → P4 (backlog)
+
+Dollar-at-risk column is optional but recommended when > 3 items compete for the
+same sprint window.
 
 ---
 

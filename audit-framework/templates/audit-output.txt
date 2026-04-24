@@ -106,7 +106,11 @@ FINDINGS YAML
   regulations: ["PIPEDA"]
   confidence: high
   duplicate_of: null
-  blast_radius: self
+  blast_radius: self             # self | org | regulator
+  likelihood: possible           # certain | likely | possible | rare
+  risk_score: 16                 # severity × blast × likelihood (see OPEN-ITEMS-TRACKER formula)
+  dollars_at_risk: null          # optional; fill for items competing for the same sprint
+  reviewed_by: null              # peer reviewer of this finding (independence rule)
 ===END-FINDINGS-YAML===
 
 ===AUDIT-COMPLETE=== module=[module] version=v[N] dimensions=[list] findings=[N] critical=[N] high=[N] medium=[N] low=[N]

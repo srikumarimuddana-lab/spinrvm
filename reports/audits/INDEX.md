@@ -13,12 +13,17 @@ in order; each is a single agent call sized to fit one context window.
 
 | Artifact | Status |
 |---|---|
-| `audit-framework/README.md` | 22 dimensions registered |
-| `audit-framework/ground-rules.md` | Canonical |
+| `audit-framework/README.md` | 23 dimensions registered (D23 mobile-binary added 2026-04-24) |
+| `audit-framework/ground-rules.md` | Canonical (rules 1–8; incident-feedback + independence added 2026-04-24) |
 | `audit-framework/regulatory-matrix.md` | Canadian fed + SK prov + Regina/Saskatoon muni + PCI/SOC2/WCAG + safety + OCAP |
-| `audit-framework/dimensions/01–22-*.md` | All 22 dimensions present |
+| `audit-framework/CHANGELOG.md` | v1.3 · 90-day re-run rule in effect |
+| `audit-framework/dimensions/01–23-*.md` | All 23 dimensions present |
 | `audit-framework/modules/{backend-api,admin-panel,rider-app,driver-app}.md` | All 4 module scopes present |
-| `audit-framework/templates/{audit-output.txt,remediation-group.md,run-audit.md}` | Canonical |
+| `audit-framework/templates/{audit-output.txt,remediation-group.md,run-audit.md}` | Canonical (risk_score + reviewed_by fields added 2026-04-24) |
+| `/SECURITY.md` | Disclosure policy live at repo root |
+| `/docs/ci-security-gates.md` | 10-gate CI matrix spec (implementation by devops) |
+| `/docs/data-classification.md` | C1–C5 per-column map |
+| `/docs/external-testing.md` | Bug-bounty + pen-test + ASV + red-team + tabletop program |
 
 ---
 

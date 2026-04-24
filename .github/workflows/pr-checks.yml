@@ -114,8 +114,19 @@ jobs:
 
             // ---- Helpers -------------------------------------------------
             const checked = (s) => /\[\s*x\s*\]/i.test(s || '');
+            // Strip backtick-quoted spans so `git revert <sha>` doesn't trip the
+            // placeholder check below. Template placeholders (e.g. `<one-line subject>`)
+            // never appear inside code-fenced content.
+            const stripCode = (s) => (s || '').replace(/`[^`]*`/g, '');
+            const hasPlaceholder = (s) => /<[a-z][^>]*>/i.test(stripCode(s));
+            // Match `**<label>...**` allowing extra words after the label
+            // (e.g. `**Dependencies / coordination**`). Captures the rest of
+            // the line plus any continuation sub-bullets that immediately
+            // follow (indented or starting with `  -`), so multi-line values
+            // are still picked up.
             const findLine = (label) => {
-              const m = body.match(new RegExp('\\*\\*' + label + '\\*\\*[^\\n]*', 'i'));
+              const re = new RegExp('\\*\\*' + label + '[^*\\n]*\\*\\*[^\\n]*(?:\\n[ \\t]+[^\\n]+)*', 'i');
+              const m = body.match(re);
               return m ? m[0] : null;
             };
             const findBlock = (startLabel, stopRe) => {
@@ -138,7 +149,7 @@ jobs:
 
             // Tier 1: Summary
             const summaryLine = findLine('Summary');
-            if (!summaryLine || /<[a-z][^>]*>/i.test(summaryLine) || /:\s*$/.test(summaryLine)) {
+            if (!summaryLine || hasPlaceholder(summaryLine) || /:\s*$/.test(summaryLine)) {
               issues.push('Tier 1 `Summary`: fill in the one-line description (no `<...>` placeholder).');
             }
 
@@ -151,7 +162,7 @@ jobs:
 
             // Tier 1: Linked issue
             const linkedLine = findLine('Linked issue');
-            if (!linkedLine || !/(Fixes|Refs|none)\b/i.test(linkedLine) || /<[a-z][^>]*>/i.test(linkedLine.replace(/<n>/i, ''))) {
+            if (!linkedLine || !/(Fixes|Refs|none)\b/i.test(linkedLine) || hasPlaceholder(linkedLine.replace(/<n>/i, ''))) {
               issues.push('Tier 1 `Linked issue`: must start with `Fixes #N`, `Refs #N`, or `none` with reason.');
             }
 
@@ -184,25 +195,25 @@ jobs:
 
               // Tier 2: Rollback plan
               const rollbackLine = findLine('Rollback plan');
-              if (!rollbackLine || /<[a-z][^>]*>/i.test(rollbackLine) || !/(git-revert-safe|revert-plus-data-cleanup|coordinated|not-revertible)/i.test(rollbackLine)) {
+              if (!rollbackLine || hasPlaceholder(rollbackLine) || !/(git-revert-safe|revert-plus-data-cleanup|coordinated|not-revertible)/i.test(rollbackLine)) {
                 issues.push('Tier 2 `Rollback plan`: pick one of `git-revert-safe`/`revert-plus-data-cleanup`/`coordinated`/`not-revertible` and fill the one-line explanation.');
               }
 
               // Tier 2: Dependencies / coordination
               const depsLine = findLine('Dependencies');
-              if (!depsLine || /<[a-z][^>]*>/i.test(depsLine)) {
+              if (!depsLine || hasPlaceholder(depsLine)) {
                 issues.push('Tier 2 `Dependencies / coordination`: write `none` or list PRs/releases/rotations this PR depends on.');
               }
 
               // Tier 2: Assumptions
               const assumptLine = findLine('Assumptions');
-              if (!assumptLine || /<[a-z][^>]*>/i.test(assumptLine)) {
+              if (!assumptLine || hasPlaceholder(assumptLine)) {
                 issues.push('Tier 2 `Assumptions`: write `none` or state what this PR assumes about the rest of the system.');
               }
 
               // Tier 4: Unit tests
               const unitLine = findLine('Unit tests');
-              if (!unitLine || /<[a-z][^>]*>/i.test(unitLine)) {
+              if (!unitLine || hasPlaceholder(unitLine)) {
                 issues.push('Tier 4 `Unit tests`: pick `added`/`updated`/`not-applicable` and give count or reason.');
               }
 

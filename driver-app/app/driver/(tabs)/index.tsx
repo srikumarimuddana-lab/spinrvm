@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { View, Text, StyleSheet, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator, AppState } from 'react-native';
 import CustomAlert from '@shared/components/CustomAlert';
 import MapView, { Marker, Polyline, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
@@ -77,6 +77,7 @@ function DriverDashboard() {
     showDashAlert,
     closeDashAlert,
     wsError,
+    refreshLocation,
   } = useDriverDashboard();
 
   // Route polyline coordinates for active rides
@@ -197,6 +198,35 @@ function DriverDashboard() {
     // transition, not on every GPS tick.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rideState]);
+
+  // When the app comes back to the foreground, arm a one-shot re-center
+  // for the next location update. `initialRegion` above is one-shot, so
+  // without this the map stays pinned to whatever fix was set before the
+  // user backgrounded — e.g. they left home, opened the app at work, and
+  // the map still shows home until the next app restart. Skipped during
+  // active rides so the ride camera framing isn't disrupted.
+  const pendingRecenterRef = useRef(false);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') pendingRecenterRef.current = true;
+    });
+    return () => sub.remove();
+  }, []);
+  useEffect(() => {
+    if (!pendingRecenterRef.current) return;
+    if (!location?.coords || !mapRef.current) return;
+    if (rideState !== 'idle') return;
+    pendingRecenterRef.current = false;
+    mapRef.current.animateToRegion?.(
+      {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        latitudeDelta: 0.04,
+        longitudeDelta: 0.04,
+      },
+      400
+    );
+  }, [location, rideState]);
 
   // Error handling
   useEffect(() => {
@@ -577,6 +607,7 @@ function DriverDashboard() {
         mapRef={mapRef}
         location={location}
         currentRegionRef={currentRegionRef}
+        onRecenter={() => refreshLocation(false)}
       />
 
       {/* Bottom Panels */}

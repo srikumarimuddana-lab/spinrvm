@@ -201,9 +201,13 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             return
 
         token = auth_msg.get("token")
-        # Try Firebase token first
+        # Try Firebase token first. verify_id_token is a synchronous
+        # crypto call (RSA verify + key fetch) that blocks the event
+        # loop for tens of ms under cold-cache — enough to stall every
+        # other socket on this VM during a reconnect storm. Push it
+        # into the default threadpool so only this coroutine waits.
         try:
-            payload = firebase_auth.verify_id_token(token)
+            payload = await asyncio.to_thread(firebase_auth.verify_id_token, token)
             uid = payload.get("uid") or payload.get("user_id")
             user = await db_supabase.get_user_by_id(uid)
             if not user:
@@ -221,9 +225,11 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                     await db_supabase.create_user(new_user)
                     user = new_user
         except Exception:
-            # Fallback to legacy JWT
+            # Fallback to legacy JWT. Same threadpool rationale —
+            # jwt.decode performs HMAC verification which is fast but
+            # still blocking; keep the loop free under load.
             try:
-                payload = verify_jwt_token(token)
+                payload = await asyncio.to_thread(verify_jwt_token, token)
                 # Admin tokens are minted with a `role` claim and have no row
                 # in the `users` table (admin-001 is env-var creds; admin_staff
                 # rows live in a separate table). Without this branch the
@@ -254,7 +260,12 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             await websocket.close()
             return
 
-        # If connecting as driver, ensure user has a driver profile
+        # If connecting as driver, ensure user has a driver profile.
+        # Cache the driver_id on the connection — the location-update
+        # handler used to re-look-this-up on every GPS ping (1 Hz × N
+        # drivers = constant DB load); keeping it here makes subsequent
+        # per-message handlers pure in-memory lookups.
+        driver_profile = None
         if client_type == "driver":
             driver_profile = (lambda _r: _r[0] if _r else None)(
                 await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
@@ -263,6 +274,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 await websocket.send_json({"type": "error", "message": "user_is_not_a_driver"})
                 await websocket.close()
                 return
+            current_driver_id = driver_profile["id"]
         elif client_type == "admin":
             # Admin clients must have admin or super_admin role
             if user.get("role") not in ("admin", "super_admin"):
@@ -285,22 +297,20 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
         # the DB says about is_online — don't assume reconnect == online,
         # because the driver might still be toggled off (e.g. they opened
         # the app but haven't hit Go Online yet). Admins should always see
-        # intent-based status, not socket-presence.
-        if client_type == "driver":
-            driver_profile_for_status = await db.find_one("drivers", {"user_id": user["id"]})
-            if driver_profile_for_status:
-                current_driver_id = driver_profile_for_status["id"]
-                # Uber/Lyft-style presence: socket is alive → driver is present.
-                # Expires after PRESENCE_TTL if the socket dies without a
-                # clean disconnect. Refreshed on every pong and location ping.
-                await mark_present(current_driver_id)
-                await manager.broadcast_to_admins(
-                    {
-                        "type": "driver_status_changed",
-                        "driver_id": current_driver_id,
-                        "is_online": bool(driver_profile_for_status.get("is_online")),
-                    }
-                )
+        # intent-based status, not socket-presence. We reuse the profile
+        # we already fetched above rather than issuing a second lookup.
+        if client_type == "driver" and driver_profile:
+            # Uber/Lyft-style presence: socket is alive → driver is present.
+            # Expires after PRESENCE_TTL if the socket dies without a
+            # clean disconnect. Refreshed on every pong and location ping.
+            await mark_present(current_driver_id)
+            await manager.broadcast_to_admins(
+                {
+                    "type": "driver_status_changed",
+                    "driver_id": current_driver_id,
+                    "is_online": bool(driver_profile.get("is_online")),
+                }
+            )
 
         # GAP FIX: Start heartbeat background task. conn_state is shared with
         # heartbeat_task so it can detect stale connections — every pong the
@@ -350,29 +360,16 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 continue
 
             if data.get("type") in ("driver_location", "location_update"):
-                # Accept both message types for backwards compat
-                driver_id = data.get("driver_id")
+                # Accept both message types for backwards compat.
+                # Ownership is enforced by the cached driver_id from auth —
+                # we deliberately ignore any driver_id the client sent to
+                # prevent a compromised token from spoofing locations for
+                # another driver.
                 lat = data.get("lat")
                 lng = data.get("lng")
+                driver_id = current_driver_id if client_type == "driver" else None
 
-                # If driver_id not sent, look it up from the authenticated user
-                if not driver_id and client_type == "driver":
-                    dp = (lambda _r: _r[0] if _r else None)(
-                        await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
-                    )
-                    if dp:
-                        driver_id = dp["id"]
-
-                # Verify driver ownership
-                is_valid_driver = False
-                if client_type == "driver" and driver_id:
-                    owned_driver = (lambda _r: _r[0] if _r else None)(
-                        await db_supabase.get_rows("drivers", {"id": driver_id, "user_id": user["id"]}, limit=1)
-                    )
-                    if owned_driver:
-                        is_valid_driver = True
-
-                if driver_id and lat and lng and is_valid_driver:
+                if driver_id and lat and lng:
                     manager.update_driver_location(driver_id, lat, lng)
                     await db_supabase.update_driver_location(driver_id, lat, lng)
                     # Location pings are an even stronger liveness signal
@@ -380,31 +377,38 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                     # foregrounded, not just that TCP is open.
                     await mark_present(driver_id)
 
-                    # ── Persist GPS breadcrumb ──────────────────────
-                    active_ride = (lambda _r: _r[0] if _r else None)(
-                        await db_supabase.get_rows(
-                            "rides",
-                            {
-                                "driver_id": driver_id,
-                                "status": {
-                                    "$in": ["driver_assigned", "driver_accepted", "driver_arrived", "in_progress"]
-                                },
+                    # One query covers breadcrumb tagging AND rider fan-out;
+                    # previously we hit the rides table twice per GPS ping.
+                    # `driver_accepted` is included so breadcrumbs are tagged
+                    # navigating_to_pickup during that brief state, but the
+                    # rider fan-out list stays restricted to assigned/
+                    # arrived/in_progress to match the pre-refactor behaviour.
+                    active_rides = await db_supabase.get_rows(
+                        "rides",
+                        {
+                            "driver_id": driver_id,
+                            "status": {
+                                "$in": [
+                                    "driver_assigned", "driver_accepted",
+                                    "driver_arrived", "in_progress",
+                                ]
                             },
-                            limit=1,
-                        )
+                        },
+                        limit=10,
                     )
+                    active_ride = active_rides[0] if active_rides else None
                     ride_id = active_ride["id"] if active_ride else None
 
-                    # Determine tracking phase
-                    tracking_phase = "online_idle"
-                    if active_ride:
-                        status_map = {
-                            "driver_assigned": "navigating_to_pickup",
-                            "driver_accepted": "navigating_to_pickup",
-                            "driver_arrived": "arrived_at_pickup",
-                            "in_progress": "trip_in_progress",
-                        }
-                        tracking_phase = status_map.get(active_ride.get("status", ""), "online_idle")
+                    status_map = {
+                        "driver_assigned": "navigating_to_pickup",
+                        "driver_accepted": "navigating_to_pickup",
+                        "driver_arrived": "arrived_at_pickup",
+                        "in_progress": "trip_in_progress",
+                    }
+                    tracking_phase = (
+                        status_map.get(active_ride.get("status", ""), "online_idle")
+                        if active_ride else "online_idle"
+                    )
 
                     breadcrumb = {
                         "id": str(uuid.uuid4()),
@@ -421,77 +425,58 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
 
                     await db_supabase.insert_one("driver_location_history", breadcrumb)
 
-                    # Forward to rider in real-time
-                    rides = await db_supabase.get_rows(
-                        "rides",
-                        {
-                            "driver_id": driver_id,
-                            "status": {"$in": ["driver_assigned", "driver_arrived", "in_progress"]},
-                        },
-                        limit=10,
-                    )
-                    for ride in rides:
+                    location_update = {
+                        "type": "driver_location_update",
+                        "driver_id": driver_id,
+                        "lat": lat,
+                        "lng": lng,
+                        "speed": data.get("speed"),
+                        "heading": data.get("heading"),
+                    }
+
+                    # Forward to riders of in-flight rides only (exclude
+                    # driver_accepted: rider hasn't been told yet).
+                    for ride in active_rides:
+                        if ride.get("status") == "driver_accepted":
+                            continue
                         await manager.send_personal_message(
-                            {
-                                "type": "driver_location_update",
-                                "driver_id": driver_id,
-                                "lat": lat,
-                                "lng": lng,
-                                "speed": data.get("speed"),
-                                "heading": data.get("heading"),
-                            },
+                            location_update,
                             f"rider_{ride['rider_id']}",
                         )
 
                     # Broadcast live location to all connected admin monitoring clients
-                    await manager.broadcast_to_admins(
-                        {
-                            "type": "driver_location_update",
-                            "driver_id": driver_id,
-                            "lat": lat,
-                            "lng": lng,
-                            "speed": data.get("speed"),
-                            "heading": data.get("heading"),
-                        }
-                    )
+                    await manager.broadcast_to_admins(location_update)
 
             elif data.get("type") == "location_batch":
-                # Batch upload of buffered GPS points (offline recovery)
+                # Batch upload of buffered GPS points (offline recovery).
+                # Same ownership model as single-point updates: always use
+                # the driver_id bound to this authenticated socket; ignore
+                # any client-supplied value.
                 points = data.get("points", [])
-                driver_id = data.get("driver_id")
-                if not driver_id and client_type == "driver":
-                    dp = (lambda _r: _r[0] if _r else None)(
-                        await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
-                    )
-                    if dp:
-                        driver_id = dp["id"]
-                if driver_id and points and client_type == "driver":
-                    owned = (lambda _r: _r[0] if _r else None)(
-                        await db_supabase.get_rows("drivers", {"id": driver_id, "user_id": user["id"]}, limit=1)
-                    )
-                    if owned:
-                        docs = []
-                        for pt in points[:500]:  # cap at 500 points per batch
-                            docs.append(
-                                {
-                                    "id": str(uuid.uuid4()),
-                                    "driver_id": driver_id,
-                                    "ride_id": pt.get("ride_id"),
-                                    "lat": pt.get("lat"),
-                                    "lng": pt.get("lng"),
-                                    "speed": pt.get("speed"),
-                                    "heading": pt.get("heading"),
-                                    "accuracy": pt.get("accuracy"),
-                                    "altitude": pt.get("altitude"),
-                                    "tracking_phase": pt.get("tracking_phase", "online_idle"),
-                                    "timestamp": datetime.fromisoformat(pt["timestamp"])
-                                    if pt.get("timestamp")
-                                    else datetime.now(timezone.utc),
-                                }
-                            )
-                        if docs:
-                            await db_supabase.insert_many("driver_location_history", docs)
-                        await websocket.send_json({"type": "location_batch_ack", "count": len(docs)})
+                driver_id = current_driver_id if client_type == "driver" else None
+                if driver_id and points:
+                    docs = []
+                    for pt in points[:500]:  # cap at 500 points per batch
+                        docs.append(
+                            {
+                                "id": str(uuid.uuid4()),
+                                "driver_id": driver_id,
+                                "ride_id": pt.get("ride_id"),
+                                "lat": pt.get("lat"),
+                                "lng": pt.get("lng"),
+                                "speed": pt.get("speed"),
+                                "heading": pt.get("heading"),
+                                "accuracy": pt.get("accuracy"),
+                                "altitude": pt.get("altitude"),
+                                "tracking_phase": pt.get("tracking_phase", "online_idle"),
+                                "timestamp": datetime.fromisoformat(pt["timestamp"])
+                                if pt.get("timestamp")
+                                else datetime.now(timezone.utc),
+                            }
+                        )
+                    if docs:
+                        await db_supabase.insert_many("driver_location_history", docs)
+                    await websocket.send_json({"type": "location_batch_ack", "count": len(docs)})
 
             elif data.get("type") == "ride_status_update":
                 ride_id = data.get("ride_id")

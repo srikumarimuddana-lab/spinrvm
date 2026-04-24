@@ -585,25 +585,36 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 logger.warning(f"Unknown WS message type: {data.get('type')}")
 
     except WebSocketDisconnect as _wsd:
+        # A newer WS can register under the same connection_key while this
+        # one's disconnect handler is queued. Only run cleanup if THIS
+        # specific socket is still the one the manager has for this key —
+        # otherwise we'd evict the newer socket from active_connections
+        # and clear its presence key, stranding a live connection.
+        still_current = bool(
+            connection_key and manager.active_connections.get(connection_key) is websocket
+        )
         logger.info(
             f"[GO-ONLINE] WS branch=WebSocketDisconnect connection_key={connection_key} "
             f"code={getattr(_wsd, 'code', None)} reason={getattr(_wsd, 'reason', None)} "
-            f"current_driver_id={current_driver_id}"
+            f"current_driver_id={current_driver_id} still_current={still_current}"
         )
-        if current_driver_id:
-            await clear_presence(current_driver_id)
-        await _handle_driver_ws_offline(connection_key, user)
-        if connection_key:
+        if still_current:
+            if current_driver_id:
+                await clear_presence(current_driver_id)
+            await _handle_driver_ws_offline(connection_key, user)
             manager.disconnect(connection_key)
     except Exception as e:
+        still_current = bool(
+            connection_key and manager.active_connections.get(connection_key) is websocket
+        )
         logger.exception(
             f"[GO-ONLINE] WS branch=Exception connection_key={connection_key} "
-            f"current_driver_id={current_driver_id} err={e}"
+            f"current_driver_id={current_driver_id} still_current={still_current} err={e}"
         )
-        if current_driver_id:
-            await clear_presence(current_driver_id)
-        await _handle_driver_ws_offline(connection_key, user)
-        if connection_key:
+        if still_current:
+            if current_driver_id:
+                await clear_presence(current_driver_id)
+            await _handle_driver_ws_offline(connection_key, user)
             manager.disconnect(connection_key)
         try:
             await websocket.close()

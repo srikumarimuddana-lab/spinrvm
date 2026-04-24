@@ -453,5 +453,354 @@ FINDINGS YAML
 
 ================================================================================
 END OF D17 — rider-app Phase E
-Next: D18 DR/BCP (append below when E-2 runs)
+================================================================================
+
+================================================================================
+TASK 18 — DISASTER RECOVERY / BUSINESS CONTINUITY
+================================================================================
+
+[18-1] HIGH | Wallet balance not refreshed on app foreground; stale balance cached
+File: rider-app/store/walletStore.ts:73-81
+Finding: fetchWallet() exists but is never invoked on
+AppState.addEventListener('change', 'active'). Rider backgrounds the app,
+returns with cached balance; a payment attempt may fail with a confusing
+"insufficient funds" while the UI still shows the old higher balance.
+Fix: Add useWalletRefresh hook in rider-app that listens to AppState
+transitions and calls useWalletStore.getState().fetchWallet() on 'active'.
+Wire alongside useRiderSocket in _layout.tsx. Effort: 1.5 h
+Risk score: 16 (HIGH × self × possible)
+Regulations: PIPEDA
+Owner: rider-app · Sprint: P1
+
+[18-2] MEDIUM | Payment idempotency not enforced on app-side retry
+File: rider-app/store/rideStore.ts:477; backend/routes/rides.py:1315-1332
+Finding: POST /rides/{id}/complete from completeRide() does not pass an
+Idempotency-Key header on retry. Backend relies solely on Stripe's
+ride-charge-{ride_id} key (24h dedup). A retry >24h after an aborted first
+attempt (network drop while charge succeeded) could double-charge.
+Fix: Generate idempotencyKey = uuid4() in completeRide() before POST; pass
+as header. Backend stores/checks in payment_idempotency_map table (30d
+retention) before initiating Stripe call. Effort: 3 h
+Risk score: 16 (MEDIUM × org × possible)
+Regulations: PCI-DSS
+Owner: rider-app + backend · Sprint: P1
+
+[18-3] RECOMMENDATION | Redis replica/sentinel not deployed; single-AZ risk
+File: docs/runbooks/redis-down.md:57,99
+Finding: Runbook notes "No Redis replica configured (single-AZ risk)" and
+"Long-term: add Redis Sentinel / Cluster failover". For multi-replica
+backend, Redis pub/sub failure forces scaling to 1 replica to restore
+correctness — losing HA during an outage.
+Fix: Deploy Redis Sentinel or Cluster; update runbook with failover
+procedure; test quarterly. Effort: 8 h
+Risk score: 4 (RECOMMENDATION × org × rare) — mitigated_by:
+docs/runbooks/redis-down.md
+Regulations: SOC2, SK-TNC
+Owner: infra + devops · Sprint: P2
+
+[18-4] PASS | WebSocket reconnect: exponential backoff w/ jitter, cap 30s
+File: rider-app/hooks/useRiderSocket.ts:37,199-208
+Evidence: RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000] with ±500ms
+jitter; re-fetches ride on reconnect. Under 60s cap; no thundering herd.
+
+[18-5] PASS | In-progress ride state persisted via AsyncStorage
+File: rider-app/store/rideStore.ts:9-20,220,479
+Evidence: _persistRide writes {currentRide, currentDriver} to
+@spinr:active_ride on every change; clears on terminal status
+(COMPLETED/CANCELLED/FAILED); hydrateActiveRide restores on cold start.
+
+[18-6] PASS | Offline banner on network loss
+File: shared/components/OfflineBanner.tsx:42-65
+Evidence: NetInfo.addEventListener drives banner; unmount listener on
+component cleanup.
+
+[18-7] PASS | Payment errors are specific (not "Something went wrong")
+File: backend/routes/rides.py:1538-1573
+Evidence: 402 {code: card_declined, decline_code, message}; 502 {code:
+payment_processor_error, message}.
+
+[18-8] PASS | Stripe idempotency key ride-charge-{ride_id} prevents dup charges
+File: backend/utils/stripe_charge.py:33-39,151-187
+Evidence: Idempotency key + atomic payment_status='processing' DB lock.
+
+[18-9] RECOMMENDATION | Supabase PITR tier not verified in code; no drill evidence
+File: docs/runbooks/pitr-restore.md:23,130
+Finding: Runbook assumes Pro tier (7-day PITR window) but no code verifies
+project tier at startup. Silent downgrade to Starter would remove PITR
+capability without alerting. Quarterly DR drill is documented but no
+evidence file exists in reports/tabletop/.
+Fix: Add startup health check to lifespan.py querying Supabase project
+settings; confirm PITR enabled + retention ≥ 7 days. Create quarterly
+drill evidence file: reports/tabletop/YYYY-Q-pitr-drill.md. Effort: 2 h
+Risk score: 4 (RECOMMENDATION × org × rare) — mitigated_by:
+docs/runbooks/pitr-restore.md
+Regulations: SOC2, PIPEDA
+Owner: infra + data · Sprint: P2
+
+[18-10] PASS | Circuit breaker on Supabase: 5 failures / 30s opens circuit
+File: backend/db_supabase.py:31-81
+Evidence: _CircuitBreaker class (closed/open/half-open); prevents thundering
+requests during Supabase outage; logs transitions.
+
+================================================================================
+FINDINGS YAML — D18
+================================================================================
+
+===FINDINGS-YAML===
+- id: "18-1"
+  severity: HIGH
+  dimension: "18"
+  evidence:
+    file: rider-app/store/walletStore.ts
+    lines: [73, 81]
+    snippet: "fetchWallet: async () => { ... } — no AppState foreground listener wiring"
+    test_file: null
+    test_lines: null
+  root_cause: "walletStore has fetchWallet() but no AppState foreground listener to refresh on app resume"
+  impact: "Rider sees stale wallet balance after backgrounding; payment failures confusing due to cached insufficient balance"
+  fix: "Add useWalletRefresh hook listening to AppState 'active'; call fetchWallet(); wire into _layout.tsx"
+  effort_hours: 1.5
+  regression_test: "Background app during active ride, return to foreground, verify fetchWallet fires with new balance"
+  sprint: P1
+  owners: ["rider-app"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: self
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "18-2"
+  severity: MEDIUM
+  dimension: "18"
+  evidence:
+    file: rider-app/store/rideStore.ts
+    lines: [477]
+    snippet: "const response = await api.post(`/rides/${currentRide.id}/complete`); — no Idempotency-Key"
+    test_file: null
+    test_lines: null
+  root_cause: "completeRide() does not pass Idempotency-Key on retry; backend Stripe key has 24h dedup window only"
+  impact: "Retry >24h after network-drop could double-charge if first attempt succeeded but response was lost"
+  fix: "Generate uuid4() idempotencyKey before POST; backend stores/checks in payment_idempotency_map (30d retention)"
+  effort_hours: 3
+  regression_test: "Simulate 500 then retry within and after 24h; verify same charge outcome"
+  sprint: P1
+  owners: ["rider-app", "backend"]
+  regulations: ["PCI-DSS"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "18-3"
+  severity: RECOMMENDATION
+  dimension: "18"
+  evidence:
+    file: docs/runbooks/redis-down.md
+    lines: [57, 99]
+    snippet: "Long-term: add Redis Sentinel / Cluster failover; No Redis replica configured (single-AZ risk)"
+    test_file: null
+    test_lines: null
+  root_cause: "Redis replica/sentinel not deployed; single-AZ outage loses WS pub/sub; ops must scale to 1 replica"
+  impact: "Multi-replica HA loss during Redis outage; ops trade correctness vs availability"
+  fix: "Deploy Sentinel or Cluster; update runbook with failover procedure; test quarterly"
+  effort_hours: 8
+  regression_test: "Kill Redis primary in test; verify automatic failover; verify WS pub/sub resumes"
+  sprint: P2
+  owners: ["infra", "devops"]
+  regulations: ["SOC2", "SK-TNC"]
+  confidence: medium
+  duplicate_of: null
+  blast_radius: org
+  likelihood: rare
+  risk_score: 4
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "18-4"
+  severity: PASS
+  dimension: "18"
+  evidence:
+    file: rider-app/hooks/useRiderSocket.ts
+    lines: [37, 199, 208]
+    snippet: "RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000]; Math.max(500, baseDelay + jitter)"
+    test_file: null
+    test_lines: null
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: null
+  sprint: null
+  owners: null
+  regulations: ["PIPEDA", "SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "18-5"
+  severity: PASS
+  dimension: "18"
+  evidence:
+    file: rider-app/store/rideStore.ts
+    lines: [9, 15, 220]
+    snippet: "ACTIVE_RIDE_KEY='@spinr:active_ride'; terminal-status guard removes key"
+    test_file: null
+    test_lines: null
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: null
+  sprint: null
+  owners: null
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "18-6"
+  severity: PASS
+  dimension: "18"
+  evidence:
+    file: shared/components/OfflineBanner.tsx
+    lines: [42, 59, 65]
+    snippet: "NetInfo.addEventListener(state => updateNetworkStatus(...))"
+    test_file: null
+    test_lines: null
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: null
+  sprint: null
+  owners: null
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "18-7"
+  severity: PASS
+  dimension: "18"
+  evidence:
+    file: backend/routes/rides.py
+    lines: [1538, 1567]
+    snippet: "402 {code: card_declined, ...}; 502 {code: payment_processor_error, ...}"
+    test_file: null
+    test_lines: null
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: null
+  sprint: null
+  owners: null
+  regulations: ["PCI-DSS"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "18-8"
+  severity: PASS
+  dimension: "18"
+  evidence:
+    file: backend/utils/stripe_charge.py
+    lines: [33, 155, 187]
+    snippet: "idempotency_key = f'ride-charge-{ride_id}'; PaymentIntent.create(idempotency_key=...)"
+    test_file: null
+    test_lines: null
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: null
+  sprint: null
+  owners: null
+  regulations: ["PCI-DSS"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "18-9"
+  severity: RECOMMENDATION
+  dimension: "18"
+  evidence:
+    file: docs/runbooks/pitr-restore.md
+    lines: [23, 130]
+    snippet: "Pro tier minimum with 7-day window — no verification in code"
+    test_file: null
+    test_lines: null
+  root_cause: "Runbook assumes Pro tier PITR but code never verifies; no quarterly drill evidence file found"
+  impact: "Silent loss of PITR capability if project downgraded; DR assumption breaks without alerting"
+  fix: "Startup health check in lifespan.py confirming PITR enabled + ≥7d retention; file quarterly drill evidence"
+  effort_hours: 2
+  regression_test: "Health check against prod project logs PITR status; quarterly drill produces evidence file"
+  sprint: P2
+  owners: ["infra", "data"]
+  regulations: ["SOC2", "PIPEDA"]
+  confidence: medium
+  duplicate_of: null
+  blast_radius: org
+  likelihood: rare
+  risk_score: 4
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "18-10"
+  severity: PASS
+  dimension: "18"
+  evidence:
+    file: backend/db_supabase.py
+    lines: [31, 55, 81]
+    snippet: "_CircuitBreaker (closed/open/half-open); FAILURE_THRESHOLD=5 WINDOW=30s"
+    test_file: null
+    test_lines: null
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: null
+  sprint: null
+  owners: null
+  regulations: ["SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+===END-FINDINGS-YAML===
+
+===AUDIT-COMPLETE=== dim=18 module=rider-app findings=10 actionable=3 pass=7
+
+================================================================================
+END OF D18 — rider-app Phase E
+Next: D19 Fraud (append below when E-3 re-run completes)
 ================================================================================

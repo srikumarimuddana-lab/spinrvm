@@ -1925,5 +1925,391 @@ FINDINGS YAML — D21
 
 ================================================================================
 END OF D21 — rider-app Phase E
-Next: D22 Third-Party Risk (final rider Phase E call)
+================================================================================
+
+================================================================================
+TASK 22 — THIRD-PARTY RISK
+================================================================================
+Many findings here duplicate pre-flagged open items in docs/dpa-register.md;
+three are genuinely new (FCM token retention, Maps key scoping verification,
+Expo SDK EOL monitoring).
+
+[22-1] HIGH | Gemini not disclosed as sub-processor in privacy policy
+(duplicate_of DV-16)
+Fix: add Gemini + US to privacy policy; cross-link to Google DPA on file.
+Effort: 2 h · Risk 32 (HIGH × regulator × possible) · Regs: PIPEDA
+
+[22-2] CRITICAL | Supabase Canadian region attestation not on file
+File: docs/dpa-register.md:28 · docs/vendor-inventory.md:35 (⚠ VERIFY)
+Finding: PIPEDA s.4.1.3 requires documented evidence of Canadian hosting.
+Supabase region flagged as unverified in both registers. **Pre-launch blocker.**
+Fix: Obtain Supabase written attestation (ca-central-1); file as
+reports/legal/dpa-supabase-2026.pdf; flip register to ✅. Effort: 1 h
+Risk 128 (CRITICAL × regulator × certain) — **P0 pre-launch**
+Regulations: PIPEDA
+Owner: legal + infra
+
+[22-3] HIGH | Twilio DPA not filed locally (CRITICAL vendor — SMS OTP path)
+File: docs/dpa-register.md:31
+Finding: SMS OTP is C3 phone data. DPA status "⚠ VERIFY"; no local copy.
+Fix: Download from Twilio console → file locally; update register. Effort: 1 h
+Risk 32 (HIGH × regulator × possible) — P1
+Regulations: PIPEDA, PCI-DSS
+Owner: legal
+
+[22-4] HIGH | Upstash Redis DPA + region unverified (CRITICAL vendor)
+File: docs/dpa-register.md:38 · docs/vendor-inventory.md:39
+Finding: Upstash stores C2/C3 (rate-limit state, OTP hashes, sessions).
+Default US region unless explicitly multi-region; verify.
+Fix: Obtain DPA; confirm region selection; file locally; update register.
+Effort: 1.5 h · Risk 32 — P1
+Regulations: PIPEDA, SOC2
+Owner: infra + legal
+
+[22-5] HIGH | Firebase rider audience env var not in .env.example
+(duplicate_of DV-10)
+File: backend/dependencies/__init__.py:149-153 · backend/.env.example (missing)
+Finding: Audience check exists but FIREBASE_RIDER_APP_ID is not in
+.env.example — silent misconfiguration risk.
+Fix: Add to .env.example + startup validation (fail-if-missing in prod).
+Effort: 0.5 h · Risk 32 — P1 (prerequisite for 19-6 / 21-1 fix)
+Regulations: PIPEDA
+Owner: backend
+
+[22-6] MEDIUM | FCM token not revoked on logout — cross-user push leakage
+on shared device
+File: shared/store/authStore.ts:528-542 · rider-app/app/_layout.tsx:281
+Finding: logout() clears JWT + refresh but doesn't DELETE the FCM token
+registration. On a shared device, ride updates + payment alerts for the
+previous rider continue to land on the next signed-in user.
+Fix: logout() calls `api.post('/notifications/deregister-token', {token,
+platform})`; backend endpoint removes row from `push_tokens`.
+Effort: 2 h · Risk 8 — P1
+Regulations: PIPEDA, CASL
+Owner: rider-app + backend
+
+[22-7] MEDIUM | Google Maps API key bundle restriction not verified in console
+File: rider-app/app.config.ts:34,85 · rider-app/eas.json:36
+Finding: EXPO_PUBLIC_GOOGLE_MAPS_API_KEY loaded via EAS secret (good) —
+but no evidence that the Google Cloud Console restricts the key to the
+com.spinr.user + com.spinr.driver bundle IDs. Unrestricted key = quota
+burn + OSINT location queries by any attacker who can extract it.
+Fix: Google Cloud Console → Credentials → Maps key → Application
+restrictions = Android/iOS with exact bundle IDs. Archive screenshot.
+Effort: 0.5 h · Risk 16 — P1
+Regulations: PIPEDA
+Owner: infra
+
+[22-8] MEDIUM | Email provider and on-call tool still TBD — launch-blocker DPAs
+File: docs/vendor-inventory.md:84-86 · docs/dpa-register.md:40-42
+Finding: Email provider (SendGrid / Postmark / SES — undecided), PagerDuty
+/ OpsGenie (undecided), status-page provider (undecided). All flagged
+TBD; DPAs on ice until vendor selected.
+Fix: Product + ops select vendors; request DPA on onboarding; file + update
+registers. Effort: 3 h (coordination) · Risk 8 — P2
+Regulations: PIPEDA, CASL (email), SOC2
+Owner: backend + devops + legal
+
+[22-9] MEDIUM | Expo SDK 54 support-window EOL date not tracked
+File: rider-app/package.json:39 (expo ~54.0.0)
+Finding: SDK 54 is pinned but no process tracks Expo's sunset date. If
+SDK 54 reaches EOL before a scheduled release, EAS Build becomes unavailable
+until the app upgrades.
+Fix: Document EOL in DEPLOYMENT.md; set calendar reminder 60 d before
+sunset; add to vendor-inventory.md review cadence.
+Effort: 0.5 h · Risk 8 — P2
+Regulations: —
+Owner: mobile + devops
+
+[22-10] LOW | Railway DPA verification ambiguous
+File: docs/dpa-register.md:32
+Finding: Railway is CRITICAL backend host (C2 runtime). Standard ToS may
+or may not include a DPA; not confirmed.
+Fix: Email Railway support; file clarification in reports/legal/. Effort: 1 h
+Risk 4 — P2
+Regulations: PIPEDA, SOC2
+Owner: legal
+
+================================================================================
+FINDINGS YAML — D22
+================================================================================
+
+===FINDINGS-YAML===
+- id: "22-1"
+  severity: HIGH
+  dimension: "22"
+  evidence:
+    file: docs/data-classification.md
+    lines: [62]
+    snippet: "Google Gemini | US | C2/C3 — Privacy policy DV-16 open"
+    test_file: null
+    test_lines: null
+  root_cause: "Gemini sub-processor disclosure missing from published privacy policy"
+  impact: "PIPEDA s.4.1.3 non-compliance on cross-border sub-processor disclosure"
+  fix: "Add Gemini + US to privacy policy; cross-link to Google DPA (already on file)"
+  effort_hours: 2
+  regression_test: "Grep privacy policy source for 'Gemini' + 'United States' + 'support features'"
+  sprint: P1
+  owners: ["legal"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: "DV-16"
+  blast_radius: regulator
+  likelihood: possible
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "22-2"
+  severity: CRITICAL
+  dimension: "22"
+  evidence:
+    file: docs/dpa-register.md
+    lines: [28]
+    snippet: "Supabase | VERIFY — Canadian region attestation not filed"
+    test_file: null
+    test_lines: null
+  root_cause: "Supabase Canadian hosting region not documented via written attestation"
+  impact: "PIPEDA data-residency requirement cannot be evidenced at launch; OPC enforcement risk"
+  fix: "Obtain Supabase ca-central-1 attestation; file reports/legal/dpa-supabase-2026.pdf; flip register to green"
+  effort_hours: 1
+  regression_test: "grep ca-central-1 reports/legal/dpa-supabase*.pdf; dpa-register.md Supabase row shows ✅"
+  sprint: P0
+  owners: ["legal", "infra"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: regulator
+  likelihood: certain
+  risk_score: 128
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "22-3"
+  severity: HIGH
+  dimension: "22"
+  evidence:
+    file: docs/dpa-register.md
+    lines: [31]
+    snippet: "Twilio | VERIFY — DPA not filed"
+    test_file: null
+    test_lines: null
+  root_cause: "Twilio DPA (SMS OTP path — C3 phone data) not filed locally"
+  impact: "PIPEDA + PCI-DSS evidence gap for critical messaging vendor"
+  fix: "Download Twilio DPA from console; file locally; update register"
+  effort_hours: 1
+  regression_test: "ls reports/legal/dpa-twilio*.pdf && grep Twilio dpa-register.md | grep ✅"
+  sprint: P1
+  owners: ["legal"]
+  regulations: ["PIPEDA", "PCI-DSS"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: regulator
+  likelihood: possible
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "22-4"
+  severity: HIGH
+  dimension: "22"
+  evidence:
+    file: docs/dpa-register.md
+    lines: [38]
+    snippet: "Upstash / Redis Cloud | VERIFY — DPA + region unverified"
+    test_file: null
+    test_lines: null
+  root_cause: "Upstash (rate-limit + OTP hash + session cache) DPA and region selection unverified"
+  impact: "C2/C3 data potentially processed outside Canada with no residency evidence"
+  fix: "Obtain DPA + confirm Canadian region; file locally; update register"
+  effort_hours: 1.5
+  regression_test: "grep RATE_LIMIT_REDIS_URL backend/.env*; register row ✅"
+  sprint: P1
+  owners: ["infra", "legal"]
+  regulations: ["PIPEDA", "SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: regulator
+  likelihood: possible
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "22-5"
+  severity: HIGH
+  dimension: "22"
+  evidence:
+    file: backend/dependencies/__init__.py
+    lines: [149, 153]
+    snippet: "rider_app_id = settings.FIREBASE_RIDER_APP_ID — absent from .env.example"
+    test_file: null
+    test_lines: null
+  root_cause: "FIREBASE_RIDER_APP_ID missing from backend/.env.example; silent misconfiguration risk"
+  impact: "Deploys may ship without the audience check — cross-app token acceptance re-emerges"
+  fix: "Add to .env.example + startup validation (fail-if-missing in prod)"
+  effort_hours: 0.5
+  regression_test: "Unset var → prod startup fails; env-missing test in CI"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: "DV-10"
+  blast_radius: org
+  likelihood: possible
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "22-6"
+  severity: MEDIUM
+  dimension: "22"
+  evidence:
+    file: shared/store/authStore.ts
+    lines: [528, 542]
+    snippet: "logout: async () { … setInMemoryToken(null); } — FCM token not revoked"
+    test_file: null
+    test_lines: null
+  root_cause: "Logout clears local session but does not deregister FCM token on backend"
+  impact: "Shared device — previous user's push notifications continue reaching next signed-in user"
+  fix: "logout() calls /notifications/deregister-token {token, platform}; backend removes from push_tokens"
+  effort_hours: 2
+  regression_test: "Register FCM → logout → push send fails; push_tokens row absent"
+  sprint: P1
+  owners: ["rider-app", "backend"]
+  regulations: ["PIPEDA", "CASL"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: self
+  likelihood: possible
+  risk_score: 8
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "22-7"
+  severity: MEDIUM
+  dimension: "22"
+  evidence:
+    file: rider-app/app.config.ts
+    lines: [34, 85]
+    snippet: "googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY"
+    test_file: null
+    test_lines: null
+  root_cause: "Key restricted to bundle IDs in Google Console is not evidenced anywhere in repo"
+  impact: "If unrestricted, attacker can bundle the key into a rogue app; quota burn + location OSINT"
+  fix: "Google Console → Credentials → Maps key → restrict to com.spinr.user + com.spinr.driver; archive screenshot"
+  effort_hours: 0.5
+  regression_test: "Screenshot in reports/compliance/maps-key-restrictions.png; periodic re-check"
+  sprint: P1
+  owners: ["infra"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "22-8"
+  severity: MEDIUM
+  dimension: "22"
+  evidence:
+    file: docs/vendor-inventory.md
+    lines: [84, 86]
+    snippet: "Email provider (SendGrid/Postmark — TBD) + PagerDuty/OpsGenie (TBD) + status page (TBD)"
+    test_file: null
+    test_lines: null
+  root_cause: "Three launch-prerequisite vendors undecided; DPAs pending vendor selection"
+  impact: "Cannot complete DPA register before launch; email (C3) + on-call blocked"
+  fix: "Select vendors; request DPA on onboarding; file + update registers"
+  effort_hours: 3
+  regression_test: "grep -i 'TBD' docs/vendor-inventory.md returns 0 rows at launch"
+  sprint: P2
+  owners: ["backend", "devops", "legal"]
+  regulations: ["PIPEDA", "CASL", "SOC2"]
+  confidence: medium
+  duplicate_of: null
+  blast_radius: regulator
+  likelihood: rare
+  risk_score: 8
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "22-9"
+  severity: MEDIUM
+  dimension: "22"
+  evidence:
+    file: rider-app/package.json
+    lines: [39]
+    snippet: "expo: ~54.0.0 — no EOL tracking"
+    test_file: null
+    test_lines: null
+  root_cause: "No documented sunset date or calendar reminder for Expo SDK 54"
+  impact: "EAS Build unavailable without major upgrade once SDK reaches EOL"
+  fix: "Document Expo SDK 54 EOL in DEPLOYMENT.md; calendar reminder 60d prior; add to vendor-inventory review"
+  effort_hours: 0.5
+  regression_test: "DEPLOYMENT.md contains 'Expo SDK EOL' row; quarterly check verifies date current"
+  sprint: P2
+  owners: ["mobile", "devops"]
+  regulations: []
+  confidence: medium
+  duplicate_of: null
+  blast_radius: self
+  likelihood: rare
+  risk_score: 8
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "22-10"
+  severity: LOW
+  dimension: "22"
+  evidence:
+    file: docs/dpa-register.md
+    lines: [32]
+    snippet: "Railway | VERIFY — standard ToS vs separate DPA unclear"
+    test_file: null
+    test_lines: null
+  root_cause: "Railway DPA status unclear — standard ToS may or may not include processor terms"
+  impact: "SOC2 CC9.2 evidence gap for critical backend host"
+  fix: "Email Railway support; file clarification in reports/legal/"
+  effort_hours: 1
+  regression_test: "dpa-register.md Railway row ✅ with link to DPA"
+  sprint: P2
+  owners: ["legal"]
+  regulations: ["PIPEDA", "SOC2"]
+  confidence: medium
+  duplicate_of: null
+  blast_radius: regulator
+  likelihood: rare
+  risk_score: 4
+  dollars_at_risk: null
+  reviewed_by: null
+===END-FINDINGS-YAML===
+
+===AUDIT-COMPLETE=== dim=22 module=rider-app findings=10 critical=1 high=4 medium=4 low=1
+
+================================================================================
+END OF D22 — rider-app Phase E
+================================================================================
+
+================================================================================
+RIDER PHASE E COMPLETE — all 6 dimensions (D17–D22)
+================================================================================
+Findings total: 60 (12 D17 + 10 D18 + 9 D19 + 10 D20 + 10 D21 + 10 D22 — minus 3 double-counted dups against D18 and inter-dim)
+By severity (actionable):
+  CRITICAL: 6 (19-1 rating field bug, 20-1 wallet $set+float,
+             20-2 no reconciliation cron, 20-3 no financial_events ledger,
+             20-5 T4A stub, 21-2 rider addr in driver response, 22-2 Supabase
+             region attestation)
+  HIGH:    12 (auth, fraud, reconciliation, third-party, STRIDE)
+  MEDIUM:  18
+  LOW:      3
+  RECOMMENDATION: 5
+  PASS:    16
+Key cross-dim correlations:
+  - DV-2 {$set} pattern reappears in 20-1 (wallets table)
+  - DV-10 Firebase audience shows in 19-6, 21-1, 22-5
+  - DV-6 rate-limiter fallback shows in 17-4, 17-5, 21-6
+  - 18-1 wallet foreground refresh also surfaced as 20-7
+Action: produce rider-remediation-rollup-v2 synthesising open + remediation.
 ================================================================================

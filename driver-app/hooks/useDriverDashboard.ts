@@ -205,9 +205,13 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   }, [user, applyDriverConfig]);
 
   // ─── Location Tracking ───────────────────────────────────────────
-  useEffect(() => {
-    (async () => {
-      // 0. Load cached location from previous session
+  // Refresh on mount AND whenever the app returns to the foreground so
+  // the map doesn't keep showing a stale fix from the previous session
+  // (e.g. driver left home yesterday, opened app at work — without the
+  // AppState refresh the map would still point at home until
+  // watchPositionAsync starts after Go Online).
+  const refreshLocation = useCallback(async (useCache: boolean) => {
+    if (useCache) {
       try {
         const AsyncStorage = require('@react-native-async-storage/async-storage').default;
         const saved = await AsyncStorage.getItem('spinr_driver_last_location');
@@ -216,30 +220,38 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           setLocation({ coords: { latitude: lat, longitude: lng, heading: 0, speed: 0, accuracy: 100, altitude: 0 }, timestamp: Date.now() } as any);
         }
       } catch {}
+    }
 
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') return;
 
-      // 1. Fast: OS cached location
+    if (useCache) {
       try {
         const lastKnown = await Location.getLastKnownPositionAsync();
         if (lastKnown) { setLocation(lastKnown); locationRef.current = lastKnown; }
       } catch {}
+    }
 
-      // 2. Accurate position (non-blocking)
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
-        .then(loc => {
-          setLocation(loc);
-          locationRef.current = loc;
-          // Save for next cold start
-          try {
-            const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-            AsyncStorage.setItem('spinr_driver_last_location', JSON.stringify({ lat: loc.coords.latitude, lng: loc.coords.longitude }));
-          } catch {}
-        })
-        .catch(() => {});
-    })();
+    Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+      .then(loc => {
+        setLocation(loc);
+        locationRef.current = loc;
+        try {
+          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+          AsyncStorage.setItem('spinr_driver_last_location', JSON.stringify({ lat: loc.coords.latitude, lng: loc.coords.longitude }));
+        } catch {}
+      })
+      .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    refreshLocation(true);
+    const sub = AppState.addEventListener('change', (next) => {
+      // Skip cache on resume — we want a fresh fix, not yesterday's.
+      if (next === 'active') refreshLocation(false);
+    });
+    return () => sub.remove();
+  }, [refreshLocation]);
 
   // ─── Batch Location Upload ───────────────────────────────────────
   // G16: Persist buffer to AsyncStorage so crash doesn't lose GPS

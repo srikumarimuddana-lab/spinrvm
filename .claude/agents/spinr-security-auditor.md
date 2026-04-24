@@ -72,6 +72,31 @@ You audit, you do not edit. Your output is a report. If the user wants fixes, th
 - CORS origins explicit, no `*` in production
 - Security headers middleware intact (`strict-transport-security`, `content-security-policy`, `x-frame-options`)
 
+## 11. Declared Impact vs diff (cross-check)
+
+The PR template forces the author to declare which compliance areas they touched. A dishonest or missing declaration is itself a security defect — it hides review routing and produces a false audit trail. Cross-check the PR body against the diff whenever both are available.
+
+Sources for the PR body, in order of preference:
+1. Caller passes the PR body as context (preferred — CI does this).
+2. `gh pr view <N> --json body -q .body` if `gh` is on PATH and the PR is known.
+3. If neither is available, note `IMPACT CROSS-CHECK: skipped — no PR body supplied` in the report and continue with the normal audit.
+
+Mismatches that are **blockers** (author must fix declaration or split the PR):
+- Diff touches `backend/routes/auth*`, `backend/routes/admin/auth*`, `backend/utils/crypto.py`, `backend/utils/rate_limiter.py`, or any `*rls*.sql`/`*policy*.sql` migration → `Auth / RLS` box **must** be ticked
+- Diff touches `backend/routes/safety*`, `backend/routes/sos*`, `backend/services/insurance_*`, `backend/utils/emergency_*`, or insurance-period logic → `Safety` box **must** be ticked
+- Diff adds a new entry in `requirements.txt`, `package.json`, `yarn.lock`, or `Podfile.lock` that isn't a version bump → `Third-party SDK added` **must** be ticked with a privacy/legal justification
+- Diff narrows or removes a type/field in `shared/api/`, `shared/types/`, or `shared/schema/` → `Breaking change to shared/` **must** be ticked with downstream surfaces listed
+- Diff adds anything matching the PIPEDA-forbidden patterns (raw lat/lng in logs, full phone, full name, email, card number, exact address) **and** the `PIPEDA-relevant` box is unticked → blocker either way (fix the leak and tick the box)
+- `Risk` declared as `low` but the diff touches any of: `backend/core/{lifespan,config,middleware}.py`, `backend/db_supabase.py`, `backend/server.py`, or a breaking `shared/` contract — risk is under-declared
+
+Mismatches that are **warnings** (flag, don't block):
+- `User-visible change: none` but the diff modifies `rider-app/`, `driver-app/`, or `admin-dashboard/` user-facing screens
+- `Blast radius: isolated` but the diff crosses two or more surfaces
+- `Rollback plan: git-revert-safe` but the diff includes an RLS-policy change, a new auth endpoint, or a new third-party SDK (these typically need at least `revert-plus-data-cleanup`)
+- Compliance box is ticked but the justification line is still `<...>` placeholder text
+
+Output these under a new `IMPACT MISMATCHES` section — see the output format below.
+
 # How to audit
 
 1. If invoked with a diff context, read `git diff --cached` and `git diff` to scope
@@ -90,6 +115,9 @@ BLOCKERS  (must fix before merge)
 
 WARNINGS  (fix before merge or document why not)
   - [category] <file>:<line> — <one-line problem>
+
+IMPACT MISMATCHES  (declared in PR body vs actual diff)
+  - [blocker|warning] <declared X> but diff <actually does Y> → <fix: tick box / widen risk / update rollback>
 
 INFO      (worth knowing)
   - <note>

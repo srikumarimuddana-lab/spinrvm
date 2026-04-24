@@ -78,6 +78,30 @@ Payment source order: **rider wallet → corporate allowance → master wallet �
 - Receipt data retained 7 years (CRA + SK)
 - Driver earnings summary T4A-compatible when threshold hit annually
 
+## 11. Declared Impact vs diff (cross-check)
+
+The PR template forces the author to declare money-touching changes and a rollback plan. Under-declaring money impact is a blocker by itself — finance/legal routing depends on the tick.
+
+Sources for the PR body, in order of preference:
+1. Caller passes the PR body as context (preferred — CI does this).
+2. `gh pr view <N> --json body -q .body` if `gh` is on PATH and the PR is known.
+3. If neither is available, note `IMPACT CROSS-CHECK: skipped — no PR body supplied` and continue with the normal audit.
+
+Mismatches that are **blockers**:
+- Diff touches any path listed under `area:money` in `.github/labeler.yml` (`services/fare_*`, `services/corporate_*`, `routes/payments`, `routes/wallet`, `routes/corporate*`, `routes/fares`, `routes/tips`, `routes/payouts`, `utils/surge_engine`, `utils/payment_retry`) → `Money-touching` box **must** be ticked with a one-line justification (not `<...>` placeholder)
+- Surge-engine diff raises `SURGE_CAP` above `2.5` or widens an auto-mode tier → must be called out in the Money-touching justification **and** needs an ADR link; otherwise blocker
+- Diff modifies Stripe webhook handlers (`routes/webhooks.py`, `routes/payments.py` webhook entry, `utils/stripe_charge.py`) → `Rollback plan: git-revert-safe` is wrong; must be `revert-plus-data-cleanup` or `not-revertible` with explanation
+- Diff introduces a new `platform_share ≠ 0` on consumer rides → blocker regardless of what's declared; 0% commission is a brand-defining invariant and requires explicit product confirmation
+- Receipt line-item code changes that bundle previously-separate lines (base/distance/time/booking/surge/GST/PST/tip/discount) → blocker; "no hidden fee" is part of the product contract
+
+Mismatches that are **warnings**:
+- Diff adds or changes a corporate billing path but `Money-touching` justification says "fare only" or similar — corporate billing has its own rules (allowance cap, priority order, master-wallet fallback) and deserves its own line
+- `Data schema change: none` but the diff includes a new money-typed column (`numeric(12,2)`, `cents`, `amount_*`) — declaration is under-specified
+- `Feature flag: none` but the diff introduces a new fare-path branch without a gating flag — rolling back a bad fare calc is much harder without a flag
+- Compliance box ticked but the justification line is still `<...>` placeholder text
+
+Output these under a new `IMPACT MISMATCHES` section — see the output format below.
+
 # How to audit
 
 1. Scope: `git diff --cached -- '*.py' '*.ts' '*.tsx' | head -2000` to find money-touching changes
@@ -103,6 +127,9 @@ BLOCKERS  (can drop money / violate tax / break Stripe)
 
 WARNINGS  (fix before merge or document)
   - [rule #N] <file>:<line> — <one-line problem>
+
+IMPACT MISMATCHES  (declared in PR body vs actual diff)
+  - [blocker|warning] <declared X> but diff <actually does Y> → <fix: tick money box / widen rollback plan / cite ADR for surge cap>
 
 VERIFIED  (checked and clean)
   - <e.g. "Stripe idempotency present in all 4 webhook handlers">

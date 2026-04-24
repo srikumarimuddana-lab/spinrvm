@@ -61,6 +61,31 @@ Audit migrations only (`backend/migrations/*.sql`). Report findings; do not edit
 - Trip records, insurance periods, safety incidents → **never** `DELETE` cascade, anonymize only (see `regulatory-sk.md`)
 - Migration that adds `ON DELETE CASCADE` to one of these → blocker
 
+## Declared Impact vs diff (cross-check)
+
+The PR template has explicit fields for schema change, config/secret change, and rollback plan. A migration PR that under-declares these hides coordination work and trips deployment.
+
+Sources for the PR body, in order of preference:
+1. Caller passes the PR body as context (preferred — CI does this).
+2. `gh pr view <N> --json body -q .body` if `gh` is on PATH and the PR is known.
+3. If neither is available, note `IMPACT CROSS-CHECK: skipped — no PR body supplied` and continue with the normal review.
+
+Mismatches that are **blockers**:
+- Migration file present in diff but `Data schema change: none` — hard contradiction
+- Migration is destructive (`DROP COLUMN`, `DROP TABLE`, `ALTER TYPE`, column-type change, renaming a column without an alias) but `Data schema change: additive` — downgrade to `breaking` or `coordinated-deploy`
+- Migration requires app + DB to deploy in lockstep (new NOT NULL column the app must write, new table the app reads) but `Rollback plan: git-revert-safe` — wrong; must be `coordinated` or `revert-plus-data-cleanup` with the exact sequence spelled out
+- Migration adds an `app_settings` row (new settings key) but `Config / secret change: none` — must be `app_settings-row`
+- Migration adds a new user-data table without RLS policies **and** the `Auth / RLS` compliance box is unticked — double failure
+- Migration touches a retention-sensitive table (trips, insurance periods, safety incidents) but `SK Transportation Act` compliance box is unticked
+
+Mismatches that are **warnings**:
+- Migration adds an index on an existing hot table (`rides`, `drivers`, `users`, `wallet_*`) and doesn't use `CONCURRENTLY`; regardless of declaration, flag so the author can confirm `Rollback plan` covers the lock scenario
+- Migration renames a column or table — even if done via a view/alias compat shim — but `API contract change: none` (downstream clients reading the column may break)
+- `Background job change: none` but the migration creates a table a background loop is obviously meant to consume (naming pattern: `*_reminders`, `*_queue`, `*_scheduled`)
+- Rollback-plan line is present but says nothing concrete (e.g. just `git-revert-safe` with no description of whether old backend can talk to new DB)
+
+Output these under a new `IMPACT MISMATCHES` section — see the output format below.
+
 # How to review
 
 1. Find the new migration(s) in the diff:
@@ -99,6 +124,9 @@ BLOCKERS
 
 WARNINGS
   - <file>:<line> — <problem>
+
+IMPACT MISMATCHES  (declared in PR body vs actual diff)
+  - [blocker|warning] <declared X> but migration <actually does Y> → <fix: widen schema-change flag / switch rollback plan / tick RLS box>
 
 VERDICT: SAFE TO APPLY / FIX BLOCKERS / NEEDS DBA REVIEW
 ```

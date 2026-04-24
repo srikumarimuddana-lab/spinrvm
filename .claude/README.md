@@ -36,34 +36,36 @@ This folder configures how Claude Code works with the Spinr monorepo. Everything
 │   └── adr.md                # /adr               → decision record
 │
 └── hooks/                    # Harness-executed scripts
-    ├── pre-commit            # Installed into .git/hooks — secret scanning
+    ├── pre-commit            # Installed into .git/hooks by scripts/setup-claude.sh — secret scanning
     ├── session-start.sh      # Prints sprint header on new session
     ├── pre-migration-write.sh # Warns before writing to backend/migrations/
     └── post-python-write.sh  # ruff format + ruff check --fix on backend *.py writes
 ```
 
+Bootstrap script lives outside this folder at `scripts/setup-claude.sh`.
+
 ## First-time setup
 
-1. **Install the pre-commit hook** (once per clone):
-   ```
-   cp .claude/hooks/pre-commit .git/hooks/pre-commit
-   chmod +x .git/hooks/pre-commit
-   ```
+Run the bootstrap script once per clone:
 
-2. **Configure MCP servers** (optional, improves Claude's reach):
-   ```
-   cp .claude/mcp.example.json .claude/settings.local.json
-   # edit settings.local.json: paste real keys under mcpServers
-   ```
-   - Supabase token: use a **read-only** access token scoped to non-PII tables. Never put the service role key there — it bypasses RLS.
-   - Context7 API key: free tier is fine.
+```
+./scripts/setup-claude.sh
+```
 
-3. **Update the sprint file** at the start of every sprint:
-   ```
-   # edit .claude/context/sprint-current.md
-   # fill in Sprint goal, In-flight table, Recently shipped
-   ```
-   The SessionStart hook surfaces the Sprint goal automatically in every new session.
+It is idempotent and does:
+1. Installs `.claude/hooks/pre-commit` → `.git/hooks/pre-commit` (secret scan).
+2. Scaffolds `.claude/settings.local.json` from `mcp.example.json` if missing — never overwrites.
+3. Verifies `jq` and `ruff` are on PATH (hooks degrade gracefully if not).
+4. Prints manual follow-ups it cannot automate.
+
+Then, manually:
+
+- **Configure MCP credentials** in `.claude/settings.local.json` (gitignored):
+  - Supabase token: use a **read-only** access token scoped to non-PII tables. Never put the service role key there — it bypasses RLS.
+  - Context7 API key: free tier is fine.
+  - Delete the file if you don't want MCP servers.
+- **Set the `ANTHROPIC_API_KEY` repo secret** in GitHub so `.github/workflows/claude-review.yml` can run on PRs.
+- **Update the sprint file** at the start of every sprint — edit `.claude/context/sprint-current.md` (goal, in-flight, recently shipped). The SessionStart hook surfaces the goal automatically in every new session.
 
 ## What the hooks do
 

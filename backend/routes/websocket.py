@@ -1,10 +1,10 @@
 import asyncio
-import logging
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from firebase_admin import auth as firebase_auth
+from loguru import logger
 
 try:
     from .. import db_supabase
@@ -18,8 +18,6 @@ except ImportError:
     from utils.driver_presence import clear_presence, mark_present
 
 db = db_supabase  # legacy alias
-
-logger = logging.getLogger(__name__)
 
 # Note: WebSocket routes are usually attached directly to the app, but APIRouter supports them too.
 # However, the original server.py had it on @app.websocket.

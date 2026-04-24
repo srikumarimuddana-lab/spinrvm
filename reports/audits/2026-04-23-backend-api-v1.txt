@@ -1,0 +1,198 @@
+================================================================================
+SPINR BACKEND API — PRODUCTION-READINESS AUDIT v1
+================================================================================
+Date         : 2026-04-24
+Branch       : claude/review-pending-audits-Pu1aP
+Scope        : backend/ (FastAPI Python 3.12, Supabase, Redis, Stripe)
+Plan         : reports/audits/2026-04-23-backend-api-audit-plan-v1.md
+Phase        : A (Dimensions 01–04) — first phase of 5
+
+AUDIT GROUND RULES
+──────────────────
+• OTP is 4 digits by design; dev OTP "1234" is gated to non-prod env.
+• Severity scale: CRITICAL | HIGH | MEDIUM | LOW | PASS | RECOMMENDATION
+• CRITICAL/HIGH require file:line:snippet evidence
+• Per audit-framework/ground-rules.md (8 rules; v1.3 adds rules 7+8)
+• Risk-score formula per reports/audits/OPEN-ITEMS-TRACKER.md
+
+================================================================================
+PHASE A — DIMENSIONS 01 (FEATURE), 02 (AUTH), 03 (SECRETS), 04 (INPUT VALID)
+================================================================================
+
+[01-1] HIGH | UnboundLocalError on first-ever rating: average_rating only
+defined inside `if rated_rides:` block but used unconditionally
+File: backend/routes/rides.py:1788,1796,1801-1803
+Finding: `average_rating = round(...)` is assigned only inside the
+`if rated_rides:` branch (line 1796), but lines 1801-1803 reference it
+unconditionally to build the update payload. When a driver receives their
+first rating and no prior `rated_rides` exist, this raises
+UnboundLocalError → 500 response → first-ever rating endpoint crashes.
+Compounds 19-1 (rating field-name mismatch) — even after 19-1 fixes the
+field, the FIRST rating against any driver still trips this path.
+Fix: `average_rating = driver.get('rating', 5.0)` before the conditional;
+update the local only when `rated_rides` is non-empty.
+Effort: 1 h
+Risk score: 24 (HIGH × org × likely)
+Regulations: SK-CPPA
+Owner: backend · Sprint: P0
+
+[02-1] HIGH | Firebase ID token verified without `audience=` parameter
+(DV-10 dup at HEAD)
+File: backend/routes/auth.py:392,403,407,408
+Finding: `_firebase_auth.verify_id_token(body.firebase_token)` is called
+without an audience parameter. A subsequent manual aud-claim check is
+gated on `if driver_app_id` — if `FIREBASE_DRIVER_APP_ID` is unset, the
+audience check is skipped. Confirms DV-10 still open at HEAD. The same
+issue exists for the rider audience (rider Phase E flagged this as 19-6,
+21-1, 22-5).
+Fix: Pass `audience=settings.FIREBASE_DRIVER_APP_ID` to verify_id_token;
+fail startup if the env var is missing in production.
+Effort: 2 h
+Risk score: 24 (HIGH × org × possible) — duplicate_of: DV-10
+Regulations: PIPEDA
+Owner: backend · Sprint: P1
+
+[03-1] HIGH | JWT_SECRET length not enforced — only known-weak placeholder
+values are blocked
+File: backend/core/config.py:84-99
+Finding: `_guard_production_secrets` checks `JWT_SECRET` against a list
+of placeholder strings (`your-strong-secret-key`, etc.) but does not
+enforce a minimum length. A 4-character secret passes validation. HS256
+uses the secret as the symmetric signing key — short secret = weak
+signature. CLAUDE.md says "JWT_SECRET — must be ≥32 chars; startup fails
+in production with weak value" but this isn't actually enforced.
+Fix: After the placeholder check, add `if len(value) < 32: raise
+ValueError("JWT_SECRET must be ≥32 chars in production")`.
+Effort: 1 h
+Risk score: 28 (HIGH × org × likely)
+Regulations: PIPEDA, SOC2
+Owner: backend · Sprint: P1
+
+[04-1] MEDIUM | `float()` used for monetary amounts in corporate allowance
+grant — CLAUDE.md "Decimal only" violation on a non-fare path
+File: backend/routes/corporate_company.py:269,272
+Finding: `amount=float(request["amount"])`, `floor=float(wallet.get(
+"soft_negative_floor", -50))`. The pre-commit float-arithmetic hook
+covers fare code; corporate wallet code is outside the hook's path.
+Same family as 20-1 (rider Phase E flagged the rider wallet path) — this
+is the corporate-wallet sibling.
+Fix: Replace with `Decimal(str(...))`; sweep `corporate_*.py` for the same
+pattern; add the corporate paths to the pre-commit hook scope.
+Effort: 2 h
+Risk score: 16 (MEDIUM × self × likely)
+Regulations: CRA, PCI-DSS
+Owner: backend · Sprint: P2
+
+================================================================================
+PHASE A FINDINGS YAML
+================================================================================
+
+===FINDINGS-YAML===
+- id: "01-1"
+  severity: HIGH
+  dimension: "01"
+  evidence:
+    file: backend/routes/rides.py
+    lines: [1788, 1796, 1801, 1803]
+    snippet: "if rated_rides: average_rating = round(...) — used unconditionally below"
+    test_file: null
+    test_lines: null
+  root_cause: "average_rating local only set inside if-block; used unconditionally on first rating where rated_rides is empty"
+  impact: "First-ever rating against any driver crashes 500 with UnboundLocalError"
+  fix: "Initialize average_rating = driver.get('rating', 5.0) before the conditional; update inside if-block"
+  effort_hours: 1
+  regression_test: "test_first_rating_does_not_crash — driver with no prior ratings receives one"
+  sprint: P0
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 24
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "02-1"
+  severity: HIGH
+  dimension: "02"
+  evidence:
+    file: backend/routes/auth.py
+    lines: [392, 403, 407, 408]
+    snippet: "verify_id_token(body.firebase_token) — no audience= param"
+    test_file: null
+    test_lines: null
+  root_cause: "Audience param omitted; manual aud-claim check gated on `if driver_app_id` — silent skip when env unset"
+  impact: "Cross-app token acceptance still possible if FIREBASE_*_APP_ID env unset; DV-10 open"
+  fix: "Pass audience=settings.FIREBASE_DRIVER_APP_ID; fail startup if env missing in prod"
+  effort_hours: 2
+  regression_test: "rider Firebase token rejected on driver auth path; absent env → startup fails"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: "DV-10"
+  blast_radius: org
+  likelihood: possible
+  risk_score: 24
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "03-1"
+  severity: HIGH
+  dimension: "03"
+  evidence:
+    file: backend/core/config.py
+    lines: [84, 99]
+    snippet: "_guard_production_secrets — checks placeholder values only, no length check"
+    test_file: null
+    test_lines: null
+  root_cause: "Validation blocks known-weak literals but not short secrets; CLAUDE.md ≥32 char rule not enforced in code"
+  impact: "Production JWT_SECRET can be ≤4 chars; HS256 signature trivially brute-forced"
+  fix: "After placeholder check: if len(value) < 32: raise ValueError"
+  effort_hours: 1
+  regression_test: "test_jwt_secret_length_enforced — startup fails when JWT_SECRET length < 32 in prod"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["PIPEDA", "SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 28
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "04-1"
+  severity: MEDIUM
+  dimension: "04"
+  evidence:
+    file: backend/routes/corporate_company.py
+    lines: [269, 272]
+    snippet: "amount=float(request['amount']); floor=float(wallet.get('soft_negative_floor', -50))"
+    test_file: null
+    test_lines: null
+  root_cause: "Money handled as float in corporate wallet path; outside fare pre-commit hook coverage"
+  impact: "Cents lost on large grants; corporate ledger drift; same family as 20-1 on rider wallet"
+  fix: "Decimal(str(amount)); sweep corporate_*.py; extend pre-commit hook to corporate paths"
+  effort_hours: 2
+  regression_test: "test_allowance_grant_preserves_cents; grep -nE 'float\\(' backend/routes/corporate_*.py returns 0"
+  sprint: P2
+  owners: ["backend"]
+  regulations: ["CRA", "PCI-DSS"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: self
+  likelihood: likely
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+===END-FINDINGS-YAML===
+
+===AUDIT-COMPLETE=== phase=A module=backend-api dimensions=01,02,03,04 findings=4 critical=0 high=3 medium=1
+
+================================================================================
+END OF PHASE A — backend-api v1
+Next: Phase B (D07 state machine + D08 payments) — to be run as separate
+agent call. Then C (D09–D12), D (D14), E (D17–D22).
+================================================================================

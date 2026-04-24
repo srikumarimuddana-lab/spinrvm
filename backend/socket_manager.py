@@ -89,23 +89,47 @@ class ConnectionManager:
         """Broadcast to every socket connected to THIS machine.
 
         Intentionally local-only: broadcast() has no current callers
-        outside of legacy test paths, and cross-machine broadcast is a
-        different feature (room-based fan-out) that we haven't yet had
-        a real use for. When we do, add a ``pubsub.publish_broadcast``
-        helper rather than changing this method's semantics.
+        outside of legacy test paths, and an unscoped cross-machine
+        broadcast would need a story for excluding admin-only channels.
+        Prefer prefix-scoped broadcasts (``broadcast_to_admins``) which
+        fan out correctly across VMs.
         """
         connections = list(self.active_connections.values())  # snapshot to avoid mutation during iteration
         for connection in connections:
             await connection.send_json(message)
 
     async def broadcast_to_admins(self, message: dict):
-        """Broadcast a message to all connected admin WebSocket clients."""
-        admin_keys = [k for k in self.active_connections if k.startswith("admin_")]
-        for key in admin_keys:
+        """Broadcast to every admin client across the fleet.
+
+        Fans out via Redis pub/sub so admins on other VMs receive the
+        message — previously this was local-only, so an admin connected
+        to VM-A would miss a driver_status_changed event triggered on
+        VM-B. When pub/sub is down we fall back to local delivery,
+        which matches the pre-change behaviour.
+        """
+        try:
+            from utils.ws_pubsub import pubsub
+        except ImportError:  # pragma: no cover — package-relative fallback
+            from .utils.ws_pubsub import pubsub  # type: ignore
+
+        if await pubsub.publish_broadcast("admin_", message):
+            return
+        await self._deliver_broadcast_local("admin_", message)
+
+    async def _deliver_broadcast_local(self, prefix: str, message: dict):
+        """Deliver ``message`` to every local socket whose key starts with
+        ``prefix``. Snapshot the match list before iterating so a
+        concurrent disconnect doesn't RuntimeError the loop.
+        """
+        keys = [k for k in self.active_connections if k.startswith(prefix)]
+        for key in keys:
+            ws = self.active_connections.get(key)
+            if ws is None:
+                continue
             try:
-                await self.active_connections[key].send_json(message)
+                await ws.send_json(message)
             except Exception as e:
-                logger.warning(f"Failed to send to admin {key}: {e}")
+                logger.warning(f"Failed to send to {key}: {e}")
 
     def update_driver_location(self, driver_id: str, lat: float, lng: float):
         self.driver_locations[driver_id] = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc).isoformat()}

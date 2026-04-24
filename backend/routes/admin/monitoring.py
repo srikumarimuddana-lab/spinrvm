@@ -365,13 +365,13 @@ async def get_infrastructure_stats(current_admin: dict = Depends(get_admin_user)
     # Thread pool stats (the executor handling run_sync for Supabase).
     # The default executor doesn't expose active/idle counts — we can
     # at least report the configured max worker count so ops knows the
-    # ceiling.
+    # ceiling. Use getattr because uvloop's Loop (and some partially
+    # initialised stdlib loops) don't carry `_default_executor` at all,
+    # and a raw attribute access would raise AttributeError.
     import asyncio as _asyncio
     loop = _asyncio.get_running_loop()
-    executor = loop._default_executor  # type: ignore[attr-defined]
-    max_workers = None
-    if executor is not None and hasattr(executor, "_max_workers"):
-        max_workers = getattr(executor, "_max_workers", None)
+    executor = getattr(loop, "_default_executor", None)
+    max_workers = getattr(executor, "_max_workers", None) if executor is not None else None
 
     # DB circuit breaker snapshot
     db_circuit = {

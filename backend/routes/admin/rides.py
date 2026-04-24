@@ -241,6 +241,9 @@ async def admin_cancel_ride(
         except Exception as e:
             logger.warning(f"admin_cancel_ride: rider push failed: {e}")
 
+    await manager.broadcast_ride_status(
+        ride_id, "cancelled", rider_id=rider_id, reason=reason, source="admin"
+    )
     try:
         await manager.broadcast_to_admins(
             {"type": "ride_cancelled", "ride_id": ride_id, "reason": reason, "source": "admin"}

@@ -638,6 +638,13 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 },
                 f"rider_{current_ride['rider_id']}",
             )
+            await manager.broadcast_ride_status(
+                r_id,
+                "cancelled",
+                rider_id=current_ride["rider_id"],
+                reason="no_drivers_found",
+                is_auto=True,
+            )
             try:
                 await manager.broadcast_to_admins(
                     {"type": "ride_cancelled", "ride_id": r_id, "reason": "no_drivers_found", "is_auto": True}
@@ -2010,6 +2017,9 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
                 f"driver_{driver['user_id']}",
             )
 
+    await manager.broadcast_ride_status(
+        ride_id, "cancelled", reason="rider_cancelled"
+    )
     try:
         await manager.broadcast_to_admins(
             {"type": "ride_cancelled", "ride_id": ride_id, "reason": "rider_cancelled"}

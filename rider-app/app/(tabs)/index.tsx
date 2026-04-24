@@ -9,6 +9,7 @@ import {
   Platform,
   Image,
   Linking,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -76,36 +77,39 @@ export default function HomeScreen() {
     return null;
   };
 
-  const fetchHomeData = useCallback(async () => {
-    // 0. Load cached location INSTANTLY (from previous session)
-    const cached = await loadLastLocation();
-    if (cached) {
-      const cachedLoc = { coords: { latitude: cached.lat, longitude: cached.lng } };
-      setLocation(cachedLoc);
-      setUserLocation({ latitude: cached.lat, longitude: cached.lng });
+  // Fresh GPS fix + weather. Location is NOT TTL-gated — we always want a
+  // current fix when the user is looking at the map. Cache only primes the
+  // very first paint.
+  const refreshLocation = useCallback(async (useCache: boolean) => {
+    if (useCache) {
+      const cached = await loadLastLocation();
+      if (cached) {
+        const cachedLoc = { coords: { latitude: cached.lat, longitude: cached.lng } };
+        setLocation(cachedLoc);
+        setUserLocation({ latitude: cached.lat, longitude: cached.lng });
+      }
     }
 
-    let { status } = await Location.requestForegroundPermissionsAsync();
+    const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return;
 
-    // 1. Get last known from OS (cached GPS, faster than full fix)
-    try {
-      const lastKnown = await Location.getLastKnownPositionAsync();
-      if (lastKnown) {
-        setLocation(lastKnown);
-        setUserLocation({ latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude });
-        saveLastLocation(lastKnown.coords.latitude, lastKnown.coords.longitude);
-      }
-    } catch {}
+    if (useCache) {
+      try {
+        const lastKnown = await Location.getLastKnownPositionAsync();
+        if (lastKnown) {
+          setLocation(lastKnown);
+          setUserLocation({ latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude });
+          saveLastLocation(lastKnown.coords.latitude, lastKnown.coords.longitude);
+        }
+      } catch {}
+    }
 
-    // 2. Get accurate position in background; weather + saved places in parallel
     Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
       .then(loc => {
         setLocation(loc);
         setUserLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
         saveLastLocation(loc.coords.latitude, loc.coords.longitude);
 
-        // 3. Weather in parallel with position fix
         fetch(`https://api.open-meteo.com/v1/forecast?latitude=${loc.coords.latitude}&longitude=${loc.coords.longitude}&current_weather=true`)
           .then(r => r.json())
           .then(data => {
@@ -116,21 +120,59 @@ export default function HomeScreen() {
           .catch(() => {});
       })
       .catch(() => {});
+  }, [setUserLocation]);
 
-    // 4. Saved places (independent of GPS fix)
+  // Saved-places can be TTL-gated — they rarely change within a session.
+  const fetchHomeData = useCallback(async () => {
+    await refreshLocation(true);
     fetchSavedAddresses();
-  }, []);
+  }, [refreshLocation, fetchSavedAddresses]);
 
-  // Use useFocusEffect so tab switches don't re-fire all requests unless data
-  // is stale (older than HOME_DATA_TTL_MS). First mount always fetches.
   useFocusEffect(
     useCallback(() => {
       const now = Date.now();
-      if (now - lastFetchedAt.current < HOME_DATA_TTL_MS) return;
+      if (now - lastFetchedAt.current < HOME_DATA_TTL_MS) {
+        // Still refresh the location so a stale fix from a previous session
+        // (or from before a long commute) gets replaced. Skip the saved-
+        // places fetch — those don't change minute-to-minute.
+        refreshLocation(false);
+        return;
+      }
       lastFetchedAt.current = now;
       fetchHomeData();
-    }, [fetchHomeData])
+    }, [fetchHomeData, refreshLocation])
   );
+
+  // App resume — always grab a fresh fix, no cache. `initialRegion` on
+  // AppMap is one-shot, so we also re-center the map below when location
+  // changes post-mount.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') refreshLocation(false);
+    });
+    return () => sub.remove();
+  }, [refreshLocation]);
+
+  // Re-center the map when a fresh GPS fix lands after mount. `initialRegion`
+  // only applies on first render, so without this the map stays pinned to
+  // whatever (often cached) location was first set.
+  const hasCenteredRef = useRef(false);
+  const regionRef = useRef(region);
+  useEffect(() => { regionRef.current = region; }, [region]);
+  useEffect(() => {
+    if (!location || !mapRef.current) return;
+    if (!hasCenteredRef.current) {
+      // First location sets initialRegion; no need to animate.
+      hasCenteredRef.current = true;
+      return;
+    }
+    mapRef.current.animateToRegion?.({
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+      latitudeDelta: regionRef.current?.latitudeDelta ?? 0.0922,
+      longitudeDelta: regionRef.current?.longitudeDelta ?? 0.0421,
+    }, 400);
+  }, [location]);
 
   const getGreeting = () => {
     const hour = new Date().getHours();

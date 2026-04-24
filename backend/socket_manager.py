@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from typing import Dict
 
@@ -115,6 +117,38 @@ class ConnectionManager:
         if await pubsub.publish_broadcast("admin_", message):
             return
         await self._deliver_broadcast_local("admin_", message)
+
+    async def broadcast_ride_status(
+        self,
+        ride_id: str,
+        status: str,
+        rider_id: str | None = None,
+        **extra,
+    ):
+        """Emit a unified ``ride_status_changed`` event for a ride transition.
+
+        Both the rider app and the admin dashboard listen for this single
+        event type and switch on ``status``. Individual specific events
+        (``driver_accepted``, ``ride_started``, …) still fire for
+        backward-compat, but every backend state transition should also
+        call this so admin live-monitoring stays consistent without
+        per-event wiring.
+
+        ``rider_id`` is optional — pass None for transitions that shouldn't
+        fan out to the rider (e.g. the initial driver_assigned pick, which
+        shouldn't trigger a rider UI update until the driver actually
+        accepts).
+        """
+        payload = {"type": "ride_status_changed", "ride_id": ride_id, "status": status, **extra}
+        if rider_id:
+            try:
+                await self.send_personal_message(payload, f"rider_{rider_id}")
+            except Exception as e:
+                logger.warning(f"broadcast_ride_status: rider send failed for {rider_id}: {e}")
+        try:
+            await self.broadcast_to_admins(payload)
+        except Exception as e:
+            logger.warning(f"broadcast_ride_status: admin broadcast failed for {ride_id}: {e}")
 
     async def _deliver_broadcast_local(self, prefix: str, message: dict):
         """Deliver ``message`` to every local socket whose key starts with

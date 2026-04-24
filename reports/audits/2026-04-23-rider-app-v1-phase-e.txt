@@ -1144,5 +1144,786 @@ FINDINGS YAML — D19
 
 ================================================================================
 END OF D19 — rider-app Phase E
-Next: D20 Financial Reconciliation + D21 STRIDE (next pair)
+================================================================================
+
+================================================================================
+TASK 20 — FINANCIAL RECONCILIATION
+================================================================================
+
+[20-1] CRITICAL | Wallet balance mutated via raw UPDATE; bypasses atomicity RPC;
+uses float for money (CLAUDE.md violation); $set wrapper pattern
+File: backend/routes/wallet.py:125-129 (top_up, pay, transfer) +
+backend/routes/fare_split.py:pay_split_share
+Finding: Direct `db.update_one("wallets", ..., {"$set": {"balance":
+float(new_balance), ...}})`. Three compounding issues:
+  (a) bypasses `corporate_wallet_apply_delta` RPC — no row-level lock, no
+      idempotency, no audit trail;
+  (b) `float(new_balance)` violates the Decimal-only rule in CLAUDE.md;
+  (c) `{"$set": ...}` MongoDB-style wrapper — same pattern as DV-2 for a
+      different table; worth sweeping helpers repo-wide.
+Fix: Route all wallet mutations through the RPC (or a Python wrapper that
+does); replace float() with Decimal; remove $set wrapping. Effort: 6 h
+Risk score: 128 (CRITICAL × org × certain) — P0
+Regulations: CRA, PCI-DSS, SOC2
+Owner: backend
+
+[20-2] CRITICAL | Daily Stripe ↔ DB ↔ wallet reconciliation cron is missing
+File: backend/core/lifespan.py:57-213 (no reconciliation_loop)
+Finding: `docs/runbooks/stripe-reconciliation.md` specifies a daily 02:00
+UTC cron comparing Stripe PaymentIntent sum vs `financial_events` sum vs
+wallet balance delta. No such loop is spawned in lifespan. Drift between
+Stripe and DB would surface only on escalation.
+Fix: Create `backend/utils/reconciliation.py::daily_reconciliation()`; spawn
+from lifespan; emit heartbeat (closes D17 17-5/17-10 simultaneously); alert
+on any delta > $0.01. Effort: 6 h
+Risk score: 128 (CRITICAL × org × certain) — P0
+Regulations: PCI-DSS, SOC2, CRA
+Owner: backend
+
+[20-3] CRITICAL | `financial_events` append-only ledger table does not exist
+File: backend/migrations/ (no financial_events migration)
+Finding: D20 dimension requires an append-only ledger for every money event
+(ride charge, refund, wallet top-up, dispute, chargeback). `stripe_events`
+exists for webhook dedup, but there's no double-entry financial ledger with
+RLS forbidding UPDATE/DELETE.
+Fix: Migration adding `financial_events(id, event_type, user_id,
+delta_cents, ride_id, ref, created_at)` with RLS policy blocking
+UPDATE/DELETE for all roles. Write helper to insert at every money
+transition. Effort: 4 h
+Risk score: 96 (CRITICAL × org × likely) — P0
+Regulations: CRA, SOC2
+Owner: backend + data
+
+[20-4] HIGH | Stripe idempotency key fallback uses `intent-{user}-{amount}`
+File: backend/routes/payments.py:107-111
+Finding: Fallback pattern collides on legitimate same-amount retry within
+24h (Stripe dedup window). Confirms open item DV-4.
+Fix: UUID v4 client token; remove fallback. Effort: 4 h
+Risk score: 48 (HIGH × org × possible) — P1 · duplicate_of: DV-4
+Regulations: PCI-DSS
+Owner: backend
+
+[20-5] CRITICAL | T4A returns stub JSON; no PDF generator; no Feb-28 filing path
+File: backend/routes/drivers.py:1465-1483
+Finding: `get_t4a_summary` returns `{year, total_earnings, ...}` only — no
+PDF, no `/drivers/t4a/{year}?format=pdf` endpoint, no scheduled generator.
+Confirms existing P4-7 PARTIAL. CRA filing deadline Feb 28 each year.
+Fix: PDF generator (reportlab/weasyprint) matching CRA T4A slip format box
+14; `GET /drivers/t4a/{year}` returns signed URL; schedule generation Feb 1.
+Effort: 12 h
+Risk score: 256 (CRITICAL × regulator × certain) — P1 · duplicate_of: P4-7
+Regulations: CRA
+Owner: backend
+
+[20-6] HIGH | GST/PST amounts computed but not persisted as columns on `rides`
+File: backend/features.py::calc_all_fees, rides schema
+Finding: `calc_all_fees` computes gst_amount / pst_amount but only stores
+them in the `tax_breakdown` JSON column. Monthly SK-PST and CRA queries
+cannot filter/sum on a column; must JSON-parse every row.
+Fix: Migration adding `rides.gst_amount`, `rides.pst_amount` (NUMERIC 12,2)
++ index on (created_at, province); populate on creation. Effort: 3 h
+Risk score: 48 (HIGH × org × likely) — P1
+Regulations: SK-PST, CRA
+Owner: backend
+
+[20-7] HIGH | Wallet balance not refreshed on app foreground
+File: rider-app/store/walletStore.ts:49,73-81
+Finding: Same as 18-1 (Zustand store has no AppState listener).
+Fix: See 18-1. Effort: 1.5 h
+Risk score: 16 (HIGH × self × possible) — P1 · duplicate_of: 18-1
+Regulations: PIPEDA
+Owner: rider-app
+
+[20-8] HIGH | Fare-split wallet debit + participant-status update are non-atomic
+File: backend/routes/fare_split.py:298-318
+Finding: Two separate `db.update_one` calls — network failure between them
+leaves the wallet debited but participant status unchanged. Next retry sees
+"already paid" but balance already gone twice.
+Fix: Wrap in a Postgres transaction or extend the wallet RPC to accept the
+participant-status update atomically. Effort: 3 h
+Risk score: 24 (HIGH × self × possible) — P1
+Regulations: PCI-DSS
+Owner: backend
+
+[20-9] MEDIUM | Stripe webhook replay path promised in code comment but not built
+File: backend/routes/webhooks.py:91-93
+Finding: Comment references "nightly reconciliation job replays events from
+persisted payload"; no `/stripe/events/replay` endpoint, no replay cron.
+Handler crashes leave events with `processed_at = NULL` silently forever.
+Fix: `POST /stripe/events/replay?ids=...` + 04:00 UTC cron replaying
+unprocessed events older than 30 min; idempotent via existing
+claim_stripe_event. Effort: 4 h
+Risk score: 32 (MEDIUM × org × possible) — P2
+Regulations: PCI-DSS, SOC2
+Owner: backend
+
+[20-10] MEDIUM | Tax data not structured for CRA monthly-remittance export
+File: backend/routes/rides.py:893-895 (tax_breakdown JSON only)
+Finding: No monthly-aggregation export (`/finance/monthly-tax/{year}/{month}`)
+that sums by tax type, jurisdiction, and event class. Finance team must
+hand-roll from raw rows.
+Fix: Monthly export endpoint + background export to GCS / signed-URL
+archive; align with the `financial_events` ledger from 20-3. Effort: 4 h
+Risk score: 32 (MEDIUM × org × possible) — P2 (blocked on 20-3)
+Regulations: CRA, SK-PST
+Owner: backend + finance
+
+================================================================================
+FINDINGS YAML — D20
+================================================================================
+
+===FINDINGS-YAML===
+- id: "20-1"
+  severity: CRITICAL
+  dimension: "20"
+  evidence:
+    file: backend/routes/wallet.py
+    lines: [125, 129]
+    snippet: "db.update_one('wallets', ..., {'$set': {'balance': float(new_balance), ...}})"
+    test_file: null
+    test_lines: null
+  root_cause: "Raw wallet balance UPDATE bypasses corporate_wallet_apply_delta RPC; also uses float() for money + $set wrapper"
+  impact: "Concurrent writes lose data; no audit trail; float loses cents; same $set bug pattern as DV-2 on a different table"
+  fix: "Route all wallet mutations through corporate_wallet_apply_delta; replace float with Decimal; remove $set wrapper"
+  effort_hours: 6
+  regression_test: "Concurrent debit test (no lost writes); ledger re-derivation == stored balance; grep confirms no float() in money paths"
+  sprint: P0
+  owners: ["backend"]
+  regulations: ["CRA", "PCI-DSS", "SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: certain
+  risk_score: 128
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "20-2"
+  severity: CRITICAL
+  dimension: "20"
+  evidence:
+    file: backend/core/lifespan.py
+    lines: [57, 213]
+    snippet: "No reconciliation_loop defined or spawned (7 existing loops do not include it)"
+    test_file: null
+    test_lines: null
+  root_cause: "Daily Stripe↔DB↔wallet reconciliation cron specified in runbook but never implemented"
+  impact: "Payment drift between Stripe and DB surfaces only on escalation; PCI / SOC2 / CRA gap"
+  fix: "Create backend/utils/reconciliation.py::daily_reconciliation(); spawn from lifespan; alert on delta > $0.01"
+  effort_hours: 6
+  regression_test: "Mock Stripe, inject delta, verify alert + OPEN-ITEMS-TRACKER row at 02:00 UTC"
+  sprint: P0
+  owners: ["backend"]
+  regulations: ["PCI-DSS", "SOC2", "CRA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: certain
+  risk_score: 128
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "20-3"
+  severity: CRITICAL
+  dimension: "20"
+  evidence:
+    file: backend/migrations/
+    lines: null
+    snippet: "No financial_events table migration exists (only stripe_events)"
+    test_file: null
+    test_lines: null
+  root_cause: "Append-only money-event ledger missing — no immutable audit trail for charges/refunds/topups/disputes"
+  impact: "Cannot audit financial flows; CRA + SOC2 requirement unmet; disputes unresolvable"
+  fix: "Migration adding financial_events (id, event_type, user_id, delta_cents, ride_id, ref, created_at) with RLS blocking UPDATE/DELETE"
+  effort_hours: 4
+  regression_test: "Insert ride → financial_events row created; UPDATE attempt → denied by RLS"
+  sprint: P0
+  owners: ["backend", "data"]
+  regulations: ["CRA", "SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 96
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "20-4"
+  severity: HIGH
+  dimension: "20"
+  evidence:
+    file: backend/routes/payments.py
+    lines: [107, 111]
+    snippet: "idempotency_key = f'intent-{user}-{amount}' if not ride_id else ..."
+    test_file: null
+    test_lines: null
+  root_cause: "Fallback pattern collides on legitimate same-amount retry within Stripe's 24h dedup window"
+  impact: "Second payment reuses first PaymentIntent; rider charged once but audit shows two events"
+  fix: "UUID v4 client token; remove fallback"
+  effort_hours: 4
+  regression_test: "Two $50 rides within 24h → two distinct payment_intent_ids"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["PCI-DSS"]
+  confidence: high
+  duplicate_of: "DV-4"
+  blast_radius: org
+  likelihood: possible
+  risk_score: 48
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "20-5"
+  severity: CRITICAL
+  dimension: "20"
+  evidence:
+    file: backend/routes/drivers.py
+    lines: [1465, 1483]
+    snippet: "get_t4a_summary returns JSON stub; no PDF; no /drivers/t4a/{year}?format=pdf"
+    test_file: null
+    test_lines: null
+  root_cause: "T4A generator never implemented; P4-7 remains PARTIAL"
+  impact: "CRA Feb-28 filing deadline cannot be met; drivers cannot file taxes; regulator penalty risk"
+  fix: "PDF generator per CRA T4A format box 14; /drivers/t4a/{year} returns signed URL; Feb 1 generation cron"
+  effort_hours: 12
+  regression_test: "GET /drivers/t4a/2025?format=pdf for $1000 YTD driver → valid CRA slip with box 14 total"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["CRA"]
+  confidence: high
+  duplicate_of: "P4-7"
+  blast_radius: regulator
+  likelihood: certain
+  risk_score: 256
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "20-6"
+  severity: HIGH
+  dimension: "20"
+  evidence:
+    file: backend/features.py
+    lines: null
+    snippet: "gst_amount, pst_amount computed in calc_all_fees; stored only in tax_breakdown JSON"
+    test_file: null
+    test_lines: null
+  root_cause: "Tax amounts live in JSON, not columns; monthly CRA / SK-PST queries cannot filter/sum without parsing"
+  impact: "Monthly remittance reports hand-rolled; errors likely; filing risk"
+  fix: "Migration adding rides.gst_amount, rides.pst_amount (NUMERIC 12,2) + index on (created_at, province); populate on creation"
+  effort_hours: 3
+  regression_test: "Create SK ride → rides.gst_amount = 5% taxable; pst_amount = 6%; monthly export totals = sum"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["SK-PST", "CRA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 48
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "20-7"
+  severity: HIGH
+  dimension: "20"
+  evidence:
+    file: rider-app/store/walletStore.ts
+    lines: [49, 73, 81]
+    snippet: "fetchWallet has no AppState or useFocusEffect listener"
+    test_file: null
+    test_lines: null
+  root_cause: "Same as 18-1 — Zustand store lacks AppState foreground listener"
+  impact: "Stale wallet balance after backgrounding; confusing payment failures"
+  fix: "See 18-1 remediation"
+  effort_hours: 1.5
+  regression_test: "See 18-1"
+  sprint: P1
+  owners: ["rider-app"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: "18-1"
+  blast_radius: self
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "20-8"
+  severity: HIGH
+  dimension: "20"
+  evidence:
+    file: backend/routes/fare_split.py
+    lines: [298, 318]
+    snippet: "two separate db.update_one calls: wallet debit then participant-status update"
+    test_file: null
+    test_lines: null
+  root_cause: "Non-atomic two-step update; network failure between leaves wallet debited but status unchanged"
+  impact: "Retry double-debits; split status stuck 'accepted' with no payment record"
+  fix: "Wrap both updates in Postgres transaction; or extend wallet RPC to take the status update atomically"
+  effort_hours: 3
+  regression_test: "Inject failure after wallet update; second call rejected with conflict; no double-debit"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["PCI-DSS"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: self
+  likelihood: possible
+  risk_score: 24
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "20-9"
+  severity: MEDIUM
+  dimension: "20"
+  evidence:
+    file: backend/routes/webhooks.py
+    lines: [91, 93]
+    snippet: "comment: 'nightly reconciliation job replays events from persisted payload' — never implemented"
+    test_file: null
+    test_lines: null
+  root_cause: "Promised webhook-replay path not built; events stuck with processed_at=NULL have no automatic recovery"
+  impact: "Handler crashes silently drop events; manual escalation needed to resolve"
+  fix: "POST /stripe/events/replay?ids=... + 04:00 UTC cron replaying unprocessed events > 30 min old"
+  effort_hours: 4
+  regression_test: "Inject processed_at=NULL event; replay endpoint runs handler; processed_at stamped"
+  sprint: P2
+  owners: ["backend"]
+  regulations: ["PCI-DSS", "SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "20-10"
+  severity: MEDIUM
+  dimension: "20"
+  evidence:
+    file: backend/routes/rides.py
+    lines: [893, 895]
+    snippet: "ride_data['tax_breakdown'] = fees_result.get('tax_breakdown', {})"
+    test_file: null
+    test_lines: null
+  root_cause: "Monthly CRA + SK-PST export path missing; tax data in JSON only"
+  impact: "Finance team hand-rolls monthly remittance; filing deadline risk"
+  fix: "Monthly export endpoint /finance/monthly-tax/{year}/{month} + GCS archive; align with financial_events ledger (blocked on 20-3)"
+  effort_hours: 4
+  regression_test: "Create ride + refund in month; export returns correct GST/PST totals per jurisdiction"
+  sprint: P2
+  owners: ["backend", "finance"]
+  regulations: ["CRA", "SK-PST"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+===FINDINGS-YAML-END===
+
+===AUDIT-COMPLETE=== dim=20 module=rider-app findings=10 critical=4 high=4 medium=2
+
+================================================================================
+END OF D20 — rider-app Phase E
+================================================================================
+
+================================================================================
+TASK 21 — THREAT MODEL / STRIDE VERIFICATION
+================================================================================
+Note: this dimension verifies the docs/threat-model/rider-app.md residual
+risks against the current code. Findings indicate CLOSED / PARTIAL / OPEN
+status for the RS/RT/RR/RI/RD/RE threats plus any new ones found.
+
+[21-1] HIGH | Firebase audience check null-tolerant — cross-app token
+File: backend/dependencies/__init__.py:151-152
+Finding: RE-4 / DV-10 confirmed. rider_app_id falls back to None; unset env
+var disables audience check silently. Same finding as D19-6.
+Fix: Required setting; fail startup if missing; always enforce audience.
+Effort: 3 h
+Risk score: 32 — P1 · duplicate_of: DV-10
+Regulations: PIPEDA
+Owner: backend
+
+[21-2] CRITICAL | Rider pickup/dropoff addresses still present in ride
+response after ride completed
+File: backend/routes/rides.py:1129,1136,1156,1159
+Finding: Confirms threat-model RI-2 (rank 128). IDOR guard is in place
+(rider_id == current_user check), but the completed-ride response still
+includes pickup_address / dropoff_address fields that the driver app can
+cache indefinitely. Enables rider-home stalking (RAT-1).
+Fix: Strip address fields from driver-facing response once status is
+`completed` or `cancelled`; keep them in the rider-facing response only.
+Add regression asserting the driver API body omits those fields for
+completed rides. Effort: 2 h
+Risk score: 128 (CRITICAL × org × certain) — **P0 verify first**
+Regulations: PIPEDA, SK-HRC
+Owner: backend
+
+[21-3] HIGH | Dispatch filter lacks `is_suspended=false` guard; suspended
+drivers can still be ranked
+File: backend/services/dispatch_service.py:36-48
+Finding: Confirms DV-1. `_is_dispatchable_driver` filters `is_online` and
+`is_available` but not `is_suspended`. Coupled with DV-2 (document-expiry
+$set wrapper not flipping status), a suspended driver stays in the pool.
+Fix: Add `if driver.get('is_suspended') or driver.get('status') ==
+'suspended': return False`. Effort: 1 h
+Risk score: 32 — P1 · duplicate_of: DV-1
+Regulations: SAFE-CRC, SK-TNC
+Owner: backend
+
+[21-4] MEDIUM | Ride state-string inconsistency (in_progress vs
+trip_in_progress) may drop paid-leg mileage
+File: backend/routes/drivers.py:130,2032,2043 + backend/routes/websocket.py:248-251
+Finding: Confirms DV-3. COMPLETE_FROM_STATES uses `in_progress` while GPS
+phase tracking uses `trip_in_progress`. WebSocket maps them but lookup
+failures could silently skip paid-leg mileage in distance calc.
+Fix: Enum StateString; migration or check that every ride in `in_progress`
+has phase `trip_in_progress` populated; distance calc asserts presence.
+Effort: 4 h
+Risk score: 8 — P1 · duplicate_of: DV-3
+Regulations: SK-CPPA
+Owner: backend
+
+[21-5] MEDIUM | No server-side GPS plausibility check; fake-trip undetected
+File: backend/validators.py:131,170,173 + WS GPS handler
+Finding: RT-2 OPEN. Coordinate-range check exists (lat/lng bounds, reject
+0,0) but no continuity / velocity plausibility. Breadcrumb jumping 100 km
+in 10 s is accepted; driver fakes long trips for higher fare.
+Fix: In WS GPS handler, compare each breadcrumb against the previous;
+reject / flag at sustained > 150 km/h or sub-second long jumps. Store
+previous GPS for comparison; alert on repeat flags.
+Effort: 6 h
+Risk score: 16 — P2 · cross-link threat-model RT-2
+Regulations: SK-CPPA
+Owner: backend
+
+[21-6] MEDIUM | Rate limiter in-memory fallback per-process; alert missing
+File: backend/utils/rate_limiter.py:14,27-30
+Finding: Confirms DV-6. Production should refuse startup if
+RATE_LIMIT_REDIS_URL is absent. Currently falls back to in-process dict
+silently — per-replica drift.
+Fix: Fail startup when ENV=production and Redis URL unset or unreachable;
+alert SRE on runtime fallback activation.
+Effort: 2 h
+Risk score: 16 — P1 · duplicate_of: DV-6
+Regulations: PIPEDA
+Owner: backend + devops
+
+[21-7] HIGH | TLS certificate pinning not implemented in rider app
+File: rider-app/app/otp.tsx:31-32 (and axios client)
+Finding: RS-4 OPEN. Expo SecureStore protects tokens at rest but HTTPS
+connections use default CA trust — MITM on public Wi-Fi with rogue CA or
+downgrade attack can intercept JWT.
+Fix: Certificate pinning in HTTP client (public-key pinning with a backup
+pin) using `react-native-cert-pinner` or native bridge. Pin rotation
+runbook (to create).
+Effort: 8 h
+Risk score: 32 — P1
+Regulations: PIPEDA
+Owner: rider-app
+
+[21-8] MEDIUM | Rider PII cached in AsyncStorage (unencrypted); screenshot
+cache unprotected
+File: rider-app/hooks/useScheduledRideReminder.ts:35,44
+Finding: RI-4 + RI-6 OPEN. Home/work addresses, payment last-4 cached to
+AsyncStorage (unencrypted at rest on Android; accessible on rooted
+device). App-switcher screenshots not blurred.
+Fix: Use Expo SecureStore for sensitive fields; add iOS `FLAG_SECURE` /
+blur-on-background on screens showing balance and addresses; root/jailbreak
+detection before wallet-sensitive actions.
+Effort: 12 h
+Risk score: 16 — P2
+Regulations: PIPEDA
+Owner: rider-app
+
+[21-9] MEDIUM | Dev-mode OTP bypass still reachable in non-prod code paths
+File: backend/routes/auth.py:115,224-226
+Finding: `_is_dev_otp_bypass` uses string comparison. Hardcoded "1234" /
+"123456". If a debug APK leaks or the env check is accidentally inverted,
+the bypass is exploitable.
+Fix: Double-gate: ENV-based check + build-time compile-out (reject commits
+to prod branch that still contain the helper). Verify Expo EAS production
+builds strip it.
+Effort: 2 h
+Risk score: 8 — P2
+Regulations: PIPEDA
+Owner: backend + rider-app
+
+[21-10] MEDIUM | /auth/refresh rate limit too generous (20/min/IP, no
+per-user throttle)
+File: backend/routes/auth.py:541 (rate-limit decorator)
+Finding: 20 refreshes/min/IP = 1,200/hr per IP. From 10 IPs =
+12,000 attempts/hr against a stolen-token guess. No per-user lockout on
+repeated failure.
+Fix: Tighten to 5/min per IP; add per-user rate-limit (3 failures →
+10-min lockout). Log repeated failures for anomaly detection.
+Effort: 3 h
+Risk score: 16 — P1
+Regulations: PIPEDA
+Owner: backend
+
+================================================================================
+FINDINGS YAML — D21
+================================================================================
+
+===FINDINGS-YAML===
+- id: "21-1"
+  severity: HIGH
+  dimension: "21"
+  evidence:
+    file: backend/dependencies/__init__.py
+    lines: [151, 152]
+    snippet: "rider_app_id and payload.get('aud') != rider_app_id — null-tolerant"
+    test_file: null
+    test_lines: null
+  root_cause: "Firebase audience check skipped when rider_app_id unset; cross-app token accepted"
+  impact: "Driver Firebase token could authenticate on rider endpoints (or vice versa)"
+  fix: "Required setting; fail startup if missing; always enforce audience"
+  effort_hours: 3
+  regression_test: "Test rider token fails 401 on /api/drivers/*; driver token fails on /api/rides/history"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: "DV-10"
+  blast_radius: org
+  likelihood: possible
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "21-2"
+  severity: CRITICAL
+  dimension: "21"
+  evidence:
+    file: backend/routes/rides.py
+    lines: [1129, 1136, 1156, 1159]
+    snippet: "completed-ride response still contains pickup_address / dropoff_address (driver-facing)"
+    test_file: null
+    test_lines: null
+  root_cause: "Driver-facing response does not strip rider addresses after ride.status in ('completed','cancelled')"
+  impact: "Rider home/work address persists in driver app cache indefinitely; stalking risk (threat-model RAT-1)"
+  fix: "Strip pickup_address/dropoff_address from driver response once status is terminal; keep in rider response only"
+  effort_hours: 2
+  regression_test: "Driver API body for completed ride omits address fields; rider API still returns them"
+  sprint: P0
+  owners: ["backend"]
+  regulations: ["PIPEDA", "SK-HRC"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: certain
+  risk_score: 128
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "21-3"
+  severity: HIGH
+  dimension: "21"
+  evidence:
+    file: backend/services/dispatch_service.py
+    lines: [36, 48]
+    snippet: "_is_dispatchable_driver filters is_online/is_available but not is_suspended"
+    test_file: null
+    test_lines: null
+  root_cause: "Dispatch filter omits status != 'suspended'; suspended drivers stay in the pool"
+  impact: "Safety risk — expired-doc or safety-suspended drivers may still be assigned"
+  fix: "Return False when driver.is_suspended or driver.status == 'suspended'"
+  effort_hours: 1
+  regression_test: "Suspended driver never returned by filter_and_rank_drivers"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["SAFE-CRC", "SK-TNC"]
+  confidence: high
+  duplicate_of: "DV-1"
+  blast_radius: org
+  likelihood: likely
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "21-4"
+  severity: MEDIUM
+  dimension: "21"
+  evidence:
+    file: backend/routes/drivers.py
+    lines: [130, 2032, 2043]
+    snippet: "COMPLETE_FROM_STATES='in_progress' vs phase 'trip_in_progress' across files"
+    test_file: null
+    test_lines: null
+  root_cause: "State-string inconsistency between guard and GPS phase tracking"
+  impact: "Distance calc may silently skip paid-leg mileage if phase-key lookup fails; undercharge or dispute"
+  fix: "Canonical enum; migration or assertion every 'in_progress' ride has phase 'trip_in_progress' populated"
+  effort_hours: 4
+  regression_test: "Completed ride w/ GPS in both phases → actual_distance_km includes trip_in_progress mileage"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: medium
+  duplicate_of: "DV-3"
+  blast_radius: self
+  likelihood: rare
+  risk_score: 8
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "21-5"
+  severity: MEDIUM
+  dimension: "21"
+  evidence:
+    file: backend/validators.py
+    lines: [131, 170, 173]
+    snippet: "coordinate bounds check only; no continuity / velocity plausibility"
+    test_file: null
+    test_lines: null
+  root_cause: "Server accepts implausible GPS jumps (>150 km/h) without flagging; driver fakes trips"
+  impact: "Distance-based fare inflation; fake trips pass undetected"
+  fix: "WS GPS handler compares each breadcrumb to previous; reject/flag sustained >150 km/h or sub-second long jumps"
+  effort_hours: 6
+  regression_test: "Breadcrumb w/ implausible speed rejected or flagged in admin view"
+  sprint: P2
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "21-6"
+  severity: MEDIUM
+  dimension: "21"
+  evidence:
+    file: backend/utils/rate_limiter.py
+    lines: [14, 27, 30]
+    snippet: "'memory://' fallback when RATE_LIMIT_REDIS_URL unset"
+    test_file: null
+    test_lines: null
+  root_cause: "Production silently falls back to per-process counters; per-replica drift; no SRE alert"
+  impact: "Rate limits bypassable at N × limit across replicas"
+  fix: "Fail startup when ENV=production and Redis URL absent/unreachable; alert on runtime fallback"
+  effort_hours: 2
+  regression_test: "Prod env w/o Redis → startup fails; runtime Redis loss → alert fires"
+  sprint: P1
+  owners: ["backend", "devops"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: "DV-6"
+  blast_radius: org
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "21-7"
+  severity: HIGH
+  dimension: "21"
+  evidence:
+    file: rider-app/app/otp.tsx
+    lines: [31, 32]
+    snippet: "SecureStore used for tokens but HTTPS uses default CA trust (no pinning)"
+    test_file: null
+    test_lines: null
+  root_cause: "No TLS certificate / public-key pinning in rider HTTP client"
+  impact: "MITM on public Wi-Fi w/ rogue CA can intercept JWT; full account takeover"
+  fix: "Public-key pinning with backup pin (react-native-cert-pinner); document rotation runbook"
+  effort_hours: 8
+  regression_test: "MITM cert rejected; valid cert accepted; pinning-bypass protection verified"
+  sprint: P1
+  owners: ["rider-app"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "21-8"
+  severity: MEDIUM
+  dimension: "21"
+  evidence:
+    file: rider-app/hooks/useScheduledRideReminder.ts
+    lines: [35, 44]
+    snippet: "AsyncStorage.getItem / setItem for ride + reminder state"
+    test_file: null
+    test_lines: null
+  root_cause: "AsyncStorage used for rider PII (addresses, payment last-4); unencrypted on Android; accessible on rooted device"
+  impact: "App-switcher screenshots expose balance + address; rooted device reads files; RI-4 + RI-6 realized"
+  fix: "SecureStore for sensitive fields; iOS blurScreen/FLAG_SECURE on bg; root/jailbreak detection pre-wallet action"
+  effort_hours: 12
+  regression_test: "SecureStore used; AsyncStorage cleared on logout; iOS blur on bg; rooted Android blocks wallet"
+  sprint: P2
+  owners: ["rider-app"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "21-9"
+  severity: MEDIUM
+  dimension: "21"
+  evidence:
+    file: backend/routes/auth.py
+    lines: [115, 224, 225, 226]
+    snippet: "_is_dev_otp_bypass; hardcoded '1234' / '123456'"
+    test_file: null
+    test_lines: null
+  root_cause: "Dev OTP bypass relies solely on runtime ENV check; no compile-out guarantee in release"
+  impact: "Debug APK leak → bypass exploitable; misconfigured env inverts the check"
+  fix: "Double-gate (ENV + build-time strip); pre-commit hook blocks merging the helper to prod branch"
+  effort_hours: 2
+  regression_test: "Prod build rejects '1234'; dev bypass only in development environment"
+  sprint: P2
+  owners: ["backend", "rider-app"]
+  regulations: ["PIPEDA"]
+  confidence: medium
+  duplicate_of: null
+  blast_radius: self
+  likelihood: rare
+  risk_score: 8
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "21-10"
+  severity: MEDIUM
+  dimension: "21"
+  evidence:
+    file: backend/routes/auth.py
+    lines: [541]
+    snippet: "@limiter.limit('20/minute') on /auth/refresh; no per-user throttle"
+    test_file: null
+    test_lines: null
+  root_cause: "20/min/IP = 1,200/hr × N IPs; no per-user lockout after repeated failures"
+  impact: "Brute-force stolen refresh tokens; session hijack risk"
+  fix: "Tighten to 5/min/IP; per-user lockout after 3 failures / 10 min; log anomalies"
+  effort_hours: 3
+  regression_test: "6th refresh from same user → 429 + lockout header; legitimate user unaffected at 5/min"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["PIPEDA"]
+  confidence: medium
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+===END-FINDINGS-YAML===
+
+===AUDIT-COMPLETE=== dim=21 module=rider-app findings=10 critical=1 high=3 medium=6
+
+================================================================================
+END OF D21 — rider-app Phase E
+Next: D22 Third-Party Risk (final rider Phase E call)
 ================================================================================

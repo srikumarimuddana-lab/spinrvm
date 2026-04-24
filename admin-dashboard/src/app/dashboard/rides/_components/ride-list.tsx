@@ -3,17 +3,26 @@
 import { useState, useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/utils";
-import { Car, Search, Clock, CheckCircle, XCircle, MapPin, Loader, Download, ChevronRight, ChevronLeft, User, SlidersHorizontal, ArrowUpDown, ArrowUp, ArrowDown, CalendarRange, X } from "lucide-react";
-import { getStatusBadge, fmtTime } from "./ride-ui-helpers";
+import { Car, Search, Clock, CheckCircle, XCircle, MapPin, Loader, Download, ChevronRight, ChevronLeft, User, SlidersHorizontal, ArrowUpDown, ArrowUp, ArrowDown, CalendarRange, X, CalendarClock, UserX } from "lucide-react";
+import { getStatusBadge, fmtTime, fmtKm, rideDistances } from "./ride-ui-helpers";
 import { exportToCsv } from "@/lib/export-csv";
 
+// Synthetic status values not present on the rides row itself:
+//   - "scheduled"       — is_scheduled=true AND not yet dispatched
+//   - "no_driver_found" — status=cancelled AND cancellation_type=no_drivers_found
+//                         (auto-cancelled after the 5-min search timeout)
+// These are materialised in the filter function below; the backend is
+// queried with is_scheduled=true for "scheduled" so the queue is sorted
+// by scheduled_time and paginated correctly.
 const STATUS_TABS = [
     { value: "all", label: "All", icon: Car },
+    { value: "scheduled", label: "Scheduled", icon: CalendarClock },
     { value: "searching", label: "Searching", icon: Loader },
     { value: "driver_assigned", label: "Assigned", icon: MapPin },
     { value: "in_progress", label: "In Progress", icon: Clock },
     { value: "completed", label: "Completed", icon: CheckCircle },
     { value: "cancelled", label: "Cancelled", icon: XCircle },
+    { value: "no_driver_found", label: "No Driver Found", icon: UserX },
 ];
 
 type SortKey = "status" | "pickup_address" | "rider_name" | "driver_name" | "total_fare" | "created_at";
@@ -56,7 +65,32 @@ export default function RideList({
     const [riderFilter, setRiderFilter] = useState("");
     const [driverFilter, setDriverFilter] = useState("");
 
-    const statusCounts = (s: string) => s === "all" ? allRides.length : allRides.filter(r => r.status === s).length;
+    // Tab counts. `allRides` holds whatever the current backend query
+    // returned. On the Scheduled tab that's scheduled rides only; on
+    // every other tab it's the default feed. We always count
+    // client-side against `allRides` so the badge matches what the
+    // operator actually sees (and never double-reports if the backend
+    // filter lags a deploy). Tabs we can't compute from the current
+    // feed return null and render no badge.
+    const onScheduledTab = statusFilter === "scheduled";
+    const statusCounts = (s: string): number | null => {
+        if (s === "scheduled") {
+            return allRides.filter(r => r.is_scheduled === true).length;
+        }
+        if (onScheduledTab) return null;
+        if (s === "all") return allRides.length;
+        if (s === "no_driver_found") {
+            return allRides.filter(
+                r =>
+                    r.status === "cancelled" &&
+                    (r.cancellation_type === "no_drivers_found" ||
+                        (r.cancellation_reason || "")
+                            .toLowerCase()
+                            .includes("no nearby drivers")),
+            ).length;
+        }
+        return allRides.filter(r => r.status === s).length;
+    };
 
     const handleSort = (key: SortKey) => {
         if (sortKey === key) {
@@ -138,9 +172,27 @@ export default function RideList({
                         </div>
                         <button
                             onClick={() => exportToCsv("rides", sortedRides, [
-                                { key: "id", label: "ID" }, { key: "pickup_address", label: "Pickup" }, { key: "dropoff_address", label: "Dropoff" },
-                                { key: "status", label: "Status" }, { key: "total_fare", label: "Fare" }, { key: "tip_amount", label: "Tip" },
-                                { key: "distance_km", label: "km" }, { key: "duration_minutes", label: "min" }, { key: "created_at", label: "Date" },
+                                { key: "ride_code", label: "Ride Code" },
+                                { key: "id", label: "UUID" },
+                                { key: "pickup_address", label: "Pickup" },
+                                { key: "dropoff_address", label: "Dropoff" },
+                                { key: "status", label: "Status" },
+                                { key: "total_fare", label: "Fare" },
+                                { key: "tip_amount", label: "Tip" },
+                                // Per-phase km for SGI / insurance reporting.
+                                // rideDistances() prefers the GPS-tracked
+                                // phase_distances JSONB and falls back to
+                                // scalar columns on older rides.
+                                { label: "To Pickup km", value: (r) => fmtKm(rideDistances(r).toPickupKm) },
+                                { label: "Trip km", value: (r) => fmtKm(rideDistances(r).tripKm) },
+                                { label: "Total km", value: (r) => fmtKm(rideDistances(r).totalKm) },
+                                { key: "planned_distance_km", label: "Planned km" },
+                                { key: "duration_minutes", label: "Min" },
+                                { key: "driver_name", label: "Driver" },
+                                { key: "driver_id", label: "Driver ID" },
+                                { key: "rider_name", label: "Rider" },
+                                { key: "created_at", label: "Requested At" },
+                                { key: "ride_completed_at", label: "Completed At" },
                             ])}
                             className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground px-3 py-1.5 rounded-lg border hover:bg-muted transition"
                         >
@@ -151,29 +203,34 @@ export default function RideList({
 
                 {/* Status Tabs */}
                 <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-                    {STATUS_TABS.map(tab => (
-                        <button key={tab.value} onClick={() => onStatusChange(tab.value)}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
-                                statusFilter === tab.value
-                                    ? "bg-primary text-white shadow-sm"
-                                    : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
-                            }`}>
-                            <tab.icon className="h-3.5 w-3.5" />
-                            {tab.label}
-                            <span className={`ml-0.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
-                                statusFilter === tab.value ? "bg-white/20" : "bg-background text-muted-foreground"
-                            }`}>
-                                {statusCounts(tab.value)}
-                            </span>
-                        </button>
-                    ))}
+                    {STATUS_TABS.map(tab => {
+                        const count = statusCounts(tab.value);
+                        return (
+                            <button key={tab.value} onClick={() => onStatusChange(tab.value)}
+                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all ${
+                                    statusFilter === tab.value
+                                        ? "bg-primary text-white shadow-sm"
+                                        : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
+                                }`}>
+                                <tab.icon className="h-3.5 w-3.5" />
+                                {tab.label}
+                                {count !== null && (
+                                    <span className={`ml-0.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
+                                        statusFilter === tab.value ? "bg-white/20" : "bg-background text-muted-foreground"
+                                    }`}>
+                                        {count}
+                                    </span>
+                                )}
+                            </button>
+                        );
+                    })}
                 </div>
 
                 {/* Search + Date Filter */}
                 <div className="flex items-center gap-2 mt-3">
                     <div className="relative flex-1">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input placeholder="Search by rider/driver name, phone, address, or ID..."
+                        <Input placeholder="Search by ride code, name, phone, address, or ID..."
                             value={search} onChange={e => onSearchChange(e.target.value)}
                             className="pl-9 h-9 text-sm bg-background" />
                     </div>
@@ -284,6 +341,11 @@ export default function RideList({
                                     </div>
                                 </th>
                                 <th className="text-right py-2 px-4 hidden md:table-cell">
+                                    <span className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                                        Distance
+                                    </span>
+                                </th>
+                                <th className="text-right py-2 px-4 hidden md:table-cell">
                                     <button onClick={() => handleSort("created_at")} className="flex items-center gap-1 text-[11px] font-semibold text-muted-foreground uppercase tracking-wider hover:text-foreground transition ml-auto">
                                         Date <SortIcon col="created_at" />
                                     </button>
@@ -299,6 +361,11 @@ export default function RideList({
                                     }`}>
                                     <td className="py-3 px-5">{getStatusBadge(ride.status)}</td>
                                     <td className="py-3 px-4 max-w-[320px]">
+                                        {ride.ride_code && (
+                                            <p className="text-[11px] font-bold tracking-wide text-primary/80 mb-0.5">
+                                                {ride.ride_code}
+                                            </p>
+                                        )}
                                         <p className="text-sm font-medium truncate">{ride.pickup_address || "—"}</p>
                                         <p className="text-xs text-muted-foreground truncate mt-0.5">
                                             <span className="text-muted-foreground/60">to</span> {ride.dropoff_address || "—"}
@@ -332,8 +399,45 @@ export default function RideList({
                                             <p className="text-[10px] font-semibold text-emerald-600 mt-0.5">+{formatCurrency(ride.tip_amount)} tip</p>
                                         )}
                                     </td>
+                                    <td className="py-3 px-4 text-right hidden md:table-cell tabular-nums">
+                                        {(() => {
+                                            const { toPickupKm, tripKm } = rideDistances(ride);
+                                            const planned = ride.planned_distance_km != null ? Number(ride.planned_distance_km) : null;
+                                            // Three explicit numbers per SGI/ops request: planned vs
+                                            // actual driver→pickup vs actual pickup→dropoff.
+                                            // Each row falls back to "—" so missing data is obvious.
+                                            const Row = ({ k, label, accent }: { k: number | null; label: string; accent?: boolean }) => (
+                                                <div className="flex items-center justify-end gap-1.5 leading-tight">
+                                                    <span className={`text-[10px] uppercase tracking-wide ${accent ? "text-foreground/60 font-semibold" : "text-muted-foreground"}`}>
+                                                        {label}
+                                                    </span>
+                                                    <span className={accent ? "text-sm font-bold whitespace-nowrap" : "text-xs whitespace-nowrap"}>
+                                                        {k == null ? "—" : `${fmtKm(k)} km`}
+                                                    </span>
+                                                </div>
+                                            );
+                                            return (
+                                                <div className="space-y-0.5">
+                                                    <Row k={planned} label="Plan" />
+                                                    <Row k={toPickupKm} label="Pickup" />
+                                                    <Row k={tripKm} label="Trip" accent />
+                                                </div>
+                                            );
+                                        })()}
+                                    </td>
                                     <td className="py-3 px-4 text-right hidden md:table-cell">
-                                        <p className="text-xs text-muted-foreground whitespace-nowrap">{fmtTime(ride.created_at)}</p>
+                                        {ride.is_scheduled && ride.scheduled_time ? (
+                                            <>
+                                                <p className="text-xs font-semibold text-primary whitespace-nowrap">
+                                                    {fmtTime(ride.scheduled_time)}
+                                                </p>
+                                                <p className="text-[10px] text-muted-foreground whitespace-nowrap">
+                                                    scheduled · booked {fmtTime(ride.created_at)}
+                                                </p>
+                                            </>
+                                        ) : (
+                                            <p className="text-xs text-muted-foreground whitespace-nowrap">{fmtTime(ride.created_at)}</p>
+                                        )}
                                     </td>
                                     <td className="py-3 pr-4">
                                         <ChevronRight className="h-4 w-4 text-muted-foreground/30 group-hover:text-muted-foreground/60 transition-colors" />

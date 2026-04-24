@@ -1,4 +1,6 @@
 import React, { useState, useMemo } from 'react';
+import * as ImagePicker from 'expo-image-picker';
+import { Image } from 'expo-image';
 import {
   View,
   Text,
@@ -8,13 +10,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   Keyboard,
-  TouchableWithoutFeedback,
   ActivityIndicator,
   ScrollView,
   Linking,
+  StatusBar,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@shared/store/authStore';
 import CustomAlert from '@shared/components/CustomAlert';
@@ -23,21 +25,27 @@ import type { ThemeColors } from '@shared/theme/index';
 
 export default function ProfileSetupScreen() {
   const router = useRouter();
-  const { user, createProfile, logout, isLoading: authLoading, error: authError } = useAuthStore();
+  const insets = useSafeAreaInsets();
+  const { user, createProfile, logout, updateProfileImage, isLoading: authLoading } = useAuthStore();
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   // Detect if editing existing profile vs first-time setup
   const isEditing = !!(user?.profile_complete || user?.first_name);
 
-  const [firstName, setFirstName] = useState(user?.first_name || '');
-  const [lastName, setLastName] = useState(user?.last_name || '');
-  const [email, setEmail] = useState(user?.email || '');
-  const [gender, setGender] = useState(user?.gender || '');
+  const [form, setForm] = useState({
+    firstName: user?.first_name || '',
+    lastName: user?.last_name || '',
+    email: user?.email || '',
+    gender: user?.gender || '',
+  });
+
+  const [focusedField, setFocusedField] = useState<string | null>(null);
   const [showGenderPicker, setShowGenderPicker] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [focusedField, setFocusedField] = useState<string | null>(null);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [tosAccepted, setTosAccepted] = useState(false);
+  const [showPhotoPickerAlert, setShowPhotoPickerAlert] = useState(false);
   const [alertState, setAlertState] = useState<{
     visible: boolean;
     title: string;
@@ -51,13 +59,47 @@ export default function ProfileSetupScreen() {
     return re.test(email);
   };
 
+  const updateForm = (key: keyof typeof form, value: string) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const launchCamera = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') return setAlertState({ visible: true, title: 'Permission Denied', message: 'Camera access is needed.', variant: 'warning' });
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.7,
+    });
+    if (!result.canceled && result.assets[0]) uploadPhoto(result.assets[0].uri);
+  };
+
+  const launchGallery = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') return setAlertState({ visible: true, title: 'Permission Denied', message: 'Library access is needed.', variant: 'warning' });
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.7,
+    });
+    if (!result.canceled && result.assets[0]) uploadPhoto(result.assets[0].uri);
+  };
+
+  const uploadPhoto = async (uri: string) => {
+    setIsUploadingPhoto(true);
+    try {
+      await updateProfileImage(uri);
+      setAlertState({ visible: true, title: 'Photo Updated', message: 'Your profile photo has been updated.', variant: 'success' });
+    } catch (err: any) {
+      setAlertState({ visible: true, title: 'Upload Failed', message: err.message || 'Failed to upload photo', variant: 'danger' });
+    } finally {
+      setIsUploadingPhoto(false);
+    }
+  };
+
   const handleSubmit = async () => {
-    if (!firstName.trim() || !lastName.trim() || !email.trim() || !gender) {
+    if (!form.firstName.trim() || !form.lastName.trim() || !form.email.trim() || !form.gender) {
       setAlertState({ visible: true, title: 'Missing Info', message: 'Please fill in all fields', variant: 'warning' });
       return;
     }
 
-    if (!validateEmail(email)) {
+    if (!validateEmail(form.email)) {
       setAlertState({ visible: true, title: 'Invalid Email', message: 'Please enter a valid email address', variant: 'warning' });
       return;
     }
@@ -67,10 +109,10 @@ export default function ProfileSetupScreen() {
 
     try {
       await createProfile({
-        first_name: firstName.trim(),
-        last_name: lastName.trim(),
-        email: email.trim().toLowerCase(),
-        gender,
+        first_name: form.firstName.trim(),
+        last_name: form.lastName.trim(),
+        email: form.email.trim().toLowerCase(),
+        gender: form.gender,
       });
       if (isEditing) {
         router.back();
@@ -89,251 +131,190 @@ export default function ProfileSetupScreen() {
     router.replace('/login');
   };
 
-  const isFormValid = firstName.trim() && lastName.trim() && email.trim() && gender && (isEditing || tosAccepted);
+  const isFormValid = form.firstName.trim() && form.lastName.trim() && form.email.trim() && form.gender && (isEditing || tosAccepted);
 
-  const genderOptions = [
-    { label: 'Male', value: 'Male' },
-    { label: 'Female', value: 'Female' },
-    { label: 'Other', value: 'Other' },
-  ];
+  const genderOptions = ['Male', 'Female', 'Other'];
+
+  const renderInput = (
+    key: keyof typeof form,
+    label: string,
+    placeholder: string,
+    icon: keyof typeof Ionicons.glyphMap,
+    keyboardType: 'default' | 'email-address' = 'default',
+    autoCapitalize: 'none' | 'sentences' | 'words' | 'characters' = 'words'
+  ) => {
+    const isFocused = focusedField === key;
+    return (
+      <View style={styles.inputContainer}>
+        <Text style={styles.inputLabel}>{label}</Text>
+        <View style={[styles.inputBox, isFocused && styles.inputBoxFocused]}>
+          <Ionicons name={icon} size={20} color={isFocused ? colors.primary : colors.textDim} style={styles.inputIcon} />
+          <TextInput
+            style={styles.textInput}
+            value={form[key]}
+            onChangeText={(val) => updateForm(key, val)}
+            placeholder={placeholder}
+            placeholderTextColor={colors.textDim}
+            keyboardType={keyboardType}
+            autoCapitalize={autoCapitalize}
+            onFocus={() => setFocusedField(key)}
+            onBlur={() => setFocusedField(null)}
+            autoCorrect={false}
+          />
+        </View>
+      </View>
+    );
+  };
+
+  const contentNode = (
+    <ScrollView
+      style={styles.scrollView}
+      contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 40 }]}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
+      {/* Header Profile Section */}
+      <View style={styles.headerContainer}>
+        {isEditing && (
+          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+            <Ionicons name="arrow-back" size={24} color={colors.text} />
+          </TouchableOpacity>
+        )}
+        
+        <TouchableOpacity 
+          style={styles.avatarContainer} 
+          activeOpacity={0.8}
+          onPress={() => setShowPhotoPickerAlert(true)}
+        >
+          {isUploadingPhoto ? (
+             <View style={[styles.avatarCircle, { backgroundColor: colors.surface }]}>
+               <ActivityIndicator size="large" color={colors.primary} />
+             </View>
+          ) : user?.profile_image ? (
+            <Image
+              source={{ uri: user.profile_image }}
+              style={styles.avatarCircle}
+              contentFit="cover"
+              transition={200}
+            />
+          ) : (
+            <View style={styles.avatarCircle}>
+              <Ionicons name="person" size={40} color={colors.primary} />
+            </View>
+          )}
+          <View style={styles.badge}>
+            <Ionicons name="camera" size={14} color="#FFF" />
+          </View>
+        </TouchableOpacity>
+
+        <Text style={styles.title}>{isEditing ? 'Edit Profile' : 'Complete Profile'}</Text>
+        <Text style={styles.subtitle}>
+          {isEditing ? 'Update your personal details below.' : 'Please provide your details to get started.'}
+        </Text>
+
+        {!isEditing && (
+          <View style={styles.signedInCard}>
+            <Ionicons name="phone-portrait-outline" size={18} color={colors.primary} />
+            <Text style={styles.signedInText}>
+              Signed in as <Text style={styles.signedInPhone}>{user?.phone || 'Unknown'}</Text>
+            </Text>
+            <TouchableOpacity onPress={handleLogout}>
+              <Text style={styles.changeText}>Change</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+
+      {/* Form Fields */}
+      <View style={styles.formCard}>
+        {renderInput('firstName', 'FIRST NAME', 'Enter your first name', 'person-outline', 'default', 'words')}
+        {renderInput('lastName', 'LAST NAME', 'Enter your last name', 'people-outline', 'default', 'words')}
+        {renderInput('email', 'EMAIL ADDRESS', 'name@example.com', 'mail-outline', 'email-address', 'none')}
+
+        <View style={styles.inputContainer}>
+          <Text style={styles.inputLabel}>GENDER</Text>
+          <TouchableOpacity
+            style={[styles.inputBox, showGenderPicker && styles.inputBoxFocused]}
+            onPress={() => setShowGenderPicker(!showGenderPicker)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="male-female-outline" size={20} color={showGenderPicker ? colors.primary : colors.textDim} style={styles.inputIcon} />
+            <Text style={[styles.textInput, !form.gender && { color: colors.textDim }]}>
+              {form.gender || 'Select your gender'}
+            </Text>
+            <Ionicons name={showGenderPicker ? 'chevron-up' : 'chevron-down'} size={20} color={colors.textDim} />
+          </TouchableOpacity>
+
+          {showGenderPicker && (
+            <View style={styles.dropdownContainer}>
+              {genderOptions.map((g, index) => (
+                <TouchableOpacity
+                  key={g}
+                  style={[
+                    styles.dropdownOption,
+                    index !== genderOptions.length - 1 && styles.dropdownOptionBorder,
+                    form.gender === g && styles.dropdownOptionSelected
+                  ]}
+                  onPress={() => {
+                    updateForm('gender', g);
+                    setShowGenderPicker(false);
+                  }}
+                >
+                  <Text style={[styles.dropdownOptionText, form.gender === g && styles.dropdownOptionTextActive]}>
+                    {g}
+                  </Text>
+                  {form.gender === g && <Ionicons name="checkmark-circle" size={20} color={colors.primary} />}
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </View>
+      </View>
+
+      {/* Terms & Conditions for new users */}
+      {!isEditing && (
+        <TouchableOpacity style={styles.tosContainer} activeOpacity={0.8} onPress={() => setTosAccepted(!tosAccepted)}>
+          <View style={[styles.checkbox, tosAccepted && styles.checkboxActive]}>
+            {tosAccepted && <Ionicons name="checkmark" size={16} color="#FFF" />}
+          </View>
+          <Text style={styles.tosText}>
+            I agree to Spinr's{' '}
+            <Text style={styles.link} onPress={() => Linking.openURL('https://spinr.ca/terms')}>Terms</Text>
+            {' '}and{' '}
+            <Text style={styles.link} onPress={() => Linking.openURL('https://spinr.ca/privacy')}>Privacy Policy</Text>
+          </Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Submit */}
+      <TouchableOpacity
+        style={[styles.submitBtn, (!isFormValid || isSubmitting || authLoading) && styles.submitBtnDisabled]}
+        onPress={handleSubmit}
+        disabled={!isFormValid || isSubmitting || authLoading}
+        activeOpacity={0.8}
+      >
+        {isSubmitting || authLoading ? (
+          <ActivityIndicator color="#FFF" />
+        ) : (
+          <>
+            <Text style={styles.submitBtnText}>{isEditing ? 'Save Changes' : 'Create Profile'}</Text>
+            <Ionicons name="arrow-forward" size={20} color="#FFF" />
+          </>
+        )}
+      </TouchableOpacity>
+    </ScrollView>
+  );
 
   return (
-    <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
-      >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-          <ScrollView
-            style={styles.scrollView}
-            contentContainerStyle={styles.scrollContent}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-            {/* Signed-in-as pill — only show during initial onboarding */}
-            {!isEditing && (
-              <View style={styles.signedInRow}>
-                <View style={styles.signedInInfo}>
-                  <Ionicons name="call" size={14} color={colors.textDim} />
-                  <Text style={styles.signedInText} numberOfLines={1}>
-                    Signed in as{' '}
-                    <Text style={styles.signedInPhone}>{user?.phone || 'your number'}</Text>
-                  </Text>
-                </View>
-                <TouchableOpacity
-                  onPress={() => {
-                    setAlertState({
-                      visible: true,
-                      title: 'Change phone number?',
-                      message: 'This will sign you out and return to the phone entry screen. Any progress here will be lost.',
-                      variant: 'warning',
-                      buttons: [
-                        { text: 'Cancel', style: 'cancel' },
-                        {
-                          text: 'Change Number',
-                          style: 'destructive',
-                          onPress: async () => {
-                            await logout();
-                            router.replace('/login' as any);
-                          },
-                        },
-                      ],
-                    });
-                  }}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
-                  <Text style={styles.changeNumberLink}>Change</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {/* Header */}
-            <View style={styles.header}>
-              {isEditing && (
-                <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-                  <Ionicons name="arrow-back" size={24} color={colors.text} />
-                </TouchableOpacity>
-              )}
-              <Text style={styles.title}>
-                {isEditing ? 'Edit Profile' : 'Complete your\nprofile'}
-              </Text>
-              <Text style={styles.subtitle}>
-                {isEditing
-                  ? 'Update your personal details.'
-                  : 'We need a few details to get you started with Spinr.'}
-              </Text>
-            </View>
-
-            {/* Form */}
-            <View style={styles.form}>
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>FIRST NAME</Text>
-                <View style={[styles.inputWrapper, focusedField === 'firstName' && styles.inputWrapperFocused]}>
-                  <TextInput
-                    style={styles.input}
-                    value={firstName}
-                    onChangeText={setFirstName}
-                    placeholder="Enter your first name"
-                    placeholderTextColor={colors.textDim}
-                    autoCapitalize="words"
-                    onFocus={() => setFocusedField('firstName')}
-                    onBlur={() => setFocusedField(null)}
-                  />
-                </View>
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>LAST NAME</Text>
-                <View style={[styles.inputWrapper, focusedField === 'lastName' && styles.inputWrapperFocused]}>
-                  <TextInput
-                    style={styles.input}
-                    value={lastName}
-                    onChangeText={setLastName}
-                    placeholder="Enter your last name"
-                    placeholderTextColor={colors.textDim}
-                    autoCapitalize="words"
-                    onFocus={() => setFocusedField('lastName')}
-                    onBlur={() => setFocusedField(null)}
-                  />
-                </View>
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>EMAIL</Text>
-                <View style={[styles.inputWrapper, focusedField === 'email' && styles.inputWrapperFocused]}>
-                  <TextInput
-                    style={styles.input}
-                    value={email}
-                    onChangeText={setEmail}
-                    placeholder="email@example.com"
-                    placeholderTextColor={colors.textDim}
-                    keyboardType="email-address"
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    onFocus={() => setFocusedField('email')}
-                    onBlur={() => setFocusedField(null)}
-                  />
-                </View>
-              </View>
-
-              <View style={styles.inputGroup}>
-                <Text style={styles.label}>GENDER</Text>
-                <TouchableOpacity
-                  style={styles.citySelector}
-                  onPress={() => setShowGenderPicker(!showGenderPicker)}
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.citySelectorText, !gender && styles.placeholder]}>
-                    {gender || 'Select your gender'}
-                  </Text>
-                  <Ionicons
-                    name={showGenderPicker ? 'chevron-up' : 'chevron-down'}
-                    size={20}
-                    color={colors.textDim}
-                  />
-                </TouchableOpacity>
-
-                {showGenderPicker && (
-                  <View style={styles.cityDropdown}>
-                    {genderOptions.map((g) => (
-                      <TouchableOpacity
-                        key={g.value}
-                        style={[
-                          styles.cityOption,
-                          gender === g.value && styles.cityOptionSelected,
-                        ]}
-                        onPress={() => {
-                          setGender(g.value);
-                          setShowGenderPicker(false);
-                        }}
-                      >
-                        <Text
-                          style={[
-                            styles.cityOptionText,
-                            gender === g.value && styles.cityOptionTextSelected,
-                          ]}
-                        >
-                          {g.label}
-                        </Text>
-                        {gender === g.value && (
-                          <Ionicons name="checkmark" size={20} color={colors.primary} />
-                        )}
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-              </View>
-            </View>
-
-            {/* Terms of Service — first-time setup only */}
-            {!isEditing && (
-              <TouchableOpacity
-                style={styles.tosRow}
-                onPress={() => setTosAccepted((v) => !v)}
-                activeOpacity={0.7}
-              >
-                <View style={[styles.tosCheckbox, tosAccepted && styles.tosCheckboxChecked]}>
-                  {tosAccepted && <Ionicons name="checkmark" size={14} color="#FFF" />}
-                </View>
-                <Text style={styles.tosText}>
-                  I agree to the{' '}
-                  <Text
-                    style={styles.tosLink}
-                    onPress={() => Linking.openURL('https://spinr.ca/terms')}
-                  >
-                    Terms of Service
-                  </Text>
-                  {' '}and{' '}
-                  <Text
-                    style={styles.tosLink}
-                    onPress={() => Linking.openURL('https://spinr.ca/privacy')}
-                  >
-                    Privacy Policy
-                  </Text>
-                </Text>
-              </TouchableOpacity>
-            )}
-
-            {/* Submit Button */}
-            <TouchableOpacity
-              style={[
-                styles.submitButton,
-                (isSubmitting || authLoading) && styles.submitButtonLoading,
-                !isFormValid && styles.submitButtonDisabled,
-              ]}
-              onPress={handleSubmit}
-              disabled={!isFormValid || isSubmitting || authLoading}
-              activeOpacity={0.8}
-            >
-              {isSubmitting || authLoading ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <View style={styles.submitButtonContent}>
-                  <Text style={[styles.submitButtonText, !isFormValid && styles.submitButtonTextDisabled]}>
-                    {isEditing ? 'Save Changes' : 'Get Started'}
-                  </Text>
-                  <Ionicons
-                    name="arrow-forward"
-                    size={18}
-                    color={!isFormValid ? colors.textDim : '#fff'}
-                  />
-                </View>
-              )}
-            </TouchableOpacity>
-
-            {/* Logout / Change Number Button — only on first setup */}
-            {!isEditing && (
-              <TouchableOpacity
-                style={styles.logoutButton}
-                onPress={handleLogout}
-                disabled={isSubmitting || authLoading}
-              >
-                <Text style={styles.logoutButtonText}>Not you? Change phone number</Text>
-              </TouchableOpacity>
-            )}
-          </ScrollView>
-        </TouchableWithoutFeedback>
-      </KeyboardAvoidingView>
+    <View style={styles.container}>
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+      {Platform.OS === 'ios' ? (
+        <KeyboardAvoidingView behavior="padding" style={styles.container}>
+          {contentNode}
+        </KeyboardAvoidingView>
+      ) : (
+        contentNode
+      )}
       <CustomAlert
         visible={alertState.visible}
         title={alertState.title}
@@ -342,7 +323,20 @@ export default function ProfileSetupScreen() {
         buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
         onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
       />
-    </SafeAreaView>
+      <CustomAlert
+        visible={showPhotoPickerAlert}
+        title="Update Photo"
+        message="Choose how to update your profile photo."
+        variant="info"
+        icon="camera-outline"
+        buttons={[
+          { text: 'Take Photo', style: 'default', onPress: launchCamera },
+          { text: 'Library', style: 'default', onPress: launchGallery },
+          { text: 'Cancel', style: 'cancel' },
+        ]}
+        onClose={() => setShowPhotoPickerAlert(false)}
+      />
+    </View>
   );
 }
 
@@ -350,214 +344,195 @@ function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: {
       flex: 1,
-      backgroundColor: colors.surface,
-    },
-    keyboardView: {
-      flex: 1,
+      backgroundColor: colors.surfaceLight,
     },
     scrollView: {
       flex: 1,
     },
     scrollContent: {
       paddingHorizontal: 24,
-      paddingTop: 40,
-      paddingBottom: 40,
     },
-    backBtn: {
-      width: 44, height: 44, borderRadius: 22, backgroundColor: colors.surfaceLight,
-      justifyContent: 'center', alignItems: 'center', marginBottom: 12,
-    },
-    signedInRow: {
-      flexDirection: 'row',
+    headerContainer: {
       alignItems: 'center',
-      justifyContent: 'space-between',
-      backgroundColor: colors.surfaceLight,
-      paddingHorizontal: 14,
-      paddingVertical: 10,
+      marginBottom: 32,
+      position: 'relative',
+    },
+    backButton: {
+      position: 'absolute',
+      left: 0,
+      top: 0,
+      padding: 8,
+      backgroundColor: colors.surface,
       borderRadius: 12,
-      marginBottom: 24,
-      gap: 8,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.05,
+      shadowRadius: 4,
+      elevation: 2,
     },
-    signedInInfo: {
-      flexDirection: 'row',
+    avatarContainer: {
+      position: 'relative',
+      marginBottom: 16,
+    },
+    avatarCircle: {
+      width: 90,
+      height: 90,
+      borderRadius: 45,
+      backgroundColor: `${colors.primary}15`,
+      justifyContent: 'center',
       alignItems: 'center',
-      gap: 6,
-      flex: 1,
+      borderWidth: 2,
+      borderColor: colors.primary,
     },
-    signedInText: { fontSize: 13, color: colors.textDim, flex: 1 },
-    signedInPhone: { color: colors.text, fontWeight: '700' },
-    changeNumberLink: {
-      fontSize: 13,
-      color: colors.primary,
-      fontWeight: '700',
-    },
-    header: {
-      marginBottom: 40,
+    badge: {
+      position: 'absolute',
+      bottom: 0,
+      right: 0,
+      backgroundColor: colors.primary,
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      justifyContent: 'center',
+      alignItems: 'center',
+      borderWidth: 2,
+      borderColor: colors.surfaceLight,
     },
     title: {
       fontSize: 28,
-      fontWeight: '800',
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.text,
-      lineHeight: 36,
-      letterSpacing: -0.5,
+      marginBottom: 6,
     },
     subtitle: {
       fontSize: 15,
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
-      marginTop: 12,
-      lineHeight: 22,
+      textAlign: 'center',
     },
-    form: {
-      marginBottom: 32,
+    signedInCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      paddingHorizontal: 16,
+      paddingVertical: 12,
+      borderRadius: 16,
+      marginTop: 20,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.05,
+      shadowRadius: 8,
+      elevation: 2,
+      width: '100%',
     },
-    inputGroup: {
+    signedInText: {
+      flex: 1,
+      fontSize: 13,
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.textDim,
+      marginLeft: 10,
+    },
+    signedInPhone: {
+      color: colors.text,
+      fontFamily: 'PlusJakartaSans_700Bold',
+    },
+    changeText: {
+      color: colors.primary,
+      fontFamily: 'PlusJakartaSans_700Bold',
+      fontSize: 13,
+    },
+    formCard: {
+      backgroundColor: colors.surface,
+      borderRadius: 24,
+      padding: 24,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.05,
+      shadowRadius: 12,
+      elevation: 3,
+      marginBottom: 24,
+    },
+    inputContainer: {
       marginBottom: 20,
     },
-    label: {
+    inputLabel: {
       fontSize: 11,
-      fontWeight: '700',
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.textDim,
       letterSpacing: 1,
       marginBottom: 8,
+      marginLeft: 4,
     },
-    inputWrapper: {
+    inputBox: {
+      flexDirection: 'row',
+      alignItems: 'center',
       backgroundColor: colors.surfaceLight,
-      borderRadius: 16,
-      height: 60,
       borderWidth: 1.5,
-      borderColor: colors.border,
-      justifyContent: 'center',
+      borderColor: 'transparent',
+      borderRadius: 16,
+      height: 56,
       paddingHorizontal: 16,
     },
-    inputWrapperFocused: {
+    inputBoxFocused: {
       borderColor: colors.primary,
-      backgroundColor: colors.surface,
-      shadowColor: colors.primary,
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.12,
-      shadowRadius: 8,
-      elevation: 3,
+      backgroundColor: `${colors.primary}05`,
     },
-    input: {
-      fontSize: 18,
-      fontWeight: '600',
+    inputIcon: {
+      marginRight: 12,
+    },
+    textInput: {
+      flex: 1,
+      fontSize: 16,
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.text,
-      padding: 0,
+      includeFontPadding: false,
     },
-    citySelector: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      borderWidth: 1.5,
-      borderColor: colors.border,
-      borderRadius: 16,
-      paddingHorizontal: 16,
-      paddingVertical: 14,
-    },
-    citySelectorText: {
-      fontSize: 16,
-      fontFamily: 'PlusJakartaSans_500Medium',
-      color: colors.text,
-    },
-    placeholder: {
-      color: colors.textDim,
-    },
-    cityDropdown: {
+    dropdownContainer: {
       marginTop: 8,
-      backgroundColor: colors.surface,
+      backgroundColor: colors.surfaceLight,
       borderRadius: 16,
-      borderWidth: 1,
-      borderColor: colors.border,
       overflow: 'hidden',
     },
-    cityOption: {
+    dropdownOption: {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: 16,
       paddingVertical: 14,
+      paddingHorizontal: 16,
+    },
+    dropdownOptionBorder: {
       borderBottomWidth: 1,
       borderBottomColor: colors.border,
     },
-    cityOptionSelected: {
-      backgroundColor: `${colors.primary}14`,
+    dropdownOptionSelected: {
+      backgroundColor: `${colors.primary}10`,
     },
-    cityOptionText: {
-      fontSize: 16,
+    dropdownOptionText: {
+      fontSize: 15,
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.text,
     },
-    cityOptionTextSelected: {
-      color: colors.primary,
-      fontFamily: 'PlusJakartaSans_600SemiBold',
-    },
-    submitButton: {
-      backgroundColor: colors.primary,
-      borderRadius: 16,
-      height: 58,
-      alignItems: 'center',
-      justifyContent: 'center',
-      shadowColor: colors.primary,
-      shadowOffset: { width: 0, height: 6 },
-      shadowOpacity: 0.25,
-      shadowRadius: 12,
-      elevation: 6,
-    },
-    submitButtonLoading: {
-      backgroundColor: colors.primaryDark,
-    },
-    submitButtonDisabled: {
-      backgroundColor: colors.border,
-      shadowOpacity: 0,
-      elevation: 0,
-    },
-    submitButtonContent: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-    },
-    submitButtonText: {
-      fontSize: 16,
-      fontWeight: '700',
+    dropdownOptionTextActive: {
       fontFamily: 'PlusJakartaSans_700Bold',
-      color: '#fff',
+      color: colors.primary,
     },
-    submitButtonTextDisabled: {
-      color: colors.textDim,
-    },
-    logoutButton: {
-      marginTop: 16,
-      paddingVertical: 12,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    logoutButtonText: {
-      fontSize: 15,
-      fontFamily: 'PlusJakartaSans_600SemiBold',
-      color: colors.textDim,
-    },
-    tosRow: {
+    tosContainer: {
       flexDirection: 'row',
       alignItems: 'flex-start',
-      gap: 12,
-      marginBottom: 20,
+      marginBottom: 32,
+      paddingHorizontal: 8,
     },
-    tosCheckbox: {
-      width: 22,
-      height: 22,
-      borderRadius: 6,
+    checkbox: {
+      width: 24,
+      height: 24,
+      borderRadius: 8,
       borderWidth: 2,
-      borderColor: colors.border,
-      alignItems: 'center',
+      borderColor: colors.textDim,
       justifyContent: 'center',
-      marginTop: 1,
-      flexShrink: 0,
+      alignItems: 'center',
+      marginRight: 12,
+      marginTop: 2,
     },
-    tosCheckboxChecked: {
+    checkboxActive: {
       backgroundColor: colors.primary,
       borderColor: colors.primary,
     },
@@ -566,11 +541,35 @@ function createStyles(colors: ThemeColors) {
       fontSize: 14,
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
-      lineHeight: 20,
+      lineHeight: 22,
     },
-    tosLink: {
+    link: {
       color: colors.primary,
       fontFamily: 'PlusJakartaSans_600SemiBold',
+    },
+    submitBtn: {
+      backgroundColor: colors.primary,
+      height: 60,
+      borderRadius: 20,
+      flexDirection: 'row',
+      justifyContent: 'center',
+      alignItems: 'center',
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.3,
+      shadowRadius: 12,
+      elevation: 6,
+    },
+    submitBtnDisabled: {
+      backgroundColor: colors.border,
+      shadowOpacity: 0,
+      elevation: 0,
+    },
+    submitBtnText: {
+      color: '#FFF',
+      fontSize: 17,
+      fontFamily: 'PlusJakartaSans_700Bold',
+      marginRight: 8,
     },
   });
 }

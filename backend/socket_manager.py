@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from typing import Dict
 
@@ -89,23 +91,79 @@ class ConnectionManager:
         """Broadcast to every socket connected to THIS machine.
 
         Intentionally local-only: broadcast() has no current callers
-        outside of legacy test paths, and cross-machine broadcast is a
-        different feature (room-based fan-out) that we haven't yet had
-        a real use for. When we do, add a ``pubsub.publish_broadcast``
-        helper rather than changing this method's semantics.
+        outside of legacy test paths, and an unscoped cross-machine
+        broadcast would need a story for excluding admin-only channels.
+        Prefer prefix-scoped broadcasts (``broadcast_to_admins``) which
+        fan out correctly across VMs.
         """
         connections = list(self.active_connections.values())  # snapshot to avoid mutation during iteration
         for connection in connections:
             await connection.send_json(message)
 
     async def broadcast_to_admins(self, message: dict):
-        """Broadcast a message to all connected admin WebSocket clients."""
-        admin_keys = [k for k in self.active_connections if k.startswith("admin_")]
-        for key in admin_keys:
+        """Broadcast to every admin client across the fleet.
+
+        Fans out via Redis pub/sub so admins on other VMs receive the
+        message — previously this was local-only, so an admin connected
+        to VM-A would miss a driver_status_changed event triggered on
+        VM-B. When pub/sub is down we fall back to local delivery,
+        which matches the pre-change behaviour.
+        """
+        try:
+            from utils.ws_pubsub import pubsub
+        except ImportError:  # pragma: no cover — package-relative fallback
+            from .utils.ws_pubsub import pubsub  # type: ignore
+
+        if await pubsub.publish_broadcast("admin_", message):
+            return
+        await self._deliver_broadcast_local("admin_", message)
+
+    async def broadcast_ride_status(
+        self,
+        ride_id: str,
+        status: str,
+        rider_id: str | None = None,
+        **extra,
+    ):
+        """Emit a unified ``ride_status_changed`` event for a ride transition.
+
+        Both the rider app and the admin dashboard listen for this single
+        event type and switch on ``status``. Individual specific events
+        (``driver_accepted``, ``ride_started``, …) still fire for
+        backward-compat, but every backend state transition should also
+        call this so admin live-monitoring stays consistent without
+        per-event wiring.
+
+        ``rider_id`` is optional — pass None for transitions that shouldn't
+        fan out to the rider (e.g. the initial driver_assigned pick, which
+        shouldn't trigger a rider UI update until the driver actually
+        accepts).
+        """
+        payload = {"type": "ride_status_changed", "ride_id": ride_id, "status": status, **extra}
+        if rider_id:
             try:
-                await self.active_connections[key].send_json(message)
+                await self.send_personal_message(payload, f"rider_{rider_id}")
             except Exception as e:
-                logger.warning(f"Failed to send to admin {key}: {e}")
+                logger.warning(f"broadcast_ride_status: rider send failed for {rider_id}: {e}")
+        try:
+            await self.broadcast_to_admins(payload)
+        except Exception as e:
+            logger.warning(f"broadcast_ride_status: admin broadcast failed for {ride_id}: {e}")
+
+    async def _deliver_broadcast_local(self, prefix: str, message: dict):
+        """Deliver ``message`` to every local socket whose key starts with
+        ``prefix``. Snapshot the match list before iterating so a
+        concurrent disconnect doesn't RuntimeError the loop.
+        """
+        keys = [k for k in self.active_connections if k.startswith(prefix)]
+        for key in keys:
+            ws = self.active_connections.get(key)
+            if ws is None:
+                continue
+            try:
+                await ws.send_json(message)
+            except Exception as e:
+                logger.warning(f"Failed to send to {key}: {e}")
 
     def update_driver_location(self, driver_id: str, lat: float, lng: float):
         self.driver_locations[driver_id] = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc).isoformat()}

@@ -20,9 +20,11 @@ from typing import Any, Dict, List, Optional, Tuple
 try:
     from ..geo_utils import calculate_distance
     from ..settings_loader import get_app_settings
+    from ..utils.driver_presence import present_driver_ids
 except ImportError:  # pragma: no cover - allow direct module imports in tests
     from geo_utils import calculate_distance
     from settings_loader import get_app_settings
+    from utils.driver_presence import present_driver_ids
 
 
 # Valid algorithm values. ``nearest`` is the production default.
@@ -168,16 +170,46 @@ class DispatchService:
         return algorithm, min_rating, search_radius_km
 
     async def find_candidate_drivers(self, ride: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Online + available drivers for the ride's vehicle type."""
-        return await self.db.get_rows(
+        """Online + available + verified + *present* drivers for this ride.
+
+        is_verified + status='active' gate unverified / suspended / needs_review
+        drivers out of dispatch even if their is_online flag got left on (e.g.
+        status flipped server-side after they toggled online).
+
+        Presence filter (Uber/Lyft-style): we only dispatch to drivers whose
+        short-TTL Redis heartbeat is still alive. Without this filter, a
+        driver whose app was killed mid-shift stays ``is_online=true`` until
+        someone notices — and the dispatcher routes a ride to a phone that
+        won't ring.
+
+        Safety valve: if Redis is unreachable or returns no presence keys
+        at all, we fall back to the raw DB query so a Redis outage can't
+        take every driver offline. An empty presence set is an ambiguous
+        signal (bootstrap, Redis failover, dev with REDIS_URL unset); we
+        prefer dispatching to "online-per-DB" drivers over dispatching to
+        nobody.
+        """
+        rows = await self.db.get_rows(
             "drivers",
             {
                 "is_online": True,
                 "is_available": True,
+                "is_verified": True,
+                "status": "active",
                 "vehicle_type_id": ride["vehicle_type_id"],
             },
             limit=500,
         )
+        if not rows:
+            return rows
+
+        try:
+            present = await present_driver_ids([d["id"] for d in rows])
+        except Exception:
+            return rows
+        if not present:
+            return rows
+        return [d for d in rows if d["id"] in present]
 
     async def claim_driver(self, driver_id: str) -> bool:
         """

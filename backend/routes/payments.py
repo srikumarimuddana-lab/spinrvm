@@ -8,10 +8,12 @@ try:
     from .. import db_supabase
     from ..dependencies import get_current_user
     from ..settings_loader import get_app_settings
+    from ..utils.idempotency import idempotent_endpoint
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
     from settings_loader import get_app_settings
+    from utils.idempotency import idempotent_endpoint
 import logging
 
 import stripe
@@ -50,7 +52,12 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
 
 
 @api_router.post("/create-intent")
-async def create_payment_intent(body: PaymentIntentRequest, current_user: dict = Depends(get_current_user)):
+@idempotent_endpoint(scope="payment_intent")
+async def create_payment_intent(
+    body: PaymentIntentRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
     """Create a Stripe payment intent.
 
     `amount` is validated by Pydantic (positive, ≤ 100000 CAD) before we

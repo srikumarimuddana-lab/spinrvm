@@ -54,7 +54,6 @@ class CreateProfileRequest(BaseModel):
     first_name: str = Field(..., min_length=1, max_length=50)
     last_name: str = Field(..., min_length=1, max_length=50)
     email: EmailStr
-    address: str = Field(..., min_length=10, max_length=200)
     gender: str
     role: Optional[str] = None  # 'driver' when coming from driver app
 
@@ -125,6 +124,15 @@ class AppSettings(BaseModel):
     require_driver_subscription: bool = False
     terms_of_service_text: str = ""
     privacy_policy_text: str = ""
+    # Public company / contact info. Exposed via GET /api/company-info (no
+    # auth) so the rider and driver apps can embed these in their Support
+    # / Profile footers without each app hard-coding them. None of these
+    # fields are sensitive — they're the same info on a business card.
+    company_name: str = "Spinr"
+    company_address: str = ""
+    company_phone: str = ""
+    company_email: str = ""
+    company_website: str = ""
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

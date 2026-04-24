@@ -14,7 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { useDriverStore } from '../../store/driverStore';
+import { useDriverStore } from '../../../store/driverStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -138,7 +138,11 @@ export default function RidesScreen() {
           </View>
           <View style={{ alignItems: 'flex-end' }}>
             <Text style={styles.dateText}>{formattedDate}</Text>
-            <Text style={styles.bookingIdText}>ID: #{String(item.id).substring(0, 8).toUpperCase()}</Text>
+            <Text style={styles.bookingIdText}>
+              {item.ride_code
+                ? item.ride_code
+                : `ID: #${String(item.id).substring(0, 8).toUpperCase()}`}
+            </Text>
           </View>
         </View>
 

@@ -23,6 +23,7 @@ try:
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
     from ..utils.crypto import hash_otp
+    from ..utils.idempotency import idempotent_endpoint
     from ..utils.rate_limiter import cancel_ride_limit, ride_request_limit
     from ..validators import validate_ride_location
 except ImportError:
@@ -38,6 +39,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from socket_manager import manager
     from utils.crypto import hash_otp
+    from utils.idempotency import idempotent_endpoint
     from utils.rate_limiter import cancel_ride_limit, ride_request_limit
     from validators import validate_ride_location
 
@@ -48,9 +50,11 @@ from .fares import _fares_for_location_impl, get_fares_for_location
 try:
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.error_handling import RideStateError
+    from ..utils.ride_code import generate_ride_code
 except ImportError:
     from utils.datetime_utils import parse_iso_utc
     from utils.error_handling import RideStateError
+    from utils.ride_code import generate_ride_code
 
 try:
     from ..utils.estimate_token import (
@@ -299,11 +303,10 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             f"user_id={selected_driver.get('user_id')} name={selected_driver.get('name')}"
         )
 
-        # Notify rider via WebSocket
-        await manager.send_personal_message(
-            {"type": "driver_assigned", "ride_id": ride_id, "driver_id": selected_driver["id"]},
-            f"rider_{ride['rider_id']}",
-        )
+        # No rider-facing WS event here — the rider app waits for
+        # ``driver_accepted`` (emitted when the driver actually taps
+        # Accept). Notifying on bare assignment caused premature "driver
+        # found" banners that reverted if the driver timed out.
 
         # Look up the rider so we can include name/rating in the dispatch
         # payload sent to the driver-app. Missing fields are fine — the
@@ -605,15 +608,28 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
     try:
         current_ride = await db_supabase.get_ride(r_id)
         if current_ride and current_ride.get("status") == "searching":
-            await db_supabase.update_ride(
-                r_id,
-                {
-                    "status": "cancelled",
-                    "cancelled_at": datetime.now(timezone.utc),
-                    "cancellation_reason": "No nearby drivers found. Please try again.",
-                    "updated_at": datetime.now(timezone.utc),
-                },
-            )
+            now = datetime.now(timezone.utc)
+            base_update = {
+                "status": "cancelled",
+                "cancelled_at": now,
+                "cancellation_reason": "No nearby drivers found. Please try again.",
+                "updated_at": now,
+            }
+            # Migration 38 adds cancelled_by / cancellation_type so the
+            # admin panel can filter "No Driver Found" separately. Fall
+            # back to base_update on PGRST204 ("column does not exist")
+            # so the rider-facing cancel still succeeds before the
+            # migration lands in prod.
+            try:
+                await db_supabase.update_ride(
+                    r_id,
+                    {**base_update, "cancelled_by": "system", "cancellation_type": "no_drivers_found"},
+                )
+            except Exception as _col_exc:
+                logger.warning(
+                    f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
+                )
+                await db_supabase.update_ride(r_id, base_update)
             await manager.send_personal_message(
                 {
                     "type": "ride_cancelled",
@@ -622,6 +638,19 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 },
                 f"rider_{current_ride['rider_id']}",
             )
+            await manager.broadcast_ride_status(
+                r_id,
+                "cancelled",
+                rider_id=current_ride["rider_id"],
+                reason="no_drivers_found",
+                is_auto=True,
+            )
+            try:
+                await manager.broadcast_to_admins(
+                    {"type": "ride_cancelled", "ride_id": r_id, "reason": "no_drivers_found", "is_auto": True}
+                )
+            except Exception as _exc:  # pragma: no cover - best effort
+                logger.warning(f"ride timeout admin broadcast failed: {_exc}")
             await send_push_notification(
                 current_ride["rider_id"],
                 "Ride Cancelled ❌",
@@ -635,6 +664,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
 
 @api_router.post("")
 @ride_request_limit
+@idempotent_endpoint(scope="ride_create")
 async def create_ride(
     request: Request, body: CreateRideRequest, current_user: dict = Depends(get_current_user)
 ):
@@ -940,8 +970,58 @@ async def create_ride(
     # ``insert_ride`` returns the row Supabase just wrote — use it directly
     # instead of a follow-up ``get_ride`` round-trip. Fall back to the
     # local ride_data if the driver returns None (e.g. stub DB in tests).
-    inserted = await db_supabase.insert_ride(ride_data)
+    #
+    # ride_code (migration 40) is a short SPR-XXXXXX string operators and
+    # riders can quote. The UUID in ride_data["id"] stays primary key.
+    # On the astronomically-unlikely unique-constraint collision we retry
+    # with a fresh code; on PGRST204 ("column does not exist", migration
+    # hasn't landed yet) fall back to inserting without the code.
+    inserted = None
+    last_exc: Optional[Exception] = None
+    for _attempt in range(3):
+        ride_data["ride_code"] = generate_ride_code()
+        try:
+            inserted = await db_supabase.insert_ride(ride_data)
+            break
+        except Exception as e:
+            last_exc = e
+            msg = str(e).lower()
+            if "column" in msg or "pgrst204" in msg:
+                ride_data.pop("ride_code", None)
+                inserted = await db_supabase.insert_ride(ride_data)
+                break
+            if "unique" in msg or "duplicate" in msg or "23505" in msg:
+                continue  # retry with a new code
+            raise
+    else:
+        logger.error(
+            f"create_ride: could not allocate unique ride_code after 3 tries: {last_exc}"
+        )
+        raise HTTPException(status_code=503, detail="Could not allocate ride code")
+
     fresh_ride = inserted or ride_data
+
+    # Let admin live-monitoring see the request before dispatch starts —
+    # previously the dashboard only observed a ride once a driver accepted,
+    # which made it impossible to watch an unassigned ride sit in queue.
+    try:
+        await manager.broadcast_to_admins(
+            {
+                "type": "ride_requested",
+                "ride_id": ride.id,
+                "rider_id": fresh_ride.get("rider_id"),
+                "pickup_address": fresh_ride.get("pickup_address"),
+                "dropoff_address": fresh_ride.get("dropoff_address"),
+                "pickup_lat": fresh_ride.get("pickup_lat"),
+                "pickup_lng": fresh_ride.get("pickup_lng"),
+                "dropoff_lat": fresh_ride.get("dropoff_lat"),
+                "dropoff_lng": fresh_ride.get("dropoff_lng"),
+                "fare": fresh_ride.get("total_fare"),
+                "status": fresh_ride.get("status"),
+            }
+        )
+    except Exception as _exc:  # pragma: no cover - best effort
+        logger.warning(f"create_ride: admin broadcast failed: {_exc}")
 
     # Match driver — pass the fresh ride through so the dispatch path
     # doesn't re-fetch the row we just inserted.
@@ -1176,7 +1256,13 @@ async def get_ride(ride_id: str, current_user: dict = Depends(get_current_user))
 
 
 @api_router.post("/{ride_id}/tip")
-async def add_tip(ride_id: str, req: TipRequest, current_user: dict = Depends(get_current_user)):
+@idempotent_endpoint(scope="ride_tip")
+async def add_tip(
+    ride_id: str,
+    req: TipRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
     # Money arithmetic uses Decimal per CLAUDE.md. The old `float(req.amount)`
     # path drifted when summed with existing driver_earnings.
     tip_amount = _round(_d(req.amount))
@@ -1263,10 +1349,10 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         raise HTTPException(status_code=403, detail="Not authorized")
 
     _ride_status = ride.get("status", "")
-    if _ride_status != "trip_completed":
+    if _ride_status != "completed":
         raise HTTPException(
             status_code=409,
-            detail=f"Ride is in status '{_ride_status}'; payment requires trip_completed state.",
+            detail=f"Ride is in status '{_ride_status}'; payment requires completed state.",
         )
 
     # IDEMPOTENCY: if already paid, return success without charging again
@@ -1339,7 +1425,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             ride_id,
             {
                 "payment_status": "paid",
-                "tip_amount": tip_amount,
+                "tip_amount": float(tip_amount),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
         )
@@ -1740,7 +1826,7 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
     if rating_data.tip_amount > 0:
         new_tip = ride.get("tip_amount", 0) + rating_data.tip_amount
         new_driver_earnings = ride.get("driver_earnings", 0) + rating_data.tip_amount
-    await db_supabase.update_ride(ride_id, {"tip_amount": new_tip, "driver_earnings": new_driver_earnings})
+        await db_supabase.update_ride(ride_id, {"tip_amount": new_tip, "driver_earnings": new_driver_earnings})
 
     # Aggregate driver rating accurately
     driver = await db_supabase.get_driver_by_id(driver_id)
@@ -1751,15 +1837,15 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
 
         if rated_rides:
             average_rating = round(sum(rated_rides) / len(rated_rides), 2)
-    await db_supabase.update_one(
-        "drivers",
-        {"id": driver_id},
-        {
-            "rating": average_rating,
-            "average_rating": average_rating,
-            "total_ratings": len(rated_rides),
-        },
-    )
+            await db_supabase.update_one(
+                "drivers",
+                {"id": driver_id},
+                {
+                    "rating": average_rating,
+                    "average_rating": average_rating,
+                    "total_ratings": len(rated_rides),
+                },
+            )
 
     # G19: Notify the driver that they received a rating. This creates a
     # feedback loop — drivers see their rating improve/decline in real time
@@ -1863,16 +1949,27 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
         except Exception as fee_err:
             logger.warning(f"[CANCEL] cancellation fee payout failed for driver {driver_id}: {fee_err}")
 
-    await db_supabase.update_ride(
-        ride_id,
-        {
-            "status": "cancelled",
-            "cancelled_at": datetime.now(timezone.utc),
-            "cancellation_fee_admin": charged_admin,
-            "cancellation_fee_driver": charged_driver,
-            "updated_at": datetime.now(timezone.utc),
-        },
-    )
+    _now = datetime.now(timezone.utc)
+    _base_update = {
+        "status": "cancelled",
+        "cancelled_at": _now,
+        "cancellation_fee_admin": charged_admin,
+        "cancellation_fee_driver": charged_driver,
+        "updated_at": _now,
+    }
+    # Migration 38 — attribution. Fall back to the legacy payload on
+    # PGRST204 so the rider's cancel button never 503s if the column
+    # isn't in prod yet.
+    try:
+        await db_supabase.update_ride(
+            ride_id,
+            {**_base_update, "cancelled_by": "rider", "cancellation_type": "rider_cancel"},
+        )
+    except Exception as _col_exc:
+        logger.warning(
+            f"[CANCEL] attribution write failed ({_col_exc}); retrying minimal"
+        )
+        await db_supabase.update_ride(ride_id, _base_update)
 
     # Verify the cancel actually landed in the database. Same class of
     # silent-failure we hit with go-online and accept: the update_one wrapper
@@ -1919,6 +2016,16 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
                 {"type": "ride_cancelled", "ride_id": ride_id, "reason": "Rider cancelled"},
                 f"driver_{driver['user_id']}",
             )
+
+    await manager.broadcast_ride_status(
+        ride_id, "cancelled", reason="rider_cancelled"
+    )
+    try:
+        await manager.broadcast_to_admins(
+            {"type": "ride_cancelled", "ride_id": ride_id, "reason": "rider_cancelled"}
+        )
+    except Exception as _exc:  # pragma: no cover - best effort
+        logger.warning(f"rider cancel admin broadcast failed: {_exc}")
 
     return {"success": True, "cancellation_fee": charged_admin + charged_driver}
 
@@ -2042,8 +2149,13 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
 
     await db_supabase.insert_one("emergencies", incident)
 
-    # Notify admin dashboard via Websocket
-    await manager.send_personal_message({"type": "emergency_alert", "incident": incident}, "admin_notifications")
+    # Notify admin dashboard via Websocket — broadcast across every
+    # replica's admin connections. The previous ``admin_notifications``
+    # client_id pointed at no real socket, so alerts silently disappeared.
+    try:
+        await manager.broadcast_to_admins({"type": "emergency_alert", "incident": incident})
+    except Exception as _exc:  # pragma: no cover - best effort
+        logger.warning(f"emergency_alert admin broadcast failed: {_exc}")
     logger.critical(f"EMERGENCY ALERT TRIGGERED for ride {ride_id} by user {current_user['id']}")
 
     # GAP FIX: Notify emergency contacts via SMS/push
@@ -2284,15 +2396,23 @@ async def cancel_scheduled_ride(ride_id: str, current_user: dict = Depends(get_c
     if ride.get("status") in ["completed", "cancelled"]:
         raise HTTPException(status_code=400, detail="Ride is already completed or cancelled")
 
-    await db_supabase.update_ride(
-        ride_id,
-        {
-            "status": "cancelled",
-            "cancelled_at": datetime.now(timezone.utc),
-            "cancellation_reason": "Cancelled by rider (scheduled)",
-            "updated_at": datetime.now(timezone.utc),
-        },
-    )
+    _now = datetime.now(timezone.utc)
+    _base = {
+        "status": "cancelled",
+        "cancelled_at": _now,
+        "cancellation_reason": "Cancelled by rider (scheduled)",
+        "updated_at": _now,
+    }
+    try:
+        await db_supabase.update_ride(
+            ride_id,
+            {**_base, "cancelled_by": "rider", "cancellation_type": "rider_cancel"},
+        )
+    except Exception as _col_exc:
+        logger.warning(
+            f"[SCHED-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
+        )
+        await db_supabase.update_ride(ride_id, _base)
     return {"success": True}
 
 

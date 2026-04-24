@@ -122,10 +122,18 @@ export const getStats = () =>
     }>("/api/admin/stats");
 
 /* ── Rides ────────────────────────────────── */
-export const getRides = (limit = 50, offset = 0) =>
-    request<{ rides: any[]; total_count: number; limit: number; offset: number }>(
-        `/api/admin/rides?limit=${limit}&offset=${offset}`
+export const getRides = (
+    limit = 50,
+    offset = 0,
+    opts?: { isScheduled?: boolean; status?: string },
+) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    if (opts?.isScheduled !== undefined) params.set("is_scheduled", String(opts.isScheduled));
+    if (opts?.status) params.set("status", opts.status);
+    return request<{ rides: any[]; total_count: number; limit: number; offset: number }>(
+        `/api/admin/rides?${params.toString()}`,
     );
+};
 export const getRideDetails = (id: string) =>
     request<any>(`/api/admin/rides/${id}/details`);
 export const getRideStats = () =>
@@ -1152,5 +1160,88 @@ export const adminCancelRide = (rideId: string, reason?: string) =>
         {
             method: "POST",
             body: JSON.stringify({ reason: reason ?? "Cancelled by admin" }),
+        },
+    );
+
+// ── Monitoring: Redis + Infrastructure ────────────────────────────────
+
+export type RedisStats = {
+    backend: "redis" | "in_process";
+    connected: boolean;
+    used_memory_bytes?: number | null;
+    used_memory_human?: string;
+    maxmemory_bytes?: number | null;
+    maxmemory_human?: string;
+    maxmemory_policy?: string;
+    used_memory_percent?: number | null;
+    used_memory_peak_bytes?: number;
+    total_keys?: number;
+    keyspace_hits_total?: number | null;
+    keyspace_misses_total?: number | null;
+    hit_rate_percent?: number | null;
+    evicted_keys_total?: number;
+    expired_keys_total?: number;
+    connected_clients?: number;
+    uptime_seconds?: number | null;
+    total_commands_processed?: number | null;
+    error?: string;
+};
+
+export type RedisPrefixCount = {
+    prefix: string;
+    count: number;
+    description: string;
+    flushable: boolean;
+};
+
+export type RedisHealthResponse = {
+    stats: RedisStats;
+    prefix_counts: RedisPrefixCount[];
+    flushable_prefixes: string[];
+};
+
+export type InfrastructureStats = {
+    replica: {
+        hostname: string;
+        pid: number;
+        uptime_seconds: number;
+        python_version: string | null;
+    };
+    process: {
+        rss_bytes: number | null;
+        rss_human: string | null;
+        cpu_user_seconds: number | null;
+        cpu_system_seconds: number | null;
+    };
+    thread_pool: { max_workers: number | null; note: string };
+    db_circuit_breaker: {
+        state: "closed" | "open" | "half_open";
+        recent_failures: number;
+        opened_at_monotonic: number | null;
+    };
+    redis: {
+        connected: boolean;
+        used_memory_bytes: number | null;
+        used_memory_human: string | null;
+        maxmemory_human: string | null;
+        used_memory_percent: number | null;
+        total_keys: number | null;
+        evicted_keys_total: number | null;
+    };
+    metrics: Record<string, number>;
+};
+
+export const getRedisHealth = () =>
+    request<RedisHealthResponse>("/api/admin/monitoring/redis");
+
+export const getInfrastructureStats = () =>
+    request<InfrastructureStats>("/api/admin/monitoring/infrastructure");
+
+export const flushRedisPrefix = (prefix: string) =>
+    request<{ prefix: string; deleted_keys: number; admin_id: string }>(
+        "/api/admin/monitoring/redis/flush-prefix",
+        {
+            method: "POST",
+            body: JSON.stringify({ prefix, confirm: "FLUSH" }),
         },
     );

@@ -35,16 +35,31 @@ async def admin_get_rides(
     limit: int = 50,
     offset: int = 0,
     status: Optional[str] = None,
+    is_scheduled: Optional[bool] = None,
 ):
-    """Get all rides with filters, enriched with rider_name and driver_name. Returns paginated."""
-    filters = {}
+    """Get all rides with filters, enriched with rider_name and driver_name. Returns paginated.
+
+    ``is_scheduled=true`` returns rider-requested scheduled rides (future pickup).
+    These live alongside regular rides with ``status="searching"`` until the
+    dispatcher picks them up at scheduled_time, so an explicit filter is the
+    only way to see the upcoming queue.
+    """
+    filters: Dict[str, Any] = {}
     if status:
         filters["status"] = status
+    if is_scheduled is not None:
+        filters["is_scheduled"] = is_scheduled
 
     # Get total count for pagination
     total_count = await db_supabase.count_documents("rides", filters)
 
-    rides = await db_supabase.get_rows("rides", filters, order="created_at", desc=True, limit=limit, offset=offset)
+    # Scheduled rides sort naturally by scheduled_time (earliest pickup first);
+    # regular rides keep the created_at-desc feed.
+    order_col = "scheduled_time" if is_scheduled else "created_at"
+    order_desc = not is_scheduled
+    rides = await db_supabase.get_rows(
+        "rides", filters, order=order_col, desc=order_desc, limit=limit, offset=offset
+    )
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
     drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
@@ -149,29 +164,35 @@ async def admin_cancel_ride(
     reason = (body.reason or "Cancelled by admin").strip()[:500]
     now = datetime.now(timezone.utc)
 
-    # Wrap the update so a DatabaseError surfaces the actual Supabase
-    # complaint ("column X does not exist", RLS denial, etc.) instead of
-    # vanishing into the global 503 handler. Migration 37 added the
-    # cancellation columns; older envs without it would otherwise produce
-    # a silent 503 with no clue in the logs.
+    # Build the update in layers so we can gracefully degrade when the
+    # target schema is behind.  Migration 37 added cancelled_at /
+    # cancellation_reason / cancelled_by_admin_id; migration 38 added
+    # cancelled_by / cancellation_type.  If either set of columns isn't
+    # present yet, retry with a smaller payload so the admin's cancel
+    # button still works instead of 503ing.
+    minimal = {"status": "cancelled", "updated_at": now}
+    with_37 = {
+        **minimal,
+        "cancelled_at": now,
+        "cancellation_reason": reason,
+        "cancelled_by_admin_id": admin_user.get("id"),
+    }
+    with_38 = {**with_37, "cancelled_by": "admin", "cancellation_type": "admin_cancel"}
     try:
-        await db_supabase.update_ride(
-            ride_id,
-            {
-                "status": "cancelled",
-                "cancelled_at": now,
-                "cancellation_reason": reason,
-                "cancelled_by_admin_id": admin_user.get("id"),
-                "updated_at": now,
-            },
+        await db_supabase.update_ride(ride_id, with_38)
+    except Exception as e38:
+        logger.warning(
+            f"admin_cancel_ride: attribution write failed ({e38}); retrying without mig-38 fields"
         )
-    except Exception as e:
-        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
-        logger.error(
-            f"admin_cancel_ride: update failed ride_id={ride_id} "
-            f"admin_id={admin_user.get('id')} err={original or e}"
-        )
-        raise
+        try:
+            await db_supabase.update_ride(ride_id, with_37)
+        except Exception as e37:
+            original = getattr(e37, "details", {}).get("original") if hasattr(e37, "details") else None
+            logger.error(
+                f"admin_cancel_ride: update failed ride_id={ride_id} "
+                f"admin_id={admin_user.get('id')} err={original or e37}"
+            )
+            raise
 
     verify = await db_supabase.get_ride(ride_id)
     if not verify or verify.get("status") != "cancelled":
@@ -219,6 +240,16 @@ async def admin_cancel_ride(
             )
         except Exception as e:
             logger.warning(f"admin_cancel_ride: rider push failed: {e}")
+
+    await manager.broadcast_ride_status(
+        ride_id, "cancelled", rider_id=rider_id, reason=reason, source="admin"
+    )
+    try:
+        await manager.broadcast_to_admins(
+            {"type": "ride_cancelled", "ride_id": ride_id, "reason": reason, "source": "admin"}
+        )
+    except Exception as e:  # pragma: no cover - best effort
+        logger.warning(f"admin_cancel_ride: admin broadcast failed: {e}")
 
     return {"success": True, "ride_id": ride_id, "status": "cancelled"}
 

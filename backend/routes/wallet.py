@@ -10,15 +10,17 @@ import uuid
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 try:
     from ..db import db
     from ..dependencies import get_current_user
+    from ..utils.idempotency import idempotent_endpoint
 except ImportError:
     from db import db
     from dependencies import get_current_user
+    from utils.idempotency import idempotent_endpoint
 
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/wallet", tags=["Wallet"])
@@ -112,7 +114,12 @@ async def get_wallet(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.post("/top-up")
-async def top_up_wallet(req: TopUpRequest, current_user: dict = Depends(get_current_user)):
+@idempotent_endpoint(scope="wallet_topup")
+async def top_up_wallet(
+    req: TopUpRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
     """Add funds to wallet. In production this would charge via Stripe first."""
     wallet = await get_or_create_wallet(current_user["id"])
 
@@ -238,7 +245,12 @@ async def get_transactions(
 
 
 @api_router.post("/transfer")
-async def transfer_to_user(req: TransferRequest, current_user: dict = Depends(get_current_user)):
+@idempotent_endpoint(scope="wallet_transfer")
+async def transfer_to_user(
+    req: TransferRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
     """Transfer wallet balance to another user by phone number."""
     # Find recipient
     recipient = await db.find_one("users", {"phone": req.recipient_phone})

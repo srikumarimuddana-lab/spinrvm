@@ -58,6 +58,54 @@ async def health():
     return {"status": "healthy"}
 
 
+# Prometheus-style metrics exposition. Scraped by Grafana / Railway
+# observability add-ons. No auth (it's numbers only — no PII) and
+# mounted at the root so the scraper doesn't need /api/v1 knowledge.
+# Counters cover: DB retries by policy/reason, cache hit/miss by
+# prefix, circuit-breaker state, call-level totals, and Redis stats.
+# See utils/metrics.py for the counter definitions.
+from fastapi import Response as _MetricsResponse  # noqa: E402
+
+
+@app.get("/metrics")
+async def metrics() -> _MetricsResponse:
+    from utils.metrics import render_prometheus, set_gauge
+    from utils.redis_client import get_redis_stats
+
+    # Refresh Redis gauges on each scrape. INFO is O(1) on Redis so
+    # this is cheap; exposing them as gauges lets the Prometheus
+    # server compute rates (eviction rate, hit rate) server-side.
+    try:
+        rs = await get_redis_stats()
+        if rs.get("connected"):
+            set_gauge("spinr_redis_used_memory_bytes", rs.get("used_memory_bytes") or 0)
+            set_gauge("spinr_redis_maxmemory_bytes", rs.get("maxmemory_bytes") or 0)
+            if rs.get("used_memory_percent") is not None:
+                set_gauge("spinr_redis_used_memory_percent", rs["used_memory_percent"])
+            set_gauge("spinr_redis_total_keys", rs.get("total_keys") or 0)
+            set_gauge("spinr_redis_connected_clients", rs.get("connected_clients") or 0)
+            set_gauge("spinr_redis_uptime_seconds", rs.get("uptime_seconds") or 0)
+            # Counter-like values from INFO stats. Exposed as gauges
+            # here because Prometheus can compute rate() on either;
+            # keeping them gauges avoids lying about reset semantics.
+            set_gauge("spinr_redis_keyspace_hits", rs.get("keyspace_hits_total") or 0)
+            set_gauge("spinr_redis_keyspace_misses", rs.get("keyspace_misses_total") or 0)
+            set_gauge("spinr_redis_evicted_keys", rs.get("evicted_keys_total") or 0)
+            set_gauge("spinr_redis_expired_keys", rs.get("expired_keys_total") or 0)
+            set_gauge("spinr_redis_connected", 1)
+        else:
+            set_gauge("spinr_redis_connected", 0)
+    except Exception:
+        # Never let a metrics scrape blow up — return whatever counters
+        # have been recorded so far.
+        set_gauge("spinr_redis_connected", 0)
+
+    return _MetricsResponse(
+        content=render_prometheus(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
+
 # Initialize middleware
 init_middleware(app)
 

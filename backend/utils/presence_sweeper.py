@@ -12,9 +12,14 @@ queries, and what admin staff-managed tools flip. The two can drift:
   - Railway replica restarts with stale in-process fallback state.
 
 This loop runs every 60 s and flips ``is_online=False`` on any driver row
-where the DB says online but Redis presence has expired. That gives us
-a hard guarantee that a "ghost online" row can't persist longer than
-~2.5 × PRESENCE_TTL (worst case: key expires right after a sweep tick).
+where the DB says online but Redis presence has been gone longer than
+the grace window (~15 min). The long grace is deliberate: normal driving
+(elevators, tunnels, carrier handoffs, parking garages, brief OS-level
+app suspensions) routinely produces multi-minute presence gaps, and the
+cost of falsely flipping a driver offline — missed ride offers, having
+to re-tap Go Online and re-request permissions — is high. Drivers on an
+active ride are excluded from sweeps entirely; the ride state machine
+owns their status until the trip ends.
 
 Dispatch already filters on live presence (see
 ``DispatchService.find_candidate_drivers``), so this sweeper is belt-and-
@@ -71,12 +76,14 @@ async def _sweep_once() -> int:
         return 0
 
     # Grace period — a driver who just flipped online needs time for the WS
-    # to connect and mark_present to land. Without this buffer, a sweeper
-    # tick landing in the gap between the Go-Online DB write and presence
-    # registration would race the handler's verify step and bounce the
-    # driver right back offline (the bug surfaced as 500s on tap-to-go-online).
+    # to connect and mark_present to land, AND normal network blips
+    # (elevator, tunnel, carrier handoff) shouldn't produce phantom
+    # offline flips. Uber/Lyft are deliberately slow to flip a driver
+    # offline on presence loss — minutes, not seconds — because the cost
+    # of a false flip (driver pulls over, taps Go Online again, misses
+    # trips in the interim) is high. 15 minutes is the Uber-ish default.
     now = datetime.now(timezone.utc)
-    grace_seconds = SWEEP_INTERVAL_SECONDS * 2  # 120s → always >= one full tick
+    grace_seconds = 15 * 60
 
     def _within_grace(d: dict) -> bool:
         ts_str = d.get("last_status_changed_at")
@@ -91,6 +98,33 @@ async def _sweep_once() -> int:
             return False
 
     eligible = [d for d in online_drivers if not _within_grace(d)]
+    if not eligible:
+        return 0
+
+    # Never flip a driver offline while they're on an active ride. A driver
+    # completing a trip in a dead-zone may have no presence heartbeat for
+    # many minutes; yanking is_online=False mid-trip would break dispatch
+    # ETA calculation, admin monitoring, and post-trip settlement. The
+    # ride lifecycle drives the status transition in that case.
+    ACTIVE_RIDE_STATUSES = [
+        "driver_assigned", "driver_accepted",
+        "driver_arrived", "in_progress",
+    ]
+    active_driver_ids: set = set()
+    try:
+        active_rides = await db_supabase.get_rows(
+            "rides",
+            {"status": {"$in": ACTIVE_RIDE_STATUSES}},
+            limit=1000,
+        )
+        active_driver_ids = {r["driver_id"] for r in active_rides if r.get("driver_id")}
+    except Exception as exc:
+        # Fail safe: if we can't confirm active-ride state, skip the
+        # sweep rather than risk flipping a driver mid-trip.
+        logger.warning(f"[presence_sweeper] active-ride lookup failed, skipping tick: {exc}")
+        return 0
+
+    eligible = [d for d in eligible if d["id"] not in active_driver_ids]
     if not eligible:
         return 0
 

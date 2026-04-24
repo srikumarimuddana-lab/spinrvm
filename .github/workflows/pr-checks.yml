@@ -91,3 +91,251 @@ jobs:
               await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
               core.info('Posted size advisory comment.');
             }
+
+  required-fields:
+    name: Required PR fields filled
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Verify template placeholders are filled
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Blocking check. Fails (red) if required fields are empty or still
+            // contain `<angle-bracket>` placeholders. Ticks clean when fixed.
+            // Type=trivial bypasses Tier 2-4.
+
+            const MARKER = '<!-- spinr-required-fields -->';
+            const VALID_TYPES = ['feat','fix','chore','refactor','perf','security','docs','trivial'];
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+            const body = pr.body || '';
+
+            // ---- Helpers -------------------------------------------------
+            const checked = (s) => /\[\s*x\s*\]/i.test(s || '');
+            const findLine = (label) => {
+              const m = body.match(new RegExp('\\*\\*' + label + '\\*\\*[^\\n]*', 'i'));
+              return m ? m[0] : null;
+            };
+            const findBlock = (startLabel, stopRe) => {
+              const startRe = new RegExp(startLabel, 'i');
+              const start = body.search(startRe);
+              if (start === -1) return null;
+              const rest = body.slice(start);
+              const stop = rest.search(stopRe);
+              return stop === -1 ? rest : rest.slice(0, stop);
+            };
+
+            // ---- Detect type -------------------------------------------
+            const typeLine = findLine('Type');
+            const typeMatch = typeLine && typeLine.match(/:\s*`?([a-z]+)`?/i);
+            const type = typeMatch ? typeMatch[1].toLowerCase() : null;
+            const isTrivial = type === 'trivial';
+
+            // ---- Collect issues ----------------------------------------
+            const issues = [];
+
+            // Tier 1: Summary
+            const summaryLine = findLine('Summary');
+            if (!summaryLine || /<[a-z][^>]*>/i.test(summaryLine) || /:\s*$/.test(summaryLine)) {
+              issues.push('Tier 1 `Summary`: fill in the one-line description (no `<...>` placeholder).');
+            }
+
+            // Tier 1: Type
+            if (!type) {
+              issues.push('Tier 1 `Type`: missing — pick one of ' + VALID_TYPES.join('/') + '.');
+            } else if (!VALID_TYPES.includes(type)) {
+              issues.push('Tier 1 `Type`: `' + type + '` is not valid — must be one of ' + VALID_TYPES.join('/') + '.');
+            }
+
+            // Tier 1: Linked issue
+            const linkedLine = findLine('Linked issue');
+            if (!linkedLine || !/(Fixes|Refs|none)\b/i.test(linkedLine) || /<[a-z][^>]*>/i.test(linkedLine.replace(/<n>/i, ''))) {
+              issues.push('Tier 1 `Linked issue`: must start with `Fixes #N`, `Refs #N`, or `none` with reason.');
+            }
+
+            // Tier 1: Risk
+            const riskLine = findLine('Risk');
+            const riskMatch = riskLine && riskLine.match(/:\s*`?(low|medium|high)`?/i);
+            if (!riskMatch) {
+              issues.push('Tier 1 `Risk`: must be one of `low`/`medium`/`high`.');
+            }
+
+            // Tier 1: User-visible change
+            const uvLine = findLine('User-visible change');
+            if (!uvLine || !/(none|riders|drivers|admins|corporate)/i.test(uvLine)) {
+              issues.push('Tier 1 `User-visible change`: must name the affected audience (`none`/`riders`/`drivers`/`admins`/`corporate`).');
+            }
+
+            // Tier 1: Scope contract
+            const scopeLine = findLine('Scope contract');
+            if (!scopeLine || !checked(scopeLine)) {
+              issues.push('Tier 1 `Scope contract`: tick the `[x]` box to attest the PR matches its stated type.');
+            }
+
+            // ---- Trivial bypass ---------------------------------------
+            if (!isTrivial) {
+              // Tier 2: Surfaces touched — at least one [x]
+              const surfacesLine = findLine('Surfaces touched');
+              if (!surfacesLine || !checked(surfacesLine)) {
+                issues.push('Tier 2 `Surfaces touched`: tick at least one surface.');
+              }
+
+              // Tier 2: Rollback plan
+              const rollbackLine = findLine('Rollback plan');
+              if (!rollbackLine || /<[a-z][^>]*>/i.test(rollbackLine) || !/(git-revert-safe|revert-plus-data-cleanup|coordinated|not-revertible)/i.test(rollbackLine)) {
+                issues.push('Tier 2 `Rollback plan`: pick one of `git-revert-safe`/`revert-plus-data-cleanup`/`coordinated`/`not-revertible` and fill the one-line explanation.');
+              }
+
+              // Tier 2: Dependencies / coordination
+              const depsLine = findLine('Dependencies');
+              if (!depsLine || /<[a-z][^>]*>/i.test(depsLine)) {
+                issues.push('Tier 2 `Dependencies / coordination`: write `none` or list PRs/releases/rotations this PR depends on.');
+              }
+
+              // Tier 2: Assumptions
+              const assumptLine = findLine('Assumptions');
+              if (!assumptLine || /<[a-z][^>]*>/i.test(assumptLine)) {
+                issues.push('Tier 2 `Assumptions`: write `none` or state what this PR assumes about the rest of the system.');
+              }
+
+              // Tier 4: Unit tests
+              const unitLine = findLine('Unit tests');
+              if (!unitLine || /<[a-z][^>]*>/i.test(unitLine)) {
+                issues.push('Tier 4 `Unit tests`: pick `added`/`updated`/`not-applicable` and give count or reason.');
+              }
+
+              // Tier 4: Pre-merge checklist — at least one [x]
+              const checklistBlock = findBlock('Pre-merge checklist', /\n(##|<!--)/);
+              if (!checklistBlock) {
+                issues.push('Tier 4 `Pre-merge checklist`: section missing from PR body.');
+              } else if (!checked(checklistBlock)) {
+                issues.push('Tier 4 `Pre-merge checklist`: tick at least one box (or add explicit `N/A` notes inline).');
+              }
+            }
+
+            // ---- Upsert comment + set status ---------------------------
+            const comments = await github.rest.issues.listComments({
+              owner, repo, issue_number: pr.number, per_page: 100,
+            });
+            const existing = comments.data.find(c => c.body && c.body.includes(MARKER));
+
+            if (issues.length === 0) {
+              if (existing) {
+                await github.rest.issues.deleteComment({ owner, repo, comment_id: existing.id });
+              }
+              core.info('Required fields check: clean.');
+              return;
+            }
+
+            const lines = [
+              MARKER,
+              '### :triangular_flag_on_post: PR template — required fields missing',
+              '',
+              'This PR cannot merge until the following are addressed:',
+              '',
+              ...issues.map(i => '- ' + i),
+              '',
+              isTrivial
+                ? '_Type is `trivial` — only Tier 1 is required. The issues above are Tier 1 items._'
+                : '_Setting `Type: trivial` (formatting/typo/comment-only/lockfile-only) skips Tier 2–4 checks._',
+              '',
+              '_This comment auto-refreshes when the PR body is edited._',
+            ];
+            const out = lines.join('\n');
+
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: out });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body: out });
+            }
+            core.setFailed(issues.length + ' required field(s) missing.');
+
+  merge-conflict-detect:
+    name: Detect merge commits on branch
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan for merge commits between base and head
+        id: scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_SHA='${{ github.event.pull_request.base.sha }}'
+          HEAD_SHA='${{ github.event.pull_request.head.sha }}'
+          # Ensure we have the base commit locally (checkout@v4 + fetch-depth:0
+          # usually does, but be defensive).
+          git cat-file -e "$BASE_SHA" 2>/dev/null || git fetch origin "$BASE_SHA" --depth=1 || true
+          MERGES="$(git log --merges --format='- %h %s' "${BASE_SHA}..${HEAD_SHA}" 2>/dev/null || true)"
+          if [ -n "$MERGES" ]; then
+            {
+              echo 'merges<<MERGES_EOF'
+              echo "$MERGES"
+              echo 'MERGES_EOF'
+              echo 'has_merges=true'
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo 'has_merges=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post advisory + apply label
+        if: steps.scan.outputs.has_merges == 'true'
+        uses: actions/github-script@v7
+        env:
+          MERGES: ${{ steps.scan.outputs.merges }}
+        with:
+          script: |
+            // Advisory only — does not block. Pairs with Phase D's expander
+            // which will auto-append the subsection template.
+            const MARKER = '<!-- spinr-merge-conflict-detected -->';
+            const pr = context.payload.pull_request;
+            const { owner, repo } = context.repo;
+            const merges = (process.env.MERGES || '').trim();
+
+            // Apply label (idempotent)
+            try {
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: pr.number,
+                labels: ['debug:merge-conflict'],
+              });
+            } catch (e) { core.warning('addLabels: ' + e.message); }
+
+            const body = pr.body || '';
+            const alreadyDocumented = /conflict[\s\S]{0,200}(kept mine|kept theirs|merged manually)/i.test(body);
+
+            const lines = [
+              MARKER,
+              '### :twisted_rightwards_arrows: Merge commit(s) detected on this branch',
+              '',
+              merges || '_(detection succeeded but log output was empty — re-check locally)_',
+              '',
+              alreadyDocumented
+                ? '_Looks like the PR body already documents the conflict resolution — no action needed._'
+                : 'Please add a **Tier 7 · Conflict & Debug Log → Merge conflict** subsection with:',
+              ...(alreadyDocumented ? [] : [
+                '',
+                '- Files conflicted',
+                '- Decision rule: `kept mine` / `kept theirs` / `merged manually`',
+                '- Why — especially if a "theirs" change was dropped',
+              ]),
+              '',
+              '_Advisory — not blocking._',
+            ];
+            const out = lines.join('\n');
+
+            const comments = await github.rest.issues.listComments({
+              owner, repo, issue_number: pr.number, per_page: 100,
+            });
+            const existing = comments.data.find(c => c.body && c.body.includes(MARKER));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: out });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body: out });
+            }
+

@@ -64,7 +64,6 @@
       "Bash(rm -rf*)",
       "Bash(git push --force*)",
       "Bash(git push origin main*)",
-      "Bash(git push origin develop*)",
       "Bash(git reset --hard*)",
       "Write(.env*)",
       "Write(*.pem)",

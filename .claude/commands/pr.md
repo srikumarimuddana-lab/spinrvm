@@ -12,7 +12,7 @@ silently passing.
 git branch --show-current
 ```
 
-- If `main` or `develop`: STOP.
+- If `main`: STOP — cannot PR from the protected long-lived branch.
 - If on a `claude/*` branch: confirm with the user before proceeding — `/pr`
   is usually run from a human-authored feature branch. (The Claude workflow
   branches get their own automated PRs.)
@@ -22,11 +22,11 @@ git branch --show-current
 Run these in parallel:
 
 ```bash
-git log develop..HEAD --oneline
-git log develop..HEAD --pretty=format:'%H%x09%s%x09%b%x00'
-git diff develop...HEAD --stat
-git diff develop...HEAD --name-only
-git log --merges develop..HEAD --oneline
+git log origin/main..HEAD --oneline
+git log origin/main..HEAD --pretty=format:'%H%x09%s%x09%b%x00'
+git diff origin/main...HEAD --stat
+git diff origin/main...HEAD --name-only
+git log --merges origin/main..HEAD --oneline
 ```
 
 Parse out:
@@ -181,10 +181,10 @@ checkbox is an attestation.
 
 ## 9 · Create the PR
 
-Target branch:
-
-- **`develop`** for `feat` / `fix` / `chore` / `refactor` / `perf` / `docs` / `trivial`
-- **`main`** only for a genuine hotfix (and say so explicitly to the user before creating)
+Target branch: **`main`** — Spinr is a single-trunk repo (no `develop`).
+Backend auto-deploys from `main`, so risk-tier this PR honestly: anything
+declared `risk: high` should also be opened as a draft until the on-call
+sign-off is in.
 
 Title format: `<type>(<scope>): <one-line subject>` — keep under 70 chars.
 
@@ -192,10 +192,10 @@ Use the GitHub MCP tool `mcp__github__create_pull_request` with:
 
 - `title`: as above
 - `body`: the filled-in template (Tiers 1–4; Tier 5+ left for the workflow)
-- `base`: `develop` (default) or `main` (hotfix)
+- `base`: `main`
 - `head`: current branch
-- `draft`: `true` if any required field is still a `<placeholder>` or if tests
-  are not yet green
+- `draft`: `true` if any required field is still a `<placeholder>`, if tests
+  are not yet green, or if `risk: high` and on-call hasn't acknowledged
 
 ## 10 · Report back
 

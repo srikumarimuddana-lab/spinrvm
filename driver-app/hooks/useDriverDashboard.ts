@@ -499,6 +499,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // `auth` message and will close the socket if it fails. We flip to
     // 'connected' on the first non-error server message, which proves auth
     // passed. Until then, stay in 'reconnecting' (or initial 'disconnected').
+    // Track per-connection auth state. Set to true only after server confirms
+    // auth_success so we never send location before the session is verified.
+    let wsAuthenticated = false;
+
     ws.onopen = () => {
       const currentToken = useAuthStore.getState().token;
       ws.send(JSON.stringify({
@@ -506,21 +510,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         token: currentToken,
         client_type: 'driver',
       }));
-      // Re-send last known location so backend has fresh position after reconnect
-      const loc = locationRef.current;
-      if (loc) {
-        ws.send(JSON.stringify({
-          type: 'driver_location',
-          lat: loc.coords.latitude,
-          lng: loc.coords.longitude,
-          speed: loc.coords.speed ?? null,
-          heading: loc.coords.heading ?? null,
-          accuracy: loc.coords.accuracy ?? null,
-          altitude: loc.coords.altitude ?? null,
-          ride_id: null,
-          tracking_phase: 'online_idle',
-        }));
-      }
+      // Location resend is deferred to after auth_success is confirmed in
+      // onmessage. Sending it here (before the server has processed auth)
+      // could cause the server to close the socket if the message is
+      // processed in the brief window before the main receive loop starts.
     };
 
     ws.onmessage = (event) => {
@@ -530,16 +523,35 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           setWsError(data.message || 'Connection error');
           return;
         }
-        // First valid (non-error) server message = auth accepted; clear any previous error.
-        if (wsRef.current === ws) {
+        // auth_success is the definitive signal that the backend accepted
+        // the connection. Only flip to 'connected' and reset reconnect
+        // counter on this specific message — not on every ping/pong/etc.
+        if (data.type === 'auth_success' && wsRef.current === ws) {
           const wasReconnect = reconnectAttemptRef.current > 0;
           reconnectAttemptRef.current = 0;
           setConnectionState('connected');
           setWsError(null);
+          wsAuthenticated = true;
           // Re-sync active ride state — server buffers no WS events, so any
           // transitions that fired while disconnected are recovered via HTTP.
           if (wasReconnect) {
             fetchActiveRide();
+          }
+          // Now that auth is confirmed, send the cached location so the
+          // backend has a fresh position immediately after reconnect.
+          const loc = locationRef.current;
+          if (loc && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: 'driver_location',
+              lat: loc.coords.latitude,
+              lng: loc.coords.longitude,
+              speed: loc.coords.speed ?? null,
+              heading: loc.coords.heading ?? null,
+              accuracy: loc.coords.accuracy ?? null,
+              altitude: loc.coords.altitude ?? null,
+              ride_id: null,
+              tracking_phase: 'online_idle',
+            }));
           }
         }
         handleWSMessageRef.current(data);

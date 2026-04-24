@@ -1,0 +1,457 @@
+================================================================================
+SPINR RIDER APP — PHASE E (D17–D22) AUDIT FINDINGS
+================================================================================
+Date         : 2026-04-24
+Branch       : claude/review-pending-audits-Pu1aP
+Scope        : rider-app/ + shared backend routes used by rider
+Kickoff      : reports/audits/rider-app-phase-e-kickoff.md
+Prerequisite : reports/audits/2026-04-19-rider-app-v1.txt (184 findings, D01–D16)
+
+AUDIT GROUND RULES
+──────────────────
+• Per audit-framework/ground-rules.md (8 rules; rules 7+8 from v1.3 apply)
+• CRITICAL/HIGH require file:line:snippet evidence
+• Every finding tags ≥1 regulation
+• Risk-score formula: severity_weight × blast_weight × likelihood_weight
+  (see reports/audits/OPEN-ITEMS-TRACKER.md)
+
+================================================================================
+TASK 17 — OBSERVABILITY
+================================================================================
+
+[17-1] HIGH | Sentry send_default_pii=True without scrubbing filter
+File: backend/server.py:179
+Finding: Sentry is initialized with send_default_pii=True. No before_send filter
+exists to strip request/response bodies containing phone, address, or payment
+data before events are sent to Sentry's US cloud. PIPEDA cross-border data
+transfer exposure.
+Fix: Add before_send callback in server.py:173 that redacts phone, card_last4,
+addresses, and email fields from request/response bodies and user context.
+Effort: 2 h
+Risk score: 32 (HIGH × org × possible)
+Regulations: PIPEDA
+Owner: backend + infra · Sprint: P1
+
+[17-2] MEDIUM | SOS trigger catch block does not log failure to crash reporter
+File: rider-app/store/rideStore.ts:501-517
+Finding: triggerEmergency shows an Alert but does not call recordNonFatal or
+emit any structured event. Per the D17 kickoff rider-specific risk, SOS trigger
+failure must always reach the crash reporter even when the network fails.
+Fix: Add recordNonFatal(error, {action: 'SOS', rideId}) in the catch block.
+Effort: 0.5 h
+Risk score: 8 (MEDIUM × self × possible)
+Regulations: PIPEDA
+Owner: rider-app · Sprint: P1
+
+[17-3] HIGH | Backend logs not structured JSON; HTTP requests never logged
+with request_id / user_id / latency
+File: backend/server.py:138-143
+Finding: Loguru is configured with a text-only format string. No middleware
+emits a per-request log line with request_id, user_id_hash, route, status,
+duration_ms. SLIs (latency, error rate) cannot be extracted from current logs.
+Fix: Replace loguru formatter with JSON encoder; add request/response logging
+middleware. Hash user_id before output. Effort: 4 h
+Risk score: 32 (HIGH × org × possible)
+Regulations: PIPEDA, SOC2
+Owner: backend + infra · Sprint: P1
+
+[17-4] MEDIUM | /health endpoint only checks Supabase; Redis unchecked
+File: backend/routes/main.py:32-52
+Finding: /health runs db_supabase.ping() only. Redis (rate-limit, WS pub/sub,
+session) is not health-checked. A Redis outage degrades the service silently
+while /health still returns 200 — exactly the failure mode DV-6 flagged.
+Fix: Add Redis pings to RATE_LIMIT_REDIS_URL and WS_REDIS_URL; return 503 on
+failure. Effort: 1.5 h
+Risk score: 16 (MEDIUM × org × possible)
+Regulations: SOC2
+Owner: backend + infra · Sprint: P1
+
+[17-5] MEDIUM | Background loops emit startup logs but no per-cycle heartbeat
+File: backend/core/lifespan.py:76-152
+Finding: 7 background loops (surge, scheduled dispatch, payment retry, document
+expiry, corporate auto-topup, low-balance nudge, allowance reset) log at spawn
+but not after each cycle. Per D17 checklist, each loop must emit a heartbeat so
+silent failures alert SRE.
+Fix: Inside each loop body, emit logger.info("heartbeat", extra={loop_name,
+cycle_at}) after the work cycle. Add monitor that alerts if heartbeat gap >
+2× interval. Effort: 3 h
+Risk score: 16 (MEDIUM × org × possible)
+Regulations: SOC2
+Owner: backend + infra · Sprint: P1
+
+[17-6] LOW | Crash reports lack ride_id context during active rides
+File: rider-app/app/_layout.tsx:184,267
+Finding: setUser(uid) is called at cold start but ride_id is not added as
+breadcrumb or attribute when a ride is in progress. Crashes during active rides
+cannot be correlated with ride state without cross-referencing timestamps.
+Fix: After setUser(uid), if currentRide exists, call addBreadcrumb(ride_id) or
+set it as a custom crash attribute. Effort: 1 h
+Risk score: 2 (LOW × self × rare)
+Regulations: PIPEDA
+Owner: rider-app · Sprint: P3
+
+[17-7] RECOMMENDATION | No audit_logger.py file; ride lifecycle events not
+routed through a structured audit table
+File: backend/ (no audit_logger.py found)
+Finding: The D17 checklist expects a backend/utils/audit_logger.py emitting
+rows to an `audit_events` table for: ride requested/completed, payment charged,
+wallet topped up, SOS. This file does not exist. Financial-reconciliation (D20)
+and dispute-resolution depend on this audit trail.
+Fix: Create backend/utils/audit_logger.py with emit(event_type, user_id_hash,
+ride_id, metadata) inserting into audit_events table. Wire into state
+transitions. Effort: 5 h
+Risk score: 2 (RECOMMENDATION × org × rare; will escalate on D20 audit)
+Regulations: PIPEDA, PCI-DSS
+Owner: backend · Sprint: P2
+Confidence: low (requires probe: confirm no file exists under an alternate name)
+
+[17-8] MEDIUM | WebSocket onerror logs via console.log, not crash reporter
+File: rider-app/hooks/useRiderSocket.ts:190-192
+Finding: ws.onerror handler calls console.log; errors never reach Crashlytics.
+Patterns of WS errors affecting specific users/regions are invisible to ops.
+Fix: Replace console.log with recordNonFatal(error, {context: 'ws-rider',
+state: connectionState}). Effort: 1 h
+Risk score: 8 (MEDIUM × self × possible)
+Regulations: SOC2
+Owner: rider-app · Sprint: P2
+
+[17-9] HIGH | No Sentry before_send filter — exception payloads may include
+raw phone / card / address
+File: backend/server.py:173-180
+Finding: Exceptions on payment/wallet/ride paths trigger Sentry events. With
+no before_send filter, request URLs, headers, and bodies are forwarded to
+Sentry unchanged. Compounds finding 17-1.
+Fix: Implement before_send that redacts URL query params, Authorization
+header, and body fields matching PII regex. Effort: 3 h
+Risk score: 32 (HIGH × org × possible)
+Regulations: PIPEDA, PCI-DSS
+Owner: backend + infra · Sprint: P1
+
+[17-10] PASS | Request-ID middleware implemented and propagated
+File: backend/core/middleware.py:110-119
+Evidence: RequestIDMiddleware generates X-Request-ID, binds via
+logger.contextualize(), echoes in response headers. Enables end-to-end tracing.
+
+[17-11] PASS | Firebase Crashlytics integrated and initialized at cold start
+File: rider-app/app/_layout.tsx:182
+Evidence: initFirebaseServices() called on cold start. rideStore + walletStore
+call recordNonFatal on error paths.
+
+[17-12] PASS | PrivacyInfo.xcprivacy declares all tracked API reasons
+File: rider-app/app.config.ts:42-72
+Evidence: NSPrivacyAccessedAPITypes + NSPrivacyCollectedDataTypes list precise
+location, phone, email, payment info, crash data, performance data — linked
+not tracking. Satisfies Apple's App Privacy requirement.
+
+================================================================================
+FINDINGS YAML
+================================================================================
+
+===FINDINGS-YAML===
+- id: "17-1"
+  severity: HIGH
+  dimension: "17"
+  evidence:
+    file: backend/server.py
+    lines: [179]
+    snippet: "send_default_pii=True,"
+    test_file: null
+    test_lines: null
+  root_cause: "Sentry SDK initialized with PII collection enabled and no scrubbing filter to redact phone, address, payment data"
+  impact: "PII (phone numbers, addresses, card data) may leak to Sentry cloud service"
+  fix: "Add before_send callback to strip phone, card_last4, address fields from request/response bodies and user context before sending to Sentry"
+  effort_hours: 2
+  regression_test: "Create test event with PII in request body, verify it is redacted in Sentry dashboard"
+  sprint: P1
+  owners: ["backend", "infra"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-2"
+  severity: MEDIUM
+  dimension: "17"
+  evidence:
+    file: rider-app/store/rideStore.ts
+    lines: [501, 517]
+    snippet: "catch (error: any) { Alert.alert(...); /* no recordNonFatal */ }"
+    test_file: null
+    test_lines: null
+  root_cause: "SOS trigger error handler shows UI alert but does not log to crash reporter"
+  impact: "SOS network failures are invisible to observability; cannot detect repeated failures affecting safety"
+  fix: "Add recordNonFatal(error, {action: 'SOS', rideId}) in catch block"
+  effort_hours: 0.5
+  regression_test: "Simulate network error during SOS trigger, verify error appears in Crashlytics"
+  sprint: P1
+  owners: ["rider-app"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: self
+  likelihood: possible
+  risk_score: 8
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-3"
+  severity: HIGH
+  dimension: "17"
+  evidence:
+    file: backend/server.py
+    lines: [138, 142]
+    snippet: "format='{time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | {name}:{function}:{line} | {message}'"
+    test_file: null
+    test_lines: null
+  root_cause: "Loguru text format; no middleware logs HTTP requests with request_id, user_id, latency, route"
+  impact: "Logs not machine-parseable; request tracing impossible; no SLI data extractable"
+  fix: "Replace loguru formatter with JSON encoder {ts, level, request_id, user_id, route, status, duration_ms}; add request/response middleware"
+  effort_hours: 4
+  regression_test: "Verify logs are valid JSON with required fields; test that a request appears with correct latency"
+  sprint: P1
+  owners: ["backend", "infra"]
+  regulations: ["PIPEDA", "SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-4"
+  severity: MEDIUM
+  dimension: "17"
+  evidence:
+    file: backend/routes/main.py
+    lines: [32, 40, 41]
+    snippet: "await db_supabase.ping(); return {\"status\": \"healthy\", \"db\": \"ok\"}"
+    test_file: null
+    test_lines: null
+  root_cause: "/health only checks Supabase; Redis connectivity not verified"
+  impact: "Redis outage invisible; service degradation on multi-replica deploys silently missed"
+  fix: "Add Redis ping for RATE_LIMIT_REDIS_URL and WS_REDIS_URL; return 503 if any fail"
+  effort_hours: 1.5
+  regression_test: "Kill Redis, call /health, verify 503; restart Redis, verify 200"
+  sprint: P1
+  owners: ["backend", "infra"]
+  regulations: ["SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-5"
+  severity: MEDIUM
+  dimension: "17"
+  evidence:
+    file: backend/core/lifespan.py
+    lines: [76, 107, 123]
+    snippet: "_spawn('surge_engine (2min)', ...); _spawn('payment_retry (5min)', ...)"
+    test_file: null
+    test_lines: null
+  root_cause: "7 background loops spawn at startup but emit no per-cycle heartbeat; no last_run_at tracking"
+  impact: "Silent loop failures undetected; ops cannot know when dispatch, payment-retry, etc. stop running"
+  fix: "Emit heartbeat log in each loop after work: logger.info('heartbeat', extra={loop_name, cycle_at}); add monitor alerting if gap > 2× interval"
+  effort_hours: 3
+  regression_test: "Confirm each loop emits heartbeat every cycle; add synthetic monitor failing on missing heartbeat"
+  sprint: P1
+  owners: ["backend", "infra"]
+  regulations: ["SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-6"
+  severity: LOW
+  dimension: "17"
+  evidence:
+    file: rider-app/app/_layout.tsx
+    lines: [184, 267]
+    snippet: "captureMessage('rider-app cold start', 'log'); ... setUser(uid);"
+    test_file: null
+    test_lines: null
+  root_cause: "Crash reports tagged with user but not active ride_id"
+  impact: "Crashes during an active ride cannot be correlated to ride state without manual timestamp cross-ref"
+  fix: "After setUser(uid), if currentRide exists, addBreadcrumb(currentRide.id) or set as attribute"
+  effort_hours: 1
+  regression_test: "Crash during active ride, verify report includes ride_id"
+  sprint: P3
+  owners: ["rider-app"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: self
+  likelihood: rare
+  risk_score: 2
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-7"
+  severity: RECOMMENDATION
+  dimension: "17"
+  evidence:
+    file: null
+    lines: null
+    snippet: "backend/utils/audit_logger.py not found"
+    test_file: null
+    test_lines: null
+  root_cause: "No structured audit-event emitter exists; ride lifecycle not persisted to an audit_events table"
+  impact: "Cannot generate audit trail for compliance; financial reconciliation and dispute resolution lack immutable logs"
+  fix: "Create backend/utils/audit_logger.py with emit(event_type, user_id_hash, ride_id, metadata) inserting into audit_events table"
+  effort_hours: 5
+  regression_test: "Create a ride; verify audit_events rows for requested, accepted, completed; check user_id hashed"
+  sprint: P2
+  owners: ["backend"]
+  regulations: ["PIPEDA", "PCI-DSS"]
+  confidence: low
+  duplicate_of: null
+  blast_radius: org
+  likelihood: rare
+  risk_score: 2
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-8"
+  severity: MEDIUM
+  dimension: "17"
+  evidence:
+    file: rider-app/hooks/useRiderSocket.ts
+    lines: [190, 192]
+    snippet: "ws.onerror = (error) => { console.log('[WS] Rider error:', error); };"
+    test_file: null
+    test_lines: null
+  root_cause: "WS error handler logs to console; errors never reach crash reporter"
+  impact: "Connection failures invisible; cannot detect patterns of WS errors for specific users or regions"
+  fix: "Replace console.log with recordNonFatal(error, {context: 'ws-rider', state: connectionState})"
+  effort_hours: 1
+  regression_test: "Simulate WS error, verify appears in Crashlytics with structured fields"
+  sprint: P2
+  owners: ["rider-app"]
+  regulations: ["SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: self
+  likelihood: possible
+  risk_score: 8
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-9"
+  severity: HIGH
+  dimension: "17"
+  evidence:
+    file: backend/server.py
+    lines: [173, 179]
+    snippet: "sentry_sdk.init(dsn=sentry_dsn, ..., send_default_pii=True)"
+    test_file: null
+    test_lines: null
+  root_cause: "No before_send filter in Sentry; request/response bodies and query params may include unredacted PII"
+  impact: "Payment/wallet/ride exceptions forward PII to Sentry US cloud; PIPEDA cross-border disclosure + PCI-DSS scope risk"
+  fix: "Add before_send callback that redacts request URL/query, Authorization header, body fields matching PII regex"
+  effort_hours: 3
+  regression_test: "Trigger payment error with PII in request; verify redacted in Sentry event"
+  sprint: P1
+  owners: ["backend", "infra"]
+  regulations: ["PIPEDA", "PCI-DSS"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-10"
+  severity: PASS
+  dimension: "17"
+  evidence:
+    file: backend/core/middleware.py
+    lines: [110, 116]
+    snippet: "request_id = request.headers.get('X-Request-ID') or str(uuid.uuid4()); with logger.contextualize(request_id=request_id):"
+    test_file: null
+    test_lines: null
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: null
+  sprint: null
+  owners: null
+  regulations: ["PIPEDA", "SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-11"
+  severity: PASS
+  dimension: "17"
+  evidence:
+    file: rider-app/app/_layout.tsx
+    lines: [182]
+    snippet: "await initFirebaseServices(); [Crashlytics + App Check initialized]"
+    test_file: null
+    test_lines: null
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: null
+  sprint: null
+  owners: null
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-12"
+  severity: PASS
+  dimension: "17"
+  evidence:
+    file: rider-app/app.config.ts
+    lines: [42, 62, 70]
+    snippet: "privacyManifests: { NSPrivacyTracking: false, NSPrivacyCollectedDataTypes: [preciseLocation, phone, email, paymentInfo, crashData] }"
+    test_file: null
+    test_lines: null
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: null
+  sprint: null
+  owners: null
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+===END-FINDINGS-YAML===
+
+===AUDIT-COMPLETE=== dim=17 module=rider-app findings=12 actionable=9 pass=3
+
+================================================================================
+END OF D17 — rider-app Phase E
+Next: D18 DR/BCP (append below when E-2 runs)
+================================================================================

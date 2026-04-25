@@ -193,6 +193,105 @@ PHASE A FINDINGS YAML
 
 ================================================================================
 END OF PHASE A — backend-api v1
-Next: Phase B (D07 state machine + D08 payments) — to be run as separate
-agent call. Then C (D09–D12), D (D14), E (D17–D22).
+================================================================================
+
+================================================================================
+PHASE B — DIMENSIONS 07 (STATE MACHINE), 08 (PAYMENTS)
+================================================================================
+
+[07-1] CRITICAL | Ride state-string mismatch between complete_ride and
+process_payment — rider literally cannot pay after a completed ride
+File: backend/routes/rides.py:1309,1312 (process_payment) +
+backend/routes/drivers.py:2088 (complete_ride)
+Finding: `complete_ride` writes `status='completed'`. The
+`process_payment` endpoint guards with `if _ride_status != 'trip_completed'`
+and raises 409 otherwise. Once the driver completes the ride, the rider
+hits the payment endpoint and gets 409 — fare collection blocked, support
+escalation required for every ride.
+Same family as DV-3 (`COMPLETE_FROM_STATES = ('in_progress',)` vs
+`'trip_in_progress'`). Different specific instance.
+Fix: Standardize state strings via a `RideStatus` enum (per DV-3); short
+term, change `process_payment` to also accept `'completed'` (or canonicalize
+on `'trip_completed'`). Sweep the repo for every state-string literal.
+Effort: 2 h (short fix) + 4 h (enum refactor — recommended)
+Risk score: 48 (CRITICAL × org × likely)
+Regulations: PCI-DSS, SK-CPPA
+Owner: backend · Sprint: P0
+
+[08-1] MEDIUM | Stripe webhook handler has no event-type allowlist; unknown
+events silently marked processed
+File: backend/routes/webhooks.py:94,138,190,218-219
+Finding: Webhook routing uses an if/elif chain on `event_type`; the else
+branch logs `"Unhandled event"` but still calls
+`mark_stripe_event_processed(event_id)`. Any future event type Stripe adds
+(refund, dispute, chargeback, payout.paid, account.updated, etc.) is
+silently accepted with no business logic + audit trail incomplete.
+Fix: ALLOWED_EVENTS allowlist; reject unknown types with 400 + alert
+(don't 200 + processed_at).
+Effort: 2 h
+Risk score: 16 (MEDIUM × org × possible)
+Regulations: PCI-DSS, SOC2
+Owner: backend · Sprint: P2
+
+================================================================================
+PHASE B FINDINGS YAML
+================================================================================
+
+===FINDINGS-YAML===
+- id: "07-1"
+  severity: CRITICAL
+  dimension: "07"
+  evidence:
+    file: backend/routes/rides.py
+    lines: [1309, 1312]
+    snippet: "if _ride_status != 'trip_completed': raise HTTPException(...) — but complete_ride sets 'completed'"
+    test_file: null
+    test_lines: null
+  root_cause: "State-string mismatch: complete_ride writes 'completed' but process_payment requires 'trip_completed'"
+  impact: "After driver completes ride, rider gets 409 on payment; fare collection blocked for every completed ride"
+  fix: "Canonicalize state strings via RideStatus enum (per DV-3); short-term: accept 'completed' in process_payment"
+  effort_hours: 2
+  regression_test: "test_rider_payment_after_driver_completes — driver completes ride, rider calls process_payment, expect 200"
+  sprint: P0
+  owners: ["backend"]
+  regulations: ["PCI-DSS", "SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: certain
+  risk_score: 48
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "08-1"
+  severity: MEDIUM
+  dimension: "08"
+  evidence:
+    file: backend/routes/webhooks.py
+    lines: [94, 138, 218, 219]
+    snippet: "if-elif on event_type, else: logger.info('Unhandled') + mark_processed"
+    test_file: null
+    test_lines: null
+  root_cause: "No allowlist on event_type; unknown event types are logged but still marked processed_at"
+  impact: "Future Stripe event types (refund, dispute, payout.paid, account.updated) silently accepted without business logic"
+  fix: "Define ALLOWED_EVENTS set; reject unknown with 400 + alert; don't mark processed"
+  effort_hours: 2
+  regression_test: "Send 'charge.refunded' event; expect 400 + SRE alert, not 200 + processed_at"
+  sprint: P2
+  owners: ["backend"]
+  regulations: ["PCI-DSS", "SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+===END-FINDINGS-YAML===
+
+===AUDIT-COMPLETE=== phase=B module=backend-api dimensions=07,08 findings=2 critical=1 medium=1
+
+================================================================================
+END OF PHASE B — backend-api v1
+Next: Phase C (D09 tests + D10 errors + D11 headers + D12 compliance)
 ================================================================================

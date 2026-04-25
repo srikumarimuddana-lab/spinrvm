@@ -666,6 +666,287 @@ PHASE C FINDINGS YAML
 
 ================================================================================
 END OF PHASE C — backend-api v1
-Combined Phase A+B+C: 16 findings (1 CRITICAL · 7 HIGH · 5 MEDIUM · 3 PASS)
-Next: Phase D (D14 performance) + Phase E (D17–D22)
+================================================================================
+
+================================================================================
+PHASE D — DIMENSION 14 PERFORMANCE & SCALABILITY
+================================================================================
+
+[14-1] HIGH | `get_ride_history` fetches 2000 rows then filters/paginates in Python
+File: backend/routes/rides.py:1092,1097
+Finding: `all_rides = await db_supabase.get_rows('rides', {'rider_id':
+current_user['id']}, limit=2000)`. Filter by status, sort, and pagination
+are all done in Python after the fetch. Every history request scans 2000
+rows from DB even when the caller only wants page 1 (10 rows).
+Fix: Push status filter + ordering to DB; cursor-based offset; cap LIMIT
+at the page size (≤100). Effort: 3 h
+Risk score: 32 (HIGH × org × likely) — P1
+Regulations: SK-CPPA
+Owner: backend
+
+[14-2] HIGH | Round-robin dispatch query scans the entire `rides` table to
+find one row
+File: backend/services/dispatch_service.py:239
+Finding: `await self.db.get_rows('rides', {'driver_id': {'$ne': None}},
+order='created_at', desc=True, limit=1)` to find the last-assigned driver.
+No supporting index. As `rides` grows past 100k, every dispatch decision
+incurs a sequential scan.
+Fix: `CREATE INDEX idx_rides_driver_assigned_at ON rides(driver_id,
+assigned_at DESC NULLS LAST)`; query by `assigned_at` instead of
+`created_at`. Effort: 2 h
+Risk score: 28 (HIGH × org × likely) — P1
+Regulations: SK-CPPA (dispatch SLA)
+Owner: backend
+
+[14-3] MEDIUM | Driver candidate query has no composite index for
+(is_online, is_available, vehicle_type_id)
+File: backend/migrations/34_rides_performance_indexes.sql
+Finding: Existing indexes target `rides`. The driver-candidate filter in
+dispatch (`is_online=true, is_available=true, vehicle_type_id=...`) has
+no composite index — sequential scan until driver pool exceeds ~500.
+Fix: `CREATE INDEX CONCURRENTLY idx_drivers_online_available_type ON
+drivers(is_online, is_available, vehicle_type_id)`. Effort: 2 h
+Risk score: 20 (MEDIUM × org × likely) — P2
+Regulations: —
+Owner: backend
+
+[14-4] MEDIUM | DSAR export makes 6 sequential `get_rows` calls instead of
+parallel
+File: backend/routes/drivers.py:1529-1541
+Finding: `_build_and_email_data_export` issues 6 awaits in series (drivers,
+users, rides, payouts, documents, notification_prefs). Total latency =
+sum of 6 round-trips. Compounds the DSAR SLA risk flagged in 12-2.
+Fix: `asyncio.gather(*[get_rows(...), ...])` for parallel fetch.
+Effort: 2 h
+Risk score: 16 (MEDIUM × org × possible) — P2
+Regulations: PIPEDA
+Owner: backend
+
+[14-5] MEDIUM | `run_sync` thread pool size unconfigured — default scales
+with CPU count, saturates under load
+File: backend/db_supabase.py:83-95
+Finding: `loop.run_in_executor(None, func)` uses the default executor.
+Default `ThreadPoolExecutor` has `max_workers = min(32, cpu_count + 4)`.
+On a 4-core container that's 8 threads — concurrent DB calls block each
+other under load.
+Fix: Explicit `ThreadPoolExecutor(max_workers=16)` (configurable via
+`DB_THREAD_POOL_SIZE` env var); export queue-depth + active-thread
+metrics. Effort: 3 h
+Risk score: 16 (MEDIUM × org × possible) — P2
+Regulations: —
+Owner: backend
+
+[14-6] MEDIUM | `broadcast()` sends to every connection synchronously —
+blocks event loop at high connection count
+File: backend/socket_manager.py:97-99
+Finding: `for connection in self.active_connections.values():
+await connection.send_json(msg)`. At 500+ connections per replica, a
+broadcast blocks the loop for the duration of all `send_json` calls.
+Fix: `asyncio.gather(*[c.send_json(msg) for c in connections],
+return_exceptions=True)`; per-message timeout; log slow broadcasts.
+Effort: 2 h
+Risk score: 12 (MEDIUM × org × possible) — P3
+Regulations: —
+Owner: backend
+
+[14-7] LOW | Background loops have no jitter — multiple loops wake at the
+same second
+File: backend/core/lifespan.py:96-115
+Finding: Hardcoded `asyncio.sleep(interval)` per loop. Every 5-min mark
+all 5-min loops wake at the same second causing periodic load spikes
+on the DB pool.
+Fix: Add ±10% jitter to each sleep; per-loop duration / error metrics.
+(Also closes the heartbeat-emission gap from Phase E 17-5/17-10.)
+Effort: 2 h
+Risk score: 8 (LOW × org × possible) — P3
+Regulations: —
+Owner: backend
+
+================================================================================
+PHASE D FINDINGS YAML
+================================================================================
+
+===FINDINGS-YAML===
+- id: "14-1"
+  severity: HIGH
+  dimension: "14"
+  evidence:
+    file: backend/routes/rides.py
+    lines: [1092, 1097]
+    snippet: "all_rides = await db_supabase.get_rows('rides', {'rider_id': id}, limit=2000)"
+    test_file: null
+    test_lines: null
+  root_cause: "History endpoint fetches 2000 rows + filters/sorts in Python; no DB-level status filter or pagination"
+  impact: "Every history request scans 2000 rows; high CPU + bandwidth per page click; latency grows with rider history size"
+  fix: "Push status filter to DB; cursor offset; cap LIMIT at page size (≤100)"
+  effort_hours: 3
+  regression_test: "Log SQL; verify LIMIT 100 + WHERE status IN applied; benchmark vs old"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "14-2"
+  severity: HIGH
+  dimension: "14"
+  evidence:
+    file: backend/services/dispatch_service.py
+    lines: [239]
+    snippet: "get_rows('rides', {'driver_id': {'$ne': None}}, order='created_at', desc=True, limit=1)"
+    test_file: null
+    test_lines: null
+  root_cause: "Round-robin scans full rides table to find last-assigned driver; no supporting index"
+  impact: "Every dispatch decision incurs O(n) scan on rides; SLA breach as table grows past 100k"
+  fix: "INDEX idx_rides_driver_assigned_at(driver_id, assigned_at DESC); query by assigned_at"
+  effort_hours: 2
+  regression_test: "EXPLAIN shows index scan; benchmark dispatch latency at 100k rides"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 28
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "14-3"
+  severity: MEDIUM
+  dimension: "14"
+  evidence:
+    file: backend/migrations/34_rides_performance_indexes.sql
+    lines: [1, 9]
+    snippet: "no composite index on drivers(is_online, is_available, vehicle_type_id)"
+    test_file: null
+    test_lines: null
+  root_cause: "Driver-candidate dispatch filter has no composite index"
+  impact: "Sequential scan on drivers table once fleet exceeds ~500; dispatch latency grows linearly with fleet"
+  fix: "CREATE INDEX CONCURRENTLY idx_drivers_online_available_type ON drivers(is_online, is_available, vehicle_type_id)"
+  effort_hours: 2
+  regression_test: "EXPLAIN ANALYZE shows index scan, not seq scan"
+  sprint: P2
+  owners: ["backend"]
+  regulations: []
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 20
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "14-4"
+  severity: MEDIUM
+  dimension: "14"
+  evidence:
+    file: backend/routes/drivers.py
+    lines: [1529, 1541]
+    snippet: "6 sequential get_rows calls in _build_and_email_data_export"
+    test_file: null
+    test_lines: null
+  root_cause: "DSAR export issues 6 awaits in series; total latency = sum of 6 round-trips"
+  impact: "Compounds the 30-day DSAR SLA risk (cf. 12-2 / DV-17)"
+  fix: "asyncio.gather() the 6 fetches; no order dependency in export"
+  effort_hours: 2
+  regression_test: "Mock get_rows; assert concurrent dispatch; measure < 200ms total"
+  sprint: P2
+  owners: ["backend"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "14-5"
+  severity: MEDIUM
+  dimension: "14"
+  evidence:
+    file: backend/db_supabase.py
+    lines: [83, 95]
+    snippet: "run_sync uses loop.run_in_executor(None, ...) — default thread pool min(32, cpu+4)"
+    test_file: null
+    test_lines: null
+  root_cause: "Default executor on a 4-core container = 8 threads; concurrent DB calls block each other under load"
+  impact: "Dispatch stalls during traffic spikes; rider timeouts during demand surges"
+  fix: "Explicit ThreadPoolExecutor(max_workers=16); env-configurable; export queue depth + active threads"
+  effort_hours: 3
+  regression_test: "Load test 50 concurrent requests; verify p99 dispatch within budget; max_workers visible in metrics"
+  sprint: P2
+  owners: ["backend"]
+  regulations: []
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "14-6"
+  severity: MEDIUM
+  dimension: "14"
+  evidence:
+    file: backend/socket_manager.py
+    lines: [97, 99]
+    snippet: "for connection in self.active_connections.values(): await connection.send_json(msg)"
+    test_file: null
+    test_lines: null
+  root_cause: "Sequential send_json across all connections blocks event loop; no backpressure"
+  impact: "At 500+ connections/replica, broadcast hangs the loop multiple seconds; affects in-flight requests"
+  fix: "asyncio.gather(*[send_json(msg) for c in connections], return_exceptions=True); per-message timeout"
+  effort_hours: 2
+  regression_test: "1000 mock sockets; broadcast latency < 200ms; no blocking"
+  sprint: P3
+  owners: ["backend"]
+  regulations: []
+  confidence: medium
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 12
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "14-7"
+  severity: LOW
+  dimension: "14"
+  evidence:
+    file: backend/core/lifespan.py
+    lines: [96, 115]
+    snippet: "asyncio.sleep(interval) — no jitter; loops wake on common boundary"
+    test_file: null
+    test_lines: null
+  root_cause: "Hardcoded sleep intervals; same-second wakes cause synchronized DB load spikes"
+  impact: "Periodic load spikes on DB pool; poor dispatch quality at the spike moments"
+  fix: "Add ±10% jitter; per-loop duration + error metrics (closes 17-5/17-10 too)"
+  effort_hours: 2
+  regression_test: "Parse logs over 1h; verify <2 loops wake in same second window"
+  sprint: P3
+  owners: ["backend"]
+  regulations: []
+  confidence: medium
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 8
+  dollars_at_risk: null
+  reviewed_by: null
+===END-FINDINGS-YAML===
+
+===AUDIT-COMPLETE=== phase=D module=backend-api dimension=14 findings=7 high=2 medium=4 low=1
+
+================================================================================
+END OF PHASE D — backend-api v1
+Combined Phase A+B+C+D: 23 findings (1 CRITICAL · 9 HIGH · 9 MEDIUM · 1 LOW · 3 PASS)
+Next: Phase E (D17–D22) — recommended split into E-1/E-2 (per dim or pair)
 ================================================================================

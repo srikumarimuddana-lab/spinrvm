@@ -74,15 +74,6 @@ export default function DriverTabsLayout() {
           ),
         }}
       />
-      <Tabs.Screen
-        name="help"
-        options={{
-          title: 'Help',
-          tabBarIcon: ({ color }) => (
-            <Ionicons name="chatbubble-ellipses" size={24} color={color} />
-          ),
-        }}
-      />
     </Tabs>
   );
 }

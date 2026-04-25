@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { getDriverStats, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs } from "@/lib/api";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs } from "@/lib/api";
+import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -30,10 +31,16 @@ const STATUS_TABS = [
     { value: "online", label: "Online", icon: Wifi },
 ];
 
+const PAGE_SIZE = 50;
+
 export default function DriversPage() {
     const [data, setData] = useState<any>(null);
     const [drivers, setDrivers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+    const [tableLoading, setTableLoading] = useState(true);
+    const [page, setPage] = useState(0);
+    const [hasNextPage, setHasNextPage] = useState(false);
+    const reqIdRef = useRef(0);
     const [search, setSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
     const [sortKey, setSortKey] = useState<string>("created_at");
@@ -71,10 +78,31 @@ export default function DriversPage() {
         if (serviceAreaId) params.service_area_id = serviceAreaId;
         if (startDate) params.start_date = startDate;
         if (endDate) params.end_date = endDate;
-        getDriverStats(params).then((res) => { setData(res); setDrivers(res.drivers || []); setServiceAreas(res.service_areas || []); }).catch(() => {}).finally(() => setLoading(false));
+        getDriverStats(params).then((res) => { setData(res); setServiceAreas(res.service_areas || []); }).catch(() => {}).finally(() => setLoading(false));
     }, [serviceAreaId, startDate, endDate]);
 
+    const loadDrivers = useCallback(() => {
+        setTableLoading(true);
+        const reqId = ++reqIdRef.current;
+        const opts: any = { limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE };
+        if (serviceAreaId) opts.service_area_id = serviceAreaId;
+        if (statusFilter === "online") opts.is_online = true;
+        else if (["active", "pending", "needs_review", "suspended", "banned"].includes(statusFilter)) opts.status = statusFilter;
+        getDrivers(opts)
+            .then((rows) => {
+                if (reqId !== reqIdRef.current) return;
+                const arr = Array.isArray(rows) ? rows : [];
+                setHasNextPage(arr.length > PAGE_SIZE);
+                setDrivers(arr.slice(0, PAGE_SIZE));
+            })
+            .catch(() => { if (reqId === reqIdRef.current) { setDrivers([]); setHasNextPage(false); } })
+            .finally(() => { if (reqId === reqIdRef.current) setTableLoading(false); });
+    }, [page, serviceAreaId, statusFilter]);
+
     useEffect(() => { loadData(); }, [loadData]);
+    useEffect(() => { loadDrivers(); }, [loadDrivers]);
+    // Reset to first page when filters change.
+    useEffect(() => { setPage(0); }, [statusFilter, serviceAreaId]);
     // Vehicle-type catalogue + areaId → allowed vt-id set. The map is
     // unioned from BOTH pricing stores because admins can configure
     // vehicles for an area either way:
@@ -129,7 +157,7 @@ export default function DriversPage() {
 
     const handleReviewDoc = async (docId: string, status: "approved" | "rejected", reason?: string, expiry?: string) => {
         setDocBusy(docId);
-        try { await reviewDocument(docId, status, reason, expiry ? new Date(expiry).toISOString() : undefined); await reloadDriverDocs(); loadData(); } catch (e: any) { alert("Could not update document: " + (e?.message || "unknown error")); } finally { setDocBusy(null); }
+        try { await reviewDocument(docId, status, reason, expiry ? new Date(expiry).toISOString() : undefined); await reloadDriverDocs(); loadData(); loadDrivers(); } catch (e: any) { alert("Could not update document: " + (e?.message || "unknown error")); } finally { setDocBusy(null); }
     };
 
     const openReviewDialog = (docId: string, action: "approved" | "rejected") => {
@@ -149,7 +177,7 @@ export default function DriversPage() {
 
     const handleVerify = async (driverId: string, verified: boolean) => {
         setVerifying(true);
-        try { const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? ""; const token = (await import("@/store/authStore")).useAuthStore.getState().token; await fetch(`${API_BASE}/api/admin/drivers/${driverId}/verify`, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` }, body: JSON.stringify({ verified }) }); loadData(); if (selected?.id === driverId) setSelected({ ...selected, is_verified: verified }); } catch {}
+        try { const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? ""; const token = (await import("@/store/authStore")).useAuthStore.getState().token; await fetch(`${API_BASE}/api/admin/drivers/${driverId}/verify`, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` }, body: JSON.stringify({ verified }) }); loadData(); loadDrivers(); if (selected?.id === driverId) setSelected({ ...selected, is_verified: verified }); } catch {}
         setVerifying(false);
     };
 
@@ -210,9 +238,11 @@ export default function DriversPage() {
     const SortIcon = ({ col }: { col: string }) => { if (sortKey !== col) return <ArrowUpDown className="h-3 w-3 opacity-30 inline ml-1" />; return sortDir === "asc" ? <ArrowUp className="h-3 w-3 inline ml-1" /> : <ArrowDown className="h-3 w-3 inline ml-1" />; };
 
     const statusCounts = (s: string) => {
-        if (s === "all") return drivers.length;
-        if (s === "online") return drivers.filter(d => d.is_online).length;
-        return drivers.filter(d => d.status === s).length;
+        const stats = data?.stats;
+        if (!stats) return 0;
+        if (s === "all") return stats.total ?? 0;
+        if (s === "online") return stats.online ?? 0;
+        return stats[s] ?? 0;
     };
     const fmtDate = (d: string) => { if (!d) return "\u2014"; try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
 
@@ -258,7 +288,7 @@ export default function DriversPage() {
             <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                 <div>
                     <h1 className="text-2xl font-bold">Drivers</h1>
-                    <p className="text-sm text-muted-foreground">{drivers.length} drivers {serviceAreaId ? `in ${selectedAreaName}` : "overall"}</p>
+                    <p className="text-sm text-muted-foreground">{data?.stats?.total ?? 0} drivers {serviceAreaId ? `in ${selectedAreaName}` : "overall"}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                     <div className="flex items-center gap-1.5">
@@ -321,7 +351,7 @@ export default function DriversPage() {
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {loading ? Array.from({ length: 5 }).map((_, i) => (
+                            {tableLoading ? Array.from({ length: 5 }).map((_, i) => (
                                 <TableRow key={i} className="animate-pulse">
                                     <TableCell><div className="h-8 w-16 bg-muted rounded" /></TableCell>
                                     <TableCell className="py-4"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-muted" /><div className="space-y-2"><div className="h-3 w-24 bg-muted rounded" /><div className="h-2 w-16 bg-muted rounded" /></div></div></TableCell>
@@ -418,6 +448,13 @@ export default function DriversPage() {
                         </TableBody>
                     </Table>
                 </div>
+
+                <Pagination
+                    page={page}
+                    pageSize={PAGE_SIZE}
+                    hasNextPage={hasNextPage}
+                    onPageChange={setPage}
+                />
             </div>
 
             {!serviceAreaId && <AreaStatsTable areaStats={data?.area_stats || []} loading={loading} onAreaClick={(areaId) => setServiceAreaId(areaId)} />}
@@ -676,7 +713,7 @@ export default function DriversPage() {
 
                                 {/* Actions & Verification */}
                                 <TabsContent value="verification" className="mt-4 space-y-5">
-                                    <DriverActionBar driver={selected} onActionComplete={() => { loadData(); setSelected(null); }} />
+                                    <DriverActionBar driver={selected} onActionComplete={() => { loadData(); loadDrivers(); setSelected(null); }} />
                                     <DetailSection title="Verification Checklist" icon={CheckCircle}>
                                         <div className="space-y-2">
                                             {(requiredDocs.length > 0 ? requiredDocs : [

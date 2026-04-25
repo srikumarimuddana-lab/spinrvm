@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getLostAndFoundItems, resolveLostItem, updateLostItem, deleteLostItem, reportLostItem } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,9 +11,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { PackageSearch, Search, CheckCircle, XCircle, Clock, Plus, Pencil, Trash2, RefreshCw, Eye } from "lucide-react";
+import { Pagination } from "@/components/ui/pagination";
+import { Search, CheckCircle, Plus, Pencil, Trash2, RefreshCw } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
+
+const PAGE_SIZE = 50;
 
 const S_CFG: Record<string, { l: string; c: string }> = {
     reported: { l: "Reported", c: "bg-amber-500/15 text-amber-600" },
@@ -36,15 +39,33 @@ export default function LostAndFoundTab() {
     const [saving, setSaving] = useState(false);
     const [form, setForm] = useState({ ride_id: "", item_description: "", service_area_id: "" });
     const [editForm, setEditForm] = useState({ item_description: "", admin_notes: "", status: "reported" });
+    const [page, setPage] = useState(0);
+    const [hasNextPage, setHasNextPage] = useState(false);
+    const reqIdRef = useRef(0);
 
-    const load = () => { setLoading(true); getLostAndFoundItems().then((d) => setItems(d || [])).catch(() => setItems([])).finally(() => setLoading(false)); };
-    useEffect(() => { load(); }, []);
+    const load = useCallback(() => {
+        setLoading(true);
+        const reqId = ++reqIdRef.current;
+        const opts: any = { limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE };
+        if (statusFilter !== "all") opts.status = statusFilter;
+        if (areaFilter !== "all") opts.service_area_id = areaFilter;
+        getLostAndFoundItems(opts)
+            .then((rows) => {
+                if (reqId !== reqIdRef.current) return;
+                const arr = Array.isArray(rows) ? rows : [];
+                setHasNextPage(arr.length > PAGE_SIZE);
+                setItems(arr.slice(0, PAGE_SIZE));
+            })
+            .catch(() => { if (reqId === reqIdRef.current) { setItems([]); setHasNextPage(false); } })
+            .finally(() => { if (reqId === reqIdRef.current) setLoading(false); });
+    }, [page, statusFilter, areaFilter]);
+    useEffect(() => { load(); }, [load]);
+    useEffect(() => { setPage(0); }, [statusFilter, areaFilter]);
 
-    const stats = { reported: items.filter((i) => i.status === "reported").length, notified: items.filter((i) => i.status === "driver_notified").length, resolved: items.filter((i) => i.status === "resolved").length, unresolved: items.filter((i) => i.status === "unresolved").length };
+    // Search filters the current page client-side; full-text server search is not implemented.
     const filtered = items.filter((i) => {
-        const ms = !search || i.item_description?.toLowerCase().includes(search.toLowerCase());
-        const ma = areaFilter === "all" || i.service_area_id === areaFilter;
-        return ms && (statusFilter === "all" || i.status === statusFilter) && ma;
+        if (!search) return true;
+        return i.item_description?.toLowerCase().includes(search.toLowerCase());
     });
     const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
 
@@ -68,13 +89,6 @@ export default function LostAndFoundTab() {
 
     return (
         <div className="space-y-4">
-            <div className="grid grid-cols-4 gap-3">
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><Clock className="h-4 w-4 text-amber-500" /><div><p className="text-[10px] text-muted-foreground">Reported</p><p className="text-xl font-bold">{stats.reported}</p></div></div></CardContent></Card>
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><PackageSearch className="h-4 w-4 text-blue-500" /><div><p className="text-[10px] text-muted-foreground">Notified</p><p className="text-xl font-bold">{stats.notified}</p></div></div></CardContent></Card>
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><CheckCircle className="h-4 w-4 text-emerald-500" /><div><p className="text-[10px] text-muted-foreground">Resolved</p><p className="text-xl font-bold">{stats.resolved}</p></div></div></CardContent></Card>
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><XCircle className="h-4 w-4 text-red-500" /><div><p className="text-[10px] text-muted-foreground">Unresolved</p><p className="text-xl font-bold">{stats.unresolved}</p></div></div></CardContent></Card>
-            </div>
-
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2 flex-1">
                     <div className="relative flex-1 max-w-xs"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search items..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-9" /></div>
@@ -106,6 +120,8 @@ export default function LostAndFoundTab() {
                         </TableRow>
                     ))}</TableBody></Table>}
             </CardContent></Card>
+
+            <Pagination page={page} pageSize={PAGE_SIZE} hasNextPage={hasNextPage} onPageChange={setPage} />
 
             {/* Report Dialog */}
             <Dialog open={dialogOpen} onOpenChange={(o) => { if (!o) setDialogOpen(false); }}>

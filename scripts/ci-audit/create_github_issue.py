@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import urllib.parse
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -58,7 +60,6 @@ def _api(method: str, url: str, token: str, body: dict | None = None) -> Any:
 def _search_existing(repo: str, run_id: str, token: str) -> int | None:
     query = f"repo:{repo} is:issue is:open \"CI Error Audit\" \"{run_id}\" in:title"
     url = f"{API_BASE}/search/issues?q={urllib.parse.quote(query)}&per_page=1"
-    import urllib.parse
     result = _api("GET", url, token)
     items = result.get("items", [])
     return items[0]["number"] if items else None
@@ -93,8 +94,6 @@ def create_or_update_issue(
     token: str,
     severity_filter: str,
 ) -> None:
-    import urllib.parse
-
     report_text  = Path(report_path).read_text()
     errors_data  = json.loads(Path(errors_path).read_text())
     cr_data      = json.loads(Path(cr_path).read_text())
@@ -155,14 +154,19 @@ def main() -> None:
     parser.add_argument("--run-id",           required=True)
     parser.add_argument("--workflow",         required=True)
     parser.add_argument("--branch",           required=True)
-    parser.add_argument("--token",            required=True)
+    parser.add_argument("--token",            default="", help="GitHub token (falls back to GH_TOKEN env var)")
     parser.add_argument("--severity-filter",  default="P1")
     args = parser.parse_args()
+
+    token = args.token or os.environ.get("GH_TOKEN", "")
+    if not token:
+        print("ERROR: GitHub token required via --token or GH_TOKEN env var", file=sys.stderr)
+        sys.exit(1)
 
     create_or_update_issue(
         args.report, args.errors, args.change_requests,
         args.repo, args.run_id, args.workflow,
-        args.branch, args.token, args.severity_filter,
+        args.branch, token, args.severity_filter,
     )
 
 

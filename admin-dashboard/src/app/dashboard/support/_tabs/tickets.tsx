@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
     getTickets, replyToTicket, closeTicket, createTicket, updateTicket, deleteTicket,
     getFaqs, createFaq, updateFaq, deleteFaq,
@@ -16,8 +16,11 @@ import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { MessageSquare, CheckCircle, Plus, Trash2, Pencil, Send, Search, RefreshCw, HelpCircle, Clock, Inbox } from "lucide-react";
+import { Pagination } from "@/components/ui/pagination";
+import { MessageSquare, CheckCircle, Plus, Trash2, Pencil, Send, Search, RefreshCw, HelpCircle } from "lucide-react";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
+
+const PAGE_SIZE = 50;
 
 const CATEGORIES = ["general", "rides", "payments", "account", "safety", "driver", "technical"];
 const PRIORITIES = ["low", "medium", "high", "urgent"];
@@ -53,15 +56,34 @@ function TicketsList() {
     const [editing, setEditing] = useState<any>(null);
     const [saving, setSaving] = useState(false);
     const [form, setForm] = useState({ subject: "", category: "general", priority: "medium", message: "", user_name: "", user_email: "", service_area_id: "" });
+    const [page, setPage] = useState(0);
+    const [hasNextPage, setHasNextPage] = useState(false);
+    const reqIdRef = useRef(0);
 
-    const load = () => { setLoading(true); getTickets().then(setTickets).catch(() => setTickets([])).finally(() => setLoading(false)); };
-    useEffect(() => { load(); }, []);
+    const load = useCallback(() => {
+        setLoading(true);
+        const reqId = ++reqIdRef.current;
+        const opts: any = { limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE };
+        if (statusFilter !== "all") opts.status = statusFilter;
+        if (areaFilter !== "all") opts.service_area_id = areaFilter;
+        getTickets(opts)
+            .then((rows) => {
+                if (reqId !== reqIdRef.current) return;
+                const arr = Array.isArray(rows) ? rows : [];
+                setHasNextPage(arr.length > PAGE_SIZE);
+                setTickets(arr.slice(0, PAGE_SIZE));
+            })
+            .catch(() => { if (reqId === reqIdRef.current) { setTickets([]); setHasNextPage(false); } })
+            .finally(() => { if (reqId === reqIdRef.current) setLoading(false); });
+    }, [page, statusFilter, areaFilter]);
+    useEffect(() => { load(); }, [load]);
+    useEffect(() => { setPage(0); }, [statusFilter, areaFilter]);
 
-    const stats = { total: tickets.length, open: tickets.filter((t) => t.status === "open" || t.status === "in_progress").length, closed: tickets.filter((t) => t.status === "closed").length };
+    // Search filters the current page client-side; full-text server search is not implemented.
     const filtered = tickets.filter((t) => {
-        const ms = !search || t.subject?.toLowerCase().includes(search.toLowerCase()) || t.user_name?.toLowerCase().includes(search.toLowerCase());
-        const ma = areaFilter === "all" || t.service_area_id === areaFilter;
-        return ms && ma && (statusFilter === "all" || t.status === statusFilter);
+        if (!search) return true;
+        const q = search.toLowerCase();
+        return t.subject?.toLowerCase().includes(q) || t.user_name?.toLowerCase().includes(q);
     });
 
     const reset = () => { setForm({ subject: "", category: "general", priority: "medium", message: "", user_name: "", user_email: "", service_area_id: "" }); setEditing(null); };
@@ -80,12 +102,6 @@ function TicketsList() {
 
     return (
         <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-3">
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><Inbox className="h-4 w-4 text-violet-500" /><div><p className="text-[10px] text-muted-foreground">Total</p><p className="text-xl font-bold">{stats.total}</p></div></div></CardContent></Card>
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><Clock className="h-4 w-4 text-amber-500" /><div><p className="text-[10px] text-muted-foreground">Open</p><p className="text-xl font-bold">{stats.open}</p></div></div></CardContent></Card>
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><CheckCircle className="h-4 w-4 text-emerald-500" /><div><p className="text-[10px] text-muted-foreground">Closed</p><p className="text-xl font-bold">{stats.closed}</p></div></div></CardContent></Card>
-            </div>
-
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2 flex-1 flex-wrap">
                     <div className="relative flex-1 max-w-xs"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-9" /></div>
@@ -117,7 +133,9 @@ function TicketsList() {
                                 </div></TableCell>
                             </TableRow>
                         ))}</TableBody></Table>}
-                </CardContent></Card>
+                </CardContent>
+                <Pagination page={page} pageSize={PAGE_SIZE} hasNextPage={hasNextPage} onPageChange={setPage} />
+                </Card>
 
                 <Card className="h-fit">
                     {selected ? (

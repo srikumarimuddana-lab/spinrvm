@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getComplaints, resolveComplaint, deleteComplaint, createRideComplaint } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,9 +11,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { FileWarning, Search, CheckCircle, XCircle, Clock, Plus, Trash2, Eye, RefreshCw, AlertCircle } from "lucide-react";
+import { Pagination } from "@/components/ui/pagination";
+import { FileWarning, Search, CheckCircle, XCircle, Plus, Trash2, Eye, RefreshCw } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
+
+const PAGE_SIZE = 50;
 
 const S_CFG: Record<string, { l: string; c: string }> = {
     open: { l: "Open", c: "bg-amber-500/15 text-amber-600" },
@@ -35,15 +38,34 @@ export default function ComplaintsTab() {
     const [dialogOpen, setDialogOpen] = useState(false);
     const [saving, setSaving] = useState(false);
     const [form, setForm] = useState({ ride_id: "", against_type: "driver", category: "other", description: "", service_area_id: "" });
+    const [page, setPage] = useState(0);
+    const [hasNextPage, setHasNextPage] = useState(false);
+    const reqIdRef = useRef(0);
 
-    const load = () => { setLoading(true); getComplaints().then((d) => setItems(d || [])).catch(() => setItems([])).finally(() => setLoading(false)); };
-    useEffect(() => { load(); }, []);
+    const load = useCallback(() => {
+        setLoading(true);
+        const reqId = ++reqIdRef.current;
+        const opts: any = { limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE };
+        if (statusFilter !== "all") opts.status = statusFilter;
+        if (areaFilter !== "all") opts.service_area_id = areaFilter;
+        getComplaints(opts)
+            .then((rows) => {
+                if (reqId !== reqIdRef.current) return;
+                const arr = Array.isArray(rows) ? rows : [];
+                setHasNextPage(arr.length > PAGE_SIZE);
+                setItems(arr.slice(0, PAGE_SIZE));
+            })
+            .catch(() => { if (reqId === reqIdRef.current) { setItems([]); setHasNextPage(false); } })
+            .finally(() => { if (reqId === reqIdRef.current) setLoading(false); });
+    }, [page, statusFilter, areaFilter]);
+    useEffect(() => { load(); }, [load]);
+    useEffect(() => { setPage(0); }, [statusFilter, areaFilter]);
 
-    const stats = { open: items.filter((i) => i.status === "open").length, investigating: items.filter((i) => i.status === "investigating").length, resolved: items.filter((i) => i.status === "resolved").length, dismissed: items.filter((i) => i.status === "dismissed").length };
+    // Search filters the current page client-side; full-text server search is not implemented.
     const filtered = items.filter((i) => {
-        const ms = !search || i.category?.toLowerCase().includes(search.toLowerCase()) || i.description?.toLowerCase().includes(search.toLowerCase());
-        const ma = areaFilter === "all" || i.service_area_id === areaFilter;
-        return ms && (statusFilter === "all" || i.status === statusFilter) && ma;
+        if (!search) return true;
+        const q = search.toLowerCase();
+        return i.category?.toLowerCase().includes(q) || i.description?.toLowerCase().includes(q);
     });
     const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
 
@@ -62,13 +84,6 @@ export default function ComplaintsTab() {
 
     return (
         <div className="space-y-4">
-            <div className="grid grid-cols-4 gap-3">
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><Clock className="h-4 w-4 text-amber-500" /><div><p className="text-[10px] text-muted-foreground">Open</p><p className="text-xl font-bold">{stats.open}</p></div></div></CardContent></Card>
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><AlertCircle className="h-4 w-4 text-blue-500" /><div><p className="text-[10px] text-muted-foreground">Investigating</p><p className="text-xl font-bold">{stats.investigating}</p></div></div></CardContent></Card>
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><CheckCircle className="h-4 w-4 text-emerald-500" /><div><p className="text-[10px] text-muted-foreground">Resolved</p><p className="text-xl font-bold">{stats.resolved}</p></div></div></CardContent></Card>
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><XCircle className="h-4 w-4 text-zinc-500" /><div><p className="text-[10px] text-muted-foreground">Dismissed</p><p className="text-xl font-bold">{stats.dismissed}</p></div></div></CardContent></Card>
-            </div>
-
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2 flex-1">
                     <div className="relative flex-1 max-w-xs"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-9" /></div>
@@ -100,6 +115,8 @@ export default function ComplaintsTab() {
                         </TableRow>
                     ))}</TableBody></Table>}
             </CardContent></Card>
+
+            <Pagination page={page} pageSize={PAGE_SIZE} hasNextPage={hasNextPage} onPageChange={setPage} />
 
             {/* Review Dialog */}
             <Dialog open={!!selected && !dialogOpen} onOpenChange={(o) => { if (!o) setSelected(null); }}>

@@ -1,11 +1,11 @@
 # Spinr Platform Architecture
 
 > **Living Document** — Update this file whenever the system architecture changes.
-> Last updated: 2026-03-26
+> Last updated: 2026-04-25
 
 ## System Overview
 
-Spinr is a ride-sharing platform with four main components communicating through a REST API and WebSocket connections.
+Spinr is a ride-sharing platform with five surfaces communicating through a REST API and WebSocket connections.
 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐
@@ -37,7 +37,7 @@ Spinr is a ride-sharing platform with four main components communicating through
 | Aspect | Details |
 |--------|---------|
 | Framework | FastAPI |
-| Language | Python 3.11+ |
+| Language | Python 3.12 |
 | Hosting | Railway |
 | Entry point | `backend/server.py` |
 | API prefix | `/api/v1/` |
@@ -66,9 +66,17 @@ Spinr is a ride-sharing platform with four main components communicating through
 ### Admin Dashboard (`admin-dashboard/`)
 | Aspect | Details |
 |--------|---------|
-| Framework | Next.js |
+| Framework | Next.js 16 |
 | Language | TypeScript |
 | Hosting | Vercel |
+
+### Shared Package (`shared/`)
+| Aspect | Details |
+|--------|---------|
+| Package name | `@spinr/shared` |
+| Language | TypeScript |
+| Contents | API client, Zustand stores, shared types |
+| Consumers | rider-app, driver-app, admin-dashboard |
 
 ## External Services
 | Service | Purpose | Config Location |
@@ -98,8 +106,8 @@ Rider requests ride → Backend creates ride record
 User enters phone → Backend generates OTP
 → OTP sent via SMS (Twilio/Firebase)
 → User enters OTP → Backend verifies
-→ Firebase token or JWT issued
-→ Token sent with all subsequent requests
+→ JWT issued (access: 15 min rider/driver, 12 hr admin; refresh: 30 days, rotated on use)
+→ Token sent with all subsequent requests; mobile clients auto-retry 401s via Axios interceptor
 ```
 
 ## Technical Debt
@@ -108,3 +116,10 @@ User enters phone → Backend generates OTP
 - [ ] Missing unit tests for most endpoints
 - [ ] Debug log statements with sensitive info in `dependencies.py`
 - [ ] `db.py` and `db_supabase.py` coexist — should consolidate
+
+---
+
+> **Reconciliation note (2026-04-25)** — This file was audited against `CLAUDE.md` and corrected:
+> Python 3.11+ → 3.12; token lifetimes made explicit (access 15 min / refresh 30 days);
+> `shared/` (`@spinr/shared`) added as the 5th surface; Next.js version pinned to 16.
+> Source of truth for architecture details is `CLAUDE.md`.

@@ -207,24 +207,84 @@ export const sendRideInvoice = (rideId: string) =>
         method: "POST",
         body: JSON.stringify({ tip_amount: 0 }),
     });
-export const getFlags = () => request<any[]>("/api/admin/flags");
+export const getFlags = (opts: {
+    limit?: number;
+    offset?: number;
+    target_type?: string;
+    service_area_id?: string;
+    is_active?: boolean;
+} = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.target_type) sp.set("target_type", opts.target_type);
+    if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
+    if (opts.is_active != null) sp.set("is_active", String(opts.is_active));
+    const qs = sp.toString();
+    return request<any[]>(`/api/admin/flags${qs ? `?${qs}` : ""}`);
+};
 export const deactivateFlag = (flagId: string) =>
     request<any>(`/api/admin/flags/${flagId}/deactivate`, { method: "PUT" });
 export const deleteFlag = (flagId: string) =>
     request<any>(`/api/admin/flags/${flagId}`, { method: "DELETE" });
-export const getLostAndFoundItems = () => request<any[]>("/api/admin/lost-and-found");
+export const getLostAndFoundItems = (opts: {
+    limit?: number;
+    offset?: number;
+    status?: string;
+    service_area_id?: string;
+} = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.status) sp.set("status", opts.status);
+    if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
+    const qs = sp.toString();
+    return request<any[]>(`/api/admin/lost-and-found${qs ? `?${qs}` : ""}`);
+};
 export const updateLostItem = (itemId: string, data: any) =>
     request<any>(`/api/admin/lost-and-found/${itemId}`, { method: "PUT", body: JSON.stringify(data) });
 export const deleteLostItem = (itemId: string) =>
     request<any>(`/api/admin/lost-and-found/${itemId}`, { method: "DELETE" });
 export const deleteDispute = (disputeId: string) =>
     request<any>(`/api/admin/disputes/${disputeId}`, { method: "DELETE" });
-export const getComplaints = () => request<any[]>("/api/admin/complaints");
+export const getComplaints = (opts: {
+    limit?: number;
+    offset?: number;
+    status?: string;
+    against_type?: string;
+    service_area_id?: string;
+} = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.status) sp.set("status", opts.status);
+    if (opts.against_type) sp.set("against_type", opts.against_type);
+    if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
+    const qs = sp.toString();
+    return request<any[]>(`/api/admin/complaints${qs ? `?${qs}` : ""}`);
+};
 export const deleteComplaint = (complaintId: string) =>
     request<any>(`/api/admin/complaints/${complaintId}`, { method: "DELETE" });
 
 /* ── Drivers ──────────────────────────────── */
-export const getDrivers = () => request<any[]>("/api/admin/drivers");
+export const getDrivers = (opts: {
+    limit?: number;
+    offset?: number;
+    is_verified?: boolean;
+    is_online?: boolean;
+    status?: string;
+    service_area_id?: string;
+} = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.is_verified != null) sp.set("is_verified", String(opts.is_verified));
+    if (opts.is_online != null) sp.set("is_online", String(opts.is_online));
+    if (opts.status) sp.set("status", opts.status);
+    if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
+    const qs = sp.toString();
+    return request<any[]>(`/api/admin/drivers${qs ? `?${qs}` : ""}`);
+};
 export const getDriverRides = (id: string) =>
     request<any>(`/api/admin/drivers/${id}/rides`);
 
@@ -819,6 +879,20 @@ export const getPromoStats = (range?: string) => {
 export const getUsers = (role: "all" | "rider" | "driver" | "admin" = "all") =>
     request<any[]>(`/api/admin/users?role=${role}`);
 
+export const getUsersPaginated = (opts: {
+    role?: "all" | "rider" | "driver" | "admin";
+    search?: string;
+    limit?: number;
+    offset?: number;
+} = {}) => {
+    const sp = new URLSearchParams();
+    sp.set("role", opts.role ?? "all");
+    if (opts.search) sp.set("search", opts.search);
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    return request<any[]>(`/api/admin/users?${sp.toString()}`);
+};
+
 export const getUserDetails = (id: string) =>
     request<any>(`/api/admin/users/${id}`);
 
@@ -858,8 +932,22 @@ export const debitUserWallet = (userId: string, amount: number, reason: string) 
     });
 
 /* ── Promotions ─────────────────────────────── */
-export const getPromotions = () =>
-    request<any[]>("/api/admin/promotions");
+export const getPromotions = (opts: {
+    limit?: number;
+    offset?: number;
+    promo_type?: "public" | "private";
+    status?: "active" | "inactive" | "not_expired" | "expired";
+    search?: string;
+} = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.promo_type) sp.set("promo_type", opts.promo_type);
+    if (opts.status) sp.set("status", opts.status);
+    if (opts.search) sp.set("search", opts.search);
+    const qs = sp.toString();
+    return request<any[]>(`/api/admin/promotions${qs ? `?${qs}` : ""}`);
+};
 
 export const createPromotion = (data: any) =>
     request<any>("/api/admin/promotions", {
@@ -877,8 +965,19 @@ export const deletePromotion = (id: string) =>
     request<any>(`/api/admin/promotions/${id}`, { method: "DELETE" });
 
 /* ── Disputes ───────────────────────────────── */
-export const getDisputes = () =>
-    request<any[]>("/api/admin/disputes");
+export const getDisputes = (opts: { limit?: number; offset?: number; status?: string } = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.status && opts.status !== "all") sp.set("status", opts.status);
+    const qs = sp.toString();
+    return request<any[]>(`/api/admin/disputes${qs ? `?${qs}` : ""}`);
+};
+
+export const getDisputeStats = () =>
+    request<{ open: number; under_review: number; resolved: number; rejected: number; total_refunded: number }>(
+        "/api/admin/disputes/stats"
+    );
 
 export const getDisputeDetails = (id: string) =>
     request<any>(`/api/admin/disputes/${id}`);
@@ -896,8 +995,20 @@ export const updateDispute = (id: string, data: any) =>
     });
 
 /* ── Support Tickets ────────────────────────── */
-export const getTickets = () =>
-    request<any[]>("/api/admin/tickets");
+export const getTickets = (opts: {
+    limit?: number;
+    offset?: number;
+    status?: string;
+    service_area_id?: string;
+} = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.status) sp.set("status", opts.status);
+    if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
+    const qs = sp.toString();
+    return request<any[]>(`/api/admin/tickets${qs ? `?${qs}` : ""}`);
+};
 
 export const getTicketDetails = (id: string) =>
     request<any>(`/api/admin/tickets/${id}`);
@@ -1098,8 +1209,21 @@ export const getDriverSubscriptions = (status?: string) =>
     request<any[]>(`/api/admin/driver-subscriptions${status ? `?status=${status}` : ''}`);
 
 /* ── Audit Logs ──────────────────────────── */
-export const getAuditLogs = (limit = 50) =>
-    request<any[]>(`/api/admin/audit-logs?limit=${limit}`);
+export const getAuditLogs = (opts: {
+    limit?: number;
+    offset?: number;
+    action?: string;
+    entity_type?: string;
+    search?: string;
+} = {}) => {
+    const sp = new URLSearchParams();
+    sp.set("limit", String(opts.limit ?? 50));
+    sp.set("offset", String(opts.offset ?? 0));
+    if (opts.action) sp.set("action", opts.action);
+    if (opts.entity_type) sp.set("entity_type", opts.entity_type);
+    if (opts.search) sp.set("search", opts.search);
+    return request<any[]>(`/api/admin/audit-logs?${sp.toString()}`);
+};
 
 /* ── Quests / Bonus Challenges ──────────── */
 export const getQuests = (isActive?: boolean) =>

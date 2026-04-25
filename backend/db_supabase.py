@@ -955,10 +955,60 @@ async def delete_otp_record(record_id: str):
 # ============ Query Helpers ============
 
 
+def _postgrest_pattern(value: str) -> str:
+    """PostgREST treats `*` as a wildcard in (i)like filters. Escape `*` and
+    `,` so user input cannot inject extra clauses into an or_()."""
+    return str(value).replace("*", r"\*").replace(",", r"\,").replace("(", r"\(").replace(")", r"\)")
+
+
+def _build_or_clause_term(col: str, val: Any) -> Optional[str]:
+    """Convert one {col: predicate} pair into a PostgREST or_() leaf term."""
+    if isinstance(val, dict):
+        if "$regex" in val:
+            op = "ilike" if val.get("$options") == "i" else "like"
+            return f"{col}.{op}.*{_postgrest_pattern(val['$regex'])}*"
+        if "$ne" in val:
+            return f"{col}.neq.{val['$ne']}"
+        if "$gt" in val:
+            return f"{col}.gt.{val['$gt']}"
+        if "$gte" in val:
+            return f"{col}.gte.{val['$gte']}"
+        if "$lt" in val:
+            return f"{col}.lt.{val['$lt']}"
+        if "$lte" in val:
+            return f"{col}.lte.{val['$lte']}"
+        return None
+    if val is None:
+        return f"{col}.is.null"
+    return f"{col}.eq.{val}"
+
+
+def _build_or_clause(clauses: List[Dict[str, Any]]) -> str:
+    """Flatten a list of {col: predicate} dicts into a PostgREST or_() string."""
+    parts: List[str] = []
+    for clause in clauses or []:
+        for col, val in clause.items():
+            term = _build_or_clause_term(col, val)
+            if term:
+                parts.append(term)
+    return ",".join(parts)
+
+
 def _apply_filters(q, filters: Optional[Dict[str, Any]]):
     if not filters:
         return q
     for k, v in filters.items():
+        if k == "$or" and isinstance(v, list):
+            clause = _build_or_clause(v)
+            if clause:
+                q = q.or_(clause)
+            continue
+        if k == "$and" and isinstance(v, list):
+            # PostgREST has no native AND inside or_(), but a top-level $and is
+            # simply intersection — apply each sub-filter sequentially.
+            for sub in v:
+                q = _apply_filters(q, sub)
+            continue
         if isinstance(v, dict):
             if "$in" in v and isinstance(v["$in"], (list, tuple)):
                 q = q.in_(k, list(v["$in"]))
@@ -975,6 +1025,12 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
             elif "$nin" in v and isinstance(v["$nin"], (list, tuple)):
                 # Supabase: not.in_(k, values)
                 q = q.not_.in_(k, list(v["$nin"]))
+            elif "$regex" in v:
+                pattern = f"%{v['$regex']}%"
+                if v.get("$options") == "i":
+                    q = q.ilike(k, pattern)
+                else:
+                    q = q.like(k, pattern)
             # Add more query operators as needed
         else:
             q = q.eq(k, v)

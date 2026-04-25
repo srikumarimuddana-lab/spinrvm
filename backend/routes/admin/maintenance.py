@@ -1,7 +1,8 @@
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Query
 
@@ -247,9 +248,30 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
 
 
 @router.get("/audit-logs")
-async def get_audit_logs(limit: int = Query(50), offset: int = Query(0)):
-    """Get audit log entries."""
-    logs = await db_supabase.get_rows("audit_logs", order="created_at", desc=True, limit=limit)
+async def get_audit_logs(
+    limit: int = Query(50),
+    offset: int = Query(0),
+    action: Optional[str] = Query(None),
+    entity_type: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+):
+    """Get audit log entries with optional filters and pagination."""
+    filters: Dict[str, Any] = {}
+    if action:
+        filters["action"] = action
+    if entity_type:
+        filters["entity_type"] = entity_type
+    if search:
+        term = re.escape(search.strip())
+        if term:
+            filters["$or"] = [
+                {"user_email": {"$regex": term, "$options": "i"}},
+                {"entity_id": {"$regex": term, "$options": "i"}},
+                {"details": {"$regex": term, "$options": "i"}},
+            ]
+    logs = await db_supabase.get_rows(
+        "audit_logs", filters, order="created_at", desc=True, limit=limit, offset=offset
+    )
     return logs
 
 

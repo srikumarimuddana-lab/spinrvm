@@ -121,6 +121,7 @@ async def admin_get_drivers(
     is_verified: Optional[bool] = None,
     is_online: Optional[bool] = None,
     status: Optional[str] = None,
+    service_area_id: Optional[str] = None,
 ):
     """Get drivers with filters, enriched with user name/email/phone.
 
@@ -136,6 +137,8 @@ async def admin_get_drivers(
         filters["is_online"] = is_online
     if status:
         filters["status"] = status
+    if service_area_id:
+        filters["service_area_id"] = service_area_id
 
     drivers = await db_supabase.get_rows("drivers", filters, order="created_at", desc=True, limit=limit, offset=offset)
 

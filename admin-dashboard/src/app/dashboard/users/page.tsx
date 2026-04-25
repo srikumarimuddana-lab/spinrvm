@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useEffect, useRef, useState } from "react";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,11 +27,12 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
-import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, ShieldAlert, Download, RefreshCw, ChevronLeft, ChevronRight, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus } from "lucide-react";
+import { Pagination } from "@/components/ui/pagination";
+import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus } from "lucide-react";
 import { formatDate } from "@/lib/utils";
-import { getUsers, getUserDetails, updateUserStatus, getStats, getUserWallet, creditUserWallet, debitUserWallet } from "@/lib/api";
+import { getUsersPaginated, updateUserStatus, getStats, getUserWallet, creditUserWallet, debitUserWallet } from "@/lib/api";
 
-const PER_PAGE = 25;
+const PAGE_SIZE = 50;
 
 export default function UsersPage() {
     const [users, setUsers] = useState<any[]>([]);
@@ -39,10 +40,12 @@ export default function UsersPage() {
     const [error, setError] = useState("");
     const [search, setSearch] = useState("");
     const [statusUpdating, setStatusUpdating] = useState<string | null>(null);
-    const [verifiedFilter, setVerifiedFilter] = useState("all");
     const [roleFilter, setRoleFilter] = useState<"all" | "rider" | "driver">("all");
     const [selectedUser, setSelectedUser] = useState<any>(null);
-    const [page, setPage] = useState(1);
+    const [page, setPage] = useState(0);
+    const [hasNextPage, setHasNextPage] = useState(false);
+    const [stats, setStats] = useState<{ total_users: number; total_drivers: number } | null>(null);
+    const reqIdRef = useRef(0);
 
     // Wallet state for the user-details dialog
     const [walletData, setWalletData] = useState<any>(null);
@@ -83,7 +86,6 @@ export default function UsersPage() {
         try {
             const fn = action === "credit" ? creditUserWallet : debitUserWallet;
             await fn(selectedUser.id, amt, walletReason.trim());
-            // Refetch to pick up the new ledger entry
             const refreshed = await getUserWallet(selectedUser.id);
             setWalletData(refreshed);
             setWalletAmount("");
@@ -95,21 +97,24 @@ export default function UsersPage() {
         }
     };
 
-    useEffect(() => {
-        fetchUsers();
-    }, [roleFilter]);
-
     const fetchUsers = async () => {
         setLoading(true);
         setError("");
+        const reqId = ++reqIdRef.current;
         try {
-            const [usersData, statsData] = await Promise.all([
-                getUsers(roleFilter),
-                getStats()
-            ]);
-            const transformedUsers = (usersData || []).map((u: any) => ({
+            const data = await getUsersPaginated({
+                role: roleFilter,
+                search: search.trim() || undefined,
+                limit: PAGE_SIZE + 1,
+                offset: page * PAGE_SIZE,
+            });
+            if (reqId !== reqIdRef.current) return;
+            const arr = Array.isArray(data) ? data : [];
+            setHasNextPage(arr.length > PAGE_SIZE);
+            const slice = arr.slice(0, PAGE_SIZE);
+            const transformed = slice.map((u: any) => ({
                 id: u.id,
-                name: `${u.first_name || ''} ${u.last_name || ''}`.trim() || u.email || u.phone,
+                name: `${u.first_name || ""} ${u.last_name || ""}`.trim() || u.email || u.phone,
                 email: u.email,
                 phone: u.phone,
                 role: u.role,
@@ -118,40 +123,44 @@ export default function UsersPage() {
                 rating: u.rating || null,
                 is_verified: u.is_verified ?? true,
                 city: u.city,
+                status: u.status || "active",
             }));
-            setUsers(transformedUsers);
+            setUsers(transformed);
         } catch (err: any) {
-            console.error('Failed to fetch users:', err);
+            if (reqId !== reqIdRef.current) return;
+            console.error("Failed to fetch users:", err);
             setError("Failed to load users. Please try again.");
             setUsers([]);
+            setHasNextPage(false);
         } finally {
-            setLoading(false);
+            if (reqId === reqIdRef.current) setLoading(false);
         }
     };
 
-    const filtered = useMemo(() => {
-        return users.filter((u) => {
-            const matchSearch =
-                !search ||
-                u.name?.toLowerCase().includes(search.toLowerCase()) ||
-                u.email?.toLowerCase().includes(search.toLowerCase()) ||
-                u.phone?.toLowerCase().includes(search.toLowerCase()) ||
-                u.city?.toLowerCase().includes(search.toLowerCase());
-            let matchVerified = true;
-            if (verifiedFilter === "verified") matchVerified = u.is_verified === true;
-            else if (verifiedFilter === "unverified") matchVerified = u.is_verified !== true;
-            return matchSearch && matchVerified;
-        });
-    }, [users, search, verifiedFilter]);
+    // Initial stats fetch (independent of pagination).
+    useEffect(() => {
+        getStats().then((s) => setStats(s)).catch(() => setStats(null));
+    }, []);
 
-    const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
-    const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
+    // Reset to page 0 when filters change (debounce search).
+    useEffect(() => {
+        const t = setTimeout(() => {
+            if (page !== 0) setPage(0);
+            else fetchUsers();
+        }, 300);
+        return () => clearTimeout(t);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [search, roleFilter]);
 
-    useEffect(() => { setPage(1); }, [search, verifiedFilter]);
+    // Re-fetch when page changes.
+    useEffect(() => {
+        fetchUsers();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [page]);
 
     const handleExport = () => {
         const headers = ["ID", "Name", "Email", "Phone", "City", "Total Rides", "Rating", "Verified", "Joined Date"];
-        const rows = filtered.map(u => [
+        const rows = users.map(u => [
             u.id,
             u.name,
             u.email,
@@ -172,6 +181,12 @@ export default function UsersPage() {
         URL.revokeObjectURL(url);
     };
 
+    const totalForRoleStat = roleFilter === "driver"
+        ? stats?.total_drivers
+        : roleFilter === "rider"
+            ? (stats && (stats.total_users - (stats.total_drivers || 0)))
+            : stats?.total_users;
+
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -188,8 +203,8 @@ export default function UsersPage() {
                     <Button variant="outline" size="icon" onClick={fetchUsers} disabled={loading}>
                         <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
                     </Button>
-                    <Button variant="outline" onClick={handleExport} disabled={filtered.length === 0}>
-                        <Download className="mr-2 h-4 w-4" /> Export CSV
+                    <Button variant="outline" onClick={handleExport} disabled={users.length === 0}>
+                        <Download className="mr-2 h-4 w-4" /> Export Page
                     </Button>
                 </div>
             </div>
@@ -201,8 +216,10 @@ export default function UsersPage() {
                         <div className="flex items-center gap-2">
                             <Users className="h-5 w-5 text-sky-500" />
                             <div>
-                                <p className="text-xs text-muted-foreground">Total Users</p>
-                                <p className="text-2xl font-bold">{users.length}</p>
+                                <p className="text-xs text-muted-foreground">
+                                    {roleFilter === "all" ? "Total Users" : roleFilter === "driver" ? "Total Drivers" : "Total Riders"}
+                                </p>
+                                <p className="text-2xl font-bold">{totalForRoleStat ?? "—"}</p>
                             </div>
                         </div>
                     </CardContent>
@@ -212,19 +229,8 @@ export default function UsersPage() {
                         <div className="flex items-center gap-2">
                             <ShieldCheck className="h-5 w-5 text-emerald-500" />
                             <div>
-                                <p className="text-xs text-muted-foreground">Verified</p>
+                                <p className="text-xs text-muted-foreground">Verified (page)</p>
                                 <p className="text-2xl font-bold">{users.filter(u => u.is_verified).length}</p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="pt-4 pb-3">
-                        <div className="flex items-center gap-2">
-                            <ShieldAlert className="h-5 w-5 text-amber-500" />
-                            <div>
-                                <p className="text-xs text-muted-foreground">Unverified</p>
-                                <p className="text-2xl font-bold">{users.filter(u => !u.is_verified).length}</p>
                             </div>
                         </div>
                     </CardContent>
@@ -234,7 +240,7 @@ export default function UsersPage() {
                         <div className="flex items-center gap-2">
                             <Star className="h-5 w-5 text-amber-400 fill-amber-400" />
                             <div>
-                                <p className="text-xs text-muted-foreground">Avg Rating</p>
+                                <p className="text-xs text-muted-foreground">Avg Rating (page)</p>
                                 <p className="text-2xl font-bold">
                                     {(() => {
                                         const rated = users.filter(u => u.rating != null);
@@ -242,6 +248,19 @@ export default function UsersPage() {
                                             ? (rated.reduce((s, u) => s + u.rating, 0) / rated.length).toFixed(1)
                                             : "N/A";
                                     })()}
+                                </p>
+                            </div>
+                        </div>
+                    </CardContent>
+                </Card>
+                <Card>
+                    <CardContent className="pt-4 pb-3">
+                        <div className="flex items-center gap-2">
+                            <Car className="h-5 w-5 text-violet-500" />
+                            <div>
+                                <p className="text-xs text-muted-foreground">Total Rides (page)</p>
+                                <p className="text-2xl font-bold">
+                                    {users.reduce((s, u) => s + (u.total_rides || 0), 0)}
                                 </p>
                             </div>
                         </div>
@@ -266,7 +285,7 @@ export default function UsersPage() {
                 <div className="relative flex-1 max-w-sm">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
-                        placeholder="Search by name, email, phone, or city..."
+                        placeholder="Search by name, email, phone..."
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                         className="pl-9"
@@ -282,16 +301,18 @@ export default function UsersPage() {
                         <SelectItem value="driver">Drivers</SelectItem>
                     </SelectContent>
                 </Select>
-                <Select value={verifiedFilter} onValueChange={setVerifiedFilter}>
-                    <SelectTrigger className="w-40">
-                        <SelectValue placeholder="Filter by verification" />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="all">All Users</SelectItem>
-                        <SelectItem value="verified">Verified</SelectItem>
-                        <SelectItem value="unverified">Unverified</SelectItem>
-                    </SelectContent>
-                </Select>
+                {(search || roleFilter !== "all") && (
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                            setSearch("");
+                            setRoleFilter("all");
+                        }}
+                    >
+                        Clear filters
+                    </Button>
+                )}
             </div>
 
             {/* Table */}
@@ -317,14 +338,14 @@ export default function UsersPage() {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {filtered.length === 0 ? (
+                                    {users.length === 0 ? (
                                         <TableRow>
                                             <TableCell colSpan={8} className="text-center text-muted-foreground py-12">
                                                 No users found.
                                             </TableCell>
                                         </TableRow>
                                     ) : (
-                                        paginated.map((user) => (
+                                        users.map((user) => (
                                             <TableRow key={user.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelectedUser(user)}>
                                                 <TableCell>
                                                     <div>
@@ -387,23 +408,14 @@ export default function UsersPage() {
                                 </TableBody>
                             </Table>
 
-                            {/* Pagination */}
-                            {filtered.length > PER_PAGE && (
-                                <div className="flex items-center justify-between px-4 py-3 border-t">
-                                    <p className="text-sm text-muted-foreground">
-                                        Showing {(page - 1) * PER_PAGE + 1}–{Math.min(page * PER_PAGE, filtered.length)} of {filtered.length}
-                                    </p>
-                                    <div className="flex items-center gap-2">
-                                        <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
-                                            <ChevronLeft className="h-4 w-4" />
-                                        </Button>
-                                        <span className="text-sm text-muted-foreground">Page {page} of {totalPages}</span>
-                                        <Button variant="outline" size="sm" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages}>
-                                            <ChevronRight className="h-4 w-4" />
-                                        </Button>
-                                    </div>
-                                </div>
-                            )}
+                            <div className="px-4 border-t">
+                                <Pagination
+                                    page={page}
+                                    pageSize={PAGE_SIZE}
+                                    hasNextPage={hasNextPage}
+                                    onPageChange={setPage}
+                                />
+                            </div>
                         </>
                     )}
                 </CardContent>

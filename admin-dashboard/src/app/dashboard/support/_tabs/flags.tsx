@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getFlags, deactivateFlag, deleteFlag, flagRideParticipant } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,10 +11,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Flag, Search, Plus, Trash2, Eye, RefreshCw, EyeOff, Users, Car, AlertTriangle } from "lucide-react";
+import { Pagination } from "@/components/ui/pagination";
+import { Flag, Search, Plus, Trash2, Eye, RefreshCw, EyeOff, Users, Car } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
 
+const PAGE_SIZE = 50;
 const REASONS = ["inappropriate_behavior", "safety_concern", "fraud", "policy_violation", "spam", "other"];
 
 export default function FlagsTab() {
@@ -28,15 +30,34 @@ export default function FlagsTab() {
     const [dialogOpen, setDialogOpen] = useState(false);
     const [saving, setSaving] = useState(false);
     const [form, setForm] = useState({ ride_id: "", target_type: "driver", reason: "other", description: "", service_area_id: "" });
+    const [page, setPage] = useState(0);
+    const [hasNextPage, setHasNextPage] = useState(false);
+    const reqIdRef = useRef(0);
 
-    const load = () => { setLoading(true); getFlags().then((d) => setFlags(d || [])).catch(() => setFlags([])).finally(() => setLoading(false)); };
-    useEffect(() => { load(); }, []);
+    const load = useCallback(() => {
+        setLoading(true);
+        const reqId = ++reqIdRef.current;
+        const opts: any = { limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE };
+        if (typeFilter !== "all") opts.target_type = typeFilter;
+        if (areaFilter !== "all") opts.service_area_id = areaFilter;
+        getFlags(opts)
+            .then((rows) => {
+                if (reqId !== reqIdRef.current) return;
+                const arr = Array.isArray(rows) ? rows : [];
+                setHasNextPage(arr.length > PAGE_SIZE);
+                setFlags(arr.slice(0, PAGE_SIZE));
+            })
+            .catch(() => { if (reqId === reqIdRef.current) { setFlags([]); setHasNextPage(false); } })
+            .finally(() => { if (reqId === reqIdRef.current) setLoading(false); });
+    }, [page, typeFilter, areaFilter]);
+    useEffect(() => { load(); }, [load]);
+    useEffect(() => { setPage(0); }, [typeFilter, areaFilter]);
 
-    const stats = { total: flags.length, riders: flags.filter((f) => f.target_type === "rider").length, drivers: flags.filter((f) => f.target_type === "driver").length, active: flags.filter((f) => f.is_active !== false).length };
+    // Search filters the current page client-side; full-text server search is not implemented.
     const filtered = flags.filter((f) => {
-        const ms = !search || f.reason?.toLowerCase().includes(search.toLowerCase()) || f.description?.toLowerCase().includes(search.toLowerCase()) || f.target_id?.toLowerCase().includes(search.toLowerCase());
-        const ma = areaFilter === "all" || f.service_area_id === areaFilter;
-        return ms && (typeFilter === "all" || f.target_type === typeFilter) && ma;
+        if (!search) return true;
+        const q = search.toLowerCase();
+        return f.reason?.toLowerCase().includes(q) || f.description?.toLowerCase().includes(q) || f.target_id?.toLowerCase().includes(q);
     });
     const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
 
@@ -49,13 +70,6 @@ export default function FlagsTab() {
 
     return (
         <div className="space-y-4">
-            <div className="grid grid-cols-4 gap-3">
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><Flag className="h-4 w-4 text-violet-500" /><div><p className="text-[10px] text-muted-foreground">Total</p><p className="text-xl font-bold">{stats.total}</p></div></div></CardContent></Card>
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><AlertTriangle className="h-4 w-4 text-amber-500" /><div><p className="text-[10px] text-muted-foreground">Active</p><p className="text-xl font-bold">{stats.active}</p></div></div></CardContent></Card>
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><Users className="h-4 w-4 text-blue-500" /><div><p className="text-[10px] text-muted-foreground">Riders</p><p className="text-xl font-bold">{stats.riders}</p></div></div></CardContent></Card>
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><Car className="h-4 w-4 text-emerald-500" /><div><p className="text-[10px] text-muted-foreground">Drivers</p><p className="text-xl font-bold">{stats.drivers}</p></div></div></CardContent></Card>
-            </div>
-
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2 flex-1">
                     <div className="relative flex-1 max-w-xs"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-9" /></div>
@@ -88,6 +102,8 @@ export default function FlagsTab() {
                         </TableRow>
                     ))}</TableBody></Table>}
             </CardContent></Card>
+
+            <Pagination page={page} pageSize={PAGE_SIZE} hasNextPage={hasNextPage} onPageChange={setPage} />
 
             {/* Detail Dialog */}
             <Dialog open={!!selected && !dialogOpen} onOpenChange={(o) => { if (!o) setSelected(null); }}>

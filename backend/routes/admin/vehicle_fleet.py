@@ -289,9 +289,18 @@ async def admin_resolve_lost_item(item_id: str, req: LostAndFoundResolveRequest)
 async def admin_list_lost_and_found(
     limit: int = 100,
     offset: int = 0,
+    status: Optional[str] = None,
+    service_area_id: Optional[str] = None,
 ):
-    """List all lost and found items."""
-    items = await db_supabase.get_rows("lost_and_found", order="created_at", desc=True, limit=limit, offset=offset)
+    """List all lost and found items. Optional `status` / `service_area_id` filters."""
+    filters: Dict[str, Any] = {}
+    if status and status != "all":
+        filters["status"] = status
+    if service_area_id and service_area_id != "all":
+        filters["service_area_id"] = service_area_id
+    items = await db_supabase.get_rows(
+        "lost_and_found", filters, order="created_at", desc=True, limit=limit, offset=offset
+    )
     return items
 
 

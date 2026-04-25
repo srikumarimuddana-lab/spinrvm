@@ -10,6 +10,8 @@ Rules:
 - Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
 - If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
 - After modifying code files in this session, run `python3 -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"` to keep the graph current
+- The package is published on PyPI as `graphifyy` (double-y), but imports as `graphify`. Install with `pip install graphifyy` if the rebuild command fails with `ModuleNotFoundError`.
+- `graphify-out/cache/` is the per-file extraction cache and is gitignored (regenerated on rebuild). The tracked outputs are `graph.json`, `GRAPH_REPORT.md`, and `manifest.json`.
 
 ## Project Overview
 

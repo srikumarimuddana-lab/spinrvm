@@ -33,6 +33,7 @@ from .auth import router as auth_router
 from .documents import router as documents_router
 from .drivers import router as drivers_router
 from .faqs import router as faqs_router
+from .legal_documents import router as legal_documents_router
 from .maintenance import router as maintenance_router
 from .messaging import router as messaging_router
 from .promotions import router as promotions_router
@@ -70,6 +71,7 @@ admin_router.include_router(users_router)
 admin_router.include_router(promotions_router)
 admin_router.include_router(support_router)
 admin_router.include_router(faqs_router)
+admin_router.include_router(legal_documents_router)
 admin_router.include_router(documents_router)
 admin_router.include_router(staff_router)
 admin_router.include_router(subscriptions_router)

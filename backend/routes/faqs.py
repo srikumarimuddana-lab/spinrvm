@@ -20,11 +20,22 @@ api_router = APIRouter(tags=["FAQs"])
 
 
 @api_router.get("/faqs")
-async def get_public_faqs(category: str | None = Query(None)):
-    """List active FAQ entries, optionally filtered by category."""
+async def get_public_faqs(
+    category: str | None = Query(None),
+    audience: str | None = Query(None, regex="^(rider|driver)$"),
+):
+    """List active FAQ entries, optionally filtered by category and audience.
+
+    When `audience` is given, returns rows tagged for that audience plus rows
+    tagged 'both'. When omitted, returns all active rows (legacy behavior).
+    """
     filters: dict = {"is_active": True}
     if category:
         filters["category"] = category
+
+    if audience:
+        # Match rows tagged for this audience plus rows tagged 'both'.
+        filters["audience"] = {"$in": ["both", audience]}
 
     faqs = await db_supabase.get_rows(
         "faqs",

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
@@ -6,6 +6,12 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import * as SplashScreen from 'expo-splash-screen';
+
+// Keep the native splash up until our React-rendered splash is mounted,
+// otherwise the destination tab (which contains the SOSButton) momentarily
+// flashes through during the boot transition.
+SplashScreen.preventAutoHideAsync().catch(() => {});
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
 import api from '@shared/api/client';
@@ -375,10 +381,15 @@ export default function RootLayout() {
     return unsubscribe;
   }, [isAuthInitialized, isOffline]);
 
+  const onLoadingLayout = useCallback(() => {
+    // React splash is on screen — safe to drop the native splash.
+    SplashScreen.hideAsync().catch(() => {});
+  }, []);
+
   if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized) {
     return (
       <ErrorBoundary>
-        <View style={styles.loadingContainer}>
+        <View style={styles.loadingContainer} onLayout={onLoadingLayout}>
           <Text style={styles.logoText}>Spinr</Text>
           <ActivityIndicator size="large" color="#FFFFFF" style={{ marginTop: 20 }} />
         </View>
@@ -427,13 +438,14 @@ function RootLayoutInner({
               }}
             >
               {/* Auth */}
-              <Stack.Screen name="index" />
+              <Stack.Screen name="index" options={{ animation: 'none' }} />
               <Stack.Screen name="login" />
               <Stack.Screen name="otp" />
               <Stack.Screen name="profile-setup" options={{ headerShown: false }} />
 
-              {/* Main */}
-              <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
+              {/* Main — instant cut from splash so the home tab's SOSButton
+                  doesn't flash through a cross-fade transition. */}
+              <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
 
               {/* Ride flow */}
               <Stack.Screen name="search-destination" options={{ animation: 'slide_from_bottom' }} />

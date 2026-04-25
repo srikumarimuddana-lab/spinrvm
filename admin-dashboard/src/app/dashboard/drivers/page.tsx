@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, verifyDriver, getServiceAreas, getVehicleTypes, getFareConfigs } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -177,8 +177,16 @@ export default function DriversPage() {
 
     const handleVerify = async (driverId: string, verified: boolean) => {
         setVerifying(true);
-        try { const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? ""; const token = (await import("@/store/authStore")).useAuthStore.getState().token; await fetch(`${API_BASE}/api/admin/drivers/${driverId}/verify`, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` }, body: JSON.stringify({ verified }) }); loadData(); loadDrivers(); if (selected?.id === driverId) setSelected({ ...selected, is_verified: verified }); } catch {}
-        setVerifying(false);
+        try {
+            await verifyDriver(driverId, verified);
+            loadData();
+            loadDrivers();
+            if (selected?.id === driverId) setSelected({ ...selected, is_verified: verified });
+        } catch (e: any) {
+            console.error("Failed to verify driver:", e?.message);
+        } finally {
+            setVerifying(false);
+        }
     };
 
     const startEditing = () => { if (!selected) return; setEditForm({ first_name: selected.first_name || "", last_name: selected.last_name || "", email: selected.email || "", phone: selected.phone || "", city: selected.city || "", service_area_id: selected.service_area_id || "", vehicle_type_id: selected.vehicle_type_id || "", vehicle_make: selected.vehicle_make || "", vehicle_model: selected.vehicle_model || "", vehicle_color: selected.vehicle_color || "", vehicle_year: selected.vehicle_year || "", license_plate: selected.license_plate || "", vehicle_vin: selected.vehicle_vin || "" }); setEditing(true); };

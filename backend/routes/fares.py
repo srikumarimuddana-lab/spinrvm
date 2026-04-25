@@ -213,12 +213,31 @@ async def build_fares_for_area(matched_area, vehicle_types):
             continue
         # Normalise all monetary values from DB through _fd() so downstream
         # Decimal arithmetic in rides.py starts from clean 2-dp floats.
+        base_fare = _fd(pricing["base_fare"])
+        per_km_rate = _fd(pricing["per_km_rate"])
+        per_minute_rate = _fd(pricing["per_minute_rate"])
+
+        # Guard against misconfigured DB rows (e.g. negative rates from bad
+        # admin import). A negative rate would silently produce a negative
+        # fare, so we reject the row here and fall through to defaults.
+        if base_fare < 0 or per_km_rate < 0 or per_minute_rate < 0:
+            logger.error(
+                "Fare config for vehicle_type=%s in area=%s has negative rate "
+                "(base_fare=%s per_km=%s per_min=%s) — skipping row",
+                vt.get("name"),
+                matched_area.get("id"),
+                base_fare,
+                per_km_rate,
+                per_minute_rate,
+            )
+            continue
+
         result.append(
             {
                 "vehicle_type": serialize_doc(vt),
-                "base_fare": _fd(pricing["base_fare"]),
-                "per_km_rate": _fd(pricing["per_km_rate"]),
-                "per_minute_rate": _fd(pricing["per_minute_rate"]),
+                "base_fare": base_fare,
+                "per_km_rate": per_km_rate,
+                "per_minute_rate": per_minute_rate,
                 "minimum_fare": _fd(pricing["minimum_fare"]),
                 "booking_fee": _fd(pricing["booking_fee"]),
                 "surge_multiplier": _fd(surge),

@@ -1888,7 +1888,7 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
     ride = await _require_ride_in_state_rider(
         ride_id,
         current_user["id"],
-        ("requested", "searching", "driver_assigned", "en_route", "driver_arrived"),
+        ("requested", "searching", "driver_assigned", "driver_en_route", "driver_arrived"),
     )
     diag_logger.info(
         f"[CANCEL] entry ride_id={ride_id} pre_status={ride.get('status')} driver_id={ride.get('driver_id')}"
@@ -2458,9 +2458,17 @@ async def rider_start_ride(ride_id: str, current_user: dict = Depends(get_curren
     if ride.get("status") not in ["driver_arrived"]:
         raise HTTPException(status_code=400, detail=f"Cannot start ride with status: {ride.get('status')}")
 
-    await db_supabase.update_ride(
-        ride_id, {"status": "in_progress", "ride_started_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
+    # Atomic conditional update: only succeeds when status is still 'driver_arrived'.
+    # A concurrent duplicate request will find the status already 'in_progress'
+    # and get None back from update_one, preventing a double-start.
+    now = datetime.now(timezone.utc)
+    updated = await db_supabase.update_one(
+        "rides",
+        {"id": ride_id, "status": "driver_arrived"},
+        {"status": "in_progress", "ride_started_at": now, "updated_at": now},
     )
+    if not updated:
+        raise HTTPException(status_code=409, detail="Ride already started or status changed")
     return {"success": True}
 
 

@@ -181,7 +181,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
     try:
         # Require the first message to be an auth message containing a token
         auth_msg = await websocket.receive_json()
-        if not auth_msg or auth_msg.get("type") != "auth" or not auth_msg.get("token"):
+        if not isinstance(auth_msg, dict) or not auth_msg.get("type") == "auth" or not auth_msg.get("token"):
             await websocket.send_json({"type": "error", "message": "authentication_required"})
             await websocket.close()
             return

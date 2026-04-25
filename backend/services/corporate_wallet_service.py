@@ -7,7 +7,8 @@ and optional soft-negative-floor enforcement.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any, Dict, Optional, Union
 
 try:
     from ..db_supabase import run_sync  # type: ignore
@@ -17,30 +18,46 @@ except ImportError:
     from supabase_client import supabase  # type: ignore
 
 
+_TWO_PLACES = Decimal("0.01")
+
+
+def _quantize(value: Union[Decimal, float, None]) -> Optional[str]:
+    """Convert a money value to a Decimal-quantized string for the RPC.
+
+    The Postgres RPC expects NUMERIC; passing a Python float risks
+    floating-point representation errors in the DB.  We serialise as
+    string so supabase-py sends it as a numeric literal, not IEEE-754.
+    Returns None unchanged so optional floor parameters stay NULL.
+    """
+    if value is None:
+        return None
+    return str(Decimal(str(value)).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP))
+
+
 async def _apply(
     *,
     wallet_id: str,
     scope: str,
     type_: str,
-    delta: float,
+    delta: Union[Decimal, float],
     ride_id: Optional[str] = None,
     member_id: Optional[str] = None,
     stripe_payment_intent_id: Optional[str] = None,
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
-    floor: Optional[float] = None,
+    floor: Optional[Union[Decimal, float]] = None,
 ) -> Dict[str, Any]:
     params = {
         "p_wallet_id": wallet_id,
         "p_scope": scope,
         "p_type": type_,
-        "p_delta": delta,
+        "p_delta": _quantize(delta),
         "p_ride_id": ride_id,
         "p_member_id": member_id,
         "p_stripe_pi": stripe_payment_intent_id,
         "p_actor_user_id": actor_user_id,
         "p_notes": notes,
-        "p_floor": floor,
+        "p_floor": _quantize(floor),
     }
 
     def _fn():
@@ -56,12 +73,12 @@ async def _apply(
 async def apply_topup(
     *,
     wallet_id: str,
-    amount: float,
+    amount: Union[Decimal, float],
     stripe_payment_intent_id: str,
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> Dict[str, Any]:
-    if amount <= 0:
+    if Decimal(str(amount)) <= 0:
         raise ValueError("top-up amount must be positive")
     return await _apply(
         wallet_id=wallet_id,
@@ -77,13 +94,13 @@ async def apply_topup(
 async def apply_adjustment(
     *,
     wallet_id: str,
-    amount: float,
+    amount: Union[Decimal, float],
     notes: str,
     actor_user_id: str,
-    floor: Optional[float] = None,
+    floor: Optional[Union[Decimal, float]] = None,
 ) -> Dict[str, Any]:
     """Signed adjustment to the master wallet (support/refund). Notes required."""
-    if amount == 0:
+    if Decimal(str(amount)) == 0:
         raise ValueError("adjustment amount cannot be zero")
     return await _apply(
         wallet_id=wallet_id,
@@ -99,12 +116,12 @@ async def apply_adjustment(
 async def apply_refund(
     *,
     wallet_id: str,
-    amount: float,
+    amount: Union[Decimal, float],
     ride_id: str,
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> Dict[str, Any]:
-    if amount <= 0:
+    if Decimal(str(amount)) <= 0:
         raise ValueError("refund amount must be positive")
     return await _apply(
         wallet_id=wallet_id,

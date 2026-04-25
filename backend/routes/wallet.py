@@ -5,10 +5,12 @@ All balance mutations go through the ledger (wallet_transactions) so the
 audit trail is immutable.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
+from weakref import WeakValueDictionary
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -27,9 +29,26 @@ api_router = APIRouter(prefix="/wallet", tags=["Wallet"])
 
 _TWO = Decimal("0.01")
 
+# Per-wallet locks prevent concurrent transfers from racing on the same balance.
+# WeakValueDictionary drops the lock entry once no coroutine holds a reference,
+# so memory does not grow unbounded across many wallets.
+# NOTE: this only protects within a single process replica. A distributed lock
+# (e.g. Redis SETNX) is needed for multi-replica deployments.
+_wallet_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
+_wallet_locks_mu = asyncio.Lock()
+
 
 def _d(v) -> Decimal:
     return Decimal(str(v)).quantize(_TWO, rounding=ROUND_HALF_UP)
+
+
+async def _get_wallet_lock(wallet_id: str) -> asyncio.Lock:
+    async with _wallet_locks_mu:
+        lock = _wallet_locks.get(wallet_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            _wallet_locks[wallet_id] = lock
+        return lock
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -95,7 +114,7 @@ class WalletPayRequest(BaseModel):
 
 class TransferRequest(BaseModel):
     recipient_phone: str
-    amount: float = Field(..., gt=0, le=200)
+    amount: Decimal = Field(..., gt=0, le=200)
 
 
 # ── Endpoints ────────────────────────────────────────────────────────
@@ -266,43 +285,54 @@ async def transfer_to_user(
     if not sender_wallet.get("is_active", True):
         raise HTTPException(status_code=403, detail="Your wallet is suspended")
 
-    sender_balance = _d(sender_wallet.get("balance", 0))
-    transfer_amount = _d(req.amount)
+    # Acquire per-wallet locks in a consistent order (lower ID first) to avoid
+    # deadlock when two users transfer to each other simultaneously.
+    ids_sorted = sorted([sender_wallet["id"], recipient_wallet["id"]])
+    lock_a = await _get_wallet_lock(ids_sorted[0])
+    lock_b = await _get_wallet_lock(ids_sorted[1])
 
-    if sender_balance < transfer_amount:
-        raise HTTPException(status_code=400, detail="Insufficient wallet balance")
+    async with lock_a, lock_b:
+        # Re-fetch balances inside the lock so we see the latest committed value.
+        sender_wallet = await get_or_create_wallet(current_user["id"])
+        recipient_wallet = await get_or_create_wallet(recipient["id"])
 
-    new_sender_balance = sender_balance - transfer_amount
-    new_recipient_balance = _d(recipient_wallet.get("balance", 0)) + transfer_amount
+        sender_balance = _d(sender_wallet.get("balance", 0))
+        transfer_amount = _d(req.amount)
 
-    # Debit sender
-    await db.update_one(
-        "wallets",
-        {"id": sender_wallet["id"]},
-        {"$set": {"balance": float(new_sender_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
-    )
-    await _record_transaction(
-        wallet_id=sender_wallet["id"],
-        user_id=current_user["id"],
-        txn_type="fare_split_sent",
-        amount=-float(transfer_amount),
-        balance_after=float(new_sender_balance),
-        description=f"Transfer to {req.recipient_phone}",
-    )
+        if sender_balance < transfer_amount:
+            raise HTTPException(status_code=400, detail="Insufficient wallet balance")
 
-    # Credit recipient
-    await db.update_one(
-        "wallets",
-        {"id": recipient_wallet["id"]},
-        {"$set": {"balance": float(new_recipient_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
-    )
-    await _record_transaction(
-        wallet_id=recipient_wallet["id"],
-        user_id=recipient["id"],
-        txn_type="fare_split_received",
-        amount=float(transfer_amount),
-        balance_after=float(new_recipient_balance),
-        description=f"Received from {current_user.get('phone', 'user')}",
-    )
+        new_sender_balance = sender_balance - transfer_amount
+        new_recipient_balance = _d(recipient_wallet.get("balance", 0)) + transfer_amount
+
+        # Debit sender
+        await db.update_one(
+            "wallets",
+            {"id": sender_wallet["id"]},
+            {"$set": {"balance": float(new_sender_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
+        )
+        await _record_transaction(
+            wallet_id=sender_wallet["id"],
+            user_id=current_user["id"],
+            txn_type="fare_split_sent",
+            amount=-float(transfer_amount),
+            balance_after=float(new_sender_balance),
+            description=f"Transfer to {req.recipient_phone}",
+        )
+
+        # Credit recipient
+        await db.update_one(
+            "wallets",
+            {"id": recipient_wallet["id"]},
+            {"$set": {"balance": float(new_recipient_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
+        )
+        await _record_transaction(
+            wallet_id=recipient_wallet["id"],
+            user_id=recipient["id"],
+            txn_type="fare_split_received",
+            amount=float(transfer_amount),
+            balance_after=float(new_recipient_balance),
+            description=f"Received from {current_user.get('phone', 'user')}",
+        )
 
     return {"balance": float(new_sender_balance), "success": True}

@@ -330,6 +330,12 @@ export const getDriverStats = (params?: {
 export const updateDriver = (id: string, data: Record<string, any>) =>
     request<any>(`/api/admin/drivers/${id}`, { method: "PUT", body: JSON.stringify(data) });
 
+export const verifyDriver = (driverId: string, verified: boolean) =>
+    request<any>(`/api/admin/drivers/${driverId}/verify`, {
+        method: "POST",
+        body: JSON.stringify({ verified }),
+    });
+
 /* ── Earnings ─────────────────────────────── */
 export const getEarnings = () => request<any[]>("/api/admin/earnings");
 

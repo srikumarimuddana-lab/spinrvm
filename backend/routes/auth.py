@@ -110,7 +110,10 @@ async def _clear_otp_failures(phone: str) -> None:
 
 
 def _is_dev_otp_bypass(otp: str) -> bool:
-    if settings.ENV.lower() != "development":
+    # Block the bypass explicitly in production. Any non-production ENV value
+    # (dev, test, staging, local, …) allows the hardcoded OTP so CI and
+    # developer sandboxes work without a real SMS gateway.
+    if settings.ENV.lower() == "production":
         return False
     return otp in ("1234", "123456")
 

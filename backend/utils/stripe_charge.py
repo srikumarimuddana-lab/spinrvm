@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional
 
 try:
@@ -124,7 +125,7 @@ async def charge_ride(
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "") or ""
     if not stripe_secret:
-        logger.warning(
+        logger.error(
             "stripe_secret_key not configured; skipping real charge for ride=%s",
             ride.get("id"),
         )
@@ -146,7 +147,8 @@ async def charge_ride(
         )
 
     ride_id = ride.get("id") or ""
-    amount_cents = int(round(float(total_amount) * 100))
+    _TWO_PLACES = Decimal("0.01")
+    amount_cents = int(Decimal(str(total_amount)).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP) * 100)
 
     # Idempotency: the same ride can only be charged once within 24h
     # regardless of how many retries the client makes. If an existing
@@ -223,7 +225,7 @@ async def charge_ride(
         return ChargeOutcome(
             status="succeeded",
             payment_intent_id=pi_id,
-            charged_amount=float(total_amount),
+            charged_amount=float(Decimal(str(total_amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
         )
 
     if status == "requires_action" or status == "requires_source_action":

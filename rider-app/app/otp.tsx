@@ -26,7 +26,9 @@ const storage = {
   async setItem(key: string, value: string) {
     try {
       if (Platform.OS === 'web') {
-        localStorage.setItem(key, value);
+        // sessionStorage is cleared when the tab closes, so a stolen token
+        // from XSS does not persist across browser sessions (unlike localStorage).
+        sessionStorage.setItem(key, value);
       } else {
         const SecureStore = require('expo-secure-store');
         await SecureStore.setItemAsync(key, value);

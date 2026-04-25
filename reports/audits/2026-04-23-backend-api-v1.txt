@@ -293,5 +293,379 @@ PHASE B FINDINGS YAML
 
 ================================================================================
 END OF PHASE B — backend-api v1
-Next: Phase C (D09 tests + D10 errors + D11 headers + D12 compliance)
+================================================================================
+
+================================================================================
+PHASE C — DIMENSIONS 09 (TESTS), 10 (ERRORS), 11 (HEADERS), 12 (COMPLIANCE)
+================================================================================
+
+[09-1] MEDIUM | Coverage reported but not gated — no `--cov-fail-under`
+File: backend/pytest.ini:14-19
+Finding: pytest emits term-missing/html/xml coverage reports but no
+`--cov-fail-under=N` directive. Comment in the file acknowledges ~6%
+baseline and treats raising it as P1 debt. Coverage can drop to 0% in any
+module without CI failure.
+Fix: `--cov-fail-under=70`; per-route targets (auth ≥95%, payments ≥90%,
+rides ≥85%) tracked separately. Effort: 4 h
+Risk score: 24 (MEDIUM × org × possible) — P1
+Regulations: SK-CPPA
+Owner: backend
+
+[09-2] HIGH | Large `_STALE_TEST_CLASSES` list — pre-Supabase tests skipped
+at collection
+File: backend/tests/conftest.py:378-407
+Finding: Significant fraction of test classes are explicitly skipped via
+the `_STALE_TEST_CLASSES` frozenset. Comments mark them "0/N stale,
+needs rewrite for Supabase backend". Without rewrite, integration
+coverage on critical paths is nominal.
+Fix: Quarterly audit of the frozenset; rewrite ≥10 classes/quarter;
+metric-track `tests_stale` and `days_since_rewrite`. Effort: 24 h (over
+multiple sprints)
+Risk score: 32 (HIGH × org × likely) — P1
+Regulations: —
+Owner: backend
+
+[10-1] HIGH | `logger.warning` on Firebase auth / DB persistence failures —
+CLAUDE.md rule violation
+File: backend/routes/auth.py:96,100,437,443
+Finding: `logger.warning(f"firebase_auth: could not persist user {uid}: {e}")`.
+CLAUDE.md ground rule: DB / auth / payment errors must use `logger.error`
+with full exception, not warning. Production log aggregation typically
+filters warnings — silent partial-state bugs (user created in Firebase
+but not in DB) hide.
+Fix: Replace warning → error; pass `exc_info=True`; alert on error rate.
+Effort: 2 h
+Risk score: 24 (HIGH × org × possible) — P1
+Regulations: PIPEDA
+Owner: backend
+
+[10-2] MEDIUM | App Check error logs missing `request_id` correlation
+File: backend/core/middleware.py:78,94
+Finding: App Check token failures log warnings without binding the
+`request_id` set by RequestIDMiddleware. Cross-request log correlation
+fails for App Check rejection investigations.
+Fix: `with logger.contextualize(request_id=request.state.request_id):`
+around App Check exception logging. Effort: 1 h
+Risk score: 12 (MEDIUM × self × possible) — P2
+Regulations: —
+Owner: backend
+
+[11-1] PASS | HSTS + CSP + X-Frame-Options + nosniff configured
+File: backend/core/middleware.py:157-173
+Evidence: `Strict-Transport-Security: max-age=31536000; includeSubDomains;
+preload`; CSP strict/docs variants; `X-Frame-Options: DENY`. Tested in
+backend/tests/test_p1_security.py.
+
+[11-2] PASS | CORS wildcard rejected at startup in production
+File: backend/core/middleware.py:333,351,358
+Evidence: When `ENV=production` and ALLOWED_ORIGINS contains `*`,
+`RuntimeError` raised with clear message. Test in
+backend/tests/test_p1_cors.py.
+
+[12-1] HIGH | Soft-delete columns exist but no automated retention purge cron
+(DV-8 confirmed at HEAD)
+File: backend/migrations/33_soft_delete_columns.sql:1-13
+Finding: `deleted_at` columns added on drivers/users/rides plus indexes,
+but no scheduled hard-delete loop. Soft-deleted rows persist beyond the
+2-year PIPEDA retention horizon (and 7-year CRA horizon for tax
+records). Confirms DV-8 still open.
+Fix: Per `docs/runbooks/` PIPEDA retention runbook: create
+`backend/utils/retention_purge.py`; spawn from lifespan.py at 02:00 UTC
+daily; per-table thresholds; alert on row counts > N. Effort: 6 h
+Risk score: 28 (HIGH × org × likely) — P1 · duplicate_of: DV-8
+Regulations: PIPEDA, CRA
+Owner: backend + data
+
+[12-2] MEDIUM | DSAR `/me/export-data` endpoint exists but no SLA test or
+completeness assertion (DV-17 family)
+File: backend/routes/drivers.py:1503
+Finding: PIPEDA s.9 mandates 30-day DSAR response. Endpoint defined but
+no test asserts the export includes every required field across rides /
+drivers / users / payments / ratings / documents. No metric tracks
+response latency. Confirms DV-17 family at HEAD.
+Fix: Test asserting all PII surfaces present in export; metric
+`dsar_response_seconds`; alert if request open > 7 days. Effort: 4 h
+Risk score: 20 (MEDIUM × org × possible) — P1 · duplicate_of: DV-17
+Regulations: PIPEDA
+Owner: backend + compliance
+
+[12-3] MEDIUM | `audit_logs` table has RLS but no append-only trigger
+File: backend/migrations/06_cloud_messaging.sql:70-72
+Finding: RLS allows admin full access (and service-role bypass), but no
+trigger blocks UPDATE/DELETE on audit_logs. An admin with UPDATE
+privilege could modify or remove audit entries post-hoc — breaks
+non-repudiation, fails SOC2 CC6.2 audit-log immutability.
+Fix: Trigger on audit_logs `BEFORE UPDATE OR DELETE RAISE EXCEPTION
+'audit_logs is append-only'`. Effort: 3 h
+Risk score: 20 (MEDIUM × org × possible) — P2
+Regulations: SOC2
+Owner: backend
+
+[12-4] PASS | `deleted_at` indexes present on drivers / users / rides
+File: backend/migrations/33_soft_delete_columns.sql:9-13
+Evidence: `idx_drivers_deleted_at`, `idx_users_deleted_at`,
+`idx_rides_deleted_at` — soft-delete queries don't N+1.
+
+================================================================================
+PHASE C FINDINGS YAML
+================================================================================
+
+===FINDINGS-YAML===
+- id: "09-1"
+  severity: MEDIUM
+  dimension: "09"
+  evidence:
+    file: backend/pytest.ini
+    lines: [14, 19]
+    snippet: "--cov-report=term-missing/html/xml — no --cov-fail-under"
+    test_file: null
+    test_lines: null
+  root_cause: "Coverage reported but not enforced; comment notes ~6% baseline"
+  impact: "Coverage can drop to 0% in any module without CI failure"
+  fix: "Add --cov-fail-under=70; per-route targets for auth/payments/rides"
+  effort_hours: 4
+  regression_test: "CI fails when coverage drops below 70% for any module"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 24
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "09-2"
+  severity: HIGH
+  dimension: "09"
+  evidence:
+    file: backend/tests/conftest.py
+    lines: [378, 407]
+    snippet: "_STALE_TEST_CLASSES: frozenset = frozenset({...}) — pre-Supabase tests skipped at collection"
+    test_file: null
+    test_lines: null
+  root_cause: "Pre-Supabase test harness skipped; rewrites pending; meaningful integration coverage on critical paths nominal"
+  impact: "Old tests don't match current Supabase code; regressions on auth/payments may pass CI silently"
+  fix: "Quarterly audit; rewrite ≥10 stale classes/quarter; track tests_stale + days_since_rewrite metrics"
+  effort_hours: 24
+  regression_test: "_STALE_TEST_CLASSES frozenset shrinks ≥25% per quarter"
+  sprint: P1
+  owners: ["backend"]
+  regulations: []
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "10-1"
+  severity: HIGH
+  dimension: "10"
+  evidence:
+    file: backend/routes/auth.py
+    lines: [96, 100, 437, 443]
+    snippet: "logger.warning(f'firebase_auth: could not persist user {uid}: {e}')"
+    test_file: null
+    test_lines: null
+  root_cause: "DB/auth errors logged at warning level; CLAUDE.md rule requires logger.error with full exception"
+  impact: "Production log aggregation filters warnings; user-created-in-Firebase-but-not-DB partial-state bugs hide"
+  fix: "warning → error; exc_info=True; Sentry alerting on error rate"
+  effort_hours: 2
+  regression_test: "test_firebase_user_creation_logs_error_on_db_failure — verify ERROR level"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 24
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "10-2"
+  severity: MEDIUM
+  dimension: "10"
+  evidence:
+    file: backend/core/middleware.py
+    lines: [78, 94]
+    snippet: "App Check warning logs lack request_id binding"
+    test_file: null
+    test_lines: null
+  root_cause: "App Check error logs not bound to request_id from RequestIDMiddleware"
+  impact: "Cross-request log correlation fails; debugging App Check rejections requires manual timestamp matching"
+  fix: "with logger.contextualize(request_id=request.state.request_id) around App Check exception logging"
+  effort_hours: 1
+  regression_test: "test_app_check_token_error_includes_request_id — capture log, verify X-Request-ID present"
+  sprint: P2
+  owners: ["backend"]
+  regulations: []
+  confidence: high
+  duplicate_of: null
+  blast_radius: self
+  likelihood: possible
+  risk_score: 12
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "11-1"
+  severity: PASS
+  dimension: "11"
+  evidence:
+    file: backend/core/middleware.py
+    lines: [157, 166, 168, 173]
+    snippet: "HSTS max-age=31536000 + includeSubDomains + preload; CSP; X-Frame-Options: DENY"
+    test_file: backend/tests/test_p1_security.py
+    test_lines: null
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: "test_security_headers_present — every response has HSTS/CSP/X-Frame"
+  sprint: null
+  owners: null
+  regulations: ["SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "11-2"
+  severity: PASS
+  dimension: "11"
+  evidence:
+    file: backend/core/middleware.py
+    lines: [333, 351, 358]
+    snippet: "Wildcard '*' rejected at startup if ENV=production (RuntimeError)"
+    test_file: backend/tests/test_p1_cors.py
+    test_lines: [61, 81]
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: null
+  sprint: null
+  owners: null
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "12-1"
+  severity: HIGH
+  dimension: "12"
+  evidence:
+    file: backend/migrations/33_soft_delete_columns.sql
+    lines: [1, 7]
+    snippet: "ALTER TABLE drivers/users/rides ADD COLUMN deleted_at TIMESTAMPTZ — no purge cron"
+    test_file: null
+    test_lines: null
+  root_cause: "Soft-delete columns exist but no scheduled hard-delete; data sits beyond PIPEDA 2y / CRA 7y horizons"
+  impact: "PIPEDA retention non-compliance; storage cost grows unbounded; breach impact extends with retention"
+  fix: "backend/utils/retention_purge.py; spawn daily 02:00 UTC; alert on row counts > threshold"
+  effort_hours: 6
+  regression_test: "Insert row 720+ days ago; run purge; verify hard DELETE executed"
+  sprint: P1
+  owners: ["backend", "data"]
+  regulations: ["PIPEDA", "CRA"]
+  confidence: high
+  duplicate_of: "DV-8"
+  blast_radius: org
+  likelihood: likely
+  risk_score: 28
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "12-2"
+  severity: MEDIUM
+  dimension: "12"
+  evidence:
+    file: backend/routes/drivers.py
+    lines: [1503]
+    snippet: "@api_router.post('/me/export-data') — no SLA test or completeness assertion"
+    test_file: null
+    test_lines: null
+  root_cause: "DSAR endpoint exists but no test asserts complete PII export or 30d response SLA"
+  impact: "PIPEDA s.9 30-day SLA cannot be evidenced; export may miss fields"
+  fix: "Test asserting export rows for rides/payments/documents; metric dsar_response_seconds; alert > 7d open"
+  effort_hours: 4
+  regression_test: "test_export_includes_rides_payments_documents; test_dsar_response_under_7_days"
+  sprint: P1
+  owners: ["backend", "compliance"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: "DV-17"
+  blast_radius: org
+  likelihood: possible
+  risk_score: 20
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "12-3"
+  severity: MEDIUM
+  dimension: "12"
+  evidence:
+    file: backend/migrations/06_cloud_messaging.sql
+    lines: [70, 72]
+    snippet: "audit_logs has RLS but no UPDATE/DELETE-blocking trigger"
+    test_file: null
+    test_lines: null
+  root_cause: "Append-only invariant not enforced at DB level; admin with UPDATE could erase audit entries"
+  impact: "Audit log tamper-evident requirement (SOC2 CC6.2) unmet; non-repudiation lost"
+  fix: "Trigger BEFORE UPDATE OR DELETE on audit_logs RAISE EXCEPTION 'audit_logs is append-only'"
+  effort_hours: 3
+  regression_test: "test_audit_logs_append_only — INSERT ok; UPDATE/DELETE fail"
+  sprint: P2
+  owners: ["backend"]
+  regulations: ["SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 20
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "12-4"
+  severity: PASS
+  dimension: "12"
+  evidence:
+    file: backend/migrations/33_soft_delete_columns.sql
+    lines: [9, 13]
+    snippet: "idx_drivers_deleted_at, idx_users_deleted_at, idx_rides_deleted_at"
+    test_file: null
+    test_lines: null
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: null
+  sprint: null
+  owners: null
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+===END-FINDINGS-YAML===
+
+===AUDIT-COMPLETE=== phase=C module=backend-api dimensions=09,10,11,12 findings=10 high=3 medium=4 pass=3
+
+================================================================================
+END OF PHASE C — backend-api v1
+Combined Phase A+B+C: 16 findings (1 CRITICAL · 7 HIGH · 5 MEDIUM · 3 PASS)
+Next: Phase D (D14 performance) + Phase E (D17–D22)
 ================================================================================

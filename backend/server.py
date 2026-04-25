@@ -24,6 +24,7 @@ from routes.corporate_wallet import router as corporate_wallet_router
 from routes.disputes import api_router as disputes_router
 from routes.drivers import api_router as drivers_router
 from routes.faqs import api_router as faqs_router
+from routes.legal_documents import api_router as legal_documents_router
 from routes.fare_split import api_router as fare_split_router
 from routes.fares import api_router as fares_router
 from routes.favorites import api_router as favorites_router
@@ -144,6 +145,7 @@ v1_api_router.include_router(admin_support_router)
 v1_api_router.include_router(support_chat_router)
 v1_api_router.include_router(pricing_router)
 v1_api_router.include_router(faqs_router)
+v1_api_router.include_router(legal_documents_router)
 v1_api_router.include_router(safety_router)
 
 # Include API routers

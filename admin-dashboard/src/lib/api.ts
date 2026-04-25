@@ -1056,6 +1056,20 @@ export const updateFaq = (id: string, data: any) =>
 export const deleteFaq = (id: string) =>
     request<any>(`/api/admin/faqs/${id}`, { method: "DELETE" });
 
+/* ── Legal Documents (per-audience ToS / Privacy) ─────────────── */
+export const getLegalDocuments = () =>
+    request<any[]>("/api/admin/legal-documents");
+
+export const upsertLegalDocument = (data: {
+    audience: "rider" | "driver";
+    type: "tos" | "privacy";
+    content: string;
+}) =>
+    request<any>("/api/admin/legal-documents", {
+        method: "PUT",
+        body: JSON.stringify(data),
+    });
+
 /* ── Notifications (uses sendNotification defined above) ── */
 
 /* ── Area Management (Pricing, Tax, Vehicle Pricing) ─────────────────── */

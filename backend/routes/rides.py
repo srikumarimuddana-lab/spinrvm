@@ -721,7 +721,11 @@ async def create_ride(
     try:
         all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
     except Exception as e:
-        logger.warning(f"Failed to fetch service areas: {e}")
+        original = (getattr(e, "details", None) or {}).get("original")
+        logger.error(
+            f"Failed to fetch service areas: type={type(e).__name__} msg={e} original={original}"
+        )
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
 
     # Resolve the pickup service area once and pass the match downstream.
     matched_area = None
@@ -816,7 +820,11 @@ async def create_ride(
             _matched_area=matched_area,
         )
     except Exception as e:
-        logger.warning(f"Failed to calculate area fees: {e}")
+        original = (getattr(e, "details", None) or {}).get("original")
+        logger.error(
+            f"Failed to calculate area fees: type={type(e).__name__} msg={e} original={original}"
+        )
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
 
     area_fees_total = fees_result.get("fees_total", 0)
     tax_amount = fees_result.get("tax_amount", 0)
@@ -1588,8 +1596,8 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 },
             )
         elif outcome.status == "unconfigured":
-            logger.warning(
-                "Stripe unconfigured — marking ride %s paid without real charge", ride_id
+            logger.error(
+                "Stripe unconfigured — marking ride %s paid without real charge (dev mode only)", ride_id
             )
             await db_supabase.update_ride(
                 ride_id,
@@ -1947,7 +1955,7 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
                     data={"type": "cancellation_fee_paid", "ride_id": ride_id},
                 )
         except Exception as fee_err:
-            logger.warning(f"[CANCEL] cancellation fee payout failed for driver {driver_id}: {fee_err}")
+            logger.error(f"[CANCEL] cancellation fee payout failed for driver {driver_id}: {fee_err}", exc_info=True)
 
     _now = datetime.now(timezone.utc)
     _base_update = {

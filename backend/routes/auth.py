@@ -178,7 +178,11 @@ async def send_otp(request: Request, body: SendOTPRequest):
         await db_supabase.delete_many("otp_records", {"phone": phone})
         await db_supabase.insert_otp_record(otp_record.dict())
     except Exception as e:
-        logger.warning(f"Could not store OTP in DB: {e}")
+        original = (getattr(e, "details", None) or {}).get("original")
+        logger.error(
+            f"OTP storage failed for {phone}: type={type(e).__name__} msg={e} original={original}"
+        )
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
 
     # Send OTP via SMS (Twilio when configured, console log otherwise)
     sms_result = await send_otp_sms(
@@ -219,7 +223,11 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             if not _hmac.compare_digest(str(expected), str(actual)):
                 otp_record = None
     except Exception as e:
-        logger.warning(f"Could not query OTP from DB: {e}")
+        original = (getattr(e, "details", None) or {}).get("original")
+        logger.error(
+            f"OTP query failed for {phone}: type={type(e).__name__} msg={e} original={original}"
+        )
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
 
     if not otp_record and _is_dev_otp_bypass(code):
         logger.info("Dev mode: accepting bypass OTP")
@@ -255,14 +263,14 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
     if datetime.now(timezone.utc) > expires_at:
         try:
             await db_supabase.delete_otp_record(otp_record["id"])
-        except Exception:  # noqa: S110
-            pass
+        except Exception as e:
+            logger.error(f"Failed to delete expired OTP record {otp_record.get('id')}: {e}")
         raise HTTPException(status_code=400, detail="ERR_OTP_EXPIRED")
 
     try:
         await db_supabase.update_one("otp_records", {"id": otp_record["id"]}, {"verified": True})
-    except Exception:  # noqa: S110
-        pass
+    except Exception as e:
+        logger.error(f"Failed to mark OTP {otp_record.get('id')} as verified: {e}")
 
     # SEC-008: Clear failure counter + lockout on successful verification
     await _clear_otp_failures(phone)
@@ -353,7 +361,12 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             try:
                 await db_supabase.create_user(new_user)
             except Exception as e:
-                logger.warning(f"Could not persist new user to DB: {e}")
+                original = (getattr(e, "details", None) or {}).get("original")
+                logger.error(
+                    f"create_user failed for phone={phone}: type={type(e).__name__} "
+                    f"msg={e} original={original}"
+                )
+                raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
             await redis_set(
                 f"session:{user_id}",
                 session_id,
@@ -378,11 +391,8 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
         # of being re-wrapped as a generic 500.
         raise
     except Exception as e:
-        logger.error(f"CRITICAL ERROR IN VERIFY_OTP: {e}")
-        import traceback
-
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Internal Login Error: {str(e)}") from e
+        logger.error(f"verify_otp unhandled exception for {phone}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 class FirebaseAuthRequest(BaseModel):
@@ -434,13 +444,23 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
         try:
             await db_supabase.create_user(new_user)
         except Exception as e:
-            logger.warning(f"firebase_auth: could not persist user {uid}: {e}")
+            original = (getattr(e, "details", None) or {}).get("original")
+            logger.error(
+                f"firebase_auth: create_user failed for uid={uid}: type={type(e).__name__} "
+                f"msg={e} original={original}"
+            )
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
         user = new_user
     else:
         try:
             await db_supabase.update_one("users", {"id": uid}, {"current_session_id": session_id})
         except Exception as e:
-            logger.warning(f"firebase_auth: could not update session_id for {uid}: {e}")
+            original = (getattr(e, "details", None) or {}).get("original")
+            logger.error(
+                f"firebase_auth: session_id update failed for uid={uid}: type={type(e).__name__} "
+                f"msg={e} original={original}"
+            )
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
         user["current_session_id"] = session_id
 
     user_id = user["id"]
@@ -563,7 +583,11 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
     try:
         user = await db.find_one("users", {"id": user_id})
     except Exception as e:
-        logger.warning(f"refresh: user lookup failed for {user_id}: {e}")
+        original = (getattr(e, "details", None) or {}).get("original")
+        logger.error(
+            f"refresh: user lookup failed for {user_id}: type={type(e).__name__} "
+            f"msg={e} original={original}"
+        )
     if not user:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
@@ -581,9 +605,9 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
         replaces=row.get("id"),
     )
 
-    session_id = user.get("current_session_id") or row.get("user_agent") or ""
+    session_id = user.get("current_session_id") or ""
     token_version = int(user.get("token_version") or 0)
-    access_expires_at = datetime.now(timezone.utc) + timedelta(days=settings.ACCESS_TOKEN_TTL_DAYS)
+    access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(
         user_id,
         user.get("phone", ""),

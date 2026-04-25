@@ -1859,8 +1859,30 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    # If assigned, unassign. If searching, just ignore/record decline.
+    # Verify the ride is assigned to this specific driver and in a declinable state.
+    # Without these guards a driver could reset rides belonging to other drivers or
+    # resurrect completed/cancelled rides back to searching.
+    ride = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1)
+    )
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found or not assigned to you")
+    DECLINE_FROM_STATES = ("driver_assigned", "driver_accepted", "driver_arrived")
+    if ride.get("status") not in DECLINE_FROM_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot decline ride from state '{ride.get('status')}'",
+        )
+
     await db_supabase.update_ride(ride_id, {"driver_id": None, "status": "searching", "updated_at": datetime.now(timezone.utc)})
+
+    # Notify the rider immediately so they don't wait indefinitely.
+    if ride.get("rider_id"):
+        await manager.send_personal_message(
+            {"type": "ride_declined", "ride_id": ride_id},
+            f"rider_{ride['rider_id']}",
+        )
+    await manager.broadcast_ride_status(ride_id, "searching", rider_id=ride.get("rider_id"))
 
     # Record the decline in audit_logs so daily stats can count it
     try:
@@ -1916,6 +1938,12 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
     pickup_lat = ride.get("pickup_lat", 0)
     pickup_lng = ride.get("pickup_lng", 0)
 
+    if ride.get("status") not in ARRIVE_FROM_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot mark arrival from state '{ride.get('status')}'",
+        )
+
     if driver_lat and driver_lng and pickup_lat and pickup_lng:
         distance_to_pickup = calculate_distance(driver_lat, driver_lng, pickup_lat, pickup_lng)
         if distance_to_pickup > ARRIVAL_RADIUS_KM:
@@ -1959,6 +1987,12 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
+    if ride.get("status") not in START_FROM_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot start ride from state '{ride.get('status')}'",
+        )
+
     if not hmac.compare_digest(ride.get("pickup_otp", ""), hash_otp(request.otp)):
         raise HTTPException(status_code=400, detail="Invalid OTP")
 
@@ -1985,12 +2019,23 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
 @api_router.post("/rides/{ride_id}/start")
 async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Start ride without OTP (if configured) or fallback."""
-    # Logic similar to verify_otp but without check
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
     )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
+
+    ride = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1)
+    )
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    if ride.get("status") not in START_FROM_STATES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot start ride from state '{ride.get('status')}'",
+        )
 
     await db_supabase.update_ride(
         ride_id, {"status": "in_progress", "ride_started_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}

@@ -91,7 +91,7 @@ async def create_payment_intent(
                     ),
                 )
 
-        amount = int(body.amount * 100)  # Convert dollars → cents
+        amount = int(Decimal(str(body.amount)).quantize(Decimal("0.01")) * 100)  # dollars → cents
 
         # Get or create customer for saved payments
         stripe_customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)

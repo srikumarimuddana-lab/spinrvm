@@ -1,3 +1,4 @@
+import hmac
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
@@ -179,7 +180,11 @@ async def admin_login(request: Request, body: LoginRequest):
 
     # 1. Super admin from env. Extra truthy-check on ADMIN_PASSWORD so an
     # empty/whitespace value in .env cannot match an empty body.password.
-    if settings.ADMIN_PASSWORD and body.email == settings.ADMIN_EMAIL and body.password == settings.ADMIN_PASSWORD:
+    if (
+        settings.ADMIN_PASSWORD
+        and body.email == settings.ADMIN_EMAIL
+        and hmac.compare_digest(body.password, settings.ADMIN_PASSWORD)
+    ):
         # admin-001 has no DB row, so token_version stays at 0. We still
         # emit the claim + an exp so a captured super-admin token dies
         # after ADMIN_ACCESS_TOKEN_TTL_HOURS and can't live forever.

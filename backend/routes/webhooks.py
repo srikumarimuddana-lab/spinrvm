@@ -1,3 +1,4 @@
+from decimal import Decimal
 from fastapi import APIRouter, HTTPException, Request
 
 try:
@@ -101,7 +102,7 @@ async def stripe_webhook(request: Request):
                 from services.corporate_wallet_service import apply_topup  # type: ignore
 
             amount_cents = data_object.get("amount_received") or data_object.get("amount", 0)
-            amount_cad = amount_cents / 100
+            amount_cad = Decimal(str(amount_cents)) / Decimal("100")
             await apply_topup(
                 wallet_id=meta["wallet_id"],
                 amount=amount_cad,

@@ -34,15 +34,15 @@ CATEGORY_RULES: list[tuple[str, str, str]] = [
     # ── Test failures ─────────────────────────────────────────────────────
     ("test",     r"FAILED\s+tests/",               "pytest test failure"),
     ("test",     r"AssertionError",                 "assertion error in test"),
-    ("test",     r"FAIL\s+.*\.(test|spec)\.[tj]s",  "Jest/Vitest test failure"),
+    ("test",     r"FAIL\s+.*\.(test|spec)\.[tj]sx?", "Jest/Vitest test failure"),
     ("test",     r"●\s+.*\s+›",                     "Jest describe block failure"),
     ("test",     r"TimeoutError:",                  "test timeout"),
     ("test",     r"Error: expect\(",                "expect assertion failure"),
-    ("test",     r"--cov-fail-under",               "coverage threshold not met"),
+    ("test",     r"short test summary info",          "pytest summary (failures present)"),
     ("coverage", r"FAIL\s+Required test coverage",  "coverage threshold not met"),
     ("coverage", r"Coverage\s+.*below\s+threshold", "coverage threshold not met"),
     # ── Lint / type errors ────────────────────────────────────────────────
-    ("lint",     r"ruff check.*Found \d+ error",    "ruff lint errors"),
+    ("lint",     r"Found \d+ error[s]?\.",            "ruff lint errors"),
     ("lint",     r"error:\s+\w+\s+\[E\d+\]",       "ruff error code"),
     ("lint",     r"ESLint:\s+\d+ error",            "ESLint errors"),
     ("lint",     r"TypeScript error",               "TypeScript type error"),
@@ -149,8 +149,10 @@ def _classify_log_chunk(job_name: str, step_name: str, log_text: str) -> list[Cl
         excerpt = "\n".join(excerpt_lines)
 
         severity = SEVERITY_MAP.get(category, "P2")
+        # Check overrides against the matched excerpt only, not the full log,
+        # so a CVE elsewhere in the job doesn't contaminate unrelated errors.
         for override_pattern, override_sev in SEVERITY_OVERRIDE:
-            if re.search(override_pattern, log_text, re.IGNORECASE):
+            if re.search(override_pattern, excerpt, re.IGNORECASE):
                 severity = override_sev
                 break
 
@@ -179,15 +181,20 @@ def classify(run_data: dict[str, Any], surface_filter: str = "all") -> dict[str,
         if job_status not in ("failure", "cancelled"):
             continue
 
-        for step in job.get("steps", []):
-            step_name: str = step.get("name", "unknown")
-            log_text: str = step.get("log", "")
-
-            if not log_text:
-                continue
-
-            errors = _classify_log_chunk(job_name, step_name, log_text)
+        # Prefer the job-level log (fetched once per job by fetch_run_data.py).
+        # Fall back to per-step logs for backwards compatibility.
+        job_log: str = job.get("log", "")
+        if job_log:
+            errors = _classify_log_chunk(job_name, "job log", job_log)
             all_errors.extend(errors)
+        else:
+            for step in job.get("steps", []):
+                step_name: str = step.get("name", "unknown")
+                log_text: str = step.get("log", "")
+                if not log_text:
+                    continue
+                errors = _classify_log_chunk(job_name, step_name, log_text)
+                all_errors.extend(errors)
 
     # Apply surface filter
     if surface_filter != "all":

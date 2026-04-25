@@ -1,0 +1,438 @@
+name: CI Guard Rails
+
+on:
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened]
+
+  # Allow manual check against any branch
+  workflow_dispatch:
+    inputs:
+      base_branch:
+        description: "Base branch to compare against"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+# Cancel in-flight runs for the same PR
+concurrency:
+  group: guardrails-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── 1. Coverage regression gate ─────────────────────────────────────────
+  coverage-regression-gate:
+    name: Coverage regression check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend deps
+        working-directory: backend
+        run: pip install -r requirements.txt --quiet
+
+      - name: Run coverage on PR branch
+        working-directory: backend
+        env:
+          SUPABASE_URL: https://test.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: test_key
+          SECRET_KEY: test-secret-key-for-ci-guardrails
+          ENV: test
+        run: |
+          pytest --cov=. --cov-report=json:../pr-coverage.json -q --no-header 2>/dev/null || true
+          python3 -c "
+          import json, sys
+          try:
+              data = json.load(open('../pr-coverage.json'))
+              pct = data['totals']['percent_covered']
+              print(f'PR branch coverage: {pct:.1f}%')
+              with open('../.coverage-pr', 'w') as f:
+                  f.write(str(pct))
+          except Exception as e:
+              print(f'Coverage read failed: {e}')
+              with open('../.coverage-pr', 'w') as f:
+                  f.write('0')
+          "
+
+      - name: Fetch base branch coverage from Codecov
+        id: base_coverage
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+          BASE_BRANCH: ${{ github.base_ref || inputs.base_branch }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Attempt to fetch last known coverage for base branch from Codecov API
+          BASE_PCT=$(curl -s \
+            "https://codecov.io/api/v2/github/${REPO%%/*}/repos/${REPO##*/}/branches/${BASE_BRANCH}/coverage" \
+            -H "Authorization: Bearer ${CODECOV_TOKEN}" 2>/dev/null | \
+            python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('totals',{}).get('coverage','0'))" 2>/dev/null || echo "0")
+          echo "base_pct=$BASE_PCT" >> "$GITHUB_OUTPUT"
+          echo "Base branch coverage: $BASE_PCT%"
+
+      - name: Assert no regression
+        run: |
+          PR_PCT=$(cat .coverage-pr)
+          BASE_PCT="${{ steps.base_coverage.outputs.base_pct }}"
+          python3 - <<'PYEOF'
+          import sys
+          pr_pct   = float(open('.coverage-pr').read().strip() or 0)
+          base_pct = float("$BASE_PCT" or 0)
+          # Allow up to 2% regression before blocking (accounts for flaky mocks)
+          TOLERANCE = 2.0
+          delta = pr_pct - base_pct
+          print(f"Base coverage : {base_pct:.1f}%")
+          print(f"PR coverage   : {pr_pct:.1f}%")
+          print(f"Delta         : {delta:+.1f}%")
+          if base_pct > 0 and delta < -TOLERANCE:
+              print(f"FAIL: Coverage regressed by {abs(delta):.1f}% (tolerance: {TOLERANCE}%)")
+              print("Open a Change Request via .github/ISSUE_TEMPLATE/ci_change_request.yml if")
+              print("the regression is intentional (e.g., removed dead code).")
+              sys.exit(1)
+          else:
+              print("PASS: Coverage within tolerance.")
+          PYEOF
+
+  # ─── 2. Lint warning count gate ───────────────────────────────────────────
+  lint-trend-gate:
+    name: Lint warning trend check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ruff
+        run: pip install ruff --quiet
+
+      - name: Count ruff warnings on PR branch
+        working-directory: backend
+        run: |
+          ruff check . --output-format=json 2>/dev/null | \
+            python3 -c "
+          import json, sys
+          try:
+              data = json.load(sys.stdin)
+              errors   = [d for d in data if d.get('message','').startswith('E')]
+              warnings = [d for d in data if not d.get('message','').startswith('E')]
+              total    = len(data)
+              print(f'Total issues: {total} (errors: {len(errors)}, warnings: {len(warnings)})')
+              with open('/tmp/lint_pr_count', 'w') as f:
+                  f.write(str(total))
+          except Exception:
+              with open('/tmp/lint_pr_count', 'w') as f:
+                  f.write('0')
+          " || echo "0" > /tmp/lint_pr_count
+
+      - name: Set up Node (for admin lint)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: admin-dashboard/package-lock.json
+
+      - name: Count admin ESLint issues
+        working-directory: admin-dashboard
+        run: |
+          npm ci --quiet 2>/dev/null
+          WARN_COUNT=$(npm run lint -- --format=json 2>/dev/null | \
+            python3 -c "
+          import json, sys
+          try:
+              data = json.load(sys.stdin)
+              total = sum(f.get('warningCount', 0) + f.get('errorCount', 0) for f in data)
+              print(total)
+          except Exception:
+              print(0)
+          " 2>/dev/null || echo "0")
+          echo "$WARN_COUNT" > /tmp/lint_admin_count
+
+          # GUARDRAIL: admin dashboard currently tolerates 600 warnings.
+          # This gate enforces the count does NOT grow beyond current baseline.
+          # See Change Request CR-2026-001 for the proposal to reduce this threshold.
+          CURRENT=$(cat /tmp/lint_admin_count)
+          BASELINE=600
+          if [ "$CURRENT" -gt "$BASELINE" ]; then
+            echo "FAIL: Admin ESLint warning count ($CURRENT) exceeds baseline ($BASELINE)"
+            echo "Do not introduce new lint issues. Fix existing ones first."
+            exit 1
+          fi
+
+      - name: Summary
+        run: |
+          echo "Backend ruff issues: $(cat /tmp/lint_pr_count)"
+          echo "Admin ESLint issues: $(cat /tmp/lint_admin_count)"
+
+  # ─── 3. Security posture gate ─────────────────────────────────────────────
+  security-posture-gate:
+    name: Security posture check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run pip-audit (Python CVE scan)
+        working-directory: backend
+        run: |
+          pip install pip-audit --quiet
+          pip-audit -r requirements.txt --format=json --output=/tmp/pip_audit.json || true
+          python3 - <<'PYEOF'
+          import json, sys
+          try:
+              data = json.load(open('/tmp/pip_audit.json'))
+              vulns = [v for pkg in data.get('dependencies', []) for v in pkg.get('vulns', [])]
+              critical = [v for v in vulns if v.get('fix_versions')]
+              if critical:
+                  print(f"FAIL: {len(critical)} CVE(s) with available fixes found:")
+                  for v in critical[:5]:
+                      print(f"  {v.get('id')} — {v.get('description', '')[:80]}")
+                  sys.exit(1)
+              elif vulns:
+                  print(f"WARN: {len(vulns)} CVE(s) found (no fix available yet).")
+              else:
+                  print("PASS: No Python CVEs detected.")
+          except Exception as e:
+              print(f"pip-audit output could not be parsed: {e}")
+          PYEOF
+
+      - name: Check for new secrets in diff
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          extra_args: --fail
+
+      - name: Check EXPO_PUBLIC_ variable exposure
+        run: |
+          python3 - <<'PYEOF'
+          import subprocess, re, sys
+
+          # Scan changed files in PR for accidental private key exposure via EXPO_PUBLIC_
+          result = subprocess.run(
+              ['git', 'diff', '--name-only',
+               '${{ github.event.pull_request.base.sha }}',
+               '${{ github.event.pull_request.head.sha }}'],
+              capture_output=True, text=True
+          )
+          changed = [f for f in result.stdout.strip().split('\n')
+                     if f.endswith(('.ts', '.tsx', '.js', '.jsx', '.env', '.json'))]
+
+          PRIVATE_PATTERNS = [
+              r'EXPO_PUBLIC_.*(?:SECRET|PRIVATE|PASSWORD|KEY|TOKEN)',
+              r'EXPO_PUBLIC_SUPABASE_SERVICE',
+              r'EXPO_PUBLIC_JWT',
+              r'EXPO_PUBLIC_ADMIN',
+          ]
+          issues = []
+          for filepath in changed:
+              try:
+                  content = open(filepath).read()
+                  for pat in PRIVATE_PATTERNS:
+                      if re.search(pat, content, re.IGNORECASE):
+                          issues.append(f"{filepath}: matches {pat}")
+              except (OSError, UnicodeDecodeError):
+                  pass
+
+          if issues:
+              print("FAIL: Potential private key in EXPO_PUBLIC_ variable:")
+              for i in issues:
+                  print(f"  {i}")
+              sys.exit(1)
+          else:
+              print("PASS: No EXPO_PUBLIC_ key exposure detected.")
+          PYEOF
+
+  # ─── 4. DB migration safety gate ──────────────────────────────────────────
+  migration-safety-gate:
+    name: Migration safety check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for dangerous migration patterns
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'PYEOF'
+          import subprocess, re, sys
+
+          result = subprocess.run(
+              ['git', 'diff', '--name-only', '$BASE_SHA', '$HEAD_SHA'],
+              capture_output=True, text=True
+          )
+          migration_files = [f for f in result.stdout.strip().split('\n')
+                             if 'migration' in f.lower() and f.endswith('.sql')]
+
+          if not migration_files:
+              print("PASS: No migration files changed.")
+              sys.exit(0)
+
+          print(f"Changed migration files: {migration_files}")
+
+          DANGEROUS = [
+              (r'\bDROP\s+TABLE\b',         "DROP TABLE — data loss risk"),
+              (r'\bDROP\s+COLUMN\b',        "DROP COLUMN — data loss risk"),
+              (r'\bTRUNCATE\b',             "TRUNCATE — data loss risk"),
+              (r'\bDELETE\s+FROM\b',        "DELETE FROM in migration — unintended data loss"),
+              (r'\bALTER\s+TABLE.*NOT\s+NULL\b', "Adding NOT NULL without default — locks table"),
+              (r'WITHOUT\s+ROWID',          "WITHOUT ROWID — irreversible schema change"),
+              (r'\bDROP\s+INDEX\b',         "DROP INDEX — query performance regression risk"),
+          ]
+
+          issues = []
+          for filepath in migration_files:
+              try:
+                  content = open(filepath).read().upper()
+                  for pattern, description in DANGEROUS:
+                      if re.search(pattern, content, re.IGNORECASE):
+                          issues.append(f"{filepath}: {description}")
+              except OSError:
+                  pass
+
+          if issues:
+              print("\nFAIL: Dangerous migration patterns detected:")
+              for issue in issues:
+                  print(f"  ⚠  {issue}")
+              print("\nAction required:")
+              print("  1. Review whether this is intentional.")
+              print("  2. If intentional, open a Change Request using .github/ISSUE_TEMPLATE/ci_change_request.yml")
+              print("     with full rollback plan before merging.")
+              sys.exit(1)
+          else:
+              print("PASS: No dangerous migration patterns found.")
+          PYEOF
+
+  # ─── 5. Breaking change detection ─────────────────────────────────────────
+  breaking-change-gate:
+    name: Breaking change detection
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for breaking API changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'PYEOF'
+          import subprocess, re, sys
+
+          # Detect changes to backend route signatures and DB schema
+          result = subprocess.run(
+              ['git', 'diff', '$BASE_SHA', '$HEAD_SHA', '--', 'backend/routes/', 'backend/db_supabase.py'],
+              capture_output=True, text=True
+          )
+          diff = result.stdout
+
+          BREAKING_PATTERNS = [
+              (r'^\-.*@.*router\.(get|post|put|delete|patch)\(["\']',
+               "Removed API route — existing clients will 404"),
+              (r'^\-.*def (get_|create_|update_|delete_)\w+\(.*\)',
+               "Removed public DB helper function"),
+              (r'^\+.*def \w+\(.*\)\s*->\s*None:',
+               "Function now returns None (potential type contract break)"),
+          ]
+
+          issues = []
+          for pattern, description in BREAKING_PATTERNS:
+              matches = re.findall(pattern, diff, re.MULTILINE)
+              if matches:
+                  issues.append(f"{description} ({len(matches)} instance(s))")
+
+          if issues:
+              print("WARN: Potential breaking changes detected:")
+              for issue in issues:
+                  print(f"  ⚠  {issue}")
+              print("\nIf intentional, document the breaking change in your PR description")
+              print("and open a Change Request if client apps need updating.")
+              # Warning only — does not block PR
+          else:
+              print("PASS: No obvious breaking API changes detected.")
+          PYEOF
+
+  # ─── Guard rail summary comment on PR ─────────────────────────────────────
+  guardrail-summary:
+    name: Post guard rail summary
+    runs-on: ubuntu-latest
+    needs:
+      - coverage-regression-gate
+      - lint-trend-gate
+      - security-posture-gate
+      - migration-safety-gate
+      - breaking-change-gate
+    if: always() && github.event_name == 'pull_request'
+    steps:
+      - name: Summarise results
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const jobs = {
+              'Coverage Regression': '${{ needs.coverage-regression-gate.result }}',
+              'Lint Trend':          '${{ needs.lint-trend-gate.result }}',
+              'Security Posture':    '${{ needs.security-posture-gate.result }}',
+              'Migration Safety':    '${{ needs.migration-safety-gate.result }}',
+              'Breaking Changes':    '${{ needs.breaking-change-gate.result }}',
+            };
+
+            const icon = r => r === 'success' ? '✅' : r === 'failure' ? '❌' : r === 'skipped' ? '⏭️' : '⚠️';
+            const rows = Object.entries(jobs)
+              .map(([name, result]) => `| ${icon(result)} **${name}** | \`${result}\` |`)
+              .join('\n');
+
+            const body = `## CI Guard Rails Summary\n\n| Gate | Status |\n|---|---|\n${rows}\n\n` +
+              `> Guard rails run on every PR to \`main\`/\`develop\`. ` +
+              `Failures must be resolved or a [Change Request]` +
+              `(https://github.com/${{ github.repository }}/issues/new?template=ci_change_request.yml) ` +
+              `approved before merging.\n` +
+              `> Audit: [CI Error Audit System](https://github.com/${{ github.repository }}/tree/main/reports/audits)`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('CI Guard Rails Summary')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

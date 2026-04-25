@@ -18,6 +18,8 @@ import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
+import { queryClient, asyncStoragePersister, QUERY_CACHE_BUSTER } from '@shared/api/queryClient';
 import { captureMessage, setUser } from '@shared/services/errorReporting';
 import {
   initFirebaseServices,
@@ -246,9 +248,20 @@ export default function RootLayout() {
   }
 
   return (
-    <ThemeProvider>
-      <DriverRootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} />
-    </ThemeProvider>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister: asyncStoragePersister,
+        // 24h max age — anything older is dropped on rehydrate, so the
+        // app can't boot with a week-old earnings number on screen.
+        maxAge: 24 * 60 * 60 * 1000,
+        buster: QUERY_CACHE_BUSTER,
+      }}
+    >
+      <ThemeProvider>
+        <DriverRootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} />
+      </ThemeProvider>
+    </PersistQueryClientProvider>
   );
 }
 

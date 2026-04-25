@@ -24,6 +24,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuthStore } from '@shared/store/authStore';
 import api from '@shared/api/client';
+import { useDriverMe } from '@shared/hooks/queries';
 import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -82,6 +83,15 @@ export default function ProfileScreen() {
   ];
 
   // Re-fetch user + driver data every time this tab comes into focus
+  // /drivers/me is now owned by the useDriverMe TanStack Query hook —
+  // it serves cached data instantly on focus and refetches in the
+  // background via the staleTime policy. The legacy authStore.driver
+  // is kept in sync below for screens that still read from the store.
+  const { data: driverFromQuery, refetch: refetchDriverMe } = useDriverMe();
+  useEffect(() => {
+    if (driverFromQuery) useAuthStore.setState({ driver: driverFromQuery });
+  }, [driverFromQuery]);
+
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -92,10 +102,9 @@ export default function ProfileScreen() {
           const userRes = await api.get('/auth/me');
           if (!cancelled && userRes.data) useAuthStore.setState({ user: userRes.data });
 
-          try {
-            const driverRes = await api.get('/drivers/me');
-            if (!cancelled && driverRes.data) useAuthStore.setState({ driver: driverRes.data });
-          } catch (driverErr) {} // ignore if no driver
+          // Driver row refetch is delegated to TanStack Query — calling
+          // refetch() lines up with the existing pull-to-refresh UX.
+          refetchDriverMe();
 
           try {
             const reqRes = await api.get('/drivers/requirements');

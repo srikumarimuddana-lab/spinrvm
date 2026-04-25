@@ -9,6 +9,7 @@ import { router } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { useDriverStore } from '../store/driverStore';
 import api from '@shared/api/client';
+import { useDriverConfig } from '@shared/hooks/queries';
 import { API_URL } from '@shared/config';
 import { onForegroundMessage } from '@shared/services/firebase';
 import { Dimensions } from 'react-native';
@@ -184,26 +185,18 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     return () => sub.remove();
   }, [refreshProfile]);
 
-  // ─── Fetch driver operational config from backend ────────────────
-  // `GET /drivers/config` returns server-tuned values for the
-  // ride-offer countdown and the pickup-geofence radius. Fetched once
-  // per authenticated session — if it fails the store keeps its
-  // module-level fallbacks (15s countdown, 100m pickup radius) so the
-  // driver flow never breaks on a transient backend hiccup.
+  // ─── Driver operational config — TanStack Query owned ────────────
+  // `useDriverConfig` is a long-staleTime hook: server-tuned values for
+  // the ride-offer countdown and pickup-geofence radius. Persisted cache
+  // means a cold start applies the last-known config without a network
+  // round-trip. When a fresh value lands we mirror it into the driver
+  // store so existing consumers keep reading from the same place.
+  // On error the store retains its module-level fallbacks (15s countdown,
+  // 100m pickup radius) so the flow never breaks on a transient hiccup.
+  const driverConfigQuery = useDriverConfig();
   useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await api.get('/drivers/config');
-        if (cancelled) return;
-        applyDriverConfig(res.data || {});
-      } catch (e) {
-        console.warn('[driver-config] fetch failed, using fallbacks:', e);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [user, applyDriverConfig]);
+    if (driverConfigQuery.data) applyDriverConfig(driverConfigQuery.data);
+  }, [driverConfigQuery.data, applyDriverConfig]);
 
   // ─── Location Tracking ───────────────────────────────────────────
   // Refresh on mount AND whenever the app returns to the foreground so

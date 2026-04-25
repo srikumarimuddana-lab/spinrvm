@@ -9,6 +9,8 @@
     "./api/client": "./api/client.ts",
     "./api/cachedClient": "./api/cachedClient.ts",
     "./api/upload": "./api/upload.ts",
+    "./api/queryClient": "./api/queryClient.ts",
+    "./hooks/queries": "./hooks/queries/index.ts",
     "./validators": "./validators/index.ts",
     "./config": "./config/index.ts",
     "./config/spinr.config": "./config/spinr.config.ts",

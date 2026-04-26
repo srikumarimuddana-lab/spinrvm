@@ -1346,7 +1346,6 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
         return {"url": "https://spinr-demo-onboard.com", "mock": True}
 
     try:
-        stripe.api_key = stripe_secret
         account_id = driver.get("stripe_account_id")
 
         if not account_id:
@@ -1358,6 +1357,7 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
                     "transfers": {"requested": True},
                 },
                 business_type="individual",
+                api_key=stripe_secret,
             )
             account_id = account.id
             await db_supabase.update_one("drivers", {"id": driver["id"]}, {"stripe_account_id": account_id})
@@ -1367,6 +1367,7 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
             refresh_url=f"{settings.get('base_url', 'http://localhost:8000')}/api/drivers/stripe-refresh",
             return_url=f"{settings.get('base_url', 'http://localhost:8000')}/api/drivers/stripe-return",
             type="account_onboarding",
+            api_key=stripe_secret,
         )
         # Mark as onboarded optimistically or handle via webhook/return_url properly in production
         await db_supabase.update_one("drivers", {"id": driver["id"]}, {"stripe_account_onboarded": True})
@@ -1457,11 +1458,11 @@ async def request_payout(
 
     if stripe_secret and stripe_account_id:
         try:
-            stripe.api_key = stripe_secret
             transfer = stripe.Transfer.create(
                 amount=int(req.amount * 100),
                 currency="cad",
                 destination=stripe_account_id,
+                api_key=stripe_secret,
             )
             status = "completed"
             stripe_payout_id = transfer.id
@@ -3099,7 +3100,6 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             _settings = await get_app_settings()
             _stripe_secret = _settings.get("stripe_secret_key", "")
             if _stripe_secret:
-                stripe.api_key = _stripe_secret
                 # Use the driver's saved default payment method via their Stripe customer
                 _user = await db.find_one("users", {"id": current_user["id"]})
                 _customer_id = _user.get("stripe_customer_id") if _user else None
@@ -3112,6 +3112,7 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
                         confirm=True,
                         off_session=True,
                         metadata={"driver_id": driver["id"], "plan_id": plan["id"]},
+                        api_key=_stripe_secret,
                     )
                     stripe_charge_id = _charge.id
                     payment_status = _charge.status  # "succeeded" | "requires_action" | …
@@ -3186,9 +3187,8 @@ async def verify_subscription_session(
     if not stripe_key:
         return {"status": "pending"}
 
-    stripe.api_key = stripe_key
     try:
-        session = stripe.checkout.Session.retrieve(session_id)
+        session = stripe.checkout.Session.retrieve(session_id, api_key=stripe_key)
     except Exception as e:
         logger.warning(f"[SUBSCRIBE] verify-session Stripe error: {e}")
         return {"status": "pending"}

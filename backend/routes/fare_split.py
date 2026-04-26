@@ -300,7 +300,7 @@ async def pay_split_share(
             )
         except ValueError as exc:
             if "insufficient_funds" in str(exc):
-                raise HTTPException(status_code=400, detail="Insufficient wallet balance")
+                raise HTTPException(status_code=400, detail="Insufficient wallet balance") from exc
             raise
 
         await _record_transaction(

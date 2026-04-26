@@ -50,6 +50,7 @@ jobs:
           SUPABASE_URL: https://test.supabase.co
           SUPABASE_SERVICE_ROLE_KEY: test_key
           JWT_SECRET: ci-only-not-a-real-secret-000000000000
+          ADMIN_PASSWORD: ci-placeholder-password
           ENV: test
         run: |
           pytest --cov=. --cov-report=json:../pr-coverage.json -q --no-header 2>/dev/null || true
@@ -222,7 +223,7 @@ jobs:
           path: ./
           base: ${{ github.event.pull_request.base.sha }}
           head: ${{ github.event.pull_request.head.sha }}
-          extra_args: --fail
+          extra_args: --only-verified --fail
 
       - name: Check EXPO_PUBLIC_ variable exposure
         run: |

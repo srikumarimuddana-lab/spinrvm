@@ -1019,48 +1019,181 @@ END OF D21 — driver-app Phase E
 
 
 ================================================================================
-TASK 22 — THIRD-PARTY & VENDOR RISK (DEFERRED)
+TASK 22 — THIRD-PARTY & VENDOR RISK
 ================================================================================
 
-Status: DEFERRED — both attempted agent runs (a983dbb01af911c44, 2026-04-26
-02:39 UTC) hit the account-wide usage limit ("resets 6:20am UTC") before
-producing findings. Investigation was in-progress: vendor file enumeration,
-Stripe/Firebase/Twilio/Google-Maps/Supabase integration scan, license-
-compliance pass, native CVE check.
+[22-1] HIGH | Google Maps API key hardcoded in eas.json preview profile
+File: driver-app/eas.json:30
+Finding: Production-tier Maps key `AIzaSyC5...m9M` is checked into git on the preview profile while staging/prod profiles correctly use `$EXPO_PUBLIC_GOOGLE_MAPS_API_KEY`. Key is now in git history and bundled into preview APKs without restrictions guarantee.
+Fix: Rotate the key, replace literal with `$EXPO_PUBLIC_GOOGLE_MAPS_API_KEY`, and apply Android package + SHA-1 / iOS bundle restrictions in GCP console. Effort: 2 h
+Risk score: 18 (HIGH × blast 3 × likelihood 2)
+Regulations: PIPEDA s.4.7, PCI-DSS 12.3.5
+Owner: mobile + devops · Sprint: P1
 
-Resume after limit reset. Scope per kickoff:
-  • Stripe API key handling, webhook signature verification, Connect setup
-  • Firebase Admin SDK credentials, audience pinning (DUP 21-1)
-  • Twilio credential storage, OTP cost guard
-  • Google Maps API key restrictions (HTTP referrer / iOS bundle / android)
-  • Supabase Canadian region attestation (PIPEDA data-residency)
-  • DPA register completeness (vendor list + DPAs on file)
-  • Native dep CVE pass (yarn audit + pip-audit baseline)
-  • License compliance (no GPL/AGPL in mobile/binary surfaces)
+[22-2] HIGH | Firebase verify_id_token missing audience pin for driver app
+File: backend/routes/auth.py:399-407
+Finding: `verify_id_token` is called without `check_revoked` and the audience guard only fires when `FIREBASE_DRIVER_APP_ID` is configured. If the env var is unset (no startup assertion), a token minted for the rider Firebase project would be accepted for driver login.
+Fix: Make `FIREBASE_DRIVER_APP_ID` a required Settings field with fail-fast in production and pass `check_revoked=True`. Effort: 3 h
+Risk score: 24 (HIGH × blast 4 × likelihood 2)
+Regulations: PIPEDA s.4.7, SOC2 CC6.1
+Owner: backend · Sprint: P0
+Duplicate of: DUP P-E 21-1 (Firebase audience)
 
-===AUDIT-COMPLETE=== dim=22 module=driver-app findings=0 status=DEFERRED reason=usage_limit
+[22-3] MEDIUM | Stripe webhook construct_event uses default 5-min tolerance
+File: backend/routes/webhooks.py:50
+Finding: `stripe.Webhook.construct_event` is called without an explicit `tolerance=` argument, accepting Stripe's 300s default replay window. Combined with idempotency claim this is acceptable but tightening to 120s reduces replay surface.
+Fix: Pass `tolerance=120` and assert `stripe_webhook_secret` length >= 32 at startup. Effort: 1 h
+Risk score: 8 (MED × blast 2 × likelihood 2)
+Regulations: PCI-DSS 4.2.1
+Owner: backend · Sprint: P2
+
+[22-4] HIGH | No Twilio SMS cost guard / per-phone rate limit on OTP send
+File: backend/routes/auth.py:153-208
+Finding: `_check_otp_lockout` only guards verification failures (5/hr); the OTP *send* path has no per-phone or global daily cap and no Twilio cost-spend alert. A scripted enumeration could rack up Twilio charges and toll fraud (international SMS pumping).
+Fix: Add per-phone send limit (e.g. 5/24h), global daily cap with Sentry alert, and disable international destinations in Twilio Messaging Service geo-permissions. Effort: 4 h
+Risk score: 18 (HIGH × blast 3 × likelihood 2)
+Regulations: PIPEDA s.4.7, CASL
+Owner: backend · Sprint: P1
+
+[22-5] MEDIUM | Supabase Canadian region not attested in code/config
+File: docs/vendor-inventory.md:38; backend/core/config.py:21
+Finding: Vendor inventory marks Supabase region as "ca-central-1 — VERIFY"; backend reads `SUPABASE_URL` without any startup assertion that the host resolves to a Canadian project ref. Region drift would silently violate PIPEDA data residency commitment.
+Fix: Add a startup check that `SUPABASE_URL` host matches an allowlist of Canadian project refs and update vendor-inventory.md from VERIFY to confirmed with screenshot evidence. Effort: 2 h
+Risk score: 12 (MED × blast 3 × likelihood 2)
+Regulations: PIPEDA s.4.1.3, data residency
+Owner: infra + compliance · Sprint: P1
+
+[22-6] MEDIUM | DPA register has 5 vendors in VERIFY status (Supabase, Twilio, Railway, Expo, Redis)
+File: docs/dpa-register.md:28-39
+Finding: Supabase, Twilio, Railway, Expo, and Upstash/Redis all show VERIFY for DPA-on-file. Without a signed/auto-accepted DPA, PIPEDA s.4.1.3 accountability for cross-border processing cannot be evidenced.
+Fix: Legal collects each DPA (most are click-through), files PDF copy under `reports/legal/`, and updates register. Effort: 3 h (legal)
+Risk score: 9 (MED × blast 3 × likelihood 1.5)
+Regulations: PIPEDA s.4.1.3, SOC2 CC9.2
+Owner: legal + compliance · Sprint: P2
+
+[22-7] MEDIUM | Backend dependencies use floor-only pins (>=) — no lockfile hashes
+File: backend/requirements.txt:1-22
+Finding: All deps declared as `>=X` without a hashed `requirements.lock` (pip-compile / uv lock). Transitive resolution drifts between Railway deploys; supply-chain compromise of any pinned floor version gets pulled silently.
+Fix: Generate a hashed `requirements.lock` via `pip-compile --generate-hashes` and use `pip install --require-hashes` in Dockerfile. Effort: 3 h
+Risk score: 12 (MED × blast 3 × likelihood 2)
+Regulations: SOC2 CC8.1, NIST SSDF PW.4
+Owner: backend + devops · Sprint: P1
+Duplicate of: DUP backend P-E 22-1B
+
+[22-8] MEDIUM | Mobile bundle ships duplicate Firebase JS + native SDKs
+File: driver-app/package.json:14-18,40
+Finding: Both `@react-native-firebase/*` (native, v24) and `firebase` (JS, v12.12) are dependencies. The JS SDK uses Firebase web auth audience semantics; mixed-SDK token minting can confuse audience pinning and inflate bundle size by ~600 KB.
+Fix: Remove `firebase` JS SDK; use only `@react-native-firebase/*` for auth/messaging/crashlytics. Verify no import path still pulls JS SDK. Effort: 3 h
+Risk score: 8 (MED × blast 2 × likelihood 2)
+Regulations: —
+Owner: mobile · Sprint: P2
+
+[22-9] LOW | sharp@^0.34 declared as mobile-app dep — native binary in RN bundle
+File: driver-app/package.json:65
+Finding: `sharp` is a libvips-bound Node native module not usable in React Native runtime. Its presence suggests a build/CI helper leaked into runtime deps; it pulls libvips binaries (Apache-2.0, OK) but inflates EAS build artifacts.
+Fix: Move to `devDependencies` or remove if unused at build time. Effort: 0.5 h
+Risk score: 3 (LOW × blast 1.5 × likelihood 2)
+Regulations: —
+Owner: mobile · Sprint: P3
+
+[22-10] LOW | Sub-processor change monitoring is manual quarterly grep
+File: docs/dpa-register.md:71-76
+Finding: Vendor sub-processor lists are checked manually quarterly. Stripe/Google routinely update sub-processors with 30-day notice; manual cadence may miss the window for privacy-policy refresh required by PIPEDA accountability.
+Fix: Subscribe to each vendor's sub-processor RSS/email feed; auto-file an issue on change. Effort: 2 h
+Risk score: 4 (LOW × blast 2 × likelihood 2)
+Regulations: PIPEDA s.4.1.3
+Owner: compliance · Sprint: P3
+Duplicate of: DUP backend P-E 22-3B
+
+===AUDIT-COMPLETE=== dim=22 module=driver-app findings=10 critical=0 high=3 medium=5 low=2
 
 
 ================================================================================
-TASK 23 — MOBILE BINARY / BUILD & RELEASE HARDENING (DEFERRED)
+TASK 23 — MOBILE BINARY / BUILD & RELEASE HARDENING
 ================================================================================
 
-Status: DEFERRED — agent run a5337221a2359f4b8 (2026-04-26 02:39 UTC) hit
-the account-wide usage limit before producing findings. Last completed
-step was reading driver-app/app.config.ts and PrivacyInfo.xcprivacy.
+[23-1] HIGH | Google Maps API key hard-coded in eas.json preview profile
+File: driver-app/eas.json:30
+Finding: Preview profile inlines a literal Google Maps key (AIzaSy...) into the EAS config; production/test profiles correctly use $EXPO_PUBLIC_GOOGLE_MAPS_API_KEY. The literal is committed to git and ships embedded in every preview APK — abuse fuels Maps billing and the key is now exposed in repo history.
+Fix: Replace the literal with $EXPO_PUBLIC_GOOGLE_MAPS_API_KEY, rotate the key in Google Cloud, restrict by package + SHA-1 + API. Effort: 1 h
+Risk score: 24 (HIGH × org × likely)
+Regulations: PIPEDA, PCI-DSS-adj
+Owner: driver-app · Sprint: P0
+Duplicate of: DUP D22 22-1
 
-Resume after limit reset. Scope:
-  • EAS profile correctness (production vs preview env separation)
-  • EXPO_PUBLIC_* exposure audit (no secrets in EAS exposed prefix)
-  • Code signing (iOS provisioning profile, Android keystore custody)
-  • App Transport Security (no NSAllowsArbitraryLoads exception)
-  • Force-update banner wired to /version endpoint
-  • JS source-map upload to Crashlytics + private bucket
-  • Hermes bundle obfuscation / no source-map shipped to store
-  • Privacy Manifest completeness vs API usage
-  • Play Integrity API attestation on driver privileged actions
+[23-2] HIGH | google-services.json + GoogleService-Info.plist tracked in git
+File: driver-app/google-services.json:1, driver-app/GoogleService-Info.plist
+Finding: Both Firebase config files are committed (git ls-files confirms). They contain the FCM sender ID, API key, and project number — combined with no App Check enforcement (see 23-5) any attacker can forge FCM sends. Should be ignored and provisioned via EAS secrets.
+Fix: Add to .gitignore, purge from history, upload as EAS secret files; rotate the embedded API keys via Firebase console. Effort: 2 h
+Risk score: 18 (HIGH × org × likely)
+Regulations: PIPEDA
+Owner: driver-app · Sprint: P0
 
-===AUDIT-COMPLETE=== dim=23 module=driver-app findings=0 status=DEFERRED reason=usage_limit
+[23-3] HIGH | No force-update / min-app-version gate on cold start
+File: driver-app/app/_layout.tsx:108-180
+Finding: Cold-start sequence runs initializeAuth, initializeLocation, initFirebaseServices, FCM register — no call to /version or /min-app-version. A driver on a vulnerable old binary (expired RN, broken Stripe SDK, bad insurance period mapping) keeps operating indefinitely. EAS Update is configured but a kill-switch banner is absent.
+Fix: Add a /min-app-version fetch at boot; if Constants.expoConfig.runtimeVersion < min, render blocking update screen with store link. Effort: 4 h
+Risk score: 18 (HIGH × ops × likely)
+Regulations: SK-TNC
+Owner: driver-app · Sprint: P1
+
+[23-4] MEDIUM | No Sentry/Crashlytics source-map upload step in build
+File: driver-app/eas.json:1-50, driver-app/package.json
+Finding: No postPublish hook, no sentry-expo plugin, no @sentry/react-native dependency, no upload-sourcemaps script. Crashlytics receives obfuscated Hermes stacks; symbolication for production crashes will be best-effort guesswork, slowing P0 incident triage.
+Fix: Add @sentry/react-native + sentry.properties (private); wire EAS postPublish to upload sourcemaps to private bucket; verify Hermes maps are NOT bundled into the store IPA/AAB. Effort: 4 h
+Risk score: 9 (MEDIUM × ops × likely)
+Regulations: —
+Owner: driver-app · Sprint: P1
+
+[23-5] HIGH | App Check token never attached to privileged backend calls
+File: shared/services/firebase.ts:41-68, driver-app/app/_layout.tsx:135
+Finding: initFirebaseServices() initializes App Check with isTokenAutoRefreshEnabled but no axios interceptor calls appCheck().getToken() and forwards it as X-Firebase-AppCheck on go_online, accept_ride, payout, or any other driver mutation. Backend has no enforcement either — attestation is effectively absent, so a repackaged APK can drive the dispatch API at will.
+Fix: Add axios interceptor injecting App Check token on writes; backend middleware verifies via firebase_admin.app_check; reject missing/invalid in production. Effort: 6 h
+Risk score: 24 (HIGH × org × likely)
+Regulations: SK-TNC, PIPEDA
+Owner: driver-app + backend · Sprint: P0
+
+[23-6] MEDIUM | iOS provisioning + Android keystore custody undocumented
+File: driver-app/eas.json:43-56
+Finding: submit.production.android references ./play-service-account.json (file is absent from repo — good) but there is no documented EAS-managed credentials policy, no recovery runbook, no listed key custodians. Loss of upload key on Android means permanent loss of Play Console upload ability for the package; iOS distribution cert loss locks rebuilds.
+Fix: Pin appVersionSource is already remote; document "credentialsSource: remote" in eas.json, export keystore backup to 1Password vault, list two custodians in docs/runbooks/code-signing.md. Effort: 2 h
+Risk score: 8 (MEDIUM × org × unlikely)
+Regulations: —
+Owner: driver-app · Sprint: P2
+
+[23-7] MEDIUM | Background location entitlement broader than required
+File: driver-app/app.config.ts:170-180
+Finding: locationAlways + isAndroidBackgroundLocationEnabled + isIosBackgroundLocationEnabled are unconditional. Per insurance period rules (CLAUDE.md), background location is needed only in Period 1+ (online). Always-on background location risks Apple review rejection (5.1.1) and PIPEDA "data minimization" — collecting when offline serves no stated purpose.
+Fix: Only request background-location after first go_online; stop updates on go_offline; document the period-gated lifecycle in the permission rationale strings. Effort: 6 h
+Risk score: 12 (MEDIUM × org × likely)
+Regulations: PIPEDA, App-Store-5.1.1
+Owner: driver-app · Sprint: P1
+
+[23-8] LOW | Privacy manifest missing FileTimestamp reason for own logs
+File: driver-app/PrivacyInfo.xcprivacy, driver-app/app.config.ts:46-58
+Finding: NSPrivacyAccessedAPICategoryFileTimestamp lists C617.1 (third-party crash reporter) and 0A2A.1 (own files). LogRocket and expo-secure-store both stat their own files; the declarations are present but only 0A2A.1 covers it — acceptable. However NSPrivacyAccessedAPICategoryActiveKeyboard is not declared and react-native TextInput on iOS 17.4+ can trigger required-reason checks under newer auditor scans. Pre-emptive declaration recommended.
+Fix: Verify with Apple's privacy-manifest checker; add CA92.1 + keyboard reason if flagged. Effort: 1 h
+Risk score: 3 (LOW × store × possible)
+Regulations: App-Store-Privacy
+Owner: driver-app · Sprint: P3
+
+[23-9] MEDIUM | EAS test profile points STAGING var into production-like keys
+File: driver-app/eas.json:14-21
+Finding: test profile env: EXPO_PUBLIC_BACKEND_URL set to $SPINR_STAGING_BACKEND_URL but EXPO_PUBLIC_GOOGLE_MAPS_API_KEY uses the SAME var name as production ($EXPO_PUBLIC_GOOGLE_MAPS_API_KEY). If EAS env is shared across profiles the staging APK will sign Maps calls with the prod key — restrictions (package SHA-1) likely block it but billing/quota leakage is possible if a staging APK is re-signed.
+Fix: Use a distinct $EXPO_PUBLIC_GOOGLE_MAPS_API_KEY_STAGING var restricted to the staging package SHA-1. Effort: 0.5 h
+Risk score: 6 (MEDIUM × org × possible)
+Regulations: —
+Owner: driver-app · Sprint: P2
+
+[23-10] LOW | runtimeVersion is a literal "1.0.0" — OTA blast-radius risk
+File: driver-app/app.config.ts:23
+Finding: runtimeVersion is hard-pinned. When native deps shift (Stripe, Firebase, expo-location), shipping a JS-only OTA to a device that has different native code can crash on first boot. The in-line comment acknowledges the manual bump but there's no CI check that fails when native deps change without a runtimeVersion bump.
+Fix: Add a git pre-commit / CI check: if package.json native-dep hashes change and runtimeVersion is unchanged, fail. Effort: 2 h
+Risk score: 4 (LOW × ops × possible)
+Regulations: —
+Owner: driver-app · Sprint: P3
+
+===AUDIT-COMPLETE=== dim=23 module=driver-app findings=10 critical=0 high=4 medium=4 low=2
 
 
 ================================================================================
@@ -1074,13 +1207,14 @@ DRIVER PHASE E — SUMMARY (D17–D23)
 | 19  | Fraud prevention               | 10       | 0        | 4    | 5      | 1   |
 | 20  | Financial reconciliation       | 10       | 4        | 2    | 4      | 0   |
 | 21  | Threat model (STRIDE)          | 10       | 2        | 3    | 4      | 1   |
-| 22  | Third-party & vendor risk      |  0 DEF   | —        | —    | —      | —   |
-| 23  | Mobile binary / build & release|  0 DEF   | —        | —    | —      | —   |
+| 22  | Third-party & vendor risk      | 10       | 0        | 3    | 5      | 2   |
+| 23  | Mobile binary / build & release| 10       | 0        | 4    | 4      | 2   |
 |-----|--------------------------------|---------:|---------:|-----:|-------:|----:|
-| **Total**                            | **53**   | **7**    | **13**| **23** | **5**|
+| **Total**                            | **73**   | **7**    | **20**| **32** | **9**|
 
-Cross-audit duplicates flagged: 6 (backend P-B 20-1/2/3, P-E 21-1/2/6,
-backend P2-7). Net new findings vs prior audits: 47.
+Cross-audit duplicates flagged: 9 (backend P-B 20-1/2/3, P-E 21-1/2/6,
+backend P2-7, D22 22-1/D23 23-1, D22 22-7/backend 22-1B, D22 22-10/backend 22-3B).
+Net new findings vs prior audits: 64.
 
 CRITICAL items requiring P0 attention before launch:
   • 18-1   Stripe outage blocks ride completion (no payment queue)
@@ -1091,6 +1225,15 @@ CRITICAL items requiring P0 attention before launch:
   • 21-2   Rider PII addresses leaked to driver post-completion (DUP)
   • 21-3   WS ride_status_update spoofing — privilege escalation
 
+HIGH items added by D22-D23 (Sprint P0/P1 candidates):
+  • 22-1 / 23-1  Google Maps API key hardcoded in eas.json preview (P0/P1)
+  • 22-2         Firebase audience pin missing on driver path (P0)
+  • 22-4         OTP send path has no per-phone rate limit / cost guard (P1)
+  • 22-7         Backend deps lack hashed lockfile (P1, DUP backend 22-1B)
+  • 23-2         Firebase config files committed to git (P0)
+  • 23-3         No force-update / min-app-version gate (P1)
+  • 23-5         App Check token never attached to privileged calls (P0)
+
 ================================================================================
-END OF DRIVER PHASE E (D17-D21 complete; D22-D23 deferred to next limit window)
+END OF DRIVER PHASE E (D17-D23 complete)
 ================================================================================

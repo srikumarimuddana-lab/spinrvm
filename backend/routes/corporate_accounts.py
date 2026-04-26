@@ -5,6 +5,7 @@ This module implements CRUD operations for corporate accounts that can be used
 for business rides and expense management.
 """
 
+import logging
 from datetime import datetime
 from typing import List, Optional
 
@@ -38,10 +39,20 @@ from schemas.corporate import (
 from settings_loader import get_app_settings  # noqa: E402
 from validators import sanitize_string, validate_email, validate_id, validate_phone  # noqa: E402
 
+logger = logging.getLogger(__name__)
+
 # Alias for backward compatibility
 get_current_admin = get_admin_user
 
 router = APIRouter(prefix="/admin/corporate-accounts", tags=["Corporate Accounts"])
+
+# OWNERSHIP ASSUMPTION: All Spinr admins are currently global staff — there are
+# no org-scoped admin roles. For this reason, endpoints authenticate via
+# get_current_admin but do NOT check that the admin "owns" the company_id in
+# the path. If per-org admin roles are ever added, every endpoint in this file
+# must gain an ownership check (e.g. fetched_account["admin_email"] == current_admin["email"])
+# before returning or mutating data.
+
 
 
 # Pydantic models for request/response validation
@@ -164,7 +175,14 @@ async def kyb_review(
         raise HTTPException(status_code=404, detail="Corporate account not found")
 
     if decision.approve:
-        await ensure_corporate_wallet(company_id=normalized_id)
+        try:
+            await ensure_corporate_wallet(company_id=normalized_id)
+        except Exception as wallet_err:
+            logger.error(f"[KYB] Wallet creation failed for company {normalized_id}: {wallet_err}")
+            raise HTTPException(
+                status_code=503,
+                detail="KYB approved but wallet provisioning failed — please retry",
+            ) from wallet_err
         if not row.get("stripe_customer_id"):
             settings = await get_app_settings()
             stripe_secret = settings.get("stripe_secret_key", "")

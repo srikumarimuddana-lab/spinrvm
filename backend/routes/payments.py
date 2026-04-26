@@ -197,7 +197,6 @@ async def get_payment_methods(current_user: dict = Depends(get_current_user)):
         return {"methods": [], "mock": True}
 
     try:
-        stripe.api_key = stripe_secret
         user = await db_supabase.get_user_by_id(current_user["id"])
         stripe_customer_id = user.get("stripe_customer_id") if user else None
 
@@ -415,7 +414,6 @@ async def set_default_card(card_id: str, current_user: dict = Depends(get_curren
     stripe_secret = settings.get("stripe_secret_key", "")
     if stripe_secret:
         try:
-            stripe.api_key = stripe_secret
             user = await db_supabase.get_user_by_id(current_user["id"])
             cid = user.get("stripe_customer_id")
             if cid:

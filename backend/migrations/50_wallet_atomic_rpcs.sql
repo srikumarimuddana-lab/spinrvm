@@ -1,5 +1,7 @@
 -- Atomic wallet RPCs to eliminate TOCTOU race conditions (P0-4, P0-5, P0-6)
--- All three functions use row-level locking so concurrent calls serialize correctly.
+-- Rollback: DROP FUNCTION wallet_increment_balance, wallet_pay_for_ride, wallet_transfer
+-- All three functions use SECURITY DEFINER + pinned search_path per Spinr convention
+-- for money-touching Postgres functions.
 
 -- P0-4: Atomic top-up — avoids read-compute-write race on wallet balance.
 CREATE OR REPLACE FUNCTION wallet_increment_balance(
@@ -8,6 +10,8 @@ CREATE OR REPLACE FUNCTION wallet_increment_balance(
 )
 RETURNS NUMERIC
 LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
 AS $$
 DECLARE
     v_new_balance NUMERIC;
@@ -16,10 +20,12 @@ BEGIN
        SET balance    = balance + p_amount,
            updated_at = NOW()
      WHERE id = p_wallet_id
+       AND is_active = TRUE
     RETURNING balance INTO v_new_balance;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'wallet not found: %', p_wallet_id;
+        RAISE EXCEPTION 'wallet not found or suspended: %', p_wallet_id
+            USING ERRCODE = 'P0002';
     END IF;
 
     RETURN v_new_balance;
@@ -35,6 +41,8 @@ CREATE OR REPLACE FUNCTION wallet_pay_for_ride(
 )
 RETURNS NUMERIC
 LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
 AS $$
 DECLARE
     v_balance     NUMERIC;
@@ -43,14 +51,17 @@ BEGIN
     SELECT balance INTO v_balance
       FROM wallets
      WHERE id = p_wallet_id
+       AND is_active = TRUE
        FOR UPDATE;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'wallet not found: %', p_wallet_id;
+        RAISE EXCEPTION 'wallet not found or suspended: %', p_wallet_id
+            USING ERRCODE = 'P0002';
     END IF;
 
     IF v_balance < p_amount THEN
-        RAISE EXCEPTION 'insufficient_funds';
+        RAISE EXCEPTION 'insufficient_funds'
+            USING ERRCODE = 'P0001';
     END IF;
 
     UPDATE wallets
@@ -78,6 +89,8 @@ CREATE OR REPLACE FUNCTION wallet_transfer(
     OUT recipient_balance NUMERIC
 )
 LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
 AS $$
 DECLARE
     v_first_id  UUID;
@@ -92,18 +105,20 @@ BEGIN
         v_second_id := p_sender_id;
     END IF;
 
-    PERFORM balance FROM wallets WHERE id = v_first_id  FOR UPDATE;
-    PERFORM balance FROM wallets WHERE id = v_second_id FOR UPDATE;
+    PERFORM balance FROM wallets WHERE id = v_first_id  AND is_active = TRUE FOR UPDATE;
+    PERFORM balance FROM wallets WHERE id = v_second_id AND is_active = TRUE FOR UPDATE;
 
     SELECT balance INTO sender_balance
-      FROM wallets WHERE id = p_sender_id;
+      FROM wallets WHERE id = p_sender_id AND is_active = TRUE;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'sender wallet not found: %', p_sender_id;
+        RAISE EXCEPTION 'sender wallet not found or suspended: %', p_sender_id
+            USING ERRCODE = 'P0002';
     END IF;
 
     IF sender_balance < p_amount THEN
-        RAISE EXCEPTION 'insufficient_funds';
+        RAISE EXCEPTION 'insufficient_funds'
+            USING ERRCODE = 'P0001';
     END IF;
 
     UPDATE wallets
@@ -116,10 +131,12 @@ BEGIN
        SET balance    = balance + p_amount,
            updated_at = NOW()
      WHERE id = p_recipient_id
+       AND is_active = TRUE
     RETURNING balance INTO recipient_balance;
 
     IF recipient_balance IS NULL THEN
-        RAISE EXCEPTION 'recipient wallet not found: %', p_recipient_id;
+        RAISE EXCEPTION 'recipient wallet not found or suspended: %', p_recipient_id
+            USING ERRCODE = 'P0002';
     END IF;
 END;
 $$;

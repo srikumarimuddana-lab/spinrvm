@@ -130,6 +130,7 @@ async def admin_get_disputes(
     )
 
     # Batch-fetch users and rides in 2 queries instead of 2×N per-dispute calls.
+    # user_phone intentionally omitted from response — P1-9 (PIPEDA: no PII in bulk list).
     user_ids = list({d["user_id"] for d in disputes if d.get("user_id")})
     ride_ids = list({d["ride_id"] for d in disputes if d.get("ride_id")})
     users = await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=len(user_ids)) if user_ids else []
@@ -166,8 +167,8 @@ async def admin_resolve_dispute(
     if dispute.get("status") in ("resolved", "rejected"):
         raise HTTPException(status_code=400, detail="Dispute already resolved")
 
-    # Attempt Stripe refund BEFORE updating DB status so a Stripe failure never
-    # leaves the dispute marked "resolved" without money returned to the rider.
+    # Stripe refund runs BEFORE we mark the dispute resolved.
+    # If Stripe fails we raise 502 — the dispute stays open so the admin can retry.
     original_fare = Decimal(str(dispute.get("original_fare") or 0))
     if req.refund_amount and req.refund_amount > original_fare:
         raise HTTPException(
@@ -178,7 +179,7 @@ async def admin_resolve_dispute(
     refund_result: Dict[str, Any] = {}
     if req.resolution in ("approved", "partial_refund") and req.refund_amount:
         refund_amount_cents = int(float(req.refund_amount) * 100)
-        ride = await db.find_one("rides", {"id": dispute.get("ride_id")})
+        ride = await db_supabase.get_ride(dispute.get("ride_id"))
         payment_intent_id = (ride or {}).get("stripe_charge_id") or (ride or {}).get("payment_intent_id")
 
         if not payment_intent_id:
@@ -193,7 +194,7 @@ async def admin_resolve_dispute(
             settings = await get_app_settings()
             stripe_secret = settings.get("stripe_secret_key", "")
             if not stripe_secret:
-                raise HTTPException(status_code=500, detail="Stripe not configured")
+                raise HTTPException(status_code=503, detail="Stripe not configured")
 
             try:
                 refund = _stripe.Refund.create(
@@ -215,7 +216,9 @@ async def admin_resolve_dispute(
                 )
             except Exception as refund_err:
                 logger.error(f"[REFUND] Stripe refund failed for dispute {dispute_id}: {refund_err}")
-                raise HTTPException(status_code=502, detail=f"Stripe refund failed — retry to reuse idempotency key") from refund_err
+                raise HTTPException(
+                    status_code=502, detail="Stripe refund failed — retry to reuse idempotency key"
+                ) from refund_err
 
     # Stripe succeeded (or not required) — persist the resolved status
     update_data: Dict[str, Any] = {

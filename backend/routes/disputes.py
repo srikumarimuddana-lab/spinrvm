@@ -127,11 +127,18 @@ async def admin_get_disputes(
         "disputes", filters, order="created_at", desc=True, limit=limit, offset=offset
     )
 
-    # Enrich with user + ride info
+    # Batch-fetch users and rides in 2 queries instead of 2×N per-dispute calls.
+    user_ids = list({d["user_id"] for d in disputes if d.get("user_id")})
+    ride_ids = list({d["ride_id"] for d in disputes if d.get("ride_id")})
+    users = await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=len(user_ids)) if user_ids else []
+    rides = await db_supabase.get_rows("rides", {"id": {"$in": ride_ids}}, limit=len(ride_ids)) if ride_ids else []
+    users_by_id = {u["id"]: u for u in (users or [])}
+    rides_by_id = {r["id"]: r for r in (rides or [])}
+
     enriched = []
     for d in disputes:
-        user = await db_supabase.get_user_by_id(d.get("user_id")) if d.get("user_id") else None
-        ride = await db_supabase.get_ride(d.get("ride_id")) if d.get("ride_id") else None
+        user = users_by_id.get(d.get("user_id"))
+        ride = rides_by_id.get(d.get("ride_id"))
         enriched.append(
             {
                 **d,

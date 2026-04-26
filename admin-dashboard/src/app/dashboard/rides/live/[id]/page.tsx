@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import { getLiveRideData } from "@/lib/api";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Phone, Car, User, MapPin, Radio, Navigation } from "lucide-react";
+import { ArrowLeft, Phone, Car, User, Radio } from "lucide-react";
 import dynamic from "next/dynamic";
 
 const LiveRideMap = dynamic(() => import("./live-map"), { ssr: false });

@@ -1,7 +1,9 @@
 # Module: Admin Panel
 
-**Status:** Not yet audited
-**Root folder:** `backend/routes/admin/` + admin frontend (location TBD)
+**Status:** Plan v1 ready — Phase A–E execution pending (2026-04-23)
+**Root folder:** `backend/routes/admin/` + `admin-dashboard/` (Next.js 16)
+**Audit plan:** `reports/audits/2026-04-23-admin-panel-audit-plan-v1.md`
+**Applicable dimensions:** 16 (D01–D04, D07, D09–D12, D14–D15, D17–D22)
 
 ---
 
@@ -29,7 +31,13 @@ Admin panels are frequently the highest-risk attack surface in any system:
 | 11 | Security headers | Required | Admin should be IP-restricted |
 | 12 | Compliance | Required | Admin access to PII must be logged |
 | 14 | Performance | Required | Bulk queries can bring down the DB |
-| 15 | Accessibility | If web-based | |
+| 15 | Accessibility | Required | Admin is web-based (Next.js); WCAG 2.1 AA applies |
+| 17 | Observability | Required | Admin action logs, structured audit trail, SLIs for bulk ops |
+| 18 | DR / BCP | Required | Admin-initiated bulk ops must be recoverable |
+| 19 | Fraud | Required | Admin account takeover, insider threat, break-glass misuse |
+| 20 | Financial reconciliation | Required | Admin-initiated payouts, refunds, wallet adjustments must reconcile |
+| 21 | Threat model / STRIDE | CRITICAL | Blast radius = org-wide; insider threat, privilege escalation |
+| 22 | Third-party risk | Required | Admin dashboard vendor chain (Next.js deps, analytics, support tools) |
 
 ---
 

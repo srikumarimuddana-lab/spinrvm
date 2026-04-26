@@ -32,7 +32,6 @@ export default function LostAndFoundTab() {
     const [search, setSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
     const [areaFilter, setAreaFilter] = useState("all");
-    const [selected, setSelected] = useState<any>(null);
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editDialog, setEditDialog] = useState(false);
     const [editing, setEditing] = useState<any>(null);

@@ -1,0 +1,35 @@
+#!/bin/sh
+# Pre-commit hook: lint staged files only so CI stays fast.
+# Husky runs this automatically after `npx husky install`.
+
+set -e
+
+# ── Secret scanning: gitleaks on staged files ──────────────────────────────
+# Install once: brew install gitleaks  OR  https://github.com/gitleaks/gitleaks
+if command -v gitleaks >/dev/null 2>&1; then
+    echo "▶ gitleaks protect (staged)"
+    gitleaks protect --staged --config .gitleaks.toml --redact
+else
+    echo "⚠ gitleaks not installed — skipping secret scan (install: brew install gitleaks)"
+fi
+
+# ── Python: ruff on staged backend/ files ──────────────────────────────────
+STAGED_PY=$(git diff --cached --name-only --diff-filter=ACM | grep '^backend/.*\.py$' || true)
+if [ -n "$STAGED_PY" ]; then
+    echo "▶ ruff check (staged backend/*.py)"
+    # Run from repo root so ruff.toml in backend/ is resolved correctly.
+    ruff check $STAGED_PY
+    ruff format --check $STAGED_PY
+fi
+
+# ── TypeScript: eslint on staged admin-dashboard/src files ─────────────────
+STAGED_TS=$(git diff --cached --name-only --diff-filter=ACM | grep '^admin-dashboard/src/.*\.\(ts\|tsx\)$' || true)
+if [ -n "$STAGED_TS" ]; then
+    echo "▶ eslint (staged admin-dashboard/src)"
+    # Convert repo-relative paths to admin-dashboard-relative before passing.
+    TS_FILES=$(echo "$STAGED_TS" | sed 's|^admin-dashboard/||')
+    cd admin-dashboard
+    # --max-warnings -1: only fail on errors, not pre-existing warnings.
+    npx --no-install eslint --max-warnings -1 $TS_FILES
+    cd ..
+fi

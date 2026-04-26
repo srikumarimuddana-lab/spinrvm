@@ -152,7 +152,7 @@ export default function MonitoringPage() {
         break;
       }
       case "ride_completed": {
-        const ride = ridesMapRef.current.get(event.ride_id);
+        const _ride = ridesMapRef.current.get(event.ride_id);
         ridesMapRef.current.delete(event.ride_id);
         mapHandlesRef.current?.removeRideMarkers(event.ride_id);
         refreshCounts();

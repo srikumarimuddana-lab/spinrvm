@@ -27,6 +27,29 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
             // For the login endpoint, fall through to the !res.ok handler so
             // "Invalid credentials" is shown to the user rather than "Unauthorized".
             if (path !== "/api/admin/auth/login") {
+                const store = useAuthStore.getState();
+                // Attempt one silent refresh before giving up. This handles the
+                // case where the access token expired mid-session and the timer
+                // hasn't fired yet (e.g. the tab was backgrounded).
+                if (store.refresh_token) {
+                    await store.silentRefresh();
+                    const newToken = useAuthStore.getState().token;
+                    if (newToken) {
+                        const retryHeaders = { ...headers, Authorization: `Bearer ${newToken}` };
+                        const retryRes = await fetch(url, { ...options, headers: retryHeaders });
+                        if (retryRes.ok) return retryRes.json() as T;
+                        if (retryRes.status !== 401) {
+                            const retryBody = await retryRes.json().catch(() => ({}));
+                            const retryMsg =
+                                retryBody.detail ||
+                                retryBody.error?.detail ||
+                                retryBody.error?.message ||
+                                retryBody.message ||
+                                retryRes.statusText;
+                            throw new Error(retryMsg);
+                        }
+                    }
+                }
                 useAuthStore.getState().logout();
                 if (typeof window !== "undefined") {
                     window.location.href = "/login";
@@ -78,6 +101,9 @@ export interface AuthResponse {
 
 export interface AdminLoginResponse {
     token: string;
+    refresh_token: string;
+    access_expires_at: string;
+    refresh_expires_at: string;
     user: {
         id: string;
         email: string;

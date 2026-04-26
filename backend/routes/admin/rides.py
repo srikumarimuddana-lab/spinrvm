@@ -450,19 +450,10 @@ async def admin_get_ride_invoice(ride_id: str):
         "driver_phone": ride.get("driver_phone", ""),
         "driver_vehicle": ride.get("driver_vehicle", ""),
         "driver_license_plate": ride.get("driver_license_plate", ""),
-        "pickup_lat": ride.get("pickup_lat"),
-        "pickup_lng": ride.get("pickup_lng"),
-        "dropoff_lat": ride.get("dropoff_lat"),
-        "dropoff_lng": ride.get("dropoff_lng"),
         "actual_distance_km": ride.get("actual_distance_km"),
-        # Privacy: only expose trail phases relevant to the paid ride.
-        # Filters out `online_idle` and any other pre-trip wandering so the
-        # invoice cannot leak the driver's unrelated movements.
-        "location_trail": [
-            p
-            for p in (ride.get("location_trail") or [])
-            if p.get("tracking_phase") in ("navigating_to_pickup", "trip_in_progress")
-        ],
+        # GPS coordinates are omitted (F-42/PIPEDA data minimisation).
+        # The route map image is served separately via /rides/{id}/route-map.png,
+        # which keeps raw coordinates server-side and returns only a PNG.
     }
 
 

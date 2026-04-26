@@ -159,7 +159,6 @@ async def get_fare_split(split_id: str, current_user: dict = Depends(get_current
         "participants": [
             {
                 "id": p["id"],
-                "phone": p.get("phone"),
                 "user_id": p.get("user_id"),
                 "share_amount": p["share_amount"],
                 "status": p["status"],
@@ -184,6 +183,12 @@ async def get_fare_split_for_ride(ride_id: str, current_user: dict = Depends(get
         limit=10,
     )
 
+    user_id = current_user["id"]
+    is_owner = split.get("requester_id") == user_id
+    is_participant = any(p.get("user_id") == user_id for p in participants)
+    if not (is_owner or is_participant):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     share_amount = float(_d(split["total_fare"] / split["split_count"]))
 
     return {
@@ -197,7 +202,6 @@ async def get_fare_split_for_ride(ride_id: str, current_user: dict = Depends(get
             "participants": [
                 {
                     "id": p["id"],
-                    "phone": p.get("phone"),
                     "share_amount": p["share_amount"],
                     "status": p["status"],
                 }

@@ -207,13 +207,13 @@ rides_by_id = {r["id"]: r for r in (rides or [])}
 
 ## Checklist
 
-- [ ] P1-1 Add UNIQUE(user_id, ride_id) to loyalty_transactions; handle conflict as no-op
-- [ ] P1-2 Replace promo uses increment with atomic conditional UPDATE
-- [ ] P1-3 Add idempotency_key=f"refund-dispute-{dispute_id}" to stripe.Refund.create()
-- [ ] P1-4 Add le=500 bound on promo discount_value (le=100 for percentage type)
-- [ ] P1-5 Move Stripe refund call before DB status update in admin_resolve_dispute
-- [ ] P1-6 Reverse loyalty redemption order; add compensating credit on failure
-- [ ] P1-7 Add ownership check to GET /fare-split/ride/{ride_id}; remove phone from response
+- [x] P1-1 Add UNIQUE(user_id, ride_id) to loyalty_transactions; handle conflict as no-op
+- [x] P1-2 Replace promo uses increment with atomic conditional UPDATE
+- [x] P1-3 Add idempotency_key=f"refund-dispute-{dispute_id}" to stripe.Refund.create()
+- [x] P1-4 Add le=500 bound on promo discount_value (le=100 for percentage type)
+- [x] P1-5 Move Stripe refund call before DB status update in admin_resolve_dispute
+- [x] P1-6 Reverse loyalty redemption order; add compensating credit on failure
+- [x] P1-7 Add ownership check to GET /fare-split/ride/{ride_id}; remove phone from response
 - [ ] P1-8 Add company ownership check or document global-admin assumption in corporate endpoints
-- [ ] P1-9 Remove/mask phone_number from dispute and fare-split response payloads
+- [x] P1-9 Remove/mask phone_number from dispute and fare-split response payloads
 - [ ] P1-10 Replace per-dispute DB loop with batch user + ride fetch in admin_get_disputes

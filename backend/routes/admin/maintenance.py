@@ -1,6 +1,5 @@
 import logging
 import re
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
@@ -23,7 +22,7 @@ router = APIRouter()
 
 
 @router.post("/maintenance/cleanup-location-history")
-async def admin_cleanup_location_history(days: int = 30):
+async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
     """Delete old driver_location_history rows.
 
     By default deletes rows older than 30 days. On ride completion the
@@ -276,25 +275,9 @@ async def get_audit_logs(
         term = re.escape(search.strip())
         if term:
             filters["$or"] = [
-                {"user_email": {"$regex": term, "$options": "i"}},
-                {"entity_id": {"$regex": term, "$options": "i"}},
+                {"actor_id": {"$regex": term, "$options": "i"}},
+                {"resource_id": {"$regex": term, "$options": "i"}},
                 {"details": {"$regex": term, "$options": "i"}},
             ]
     logs = await db_supabase.get_rows("audit_logs", filters, order="created_at", desc=True, limit=limit, offset=offset)
     return logs
-
-
-async def log_audit(action: str, entity_type: str, entity_id: str, user_email: str, details: str = ""):
-    """Record an audit log entry. Call from admin endpoints."""
-    await db_supabase.insert_one(
-        "audit_logs",
-        {
-            "id": str(uuid.uuid4()),
-            "action": action,  # created, updated, deleted, login, status_change
-            "entity_type": entity_type,  # driver, user, ride, promotion, service_area, staff, setting
-            "entity_id": entity_id,
-            "user_email": user_email,
-            "details": details,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )

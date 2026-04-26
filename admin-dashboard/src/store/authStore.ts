@@ -12,9 +12,15 @@ const COOKIE_NAME = 'admin_token';
 const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 8; // 8 hours — standard admin session
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 const REFRESH_BEFORE_EXPIRY_MS = 5 * 60 * 1000; // refresh 5 min before access token expires
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes (F-19)
 
 let _refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
+// NOTE (F-02): document.cookie cannot set HttpOnly — the flag is only settable
+// by the server. A full fix requires a Next.js API route (/api/auth/set-cookie)
+// that accepts the token and responds with Set-Cookie: HttpOnly; Secure.
+// Until that API route is implemented, SameSite=Strict reduces XSS exposure
+// by blocking cross-site requests from carrying this cookie.
 function setAuthCookie(token: string) {
     if (typeof document === 'undefined') return;
     const secure = typeof window !== 'undefined' && window.location.protocol === 'https:';
@@ -22,7 +28,7 @@ function setAuthCookie(token: string) {
         `${COOKIE_NAME}=${encodeURIComponent(token)}`,
         'path=/',
         `max-age=${COOKIE_MAX_AGE_SECONDS}`,
-        'SameSite=Lax',
+        'SameSite=Strict',
     ];
     if (secure) parts.push('Secure');
     document.cookie = parts.join('; ');
@@ -30,7 +36,7 @@ function setAuthCookie(token: string) {
 
 function clearAuthCookie() {
     if (typeof document === 'undefined') return;
-    document.cookie = `${COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
+    document.cookie = `${COOKIE_NAME}=; path=/; max-age=0; SameSite=Strict`;
 }
 
 function cancelRefreshTimer() {
@@ -45,6 +51,43 @@ function scheduleTokenRefresh(expiryIso: string, silentRefresh: () => Promise<vo
     const msUntilExpiry = new Date(expiryIso).getTime() - Date.now();
     const delay = Math.max(0, msUntilExpiry - REFRESH_BEFORE_EXPIRY_MS);
     _refreshTimer = setTimeout(silentRefresh, delay);
+}
+
+// ── Idle session timeout (F-19) ─────────────────────────────────
+// Track user activity and auto-logout after IDLE_TIMEOUT_MS of inactivity.
+// Event listeners are registered in the browser only (SSR-safe guard).
+let _idleTimer: ReturnType<typeof setTimeout> | null = null;
+let _idleLogoutFn: (() => void) | null = null;
+
+const _ACTIVITY_EVENTS = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'] as const;
+
+function _resetIdleTimer() {
+    if (!_idleLogoutFn) return;
+    if (_idleTimer) clearTimeout(_idleTimer);
+    _idleTimer = setTimeout(_idleLogoutFn, IDLE_TIMEOUT_MS);
+}
+
+function startIdleWatch(logoutFn: () => void) {
+    if (typeof window === 'undefined') return;
+    stopIdleWatch();
+    _idleLogoutFn = logoutFn;
+    for (const evt of _ACTIVITY_EVENTS) {
+        window.addEventListener(evt, _resetIdleTimer, { passive: true });
+    }
+    _idleTimer = setTimeout(_idleLogoutFn, IDLE_TIMEOUT_MS);
+}
+
+function stopIdleWatch() {
+    if (_idleTimer) {
+        clearTimeout(_idleTimer);
+        _idleTimer = null;
+    }
+    if (typeof window !== 'undefined') {
+        for (const evt of _ACTIVITY_EVENTS) {
+            window.removeEventListener(evt, _resetIdleTimer);
+        }
+    }
+    _idleLogoutFn = null;
 }
 
 interface User {
@@ -91,6 +134,11 @@ export const useAuthStore = create<AuthState>()(
                     isAuthenticated: !!user,
                     isLoading: false
                 });
+                if (user) {
+                    startIdleWatch(get().logout);
+                } else {
+                    stopIdleWatch();
+                }
             },
 
             setToken: (token) => {
@@ -116,6 +164,7 @@ export const useAuthStore = create<AuthState>()(
 
             logout: () => {
                 cancelRefreshTimer();
+                stopIdleWatch();
                 clearAuthCookie();
                 set({
                     user: null,
@@ -149,6 +198,8 @@ export const useAuthStore = create<AuthState>()(
                     set({ token: data.token, refresh_token: data.refresh_token });
                     setAuthCookie(data.token);
                     scheduleTokenRefresh(data.access_expires_at, get().silentRefresh);
+                    // Keep the idle watch alive after a silent token refresh.
+                    startIdleWatch(get().logout);
                 } catch {
                     get().logout();
                 }
@@ -177,6 +228,7 @@ export const useAuthStore = create<AuthState>()(
                                 isAuthenticated: true,
                                 isLoading: false
                             });
+                            startIdleWatch(get().logout);
                         } else {
                             get().logout();
                         }

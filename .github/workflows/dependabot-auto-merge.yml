@@ -1,0 +1,55 @@
+name: Dependabot auto-merge
+
+# Automatically approve and enable auto-merge for Dependabot PRs that only
+# bump patch versions. Minor/major bumps still require human review.
+#
+# Requirements for auto-merge to actually land:
+#   1. Branch protection on `main` must have "Require status checks to pass"
+#      — the merge is queued and only executes after all required checks go green.
+#   2. "Allow auto-merge" must be enabled in repo Settings → General.
+#
+# To extend to minor updates for a specific ecosystem, add another `if` block
+# matching update-type == 'version-update:semver-minor' and the desired ecosystem.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: Auto-merge Dependabot patch updates
+    runs-on: ubuntu-latest
+    # Only run for Dependabot PRs
+    if: github.actor == 'dependabot[bot]'
+
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Auto-approve patch updates for all ecosystems.
+      # Security-critical libraries (cryptography, PyJWT, stripe) are grouped
+      # in dependabot.yml; they follow the same rule — patches auto-merge,
+      # minors/majors need a human reviewer.
+      - name: Approve patch update
+        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr review --approve "$PR_URL"
+
+      - name: Enable auto-merge for patch update
+        if: steps.meta.outputs.update-type == 'version-update:semver-patch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PACKAGE_ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
+        run: |
+          gh pr merge --auto --squash "$PR_URL"
+          echo "Auto-merge enabled for $PR_URL (${PACKAGE_ECOSYSTEM} patch)"

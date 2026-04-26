@@ -23,13 +23,13 @@ Code under test: backend/routes/rides.py::create_ride (~line 685)
 Run:
     pytest backend/tests/test_e16_surge_boundary.py -v
 """
+
 from __future__ import annotations
 
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 RIDER_ID = "rider_e16"
 RIDE_ID = "ride_e16_001"
@@ -52,6 +52,7 @@ def _fare_info(surge: float = 1.0) -> dict:
 
 def _body(token: str | None = None):
     from backend.schemas import CreateRideRequest
+
     return CreateRideRequest(
         vehicle_type_id="economy",
         pickup_address="123 Main St",
@@ -69,10 +70,16 @@ def _request():
     return req
 
 
-def _sign_token(rider_id: str = RIDER_ID, surge: float = 1.5,
-                vehicle_type: str = "economy", ttl: int = 300,
-                now: float | None = None, **coord_overrides) -> str:
+def _sign_token(
+    rider_id: str = RIDER_ID,
+    surge: float = 1.5,
+    vehicle_type: str = "economy",
+    ttl: int = 300,
+    now: float | None = None,
+    **coord_overrides,
+) -> str:
     from backend.utils.estimate_token import sign_estimate_token
+
     coords = {**_PICKUP, **_DROPOFF, **coord_overrides}
     return sign_estimate_token(
         rider_id=rider_id,
@@ -100,35 +107,39 @@ async def _call_create_ride(body, current_surge: float = 1.0):
         with (
             patch("backend.routes.rides.db_supabase.find_one", AsyncMock(return_value=None)),
             patch("backend.routes.rides.db.find_one", AsyncMock(return_value=rider_row)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=[
-                [],               # no active ride
-                [],               # service_areas (airport check)
-                [{"id": "economy"}],  # vehicle_types
-            ])),
-            patch("backend.routes.rides._fares_for_location_impl",
-                  AsyncMock(return_value=[_fare_info(current_surge)])),
-            patch("backend.routes.rides.calculate_airport_fee",
-                  AsyncMock(return_value={"airport_fee": 0.0})),
-            patch("backend.routes.rides.calculate_all_fees",
-                  AsyncMock(return_value={"fees_total": 0.0, "tax_amount": 0.0})),
-            patch("backend.routes.rides.db_supabase.insert_ride",
-                  AsyncMock(side_effect=_capture)),
+            patch(
+                "backend.routes.rides.db_supabase.get_rows",
+                AsyncMock(
+                    side_effect=[
+                        [],  # no active ride
+                        [],  # service_areas (airport check)
+                        [{"id": "economy"}],  # vehicle_types
+                    ]
+                ),
+            ),
+            patch("backend.routes.rides._fares_for_location_impl", AsyncMock(return_value=[_fare_info(current_surge)])),
+            patch("backend.routes.rides.calculate_airport_fee", AsyncMock(return_value={"airport_fee": 0.0})),
+            patch(
+                "backend.routes.rides.calculate_all_fees",
+                AsyncMock(return_value={"fees_total": 0.0, "tax_amount": 0.0}),
+            ),
+            patch("backend.routes.rides.db_supabase.insert_ride", AsyncMock(side_effect=_capture)),
             patch("backend.routes.rides.match_driver_to_ride", AsyncMock()),
-            patch("backend.routes.rides.db_supabase.get_ride",
-                  AsyncMock(return_value={"id": RIDE_ID, "status": "searching"})),
-            patch("backend.routes.rides.asyncio.create_task",
-                  lambda coro: coro.close()),
+            patch(
+                "backend.routes.rides.db_supabase.get_ride",
+                AsyncMock(return_value={"id": RIDE_ID, "status": "searching"}),
+            ),
+            patch("backend.routes.rides.asyncio.create_task", lambda coro: coro.close()),
             patch("backend.routes.rides.validate_ride_location", return_value=None),
         ):
-            await rides_mod.create_ride(
-                request=_request(), body=body, current_user={"id": RIDER_ID}
-            )
+            await rides_mod.create_ride(request=_request(), body=body, current_user={"id": RIDER_ID})
         return inserted[0] if inserted else None, None
     except Exception as exc:
         return None, exc
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.e2e
 @pytest.mark.asyncio

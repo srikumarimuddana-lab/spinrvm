@@ -13,7 +13,7 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Users, Wifi, WifiOff, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause } from "lucide-react";
+import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause } from "lucide-react";
 import DriverStatsCards from "./_components/driver-stats-cards";
 import DriverCharts from "./_components/driver-charts";
 import AreaStatsTable from "./_components/area-stats-table";
@@ -46,7 +46,6 @@ export default function DriversPage() {
     const [sortKey, setSortKey] = useState<string>("created_at");
     const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
     const [selected, setSelected] = useState<any>(null);
-    const [verifying, setVerifying] = useState(false);
     const [driverDocs, setDriverDocs] = useState<any[]>([]);
     const [docsLoading, setDocsLoading] = useState(false);
     const [docBusy, setDocBusy] = useState<string | null>(null);
@@ -174,12 +173,6 @@ export default function DriversPage() {
         setReviewExpiry(""); setReviewReason("");
     };
     const confirmReview = async () => { if (!reviewingDoc) return; await handleReviewDoc(reviewingDoc.id, reviewingDoc.action, reviewReason || undefined, reviewExpiry || undefined); setReviewingDoc(null); };
-
-    const handleVerify = async (driverId: string, verified: boolean) => {
-        setVerifying(true);
-        try { const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? ""; const token = (await import("@/store/authStore")).useAuthStore.getState().token; await fetch(`${API_BASE}/api/admin/drivers/${driverId}/verify`, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` }, body: JSON.stringify({ verified }) }); loadData(); loadDrivers(); if (selected?.id === driverId) setSelected({ ...selected, is_verified: verified }); } catch {}
-        setVerifying(false);
-    };
 
     const startEditing = () => { if (!selected) return; setEditForm({ first_name: selected.first_name || "", last_name: selected.last_name || "", email: selected.email || "", phone: selected.phone || "", city: selected.city || "", service_area_id: selected.service_area_id || "", vehicle_type_id: selected.vehicle_type_id || "", vehicle_make: selected.vehicle_make || "", vehicle_model: selected.vehicle_model || "", vehicle_color: selected.vehicle_color || "", vehicle_year: selected.vehicle_year || "", license_plate: selected.license_plate || "", vehicle_vin: selected.vehicle_vin || "" }); setEditing(true); };
 
@@ -816,7 +809,7 @@ export default function DriversPage() {
                                 </label>
                                 <Input type="date" value={reviewExpiry} onChange={e => setReviewExpiry(e.target.value)} className="w-full" />
                                 {reviewingDoc?.requiresExpiry && !reviewExpiry && (
-                                    <p className="text-xs text-red-500 mt-1 flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> Expiry date is required for this document type. This will update the driver's profile.</p>
+                                    <p className="text-xs text-red-500 mt-1 flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> Expiry date is required for this document type. This will update the driver&apos;s profile.</p>
                                 )}
                                 {!reviewingDoc?.requiresExpiry && <p className="text-xs text-muted-foreground mt-1">Leave empty if no expiry.</p>}
                             </div>

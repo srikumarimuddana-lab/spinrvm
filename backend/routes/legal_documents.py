@@ -9,7 +9,7 @@ exists — keeps the rider/driver legal screens rendering during rollout.
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Query
 
 try:
     from .. import db_supabase

@@ -82,7 +82,10 @@ async def request_data_export(current_user: dict = Depends(get_current_user)):
         await db_supabase.insert_one("data_export_requests", export_record)
     except Exception as e:
         logger.warning(f"Could not record data export request: {e}")
-    return {"success": True, "message": "Data export requested. You will receive an email with a download link within 24 hours."}
+    return {
+        "success": True,
+        "message": "Data export requested. You will receive an email with a download link within 24 hours.",
+    }
 
 
 @api_router.delete("/account")
@@ -91,8 +94,7 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     logger.info(f"Account deletion (PIPEDA) requested for user {user_id}")
 
-    grace_period_end = (datetime.now(timezone.utc).replace(microsecond=0) +
-                        timedelta(days=30)).isoformat()
+    grace_period_end = (datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=30)).isoformat()
     now = datetime.now(timezone.utc).isoformat()
     try:
         await db_supabase.update_one(
@@ -102,10 +104,15 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
         )
         await db_supabase.update_one("drivers", {"user_id": user_id}, {"deleted_at": now})
         logger.info(f"Account deletion scheduled for user {user_id} (grace period until {grace_period_end})")
-        return {"success": True, "message": "Account deletion scheduled. Your account will be permanently deleted after 30 days."}
+        return {
+            "success": True,
+            "message": "Account deletion scheduled. Your account will be permanently deleted after 30 days.",
+        }
     except Exception as e:
         logger.error(f"Account deletion failed for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to schedule account deletion. Please contact support.") from e
+        raise HTTPException(
+            status_code=500, detail="Failed to schedule account deletion. Please contact support."
+        ) from e
 
 
 @api_router.delete("/profile")

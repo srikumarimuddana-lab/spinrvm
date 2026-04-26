@@ -39,7 +39,7 @@ export default function RidesPage() {
 
     useEffect(() => {
         Promise.all([loadRides(0, statusFilter), getServiceAreas().catch(() => [])])
-            .then(([_, a]) => { if (a) setAreas(a as any); })
+            .then(([, a]) => { if (a) setAreas(a as any); })
             .catch(() => {});
     }, [loadRides, statusFilter]);
 

@@ -14,13 +14,13 @@ shared/api/__tests__/client.refresh.test.ts.
 Run:
     pytest backend/tests/test_p1_token_refresh.py -v
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch, sentinel
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 USER_ID = "user_p1_11"
 OLD_REFRESH_ROW_ID = "rtk-row-001"
@@ -51,6 +51,7 @@ def _user_row() -> dict:
 # POST /auth/refresh — token rotation
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 class TestRefreshAccessToken:
     """Pins the refresh endpoint's happy-path and failure modes.
@@ -77,6 +78,7 @@ class TestRefreshAccessToken:
             patch("backend.routes.auth.create_jwt_token", return_value="new-access-token-abc"),
             patch("backend.routes.auth.get_remote_address", return_value="127.0.0.1"),
         ):
+
             class _Body:
                 refresh_token = "old-refresh-raw"
 
@@ -91,8 +93,9 @@ class TestRefreshAccessToken:
     async def test_invalid_refresh_token_returns_401(self):
         """Revoked / unknown refresh tokens must return 401 without distinguishing
         between the failure modes (no oracle)."""
-        from backend.routes import auth as auth_mod
         from fastapi import HTTPException
+
+        from backend.routes import auth as auth_mod
 
         mock_request = MagicMock()
         mock_request.headers.get = MagicMock(return_value="")
@@ -101,6 +104,7 @@ class TestRefreshAccessToken:
             patch("backend.routes.auth.lookup_refresh_token", AsyncMock(return_value=None)),
             patch("backend.routes.auth.get_remote_address", return_value="127.0.0.1"),
         ):
+
             class _Body:
                 refresh_token = "bad-or-revoked-token"
 
@@ -112,8 +116,9 @@ class TestRefreshAccessToken:
     async def test_admin_audience_refresh_token_rejected(self):
         """Admin tokens must not be exchanged via the rider refresh endpoint —
         privilege escalation guard."""
-        from backend.routes import auth as auth_mod
         from fastapi import HTTPException
+
+        from backend.routes import auth as auth_mod
 
         mock_request = MagicMock()
         mock_request.headers.get = MagicMock(return_value="")
@@ -125,6 +130,7 @@ class TestRefreshAccessToken:
             ),
             patch("backend.routes.auth.get_remote_address", return_value="127.0.0.1"),
         ):
+
             class _Body:
                 refresh_token = "admin-refresh-token"
 
@@ -135,8 +141,9 @@ class TestRefreshAccessToken:
 
     async def test_user_not_in_db_returns_401(self):
         """If the user referenced by the refresh token no longer exists, 401."""
-        from backend.routes import auth as auth_mod
         from fastapi import HTTPException
+
+        from backend.routes import auth as auth_mod
 
         mock_request = MagicMock()
         mock_request.headers.get = MagicMock(return_value="")
@@ -146,6 +153,7 @@ class TestRefreshAccessToken:
             patch("backend.routes.auth.db.find_one", AsyncMock(return_value=None)),
             patch("backend.routes.auth.get_remote_address", return_value="127.0.0.1"),
         ):
+
             class _Body:
                 refresh_token = "valid-token-deleted-user"
 
@@ -175,6 +183,7 @@ class TestRefreshAccessToken:
             patch("backend.routes.auth.create_jwt_token", return_value="access-tok"),
             patch("backend.routes.auth.get_remote_address", return_value="127.0.0.1"),
         ):
+
             class _Body:
                 refresh_token = "old-raw"
 

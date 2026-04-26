@@ -7,8 +7,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import {
-    ShieldCheck, ShieldAlert, Ban, UserX, UserCheck, AlertTriangle,
-    Pause, Play, XCircle, CheckCircle, Loader2, ShieldOff,
+    ShieldCheck, ShieldAlert, Ban, AlertTriangle,
+    Pause, Play, CheckCircle, Loader2, ShieldOff,
 } from "lucide-react";
 
 type DriverStatus = "pending" | "active" | "needs_review" | "suspended" | "banned";

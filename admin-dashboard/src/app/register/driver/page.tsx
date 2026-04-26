@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { User, Car, FileText, Check, Upload, AlertCircle, ChevronRight, ChevronLeft, Loader2 } from "lucide-react";
+import { Car, FileText, Check, AlertCircle, ChevronRight, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -306,7 +306,7 @@ export default function DriverRegistrationPage() {
             case 4: return (
                 <div className="space-y-6">
                     <div className="space-y-4 border rounded-lg p-4">
-                        <h4 className="font-medium flex items-center gap-2"><FileText className="h-4 w-4" /> Driver's License</h4>
+                        <h4 className="font-medium flex items-center gap-2"><FileText className="h-4 w-4" /> Driver&apos;s License</h4>
                         <div className="grid gap-4 sm:grid-cols-2">
                             <div className="space-y-2">
                                 <Label>License Number</Label>

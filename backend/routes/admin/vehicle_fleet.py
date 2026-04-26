@@ -91,17 +91,13 @@ async def admin_delete_vehicle_type(type_id: str):
     Service Areas → <area> → Vehicle Pricing, then re-tries the
     delete.
     """
-    vt = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("vehicle_types", {"id": type_id}, limit=1)
-    )
+    vt = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("vehicle_types", {"id": type_id}, limit=1))
     if not vt:
         raise HTTPException(status_code=404, detail="Vehicle type not found")
     vt_name = vt.get("name") or ""
 
     # fare_configs referencing this type
-    fare_cfg_rows = await db_supabase.get_rows(
-        "fare_configs", {"vehicle_type_id": type_id}, limit=500
-    )
+    fare_cfg_rows = await db_supabase.get_rows("fare_configs", {"vehicle_type_id": type_id}, limit=500)
     fare_cfg_count = len(fare_cfg_rows or [])
 
     # service_areas whose vehicle_pricing JSONB array contains a row

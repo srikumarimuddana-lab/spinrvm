@@ -101,7 +101,12 @@ async def use_favorite_route(favorite_id: str, current_user: dict = Depends(get_
     await db.update_one(
         "favorite_routes",
         {"id": favorite_id},
-        {"$set": {"use_count": (fav.get("use_count", 0) or 0) + 1, "last_used_at": datetime.now(timezone.utc).isoformat()}},
+        {
+            "$set": {
+                "use_count": (fav.get("use_count", 0) or 0) + 1,
+                "last_used_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
     )
     return fav
 

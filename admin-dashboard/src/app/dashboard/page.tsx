@@ -6,8 +6,7 @@ import { formatCurrency } from "@/lib/utils";
 import { useAuthStore } from "@/store/authStore";
 import {
     Car, Users, DollarSign, TrendingUp, Activity, UserCheck,
-    XCircle, Zap, CreditCard, Ticket, Gift, ArrowUpRight,
-    ArrowDownRight, Clock, MapPin,
+    XCircle, Zap, CreditCard, Gift, Clock, MapPin,
 } from "lucide-react";
 
 interface Stats {
@@ -72,7 +71,7 @@ export default function DashboardPage() {
                         {greeting()}, {user?.first_name || 'Admin'}
                     </h1>
                     <p className="text-sm text-muted-foreground mt-1">
-                        Here's what's happening with Spinr today.
+                        Here&apos;s what&apos;s happening with Spinr today.
                     </p>
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 px-3 py-1.5 rounded-full">

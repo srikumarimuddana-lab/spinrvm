@@ -24,10 +24,10 @@ from routes.corporate_wallet import router as corporate_wallet_router
 from routes.disputes import api_router as disputes_router
 from routes.drivers import api_router as drivers_router
 from routes.faqs import api_router as faqs_router
-from routes.legal_documents import api_router as legal_documents_router
 from routes.fare_split import api_router as fare_split_router
 from routes.fares import api_router as fares_router
 from routes.favorites import api_router as favorites_router
+from routes.legal_documents import api_router as legal_documents_router
 from routes.loyalty import api_router as loyalty_router
 from routes.notifications import api_router as notifications_router
 from routes.payments import api_router as payments_router

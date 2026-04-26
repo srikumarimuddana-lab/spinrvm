@@ -8,6 +8,7 @@ Uses app.dependency_overrides for auth and AsyncMock patches for all I/O.
 MagicMock is used for supabase-layer calls (run_sync pattern); AsyncMock for
 higher-level async DB helpers.
 """
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -63,6 +64,7 @@ def rider_override():
 #  Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _fake_fare_info():
     return {
         "vehicle_type": {"id": "vt_standard"},
@@ -103,12 +105,8 @@ def _mock_create_ride_deps(*, memberships=None, allowance=None, policy=None):
         "routes.rides.db_supabase.list_active_memberships_for_user": AsyncMock(
             return_value=memberships if memberships is not None else []
         ),
-        "routes.rides.db_supabase.get_member_allowance": AsyncMock(
-            return_value=allowance or {}
-        ),
-        "routes.rides.db_supabase.get_corporate_policy": AsyncMock(
-            return_value=policy or {}
-        ),
+        "routes.rides.db_supabase.get_member_allowance": AsyncMock(return_value=allowance or {}),
+        "routes.rides.db_supabase.get_corporate_policy": AsyncMock(return_value=policy or {}),
         "routes.rides.db_supabase.get_corporate_wallet_by_company": AsyncMock(
             return_value={"id": _WALLET_ID, "balance": 500.0}
         ),
@@ -131,6 +129,7 @@ def _apply_all_patches(patch_dict):
 # ─────────────────────────────────────────────────────────────────────────────
 #  A. create_ride() — corporate pre-dispatch
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def test_personal_ride_skips_corporate_block(test_client, rider_override):
     """No work_profile → list_active_memberships_for_user never called."""
@@ -181,8 +180,10 @@ def test_work_profile_allowance_low_returns_400(test_client, rider_override):
     """Remaining allowance too low and master fallback not allowed → 400 allowance_low."""
     membership = {"id": _MEMBER_ID, "company_id": _CORP_COMPANY_ID, "policy_override": False}
     allowance = {
-        "id": _ALLOWANCE_ID, "type": "fixed_recurring",
-        "amount": 1.00, "used": 0.99,
+        "id": _ALLOWANCE_ID,
+        "type": "fixed_recurring",
+        "amount": 1.00,
+        "used": 0.99,
     }
     policy = {"active": True, "allowed_payment_source": "allowance_only"}
     deps = _mock_create_ride_deps(memberships=[membership], allowance=allowance, policy=policy)
@@ -225,6 +226,7 @@ def test_work_profile_tags_ride_as_company_allowance(test_client, rider_override
 #  B. process_payment() — company_allowance branch
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _fake_corporate_ride(total_fare=25.0):
     return {
         "id": _RIDE_ID,
@@ -249,9 +251,7 @@ def _mock_process_payment_deps(*, allowance, membership=None):
     return {
         "routes.rides.db_supabase.get_ride": AsyncMock(return_value=_fake_corporate_ride()),
         "routes.rides.db.update_one": AsyncMock(return_value=MagicMock(modified_count=1)),
-        "routes.rides.db_supabase.list_active_memberships_for_user": AsyncMock(
-            return_value=[membership]
-        ),
+        "routes.rides.db_supabase.list_active_memberships_for_user": AsyncMock(return_value=[membership]),
         "routes.rides.db_supabase.get_member_allowance": AsyncMock(return_value=allowance),
         "routes.rides.db_supabase.get_corporate_wallet_by_company": AsyncMock(
             return_value={"id": _WALLET_ID, "balance": 1000.0}
@@ -261,12 +261,8 @@ def _mock_process_payment_deps(*, allowance, membership=None):
         "routes.rides.db_supabase.update_ride": AsyncMock(return_value=None),
         "routes.rides.db_supabase.get_user_by_id": AsyncMock(return_value=None),
         "routes.rides.db_supabase.get_driver_by_id": AsyncMock(return_value=None),
-        "routes.rides.corporate_allowance_service.apply_rollback": AsyncMock(
-            return_value={"transaction_id": "t1"}
-        ),
-        "routes.rides.corporate_wallet_service.apply_adjustment": AsyncMock(
-            return_value={"transaction_id": "t2"}
-        ),
+        "routes.rides.corporate_allowance_service.apply_rollback": AsyncMock(return_value={"transaction_id": "t1"}),
+        "routes.rides.corporate_wallet_service.apply_adjustment": AsyncMock(return_value={"transaction_id": "t2"}),
     }
 
 
@@ -297,21 +293,26 @@ def test_personal_ride_skips_corporate_payment_branch(test_client, rider_overrid
             AsyncMock(),
         ) as mock_allowance,
     ):
-        test_client.post(f"/api/v1/rides/{_RIDE_ID}/process-payment", json={"tip_amount": "0"}, headers=_APP_CHECK_HEADERS)
+        test_client.post(
+            f"/api/v1/rides/{_RIDE_ID}/process-payment", json={"tip_amount": "0"}, headers=_APP_CHECK_HEADERS
+        )
     mock_allowance.assert_not_called()
 
 
 def test_company_allowance_debits_allowance_fully_when_sufficient(test_client, rider_override):
     """Fare fully covered by allowance → allowance_debit=fare, master_debit=0."""
     allowance = {
-        "id": _ALLOWANCE_ID, "type": "fixed_recurring",
-        "amount": 200, "used": 0,
+        "id": _ALLOWANCE_ID,
+        "type": "fixed_recurring",
+        "amount": 200,
+        "used": 0,
     }
     deps = _mock_process_payment_deps(allowance=allowance)
     patchers, mocks = _apply_all_patches(deps)
     try:
         test_client.post(
-            f"/api/v1/rides/{_RIDE_ID}/process-payment", json={"tip_amount": "0"},
+            f"/api/v1/rides/{_RIDE_ID}/process-payment",
+            json={"tip_amount": "0"},
             headers=_APP_CHECK_HEADERS,
         )
     finally:
@@ -338,14 +339,17 @@ def test_company_allowance_debits_allowance_fully_when_sufficient(test_client, r
 def test_company_allowance_splits_when_allowance_partial(test_client, rider_override):
     """Only $10 remaining in allowance, ride is $25 → split $10/$15."""
     allowance = {
-        "id": _ALLOWANCE_ID, "type": "fixed_recurring",
-        "amount": 100, "used": 90,
+        "id": _ALLOWANCE_ID,
+        "type": "fixed_recurring",
+        "amount": 100,
+        "used": 90,
     }
     deps = _mock_process_payment_deps(allowance=allowance)
     patchers, mocks = _apply_all_patches(deps)
     try:
         test_client.post(
-            f"/api/v1/rides/{_RIDE_ID}/process-payment", json={"tip_amount": "0"},
+            f"/api/v1/rides/{_RIDE_ID}/process-payment",
+            json={"tip_amount": "0"},
             headers=_APP_CHECK_HEADERS,
         )
     finally:
@@ -367,8 +371,10 @@ def test_company_allowance_splits_when_allowance_partial(test_client, rider_over
 def test_company_allowance_debit_and_flag_on_allowance_only_policy(test_client, rider_override):
     """Allowance depleted + allowance_only policy → debit-and-flag, do not raise."""
     allowance = {
-        "id": _ALLOWANCE_ID, "type": "fixed_recurring",
-        "amount": 100, "used": 100,
+        "id": _ALLOWANCE_ID,
+        "type": "fixed_recurring",
+        "amount": 100,
+        "used": 100,
     }
     deps = _mock_process_payment_deps(allowance=allowance)
     deps["routes.rides.db_supabase.get_corporate_policy"] = AsyncMock(
@@ -377,7 +383,8 @@ def test_company_allowance_debit_and_flag_on_allowance_only_policy(test_client, 
     patchers, mocks = _apply_all_patches(deps)
     try:
         resp = test_client.post(
-            f"/api/v1/rides/{_RIDE_ID}/process-payment", json={"tip_amount": "0"},
+            f"/api/v1/rides/{_RIDE_ID}/process-payment",
+            json={"tip_amount": "0"},
             headers=_APP_CHECK_HEADERS,
         )
     finally:
@@ -396,14 +403,17 @@ def test_company_allowance_debit_and_flag_on_allowance_only_policy(test_client, 
 def test_company_allowance_unlimited_covers_full_fare(test_client, rider_override):
     """Unlimited allowance → allowance_debit = full fare, master_debit = 0."""
     allowance = {
-        "id": _ALLOWANCE_ID, "type": "unlimited",
-        "amount": None, "used": 0,
+        "id": _ALLOWANCE_ID,
+        "type": "unlimited",
+        "amount": None,
+        "used": 0,
     }
     deps = _mock_process_payment_deps(allowance=allowance)
     patchers, mocks = _apply_all_patches(deps)
     try:
         test_client.post(
-            f"/api/v1/rides/{_RIDE_ID}/process-payment", json={"tip_amount": "0"},
+            f"/api/v1/rides/{_RIDE_ID}/process-payment",
+            json={"tip_amount": "0"},
             headers=_APP_CHECK_HEADERS,
         )
     finally:
@@ -424,7 +434,8 @@ def test_company_allowance_missing_membership_returns_400(test_client, rider_ove
     patchers, _ = _apply_all_patches(deps)
     try:
         resp = test_client.post(
-            f"/api/v1/rides/{_RIDE_ID}/process-payment", json={"tip_amount": "0"},
+            f"/api/v1/rides/{_RIDE_ID}/process-payment",
+            json={"tip_amount": "0"},
             headers=_APP_CHECK_HEADERS,
         )
     finally:

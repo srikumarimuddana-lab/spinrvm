@@ -217,7 +217,7 @@ export default function PromotionsPage() {
     };
 
     // Re-fetch stats when range changes
-    useEffect(() => { fetchStats(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [usageDateRange]);
+    useEffect(() => { fetchStats(); }, [usageDateRange]);
 
     // Reset to page 0 when tab/search changes (debounce search)
     useEffect(() => {

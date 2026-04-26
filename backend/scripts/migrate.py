@@ -25,10 +25,10 @@ from pathlib import Path
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s %(levelname)-8s %(message)s',
-    datefmt='%H:%M:%S',
+    format="%(asctime)s %(levelname)-8s %(message)s",
+    datefmt="%H:%M:%S",
 )
-logger = logging.getLogger('migrate')
+logger = logging.getLogger("migrate")
 
 
 def get_db_connection():
@@ -45,8 +45,8 @@ def get_db_connection():
         logger.error("psycopg2 not installed. Run: pip install psycopg2-binary")
         sys.exit(1)
 
-    supabase_url = os.environ.get('SUPABASE_URL', '').rstrip('/')
-    service_role_key = os.environ.get('SUPABASE_SERVICE_ROLE_KEY', '')
+    supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    service_role_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 
     if not supabase_url or not service_role_key:
         logger.error(
@@ -58,16 +58,13 @@ def get_db_connection():
 
     # Extract project ref from URL (https://xxxx.supabase.co → xxxx)
     try:
-        project_ref = supabase_url.split('//')[1].split('.')[0]
+        project_ref = supabase_url.split("//")[1].split(".")[0]
     except IndexError:
         logger.error(f"Could not parse project ref from SUPABASE_URL: {supabase_url}")
         sys.exit(1)
 
-    host = f'db.{project_ref}.supabase.co'
-    dsn = (
-        f"host={host} port=5432 dbname=postgres "
-        f"user=postgres password={service_role_key} sslmode=require"
-    )
+    host = f"db.{project_ref}.supabase.co"
+    dsn = f"host={host} port=5432 dbname=postgres user=postgres password={service_role_key} sslmode=require"
     try:
         conn = psycopg2.connect(dsn)
         conn.autocommit = False
@@ -79,7 +76,7 @@ def get_db_connection():
 
 def get_migration_files(migrations_dir: Path) -> list:
     """Return sorted list of .sql files in the migrations directory."""
-    pattern = str(migrations_dir / '*.sql')
+    pattern = str(migrations_dir / "*.sql")
     files = sorted(glob.glob(pattern))
     return files
 
@@ -107,9 +104,7 @@ def apply_migration(conn, version: str, sql: str, dry_run: bool) -> bool:
         with conn.cursor() as cur:
             cur.execute(sql)
             cur.execute(
-                "INSERT INTO schema_migrations (version) VALUES (%s) "
-                "ON CONFLICT (version) DO NOTHING;",
-                (version,)
+                "INSERT INTO schema_migrations (version) VALUES (%s) ON CONFLICT (version) DO NOTHING;", (version,)
             )
         conn.commit()
         logger.info(f"  ✅  Applied: {version}")
@@ -121,18 +116,18 @@ def apply_migration(conn, version: str, sql: str, dry_run: bool) -> bool:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Spinr database migration runner')
+    parser = argparse.ArgumentParser(description="Spinr database migration runner")
     parser.add_argument(
-        '--dry-run',
-        action='store_true',
-        help='Print what would be applied without executing anything',
+        "--dry-run",
+        action="store_true",
+        help="Print what would be applied without executing anything",
     )
     args = parser.parse_args()
 
     # Resolve migrations directory
     script_dir = Path(__file__).parent
-    default_migrations_dir = script_dir.parent / 'migrations'
-    migrations_dir = Path(os.environ.get('MIGRATIONS_DIR', default_migrations_dir))
+    default_migrations_dir = script_dir.parent / "migrations"
+    migrations_dir = Path(os.environ.get("MIGRATIONS_DIR", default_migrations_dir))
 
     if not migrations_dir.is_dir():
         logger.error(f"Migrations directory not found: {migrations_dir}")
@@ -161,7 +156,7 @@ def main():
     logger.info(f"{len(pending)} migration(s) to apply:")
     failed = 0
     for version, filepath in pending:
-        sql = Path(filepath).read_text(encoding='utf-8')
+        sql = Path(filepath).read_text(encoding="utf-8")
         ok = apply_migration(conn, version, sql, args.dry_run)
         if not ok:
             failed += 1
@@ -181,5 +176,5 @@ def main():
         logger.info(f"\nDone. {applied_count}/{len(pending)} migration(s) applied successfully.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

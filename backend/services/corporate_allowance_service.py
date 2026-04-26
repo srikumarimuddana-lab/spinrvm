@@ -5,6 +5,7 @@ locks the master wallet + allowance rows atomically and writes paired ledger
 entries. Callers pass the master `wallet_id` and the target `allowance_id`;
 the RPC validates they exist before mutating anything.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
@@ -62,9 +63,14 @@ async def apply_grant(
     if amount <= 0:
         raise ValueError("grant amount must be positive")
     return await _apply(
-        wallet_id=wallet_id, allowance_id=allowance_id, member_id=member_id,
-        type_="allowance_grant", amount=amount,
-        actor_user_id=actor_user_id, notes=notes, floor=floor,
+        wallet_id=wallet_id,
+        allowance_id=allowance_id,
+        member_id=member_id,
+        type_="allowance_grant",
+        amount=amount,
+        actor_user_id=actor_user_id,
+        notes=notes,
+        floor=floor,
     )
 
 
@@ -78,9 +84,13 @@ async def apply_reset(
 ) -> Dict[str, Any]:
     """Zero out the `used` counter at the start of a new period."""
     return await _apply(
-        wallet_id=wallet_id, allowance_id=allowance_id, member_id=member_id,
-        type_="allowance_reset", amount=0,
-        actor_user_id=actor_user_id, notes=notes,
+        wallet_id=wallet_id,
+        allowance_id=allowance_id,
+        member_id=member_id,
+        type_="allowance_reset",
+        amount=0,
+        actor_user_id=actor_user_id,
+        notes=notes,
     )
 
 
@@ -96,7 +106,11 @@ async def apply_rollback(
     if amount <= 0:
         raise ValueError("rollback amount must be positive")
     return await _apply(
-        wallet_id=wallet_id, allowance_id=allowance_id, member_id=member_id,
-        type_="allowance_rollback", amount=amount,
-        actor_user_id=actor_user_id, notes=notes,
+        wallet_id=wallet_id,
+        allowance_id=allowance_id,
+        member_id=member_id,
+        type_="allowance_rollback",
+        amount=amount,
+        actor_user_id=actor_user_id,
+        notes=notes,
     )

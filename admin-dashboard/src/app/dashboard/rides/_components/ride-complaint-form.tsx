@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { createRideComplaint } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { FileWarning } from "lucide-react";
 
 const CATEGORIES = [

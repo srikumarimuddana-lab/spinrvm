@@ -85,10 +85,7 @@ async def create_payment_intent(
             if requested != ride_fare:
                 raise HTTPException(
                     status_code=400,
-                    detail=(
-                        f"Payment amount {requested} does not match "
-                        f"ride fare {ride_fare}"
-                    ),
+                    detail=(f"Payment amount {requested} does not match ride fare {ride_fare}"),
                 )
 
         amount = int(body.amount * 100)  # Convert dollars → cents
@@ -112,9 +109,7 @@ async def create_payment_intent(
         # Idempotency key ties this PaymentIntent to a specific ride + user so
         # a network retry after a timeout cannot create a second charge. (P2-8)
         idempotency_key = (
-            f"ride-{body.ride_id}-{current_user['id']}"
-            if body.ride_id
-            else f"intent-{current_user['id']}-{amount}"
+            f"ride-{body.ride_id}-{current_user['id']}" if body.ride_id else f"intent-{current_user['id']}-{amount}"
         )
         intent = stripe.PaymentIntent.create(
             **intent_params,
@@ -283,9 +278,23 @@ class AddCardRequest(BaseModel):
 # the request at all — before any logging, before JSON parsing by pydantic,
 # before touching Stripe. This is the PCI-DSS perimeter.
 _RAW_CARD_FIELDS = {
-    'card_number', 'cardNumber', 'card_no', 'number', 'pan', 'primary_account_number',
-    'cvv', 'cvv2', 'cvc', 'cvc2', 'security_code', 'card_security_code',
-    'expiry', 'expiration', 'expiration_date', 'exp_month', 'exp_year',
+    "card_number",
+    "cardNumber",
+    "card_no",
+    "number",
+    "pan",
+    "primary_account_number",
+    "cvv",
+    "cvv2",
+    "cvc",
+    "cvc2",
+    "security_code",
+    "card_security_code",
+    "expiry",
+    "expiration",
+    "expiration_date",
+    "exp_month",
+    "exp_year",
 }
 
 

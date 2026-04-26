@@ -1,4 +1,5 @@
 """Stripe webhook — corporate top-up branch."""
+
 import json
 from unittest.mock import AsyncMock, patch
 
@@ -39,19 +40,19 @@ def _post(test_client, event):
 def test_corporate_topup_webhook_credits_wallet(test_client):
     event = _event()
 
-    with patch(
-        "routes.webhooks.get_app_settings",
-        AsyncMock(return_value={"stripe_webhook_secret": "whsec_x", "stripe_secret_key": "sk_x"}),
-    ), patch(
-        "stripe.Webhook.construct_event", return_value=event
-    ), patch(
-        "routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)
-    ) as m_claim, patch(
-        "routes.webhooks.mark_stripe_event_processed", AsyncMock()
-    ) as m_mark, patch(
-        "services.corporate_wallet_service.apply_topup",
-        AsyncMock(return_value={"transaction_id": "t1", "balance_after": "500.00"}),
-    ) as m_apply:
+    with (
+        patch(
+            "routes.webhooks.get_app_settings",
+            AsyncMock(return_value={"stripe_webhook_secret": "whsec_x", "stripe_secret_key": "sk_x"}),
+        ),
+        patch("stripe.Webhook.construct_event", return_value=event),
+        patch("routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)) as m_claim,
+        patch("routes.webhooks.mark_stripe_event_processed", AsyncMock()) as m_mark,
+        patch(
+            "services.corporate_wallet_service.apply_topup",
+            AsyncMock(return_value={"transaction_id": "t1", "balance_after": "500.00"}),
+        ) as m_apply,
+    ):
         resp = _post(test_client, event)
 
     assert resp.status_code == 200, resp.text
@@ -72,16 +73,15 @@ def test_corporate_topup_webhook_credits_wallet(test_client):
 def test_corporate_topup_duplicate_event_is_noop(test_client):
     event = _event()
 
-    with patch(
-        "routes.webhooks.get_app_settings",
-        AsyncMock(return_value={"stripe_webhook_secret": "whsec_x", "stripe_secret_key": "sk_x"}),
-    ), patch(
-        "stripe.Webhook.construct_event", return_value=event
-    ), patch(
-        "routes.webhooks.claim_stripe_event", AsyncMock(return_value=False)
-    ), patch(
-        "services.corporate_wallet_service.apply_topup", AsyncMock()
-    ) as m_apply:
+    with (
+        patch(
+            "routes.webhooks.get_app_settings",
+            AsyncMock(return_value={"stripe_webhook_secret": "whsec_x", "stripe_secret_key": "sk_x"}),
+        ),
+        patch("stripe.Webhook.construct_event", return_value=event),
+        patch("routes.webhooks.claim_stripe_event", AsyncMock(return_value=False)),
+        patch("services.corporate_wallet_service.apply_topup", AsyncMock()) as m_apply,
+    ):
         resp = _post(test_client, event)
 
     assert resp.status_code == 200, resp.text
@@ -95,22 +95,18 @@ def test_non_corporate_topup_passes_through(test_client):
     event = _event()
     event["data"]["object"]["metadata"] = {"ride_id": "r1", "user_id": "u1"}
 
-    with patch(
-        "routes.webhooks.get_app_settings",
-        AsyncMock(return_value={"stripe_webhook_secret": "whsec_x", "stripe_secret_key": "sk_x"}),
-    ), patch(
-        "stripe.Webhook.construct_event", return_value=event
-    ), patch(
-        "routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)
-    ), patch(
-        "routes.webhooks.mark_stripe_event_processed", AsyncMock()
-    ), patch(
-        "routes.webhooks.db_supabase.update_ride", AsyncMock()
-    ), patch(
-        "routes.webhooks.send_push_notification", AsyncMock()
-    ), patch(
-        "services.corporate_wallet_service.apply_topup", AsyncMock()
-    ) as m_apply:
+    with (
+        patch(
+            "routes.webhooks.get_app_settings",
+            AsyncMock(return_value={"stripe_webhook_secret": "whsec_x", "stripe_secret_key": "sk_x"}),
+        ),
+        patch("stripe.Webhook.construct_event", return_value=event),
+        patch("routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+        patch("routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+        patch("routes.webhooks.db_supabase.update_ride", AsyncMock()),
+        patch("routes.webhooks.send_push_notification", AsyncMock()),
+        patch("services.corporate_wallet_service.apply_topup", AsyncMock()) as m_apply,
+    ):
         resp = _post(test_client, event)
 
     assert resp.status_code == 200, resp.text

@@ -31,12 +31,15 @@ class TestTaxRegion:
 
 
 class TestDomain:
-    @pytest.mark.parametrize("raw,expected", [
-        ("ACME.com", "acme.com"),
-        (" acme.com ", "acme.com"),
-        ("@acme.com", "acme.com"),
-        ("acme.co.uk", "acme.co.uk"),
-    ])
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("ACME.com", "acme.com"),
+            (" acme.com ", "acme.com"),
+            ("@acme.com", "acme.com"),
+            ("acme.co.uk", "acme.co.uk"),
+        ],
+    )
     def test_normalizes(self, raw, expected):
         assert validate_email_domain(raw) == expected
 

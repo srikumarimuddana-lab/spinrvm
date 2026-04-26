@@ -71,7 +71,6 @@ async def get_legal_settings():
     }
 
 
-
 @api_router.get("/company-info")
 async def get_company_info():
     """Public company / support info embedded by rider + driver apps.

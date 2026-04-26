@@ -202,6 +202,12 @@ async def run_sync(
             _metric_gauge("spinr_db_circuit_state", 0, {"state": "closed"})
             return result
         except Exception as exc:
+            # ValueError signals a deliberate application-level outcome
+            # (e.g. insufficient_funds, wallet_not_found) — not an
+            # infrastructure failure. Re-raise directly so callers get
+            # the typed signal and the circuit breaker stays clean.
+            if isinstance(exc, ValueError):
+                raise
             last_exc = exc
             exc_name = type(exc).__name__
             exc_str = str(exc)
@@ -1346,14 +1352,20 @@ async def fare_split_pay_share(
         raise DatabaseError(details={"original": "supabase not initialised"})
 
     def _fn():
-        res = supabase.rpc(
-            "fare_split_pay_share",
-            {
-                "p_wallet_id": wallet_id,
-                "p_participant_id": participant_id,
-                "p_amount": str(amount),
-            },
-        ).execute()
+        try:
+            res = supabase.rpc(
+                "fare_split_pay_share",
+                {
+                    "p_wallet_id": wallet_id,
+                    "p_participant_id": participant_id,
+                    "p_amount": str(amount),
+                },
+            ).execute()
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "insufficient_funds" in msg:
+                raise ValueError("insufficient_funds") from exc
+            raise
         data = getattr(res, "data", None)
         if data is None:
             raise DatabaseError(details={"original": "fare_split_pay_share returned no data"})

@@ -481,3 +481,616 @@ FINDINGS YAML
 END OF D17 — driver-app Phase E
 Next: D18 DR/BCP (append below when E-2 runs)
 ================================================================================
+
+
+================================================================================
+TASK 18 — DISASTER RECOVERY / BUSINESS CONTINUITY
+================================================================================
+
+[18-1] CRITICAL | Stripe outage blocks ride completion — no payment queue fallback
+File: backend/routes/rides.py:1318-1595
+Finding: complete_ride() calls stripe.PaymentIntent.create() inline. Any Stripe
+5xx or network timeout fails the entire complete_ride request — driver cannot
+end the trip, rider is stuck in `in_progress`. No deferred-charge queue, no
+failover to wallet, no retry from background worker.
+Fix: Move Stripe charge to async queue; on Stripe failure, mark ride
+`payment_pending` and let payment_retry_loop handle settlement. Effort: 4 h
+Risk score: 36 (CRITICAL × org × likely)
+Regulations: PCI-DSS, SOC2, SK-TNC
+Owner: backend · Sprint: P0
+
+[18-2] HIGH | FCM dispatch has no SMS / in-app fallback chain
+File: backend/routes/rides.py:358-374
+Finding: Dispatch sends ride offer via FCM only. If FCM is degraded or token
+is stale, driver never sees the offer. Match-rate KPI (≥85%) will collapse
+during a Firebase incident. SK-TNC requires demonstrable dispatch
+reliability for service-area approval.
+Fix: Cascade — FCM → in-app WS push → SMS via Twilio if WS not connected
+within 3 s. Track per-channel delivery in dispatch_attempts table.
+Effort: 6 h
+Risk score: 18 (HIGH × org × likely)
+Regulations: SK-TNC, SGI
+Owner: backend · Sprint: P1
+
+[18-3] HIGH | Offline queue has no idempotency keys — double-charge risk
+File: shared/api/offlineQueue.ts:130-170
+Finding: When the driver app is offline and queues a tip-confirm or fare-end
+mutation, replay on reconnect uses no Idempotency-Key header. If the mobile
+device retries before the server confirms, the same tip can post twice.
+Fix: Generate UUID v4 idempotency_key at enqueue time; pass as header on
+replay; backend dedup on (key, user_id) tuple. Effort: 3 h
+Risk score: 24 (HIGH × org × likely)
+Regulations: PCI-DSS, SOC2
+Owner: shared · Sprint: P1
+
+[18-4] MEDIUM | AsyncStorage stale-state can override server truth on reconnect
+File: driver-app/store/driverStore.ts:12-18
+Finding: Hydration from AsyncStorage runs before backend re-fetch. If the
+driver toggled offline on another device or the backend marked them
+`document_expired`, the local store wins until the next refresh. No
+warning banner; no force-reconcile.
+Fix: Add `last_server_sync_at` field; if stale > 5 min, show banner
+"Reconnecting…" and block go_online until reconcile. Effort: 2 h
+Risk score: 6 (MEDIUM × team × likely)
+Regulations: SK-TNC
+Owner: driver-app · Sprint: P2
+
+[18-5] MEDIUM | Redis presence read has no timeout
+File: backend/services/dispatch_service.py:206-212
+Finding: redis.get() in dispatch presence check uses default socket timeout.
+Under load, a slow Redis can stall the entire dispatch loop. Single bad
+node delays all offers.
+Fix: Wrap with asyncio.wait_for(..., timeout=0.25); on timeout, treat
+driver as offline and continue. Effort: 1 h
+Risk score: 8 (MEDIUM × team × possible)
+Regulations: SK-TNC
+Owner: backend · Sprint: P2
+
+[18-6] MEDIUM | WS reconnect has no UI feedback during back-off
+File: driver-app/hooks/useDriverDashboard.ts:18
+Finding: Reconnect logic uses exponential back-off but the UI shows
+"Online" the entire time. Driver cannot tell they are missing offers
+during a multi-second back-off window.
+Fix: Surface a "Reconnecting…" banner from the WS state machine; gate
+go_online button on connected state. Effort: 2 h
+Risk score: 6 (MEDIUM × self × likely)
+Regulations: SK-TNC
+Owner: driver-app · Sprint: P2
+
+[18-7] MEDIUM | Supabase circuit breaker has no fallback cache
+File: backend/db_supabase.py:43-106
+Finding: run_sync() retries once on H2 GOAWAY; on persistent failure it
+raises DatabaseError. There is no read-through cache for hot lookups
+(driver eligibility, fare config) — a brief Supabase outage takes the
+entire app offline.
+Fix: Add Redis read-through with 60 s TTL for: driver_status, vehicle
+docs, fare_config. Reads only — never cache writes. Effort: 5 h
+Risk score: 9 (MEDIUM × org × possible)
+Regulations: SOC2
+Owner: backend · Sprint: P2
+
+[18-8] MEDIUM | Driver payout endpoint missing @idempotent_endpoint
+File: backend/routes/drivers.py:1454-1466
+Finding: POST /drivers/payouts/instant is not wrapped with the standard
+idempotency decorator. A network retry can trigger a second Stripe
+transfer. Manual reconciliation only catches it after the fact.
+Fix: Apply @idempotent_endpoint(scope="payout"); require client-supplied
+Idempotency-Key. Effort: 3 h
+Risk score: 12 (MEDIUM × team × likely)
+Regulations: PCI-DSS
+Owner: backend · Sprint: P2
+
+[18-9] LOW | Migrations have no rollback SQL files
+File: backend/migrations/
+Finding: 37 forward migrations exist, 0 down-migration files. CLAUDE.md
+requires rollback plan in top comment, but no executable rollback path
+exists. Forward-only is fine for additive schema changes; risky for
+constraint additions.
+Fix: For migrations adding NOT NULL or FK constraints, ship a paired
+rollback file under migrations/down/. Update migrate.py to support
+--rollback flag. Effort: 8 h
+Risk score: 4 (LOW × team × possible)
+Regulations: SOC2
+Owner: backend · Sprint: P3
+
+[18-10] LOW | No documented RTO/RPO targets
+File: docs/runbooks/ (missing)
+Finding: SOC2 requires documented Recovery Time Objective and Recovery
+Point Objective per critical service. None exist for: dispatch, payment,
+auth. Cannot demonstrate audit readiness.
+Fix: Author docs/runbooks/disaster-recovery.md with RTO ≤ 1 h, RPO ≤ 5 min
+for all P0 services; reference Supabase PITR + Redis AOF settings.
+Effort: 3 h
+Risk score: 2 (LOW × self × rare)
+Regulations: SOC2, PIPEDA
+Owner: backend + devops · Sprint: P4
+
+===AUDIT-COMPLETE=== dim=18 module=driver-app findings=10 critical=1 high=2 medium=5 low=2
+
+================================================================================
+END OF D18 — driver-app Phase E
+================================================================================
+
+
+================================================================================
+TASK 19 — FRAUD PREVENTION
+================================================================================
+
+[19-1] HIGH | Self-referral check uses stale PII — gameable with email aliases
+File: backend/routes/drivers.py:2401-2440
+Finding: Referral validation compares (referrer_phone, referee_phone) only.
+A driver can self-refer using a Twilio test number or relative's SIM,
+bypassing the check. No device-fingerprint, no IP-block, no PII similarity
+check (same address, same bank, same documents).
+Fix: Add device fingerprint (X-Device-ID); reject if (device, IP, bank
+account, address) match referrer within 30 days. Effort: 3 h
+Risk score: 18 (HIGH × org × likely)
+Regulations: AML, PIPEDA
+Owner: backend · Sprint: P1
+
+[19-2] HIGH | No velocity limits on signup per device / IP
+File: backend/routes/auth.py:136-198
+Finding: signup endpoint rate-limited only by phone number (OTP). Same IP
+or device can register N accounts with N phone numbers. No throttle on
+{device_id, ip} tuple — fraud rings can mass-onboard.
+Fix: Add SlowAPI key_func that hashes (device_id, ip); cap at 3 signups
+per IP per 24 h. Audit-log denials. Effort: 4 h
+Risk score: 18 (HIGH × org × likely)
+Regulations: AML, PIPEDA
+Owner: backend · Sprint: P1
+
+[19-3] HIGH | Bank account update bypasses challenge (account-takeover risk)
+File: backend/routes/drivers.py:1377-1405
+Finding: PUT /drivers/payout-account requires only an active session JWT.
+Stolen session can re-route earnings to attacker's bank in one request.
+No step-up auth (OTP, email confirm, 24-hour cool-down).
+Fix: Send OTP to driver's primary phone before allowing payout-account
+mutation; freeze payouts for 24 h after change; email notification of
+change. Effort: 3 h
+Risk score: 24 (HIGH × org × likely)
+Regulations: PCI-DSS, AML, PIPEDA
+Owner: backend · Sprint: P1
+
+[19-4] HIGH | Document reuse undetected across driver accounts
+File: backend/routes/drivers.py:2640-2700
+Finding: Driver license / insurance upload stores file hash but does not
+search for collisions. Two driver accounts can submit identical document
+PDFs (forged identities sharing the same scan). Compliance failure.
+Fix: On upload, compute SHA-256 of normalized image; reject if hash
+matches an existing approved doc in any account; flag review queue.
+Effort: 2 h
+Risk score: 18 (HIGH × org × likely)
+Regulations: KYC, AML, PIPEDA
+Owner: backend · Sprint: P1
+
+[19-5] MEDIUM | Referral bonus credited on code apply, not first completed ride
+File: backend/routes/drivers.py:2356-2396
+Finding: apply_referral() credits the bonus immediately on code entry. A
+driver can sign up, apply code, and never complete a ride — referrer
+still earns the bounty.
+Fix: Move credit to ride_completion handler when driver's first ride
+clears; require ride_count >= 1 AND total_fare >= $10. Effort: 2 h
+Risk score: 6 (MEDIUM × team × likely)
+Regulations: AML
+Owner: backend · Sprint: P2
+
+[19-6] MEDIUM | Driver location updates have no impossible-travel detection
+File: backend/routes/drivers.py:1237-1276
+Finding: Location updates accepted without speed sanity check. A spoofed
+GPS jumping 200 km in 30 s passes silently; can game heat-map / surge
+to lure offers.
+Fix: Compute haversine distance vs prior point; if implied speed
+> 200 km/h, log warning + flag account for review. Effort: 2 h
+Risk score: 9 (MEDIUM × org × possible)
+Regulations: SK-TNC
+Owner: backend · Sprint: P2
+
+[19-7] MEDIUM | Promo validation failures are not audit-logged
+File: backend/routes/promotions.py:69-126
+Finding: Failed promo validations return 400 silently. Fraud teams
+cannot retrospectively detect brute-force code attempts (despite
+the 10/min rate limit).
+Fix: audit_log("promo_validation_failed", {user_id, code_attempt,
+reason}); aggregate weekly for fraud review. Effort: 2 h
+Risk score: 4 (MEDIUM × self × likely)
+Regulations: PIPEDA
+Owner: backend · Sprint: P2
+
+[19-8] MEDIUM | No Stripe Radar custom rules for ride-share patterns
+File: backend/routes/payments.py:114-118
+Finding: PaymentIntent creation passes default Stripe Radar config. No
+custom rules for: high-velocity new card, multiple cards on one rider,
+foreign-card with local pickup. Out-of-the-box Radar misses ride-share
+fraud signals.
+Fix: Configure 5 Radar rules (per Stripe Best Practices for marketplaces);
+store rule IDs in app_settings; document in fraud-runbook.md. Effort: 1.5 h
+Risk score: 9 (MEDIUM × org × possible)
+Regulations: PCI-DSS
+Owner: backend + risk · Sprint: P2
+
+[19-9] MEDIUM | Accept-then-cancel gaming undetected
+File: backend/routes/rides.py:2254-2320
+Finding: Driver can accept offers to clear queue then cancel pre-arrival
+to grab a higher-priced offer. Cancel rate is tracked per ride but not
+flagged as a behavior pattern: no "rolling 7-day cancel rate > 20%"
+auto-suspension.
+Fix: Add daily cron computing per-driver cancel rate; suspend
+account if > 20% over 7-day window. Effort: 2 h
+Risk score: 8 (MEDIUM × team × possible)
+Regulations: SK-TNC
+Owner: backend · Sprint: P2
+
+[19-10] LOW | OTP lockout key is phone-only — SIM-swap bypass
+File: backend/routes/auth.py:62-99
+Finding: Lockout state in Redis keyed on phone number alone. If attacker
+SIM-swaps the victim, lockout is reset (different device, same phone).
+Add device fingerprint to lockout key.
+Fix: Lockout key = SHA(phone || device_id_hash); preserve lockout across
+device changes; surface "new device login" notification. Effort: 2 h
+Risk score: 4 (LOW × team × possible)
+Regulations: PIPEDA, SK-TNC
+Owner: backend · Sprint: P2
+
+===AUDIT-COMPLETE=== dim=19 module=driver-app findings=10 critical=0 high=4 medium=5 low=1
+
+================================================================================
+END OF D19 — driver-app Phase E
+================================================================================
+
+
+================================================================================
+TASK 20 — FINANCIAL RECONCILIATION
+================================================================================
+
+[20-1] CRITICAL | Wallet uses float arithmetic + $set wrapper (DUP backend P-B 20-1)
+File: backend/routes/wallet.py:132-136, 180-184
+Finding: Wallet credit/debit performs `balance = balance + amount` with
+Python float, violating CLAUDE.md Decimal-only rule. The $set wrapper
+also swallows precision errors. Confirmed duplicate of backend Phase B
+finding 20-1; left here for driver-context completeness.
+Fix: Convert to Decimal via _d(); use SECURITY DEFINER Postgres function
+wallet_apply_delta(user_id, delta, idempotency_key) with FOR UPDATE lock.
+Effort: 6 h
+Risk score: 36 (CRITICAL × org × likely)
+Regulations: CRA, PCI-DSS, SOC2
+Owner: backend · Sprint: P0
+Duplicate of: backend Phase B 20-1
+
+[20-2] CRITICAL | Daily Stripe ↔ Supabase reconciliation cron missing (DUP)
+File: backend/core/lifespan.py:57-223
+Finding: 7 background loops registered; none performs daily reconciliation
+of Stripe Charges/Transfers vs Supabase rides/payouts. Drift cannot be
+detected proactively. SOC2 IT-controls require automated monitoring.
+Fix: Add reconciliation_loop running daily at 03:00 UTC; emit metric
+spinr.recon.drift.count{type=charge|payout|refund}; alert if drift > 0.
+Effort: 6 h
+Risk score: 36 (CRITICAL × org × likely)
+Regulations: PCI-DSS, SOC2, CRA
+Owner: backend · Sprint: P0
+Duplicate of: backend Phase B 20-2
+
+[20-3] CRITICAL | financial_events append-only ledger missing (DUP)
+File: backend/migrations/ (no such table)
+Finding: No immutable event-sourced ledger. All money state lives in
+mutable columns (rides.fare_total, wallets.balance). Cannot reconstruct
+state at audit-time-T. SOC2 requires append-only financial logs.
+Fix: New migration creating financial_events(id, ts, kind, ride_id,
+user_id, amount_cents, currency, source, idem_key) with INSERT-only
+RLS + trigger blocking UPDATE/DELETE.
+Effort: 4 h
+Risk score: 36 (CRITICAL × org × likely)
+Regulations: CRA, SOC2
+Owner: backend · Sprint: P0
+Duplicate of: backend Phase B 20-3
+
+[20-4] HIGH | Refund does not claw back driver earnings
+File: backend/routes/disputes.py:164-215
+Finding: process_refund() reverses the rider's Stripe charge but does not
+debit the driver's pending_earnings or post a negative entry. Net result:
+driver paid full fare on refunded rides — Spinr eats the loss with no
+audit trail.
+Fix: Call services/earnings_service.reverse_for_ride(ride_id, reason)
+inside refund handler; emit financial_events row(kind='clawback').
+Effort: 2 h
+Risk score: 18 (HIGH × org × likely)
+Regulations: CRA, PCI-DSS
+Owner: backend · Sprint: P1
+
+[20-5] CRITICAL | T4A is JSON stub — no PDF, no Feb-28 cron (DUP backend P2-7)
+File: backend/routes/drivers.py:1501-1522
+Finding: GET /drivers/t4a returns a JSON dict labeled "T4A". Real T4A
+delivery requires CRA-format PDF generation, mailing/email by
+Feb 28, and CRA XML upload for the prior tax year. None implemented.
+Critical compliance gap.
+Fix: Integrate T4A PDF generator (reportlab or Stripe Connect 1099-equiv);
+schedule cron @ Feb 1 to generate prior-year T4As; archive in S3 with
+PIPEDA retention; CRA XML transmittal via My Business Account.
+Effort: 12 h
+Risk score: 36 (CRITICAL × org × likely)
+Regulations: CRA
+Owner: backend + finance · Sprint: P1
+Duplicate of: backend P2-7
+
+[20-6] HIGH | GST and PST are not separate columns on rides
+File: backend/supabase_schema.sql:150-215
+Finding: rides.tax_total stores combined tax. CRA + SK-PST require
+separate disclosure on receipts and in remittance schedules. Audit
+cannot distinguish GST (5%) from PST (6% where applicable).
+Fix: Add rides.gst_amount, rides.pst_amount columns; backfill from
+historical assumption (gst = total × 5/11 for SK); update receipt
+template to render two lines.
+Effort: 3 h
+Risk score: 24 (HIGH × org × likely)
+Regulations: CRA, SK-PST
+Owner: backend · Sprint: P1
+
+[20-7] MEDIUM | Tip earnings calculation uses float, not Decimal
+File: backend/routes/rides.py:1261-1271
+Finding: Tip path computes driver_share = tip * (1 - PROCESSOR_RATE) using
+Python float. Half-cent rounding bias accumulates over 100k+ tips.
+Violates Decimal-only rule.
+Fix: Wrap with _d(); use _round() with HALF_UP; assert sum
+(driver_share + processor_fee) == tip cent-perfect. Effort: 2 h
+Risk score: 9 (MEDIUM × org × possible)
+Regulations: CRA
+Owner: backend · Sprint: P2
+
+[20-8] MEDIUM | Tip endpoint idempotency relies on header-only docs
+File: backend/routes/rides.py:1240-1312
+Finding: Tip POST documents "send Idempotency-Key" but does not enforce.
+Without header, a network retry from rider app double-tips. Affects
+both rider charge and driver earnings.
+Fix: Require Idempotency-Key header; reject 400 if missing; dedup via
+stripe_events table for the underlying charge. Effort: 1.5 h
+Risk score: 6 (MEDIUM × team × possible)
+Regulations: PCI-DSS, CRA
+Owner: backend · Sprint: P2
+
+[20-9] MEDIUM | Payout uses int(amount * 100) — float-to-cents truncation
+File: backend/routes/drivers.py:1457-1458
+Finding: Stripe transfer cents = int(payout_amount * 100). Floats like
+12.34 → 1233 (truncation). HALF_UP rounding required by CRA + Stripe.
+Half-cent loss becomes systemic over scale.
+Fix: Use _round(_d(payout_amount) * 100, 0, ROUND_HALF_UP) → int.
+Effort: 0.5 h
+Risk score: 6 (MEDIUM × team × likely)
+Regulations: CRA, PCI-DSS
+Owner: backend · Sprint: P2
+
+[20-10] MEDIUM | No automated drift detection on driver pending earnings
+File: backend/services/earnings_service.py (no monitor)
+Finding: pending_earnings.balance can drift from sum(financial_events
+where kind in ('credit','clawback')) due to direct UPDATE statements
+elsewhere. No periodic reconciliation cross-checks.
+Fix: Add daily check job: assert balance == sum(events) per driver;
+alert + lock account on mismatch. Effort: 1.5 h
+Risk score: 6 (MEDIUM × team × likely)
+Regulations: CRA, SOC2
+Owner: backend · Sprint: P1
+
+===AUDIT-COMPLETE=== dim=20 module=driver-app findings=10 critical=4 high=2 medium=4 low=0
+
+================================================================================
+END OF D20 — driver-app Phase E
+================================================================================
+
+
+================================================================================
+TASK 21 — THREAT MODEL (STRIDE)
+================================================================================
+
+[21-1] HIGH | Firebase ID-token verify missing audience check (DUP P-E 21-1)
+File: backend/dependencies/__init__.py:154-156
+Finding: verify_firebase_token uses default verification — does not pin
+expected `aud` claim to project_id. A token issued for a different
+Firebase project would be accepted.
+Fix: Pass `audience=settings.FIREBASE_PROJECT_ID` to firebase_admin
+auth.verify_id_token; reject mismatch. Effort: 0.25 h
+Risk score: 24 (HIGH × org × likely)
+Regulations: PIPEDA
+Owner: backend · Sprint: P0
+Duplicate of: backend Phase E 21-1
+STRIDE: Spoofing
+
+[21-2] CRITICAL | Rider PII (full address) leaked to driver post-completion (DUP)
+File: driver-app/app/driver/(tabs)/earnings.tsx:335,342 +
+      backend/routes/rides.py:1233
+Finding: GET /drivers/me/rides returns rider pickup_address +
+dropoff_address full strings. After ride completion the driver retains
+full addresses indefinitely in earnings history. PIPEDA + SK Human
+Rights Code prohibit this — driver has no legitimate basis post-trip.
+Fix: Backend: redact addresses to city/area on rides older than 24 h;
+driver-app: render redacted form in history view. Effort: 2 h
+Risk score: 36 (CRITICAL × org × likely)
+Regulations: PIPEDA, SK-HRC
+Owner: backend + driver-app · Sprint: P0
+Duplicate of: backend Phase E 21-2
+STRIDE: Information Disclosure
+
+[21-3] CRITICAL | Driver WS can inject ride_status_update for any ride
+File: backend/routes/websocket.py:469-486
+Finding: ride_status_update message handler trusts the {ride_id, status}
+in the payload without verifying ride.driver_id == connection.user_id.
+A malicious driver can mark another driver's ride completed/cancelled.
+Backend then fires fare-settlement on a ride they were never assigned.
+Fix: Look up ride; assert ride.driver_id == authenticated user_id;
+reject 4403 + audit-log otherwise. Effort: 2 h
+Risk score: 36 (CRITICAL × org × likely)
+Regulations: PIPEDA, SK-TNC, SK-HRC
+Owner: backend · Sprint: P0
+STRIDE: Tampering, Elevation of Privilege
+
+[21-4] HIGH | Rate-limiter falls back to memory:// silently (DUP P-E 21-6)
+File: backend/utils/rate_limiter.py:45-58
+Finding: When REDIS_URL unset OR Redis unreachable at startup, SlowAPI
+falls back to in-memory storage. In multi-replica production this means
+each pod has its own counter — effective limits are N× looser. No log
+warns of fallback in production.
+Fix: Read settings.ENV; if production AND Redis init fails, raise
+HardError to fail-fast deploy. Effort: 1.5 h
+Risk score: 18 (HIGH × org × likely)
+Regulations: PIPEDA, PCI-DSS
+Owner: backend · Sprint: P0
+Duplicate of: backend Phase E 21-6
+STRIDE: Denial of Service
+
+[21-5] HIGH | GPS spoof at completion has no geofence sanity check
+File: backend/routes/drivers.py:2012-2100
+Finding: complete_ride accepts driver-supplied final lat/lng without
+checking distance from intended dropoff. Spoofed GPS lets driver
+"complete" rides while parked at home — surge gaming + fare manipulation.
+Fix: Compare {final_lat, final_lng} to ride.dropoff coordinates; if
+distance > 500 m, require driver photo + flag for review; admin can
+override. Effort: 1.5 h
+Risk score: 18 (HIGH × org × likely)
+Regulations: SK-HRC, PIPEDA, SK-TNC
+Owner: backend · Sprint: P1
+STRIDE: Tampering
+
+[21-6] MEDIUM | No immutable audit trail for ride state transitions
+File: backend/routes/rides.py (multiple state-changes)
+Finding: State transitions UPDATE rides.status directly. There is no
+ride_state_events append-only table. Cannot reconstruct timeline for
+disputes, regulatory subpoenas, or insurance period audits.
+Fix: New migration with ride_state_events(id, ride_id, prev, next, ts,
+actor_id, actor_role, source); INSERT-only RLS; trigger blocks
+UPDATE/DELETE; backfill from rides.updated_at where possible. Effort: 2 h
+Risk score: 12 (MEDIUM × team × likely)
+Regulations: PIPEDA, SK-TNC, SOC2
+Owner: backend · Sprint: P1
+STRIDE: Repudiation
+
+[21-7] MEDIUM | PII (lat/lng + ride_id) sent to Crashlytics
+File: driver-app/utils/crashlytics.ts:33
+Finding: recordNonFatal includes raw lat/lng + ride_id in extras dict.
+PIPEDA prohibits raw GPS coords in third-party logs. Spinr's privacy
+policy commits to geohash only.
+Fix: Round lat/lng to 0.01° (~1 km grid); replace ride_id with first
+8 chars; document approved crash-context schema. Effort: 1 h
+Risk score: 12 (MEDIUM × org × likely)
+Regulations: PIPEDA
+Owner: driver-app · Sprint: P1
+STRIDE: Information Disclosure
+
+[21-8] MEDIUM | GET /rides/{id} not rate-limited — enumeration risk
+File: backend/routes/rides.py:1143
+Finding: get_ride() endpoint authenticates the JWT but applies no rate
+limit. An authenticated rider/driver could enumerate by guessing UUIDs;
+each 200 confirms ride existence. Surface area for harvesting.
+Fix: Apply @limiter.limit("60/minute") with key_func by user_id; on
+exceed, return 429. Effort: 0.5 h
+Risk score: 6 (MEDIUM × team × possible)
+Regulations: PIPEDA
+Owner: backend · Sprint: P2
+STRIDE: Information Disclosure
+
+[21-9] MEDIUM | JWT replay risk — no nonce / jti tracking
+File: backend/dependencies/__init__.py:109-116
+Finding: Access tokens carry no jti claim, refresh tokens carry no nonce.
+Stolen access token (15-min lifetime) can be replayed across services
+indefinitely within window. Cannot revoke an individual access token.
+Fix: Issue jti on each access token; store jti in Redis with TTL =
+remaining lifetime; check on every verify; admin endpoint to revoke.
+Effort: 2 h
+Risk score: 9 (MEDIUM × org × possible)
+Regulations: PIPEDA, PCI-DSS
+Owner: backend · Sprint: P2
+STRIDE: Spoofing, Repudiation
+
+[21-10] LOW | iOS "Allow Once" permission silently degrades dispatch
+File: driver-app/hooks/useDriverDashboard.ts:320-340
+Finding: If driver grants location "Allow Once" instead of "Always",
+background location task dies without warning. Driver appears online
+but never sends GPS — dispatch proceeds with stale fix. Indirect
+E911 implication: emergency response would route to last-known.
+Fix: Check authorizationStatus; if "WhenInUse" or "AuthorizedAlways"
+not granted, force offline + show modal explaining requirement.
+Effort: 1.5 h
+Risk score: 3 (LOW × self × possible)
+Regulations: E911, SK-TNC
+Owner: driver-app · Sprint: P2
+STRIDE: Denial of Service
+
+===AUDIT-COMPLETE=== dim=21 module=driver-app findings=10 critical=2 high=3 medium=4 low=1
+
+================================================================================
+END OF D21 — driver-app Phase E
+================================================================================
+
+
+================================================================================
+TASK 22 — THIRD-PARTY & VENDOR RISK (DEFERRED)
+================================================================================
+
+Status: DEFERRED — both attempted agent runs (a983dbb01af911c44, 2026-04-26
+02:39 UTC) hit the account-wide usage limit ("resets 6:20am UTC") before
+producing findings. Investigation was in-progress: vendor file enumeration,
+Stripe/Firebase/Twilio/Google-Maps/Supabase integration scan, license-
+compliance pass, native CVE check.
+
+Resume after limit reset. Scope per kickoff:
+  • Stripe API key handling, webhook signature verification, Connect setup
+  • Firebase Admin SDK credentials, audience pinning (DUP 21-1)
+  • Twilio credential storage, OTP cost guard
+  • Google Maps API key restrictions (HTTP referrer / iOS bundle / android)
+  • Supabase Canadian region attestation (PIPEDA data-residency)
+  • DPA register completeness (vendor list + DPAs on file)
+  • Native dep CVE pass (yarn audit + pip-audit baseline)
+  • License compliance (no GPL/AGPL in mobile/binary surfaces)
+
+===AUDIT-COMPLETE=== dim=22 module=driver-app findings=0 status=DEFERRED reason=usage_limit
+
+
+================================================================================
+TASK 23 — MOBILE BINARY / BUILD & RELEASE HARDENING (DEFERRED)
+================================================================================
+
+Status: DEFERRED — agent run a5337221a2359f4b8 (2026-04-26 02:39 UTC) hit
+the account-wide usage limit before producing findings. Last completed
+step was reading driver-app/app.config.ts and PrivacyInfo.xcprivacy.
+
+Resume after limit reset. Scope:
+  • EAS profile correctness (production vs preview env separation)
+  • EXPO_PUBLIC_* exposure audit (no secrets in EAS exposed prefix)
+  • Code signing (iOS provisioning profile, Android keystore custody)
+  • App Transport Security (no NSAllowsArbitraryLoads exception)
+  • Force-update banner wired to /version endpoint
+  • JS source-map upload to Crashlytics + private bucket
+  • Hermes bundle obfuscation / no source-map shipped to store
+  • Privacy Manifest completeness vs API usage
+  • Play Integrity API attestation on driver privileged actions
+
+===AUDIT-COMPLETE=== dim=23 module=driver-app findings=0 status=DEFERRED reason=usage_limit
+
+
+================================================================================
+DRIVER PHASE E — SUMMARY (D17–D23)
+================================================================================
+
+| Dim | Title                          | Findings | Critical | High | Medium | Low |
+|-----|--------------------------------|---------:|---------:|-----:|-------:|----:|
+| 17  | Observability                  | 13 (10A) | 0        | 2    | 5      | 1   |
+| 18  | DR / BCP                       | 10       | 1        | 2    | 5      | 2   |
+| 19  | Fraud prevention               | 10       | 0        | 4    | 5      | 1   |
+| 20  | Financial reconciliation       | 10       | 4        | 2    | 4      | 0   |
+| 21  | Threat model (STRIDE)          | 10       | 2        | 3    | 4      | 1   |
+| 22  | Third-party & vendor risk      |  0 DEF   | —        | —    | —      | —   |
+| 23  | Mobile binary / build & release|  0 DEF   | —        | —    | —      | —   |
+|-----|--------------------------------|---------:|---------:|-----:|-------:|----:|
+| **Total**                            | **53**   | **7**    | **13**| **23** | **5**|
+
+Cross-audit duplicates flagged: 6 (backend P-B 20-1/2/3, P-E 21-1/2/6,
+backend P2-7). Net new findings vs prior audits: 47.
+
+CRITICAL items requiring P0 attention before launch:
+  • 18-1   Stripe outage blocks ride completion (no payment queue)
+  • 20-1   Wallet float arithmetic + $set wrapper (DUP)
+  • 20-2   Daily Stripe↔Supabase reconciliation cron missing (DUP)
+  • 20-3   financial_events ledger missing (DUP)
+  • 20-5   T4A no PDF generator no Feb-28 cron (DUP)
+  • 21-2   Rider PII addresses leaked to driver post-completion (DUP)
+  • 21-3   WS ride_status_update spoofing — privilege escalation
+
+================================================================================
+END OF DRIVER PHASE E (D17-D21 complete; D22-D23 deferred to next limit window)
+================================================================================

@@ -27,22 +27,26 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('spinr/backend/requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
 
       - name: Install dependencies
-        working-directory: spinr/backend
-        run: |
-          pip install -r requirements.txt
-          pip install pytest pytest-asyncio pytest-cov
+        working-directory: backend
+        run: pip install -r requirements.txt
 
       - name: Run tests
-        working-directory: spinr/backend
+        working-directory: backend
         env:
           SUPABASE_URL: ${{ secrets.TEST_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.TEST_SUPABASE_KEY }}
           JWT_SECRET: test-secret-ci
           ENV: test
-        run: pytest --cov --tb=short -q || echo "Tests completed (some may need test DB)"
+        # continue-on-error is intentional: TEST_SUPABASE_URL / TEST_SUPABASE_KEY
+        # may be absent on forks or in environments without a test DB, making
+        # integration tests fail for infrastructure reasons rather than code bugs.
+        # Unit tests (pytest -m unit) pass without secrets; full suite needs them.
+        # Remove continue-on-error once TEST_SUPABASE_URL is set on all runners.
+        continue-on-error: true
+        run: pytest --cov --tb=short -q
 
   # ─── 2. Rider App: TypeScript Check ───
   rider-app-check:
@@ -57,16 +61,19 @@ jobs:
       - name: Cache node_modules
         uses: actions/cache@v5
         with:
-          path: spinr/rider-app/node_modules
-          key: rider-${{ runner.os }}-${{ hashFiles('spinr/rider-app/package-lock.json') }}
+          path: rider-app/node_modules
+          key: rider-${{ runner.os }}-${{ hashFiles('rider-app/package-lock.json', 'rider-app/yarn.lock') }}
 
       - name: Install
-        working-directory: spinr/rider-app
-        run: npm install --legacy-peer-deps
+        working-directory: rider-app
+        run: |
+          if [ -f yarn.lock ]; then yarn install --frozen-lockfile
+          else npm install --legacy-peer-deps
+          fi
 
       - name: TypeScript check
-        working-directory: spinr/rider-app
-        run: npx tsc --noEmit 2>&1 || true  # Warn but don't fail on shared/ type issues
+        working-directory: rider-app
+        run: npx tsc --noEmit
 
   # ─── 3. Driver App: TypeScript Check ───
   driver-app-check:
@@ -81,16 +88,19 @@ jobs:
       - name: Cache node_modules
         uses: actions/cache@v5
         with:
-          path: spinr/driver-app/node_modules
-          key: driver-${{ runner.os }}-${{ hashFiles('spinr/driver-app/package-lock.json') }}
+          path: driver-app/node_modules
+          key: driver-${{ runner.os }}-${{ hashFiles('driver-app/package-lock.json', 'driver-app/yarn.lock') }}
 
       - name: Install
-        working-directory: spinr/driver-app
-        run: npm install --legacy-peer-deps
+        working-directory: driver-app
+        run: |
+          if [ -f yarn.lock ]; then yarn install --frozen-lockfile
+          else npm install --legacy-peer-deps
+          fi
 
       - name: TypeScript check
-        working-directory: spinr/driver-app
-        run: npx tsc --noEmit 2>&1 || true
+        working-directory: driver-app
+        run: npx tsc --noEmit
 
   # ─── 4. Deploy Backend to Test ───
   deploy-backend-test:
@@ -101,12 +111,25 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # Railway auto-deploys on push to develop branch
-      # No manual deploy step needed — just verify it's healthy
-      - name: Verify test backend
+      # Railway auto-deploys on push to develop. Poll /health until healthy
+      # (up to 3 min) rather than sleeping a fixed 30s and eating the error.
+      - name: Wait for test backend to become healthy
+        env:
+          HEALTH_URL: https://spinr-backend-test.up.railway.app/api/v1
         run: |
-          sleep 30
-          curl -f https://spinr-backend-test.up.railway.app/api/v1/vehicle-types || echo "Backend still deploying..."
+          echo "Polling ${HEALTH_URL}/health …"
+          for i in $(seq 1 18); do
+            STATUS=$(curl -sf --max-time 5 "${HEALTH_URL}/health" \
+              -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+            echo "  attempt ${i}/18 → HTTP ${STATUS}"
+            if [ "$STATUS" = "200" ]; then
+              echo "Test backend is healthy."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Test backend health check timed out."
+          exit 1
 
   # ─── 5. Build Mobile Apps (Test/Preview) ───
   build-mobile-test:
@@ -129,20 +152,26 @@ jobs:
 
       # Rider App — development build
       - name: Install rider-app deps
-        working-directory: spinr/rider-app
-        run: npm install --legacy-peer-deps
+        working-directory: rider-app
+        run: |
+          if [ -f yarn.lock ]; then yarn install --frozen-lockfile
+          else npm install --legacy-peer-deps
+          fi
 
       - name: Build rider-app (preview)
-        working-directory: spinr/rider-app
+        working-directory: rider-app
         run: eas build --platform all --profile preview --non-interactive
 
       # Driver App — development build
       - name: Install driver-app deps
-        working-directory: spinr/driver-app
-        run: npm install --legacy-peer-deps
+        working-directory: driver-app
+        run: |
+          if [ -f yarn.lock ]; then yarn install --frozen-lockfile
+          else npm install --legacy-peer-deps
+          fi
 
       - name: Build driver-app (preview)
-        working-directory: spinr/driver-app
+        working-directory: driver-app
         run: eas build --platform all --profile preview --non-interactive
 
   # ─── 6. OTA Update (fast — no rebuild needed) ───
@@ -165,17 +194,23 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Install rider-app deps
-        working-directory: spinr/rider-app
-        run: npm install --legacy-peer-deps
+        working-directory: rider-app
+        run: |
+          if [ -f yarn.lock ]; then yarn install --frozen-lockfile
+          else npm install --legacy-peer-deps
+          fi
 
       - name: Publish OTA update (rider)
-        working-directory: spinr/rider-app
+        working-directory: rider-app
         run: eas update --branch test --message "Test env update - $(git log -1 --pretty=%B)"
 
       - name: Install driver-app deps
-        working-directory: spinr/driver-app
-        run: npm install --legacy-peer-deps
+        working-directory: driver-app
+        run: |
+          if [ -f yarn.lock ]; then yarn install --frozen-lockfile
+          else npm install --legacy-peer-deps
+          fi
 
       - name: Publish OTA update (driver)
-        working-directory: spinr/driver-app
+        working-directory: driver-app
         run: eas update --branch test --message "Test env update - $(git log -1 --pretty=%B)"

@@ -7,8 +7,8 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
     Car, User, Phone, Mail, Star, Route, Clock, Percent,
     DollarSign, Receipt, Ticket, AlertTriangle, Flag, Radio,
-    MapPin, FileWarning, MapPinned, CalendarDays, Hash,
-    Gauge, Shield, Users, Calendar,
+    FileWarning, MapPinned, CalendarDays, Hash,
+    Gauge, Shield, Users,
 } from "lucide-react";
 import { Sec, FR, MStat, TL, getStatusBadge, fmtTime, isRideLive, computePhaseDistances } from "./ride-ui-helpers";
 import RideInvoice from "./ride-invoice";
@@ -18,14 +18,6 @@ import RideComplaintForm from "./ride-complaint-form";
 import dynamic from "next/dynamic";
 
 const RideRouteMap = dynamic(() => import("./ride-route-map"), { ssr: false });
-
-const PHASE_LABELS: Record<string, string> = {
-    navigating_to_pickup: "To Pickup",
-    arrived_at_pickup: "At Pickup",
-    trip_in_progress: "Trip",
-    online_idle: "Idle",
-    unknown: "Unknown",
-};
 
 const PHASE_COLORS: Record<string, string> = {
     navigating_to_pickup: "text-blue-600 bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400",
@@ -396,7 +388,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                     ))}
                                                     <span className="text-sm font-bold ml-2">{ride.rider_rating}/5</span>
                                                 </div>
-                                                {ride.rider_comment && <p className="text-sm text-muted-foreground mt-2 italic">"{ride.rider_comment}"</p>}
+                                                {ride.rider_comment && <p className="text-sm text-muted-foreground mt-2 italic">&quot;{ride.rider_comment}&quot;</p>}
                                             </div>
                                         ) : (
                                             <p className="text-sm text-muted-foreground py-1">No rating yet</p>

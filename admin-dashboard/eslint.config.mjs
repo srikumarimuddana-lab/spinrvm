@@ -14,9 +14,20 @@ const eslintConfig = defineConfig([
   ]),
   // Downgrade pre-existing violations to warnings so CI doesn't block on legacy code.
   // These should be gradually fixed but must not block feature PRs.
+  //
+  // @typescript-eslint/no-explicit-any: disabled because ~424 legacy violations exist across
+  // api.ts and the dashboard pages (untyped API responses). Re-enable incrementally as
+  // domain-specific response types are added. Tracked: CR-2026-002.
   {
     rules: {
-      "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/no-explicit-any": "off",
+      // Standard TS convention: _-prefixed names are intentionally unused.
+      "@typescript-eslint/no-unused-vars": ["warn", {
+        "varsIgnorePattern": "^_",
+        "argsIgnorePattern": "^_",
+        "caughtErrorsIgnorePattern": "^_",
+        "destructuredArrayIgnorePattern": "^_",
+      }],
       "react/no-unescaped-entities": "warn",
       "prefer-const": "warn",
       // React 19 compiler rules (shipped in eslint-config-next@16) flag

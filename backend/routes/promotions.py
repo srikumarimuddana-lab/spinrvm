@@ -9,20 +9,22 @@ from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, validator
 
 try:
     from .. import db_supabase
+    from ..db_supabase import increment_promo_uses
     from ..dependencies import get_admin_user, get_current_user
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.rate_limiter import promo_available_limit, promo_validate_limit
 except ImportError:
     import db_supabase
+    from db_supabase import increment_promo_uses
     from dependencies import get_admin_user, get_current_user
     from utils.datetime_utils import parse_iso_utc
     from utils.rate_limiter import promo_available_limit, promo_validate_limit
 
-db_rpc = db_supabase.rpc  # atomic promo increment (P1-2)
+get_current_admin = get_admin_user
 
 logger = logging.getLogger(__name__)
 
@@ -45,13 +47,19 @@ class ApplyPromoRequest(BaseModel):
 class CreatePromoCodeRequest(BaseModel):
     code: str
     discount_type: str = "flat"  # flat | percentage
-    discount_value: Decimal  # e.g. 5.00 for $5 off, or 10.0 for 10%
+    discount_value: Decimal = Field(..., gt=0, le=500)  # flat: max $500 off; percentage: capped at 100 below
     max_discount: Optional[Decimal] = None  # Cap for percentage discounts
     max_uses: int = 100
     max_uses_per_user: int = 1
     expiry_date: Optional[str] = None  # ISO 8601
     is_active: bool = True
     description: Optional[str] = None
+
+    @validator("discount_value")
+    def validate_discount_value(cls, v, values):
+        if values.get("discount_type") == "percentage" and v > 100:
+            raise ValueError("Percentage discount cannot exceed 100")
+        return v
 
 
 class UpdatePromoCodeRequest(BaseModel):
@@ -235,15 +243,15 @@ async def apply_promo(
     }
     await db_supabase.insert_one("promo_applications", application)
 
-    # Atomic increment — prevents two concurrent applys both reading the same
-    # uses count and each writing uses+1 (net +1 instead of +2). P1-2.
-    try:
-        await db_rpc("promo_increment_uses", {"p_promo_id": validation["promo_id"]})
-    except Exception as e:
-        msg = str(e).lower()
-        if "limit reached" in msg:
-            raise HTTPException(status_code=400, detail="Promo code has reached its usage limit") from e
-        raise HTTPException(status_code=503, detail="Failed to record promo usage") from e
+    # Atomically increment usage count. The RPC does UPDATE ... WHERE uses < max_uses,
+    # so two concurrent applications of a max_uses=1 promo can't both succeed.
+    promo_row = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("promotions", {"id": validation["promo_id"]}, limit=1)
+    )
+    max_uses = int((promo_row or {}).get("max_uses", 0))
+    incremented = await increment_promo_uses(validation["promo_id"], max_uses)
+    if not incremented:
+        raise HTTPException(status_code=409, detail="Promo code has been fully redeemed")
 
     return {
         "success": True,
@@ -276,6 +284,15 @@ async def get_available_promos(
         },
     )
 
+    # Pre-fetch all user promo applications in one query so per-promo usage
+    # check is O(1) instead of one DB call per promo (N+1 reduction).
+    all_user_apps = await db_supabase.get_rows("promo_applications", {"user_id": current_user["id"]}, limit=2000) or []
+    user_usage_by_promo: dict = {}
+    for app in all_user_apps:
+        pid = app.get("promo_id")
+        if pid:
+            user_usage_by_promo[pid] = user_usage_by_promo.get(pid, 0) + 1
+
     available = []
     for p in promos:
         try:
@@ -293,12 +310,10 @@ async def get_available_promos(
             if max_uses > 0 and p.get("uses", 0) >= max_uses:
                 continue  # noqa: E701
 
-            # Per-user usage (0 = unlimited)
+            # Per-user usage (0 = unlimited) — uses pre-fetched map, not a per-promo query
             max_per_user = p.get("max_uses_per_user", 1)
             if max_per_user > 0:
-                user_uses = await db_supabase.count_documents(
-                    "promo_applications", {"promo_id": p["id"], "user_id": current_user["id"]}
-                )
+                user_uses = user_usage_by_promo.get(p["id"], 0)
                 if user_uses >= max_per_user:
                     continue  # noqa: E701
 
@@ -367,8 +382,9 @@ async def get_available_promos(
                     "min_ride_fare": p.get("min_ride_fare", 0),
                 }
             )
-        except Exception:  # noqa: S112
-            continue  # skip broken promos
+        except Exception as promo_err:
+            logger.error(f"[PROMOS] Skipping promo {p.get('id')} due to error: {promo_err}")
+            continue
 
     # Sort by biggest discount first
     available.sort(key=lambda x: x["discount_amount"], reverse=True)
@@ -380,7 +396,7 @@ async def get_available_promos(
 admin_router = APIRouter(
     prefix="/admin/promo-codes",
     tags=["Admin Promotions"],
-    dependencies=[Depends(get_admin_user)],
+    dependencies=[Depends(get_current_admin)],
 )
 
 

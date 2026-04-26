@@ -14,13 +14,16 @@ from pydantic import BaseModel
 try:
     from .. import db_supabase
     from ..dependencies import get_admin_user, get_current_user
+    from ..routes.admin.maintenance import log_audit
     from ..settings_loader import get_app_settings
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user, get_current_user
+    from routes.admin.maintenance import log_audit
     from settings_loader import get_app_settings
 
 db = db_supabase  # legacy alias
+get_current_admin = get_admin_user
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +119,7 @@ async def admin_get_disputes(
     status: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    current_admin: dict = Depends(get_admin_user),
+    current_admin: dict = Depends(get_current_admin),
 ):
     """Get all disputes with optional status filter."""
     filters: Dict[str, Any] = {}
@@ -126,24 +129,19 @@ async def admin_get_disputes(
         "disputes", filters, order="created_at", desc=True, limit=limit, offset=offset
     )
 
-    # Batch-fetch users and rides (one query each instead of 2N queries) — P1-10.
-    # user_phone is intentionally omitted from the response — P1-9 (PIPEDA: no PII in bulk list).
-    user_ids = [d["user_id"] for d in disputes if d.get("user_id")]
-    ride_ids = [d["ride_id"] for d in disputes if d.get("ride_id")]
-
-    users_by_id: Dict[str, Any] = {}
-    rides_by_id: Dict[str, Any] = {}
-    if user_ids:
-        users = await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=len(user_ids))
-        users_by_id = {u["id"]: u for u in users}
-    if ride_ids:
-        rides = await db_supabase.get_rows("rides", {"id": {"$in": ride_ids}}, limit=len(ride_ids))
-        rides_by_id = {r["id"]: r for r in rides}
+    # Batch-fetch users and rides in 2 queries instead of 2×N per-dispute calls.
+    # user_phone intentionally omitted from response — P1-9 (PIPEDA: no PII in bulk list).
+    user_ids = list({d["user_id"] for d in disputes if d.get("user_id")})
+    ride_ids = list({d["ride_id"] for d in disputes if d.get("ride_id")})
+    users = await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=len(user_ids)) if user_ids else []
+    rides = await db_supabase.get_rows("rides", {"id": {"$in": ride_ids}}, limit=len(ride_ids)) if ride_ids else []
+    users_by_id = {u["id"]: u for u in (users or [])}
+    rides_by_id = {r["id"]: r for r in (rides or [])}
 
     enriched = []
     for d in disputes:
-        user = users_by_id.get(d.get("user_id") or "")
-        ride = rides_by_id.get(d.get("ride_id") or "")
+        user = users_by_id.get(d.get("user_id"))
+        ride = rides_by_id.get(d.get("ride_id"))
         enriched.append(
             {
                 **d,
@@ -159,7 +157,7 @@ async def admin_get_disputes(
 async def admin_resolve_dispute(
     dispute_id: str,
     req: ResolveDisputeRequest,
-    current_admin: dict = Depends(get_admin_user),
+    current_admin: dict = Depends(get_current_admin),
 ):
     """Resolve a dispute (approve/reject refund)."""
     dispute = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("disputes", {"id": dispute_id}, limit=1))
@@ -169,9 +167,15 @@ async def admin_resolve_dispute(
     if dispute.get("status") in ("resolved", "rejected"):
         raise HTTPException(status_code=400, detail="Dispute already resolved")
 
-    # P1-3 + P1-5: Stripe refund runs BEFORE we mark the dispute resolved.
-    # If Stripe fails we raise 502 — the dispute stays open so the admin can retry
-    # rather than discovering later that no money was actually moved.
+    # Stripe refund runs BEFORE we mark the dispute resolved.
+    # If Stripe fails we raise 502 — the dispute stays open so the admin can retry.
+    original_fare = Decimal(str(dispute.get("original_fare") or 0))
+    if req.refund_amount and req.refund_amount > original_fare:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Refund amount ${req.refund_amount} exceeds original fare ${original_fare}",
+        )
+
     refund_result: Dict[str, Any] = {}
     if req.resolution in ("approved", "partial_refund") and req.refund_amount:
         refund_amount_cents = int(float(req.refund_amount) * 100)
@@ -213,20 +217,33 @@ async def admin_resolve_dispute(
             except Exception as refund_err:
                 logger.error(f"[REFUND] Stripe refund failed for dispute {dispute_id}: {refund_err}")
                 raise HTTPException(
-                    status_code=502, detail="Stripe refund failed; dispute not marked resolved"
+                    status_code=502, detail="Stripe refund failed — retry to reuse idempotency key"
                 ) from refund_err
 
-    # Stripe succeeded (or no payment to refund) — persist resolution in a single write
-    update_data = {
+    # Stripe succeeded (or not required) — persist the resolved status
+    update_data: Dict[str, Any] = {
         "status": "resolved" if req.resolution != "rejected" else "rejected",
         "resolution": req.resolution,
         "refund_amount": req.refund_amount or 0,
         "admin_note": req.admin_note or "",
         "resolved_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "refund_result": refund_result,
     }
+    if refund_result:
+        update_data["refund_result"] = refund_result
+
     await db_supabase.update_one("disputes", {"id": dispute_id}, update_data)
+
+    try:
+        await log_audit(
+            "dispute_resolved",
+            "dispute",
+            dispute_id,
+            current_admin.get("email", current_admin.get("id", "unknown")),
+            f"Resolution: {req.resolution}. Amount: {req.refund_amount or 0}. Note: {req.admin_note or ''}",
+        )
+    except Exception as audit_err:
+        logger.error(f"[AUDIT] Failed to write audit log for dispute {dispute_id}: {audit_err}")
 
     return {
         "success": True,

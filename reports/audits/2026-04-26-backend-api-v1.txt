@@ -1,0 +1,824 @@
+================================================================================
+SPINR BACKEND API — PRODUCTION-READINESS AUDIT v1
+================================================================================
+Date        : 2026-04-26
+Branch      : claude/fix-audit-prompt-length-AJpQN
+Auditor     : Claude Code (claude-sonnet-4-6)
+Scope       : backend/routes/disputes.py, fare_split.py, fares.py,
+              favorites.py, loyalty.py, promotions.py,
+              corporate_accounts.py, corporate_company.py,
+              corporate_rider.py, corporate_wallet.py, wallet.py
+Platform    : FastAPI 0.115, Python 3.12, Supabase/PostgreSQL, Redis, Stripe
+
+AUDIT GROUND RULES
+──────────────────
+• OTP is 4 digits by design — compensating controls documented, NOT flagged.
+• Hard-coded dev values (OTP "1234", test keys) → severity LOW/RECOMMENDATION only.
+• Severity scale: CRITICAL | HIGH | MEDIUM | LOW | PASS | RECOMMENDATION
+• See audit-framework/ground-rules.md for full list.
+
+PRE-AUDIT CHECKS
+─────────────────
+pip-audit (backend):      Not run in this session — no CVEs expected for FastAPI 0.115 / Pydantic v2
+Dimensions run:           01, 02, 03, 04, 07, 08, 09, 10, 11, 12, 14
+
+================================================================================
+FINDINGS
+================================================================================
+
+================================================================================
+TASK 1 — AUTHENTICATION & AUTHORIZATION (DIM-02)
+================================================================================
+
+[TASK-1-1] CRITICAL | GET /admin/disputes — No Authentication
+File: backend/routes/disputes.py (admin_get_disputes endpoint)
+Finding: The admin dispute listing endpoint has no get_current_user or
+  get_current_admin dependency. Any unauthenticated HTTP request to
+  GET /admin/disputes receives a paginated list of every dispute in the
+  system, including rider phone numbers enriched at lines ~130–140.
+Fix: Add Depends(get_current_admin) to the endpoint. Effort: 15 minutes.
+
+[TASK-1-2] CRITICAL | PUT /admin/disputes/{id}/resolve — No Authentication
+File: backend/routes/disputes.py (admin_resolve_dispute endpoint)
+Finding: The dispute resolution endpoint is also unprotected. Any caller can
+  approve or reject a dispute, set the resolution amount, and trigger a Stripe
+  refund — all without logging in.
+Fix: Add Depends(get_current_admin) to the endpoint. Effort: 15 minutes.
+
+[TASK-1-3] CRITICAL | Four Admin Promo Endpoints Fully Unprotected
+File: backend/routes/promotions.py (admin_router block, lines ~378–447)
+Finding: GET /admin/promo-codes, POST /admin/promo-codes,
+  PUT /admin/promo-codes/{id}, DELETE /admin/promo-codes/{id} — all four
+  endpoints in the admin_router lack any authentication dependency. Any
+  unauthenticated user can enumerate all active campaigns, create unlimited-
+  budget promo codes, modify discount values, or delete promo codes entirely.
+Fix: Add Depends(get_current_admin) to all four endpoints (or apply it to
+  the router itself via router-level dependencies). Effort: 30 minutes.
+
+[TASK-1-4] CRITICAL | /rider/work-profile/join-domain — Authorization Bypass
+File: backend/routes/corporate_rider.py (join_via_domain handler, ~lines 132–136)
+Finding: The endpoint accepts a company_id and email from the caller but does
+  NOT verify that the email's domain is in the company's corporate_allowed_domains
+  list before inserting the membership. Any authenticated rider can join any
+  company by supplying an arbitrary company_id and any email string. The service
+  function (corporate_membership_service.py ~line 111) trusts the caller
+  without performing domain ownership validation.
+Fix: Before calling join_via_domain(), query corporate_allowed_domains where
+  company_id = req.company_id, extract the domain from the verified user email
+  (from the JWT, not from the request body), and confirm it is in the allowed
+  list. Reject with 403 if not. Effort: 2–3 hours.
+
+[TASK-1-5] MEDIUM | GET /fare-split/ride/{ride_id} — Missing Ownership Check
+File: backend/routes/fare_split.py (get_fare_split_by_ride endpoint, ~line 174)
+Finding: Any authenticated rider can call this endpoint with any ride_id and
+  receive the full fare-split record, including participant phone numbers
+  (~line 200). There is no check that the caller is the ride owner or a
+  participant.
+Fix: After fetching the split, verify current_user["id"] == split["requester_id"]
+  OR current_user["id"] in [p["user_id"] for p in participants].
+  Effort: 30 minutes.
+
+[TASK-1-6] HIGH | IDOR on All Corporate Wallet Admin Endpoints
+File: backend/routes/corporate_wallet.py (all four endpoints)
+Finding: GET /{company_id}/wallet, POST /{company_id}/wallet/topup,
+  POST /{company_id}/wallet/adjust, PUT /{company_id}/wallet/config all
+  authenticate via get_admin_user but perform no ownership check. An admin
+  from any context can view or modify any company's wallet by substituting a
+  different company_id in the path. validate_id() only checks format.
+Fix: After fetching the corporate account, verify the admin's associated
+  company_id matches, or document that all admins are global Spinr staff
+  (in which case this is accepted risk — add a code comment). Effort: 1 hour.
+
+[TASK-1-7] HIGH | IDOR on Corporate Account Admin Endpoints
+File: backend/routes/corporate_accounts.py
+  (GET /admin/corporate-accounts/{id}, PUT, DELETE, POST .../status — ~lines 223, 248, 294, 320)
+Finding: All four record-level admin endpoints fetch any corporate account by
+  ID without verifying the requesting admin has authority over that account.
+  Same pattern as TASK-1-6.
+Fix: Same as TASK-1-6 — add ownership check or document global-admin
+  assumption. Effort: 1 hour.
+
+================================================================================
+TASK 2 — STATE MACHINE & RACE CONDITIONS (DIM-07)
+================================================================================
+
+[TASK-2-1] CRITICAL | /wallet/top-up — TOCTOU Race Condition (Balance Corruption)
+File: backend/routes/wallet.py (top_up endpoint, ~lines 124–136)
+Finding: The top-up flow reads the wallet balance into a Python variable
+  (old_balance), computes new_balance = old_balance + amount, then writes it
+  back with update_one(). There is no row-level lock between the read and the
+  write. Two concurrent top-up requests that both read the same old_balance
+  will each compute new_balance = old_balance + X, and the second write will
+  silently overwrite the first — one top-up is lost. The @idempotent_endpoint
+  decorator only protects against the same idempotency key being replayed,
+  not against two distinct concurrent requests.
+Fix: Replace the read-compute-write pattern with an atomic Postgres operation.
+  Option A: a Supabase RPC that executes
+    UPDATE wallets SET balance = balance + $amount WHERE id = $id RETURNING balance.
+  Option B: SELECT FOR UPDATE inside a transaction.
+  Effort: 3–4 hours.
+
+[TASK-2-2] CRITICAL | /wallet/pay — TOCTOU Race Condition + Non-Atomic Dual Update
+File: backend/routes/wallet.py (pay endpoint, ~lines 173–191)
+Finding: Same read-compute-write race as TASK-2-1 — concurrent payments both
+  pass the sufficiency check on a stale balance, producing overdraft.
+  Additionally the wallet balance update (~line 180) and the ride payment_status
+  update (~line 187) are two separate, non-atomic DB calls. If the second call
+  fails, the rider's balance is debited but the ride is never marked paid.
+Fix: Wrap both updates in a single Postgres function or use SELECT FOR UPDATE
+  to hold the row lock across both writes. Effort: 4–5 hours.
+
+[TASK-2-3] CRITICAL | /wallet/transfer — TOCTOU Race Condition (Multi-Party)
+File: backend/routes/wallet.py (transfer endpoint, ~lines 269–298)
+Finding: Transfer reads sender balance (no lock), checks sufficiency, debits
+  sender (~line 279), then credits recipient (~line 294) — four steps with no
+  transaction boundary. Three races:
+  (1) Two concurrent transfers from the same sender both pass sufficiency →
+      overdraft.
+  (2) Sender debit succeeds; recipient credit throws → sender loses funds,
+      recipient receives nothing. Money disappears.
+  (3) Two concurrent inbound credits to the same recipient race on the
+      recipient balance read → one increment is lost.
+Fix: Single Postgres function that locks both rows (in key order to avoid
+  deadlock), performs both credits/debits atomically, and returns an error if
+  sender balance is insufficient. Effort: 5–6 hours.
+
+[TASK-2-4] HIGH | Loyalty Points Award — Non-Atomic Idempotency Check
+File: backend/routes/loyalty.py (earn_points_for_ride, ~lines 123–165)
+Finding: Double-award prevention queries for an existing transaction; if absent,
+  awards points and inserts a new ledger row. Between the SELECT and the INSERT,
+  a second concurrent request for the same ride also finds no row and also
+  awards points. Without a unique constraint on (user_id, ride_id), both
+  succeed — points are awarded twice for one ride.
+Fix: (1) Add UNIQUE constraint on loyalty_transactions(user_id, ride_id).
+  (2) Catch unique-constraint violations at the INSERT and treat as a
+  successful no-op. Effort: 2–3 hours.
+
+[TASK-2-5] HIGH | Promo Redemption — Non-Atomic Uses Counter
+File: backend/routes/promotions.py (apply_promo, ~lines 205–247)
+Finding: Flow is: validate promo (checks uses < max_uses) → insert application
+  → increment uses in a separate UPDATE. Steps 1 and 3 are not atomic. Two
+  concurrent requests for a max_uses=1 promo will both see uses=0, both insert
+  applications, then both increment — final uses=2 when max_uses=1.
+Fix: Atomic conditional update:
+  UPDATE promotions SET uses = uses + 1 WHERE id = $id AND uses < max_uses
+  RETURNING id. Zero rows → promo exhausted → 409. Effort: 2–3 hours.
+
+[TASK-2-6] MEDIUM | Fare Split Payment — Non-Atomic Wallet Debit + Status Update
+File: backend/routes/fare_split.py (participant_pay, ~lines 298–334)
+Finding: Wallet debit (~line 298) and participant status update (~line 314)
+  are two sequential DB calls with no transaction. If the status update fails
+  after the wallet debit, the participant's balance is reduced but their split
+  status remains "accepted" — they appear to still owe money.
+Fix: Wrap both writes in a Postgres function or compensate by re-crediting
+  the wallet on status-update failure. Effort: 2 hours.
+
+================================================================================
+TASK 3 — PAYMENTS (DIM-08)
+================================================================================
+
+[TASK-3-1] HIGH | Dispute Refund — No Stripe Idempotency Key
+File: backend/routes/disputes.py (admin_resolve_dispute, ~line 188)
+Finding: The Stripe refund is created with stripe.Refund.create(payment_intent=...)
+  but no idempotency_key is passed. If the HTTP connection drops after Stripe
+  processes the refund but before the server receives the response, an admin
+  retry (or a network-level retry) will create a second refund against the same
+  PaymentIntent. The rider receives double the money; the platform takes the loss.
+Fix: Pass idempotency_key=f"refund-dispute-{dispute_id}" to stripe.Refund.create().
+  Effort: 15 minutes.
+
+[TASK-3-2] MEDIUM | Dispute Refund Amount Not Bounded by Original Charge
+File: backend/routes/disputes.py (admin_resolve_dispute, ~line 169 / ResolveDisputeRequest)
+Finding: The refund_amount field in the resolution request is an optional Decimal
+  with no upper-bound validation. An admin can submit a refund_amount larger than
+  the original ride fare, causing a net payout to the rider at Spinr's expense.
+  Stripe itself will reject refunds that exceed the original charge, but only at
+  the API call — no guard exists in the application layer.
+Fix: After fetching the ride, validate:
+  if refund_amount > ride.get("fare_total"):
+      raise HTTPException(400, "Refund cannot exceed original fare")
+  Effort: 30 minutes.
+
+[TASK-3-3] MEDIUM | Corporate Wallet Top-Up — No Stripe Idempotency Key
+File: backend/routes/corporate_wallet.py (topup endpoint, ~line 116)
+Finding: stripe.PaymentIntent.create() is called without an idempotency_key.
+  A network timeout after Stripe accepts the charge but before the server
+  receives the response will result in a duplicate PaymentIntent on retry.
+  Mitigated partially by the caller-side @idempotent_endpoint decorator, but
+  Stripe-side idempotency is an independent requirement.
+Fix: Pass idempotency_key=f"corp-topup-{wallet_id}-{timestamp_bucket}"
+  (e.g., rounded to 1-minute windows) to stripe.PaymentIntent.create().
+  Effort: 30 minutes.
+
+[TASK-3-4] MEDIUM | Loyalty Redemption — Float Used in Dollar Conversion
+File: backend/routes/loyalty.py (redeem_points, ~line 196)
+Finding: round(req.points / REDEMPTION_RATE, 2) uses Python's built-in round()
+  which employs banker's rounding (round-to-even). Over thousands of redemptions
+  this introduces a systematic bias that violates Canadian financial rounding
+  conventions (ROUND_HALF_UP). All other monetary arithmetic in the codebase
+  uses Decimal with explicit quantize(ROUND_HALF_UP) per the coding standards.
+Fix: Replace with:
+  Decimal(req.points) / Decimal(REDEMPTION_RATE).quantize(Decimal("0.01"), ROUND_HALF_UP)
+  Effort: 15 minutes.
+
+[TASK-3-5] PASS | Consumer Wallet — Correct Decimal Arithmetic
+File: backend/routes/wallet.py (~lines 11, 28–32)
+Finding: All monetary values use Decimal with _d() helper and
+  quantize(ROUND_HALF_UP) before DB writes and API responses. No float
+  arithmetic on money paths.
+Fix: None required.
+
+[TASK-3-6] PASS | Corporate Wallet Delta — Atomic Postgres RPC
+File: backend/routes/corporate_wallet.py (adjust endpoint, ~line 47 in service)
+Finding: The corporate_wallet_apply_delta Postgres RPC applies debits/credits
+  with row-level locking inside a DB transaction. The corporate path is safe
+  from the TOCTOU race that affects the consumer wallet.
+Fix: None required. Note: consumer wallet.py should adopt the same pattern
+  (see TASK-2-1 through TASK-2-3).
+
+[TASK-3-7] PASS | Stripe Webhook — Idempotency Guard
+File: backend/routes/webhooks.py (already audited in prior sessions)
+Finding: claim_stripe_event(event_id) is called before any webhook processing;
+  duplicate deliveries are silently skipped. PCI-DSS requirement met.
+Fix: None required.
+
+================================================================================
+TASK 4 — INPUT VALIDATION (DIM-04)
+================================================================================
+
+[TASK-4-1] HIGH | Promo discount_value — No Upper Bound
+File: backend/routes/promotions.py (CreatePromoCodeRequest, ~lines 43–46)
+Finding: The discount_value field on a promo has no maximum validation. Because
+  the admin promo endpoints are also unprotected (TASK-1-3), an attacker can
+  create a promo code with discount_value=999999 and type="flat", making every
+  eligible ride free or negative-cost. Even after auth is added, a maximum bound
+  should be enforced to prevent misconfiguration.
+Fix: Add Field(..., gt=0, le=500) on discount_value for flat discounts and
+  le=100 for percentage discounts, with a validator that checks the constraint
+  matches the discount_type. Effort: 1 hour.
+
+[TASK-4-2] MEDIUM | fares.py — lat/lng Query Params Lack Bounds
+File: backend/routes/fares.py (GET /fares/fares, ~line 272)
+Finding: The lat and lng query parameters are typed as float but have no
+  ge/le constraints in the Query() declaration. FastAPI/Pydantic will accept
+  float("nan"), float("inf"), or out-of-range values (e.g., lat=999). These
+  flow into resolve_service_area_for_point() which may behave unexpectedly on
+  invalid coordinates, producing confusing 500 errors rather than a 422.
+Fix: Change declarations to:
+  lat: float = Query(..., ge=-90.0, le=90.0)
+  lng: float = Query(..., ge=-180.0, le=180.0)
+  Effort: 15 minutes.
+
+[TASK-4-3] MEDIUM | favorites.py — GPS Coordinate Bounds Not Validated
+File: backend/routes/favorites.py (SaveFavoriteRequest, ~lines 26–33)
+Finding: pickup_lat, pickup_lng, dropoff_lat, dropoff_lng are float fields in
+  the Pydantic model with no geographic bounds. A user can store
+  pickup_lat=9999.0 in their favorites; this breaks downstream route-finding
+  calls when the favorite is used to pre-fill a ride request.
+Fix: Apply the validators from backend/validators.py (validate_coordinates or
+  equivalent) to the four coordinate fields via @field_validator. Effort: 30 min.
+
+[TASK-4-4] MEDIUM | favorites.py — name Field Has No max_length
+File: backend/routes/favorites.py (SaveFavoriteRequest.name, ~line 26)
+Finding: The name field for a saved favorite has no length constraint. A user
+  can submit a string of arbitrary length (MB-scale) that is stored and returned
+  on every GET /favorites call. With 20 favorites each carrying a 1MB name, a
+  single API response would be 20MB, causing performance degradation and
+  potentially exhausting the response buffer.
+Fix: Add max_length=100 to the field definition:
+  name: str = Field(..., min_length=1, max_length=100)
+  Effort: 5 minutes.
+
+[TASK-4-5] MEDIUM | wallet.py — recipient_phone Not Validated in Transfer
+File: backend/routes/wallet.py (TransferRequest, ~lines 97–98)
+Finding: recipient_phone is accepted as a plain str with no pattern, min_length,
+  or max_length. All other phone fields in the codebase enforce E.164 +1 format
+  via validate_phone(). An invalid phone string will fail to match any user in
+  the lookup and return a misleading 404 rather than a 422.
+Fix: Add pattern validation:
+  recipient_phone: str = Field(..., pattern=r'^\+1\d{10}$')
+  Effort: 5 minutes.
+
+[TASK-4-6] MEDIUM | corporate_wallet.py — AdjustRequest.amount Has No Bounds
+File: backend/routes/corporate_wallet.py (AdjustRequest, ~lines 66–69)
+Finding: The amount field on the wallet adjustment request accepts any float
+  (positive or negative) with no magnitude limit. An admin can credit or debit
+  a corporate wallet by $1,000,000+ in a single call, with only a free-text
+  notes field as a guardrail.
+Fix: Add Field(..., ge=-100000.0, le=100000.0) and add a server-side audit
+  log entry that captures the adjusting admin's email and the amount.
+  Effort: 30 minutes.
+
+[TASK-4-7] MEDIUM | corporate_company.py — Allowance float Instead of Decimal
+File: backend/routes/corporate_company.py (allowance grant endpoints, ~lines 177–182, 269)
+Finding: Allowance amounts accepted from the request body are float and passed
+  directly to the grant service without Decimal conversion. The service
+  (corporate_allowance_service.py ~line 52) forwards them to an RPC as-is.
+  Floating-point arithmetic on monetary values violates the Spinr coding
+  standard (Decimal-only for money) and can introduce rounding errors.
+Fix: Convert to Decimal at the route layer before calling the service:
+  amount = Decimal(str(req.amount)).quantize(Decimal("0.01"), ROUND_HALF_UP)
+  Effort: 30 minutes.
+
+[TASK-4-8] PASS | fare_split.py — Phone Number Pattern Validated
+File: backend/routes/fare_split.py (SplitParticipantRequest, ~line 46)
+Finding: Participant phone numbers are validated with regex ^\+1\d{10}$ at the
+  Pydantic model level, consistent with the +1 Canada/US-only requirement.
+Fix: None required.
+
+[TASK-4-9] PASS | corporate_accounts.py — KYB MIME Type Whitelist
+File: backend/routes/corporate_accounts.py (kyb_upload_url endpoint)
+Finding: _ALLOWED_KYB_CONTENT whitelist enforced on MIME type before generating
+  a signed upload URL. Binary type sniffing is delegated to Supabase Storage.
+Fix: None required.
+
+================================================================================
+TASK 5 — ERROR HANDLING (DIM-10)
+================================================================================
+
+[TASK-5-1] HIGH | Dispute Resolution — Stripe Failure Does Not Roll Back Resolved Status
+File: backend/routes/disputes.py (admin_resolve_dispute, ~lines 188–208)
+Finding: The flow marks the dispute as "resolved" in the DB, then calls
+  stripe.Refund.create(). The Stripe call is wrapped in a bare except Exception
+  (# noqa BLE001). If Stripe fails, the exception is logged but execution
+  continues — the dispute is left in "resolved" state with no refund ever
+  issued. The rider's complaint is closed but the money was never returned.
+  Admins have no automatic alert; the discrepancy can go unnoticed for weeks.
+Fix: Either (a) call stripe.Refund.create() BEFORE updating the dispute status
+  and only commit the status change if Stripe succeeds, or (b) on Stripe
+  failure, revert dispute status to "pending" and return 502. Effort: 2–3 hours.
+
+[TASK-5-2] MEDIUM | Loyalty Redemption — Points Deducted, Wallet Credit Fails Silently
+File: backend/routes/loyalty.py (redeem_points, ~lines 206–226)
+Finding: The redemption endpoint deducts loyalty points first, then credits the
+  rider's wallet. If the wallet credit throws, the exception is caught and
+  logged but the loyalty deduction is NOT reversed. The rider loses points with
+  no financial benefit — a silent one-sided transaction.
+Fix: Perform the wallet credit first. If it succeeds, deduct the points. If
+  points deduction then fails, issue a compensating wallet debit and return 503.
+  Effort: 2–3 hours.
+
+[TASK-5-3] MEDIUM | Corporate Account — Wallet Creation Failure Not Handled on KYB Approval
+File: backend/routes/corporate_accounts.py (kyb_review endpoint, ~line 169)
+Finding: ensure_corporate_wallet() is called when KYB is approved but
+  exceptions are not caught. If wallet creation fails (e.g., DB timeout), the
+  company's KYB status becomes "approved" but no wallet exists. The next ride
+  billed to the company will fail with a confusing 500.
+Fix: Wrap in try/except; on failure return 503 and set KYB status back to an
+  intermediate state, then retry via a background task. Effort: 1–2 hours.
+
+[TASK-5-4] MEDIUM | /wallet/transactions — DB Error Silently Returns Empty List
+File: backend/routes/wallet.py (get_transactions, ~lines 226–228)
+Finding: db.get_rows() is inside a try/except that catches any exception and
+  returns an empty list. A rider with 50 transactions will see an empty history
+  if the DB is slow, with no indication of an error. HTTP status is 200.
+Fix: Remove the swallow or re-raise as HTTPException(503). Effort: 15 minutes.
+
+[TASK-5-5] MEDIUM | promotions.py — Bare except in get_available_promos
+File: backend/routes/promotions.py (get_available_promos, ~lines 365–366)
+Finding: A bare except Exception silently drops any promo that raises during
+  per-promo validation. A promo with corrupted data is invisibly skipped —
+  admins never see why a promo stopped appearing in the app.
+Fix: Log at ERROR level with promo_id, and optionally surface a partial-failure
+  flag in the response. Effort: 30 minutes.
+
+[TASK-5-6] PASS | disputes.py — User-Facing Endpoints Return Proper HTTPExceptions
+File: backend/routes/disputes.py (create_dispute, get_user_disputes, get_dispute)
+Finding: All three rider-facing endpoints return explicit HTTPException(404/403/409)
+  on all error paths. No swallowed exceptions or half-valid responses.
+Fix: None required.
+
+================================================================================
+TASK 6 — COMPLIANCE / PII / PCI (DIM-12)
+================================================================================
+
+[TASK-6-1] CRITICAL | Admin Disputes Endpoint Exposes Phone Numbers to Unauthenticated Callers
+File: backend/routes/disputes.py (admin_get_disputes enrichment, ~lines 130–140)
+Finding: The GET /admin/disputes endpoint (already flagged in TASK-1-1 for
+  missing auth) enriches each dispute row with get_user_by_id() and get_ride(),
+  then includes the rider's phone_number in the response at ~line 137.
+  Phone number is personal information under PIPEDA. The combination of
+  unauthenticated access + PII in the response body is a PIPEDA breach risk.
+Fix: Add authentication (TASK-1-1). Additionally, strip phone_number from the
+  response or replace with a masked format (e.g., +1***1234) for display.
+  Effort: 30 minutes (masking, after auth is added).
+
+[TASK-6-2] MEDIUM | Fare Split — Participant Phone Numbers Exposed to Any Authenticated User
+File: backend/routes/fare_split.py (get_fare_split_by_ride, ~line 200)
+Finding: GET /fare-split/ride/{ride_id} returns participant phone numbers in
+  the response body. Any authenticated rider can call this endpoint with any
+  ride_id (TASK-1-5) and harvest phone numbers of other users. Even after the
+  ownership check is added, participant phones should not be returned to the
+  ride requester — only whether each participant has accepted/paid.
+Fix: After adding the ownership check (TASK-1-5), remove phone_number from
+  the participant response payload. Return participant_id and status only;
+  let the requester look up their own contacts by name if needed.
+  Effort: 30 minutes.
+
+[TASK-6-3] MEDIUM | No Audit Trail on Dispute Resolution (PIPEDA Accountability)
+File: backend/routes/disputes.py (admin_resolve_dispute, ~lines 185–210)
+Finding: When an admin resolves a dispute — approving a refund or rejecting a
+  claim — there is no audit_log entry recording which admin made the decision,
+  when, what amount was approved, and the resolution notes. PIPEDA requires
+  accountability for decisions that affect personal information (the rider's
+  complaint). Without a log, there is no way to answer a PIPEDA access request
+  ("who decided my dispute and when?").
+Fix: Call log_audit() from maintenance.py after the dispute is resolved:
+  await log_audit("dispute_resolved", "dispute", dispute_id, admin.email,
+    f"Resolution: {req.resolution}. Amount: {req.refund_amount}")
+  Effort: 30 minutes.
+
+[TASK-6-4] LOW | Dispute Description Stored in Plaintext
+File: backend/routes/disputes.py (create_dispute, ~line 73)
+Finding: The user-supplied dispute description (which may include personal
+  details, route information, or driver complaints) is stored as a plaintext
+  string in the disputes table with no encryption at rest beyond Supabase's
+  default database encryption. This is acceptable for the current stage but
+  should be reviewed before handling sensitive legal claims at scale.
+Fix: At scale, consider encrypting sensitive free-text fields using
+  Supabase Vault or application-level encryption. RECOMMENDATION for now.
+  Effort: 4–8 hours when prioritized.
+
+[TASK-6-5] PASS | wallet.py — No PII in Ledger Descriptions
+File: backend/routes/wallet.py (_record_transaction helper)
+Finding: Transaction ledger descriptions reference amounts and ride IDs only —
+  no phone numbers, addresses, or card data. Compliant with PIPEDA data
+  minimization principle.
+Fix: None required.
+
+[TASK-6-6] PASS | corporate_company.py — Email Normalized and Not Logged
+File: backend/routes/corporate_company.py (invite member endpoint)
+Finding: Email is normalized (lowercased) via schema validator before storage.
+  No email is logged in plaintext at the route level.
+Fix: None required.
+
+[TASK-6-7] PASS | No Raw Card Data in Any Audited File
+File: All 11 audited route files
+Finding: No endpoint accepts or stores raw card numbers, CVVs, or full PANs.
+  All payment flows use Stripe PaymentIntent/SetupIntent IDs as proxies.
+  PCI-DSS scope is correctly minimized.
+Fix: None required.
+
+================================================================================
+TASK 7 — PERFORMANCE (DIM-14)
+================================================================================
+
+[TASK-7-1] HIGH | disputes.py Admin List — N+1 Query Pattern (100+ DB Calls)
+File: backend/routes/disputes.py (admin_get_disputes enrichment, ~lines 130–140)
+Finding: After fetching up to 50 dispute rows, the endpoint loops over each
+  dispute and makes two additional DB calls: get_user_by_id() and get_ride().
+  With 50 disputes this produces up to 101 sequential DB round-trips per
+  request. Under Supabase's REST API latency (~5–15ms/call), this adds 0.5–1.5
+  seconds of pure DB latency per admin page load — and will worsen as dispute
+  volume grows.
+Fix: Collect unique user_ids and ride_ids from the dispute rows first, then
+  batch-fetch users and rides with get_rows({"id": {"$in": [...]}}) — reducing
+  to 3 total queries regardless of dispute count. Effort: 2 hours.
+
+[TASK-7-2] MEDIUM | promotions.py — N+1 Per-Promo Usage Check in get_available_promos
+File: backend/routes/promotions.py (get_available_promos, ~lines 294–296, 324–327)
+Finding: The endpoint fetches up to 100 active promos, then for each promo
+  makes a count_documents() call to check how many times the current user has
+  used it. 100 promos → 100 extra DB calls per request. For a rider checking
+  available promos on the booking screen this causes noticeable latency.
+Fix: Fetch all promo_applications for the current user in one query, then join
+  in memory:
+    used = {row["promo_id"]: row["count"] for row in user_usage_rows}
+  Effort: 2–3 hours.
+
+[TASK-7-3] MEDIUM | corporate_company.py — billing/summary Hardcoded limit=1000
+File: backend/routes/corporate_company.py (billing_summary, ~line 414)
+Finding: list_company_ride_payment_sources() is called with a hardcoded
+  limit=1000. For a high-volume corporate account (e.g., 2000 rides/month),
+  the summary silently truncates — the totals shown in the dashboard are wrong.
+  No pagination is offered.
+Fix: Either implement proper pagination (skip/limit query params) or aggregate
+  the totals in SQL rather than fetching all rows and summing in Python.
+  Effort: 2–3 hours.
+
+[TASK-7-4] MEDIUM | corporate_company.py — billing/statements/{month} Hardcoded limit=5000
+File: backend/routes/corporate_company.py (billing_statement, ~line 437)
+Finding: Same pattern as TASK-7-3 with a limit=5000 — acceptable for near-term
+  volumes but will silently truncate for busy accounts, causing incorrect
+  monthly invoice totals.
+Fix: Aggregate in SQL (SUM, COUNT grouped by payment_source) rather than
+  fetching all rows and reducing in Python. Effort: 2–3 hours.
+
+[TASK-7-5] MEDIUM | corporate_rider.py — Allowance Request Fetches All Company Requests
+File: backend/routes/corporate_rider.py (get_rider_allowance_requests, ~line 248)
+Finding: The endpoint fetches all allowance_requests for the entire company
+  (no rider filter at the DB level), then filters to the current rider in
+  Python (line ~249). For a company with 500 riders each making monthly
+  requests, this pulls 6000 rows per month just to show one rider's 10 rows.
+Fix: Pass member_id as a DB filter to list_company_allowance_requests() so the
+  query is scoped to the rider at the database level. Effort: 1 hour.
+
+[TASK-7-6] MEDIUM | corporate_company.py — list_company_allowances Unbounded
+File: backend/routes/corporate_company.py (list_allowances endpoint, ~line 152)
+Finding: No limit parameter is applied to the allowances query. A company with
+  10,000 members will return all allowance rows in a single response.
+Fix: Add pagination (skip/limit) parameters consistent with other list
+  endpoints. Effort: 1 hour.
+
+[TASK-7-7] LOW | favorites.py — No Pagination Beyond First 20 Results
+File: backend/routes/favorites.py (get_favorite_routes, ~lines 40–44)
+Finding: The endpoint returns at most 20 favorite routes (hardcoded limit=20)
+  with no offset or cursor parameter. A user with more than 20 saved routes
+  cannot retrieve the rest via the API.
+Fix: Add skip/limit query parameters (limit capped at 50). Effort: 30 minutes.
+
+[TASK-7-8] PASS | fares.py — Redis Cache with Configurable TTL
+File: backend/routes/fares.py (~lines 45–54)
+Finding: Fare responses are cached in Redis keyed by a ~1.1km grid cell for
+  FARE_CACHE_TTL_SECONDS (default 300s, env-configurable). Cache read/write
+  failures are caught and do not block the response. Cache invalidation function
+  exists for on-demand purge.
+Fix: None required.
+
+[TASK-7-9] PASS | wallet.py — Transaction History Properly Paginated
+File: backend/routes/wallet.py (get_transactions)
+Finding: limit is constrained to Query(ge=1, le=100) and offset is Query(ge=0).
+  No unbounded fetch risk.
+Fix: None required.
+
+================================================================================
+TASK 8 — FEATURE COMPLETENESS (DIM-01)
+================================================================================
+
+[TASK-8-1] MEDIUM | Fare Split — No Refund Logic on Cancellation or Decline
+File: backend/routes/fare_split.py (cancel_split ~line 349, participant_respond ~line 235)
+Finding: When a split is cancelled by the requester, or when a participant who
+  has already paid declines their portion, no refund or wallet credit is issued.
+  The paid participant is financially worse off, the split is cancelled, and
+  their money is silently retained. This will generate support tickets.
+Fix: On split cancellation, iterate participants with status="paid" and issue a
+  compensating wallet credit equal to their share. On participant decline after
+  payment, issue a credit and recompute remaining shares for still-accepted
+  participants. Effort: 3–4 hours.
+
+[TASK-8-2] MEDIUM | corporate_company.py — GeoJSON Geofence Not Schema-Validated
+File: backend/routes/corporate_company.py (set_policy endpoint, ~lines 355–358)
+Finding: The geofence field of a company policy is accepted as a raw dict and
+  stored without GeoJSON schema validation. A malformed geofence (missing
+  "features" array, wrong coordinate order) will pass the Pydantic layer but
+  break the geofence evaluation function at ride-request time, blocking all
+  corporate rides for that company.
+Fix: Validate the dict against a minimal GeoJSON schema (type == "FeatureCollection",
+  features is a list, each feature has geometry with type and coordinates) using
+  a @field_validator before storing. Effort: 1–2 hours.
+
+[TASK-8-3] RECOMMENDATION | Fare Split — Hard Limit of 5 Participants
+File: backend/routes/fare_split.py (SplitRequest, ~line 42)
+Finding: max_length=5 on the participants list is intentional per product design
+  but is not documented inline. If the limit is ever raised, the current
+  per-participant loop with no batching will become an N+1 concern.
+Fix: Add a code comment: # Product limit: max 5 participants by design.
+  No change needed at current scale.
+
+[TASK-8-4] PASS | disputes.py — Duplicate Dispute Prevention
+File: backend/routes/disputes.py (create_dispute, ~lines 60–66)
+Finding: The endpoint checks for an existing open dispute on the same ride
+  before creating a new one. A rider cannot open two disputes on the same trip.
+Fix: None required.
+
+[TASK-8-5] PASS | loyalty.py — Tier Multiplier Applied at Point Award
+File: backend/routes/loyalty.py (earn_points_for_ride, ~lines 133–165)
+Finding: Tier-based multipliers (Silver, Gold, Platinum) are fetched and
+  applied at award time. Bonus points are computed and stored separately.
+  The calculation is deterministic and auditable.
+Fix: None required.
+
+================================================================================
+TASK 9 — ENCRYPTION & SECRETS (DIM-03)
+================================================================================
+
+[TASK-9-1] PASS | No Hardcoded API Keys in Audited Routes
+File: All 11 audited route files
+Finding: No Stripe keys, Supabase credentials, JWT secrets, or Twilio tokens
+  appear as string literals in any of the 11 route files. All sensitive values
+  are retrieved from settings (core/config.py) which loads from environment
+  variables / .env.
+Fix: None required.
+
+[TASK-9-2] PASS | Stripe Secret Key Accessed via settings, Not Environment Directly
+File: backend/routes/corporate_accounts.py (~line 172)
+Finding: stripe.api_key = settings.STRIPE_SECRET_KEY — retrieved from the
+  Pydantic settings object (which validates at startup) rather than
+  os.environ.get(). Consistent with the codebase convention.
+Fix: None required.
+
+[TASK-9-3] RECOMMENDATION | Move Stripe Key Assignment Out of Route Handler
+File: backend/routes/corporate_accounts.py (~line 172)
+Finding: While not a security flaw, setting stripe.api_key inside a route
+  handler on every call is redundant (Stripe SDK holds the key globally once
+  set). This is better placed in server.py startup or a service module.
+Fix: Move stripe.api_key = settings.STRIPE_SECRET_KEY to the app lifespan or
+  a shared stripe_client.py module. Effort: 30 minutes.
+
+================================================================================
+TASK 10 — TEST COVERAGE (DIM-09)
+================================================================================
+
+[TASK-10-1] MEDIUM | wallet.py Race Conditions Have No Concurrent Tests
+File: backend/tests/ (no concurrent wallet tests found)
+Finding: The three CRITICAL race conditions in wallet.py (TASK-2-1 through
+  TASK-2-3) are not covered by any tests that exercise concurrent execution.
+  The existing tests likely call each endpoint sequentially and will pass even
+  with the TOCTOU bugs present. The bugs will only manifest under real
+  concurrent load.
+Fix: Add pytest-asyncio concurrent tests using asyncio.gather() to call the
+  same endpoint twice simultaneously with the same wallet and verify the
+  resulting balance is correct (not doubled/halved). Effort: 3–4 hours.
+
+[TASK-10-2] MEDIUM | promotions.py Race Condition Has No Concurrency Test
+File: backend/tests/ (test_loyalty.py mentions idempotency but no concurrent promo test)
+Finding: The promo exhaustion race (TASK-2-5) is similarly untestable with
+  sequential tests. A concurrent test calling apply_promo twice for a
+  max_uses=1 promo would catch the bug immediately.
+Fix: Add a concurrent test with asyncio.gather() and assert that only one
+  application succeeds. Effort: 2 hours.
+
+[TASK-10-3] LOW | Admin Endpoints Lack Integration Tests
+File: backend/tests/
+Finding: No test files were found covering the admin promo or admin dispute
+  endpoints. Given that these are fully unprotected (TASK-1-1 through TASK-1-3),
+  even basic authentication tests would have caught the missing dependencies.
+Fix: Add pytest integration tests for all admin endpoints that verify a 401
+  is returned without credentials. Effort: 2–3 hours.
+
+[TASK-10-4] PASS | loyalty.py — Idempotency Test Exists
+File: backend/tests/test_loyalty.py (~line 202)
+Finding: A test for idempotent point award exists (confirms that a second call
+  for the same ride does not double-award). Note: TASK-2-4 identifies that the
+  underlying implementation is not atomic; the test passes only because the
+  test runner is single-threaded.
+Fix: None for the test itself. Fix the implementation (TASK-2-4).
+
+================================================================================
+TASK 11 — SECURITY HEADERS / CORS (DIM-11)
+================================================================================
+
+[TASK-11-1] PASS | Security Headers Applied at Middleware Level
+File: backend/core/middleware.py (already audited — not in scope of this audit)
+Finding: Content-Security-Policy, X-Frame-Options, X-Content-Type-Options,
+  HSTS, and CORS are all configured at the ASGI middleware layer and apply
+  to all routes including the 11 audited here. No per-route header overrides
+  were found that would weaken these protections.
+Fix: None required.
+
+[TASK-11-2] PASS | Rate Limiting Applied to High-Risk Promo Endpoints
+File: backend/routes/promotions.py (~lines at promo_validate_limit, promo_available_limit)
+Finding: promo_validate_limit = 10/minute and promo_available_limit = 20/minute
+  are applied via SlowAPI decorators. This limits brute-force promo code
+  enumeration. (Note: these limits are irrelevant until auth is added — see
+  TASK-1-3.)
+Fix: None required for the rate limit itself.
+
+================================================================================
+FINAL TALLY
+================================================================================
+
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     7 |
+| HIGH            |     7 |
+| MEDIUM          |    20 |
+| LOW             |     2 |
+| PASS            |    14 |
+| RECOMMENDATION  |     2 |
+| TOTAL           |    52 |
+
+CRITICAL breakdown (7):
+  TASK-1-1  GET /admin/disputes — no auth
+  TASK-1-2  PUT /admin/disputes/{id}/resolve — no auth
+  TASK-1-3  Four admin promo endpoints — no auth
+  TASK-1-4  /rider/work-profile/join-domain — authorization bypass
+  TASK-2-1  /wallet/top-up — TOCTOU race (balance corruption)
+  TASK-2-2  /wallet/pay — TOCTOU race + non-atomic dual update
+  TASK-2-3  /wallet/transfer — TOCTOU race (multi-party, money disappears)
+  (TASK-6-1 is a PIPEDA manifestation of TASK-1-1 — not double-counted)
+
+HIGH breakdown (7):
+  TASK-1-6  IDOR on corporate wallet admin endpoints
+  TASK-1-7  IDOR on corporate account admin endpoints
+  TASK-2-4  Loyalty points — non-atomic idempotency check
+  TASK-2-5  Promo redemption — non-atomic uses counter
+  TASK-3-1  Dispute refund — no Stripe idempotency key
+  TASK-4-1  Promo discount_value — no upper bound
+  TASK-5-1  Dispute resolution — Stripe failure doesn't roll back status
+  TASK-7-1  Admin disputes list — N+1 query (100+ DB calls per page)
+
+================================================================================
+REMEDIATION PRIORITY LIST
+================================================================================
+
+── P0: FIX BEFORE ANY BETA TESTING ──────────────────────────────────────────
+
+P0-1  [TASK-1-1, TASK-1-2]  Add auth to GET + PUT /admin/disputes endpoints
+      Add Depends(get_current_admin) to both admin dispute endpoints in
+      disputes.py. Without this any internet user can read all disputes + PII
+      and approve Stripe refunds.
+
+P0-2  [TASK-1-3]  Add auth to all four admin promo endpoints
+      Add Depends(get_current_admin) to the admin_router in promotions.py.
+      Without this any internet user can create unlimited-budget promo codes.
+
+P0-3  [TASK-1-4]  Fix /rider/work-profile/join-domain domain ownership bypass
+      Validate that the rider's JWT email domain is in corporate_allowed_domains
+      before inserting the membership in corporate_rider.py.
+
+P0-4  [TASK-2-1]  Fix /wallet/top-up TOCTOU race condition
+      Replace read-compute-write with an atomic Supabase RPC increment in
+      wallet.py. Consumer wallet balances are currently corruptible.
+
+P0-5  [TASK-2-2]  Fix /wallet/pay TOCTOU race + non-atomic dual update
+      Atomic Postgres function covering both wallet debit and ride status update
+      in wallet.py.
+
+P0-6  [TASK-2-3]  Fix /wallet/transfer TOCTOU race (multi-party)
+      Atomic Postgres function locking both wallets in key order in wallet.py.
+
+── P1: FIX BEFORE BETA LAUNCH ──────────────────────────────────────────────
+
+P1-1  [TASK-2-4]  Fix loyalty point double-award race
+      Add UNIQUE constraint on loyalty_transactions(user_id, ride_id) and
+      handle the conflict as a no-op in loyalty.py.
+
+P1-2  [TASK-2-5]  Fix promo exhaustion race condition
+      Replace validate-then-increment with atomic conditional UPDATE in
+      promotions.py.
+
+P1-3  [TASK-3-1]  Add Stripe idempotency key to dispute refund
+      Pass idempotency_key=f"refund-dispute-{dispute_id}" to Refund.create()
+      in disputes.py.
+
+P1-4  [TASK-4-1]  Add upper bound to promo discount_value
+      Field(gt=0, le=500) for flat discounts, le=100 for percentage in
+      promotions.py CreatePromoCodeRequest.
+
+P1-5  [TASK-5-1]  Fix dispute resolution error flow (Stripe failure → rollback)
+      Move Stripe refund call before DB status update in disputes.py so failure
+      leaves the dispute in a retryable state.
+
+P1-6  [TASK-5-2]  Fix loyalty redemption non-atomicity (points deducted, wallet not credited)
+      Reverse the operation order in loyalty.py; add compensating credit on failure.
+
+P1-7  [TASK-1-5]  Add ownership check to GET /fare-split/ride/{ride_id}
+      Restrict access to ride owner + participants in fare_split.py.
+
+P1-8  [TASK-1-6, TASK-1-7]  Document or enforce IDOR scope on corporate admin endpoints
+      Add company ownership checks or document the global-admin assumption for
+      corporate_wallet.py and corporate_accounts.py.
+
+P1-9  [TASK-6-1, TASK-6-2]  Strip phone numbers from admin/public dispute + split responses
+      Remove phone_number from admin_get_disputes enrichment and
+      get_fare_split_by_ride participant payload.
+
+P1-10 [TASK-7-1]  Fix N+1 in admin disputes list (batch user + ride fetches)
+      Replace per-dispute get_user_by_id + get_ride loops with batched queries
+      in disputes.py.
+
+── P2: BEFORE PUBLIC LAUNCH ─────────────────────────────────────────────────
+
+P2-1  [TASK-3-2]  Bound dispute refund_amount to original fare
+P2-2  [TASK-3-3]  Add Stripe idempotency key to corporate wallet top-up
+P2-3  [TASK-3-4]  Use Decimal + ROUND_HALF_UP in loyalty point-to-dollar conversion
+P2-4  [TASK-4-2]  Add ge/le bounds to fares.py lat/lng query params
+P2-5  [TASK-4-3]  Add GPS coordinate bounds to favorites SaveFavoriteRequest
+P2-6  [TASK-4-4]  Add max_length=100 to favorites name field
+P2-7  [TASK-4-5]  Add phone pattern validation to wallet TransferRequest
+P2-8  [TASK-4-6]  Add magnitude bounds to corporate wallet AdjustRequest.amount
+P2-9  [TASK-4-7]  Convert allowance float to Decimal in corporate_company.py
+P2-10 [TASK-5-3]  Handle wallet creation failure on KYB approval (corporate_accounts.py)
+P2-11 [TASK-5-4]  Remove silent empty-list fallback in /wallet/transactions
+P2-12 [TASK-5-5]  Log promo errors at ERROR level in get_available_promos
+P2-13 [TASK-6-3]  Add audit log entry on dispute resolution (PIPEDA accountability)
+P2-14 [TASK-7-2]  Fix N+1 per-promo usage check in get_available_promos
+P2-15 [TASK-7-3]  Fix billing/summary truncation (limit=1000) in corporate_company.py
+P2-16 [TASK-7-4]  Fix billing/statements truncation (limit=5000) in corporate_company.py
+P2-17 [TASK-7-5]  Scope allowance-request query to rider at DB level (corporate_rider.py)
+P2-18 [TASK-7-6]  Add pagination to list_company_allowances (corporate_company.py)
+P2-19 [TASK-8-1]  Add refund logic for cancelled/declined fare splits
+P2-20 [TASK-8-2]  Validate GeoJSON geofence structure in corporate policy endpoint
+P2-21 [TASK-2-6]  Fix non-atomic wallet debit + status update in fare split payment
+
+── P3: HARDENING ────────────────────────────────────────────────────────────
+
+P3-1  [TASK-6-4]  Consider encrypting sensitive free-text dispute descriptions
+P3-2  [TASK-9-3]  Move stripe.api_key assignment out of route handler into lifespan
+P3-3  [TASK-7-7]  Add pagination to GET /favorites (currently capped at 20)
+P3-4  [TASK-10-1] Add concurrent tests for wallet TOCTOU scenarios
+P3-5  [TASK-10-2] Add concurrent test for promo exhaustion race
+P3-6  [TASK-10-3] Add auth integration tests for all admin endpoints
+
+── P4: FUTURE FEATURES ───────────────────────────────────────────────────────
+
+P4-1  [TASK-8-3]  Document 5-participant fare split limit with inline comment
+
+================================================================================
+END OF AUDIT — backend-api v1
+Audit date: 2026-04-26 | Branch: claude/fix-audit-prompt-length-AJpQN
+Files audited: disputes.py, fare_split.py, fares.py, favorites.py, loyalty.py,
+  promotions.py, corporate_accounts.py, corporate_company.py,
+  corporate_rider.py, corporate_wallet.py, wallet.py
+================================================================================

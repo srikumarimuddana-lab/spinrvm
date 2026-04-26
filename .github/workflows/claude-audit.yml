@@ -1,0 +1,137 @@
+name: Claude Config Audit
+
+on:
+  pull_request:
+    paths:
+      - '.claude/**'
+      - 'CLAUDE.md'
+      - '.agents/**'
+      - '.github/workflows/claude.yml'
+  push:
+    branches: [main, develop]
+    paths:
+      - '.claude/**'
+      - 'CLAUDE.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  audit:
+    name: Claude config audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate settings JSON schemas
+        run: |
+          python3 -c "import json; json.load(open('.claude/settings.json'))"
+          if [ -f .claude/settings.local.json ]; then
+            python3 -c "import json; json.load(open('.claude/settings.local.json'))"
+          fi
+
+      - name: Structural lint of Bash permission patterns
+        run: |
+          python3 - <<'PY'
+          import json, re, sys
+          bad = []
+          for path in ['.claude/settings.json', '.claude/settings.local.json']:
+              try:
+                  with open(path) as f:
+                      data = json.load(f)
+              except FileNotFoundError:
+                  continue
+              perms = data.get('permissions', {})
+              for bucket in ('allow', 'deny'):
+                  for rule in perms.get(bucket, []):
+                      m = re.match(r'^(Bash|Read|Write)\((.+)\)$', rule)
+                      if not m:
+                          continue
+                      inner = m.group(2)
+                      # Unbalanced quotes or parens
+                      if inner.count("'") % 2 or inner.count('"') % 2:
+                          bad.append(f"{path}:{bucket}:{rule} — unbalanced quote")
+                      if inner.count('(') != inner.count(')'):
+                          bad.append(f"{path}:{bucket}:{rule} — unbalanced paren")
+          if bad:
+              print("\n".join(bad))
+              sys.exit(1)
+          PY
+
+      - name: Check attribution model name matches pinned model
+        run: |
+          python3 - <<'PY'
+          import json, sys, re
+          s = json.load(open('.claude/settings.json'))
+          pinned = s.get('model', '')
+          attr = s.get('attribution', {}).get('commit', '')
+          m = re.search(r'claude-[a-z]+-[0-9]+-[0-9]+', attr)
+          if m and pinned and m.group(0) != pinned:
+              print(f"ATTRIBUTION DRIFT: pinned={pinned} attribution={m.group(0)}")
+              sys.exit(1)
+          PY
+
+      - name: Assert pre-commit hook is tracked and executable
+        run: |
+          test -f .claude/hooks/pre-commit || { echo "pre-commit hook missing"; exit 1; }
+          test -x .claude/hooks/pre-commit || { echo "pre-commit hook not executable"; exit 1; }
+
+      - name: Shellcheck hooks
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: ./.claude/hooks
+
+      - name: Detect P0 conflict — local override of deny rules
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          s = json.load(open('.claude/settings.json'))
+          try:
+              l = json.load(open('.claude/settings.local.json'))
+          except FileNotFoundError:
+              sys.exit(0)
+          deny = set(s.get('permissions', {}).get('deny', []))
+          local_allow = l.get('permissions', {}).get('allow', [])
+          conflicts = []
+          danger = ['git push origin main', 'git push:*', 'git reset:*', 'python:*', 'python3 *', 'py *', 'curl *']
+          for rule in local_allow:
+              for d in danger:
+                  if d in rule:
+                      conflicts.append(rule)
+          if conflicts:
+              print("LOCAL OVERRIDE of high-risk rules:")
+              for c in conflicts: print(f"  - {c}")
+              sys.exit(1)
+          PY
+
+      - name: Verify god nodes referenced in CLAUDE.md
+        run: |
+          if [ -f graphify-out/GRAPH_REPORT.md ]; then
+            # extract god node names (backticked) and check at least 60% are in CLAUDE.md
+            python3 - <<'PY'
+          import re, sys
+          gods = re.findall(r'`([A-Za-z_]+)\(?\)?`', open('graphify-out/GRAPH_REPORT.md').read())
+          gods = gods[:10] if len(gods) > 10 else gods
+          claude = open('CLAUDE.md').read()
+          missing = [g for g in gods if g not in claude]
+          print(f"God nodes missing from CLAUDE.md: {missing}")
+          if len(missing) > len(gods) * 0.6:
+              sys.exit(1)
+          PY
+          fi
+
+      - name: Comment on PR with findings
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: 'Claude config audit found issues. See job logs for details. Fix P0 findings before merge.'
+            })

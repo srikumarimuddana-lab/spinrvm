@@ -15,11 +15,14 @@ from pydantic import BaseModel, Field
 
 try:
     from ..db import db
-    from ..db_supabase import rpc as db_rpc
+    from ..db_supabase import wallet_increment_balance, wallet_pay_for_ride
+    from ..db_supabase import wallet_transfer as _wallet_transfer_rpc
     from ..dependencies import get_current_user
     from ..utils.idempotency import idempotent_endpoint
 except ImportError:
     from db import db
+    from db_supabase import wallet_increment_balance, wallet_pay_for_ride
+    from db_supabase import wallet_transfer as _wallet_transfer_rpc
     from dependencies import get_current_user
     from utils.idempotency import idempotent_endpoint
 
@@ -95,7 +98,7 @@ class WalletPayRequest(BaseModel):
 
 
 class TransferRequest(BaseModel):
-    recipient_phone: str
+    recipient_phone: str = Field(..., pattern=r"^\+1\d{10}$")
     amount: float = Field(..., gt=0, le=200)
 
 
@@ -124,17 +127,7 @@ async def top_up_wallet(
     """Add funds to wallet. In production this would charge via Stripe first."""
     wallet = await get_or_create_wallet(current_user["id"])
 
-    try:
-        result = await db_rpc(
-            "wallet_increment_balance", {"p_wallet_id": wallet["id"], "p_amount": str(_d(req.amount))}
-        )
-    except Exception as e:
-        msg = str(e).lower()
-        if "suspended" in msg or "not found" in msg:
-            raise HTTPException(status_code=403, detail="Wallet is suspended") from e
-        raise HTTPException(status_code=503, detail="Wallet update failed") from e
-
-    new_balance = _d(result)
+    new_balance = await wallet_increment_balance(wallet["id"], _d(req.amount))
 
     txn = await _record_transaction(
         wallet_id=wallet["id"],
@@ -169,19 +162,18 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
         raise HTTPException(status_code=400, detail="ERR_FARE_EXCEEDED")
 
     try:
-        result = await db_rpc(
-            "wallet_pay_for_ride",
-            {"p_wallet_id": wallet["id"], "p_ride_id": req.ride_id, "p_amount": str(debit_amount)},
-        )
-    except Exception as e:
-        msg = str(e).lower()
-        if "insufficient" in msg:
-            raise HTTPException(status_code=400, detail="Insufficient wallet balance") from e
-        if "suspended" in msg or "not found" in msg:
-            raise HTTPException(status_code=403, detail="Wallet is suspended") from e
-        raise HTTPException(status_code=503, detail="Wallet update failed") from e
+        new_balance = await wallet_pay_for_ride(wallet["id"], req.ride_id, debit_amount)
+    except ValueError as exc:
+        if "insufficient_funds" in str(exc):
+            raise HTTPException(status_code=400, detail="Insufficient wallet balance") from exc
+        raise HTTPException(status_code=503, detail="Wallet payment failed — please retry") from exc
 
-    new_balance = _d(result)
+    # Mark the ride payment method (the RPC already set payment_status='paid')
+    await db.update_one(
+        "rides",
+        {"id": req.ride_id},
+        {"$set": {"payment_method": "wallet"}},
+    )
 
     txn = await _record_transaction(
         wallet_id=wallet["id"],
@@ -208,17 +200,13 @@ async def get_transactions(
     """Get wallet transaction history for the current user."""
     wallet = await get_or_create_wallet(current_user["id"])
 
-    try:
-        txns = await db.get_rows(
-            "wallet_transactions",
-            {"wallet_id": wallet["id"]},
-            limit=limit,
-            skip=offset,
-            order="created_at",
-        )
-    except Exception as e:
-        logger.error(f"Error fetching transactions: {e}")
-        txns = []
+    txns = await db.get_rows(
+        "wallet_transactions",
+        {"wallet_id": wallet["id"]},
+        limit=limit,
+        skip=offset,
+        order="created_at",
+    )
 
     return {
         "transactions": [
@@ -255,29 +243,20 @@ async def transfer_to_user(
 
     sender_wallet = await get_or_create_wallet(current_user["id"])
     recipient_wallet = await get_or_create_wallet(recipient["id"])
+
+    if not sender_wallet.get("is_active", True):
+        raise HTTPException(status_code=403, detail="Your wallet is suspended")
+
     transfer_amount = _d(req.amount)
 
     try:
-        rows = await db_rpc(
-            "wallet_transfer",
-            {
-                "p_sender_wallet_id": sender_wallet["id"],
-                "p_recipient_wallet_id": recipient_wallet["id"],
-                "p_amount": str(transfer_amount),
-            },
+        new_sender_balance, new_recipient_balance = await _wallet_transfer_rpc(
+            sender_wallet["id"], recipient_wallet["id"], transfer_amount
         )
-    except Exception as e:
-        msg = str(e).lower()
-        if "insufficient" in msg:
-            raise HTTPException(status_code=400, detail="Insufficient wallet balance") from e
-        if "suspended" in msg or "not found" in msg:
-            raise HTTPException(status_code=403, detail="Wallet is suspended") from e
-        raise HTTPException(status_code=503, detail="Wallet transfer failed") from e
-
-    # wallet_transfer returns a single row with sender_balance, recipient_balance
-    row = rows[0] if isinstance(rows, list) else rows
-    new_sender_balance = _d(row["sender_balance"])
-    new_recipient_balance = _d(row["recipient_balance"])
+    except ValueError as exc:
+        if "insufficient_funds" in str(exc):
+            raise HTTPException(status_code=400, detail="Insufficient wallet balance") from exc
+        raise HTTPException(status_code=503, detail="Transfer failed — please retry") from exc
 
     await _record_transaction(
         wallet_id=sender_wallet["id"],

@@ -1,4 +1,15 @@
-redis[asyncio]>=5.0.0
+# Source-of-truth for backend dependencies (B-P1-10).
+# Floor pins only; the production lockfile with SHA-256 hashes is
+# generated from this file via:
+#
+#     cd backend && pip-compile --generate-hashes \
+#         --resolver=backtracking --output-file=requirements-locked.txt \
+#         requirements.txt
+#
+# CI and the Dockerfile install from requirements-locked.txt with
+# `pip install --require-hashes` so a compromised PyPI mirror or a
+# typosquat dependency cannot ship into the container. Update both
+# files in the same PR — see docs/runbooks/dependency-update.md.
 
 # Server and framework
 fastapi>=0.115.0
@@ -86,7 +97,9 @@ flake8>=7.3.0
 # Redis (optional — transparent in-process fallback when REDIS_URL unset)
 redis[asyncio]>=5.0.0
 
-# Additional dependencies
+# Additional dependencies — pinned because pip-compile resolves these as
+# transitive deps of the SDKs above, and explicit floors here keep the
+# lockfile stable across regenerations.
 certifi>=2026.2.25
 idna>=3.11
 urllib3>=2.6.3

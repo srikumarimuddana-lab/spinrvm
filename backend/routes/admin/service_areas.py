@@ -3,18 +3,22 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 try:
     from ... import db_supabase
     from ...routes.fares import invalidate_fare_cache
+    from ...utils.surge_engine import SURGE_CAP
 except ImportError:
     import db_supabase
     from routes.fares import invalidate_fare_cache
+    from utils.surge_engine import SURGE_CAP
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_SURGE_MAX = 10.0  # absolute ceiling for manual admin override
 
 # ---------- Service areas (table: service_areas) ----------
 
@@ -111,6 +115,26 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
     # Map surge_enabled to surge_active
     if "surge_enabled" in area:
         area["surge_active"] = area["surge_enabled"]
+
+    # Validate surge_multiplier at the API boundary (F-26).
+    # fare_service.py always applies SURGE_CAP (2.5×) at calculation time, so
+    # values above SURGE_CAP stored here only take effect as manual overrides
+    # that require documented justification per CLAUDE.md.
+    if "surge_multiplier" in area and area["surge_multiplier"] is not None:
+        sm = float(area["surge_multiplier"])
+        if sm < 1.0 or sm > _SURGE_MAX:
+            raise HTTPException(
+                status_code=400,
+                detail=f"surge_multiplier must be between 1.0 and {_SURGE_MAX}",
+            )
+        if sm > SURGE_CAP:
+            logger.warning(
+                "surge_multiplier %.2f exceeds auto-mode cap (%.1f) for area %s — "
+                "manual override; fare_service enforces cap for auto-mode areas",
+                sm,
+                SURGE_CAP,
+                area_id,
+            )
 
     update_payload = {k: v for k, v in area.items() if k in allowed and v is not None}
 

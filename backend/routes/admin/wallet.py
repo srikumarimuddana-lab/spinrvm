@@ -66,7 +66,9 @@ async def admin_get_wallet(
     return {
         "user": {
             "id": user["id"],
-            "name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or user.get("phone") or user.get("email"),
+            "name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+            or user.get("phone")
+            or user.get("email"),
             "phone": user.get("phone"),
             "email": user.get("email"),
         },

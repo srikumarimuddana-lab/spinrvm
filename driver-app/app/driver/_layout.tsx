@@ -1,108 +1,48 @@
-import React, { useMemo } from 'react';
-import { Tabs } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme } from '@shared/theme/ThemeContext';
-import type { ThemeColors } from '@shared/theme/index';
+import React from 'react';
+import { Stack } from 'expo-router';
 
-export default function DriverLayout() {
-  const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
-  // Use the real bottom inset (gesture bar on Android, home indicator on iOS)
-  // instead of hardcoded values. Fall back to 8px so the tab bar still has
-  // breathing room on devices with no system inset.
-  const bottomPadding = Math.max(insets.bottom, 8);
-  const tabBarHeight = 60 + bottomPadding;
-
+/**
+ * Driver stack — wraps the tab group so detail screens (settings, payout,
+ * referral, notifications, chat, addresses, etc.) push onto a real stack
+ * instead of living as hidden siblings inside the Tabs navigator.
+ *
+ * Before this file was rewritten, every sub-screen was registered with
+ * `<Tabs.Screen href={null}>` in the Tabs layout — which caused back
+ * presses from "Profile → Settings → Payout" to jump to the first tab
+ * (Drive) instead of popping the previous detail screen. Tabs navigators
+ * don't keep a push stack between hidden siblings.
+ *
+ * With this Stack wrapper:
+ *   - `(tabs)` hosts the 5 real tabs and is the initial screen.
+ *   - Every detail screen is a Stack.Screen, so `router.push('/driver/X')`
+ *     truly pushes, and the back button pops back to the previous screen
+ *     (the tab you came from, preserved in place).
+ *
+ * URLs are unchanged because `(tabs)` is a route group — it does not appear
+ * in the URL path. `/driver/settings` still points at this file's sibling.
+ */
+export default function DriverStackLayout() {
   return (
-    <Tabs
+    <Stack
       screenOptions={{
         headerShown: false,
-        tabBarStyle: {
-          backgroundColor: colors.surface,
-          borderTopColor: colors.border,
-          height: tabBarHeight,
-          paddingBottom: bottomPadding,
-          paddingTop: 8,
-          elevation: 8,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: -2 },
-          shadowOpacity: 0.1,
-          shadowRadius: 4,
-        },
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textDim,
-        tabBarLabelStyle: {
-          fontSize: 10,
-          fontWeight: '600',
-          marginTop: 2,
-        },
+        animation: 'slide_from_right',
       }}
     >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Drive',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="car-sport" size={24} color={color} />
-          ),
-        }}
-      />
-
-      <Tabs.Screen
-        name="rides"
-        options={{
-          title: 'Rides',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="list" size={24} color={color} />
-          ),
-        }}
-      />
-
-      <Tabs.Screen
-        name="earnings"
-        options={{
-          title: 'Earnings',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="wallet" size={24} color={color} />
-          ),
-        }}
-      />
-
-      <Tabs.Screen
-        name="profile"
-        options={{
-          title: 'Profile',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="person" size={24} color={color} />
-          ),
-        }}
-      />
-
-      <Tabs.Screen
-        name="help"
-        options={{
-          title: 'Help',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="chatbubble-ellipses" size={24} color={color} />
-          ),
-        }}
-      />
-
-      {/* Hidden Screens - use href: null to completely remove from tab bar */}
-      <Tabs.Screen name="faq" options={{ href: null }} />
-      <Tabs.Screen name="ride-detail" options={{ href: null }} />
-      <Tabs.Screen name="chat" options={{ href: null }} />
-      <Tabs.Screen name="settings" options={{ href: null }} />
-      <Tabs.Screen name="notifications" options={{ href: null }} />
-      <Tabs.Screen name="payout" options={{ href: null }} />
-      <Tabs.Screen name="payout-history" options={{ href: null }} />
-      <Tabs.Screen name="tax-documents" options={{ href: null }} />
-      <Tabs.Screen name="referral" options={{ href: null }} />
-      <Tabs.Screen name="addresses" options={{ href: null }} />
-      <Tabs.Screen name="subscription" options={{ href: null }} />
-      <Tabs.Screen name="quests" options={{ href: null }} />
-      <Tabs.Screen name="emergency-contacts" options={{ href: null }} />
-    </Tabs>
+      <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
+      <Stack.Screen name="settings" />
+      <Stack.Screen name="notifications" />
+      <Stack.Screen name="payout" />
+      <Stack.Screen name="payout-history" />
+      <Stack.Screen name="tax-documents" />
+      <Stack.Screen name="referral" />
+      <Stack.Screen name="addresses" />
+      <Stack.Screen name="subscription" />
+      <Stack.Screen name="quests" />
+      <Stack.Screen name="emergency-contacts" />
+      <Stack.Screen name="faq" />
+      <Stack.Screen name="chat" />
+      <Stack.Screen name="ride-detail" />
+    </Stack>
   );
 }

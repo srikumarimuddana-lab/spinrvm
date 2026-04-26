@@ -32,7 +32,7 @@ def _is_valid_uuid(value: str) -> bool:
 # --- File Upload Security ---
 ALLOWED_MIME_TYPES = {
     "image/jpeg",
-    "image/jpg",   # alias — some devices/pickers send this
+    "image/jpg",  # alias — some devices/pickers send this
     "image/png",
     "image/gif",
     "image/webp",
@@ -47,12 +47,12 @@ _MAGIC_BYTES = {
     b"%PDF": "application/pdf",
 }
 
-ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf'}
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf"}
 
 
 def _is_valid_webp(data: bytes) -> bool:
     """Return True only if data has both the RIFF container and WEBP marker."""
-    return data[:4] == b'RIFF' and data[8:12] == b'WEBP'
+    return data[:4] == b"RIFF" and data[8:12] == b"WEBP"
 
 
 def _validate_file_type(content: bytes, declared_type: str) -> None:
@@ -216,7 +216,12 @@ async def _supersede_and_flag_pending_review(
             await db_supabase.update_one(
                 "drivers",
                 {"id": driver_id},
-                {"status": "needs_review", "is_online": False, "is_available": False, "updated_at": datetime.now(timezone.utc)},
+                {
+                    "status": "needs_review",
+                    "is_online": False,
+                    "is_available": False,
+                    "updated_at": datetime.now(timezone.utc),
+                },
             )
         else:
             await db_supabase.update_one("drivers", {"id": driver_id}, {"updated_at": datetime.now(timezone.utc)})
@@ -407,12 +412,14 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
         )
         logger.info(f"Auto-created driver row for user_id={current_user['id']} during document upload")
 
-    # Validate requirement exists — check global table first (if UUID), then
-    # fall back to the driver's service area required_documents list
-    # (since we moved to per-area docs, requirement_id is now the area doc key).
-    req = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("document_requirements", {"id": doc_data.requirement_id}, limit=1)
-    )
+    # Validate requirement exists — check global table first (only if the id
+    # looks like a UUID; the driver app now sends area-doc slugs like
+    # "drivers_license" which would otherwise trip the UUID cast in Postgres
+    # and raise 22P02 before we reach the service-area fallback below).
+    req = None
+    if _is_valid_uuid(doc_data.requirement_id):
+        rows = await db_supabase.get_rows("document_requirements", {"id": doc_data.requirement_id}, limit=1)
+        req = rows[0] if rows else None
     if not req:
         # Try looking it up from the driver's service area
         area_req = None
@@ -835,7 +842,7 @@ async def upload_file(
         getattr(file, "content_type", None),
     )
     try:
-        content_length = request.headers.get('content-length')
+        content_length = request.headers.get("content-length")
         if content_length and int(content_length) > MAX_FILE_SIZE:
             raise FileTooLargeError()
 

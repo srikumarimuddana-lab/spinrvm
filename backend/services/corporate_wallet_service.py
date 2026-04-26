@@ -5,6 +5,7 @@ service. It wraps the Postgres function `corporate_wallet_apply_delta`
 which enforces row-level locking, idempotency on stripe_payment_intent_id,
 and optional soft-negative-floor enforcement.
 """
+
 from __future__ import annotations
 
 from typing import Any, Dict, Optional

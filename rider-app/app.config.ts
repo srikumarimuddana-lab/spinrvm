@@ -23,8 +23,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     splash: {
         backgroundColor: '#ee2b2b',
         resizeMode: 'contain',
-        image: './assets/images/splash-image.png',
-        imageWidth: 200,
+        image: './assets/images/icon.png',
+        imageWidth: 160,
     },
     ios: {
         supportsTablet: true,
@@ -114,8 +114,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         [
             'expo-splash-screen',
             {
-                image: './assets/images/splash-image.png',
-                imageWidth: 200,
+                image: './assets/images/icon.png',
+                imageWidth: 160,
                 resizeMode: 'contain',
                 backgroundColor: '#ee2b2b'
             }

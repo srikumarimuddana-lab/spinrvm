@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,12 +15,13 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { Pagination } from "@/components/ui/pagination";
 import {
   AlertTriangle, RefreshCw, CheckCircle, XCircle, Clock, DollarSign,
-  MessageSquare, User, Car,
+  User,
 } from "lucide-react";
-import { formatDate, formatCurrency } from "@/lib/utils";
-import { getDisputes, resolveDispute } from "@/lib/api";
+import { formatDate } from "@/lib/utils";
+import { getDisputes, getDisputeStats, resolveDispute } from "@/lib/api";
 
 const STATUS_COLORS: Record<string, string> = {
   open: "bg-red-100 text-red-700",
@@ -37,33 +38,79 @@ const REASON_LABELS: Record<string, string> = {
   other: "Other",
 };
 
+const PAGE_SIZE = 50;
+
+interface DisputeStats {
+  open: number;
+  under_review: number;
+  resolved: number;
+  rejected: number;
+  total_refunded: number;
+}
+
 export default function DisputesPage() {
   const [disputes, setDisputes] = useState<any[]>([]);
+  const [stats, setStats] = useState<DisputeStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState("all");
+  const [page, setPage] = useState(0);
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const reqIdRef = useRef(0);
+
   const [selected, setSelected] = useState<any>(null);
   const [resolving, setResolving] = useState(false);
   const [resolution, setResolution] = useState("approved");
   const [refundAmount, setRefundAmount] = useState("");
   const [adminNote, setAdminNote] = useState("");
 
-  const fetchDisputes = useCallback(async () => {
+  const fetchDisputes = async () => {
     setLoading(true);
+    const reqId = ++reqIdRef.current;
     try {
-      const data = await getDisputes();
-      setDisputes(Array.isArray(data) ? data : []);
+      const data = await getDisputes({
+        limit: PAGE_SIZE + 1,
+        offset: page * PAGE_SIZE,
+        status: statusFilter,
+      });
+      if (reqId !== reqIdRef.current) return;
+      const arr = Array.isArray(data) ? data : [];
+      setHasNextPage(arr.length > PAGE_SIZE);
+      setDisputes(arr.slice(0, PAGE_SIZE));
     } catch {
+      if (reqId !== reqIdRef.current) return;
       setDisputes([]);
+      setHasNextPage(false);
     } finally {
-      setLoading(false);
+      if (reqId === reqIdRef.current) setLoading(false);
     }
-  }, []);
+  };
 
-  useEffect(() => { fetchDisputes(); }, [fetchDisputes]);
+  const fetchStats = async () => {
+    try {
+      const data = await getDisputeStats();
+      setStats(data ?? null);
+    } catch {
+      setStats(null);
+    }
+  };
 
-  const filtered = statusFilter === "all"
-    ? disputes
-    : disputes.filter(d => d.status === statusFilter);
+  // Reset to page 0 on status filter change.
+  useEffect(() => {
+    if (page !== 0) setPage(0);
+    else fetchDisputes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter]);
+
+  // Re-fetch on page change.
+  useEffect(() => {
+    fetchDisputes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
+
+  // Stats once on mount.
+  useEffect(() => { fetchStats(); }, []);
+
+  const refresh = () => { fetchDisputes(); fetchStats(); };
 
   const handleResolve = async () => {
     if (!selected) return;
@@ -78,21 +125,13 @@ export default function DisputesPage() {
       setResolution("approved");
       setRefundAmount("");
       setAdminNote("");
-      fetchDisputes();
+      refresh();
     } catch (err) {
       console.error("Failed to resolve dispute:", err);
     } finally {
       setResolving(false);
     }
   };
-
-  // Stats
-  const openCount = disputes.filter(d => d.status === "open").length;
-  const reviewCount = disputes.filter(d => d.status === "under_review").length;
-  const resolvedCount = disputes.filter(d => d.status === "resolved").length;
-  const totalRefunded = disputes
-    .filter(d => d.status === "resolved")
-    .reduce((s, d) => s + Number(d.refund_amount || 0), 0);
 
   return (
     <div className="space-y-6">
@@ -107,36 +146,36 @@ export default function DisputesPage() {
             Review and resolve rider payment disputes and refund requests
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={fetchDisputes} disabled={loading}>
+        <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
           <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />
           Refresh
         </Button>
       </div>
 
-      {/* Stats */}
+      {/* Stats (aggregate, not per-page) */}
       <div className="grid grid-cols-4 gap-4">
         <Card><CardContent className="pt-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground"><XCircle className="h-4 w-4 text-red-500" /> Open</div>
-          <div className="text-2xl font-bold text-red-600">{openCount}</div>
+          <div className="text-2xl font-bold text-red-600">{stats?.open ?? "—"}</div>
         </CardContent></Card>
         <Card><CardContent className="pt-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground"><Clock className="h-4 w-4 text-amber-500" /> Under Review</div>
-          <div className="text-2xl font-bold text-amber-600">{reviewCount}</div>
+          <div className="text-2xl font-bold text-amber-600">{stats?.under_review ?? "—"}</div>
         </CardContent></Card>
         <Card><CardContent className="pt-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground"><CheckCircle className="h-4 w-4 text-green-500" /> Resolved</div>
-          <div className="text-2xl font-bold text-green-600">{resolvedCount}</div>
+          <div className="text-2xl font-bold text-green-600">{stats?.resolved ?? "—"}</div>
         </CardContent></Card>
         <Card><CardContent className="pt-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground"><DollarSign className="h-4 w-4" /> Total Refunded</div>
-          <div className="text-2xl font-bold">${totalRefunded.toFixed(2)}</div>
+          <div className="text-2xl font-bold">${(stats?.total_refunded ?? 0).toFixed(2)}</div>
         </CardContent></Card>
       </div>
 
       {/* Disputes Table */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle>All Disputes ({filtered.length})</CardTitle>
+          <CardTitle>Disputes</CardTitle>
           <div className="flex gap-1 bg-muted rounded-lg p-0.5">
             {["all", "open", "under_review", "resolved", "rejected"].map(s => (
               <button key={s} onClick={() => setStatusFilter(s)}
@@ -150,54 +189,64 @@ export default function DisputesPage() {
           {loading ? (
             <div className="flex justify-center p-12"><div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Rider</TableHead>
-                  <TableHead>Reason</TableHead>
-                  <TableHead>Fare</TableHead>
-                  <TableHead>Requested</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Filed</TableHead>
-                  <TableHead>Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filtered.length === 0 ? (
-                  <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No disputes found</TableCell></TableRow>
-                ) : filtered.map((d: any) => (
-                  <TableRow key={d.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelected(d)}>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <User className="h-4 w-4 text-muted-foreground" />
-                        <div>
-                          <p className="font-medium text-sm">{d.user_name || "Unknown"}</p>
-                          <p className="text-xs text-muted-foreground">{d.user_phone || ""}</p>
-                        </div>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{REASON_LABELS[d.reason] || d.reason}</Badge>
-                    </TableCell>
-                    <TableCell className="font-mono">${Number(d.original_fare || 0).toFixed(2)}</TableCell>
-                    <TableCell className="font-mono text-red-600">${Number(d.requested_amount || 0).toFixed(2)}</TableCell>
-                    <TableCell>
-                      <Badge className={STATUS_COLORS[d.status] || "bg-gray-100"}>{d.status}</Badge>
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{formatDate(d.created_at)}</TableCell>
-                    <TableCell>
-                      {d.status === "open" || d.status === "under_review" ? (
-                        <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); setSelected(d); }}>
-                          Resolve
-                        </Button>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">{d.resolution || "—"}</span>
-                      )}
-                    </TableCell>
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Rider</TableHead>
+                    <TableHead>Reason</TableHead>
+                    <TableHead>Fare</TableHead>
+                    <TableHead>Requested</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Filed</TableHead>
+                    <TableHead>Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {disputes.length === 0 ? (
+                    <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">No disputes found</TableCell></TableRow>
+                  ) : disputes.map((d: any) => (
+                    <TableRow key={d.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelected(d)}>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <User className="h-4 w-4 text-muted-foreground" />
+                          <div>
+                            <p className="font-medium text-sm">{d.user_name || "Unknown"}</p>
+                            <p className="text-xs text-muted-foreground">{d.user_phone || ""}</p>
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{REASON_LABELS[d.reason] || d.reason}</Badge>
+                      </TableCell>
+                      <TableCell className="font-mono">${Number(d.original_fare || 0).toFixed(2)}</TableCell>
+                      <TableCell className="font-mono text-red-600">${Number(d.requested_amount || 0).toFixed(2)}</TableCell>
+                      <TableCell>
+                        <Badge className={STATUS_COLORS[d.status] || "bg-gray-100"}>{d.status}</Badge>
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{formatDate(d.created_at)}</TableCell>
+                      <TableCell>
+                        {d.status === "open" || d.status === "under_review" ? (
+                          <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); setSelected(d); }}>
+                            Resolve
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">{d.resolution || "—"}</span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              <div className="px-4 border-t">
+                <Pagination
+                  page={page}
+                  pageSize={PAGE_SIZE}
+                  hasNextPage={hasNextPage}
+                  onPageChange={setPage}
+                />
+              </div>
+            </>
           )}
         </CardContent>
       </Card>

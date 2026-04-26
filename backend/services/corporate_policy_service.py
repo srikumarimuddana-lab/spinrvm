@@ -8,6 +8,7 @@ Public API:
     Async wrapper: fetches policy + allowance from DB, builds context, delegates to
     evaluate_policy. Use this from route handlers.
 """
+
 from __future__ import annotations
 
 import logging
@@ -21,7 +22,6 @@ except ImportError:
     _pytz = None  # type: ignore
 
 logger = logging.getLogger(__name__)
-
 
 
 class PolicyResult:
@@ -83,7 +83,7 @@ async def evaluate_policy_for_ride(
     corporate_account_id: str,
     rider_id: str,
     estimated_fare: Decimal,
-    ride_type: str,         # "standard" | "xl" | "premium"
+    ride_type: str,  # "standard" | "xl" | "premium"
     pickup_time: datetime,  # UTC
     *,
     policy_override: bool = False,
@@ -115,14 +115,13 @@ async def evaluate_policy_for_ride(
     except Exception as exc:
         logger.warning(
             "[policy] could not fetch policy for company=%s: %s — treating as no policy",
-            corporate_account_id, exc,
+            corporate_account_id,
+            exc,
         )
 
     try:
         memberships = await list_active_memberships_for_user(rider_id)
-        member = next(
-            (m for m in memberships if m.get("company_id") == corporate_account_id), None
-        )
+        member = next((m for m in memberships if m.get("company_id") == corporate_account_id), None)
         if member:
             allowance = await get_member_allowance(member["id"]) or {}
             if policy_override is False:
@@ -130,7 +129,9 @@ async def evaluate_policy_for_ride(
     except Exception as exc:
         logger.warning(
             "[policy] could not fetch allowance for rider=%s company=%s: %s",
-            rider_id, corporate_account_id, exc,
+            rider_id,
+            corporate_account_id,
+            exc,
         )
 
     ride_context: dict = {
@@ -147,8 +148,13 @@ async def evaluate_policy_for_ride(
 
 # Day-of-week abbreviations → Python weekday index (Mon=0 … Sun=6)
 _DOW_MAP: Dict[str, int] = {
-    "mon": 0, "tue": 1, "wed": 2, "thu": 3,
-    "fri": 4, "sat": 5, "sun": 6,
+    "mon": 0,
+    "tue": 1,
+    "wed": 2,
+    "thu": 3,
+    "fri": 4,
+    "sat": 5,
+    "sun": 6,
 }
 
 
@@ -235,8 +241,7 @@ def evaluate_policy(policy: dict, ride_context: dict) -> dict:
     if policy.get("allowed_geofence"):
         skipped.append("geofence")
         logger.warning(
-            "[policy] geofence check deferred (PostGIS unavailable) — "
-            "ride_id=%s company=%s",
+            "[policy] geofence check deferred (PostGIS unavailable) — ride_id=%s company=%s",
             ride_context.get("ride_id", "unknown"),
             ride_context.get("corporate_account_id", "unknown"),
         )

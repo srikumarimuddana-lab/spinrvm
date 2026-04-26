@@ -17,9 +17,70 @@ router = APIRouter()
 
 
 @router.get("/promotions")
-async def admin_get_promotions():
-    """Get all promotions/discount codes."""
-    promotions = await db_supabase.get_rows("promotions", order="created_at", desc=True, limit=500)
+async def admin_get_promotions(
+    limit: int = Query(50),
+    offset: int = Query(0),
+    promo_type: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+):
+    """Get promotions/discount codes with pagination.
+
+    Filters:
+    - `promo_type`: "public" (any promo whose promo_type != "private"), "private", or omit for all.
+    - `status`: "active" (is_active=true and not expired), "inactive" (is_active=false and not
+      expired), "not_expired" (expiry_date NULL or in the future, any is_active), "expired"
+      (expiry_date in the past), or omit for all.
+    - `search`: case-insensitive contains match on `code` or `description`.
+    """
+    import re
+
+    filters: Dict[str, Any] = {}
+
+    if promo_type == "private":
+        filters["promo_type"] = "private"
+    elif promo_type == "public":
+        # Treat anything not flagged "private" as public.
+        filters["promo_type"] = {"$ne": "private"}
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    if status == "active":
+        filters["is_active"] = True
+        filters["$or"] = [
+            {"expiry_date": None},
+            {"expiry_date": {"$gte": now_iso}},
+        ]
+    elif status == "inactive":
+        filters["is_active"] = False
+        filters["$or"] = [
+            {"expiry_date": None},
+            {"expiry_date": {"$gte": now_iso}},
+        ]
+    elif status == "not_expired":
+        filters["$or"] = [
+            {"expiry_date": None},
+            {"expiry_date": {"$gte": now_iso}},
+        ]
+    elif status == "expired":
+        filters["expiry_date"] = {"$lt": now_iso}
+
+    if search:
+        term = search.strip()
+        if term:
+            search_clauses = [
+                {"code": {"$regex": re.escape(term), "$options": "i"}},
+                {"description": {"$regex": re.escape(term), "$options": "i"}},
+            ]
+            # If we already used $or for status, AND the two via $and so neither is overwritten.
+            if "$or" in filters:
+                existing_or = filters.pop("$or")
+                filters["$and"] = [{"$or": existing_or}, {"$or": search_clauses}]
+            else:
+                filters["$or"] = search_clauses
+
+    promotions = await db_supabase.get_rows(
+        "promotions", filters, order="created_at", desc=True, limit=limit, offset=offset
+    )
     return promotions
 
 

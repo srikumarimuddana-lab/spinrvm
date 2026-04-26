@@ -26,9 +26,16 @@ PATTERNS=(
   "password\s*[=:]\s*['\"][^'\"]{6,}"
   "DATABASE_URL.*:[^@]+@"
 )
+# Exclude paths that legitimately contain literal pattern strings as
+# meta-documentation about what this scanner detects.
+SECRET_SCAN_EXCLUDES=(
+  ':!docs/claude-audit*'
+  ':!docs/proposed-claude-audit-*'
+  ':!.claude/hooks/pre-commit'
+)
 FOUND=0
 for p in "${PATTERNS[@]}"; do
-  M=$(git diff --cached -U0 | grep "^+" | grep -iE "$p" 2>/dev/null)
+  M=$(git diff --cached -U0 -- "${SECRET_SCAN_EXCLUDES[@]}" | grep "^+" | grep -iE "$p" 2>/dev/null)
   if [ -n "$M" ]; then
     echo -e "${RED}  BLOCKED — secret detected: $p${NC}"
     FOUND=1; BLOCKED=1

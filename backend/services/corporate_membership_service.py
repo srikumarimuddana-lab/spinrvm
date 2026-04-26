@@ -10,6 +10,7 @@ Domain auto-match flow:
     is active. The rider app surfaces a confirm prompt; confirmation
     routes to join_via_domain.
 """
+
 from __future__ import annotations
 
 import secrets
@@ -85,16 +86,14 @@ async def accept_invite(*, token: str, user_id: str) -> Tuple[Dict[str, Any], Di
     return company or {}, updated
 
 
-async def auto_match_by_email(
-    *, user_id: str, email: str
-) -> List[Dict[str, Any]]:
+async def auto_match_by_email(*, user_id: str, email: str) -> List[Dict[str, Any]]:
     """Return active companies that allow this rider's email domain AND
     haven't already enrolled them.
     """
     at = (email or "").rfind("@")
     if at < 0:
         return []
-    domain = email[at + 1:].strip().lower()
+    domain = email[at + 1 :].strip().lower()
     if not domain:
         return []
     raw = await find_companies_by_email_domain(domain)

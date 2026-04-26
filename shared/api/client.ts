@@ -11,6 +11,14 @@ if (__DEV__) console.log('API Client configured with URL:', API_URL);
 // Request timeout in milliseconds
 const REQUEST_TIMEOUT = 15000;
 
+// Propagate the client's timeout to the backend as an absolute epoch-ms
+// deadline. The backend's DeadlineMiddleware reads this and uses it to
+// skip DB retries once the client has already given up — frees backend
+// thread-pool workers for requests that aren't already doomed.
+function deadlineHeader(timeoutMs: number = REQUEST_TIMEOUT): Record<string, string> {
+  return { 'X-Deadline-Ms': String(Date.now() + timeoutMs) };
+}
+
 // Helper function to wrap fetch with timeout
 const fetchWithTimeout = async (
   url: string,
@@ -173,6 +181,22 @@ const handleApiError = async (response: Response, method: string, url: string, r
     }
   }
 
+  // On 503 (Supabase transient — see db_supabase.run_sync), retry once
+  // after a short delay before surfacing the error. The backend's
+  // run_sync already does its own 2-retry exponential-backoff loop, so
+  // a 503 here means the burst outlasted ~2s of retries server-side.
+  // Giving the rider-app one more shot after another 1.5s catches
+  // longer Supabase edge hiccups without the user seeing
+  // "Service temporarily unavailable: database" mid-booking.
+  if (response.status === 503 && retryFn && url !== '/auth/refresh') {
+    await new Promise(r => setTimeout(r, 1500));
+    try {
+      return retryFn() as any;
+    } catch {
+      // retry threw — fall through to the original error surface below
+    }
+  }
+
   const errorData = await response.json().catch(() => ({}));
   const message = extractErrorMessage(errorData);
   const requestId = response.headers.get('x-request-id') || errorData?.error?.request_id;
@@ -228,6 +252,7 @@ const client = {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...deadlineHeader(),
       ...config?.headers,
     };
     if (token) {
@@ -249,6 +274,7 @@ const client = {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...deadlineHeader(),
       ...config?.headers,
     };
     if (token) {
@@ -298,6 +324,7 @@ const client = {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...deadlineHeader(),
       ...config?.headers,
     };
     if (token) {
@@ -320,6 +347,7 @@ const client = {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      ...deadlineHeader(),
       ...config?.headers,
     };
     if (token) {

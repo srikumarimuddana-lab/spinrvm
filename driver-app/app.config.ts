@@ -26,8 +26,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     splash: {
         backgroundColor: '#ee2b2b',
         resizeMode: 'contain',
-        image: './assets/images/splash-image.png',
-        imageWidth: 200,
+        image: './assets/images/icon.png',
+        imageWidth: 160,
     },
     ios: {
         supportsTablet: true,
@@ -166,6 +166,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     plugins: [
         'expo-router',
+        ['expo-location', {
+            locationAlwaysAndWhenInUsePermission:
+                'Spinr Driver needs your location to dispatch ride requests, navigate to pickups, and share your live position with riders during active trips.',
+            locationWhenInUsePermission:
+                'Spinr Driver needs your location to dispatch ride requests and navigate to pickups.',
+            locationAlwaysPermission:
+                'Spinr Driver needs background location so you keep receiving ride offers and stay visible to riders when the app is in the background.',
+            isAndroidBackgroundLocationEnabled: true,
+            isIosBackgroundLocationEnabled: true,
+        }],
         ['@stripe/stripe-react-native', {
             merchantIdentifier: 'merchant.com.spinr.driver',
             enableGooglePay: true,
@@ -173,8 +183,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         [
             'expo-splash-screen',
             {
-                image: './assets/images/splash-image.png',
-                imageWidth: 200,
+                image: './assets/images/icon.png',
+                imageWidth: 160,
                 resizeMode: 'contain',
                 backgroundColor: '#ee2b2b'
             }

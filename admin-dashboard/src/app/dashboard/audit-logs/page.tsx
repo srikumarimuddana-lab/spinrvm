@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
+import { Pagination } from "@/components/ui/pagination";
 import {
     Shield,
     Search,
@@ -31,10 +32,7 @@ import {
     Ticket,
     RefreshCw,
     Download,
-    ChevronLeft,
-    ChevronRight,
     Activity,
-    Clock,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { getAuditLogs } from "@/lib/api";
@@ -58,7 +56,7 @@ const ACTION_CONFIG: Record<string, { label: string; color: string }> = {
     status_change: { label: "Status Change", color: "bg-amber-500/15 text-amber-600" },
 };
 
-const PER_PAGE = 25;
+const PAGE_SIZE = 50;
 
 export default function AuditLogsPage() {
     const [logs, setLogs] = useState<any[]>([]);
@@ -66,60 +64,54 @@ export default function AuditLogsPage() {
     const [search, setSearch] = useState("");
     const [actionFilter, setActionFilter] = useState("all");
     const [entityFilter, setEntityFilter] = useState("all");
-    const [page, setPage] = useState(1);
+    const [page, setPage] = useState(0);
+    const [hasNextPage, setHasNextPage] = useState(false);
+    const reqIdRef = useRef(0);
 
     const fetchLogs = async () => {
         setLoading(true);
+        const reqId = ++reqIdRef.current;
         try {
-            const data = await getAuditLogs(500);
-            setLogs(Array.isArray(data) ? data : []);
+            const data = await getAuditLogs({
+                limit: PAGE_SIZE + 1,
+                offset: page * PAGE_SIZE,
+                action: actionFilter !== "all" ? actionFilter : undefined,
+                entity_type: entityFilter !== "all" ? entityFilter : undefined,
+                search: search.trim() || undefined,
+            });
+            if (reqId !== reqIdRef.current) return;
+            const arr = Array.isArray(data) ? data : [];
+            setHasNextPage(arr.length > PAGE_SIZE);
+            setLogs(arr.slice(0, PAGE_SIZE));
         } catch {
+            if (reqId !== reqIdRef.current) return;
             setLogs([]);
+            setHasNextPage(false);
         } finally {
-            setLoading(false);
+            if (reqId === reqIdRef.current) setLoading(false);
         }
     };
 
+    // Reset to page 0 when filters change (search debounced).
     useEffect(() => {
-        fetchLogs();
-    }, []);
-
-    const filtered = useMemo(() => {
-        return logs.filter((log) => {
-            const matchSearch =
-                !search ||
-                log.user_email?.toLowerCase().includes(search.toLowerCase()) ||
-                log.entity_type?.toLowerCase().includes(search.toLowerCase()) ||
-                log.entity_id?.toLowerCase().includes(search.toLowerCase()) ||
-                log.details?.toLowerCase().includes(search.toLowerCase());
-            const matchAction = actionFilter === "all" || log.action === actionFilter;
-            const matchEntity = entityFilter === "all" || log.entity_type === entityFilter;
-            return matchSearch && matchAction && matchEntity;
-        });
-    }, [logs, search, actionFilter, entityFilter]);
-
-    const totalPages = Math.max(1, Math.ceil(filtered.length / PER_PAGE));
-    const paginated = filtered.slice((page - 1) * PER_PAGE, page * PER_PAGE);
-
-    // Reset to page 1 when filters change
-    useEffect(() => {
-        setPage(1);
+        const t = setTimeout(() => {
+            if (page !== 0) setPage(0);
+            else fetchLogs();
+        }, 300);
+        return () => clearTimeout(t);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [search, actionFilter, entityFilter]);
 
-    const stats = useMemo(() => {
-        const today = new Date().toISOString().split("T")[0];
-        return {
-            total: logs.length,
-            today: logs.filter((l) => l.created_at?.startsWith(today)).length,
-            uniqueUsers: new Set(logs.map((l) => l.user_email).filter(Boolean)).size,
-            latestAction: logs.length > 0 ? logs[0].action : "—",
-        };
-    }, [logs]);
+    // Re-fetch when page changes.
+    useEffect(() => {
+        fetchLogs();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [page]);
 
     const handleExport = () => {
         const headers = ["Time", "User", "Action", "Entity Type", "Entity ID", "Details"];
         const escapeCSV = (val: string) => `"${String(val || "").replace(/"/g, '""')}"`;
-        const rows = filtered.map((log) => [
+        const rows = logs.map((log) => [
             formatDate(log.created_at),
             escapeCSV(log.user_email || ""),
             log.action,
@@ -154,58 +146,10 @@ export default function AuditLogsPage() {
                     <Button variant="outline" size="sm" onClick={fetchLogs} disabled={loading}>
                         <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
                     </Button>
-                    <Button variant="outline" size="sm" onClick={handleExport} disabled={filtered.length === 0}>
-                        <Download className="mr-2 h-4 w-4" /> Export
+                    <Button variant="outline" size="sm" onClick={handleExport} disabled={logs.length === 0}>
+                        <Download className="mr-2 h-4 w-4" /> Export Page
                     </Button>
                 </div>
-            </div>
-
-            {/* Stats */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <Card>
-                    <CardContent className="pt-4 pb-3">
-                        <div className="flex items-center gap-2">
-                            <Shield className="h-5 w-5 text-violet-500" />
-                            <div>
-                                <p className="text-xs text-muted-foreground">Total Logs</p>
-                                <p className="text-2xl font-bold">{stats.total}</p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="pt-4 pb-3">
-                        <div className="flex items-center gap-2">
-                            <Clock className="h-5 w-5 text-blue-500" />
-                            <div>
-                                <p className="text-xs text-muted-foreground">Today</p>
-                                <p className="text-2xl font-bold">{stats.today}</p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="pt-4 pb-3">
-                        <div className="flex items-center gap-2">
-                            <User className="h-5 w-5 text-emerald-500" />
-                            <div>
-                                <p className="text-xs text-muted-foreground">Unique Users</p>
-                                <p className="text-2xl font-bold">{stats.uniqueUsers}</p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-                <Card>
-                    <CardContent className="pt-4 pb-3">
-                        <div className="flex items-center gap-2">
-                            <Activity className="h-5 w-5 text-amber-500" />
-                            <div>
-                                <p className="text-xs text-muted-foreground">Latest Action</p>
-                                <p className="text-2xl font-bold capitalize">{stats.latestAction}</p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
             </div>
 
             {/* Filters */}
@@ -248,6 +192,19 @@ export default function AuditLogsPage() {
                         <SelectItem value="subscription">Subscription</SelectItem>
                     </SelectContent>
                 </Select>
+                {(search || actionFilter !== "all" || entityFilter !== "all") && (
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                            setSearch("");
+                            setActionFilter("all");
+                            setEntityFilter("all");
+                        }}
+                    >
+                        Clear filters
+                    </Button>
+                )}
             </div>
 
             {/* Table */}
@@ -257,11 +214,15 @@ export default function AuditLogsPage() {
                         <div className="flex items-center justify-center p-12">
                             <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                         </div>
-                    ) : filtered.length === 0 ? (
+                    ) : logs.length === 0 ? (
                         <div className="text-center py-16">
                             <Shield className="h-12 w-12 text-muted-foreground/30 mx-auto mb-4" />
                             <h3 className="text-lg font-semibold">No audit logs found</h3>
-                            <p className="text-muted-foreground mt-1">Admin actions will be recorded here.</p>
+                            <p className="text-muted-foreground mt-1">
+                                {search || actionFilter !== "all" || entityFilter !== "all"
+                                    ? "Try adjusting your filters."
+                                    : "Admin actions will be recorded here."}
+                            </p>
                         </div>
                     ) : (
                         <>
@@ -276,7 +237,7 @@ export default function AuditLogsPage() {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {paginated.map((log) => {
+                                    {logs.map((log) => {
                                         const Icon = ENTITY_ICONS[log.entity_type] || Shield;
                                         const actionCfg = ACTION_CONFIG[log.action];
                                         return (
@@ -310,37 +271,26 @@ export default function AuditLogsPage() {
                                 </TableBody>
                             </Table>
 
-                            {/* Pagination */}
-                            <div className="flex items-center justify-between px-4 py-3 border-t">
-                                <p className="text-sm text-muted-foreground">
-                                    Showing {(page - 1) * PER_PAGE + 1}–{Math.min(page * PER_PAGE, filtered.length)} of {filtered.length} logs
-                                </p>
-                                <div className="flex items-center gap-2">
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => setPage((p) => Math.max(1, p - 1))}
-                                        disabled={page === 1}
-                                    >
-                                        <ChevronLeft className="h-4 w-4" />
-                                    </Button>
-                                    <span className="text-sm text-muted-foreground">
-                                        Page {page} of {totalPages}
-                                    </span>
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                                        disabled={page === totalPages}
-                                    >
-                                        <ChevronRight className="h-4 w-4" />
-                                    </Button>
-                                </div>
+                            <div className="px-4 border-t">
+                                <Pagination
+                                    page={page}
+                                    pageSize={PAGE_SIZE}
+                                    hasNextPage={hasNextPage}
+                                    onPageChange={setPage}
+                                />
                             </div>
                         </>
                     )}
                 </CardContent>
             </Card>
+
+            {/* Activity hint */}
+            {!loading && logs.length > 0 && (
+                <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                    <Activity className="h-3 w-3" />
+                    Showing {logs.length} log{logs.length === 1 ? "" : "s"} on this page.
+                </p>
+            )}
         </div>
     );
 }

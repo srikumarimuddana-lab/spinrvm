@@ -6,6 +6,7 @@ Pydantic schema round-trips, and the closed-is-terminal guard, not
 the Supabase layer itself (that's covered by test_corporate_db_helpers
 and the integration-marked schema smoke test).
 """
+
 from unittest.mock import AsyncMock, patch
 
 from backend.tests._factories import corporate_account_row
@@ -41,24 +42,31 @@ def test_create_approve_suspend_reactivate_flow(test_client, admin_override):
         billing_email="billing@example.com",
     )
 
-    with patch(
-        "routes.corporate_accounts.insert_corporate_account",
-        AsyncMock(return_value=created),
-    ), patch(
-        "db_supabase.record_kyb_decision",
-        AsyncMock(return_value=active_row),
-    ), patch(
-        "routes.corporate_accounts.ensure_corporate_wallet",
-        AsyncMock(return_value={"id": "w1"}),
-    ), patch(
-        "routes.corporate_accounts.get_app_settings",
-        AsyncMock(return_value={"stripe_secret_key": ""}),
-    ), patch(
-        "routes.corporate_accounts.get_corporate_account_by_id",
-        AsyncMock(side_effect=[active_row, suspended_row]),
-    ), patch(
-        "db_supabase.update_corporate_account_status",
-        AsyncMock(side_effect=[suspended_row, active_row]),
+    with (
+        patch(
+            "routes.corporate_accounts.insert_corporate_account",
+            AsyncMock(return_value=created),
+        ),
+        patch(
+            "db_supabase.record_kyb_decision",
+            AsyncMock(return_value=active_row),
+        ),
+        patch(
+            "routes.corporate_accounts.ensure_corporate_wallet",
+            AsyncMock(return_value={"id": "w1"}),
+        ),
+        patch(
+            "routes.corporate_accounts.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": ""}),
+        ),
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(side_effect=[active_row, suspended_row]),
+        ),
+        patch(
+            "db_supabase.update_corporate_account_status",
+            AsyncMock(side_effect=[suspended_row, active_row]),
+        ),
     ):
         # 1. Create the company
         resp = test_client.post(

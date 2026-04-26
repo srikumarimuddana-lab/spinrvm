@@ -19,6 +19,10 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
 import { languages, Language } from '../../i18n';
 import api from '@shared/api/client';
+import {
+    useNotificationPreferences,
+    useUpdateNotificationPreferences,
+} from '@shared/hooks/queries';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -56,20 +60,28 @@ export default function SettingsScreen() {
     const [soundEffects, setSoundEffects] = useState(true);
     const [vibration, setVibration] = useState(true);
 
+    // /notifications/preferences is owned by the useNotificationPreferences
+    // hook. The persisted cache means revisiting Settings shows toggles
+    // instantly with no spinner; the background refetch keeps them honest.
+    const { data: prefsResponse } = useNotificationPreferences();
+    const updatePreferences = useUpdateNotificationPreferences();
     useEffect(() => {
-        api.get('/notifications/preferences').then((prefs: any) => {
-            if (prefs == null) return;
-            if (prefs.push_notifications != null) setPushNotifications(Boolean(prefs.push_notifications));
-            if (prefs.ride_alerts != null) setRideAlerts(Boolean(prefs.ride_alerts));
-            if (prefs.earnings_summary != null) setEarningsSummary(Boolean(prefs.earnings_summary));
-            if (prefs.promotions != null) setPromotions(Boolean(prefs.promotions));
-            if (prefs.sound_effects != null) setSoundEffects(Boolean(prefs.sound_effects));
-            if (prefs.vibration != null) setVibration(Boolean(prefs.vibration));
-        }).catch(() => {/* keep defaults on network failure */});
-    }, []);
+        // Server can return null when the row hasn't been created yet;
+        // keep the defaults set above in that case.
+        const prefs: any = prefsResponse;
+        if (prefs == null) return;
+        if (prefs.push_notifications != null) setPushNotifications(Boolean(prefs.push_notifications));
+        if (prefs.ride_alerts != null) setRideAlerts(Boolean(prefs.ride_alerts));
+        if (prefs.earnings_summary != null) setEarningsSummary(Boolean(prefs.earnings_summary));
+        if (prefs.promotions != null) setPromotions(Boolean(prefs.promotions));
+        if (prefs.sound_effects != null) setSoundEffects(Boolean(prefs.sound_effects));
+        if (prefs.vibration != null) setVibration(Boolean(prefs.vibration));
+    }, [prefsResponse]);
 
     const savePreference = (key: string, value: boolean) => {
-        api.put('/notifications/preferences', { [key]: value }).catch(() => {/* fire-and-forget */});
+        // Fire-and-forget mutation; cache invalidation happens in the
+        // hook's onSuccess so the next screen open reflects the new value.
+        updatePreferences.mutate({ [key]: value });
     };
 
     const handleToggle = (key: string, setter: (v: boolean) => void) => (value: boolean) => {
@@ -271,19 +283,12 @@ export default function SettingsScreen() {
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                         </TouchableOpacity>
                         <View style={styles.cardDivider} />
-                        <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/legal?type=tos' as any)}>
+                        <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/legal' as any)}>
                             <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
                                 <Ionicons name="document-text" size={18} color={colors.primary} />
                             </View>
-                            <Text style={styles.settingLabel}>Terms of Service</Text>
-                            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
-                        </TouchableOpacity>
-                        <View style={styles.cardDivider} />
-                        <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/legal?type=privacy' as any)}>
-                            <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
-                                <Ionicons name="shield" size={18} color={colors.primary} />
-                            </View>
-                            <Text style={styles.settingLabel}>Privacy Policy</Text>
+                            <Text style={styles.settingLabel}>Legal</Text>
+                            <Text style={styles.settingValue}>Terms & Privacy</Text>
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                         </TouchableOpacity>
                         <View style={styles.cardDivider} />

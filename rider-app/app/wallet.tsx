@@ -187,7 +187,7 @@ export default function WalletScreen() {
 
       {/* Top Up Modal */}
       {showTopUp && (
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <View style={styles.topUpSection}>
             <Text style={styles.topUpTitle}>Add Funds</Text>
             <View style={styles.topUpGrid}>
@@ -258,7 +258,7 @@ export default function WalletScreen() {
       {/* Transfer Modal */}
       <Modal visible={showTransfer} animationType="slide" transparent onRequestClose={() => setShowTransfer(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowTransfer(false)}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
             <TouchableOpacity activeOpacity={1} style={styles.transferSheet}>
               <View style={styles.sheetHandle} />
               <Text style={styles.transferTitle}>Send Money</Text>

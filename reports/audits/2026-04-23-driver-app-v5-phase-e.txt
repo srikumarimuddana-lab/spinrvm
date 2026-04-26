@@ -1,0 +1,483 @@
+================================================================================
+SPINR DRIVER APP — PHASE E (D17–D22) + D23 AUDIT FINDINGS (v5)
+================================================================================
+Date         : 2026-04-24
+Branch       : claude/review-pending-audits-Pu1aP
+Scope        : driver-app/ + shared backend routes used by driver
+Kickoff      : reports/audits/driver-app-phase-e-kickoff.md
+Prerequisite : reports/audits/2026-04-18-driver-app-production-readiness-v4.txt
+
+AUDIT GROUND RULES
+──────────────────
+• Per audit-framework/ground-rules.md (8 rules; rules 7+8 from v1.3 apply)
+• CRITICAL/HIGH require file:line:snippet evidence
+• Every finding tags ≥1 regulation
+• Risk-score formula per reports/audits/OPEN-ITEMS-TRACKER.md
+
+================================================================================
+TASK 17 — OBSERVABILITY
+================================================================================
+
+[17-1] HIGH | WS disconnect logs missing last-heartbeat timestamp + close code
+File: backend/routes/websocket.py:439,544
+Finding: WebSocket error handler logs a generic message without the close_code
+or last-heartbeat timestamp. Dispatch-debugging requires both.
+Fix: Emit structured disconnect event {connection_key, client_type,
+last_heartbeat_ts, close_code}. Effort: 1.5 h
+Risk score: 16 (HIGH × self × likely)
+Regulations: PIPEDA
+Owner: backend · Sprint: P1
+
+[17-2] MEDIUM | Background location subscription has no error callback on
+permission revocation
+File: driver-app/hooks/useDriverDashboard.ts:320-377
+Finding: Location.watchPositionAsync has no error handler. Backend is never
+notified when the OS kills the background task or the driver revokes
+permission — dispatch continues with stale GPS.
+Fix: Add error callback emitting captureException + POST
+/drivers/location-telemetry with stop reason. Effort: 2 h
+Risk score: 12 (MEDIUM × org × possible)
+Regulations: PIPEDA
+Owner: driver-app · Sprint: P1
+
+[17-3] MEDIUM | Crash reports omit driver_id and ride_id in extras
+File: driver-app/store/driverStore.ts:408,507,521
+Finding: recordNonFatal calls pass {store, action} only. Support triage is
+ambiguous: cannot determine which ride or driver was affected.
+Fix: Augment recordNonFatal with {driver_id, ride_id} from activeRide context.
+Effort: 1 h
+Risk score: 8 (MEDIUM × self × likely)
+Regulations: PIPEDA
+Owner: driver-app · Sprint: P2
+
+[17-4] MEDIUM | Stripe API failures logged as .warning() instead of .error()
+File: backend/routes/payments.py:169,191,256
+Finding: Stripe API errors use logger.warning(), violating the CLAUDE.md rule
+that critical-path DB/auth/payment errors must use .error(). Production log
+aggregation typically drops warnings — Stripe failures silently missed.
+Fix: Replace logger.warning with logger.error; include full exception.
+Effort: 0.5 h
+Risk score: 8 (MEDIUM × org × possible)
+Regulations: PCI-DSS, SOC2
+Owner: backend · Sprint: P1
+
+[17-5] MEDIUM | document_expiry_loop has no success-path heartbeat
+File: backend/utils/document_expiry.py:192-200
+Finding: Loop logs only on exception, not on each successful iteration. 12 h
+interval means a stuck loop can go 24+ h before detection. Related to DV-2
+(doc-expiry wrapper bug) — if that fix lands but the loop silently stops,
+nobody notices.
+Fix: Emit logger.info("document_expiry_heartbeat",
+extra={last_run_at, drivers_checked, drivers_suspended}) after each cycle.
+Effort: 0.5 h
+Risk score: 8 (MEDIUM × org × likely)
+Regulations: SOC2
+Owner: backend · Sprint: P2
+
+[17-6] HIGH | Crash-reporting context (driver_id) bound 60+ lines after first
+crash-capture call
+File: driver-app/app/_layout.tsx:129,193
+Finding: captureMessage('driver-app cold start') fires at line 129; setUser()
+is not called until line 193. A crash during initializeAuth / font load /
+location init reports anonymously — support cannot triage.
+Fix: Move setUser(uid, {role: 'driver'}) immediately after initializeAuth
+completes, before captureMessage. Effort: 1.5 h
+Risk score: 16 (HIGH × self × likely)
+Regulations: PIPEDA, SOC2
+Owner: driver-app · Sprint: P1
+
+[17-7] MEDIUM | Backend request_id not propagated to Stripe API calls
+File: backend/routes/payments.py:40-95
+Finding: stripe.Customer.create() and stripe.PaymentIntent.create() are called
+without the backend request_id as idempotency_key or metadata. Stripe webhook
+failures cannot be correlated to backend logs.
+Fix: Extract request.state.request_id; pass as idempotency_key (or metadata)
+in every Stripe create/update call. Effort: 1 h
+Risk score: 12 (MEDIUM × self × possible)
+Regulations: PCI-DSS, SOC2
+Owner: backend · Sprint: P2
+
+[17-8] LOW | WS heartbeat task cancellation not logged on disconnect
+File: backend/routes/websocket.py:447-449
+Finding: hb_task.cancel() fires silently. Connection-leak debugging is harder
+without explicit lifecycle logging.
+Fix: Add logger.debug(f"Cancelled heartbeat for {connection_key}") after cancel.
+Effort: 0.25 h
+Risk score: 2 (LOW × self × rare)
+Regulations: PIPEDA
+Owner: backend · Sprint: P3
+
+[17-9] RECOMMENDATION | Crashlytics SLO / dashboard link not documented;
+no pre-launch crash-free gate
+File: shared/services/errorReporting.ts:1-17
+Finding: Header comment notes Crashlytics → Sentry upgrade path (SPR-04) but
+there's no documented SLO (crash-free > 99.5%) or dashboard URL. Phase E
+kickoff requires crash-free rate > 99.5% for 14 days before launch.
+Fix: Add dashboard URL + SLO to pre-launch checklist. Effort: 0.5 h
+Risk score: 2 (RECOMMENDATION × self × possible)
+Regulations: SOC2
+Owner: driver-app + product · Sprint: P4
+
+[17-10] MEDIUM | Liveness alerting: none of the 7 background loops emit
+last_run_at metric
+File: backend/core/lifespan.py (all 7 loops)
+Finding: Dimension D17 requires per-loop liveness metrics so SRE alerts fire
+if any loop stops (2× interval). None of the 7 loops emit this metric.
+Fix: Emit last_run_at metric + log per iteration; add SRE alert rule:
+time_since(last_run_at) > 2× interval_seconds. Effort: 2.5 h
+Risk score: 8 (MEDIUM × org × likely)
+Regulations: SOC2
+Owner: backend + devops · Sprint: P2
+
+[17-11] PASS | Firebase Crashlytics integrated; bundle ID correct
+File: driver-app/app.config.ts:4,34
+Evidence: bundleIdentifier = com.spinr.driver; googleServicesFile =
+./GoogleService-Info.plist; Firebase plugins included (lines 185-186).
+
+[17-12] PASS | PrivacyInfo.xcprivacy declares location + Crashlytics API reasons
+File: driver-app/app.config.ts:44-126
+Evidence: NSPrivacyAccessedAPITypes for Crashlytics (C617.1, 35F9.1); CrashData
++ preciseLocation declared in NSPrivacyCollectedDataTypes.
+
+[17-13] PASS | Request-ID middleware propagates correlation ID
+File: backend/core/middleware.py:110-119
+Evidence: RequestIDMiddleware generates/reads X-Request-ID, binds via
+logger.contextualize(), echoes in response header.
+
+================================================================================
+FINDINGS YAML
+================================================================================
+
+===FINDINGS-YAML===
+- id: "17-1"
+  severity: HIGH
+  dimension: "17"
+  evidence:
+    file: backend/routes/websocket.py
+    lines: [439, 544]
+    snippet: "logger.exception(f'WebSocket error: {e}'); onclose handler missing timestamp context"
+    test_file: null
+    test_lines: null
+  root_cause: "WS disconnect handler logs generic error without last-heartbeat timestamp or close_code"
+  impact: "Support cannot reconstruct WS disconnect timeline; silent connection failures hard to diagnose"
+  fix: "Emit structured disconnect event {connection_key, client_type, last_heartbeat_ts, close_code}"
+  effort_hours: 1.5
+  regression_test: "Test WS disconnect logs include close_code and heartbeat age"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: self
+  likelihood: likely
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-2"
+  severity: MEDIUM
+  dimension: "17"
+  evidence:
+    file: driver-app/hooks/useDriverDashboard.ts
+    lines: [320, 321]
+    snippet: "Location.watchPositionAsync(...) called with no error handler"
+    test_file: null
+    test_lines: null
+  root_cause: "Background location subscription lacks error callback for permission revocation or OS kill"
+  impact: "Backend unaware driver lost location; dispatch continues with stale GPS; driver safety degraded"
+  fix: "Add error callback; emit captureException + POST /drivers/location-telemetry on permission denial"
+  effort_hours: 2
+  regression_test: "Simulate permission revocation; verify backend receives stop event within 1 min"
+  sprint: P1
+  owners: ["driver-app"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 12
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-3"
+  severity: MEDIUM
+  dimension: "17"
+  evidence:
+    file: driver-app/store/driverStore.ts
+    lines: [408, 507, 521]
+    snippet: "recordNonFatal(err, {store, action}) — no ride_id / driver_id"
+    test_file: null
+    test_lines: null
+  root_cause: "Crash context attributes insufficient for ride-state-mutation incident correlation"
+  impact: "Support triage ambiguous: cannot determine affected ride / driver"
+  fix: "Augment recordNonFatal with ride_id + driver_id from activeRide"
+  effort_hours: 1
+  regression_test: "Trigger acceptRide error; verify Crashlytics shows ride_id + driver_id"
+  sprint: P2
+  owners: ["driver-app"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: self
+  likelihood: likely
+  risk_score: 8
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-4"
+  severity: MEDIUM
+  dimension: "17"
+  evidence:
+    file: backend/routes/payments.py
+    lines: [169, 191, 256]
+    snippet: "logger.warning(f'Stripe...') for API failures"
+    test_file: null
+    test_lines: null
+  root_cause: "CLAUDE.md rule violation: critical-path Stripe errors must use .error(), not .warning()"
+  impact: "Production log aggregation filters warnings; Stripe failures silently missed by monitoring"
+  fix: "Replace logger.warning with logger.error; preserve full exception traceback"
+  effort_hours: 0.5
+  regression_test: "Simulate Stripe API 5xx; verify logger.error fires in prod log sink"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["PCI-DSS", "SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 8
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-5"
+  severity: MEDIUM
+  dimension: "17"
+  evidence:
+    file: backend/utils/document_expiry.py
+    lines: [192, 199]
+    snippet: "document_expiry_loop: no heartbeat logged on success"
+    test_file: null
+    test_lines: null
+  root_cause: "7-loop liveness monitoring gap: success path emits no heartbeat metric"
+  impact: "SRE cannot distinguish loop hung from loop paused; 12h gap between failures undetected"
+  fix: "Add logger.info heartbeat after each check_expiring_documents() with {last_run_at, count_checked, count_suspended}"
+  effort_hours: 0.5
+  regression_test: "Grep logs for heartbeat entry; alert rule fires if entry absent > 24 h"
+  sprint: P2
+  owners: ["backend"]
+  regulations: ["SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 8
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-6"
+  severity: HIGH
+  dimension: "17"
+  evidence:
+    file: driver-app/app/_layout.tsx
+    lines: [129, 193]
+    snippet: "captureMessage() at line 129 fires before setUser() at line 193"
+    test_file: null
+    test_lines: null
+  root_cause: "Crash context (driver_id) not bound to Crashlytics until 60+ lines after cold-start capture"
+  impact: "Crashes during init (font, auth, location) report anonymously; support cannot triage"
+  fix: "Call setUser(uid, {role: 'driver'}) immediately after initializeAuth completes, before captureMessage"
+  effort_hours: 1.5
+  regression_test: "Inject error in initializeAuth; verify crash report includes driver_id"
+  sprint: P1
+  owners: ["driver-app"]
+  regulations: ["PIPEDA", "SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: self
+  likelihood: likely
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-7"
+  severity: MEDIUM
+  dimension: "17"
+  evidence:
+    file: backend/routes/payments.py
+    lines: [40, 47, 95]
+    snippet: "stripe.Customer.create() / stripe.PaymentIntent.create() without idempotency_key from request_id"
+    test_file: null
+    test_lines: null
+  root_cause: "request_id not propagated to outbound Stripe API; trace correlation lost"
+  impact: "Stripe webhook failures cannot be correlated to backend request logs; incident investigation blocked"
+  fix: "Extract request.state.request_id; pass as idempotency_key in Stripe create/update calls"
+  effort_hours: 1
+  regression_test: "Log Stripe calls; verify idempotency key matches backend request_id"
+  sprint: P2
+  owners: ["backend"]
+  regulations: ["PCI-DSS", "SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: self
+  likelihood: possible
+  risk_score: 12
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-8"
+  severity: LOW
+  dimension: "17"
+  evidence:
+    file: backend/routes/websocket.py
+    lines: [447, 449]
+    snippet: "hb_task.cancel() — no logging"
+    test_file: null
+    test_lines: null
+  root_cause: "Heartbeat task lifecycle not logged"
+  impact: "Cannot confirm heartbeat tasks cleaned up on disconnect; potential resource leak signal missed"
+  fix: "Add logger.debug(f'Cancelled heartbeat for {connection_key}') after hb_task.cancel()"
+  effort_hours: 0.25
+  regression_test: "Verify heartbeat cancellation log entry for every WS disconnect"
+  sprint: P3
+  owners: ["backend"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: self
+  likelihood: rare
+  risk_score: 2
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-9"
+  severity: RECOMMENDATION
+  dimension: "17"
+  evidence:
+    file: shared/services/errorReporting.ts
+    lines: [1, 14]
+    snippet: "Crashlytics documented as upgrade path; no SLO / dashboard link"
+    test_file: null
+    test_lines: null
+  root_cause: "Crash reporting integrated but pre-launch health dashboard monitoring not documented"
+  impact: "Team may miss crash spike during beta; no objective go-live criterion for crash-free rate"
+  fix: "Document Crashlytics dashboard URL + SLO in launch checklist: crash-free rate > 99.5% for 14 d"
+  effort_hours: 0.5
+  regression_test: "Confirm SLO visible in launch checklist; dashboard accessible to product"
+  sprint: P4
+  owners: ["driver-app", "product"]
+  regulations: ["SOC2"]
+  confidence: medium
+  duplicate_of: null
+  blast_radius: self
+  likelihood: possible
+  risk_score: 2
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-10"
+  severity: MEDIUM
+  dimension: "17"
+  evidence:
+    file: backend/core/lifespan.py
+    lines: [89, 98, 107, 115, 121, 123, 131, 140, 150]
+    snippet: "7 background loops spawned; none emit last_run_at metric"
+    test_file: null
+    test_lines: null
+  root_cause: "Lifespan liveness metrics not implemented; monitoring gap for task liveness"
+  impact: "If any loop stops (stuck / deadlock / import error), SRE alerted only on next exception (≤ 12 h gap)"
+  fix: "Emit last_run_at metric + log per iteration in each loop; SRE alert: time_since(last_run) > 2× interval"
+  effort_hours: 2.5
+  regression_test: "Run all 7 loops; grep heartbeat entries; kill one loop; verify alert fires within 2× interval"
+  sprint: P2
+  owners: ["backend", "devops"]
+  regulations: ["SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 8
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-11"
+  severity: PASS
+  dimension: "17"
+  evidence:
+    file: driver-app/app.config.ts
+    lines: [4, 34]
+    snippet: "bundleIdentifier: BUNDLE_ID (com.spinr.driver); googleServicesFile: ./GoogleService-Info.plist"
+    test_file: null
+    test_lines: null
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: null
+  sprint: null
+  owners: null
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-12"
+  severity: PASS
+  dimension: "17"
+  evidence:
+    file: driver-app/app.config.ts
+    lines: [44, 120, 126]
+    snippet: "NSPrivacyAccessedAPITypes (C617.1, 35F9.1); NSPrivacyCollectedDataTypes: crashData + preciseLocation"
+    test_file: null
+    test_lines: null
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: null
+  sprint: null
+  owners: null
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "17-13"
+  severity: PASS
+  dimension: "17"
+  evidence:
+    file: backend/core/middleware.py
+    lines: [110, 116, 118]
+    snippet: "request_id binding via logger.contextualize(); echoed in response header"
+    test_file: null
+    test_lines: null
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: null
+  sprint: null
+  owners: null
+  regulations: ["PIPEDA", "SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+===END-FINDINGS-YAML===
+
+===AUDIT-COMPLETE=== dim=17 module=driver-app findings=13 actionable=10 pass=3
+
+================================================================================
+END OF D17 — driver-app Phase E
+Next: D18 DR/BCP (append below when E-2 runs)
+================================================================================

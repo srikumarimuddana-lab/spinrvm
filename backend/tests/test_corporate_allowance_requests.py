@@ -1,4 +1,5 @@
 """Admin approve/deny for allowance requests (Task 8)."""
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -17,30 +18,43 @@ def rider_override():
 
 
 def test_approve_request_grants_amount(test_client, rider_override):
-    with patch(
-        "dependencies.company_guard.list_active_memberships_for_user",
-        AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
-    ), patch(
-        "routes.corporate_company.get_allowance_request_by_id",
-        AsyncMock(return_value={
-            "id": "r1", "member_id": "m1", "amount": 200, "status": "pending",
-        }),
-    ), patch(
-        "routes.corporate_company.get_corporate_member_by_id",
-        AsyncMock(return_value={"id": "m1", "company_id": "c1"}),
-    ), patch(
-        "routes.corporate_company.get_member_allowance",
-        AsyncMock(return_value={"id": "a1", "member_id": "m1"}),
-    ), patch(
-        "routes.corporate_company.get_corporate_wallet_by_company",
-        AsyncMock(return_value={"id": "w1", "soft_negative_floor": -50}),
-    ), patch(
-        "routes.corporate_company.apply_grant",
-        AsyncMock(return_value={"master_balance_after": 800, "allowance_used_after": -200}),
-    ) as m_grant, patch(
-        "routes.corporate_company.update_allowance_request",
-        AsyncMock(return_value={"id": "r1", "status": "approved"}),
-    ) as m_upd:
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
+        ),
+        patch(
+            "routes.corporate_company.get_allowance_request_by_id",
+            AsyncMock(
+                return_value={
+                    "id": "r1",
+                    "member_id": "m1",
+                    "amount": 200,
+                    "status": "pending",
+                }
+            ),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m1", "company_id": "c1"}),
+        ),
+        patch(
+            "routes.corporate_company.get_member_allowance",
+            AsyncMock(return_value={"id": "a1", "member_id": "m1"}),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "soft_negative_floor": -50}),
+        ),
+        patch(
+            "routes.corporate_company.apply_grant",
+            AsyncMock(return_value={"master_balance_after": 800, "allowance_used_after": -200}),
+        ) as m_grant,
+        patch(
+            "routes.corporate_company.update_allowance_request",
+            AsyncMock(return_value={"id": "r1", "status": "approved"}),
+        ) as m_upd,
+    ):
         resp = test_client.post(
             "/company/c1/allowance-requests/r1/decide",
             json={"approve": True, "note": "ok"},
@@ -54,23 +68,34 @@ def test_approve_request_grants_amount(test_client, rider_override):
 
 
 def test_deny_request_skips_grant(test_client, rider_override):
-    with patch(
-        "dependencies.company_guard.list_active_memberships_for_user",
-        AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
-    ), patch(
-        "routes.corporate_company.get_allowance_request_by_id",
-        AsyncMock(return_value={
-            "id": "r1", "member_id": "m1", "amount": 200, "status": "pending",
-        }),
-    ), patch(
-        "routes.corporate_company.get_corporate_member_by_id",
-        AsyncMock(return_value={"id": "m1", "company_id": "c1"}),
-    ), patch(
-        "routes.corporate_company.apply_grant",
-        AsyncMock(),
-    ) as m_grant, patch(
-        "routes.corporate_company.update_allowance_request",
-        AsyncMock(return_value={"id": "r1", "status": "denied"}),
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
+        ),
+        patch(
+            "routes.corporate_company.get_allowance_request_by_id",
+            AsyncMock(
+                return_value={
+                    "id": "r1",
+                    "member_id": "m1",
+                    "amount": 200,
+                    "status": "pending",
+                }
+            ),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m1", "company_id": "c1"}),
+        ),
+        patch(
+            "routes.corporate_company.apply_grant",
+            AsyncMock(),
+        ) as m_grant,
+        patch(
+            "routes.corporate_company.update_allowance_request",
+            AsyncMock(return_value={"id": "r1", "status": "denied"}),
+        ),
     ):
         resp = test_client.post(
             "/company/c1/allowance-requests/r1/decide",
@@ -81,17 +106,26 @@ def test_deny_request_skips_grant(test_client, rider_override):
 
 
 def test_already_decided_request_returns_409(test_client, rider_override):
-    with patch(
-        "dependencies.company_guard.list_active_memberships_for_user",
-        AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
-    ), patch(
-        "routes.corporate_company.get_allowance_request_by_id",
-        AsyncMock(return_value={
-            "id": "r1", "member_id": "m1", "amount": 200, "status": "approved",
-        }),
-    ), patch(
-        "routes.corporate_company.get_corporate_member_by_id",
-        AsyncMock(return_value={"id": "m1", "company_id": "c1"}),
+    with (
+        patch(
+            "dependencies.company_guard.list_active_memberships_for_user",
+            AsyncMock(return_value=[{"company_id": "c1", "role": "admin"}]),
+        ),
+        patch(
+            "routes.corporate_company.get_allowance_request_by_id",
+            AsyncMock(
+                return_value={
+                    "id": "r1",
+                    "member_id": "m1",
+                    "amount": 200,
+                    "status": "approved",
+                }
+            ),
+        ),
+        patch(
+            "routes.corporate_company.get_corporate_member_by_id",
+            AsyncMock(return_value={"id": "m1", "company_id": "c1"}),
+        ),
     ):
         resp = test_client.post(
             "/company/c1/allowance-requests/r1/decide",

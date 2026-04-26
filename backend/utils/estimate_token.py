@@ -25,6 +25,7 @@ Pure stdlib — no JWT dep needed. Tokens are:
 
 The shape is unambiguous (``.`` separator) and trivially parseable.
 """
+
 from __future__ import annotations
 
 import base64
@@ -132,7 +133,7 @@ def verify_estimate_token(
         payload_bytes = _b64url_decode(payload_b64)
         provided_sig = _b64url_decode(sig_b64)
     except (ValueError, TypeError) as e:
-        raise EstimateTokenError(f"base64 decode failed: {e}")
+        raise EstimateTokenError(f"base64 decode failed: {e}") from e
 
     expected_sig = _sign(payload_bytes, settings.JWT_SECRET)
     if not hmac.compare_digest(provided_sig, expected_sig):
@@ -141,7 +142,7 @@ def verify_estimate_token(
     try:
         payload = json.loads(payload_bytes)
     except json.JSONDecodeError as e:
-        raise EstimateTokenError(f"payload is not JSON: {e}")
+        raise EstimateTokenError(f"payload is not JSON: {e}") from e
 
     if payload.get("v") != 1:
         raise EstimateTokenError(f"unsupported token version: {payload.get('v')}")

@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, RefreshCw, Users, Car, Building2 } from "lucide-react";
 
-// Dynamic import for Leaflet (client-side only)
+// Dynamic import — MapLibre GL needs window, so defer to client.
 const HeatMap = dynamic(() => import("@/components/heat-map"), {
     ssr: false,
     loading: () => (

@@ -103,8 +103,12 @@ export default function VehicleTypesPage() {
         try {
             await deleteVehicleType(id);
             fetchTypes();
-        } catch (err) {
+        } catch (err: any) {
+            // 409 from the backend means the type is still referenced by a
+            // service area or fare config. Show the message so the operator
+            // knows where to clean up before re-trying the delete.
             console.error("Error deleting vehicle type:", err);
+            alert(err?.message || "Could not delete vehicle type");
         }
     };
 

@@ -135,9 +135,7 @@ async def kyb_upload_url(
 
     from db_supabase import create_kyb_upload_url
 
-    return await create_kyb_upload_url(
-        company_id=normalized_id, content_type=body.content_type
-    )
+    return await create_kyb_upload_url(company_id=normalized_id, content_type=body.content_type)
 
 
 @router.post("/{company_id}/kyb-review", response_model=CorporateAccountDetailResponse)
@@ -172,15 +170,14 @@ async def kyb_review(
             stripe_secret = settings.get("stripe_secret_key", "")
             if stripe_secret:
                 import stripe
+
                 customer = stripe.Customer.create(
                     email=row.get("billing_email"),
                     name=row.get("legal_name") or row.get("name"),
                     metadata={"corporate_account_id": normalized_id},
                     api_key=stripe_secret,
                 )
-                await update_corporate_stripe_customer_id(
-                    company_id=normalized_id, stripe_customer_id=customer.id
-                )
+                await update_corporate_stripe_customer_id(company_id=normalized_id, stripe_customer_id=customer.id)
 
     return row
 
@@ -360,8 +357,6 @@ async def change_company_status(
     if transition.status in (CompanyStatus.SUSPENDED, CompanyStatus.CLOSED):
         wallet = await get_corporate_wallet_by_company(normalized_id)
         if wallet and wallet.get("auto_topup_enabled"):
-            await update_corporate_wallet_config(
-                wallet_id=wallet["id"], patch={"auto_topup_enabled": False}
-            )
+            await update_corporate_wallet_config(wallet_id=wallet["id"], patch={"auto_topup_enabled": False})
 
     return row

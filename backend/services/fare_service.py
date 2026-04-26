@@ -14,8 +14,10 @@ from typing import Any, Dict, List, Optional
 
 try:
     from ..geo_utils import get_service_area_polygon, point_in_polygon
+    from ..utils.surge_engine import SURGE_CAP
 except ImportError:  # pragma: no cover - allow direct module imports in tests
     from geo_utils import get_service_area_polygon, point_in_polygon
+    from utils.surge_engine import SURGE_CAP
 
 
 _TWO_PLACES = Decimal("0.01")
@@ -145,7 +147,7 @@ class FareService:
         if not matching_area:
             return build_default_fares(vehicle_types)
 
-        surge = float(matching_area.get("surge_multiplier", 1.0))
+        surge = min(float(matching_area.get("surge_multiplier", 1.0)), SURGE_CAP)
         fare_configs = await self.db.get_rows(
             "fare_configs",
             {"service_area_id": matching_area["id"], "is_active": True},

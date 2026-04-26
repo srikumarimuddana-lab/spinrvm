@@ -59,7 +59,7 @@ async def get_cancellation_breakdown(
         logger.error(f"Failed to fetch cancelled rides: {e}", exc_info=True)
         from fastapi import HTTPException as _HTTPException
 
-        raise _HTTPException(status_code=503, detail="Analytics data unavailable — database error")
+        raise _HTTPException(status_code=503, detail="Analytics data unavailable — database error") from e
 
     # Categorize cancellation reasons
     reason_counter = Counter()
@@ -226,7 +226,7 @@ async def get_analytics_overview(
         logger.error(f"Failed to fetch rides: {e}", exc_info=True)
         from fastapi import HTTPException as _HTTPException
 
-        raise _HTTPException(status_code=503, detail="Analytics data unavailable — database error")
+        raise _HTTPException(status_code=503, detail="Analytics data unavailable — database error") from e
 
     total = len(period_rides)
     completed = sum(1 for r in period_rides if r.get("status") == "completed")

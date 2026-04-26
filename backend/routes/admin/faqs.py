@@ -1,23 +1,51 @@
-import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Query
+from fastapi import APIRouter, Query, Request
+from pydantic import BaseModel
 
 try:
     from ... import db_supabase
-    from ...features import send_push_notification
+    from ...utils.rate_limiter import admin_mass_notify_limit
 except ImportError:
     import db_supabase
-    from features import send_push_notification
+    from utils.rate_limiter import admin_mass_notify_limit
 
 db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ---------- Pydantic models ----------
+
+
+class FaqCreateRequest(BaseModel):
+    question: str
+    answer: str
+    category: str = "general"
+    audience: str = "both"
+    is_active: bool = True
+
+
+class FaqUpdateRequest(BaseModel):
+    question: Optional[str] = None
+    answer: Optional[str] = None
+    category: Optional[str] = None
+    audience: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class NotificationRequest(BaseModel):
+    user_id: Optional[str] = None
+    title: str
+    body: str
+    type: str = "general"
+    audience: str = "user"  # user, all, riders, drivers
+
 
 # ---------- FAQs ----------
 
@@ -30,14 +58,14 @@ async def admin_get_faqs():
 
 
 @router.post("/faqs")
-async def admin_create_faq(faq: Dict[str, Any]):
+async def admin_create_faq(faq: FaqCreateRequest):
     """Create a new FAQ entry."""
     doc = {
-        "question": faq.get("question"),
-        "answer": faq.get("answer"),
-        "category": faq.get("category", "general"),
-        "audience": faq.get("audience", "both"),
-        "is_active": faq.get("is_active", True),
+        "question": faq.question,
+        "answer": faq.answer,
+        "category": faq.category,
+        "audience": faq.audience,
+        "is_active": faq.is_active,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("faqs", doc)
@@ -45,19 +73,19 @@ async def admin_create_faq(faq: Dict[str, Any]):
 
 
 @router.put("/faqs/{faq_id}")
-async def admin_update_faq(faq_id: str, faq: Dict[str, Any]):
+async def admin_update_faq(faq_id: str, faq: FaqUpdateRequest):
     """Update an FAQ entry."""
-    updates = {}
-    if faq.get("question") is not None:
-        updates["question"] = faq.get("question")
-    if faq.get("answer") is not None:
-        updates["answer"] = faq.get("answer")
-    if faq.get("category") is not None:
-        updates["category"] = faq.get("category")
-    if faq.get("audience") is not None:
-        updates["audience"] = faq.get("audience")
-    if faq.get("is_active") is not None:
-        updates["is_active"] = faq.get("is_active")
+    updates: Dict[str, Any] = {}
+    if faq.question is not None:
+        updates["question"] = faq.question
+    if faq.answer is not None:
+        updates["answer"] = faq.answer
+    if faq.category is not None:
+        updates["category"] = faq.category
+    if faq.audience is not None:
+        updates["audience"] = faq.audience
+    if faq.is_active is not None:
+        updates["is_active"] = faq.is_active
 
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -76,13 +104,14 @@ async def admin_delete_faq(faq_id: str):
 
 
 @router.post("/notifications/send")
-async def admin_send_notification(notification: Dict[str, Any], background_tasks: BackgroundTasks):
+@admin_mass_notify_limit
+async def admin_send_notification(request: Request, notification: NotificationRequest):
     """Send a notification to a specific user or audience."""
-    user_id = notification.get("user_id")
-    title = notification.get("title", "")
-    body = notification.get("body", "")
-    notification_type = notification.get("type", "general")
-    audience = notification.get("audience", "user")  # user, all, riders, drivers
+    user_id = notification.user_id
+    title = notification.title
+    body = notification.body
+    notification_type = notification.type
+    audience = notification.audience
 
     notification_doc = {
         "id": str(uuid.uuid4()),
@@ -96,29 +125,29 @@ async def admin_send_notification(notification: Dict[str, Any], background_tasks
         "sent_count": 1 if user_id else 0,
     }
 
-    async def _broadcast(role_filter: Optional[Dict] = None) -> None:
-        users = await db.get_rows("users", role_filter or {}, limit=10000)
-        results = await asyncio.gather(
-            *[send_push_notification(u["id"], title, body) for u in (users or [])],
-            return_exceptions=True,
-        )
-        failures = sum(1 for r in results if isinstance(r, Exception))
-        if failures:
-            logger.error(f"Broadcast ({audience!r}): {failures}/{len(results)} FCM sends failed")
+    try:
+        from ...features import send_push_notification
+    except ImportError:
+        from features import send_push_notification
 
     if user_id:
         await db_supabase.insert_one("notifications", notification_doc)
-        await send_push_notification(user_id, title, body)
-        logger.info(f"Notification dispatched to user {user_id}: {title}")
+        logger.info(f"Notification sent to user {user_id}: {title}")
     elif audience == "all":
-        background_tasks.add_task(_broadcast)
-        logger.info(f"Broadcast queued for all users: {title}")
+        all_users = await db.get_rows("users", {}, limit=10000)
+        for u in all_users or []:
+            await send_push_notification(u["id"], title, body)
+        logger.info(f"Broadcast notification to all users: {title}")
     elif audience == "riders":
-        background_tasks.add_task(_broadcast, {"role": "rider"})
-        logger.info(f"Broadcast queued for riders: {title}")
+        riders = await db.get_rows("users", {"role": "rider"}, limit=10000)
+        for u in riders or []:
+            await send_push_notification(u["id"], title, body)
+        logger.info(f"Broadcast notification to all riders: {title}")
     elif audience == "drivers":
-        background_tasks.add_task(_broadcast, {"role": "driver"})
-        logger.info(f"Broadcast queued for drivers: {title}")
+        drivers = await db.get_rows("users", {"role": "driver"}, limit=10000)
+        for u in drivers or []:
+            await send_push_notification(u["id"], title, body)
+        logger.info(f"Broadcast notification to all drivers: {title}")
 
     return {"success": True, "notification": notification_doc}
 

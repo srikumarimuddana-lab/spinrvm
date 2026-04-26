@@ -366,10 +366,10 @@ TASK 03 — ENCRYPTION & SECRETS MANAGEMENT (Dimension 03)
 [03-1] CRITICAL | Real Supabase Service-Role Key Committed in backend/.env.example
 File: backend/.env.example:3
 Finding: backend/.env.example contains:
-    SUPABASE_URL=https://dbbadhihiwztmnqnbdke.supabase.co
+    SUPABASE_URL=https://[redacted-project].supabase.co
     SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzd…
   Decoding the JWT payload:
-    {"iss":"supabase","ref":"dbbadhihiwztmnqnbdke","role":"service_role",
+    {"iss":"supabase","ref":"[redacted-project]","role":"service_role",
      "iat":1770836564,"exp":2086412564}
   The role is "service_role" — this key bypasses Supabase Row Level Security
   entirely and grants unrestricted read/write access to every table in the

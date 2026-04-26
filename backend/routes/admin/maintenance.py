@@ -23,7 +23,7 @@ router = APIRouter()
 
 
 @router.post("/maintenance/cleanup-location-history")
-async def admin_cleanup_location_history(days: int = 30):
+async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
     """Delete old driver_location_history rows.
 
     By default deletes rows older than 30 days. On ride completion the

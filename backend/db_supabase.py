@@ -206,6 +206,12 @@ async def run_sync(
             _metric_gauge("spinr_db_circuit_state", 0, {"state": "closed"})
             return result
         except Exception as exc:
+            # ValueError signals a deliberate application-level outcome
+            # (e.g. insufficient_funds, wallet_not_found) — not an
+            # infrastructure failure. Re-raise directly so callers get
+            # the typed signal and the circuit breaker stays clean.
+            if isinstance(exc, ValueError):
+                raise
             last_exc = exc
             exc_name = type(exc).__name__
             exc_str = str(exc)
@@ -1224,6 +1230,160 @@ async def rpc(func_name: str, params: Dict[str, Any]):
     return await run_sync(_fn)
 
 
+# ============ Atomic Wallet RPCs (P0-4, P0-5, P0-6) ============
+
+
+async def wallet_increment_balance(wallet_id: str, amount: "Decimal") -> "Decimal":
+    """Atomically increment a wallet balance. Returns the new balance."""
+    from decimal import Decimal as _Decimal  # noqa: PLC0415
+
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        res = supabase.rpc(
+            "wallet_increment_balance",
+            {"p_wallet_id": wallet_id, "p_amount": str(amount)},
+        ).execute()
+        data = getattr(res, "data", None)
+        if data is None:
+            raise DatabaseError(details={"original": "wallet_increment_balance: no data returned"})
+        return _Decimal(str(data))
+
+    return await run_sync(_fn)
+
+
+async def wallet_pay_for_ride(wallet_id: str, ride_id: str, amount: "Decimal") -> "Decimal":
+    """Atomically debit wallet and mark ride paid. Returns the new balance.
+
+    Raises ValueError('insufficient_funds') if balance < amount.
+    """
+    from decimal import Decimal as _Decimal  # noqa: PLC0415
+
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        try:
+            res = supabase.rpc(
+                "wallet_pay_for_ride",
+                {"p_wallet_id": wallet_id, "p_ride_id": ride_id, "p_amount": str(amount)},
+            ).execute()
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "insufficient_funds" in msg:
+                raise ValueError("insufficient_funds") from exc
+            if "wallet not found" in msg:
+                raise ValueError("wallet_not_found") from exc
+            raise
+        data = getattr(res, "data", None)
+        if data is None:
+            raise DatabaseError(details={"original": "wallet_pay_for_ride: no data returned"})
+        return _Decimal(str(data))
+
+    return await run_sync(_fn)
+
+
+async def wallet_transfer(
+    sender_id: str, recipient_id: str, amount: "Decimal"
+) -> "tuple[Decimal, Decimal]":
+    """Atomically transfer between two wallets. Returns (sender_balance, recipient_balance).
+
+    Raises ValueError('insufficient_funds') if sender balance < amount.
+    """
+    from decimal import Decimal as _Decimal  # noqa: PLC0415
+
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        try:
+            res = supabase.rpc(
+                "wallet_transfer",
+                {
+                    "p_sender_id": sender_id,
+                    "p_recipient_id": recipient_id,
+                    "p_amount": str(amount),
+                },
+            ).execute()
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "insufficient_funds" in msg:
+                raise ValueError("insufficient_funds") from exc
+            if "wallet not found" in msg:
+                raise ValueError("wallet_not_found") from exc
+            raise
+        data = getattr(res, "data", None)
+        if not data:
+            raise DatabaseError(details={"original": "wallet_transfer: no data returned"})
+        row = data[0] if isinstance(data, list) else data
+        return (
+            _Decimal(str(row["sender_balance"])),
+            _Decimal(str(row["recipient_balance"])),
+        )
+
+    return await run_sync(_fn)
+
+
+async def increment_promo_uses(promo_id: str, max_uses: int) -> bool:
+    """Atomically increment promo uses if uses < max_uses. Returns True if
+    the promo still had capacity (row updated), False if exhausted.
+    Callers should raise HTTP 409 on False.
+    """
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        res = supabase.rpc(
+            "increment_promo_uses",
+            {"p_promo_id": promo_id, "p_max_uses": max_uses},
+        ).execute()
+        data = getattr(res, "data", None)
+        return data is True or data == 1 or (isinstance(data, list) and len(data) > 0)
+
+    return await run_sync(_fn)
+
+
+async def fare_split_pay_share(
+    wallet_id: str, participant_id: str, amount: "Decimal"
+) -> "Decimal":
+    """Atomically deduct `amount` from `wallet_id` and mark `participant_id`
+    as paid in a single Postgres transaction. Returns the new wallet balance.
+    Raises ValueError('insufficient_funds') when balance is insufficient.
+    """
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        try:
+            res = supabase.rpc(
+                "fare_split_pay_share",
+                {
+                    "p_wallet_id": wallet_id,
+                    "p_participant_id": participant_id,
+                    "p_amount": str(amount),
+                },
+            ).execute()
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "insufficient_funds" in msg:
+                raise ValueError("insufficient_funds") from exc
+            raise
+        data = getattr(res, "data", None)
+        if data is None:
+            raise DatabaseError(details={"original": "fare_split_pay_share returned no data"})
+        return data
+
+    try:
+        raw = await run_sync(_fn)
+        return Decimal(str(raw))
+    except Exception as exc:
+        msg = str(exc)
+        if "insufficient_funds" in msg:
+            raise ValueError("insufficient_funds") from exc
+        raise
+
+
 # ============ Rides Admin Dashboard – New Helpers ============
 
 
@@ -2199,7 +2359,9 @@ async def list_pending_allowance_requests_for_member(
 
 
 async def list_company_allowance_requests(
-    company_id: str, statuses: Optional[List[str]] = None
+    company_id: str,
+    statuses: Optional[List[str]] = None,
+    member_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     def _fn():
         q = (
@@ -2207,6 +2369,8 @@ async def list_company_allowance_requests(
             .select("*, member:corporate_members!inner(id,company_id,invited_email,user_id)")
             .eq("member.company_id", company_id)
         )
+        if member_id:
+            q = q.eq("member_id", member_id)
         if statuses:
             q = q.in_("status", statuses)
         res = q.order("created_at", desc=True).execute()

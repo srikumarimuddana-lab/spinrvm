@@ -46,7 +46,6 @@ async def stripe_webhook(request: Request):
     try:
         import stripe
 
-        stripe.api_key = stripe_secret
         event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid payload") from None

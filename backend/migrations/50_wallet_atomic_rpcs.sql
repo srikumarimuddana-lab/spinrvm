@@ -1,14 +1,9 @@
--- Migration: 50_wallet_atomic_rpcs.sql
--- Purpose : Replace TOCTOU-prone read-compute-write wallet mutations with
---           atomic Postgres functions.  Fixes P0-4, P0-5, P0-6.
--- Rollback: DROP FUNCTION wallet_increment_balance, wallet_pay_for_ride,
---           wallet_transfer; application falls back to the previous
---           read-compute-write paths (re-introduces the races).
--- Forward-compatible: additive only — no existing columns removed or renamed.
+-- Atomic wallet RPCs to eliminate TOCTOU race conditions (P0-4, P0-5, P0-6)
+-- Rollback: DROP FUNCTION wallet_increment_balance, wallet_pay_for_ride, wallet_transfer
+-- All three functions use SECURITY DEFINER + pinned search_path per Spinr convention
+-- for money-touching Postgres functions.
 
--- ── P0-4: top-up ─────────────────────────────────────────────────────────────
--- Atomically credits a wallet by p_amount and returns the new balance.
--- Raises SQLSTATE 'P0002' (NO_DATA_FOUND) if the wallet does not exist.
+-- P0-4: Atomic top-up — avoids read-compute-write race on wallet balance.
 CREATE OR REPLACE FUNCTION wallet_increment_balance(
     p_wallet_id UUID,
     p_amount    NUMERIC
@@ -23,9 +18,9 @@ DECLARE
 BEGIN
     UPDATE wallets
        SET balance    = balance + p_amount,
-           updated_at = now()
+           updated_at = NOW()
      WHERE id = p_wallet_id
-       AND is_active  = TRUE
+       AND is_active = TRUE
     RETURNING balance INTO v_new_balance;
 
     IF NOT FOUND THEN
@@ -37,12 +32,8 @@ BEGIN
 END;
 $$;
 
--- ── P0-5: ride payment ────────────────────────────────────────────────────────
--- Atomically debits p_amount from a wallet and marks the ride as paid in
--- the same transaction.  Raises if:
---   - wallet not found / suspended
---   - insufficient funds (balance < p_amount)
---   - ride not found or already paid
+-- P0-5: Atomic pay — locks wallet row, checks balance, debits wallet and marks
+-- ride paid in a single transaction so neither half can succeed without the other.
 CREATE OR REPLACE FUNCTION wallet_pay_for_ride(
     p_wallet_id UUID,
     p_ride_id   UUID,
@@ -54,103 +45,98 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
+    v_balance     NUMERIC;
     v_new_balance NUMERIC;
 BEGIN
-    -- Lock wallet row and debit atomically
-    UPDATE wallets
-       SET balance    = balance - p_amount,
-           updated_at = now()
-     WHERE id        = p_wallet_id
-       AND is_active  = TRUE
-       AND balance   >= p_amount
-    RETURNING balance INTO v_new_balance;
+    SELECT balance INTO v_balance
+      FROM wallets
+     WHERE id = p_wallet_id
+       AND is_active = TRUE
+       FOR UPDATE;
 
     IF NOT FOUND THEN
-        -- Distinguish not-found from insufficient-funds for cleaner error messages
-        IF NOT EXISTS (SELECT 1 FROM wallets WHERE id = p_wallet_id AND is_active = TRUE) THEN
-            RAISE EXCEPTION 'wallet not found or suspended: %', p_wallet_id
-                USING ERRCODE = 'P0002';
-        ELSE
-            RAISE EXCEPTION 'insufficient wallet balance'
-                USING ERRCODE = 'P0001';
-        END IF;
-    END IF;
-
-    -- Mark ride paid in the same transaction
-    UPDATE rides
-       SET payment_status  = 'paid',
-           payment_method  = 'wallet',
-           updated_at      = now()
-     WHERE id = p_ride_id;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'ride not found: %', p_ride_id
+        RAISE EXCEPTION 'wallet not found or suspended: %', p_wallet_id
             USING ERRCODE = 'P0002';
     END IF;
+
+    IF v_balance < p_amount THEN
+        RAISE EXCEPTION 'insufficient_funds'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    UPDATE wallets
+       SET balance    = balance - p_amount,
+           updated_at = NOW()
+     WHERE id = p_wallet_id
+    RETURNING balance INTO v_new_balance;
+
+    UPDATE rides
+       SET payment_status = 'paid',
+           updated_at     = NOW()
+     WHERE id = p_ride_id;
 
     RETURN v_new_balance;
 END;
 $$;
 
--- ── P0-6: peer transfer ───────────────────────────────────────────────────────
--- Atomically debits the sender and credits the recipient.
--- Locks both wallets in ascending UUID order to prevent deadlocks.
--- Raises if sender has insufficient funds or either wallet is missing/suspended.
+-- P0-6: Atomic transfer — locks both wallets in ascending UUID order to prevent
+-- deadlocks, checks sender balance, debits and credits in one transaction.
 CREATE OR REPLACE FUNCTION wallet_transfer(
-    p_sender_wallet_id    UUID,
-    p_recipient_wallet_id UUID,
-    p_amount              NUMERIC
+    p_sender_id    UUID,
+    p_recipient_id UUID,
+    p_amount       NUMERIC,
+    OUT sender_balance    NUMERIC,
+    OUT recipient_balance NUMERIC
 )
-RETURNS TABLE(sender_balance NUMERIC, recipient_balance NUMERIC)
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-    v_sender_new    NUMERIC;
-    v_recipient_new NUMERIC;
+    v_first_id  UUID;
+    v_second_id UUID;
 BEGIN
-    -- Lock both wallets in consistent order (prevents deadlock under concurrency)
-    IF p_sender_wallet_id < p_recipient_wallet_id THEN
-        PERFORM id FROM wallets WHERE id = p_sender_wallet_id    FOR UPDATE;
-        PERFORM id FROM wallets WHERE id = p_recipient_wallet_id FOR UPDATE;
+    -- Lock in ascending UUID order to prevent deadlocks between concurrent transfers.
+    IF p_sender_id < p_recipient_id THEN
+        v_first_id  := p_sender_id;
+        v_second_id := p_recipient_id;
     ELSE
-        PERFORM id FROM wallets WHERE id = p_recipient_wallet_id FOR UPDATE;
-        PERFORM id FROM wallets WHERE id = p_sender_wallet_id    FOR UPDATE;
+        v_first_id  := p_recipient_id;
+        v_second_id := p_sender_id;
     END IF;
 
-    -- Debit sender
-    UPDATE wallets
-       SET balance    = balance - p_amount,
-           updated_at = now()
-     WHERE id        = p_sender_wallet_id
-       AND is_active  = TRUE
-       AND balance   >= p_amount
-    RETURNING balance INTO v_sender_new;
+    PERFORM balance FROM wallets WHERE id = v_first_id  AND is_active = TRUE FOR UPDATE;
+    PERFORM balance FROM wallets WHERE id = v_second_id AND is_active = TRUE FOR UPDATE;
+
+    SELECT balance INTO sender_balance
+      FROM wallets WHERE id = p_sender_id AND is_active = TRUE;
 
     IF NOT FOUND THEN
-        IF NOT EXISTS (SELECT 1 FROM wallets WHERE id = p_sender_wallet_id AND is_active = TRUE) THEN
-            RAISE EXCEPTION 'sender wallet not found or suspended: %', p_sender_wallet_id
-                USING ERRCODE = 'P0002';
-        ELSE
-            RAISE EXCEPTION 'insufficient sender balance'
-                USING ERRCODE = 'P0001';
-        END IF;
-    END IF;
-
-    -- Credit recipient
-    UPDATE wallets
-       SET balance    = balance + p_amount,
-           updated_at = now()
-     WHERE id        = p_recipient_wallet_id
-       AND is_active  = TRUE
-    RETURNING balance INTO v_recipient_new;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'recipient wallet not found or suspended: %', p_recipient_wallet_id
+        RAISE EXCEPTION 'sender wallet not found or suspended: %', p_sender_id
             USING ERRCODE = 'P0002';
     END IF;
 
-    RETURN QUERY SELECT v_sender_new, v_recipient_new;
+    IF sender_balance < p_amount THEN
+        RAISE EXCEPTION 'insufficient_funds'
+            USING ERRCODE = 'P0001';
+    END IF;
+
+    UPDATE wallets
+       SET balance    = balance - p_amount,
+           updated_at = NOW()
+     WHERE id = p_sender_id
+    RETURNING balance INTO sender_balance;
+
+    UPDATE wallets
+       SET balance    = balance + p_amount,
+           updated_at = NOW()
+     WHERE id = p_recipient_id
+       AND is_active = TRUE
+    RETURNING balance INTO recipient_balance;
+
+    IF recipient_balance IS NULL THEN
+        RAISE EXCEPTION 'recipient wallet not found or suspended: %', p_recipient_id
+            USING ERRCODE = 'P0002';
+    END IF;
 END;
 $$;

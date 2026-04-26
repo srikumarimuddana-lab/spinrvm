@@ -3,16 +3,20 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
     from ...routes.fares import invalidate_fare_cache
+    from ...utils.audit_logger import log_admin_action
     from ...utils.surge_engine import SURGE_CAP
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user  # noqa: F401
     from routes.fares import invalidate_fare_cache
+    from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.surge_engine import SURGE_CAP
 
 logger = logging.getLogger(__name__)
@@ -135,7 +139,7 @@ async def admin_get_service_areas():
 
 
 @router.post("/service-areas")
-async def admin_create_service_area(area: ServiceAreaCreateRequest):
+async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict = Depends(get_admin_user)):
     """Create service area with full configuration."""
     polygon = area.geojson if area.geojson is not None else area.polygon or []
     surge_active = area.surge_active if area.surge_active is not None else (area.surge_enabled or False)
@@ -167,11 +171,14 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest):
     await db_supabase.insert_one("service_areas", doc)
     # PERF-001: Invalidate fare cache
     await invalidate_fare_cache()
+    await log_admin_action(admin, "service_area_created", "service_areas", doc["id"], {"name": area.name})
     return {"area_id": doc["id"]}
 
 
 @router.put("/service-areas/{area_id}")
-async def admin_update_service_area(area_id: str, area: ServiceAreaUpdateRequest):
+async def admin_update_service_area(
+    area_id: str, area: ServiceAreaUpdateRequest, admin: dict = Depends(get_admin_user)
+):
     """Update service area — accepts any field."""
     # Resolve aliases
     polygon = area.geojson if area.geojson is not None else area.polygon
@@ -234,15 +241,19 @@ async def admin_update_service_area(area_id: str, area: ServiceAreaUpdateRequest
         await db_supabase.update_one("service_areas", {"id": area_id}, update_payload)
         # PERF-001: Invalidate fare cache
         await invalidate_fare_cache()
+        await log_admin_action(
+            admin, "service_area_updated", "service_areas", area_id, {"updated_fields": list(update_payload.keys())}
+        )
     return {"message": "Service area updated"}
 
 
 @router.delete("/service-areas/{area_id}")
-async def admin_delete_service_area(area_id: str):
+async def admin_delete_service_area(area_id: str, admin: dict = Depends(get_admin_user)):
     """Delete service area."""
     await db_supabase.delete_many("service_areas", {"id": area_id})
     # PERF-001: Invalidate fare cache
     await invalidate_fare_cache()
+    await log_admin_action(admin, "service_area_deleted", "service_areas", area_id)
     return {"message": "Service area deleted"}
 
 
@@ -250,7 +261,7 @@ async def admin_delete_service_area(area_id: str):
 
 
 @router.put("/service-areas/{area_id}/surge")
-async def admin_update_surge_pricing(area_id: str, surge: SurgePricingRequest):
+async def admin_update_surge_pricing(area_id: str, surge: SurgePricingRequest, admin: dict = Depends(get_admin_user)):
     """Update surge pricing for a service area."""
     surge_doc = {
         "id": str(uuid.uuid4()),
@@ -275,6 +286,13 @@ async def admin_update_surge_pricing(area_id: str, surge: SurgePricingRequest):
 
     # PERF-001: Invalidate fare cache
     await invalidate_fare_cache()
+    await log_admin_action(
+        admin,
+        "surge_pricing_updated",
+        "service_areas",
+        area_id,
+        {"multiplier": surge.multiplier, "is_active": surge.is_active},
+    )
 
     return {"message": "Surge pricing updated"}
 

@@ -54,7 +54,7 @@ function emptyWindow(): TimeWindowPolicy {
 
 function TimeWindowRow({
     window: w,
-    index,
+    index: _index,
     onChange,
     onRemove,
 }: {
@@ -272,7 +272,7 @@ export default function CompanyPolicyPage() {
                     <div>
                         <Label>Allowed payment source</Label>
                         <p className="text-xs text-muted-foreground mb-2">
-                            Controls whether the rider's personal card can be used as fallback.
+                            Controls whether the rider&apos;s personal card can be used as fallback.
                         </p>
                         <Select
                             value={paymentSource}

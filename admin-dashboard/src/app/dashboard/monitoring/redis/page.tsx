@@ -345,7 +345,7 @@ export default function RedisMonitoringPage() {
                     <p className="text-xs text-muted-foreground">
                         Refreshed only on manual refresh — uses SCAN, so not on the poll loop.
                         Flush actions are restricted to caches + idempotency keys; session / OTP
-                        / rate-limit prefixes can't be purged from here to prevent accidental
+                        / rate-limit prefixes can&apos;t be purged from here to prevent accidental
                         mass-logouts.
                     </p>
                 </CardHeader>
@@ -416,7 +416,7 @@ export default function RedisMonitoringPage() {
                     </CardTitle>
                     <p className="text-xs text-muted-foreground">
                         Process-level stats for the backend replica that served this request.
-                        For a fleet-wide view, point Prometheus at each replica's{" "}
+                        For a fleet-wide view, point Prometheus at each replica&apos;s{" "}
                         <code>/metrics</code>.
                     </p>
                 </CardHeader>

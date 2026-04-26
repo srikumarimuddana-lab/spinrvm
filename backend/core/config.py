@@ -35,8 +35,9 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     # Legacy days TTL — preserved for mobile clients that haven't adopted rotation yet.
     ACCESS_TOKEN_TTL_DAYS: int = 30
-    # Admin-console access-token TTL in hours. Cap at 12h for security.
-    ADMIN_ACCESS_TOKEN_TTL_HOURS: int = 12
+    # Admin-console access-token TTL in hours. 1h forces frequent rotation via
+    # the refresh token flow; reduces the blast radius of a captured token.
+    ADMIN_ACCESS_TOKEN_TTL_HOURS: int = 1
     # Refresh-token TTL in days (30 days "remember this device").
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 

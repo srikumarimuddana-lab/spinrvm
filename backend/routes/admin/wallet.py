@@ -37,12 +37,18 @@ class AdminCreditRequest(BaseModel):
     user_id: str
     amount: float = Field(..., gt=0, le=10_000, description="CAD amount to credit (max $10,000/txn)")
     reason: str = Field(..., min_length=3, max_length=200)
+    idempotency_key: str | None = Field(
+        None, description="Caller-supplied key; duplicate requests return the original result"
+    )
 
 
 class AdminDebitRequest(BaseModel):
     user_id: str
     amount: float = Field(..., gt=0, le=10_000)
     reason: str = Field(..., min_length=3, max_length=200)
+    idempotency_key: str | None = Field(
+        None, description="Caller-supplied key; duplicate requests return the original result"
+    )
 
 
 @router.get("/{user_id}")
@@ -98,6 +104,18 @@ async def admin_get_wallet(
 @router.post("/credit")
 async def admin_credit_wallet(req: AdminCreditRequest, admin: dict = Depends(get_admin_user)):
     """Credit a user's wallet. Writes an audited ledger entry."""
+    # Idempotency guard (F-37): if a key was supplied, return the existing
+    # transaction rather than applying the credit a second time on retry.
+    if req.idempotency_key:
+        existing_txns = await db_supabase.get_rows(
+            "wallet_transactions",
+            {"reference_id": req.idempotency_key, "type": "admin_credit"},
+            limit=1,
+        )
+        if existing_txns:
+            t = existing_txns[0]
+            return {"balance": float(t["balance_after"]), "transaction_id": t["id"]}
+
     user = await db_supabase.get_user_by_id(req.user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -121,6 +139,7 @@ async def admin_credit_wallet(req: AdminCreditRequest, admin: dict = Depends(get
         txn_type="admin_credit",
         amount=float(credit),
         balance_after=float(new_balance),
+        reference_id=req.idempotency_key,
         description=f"Admin credit: {req.reason}",
         metadata={"admin_id": admin["id"], "reason": req.reason},
     )
@@ -154,6 +173,17 @@ async def admin_credit_wallet(req: AdminCreditRequest, admin: dict = Depends(get
 @router.post("/debit")
 async def admin_debit_wallet(req: AdminDebitRequest, admin: dict = Depends(get_admin_user)):
     """Debit (deduct from) a user's wallet — refunds, correction, fraud clawback."""
+    # Idempotency guard (F-37): return existing result on retry.
+    if req.idempotency_key:
+        existing_txns = await db_supabase.get_rows(
+            "wallet_transactions",
+            {"reference_id": req.idempotency_key, "type": "admin_debit"},
+            limit=1,
+        )
+        if existing_txns:
+            t = existing_txns[0]
+            return {"balance": float(t["balance_after"]), "transaction_id": t["id"]}
+
     user = await db_supabase.get_user_by_id(req.user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -179,6 +209,7 @@ async def admin_debit_wallet(req: AdminDebitRequest, admin: dict = Depends(get_a
         txn_type="admin_debit",
         amount=-float(debit),
         balance_after=float(new_balance),
+        reference_id=req.idempotency_key,
         description=f"Admin debit: {req.reason}",
         metadata={"admin_id": admin["id"], "reason": req.reason},
     )

@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 try:
-    from ...db_supabase import _rows_from_res, run_sync
     from ...db_supabase import _breaker as _db_breaker
+    from ...db_supabase import _rows_from_res, run_sync
     from ...dependencies import get_admin_user
     from ...supabase_client import supabase
     from ...utils.driver_presence import PRESENCE_TTL, present_driver_ids
@@ -22,7 +22,12 @@ except ImportError:
     from supabase_client import supabase
     from utils.driver_presence import PRESENCE_TTL, present_driver_ids  # type: ignore
     from utils.metrics import snapshot as _metrics_snapshot  # type: ignore
-    from utils.redis_client import KNOWN_KEY_PREFIXES, count_keys_by_prefix, get_redis_stats, redis_delete_pattern  # type: ignore
+    from utils.redis_client import (  # type: ignore
+        KNOWN_KEY_PREFIXES,
+        count_keys_by_prefix,
+        get_redis_stats,
+        redis_delete_pattern,
+    )
 
 router = APIRouter(prefix="/admin/monitoring", tags=["Monitoring"])
 
@@ -176,9 +181,7 @@ async def get_monitoring_rides(current_admin: dict = Depends(get_admin_user)) ->
                 .execute()
             )
         ),
-        run_sync(
-            lambda: supabase.table("drivers").select("id, user_id, lat, lng").in_("id", driver_ids).execute()
-        ),
+        run_sync(lambda: supabase.table("drivers").select("id, user_id, lat, lng").in_("id", driver_ids).execute()),
     )
     riders_by_id = {u["id"]: u for u in _rows_from_res(riders_res)}
     drivers_rows = _rows_from_res(drivers_map_res)
@@ -261,18 +264,18 @@ async def get_redis_health(current_admin: dict = Depends(get_admin_user)) -> Dic
     # hard-coding the mapping in the frontend. Add new prefixes here
     # when you add them to KNOWN_KEY_PREFIXES.
     prefix_descriptions = {
-        "cache:user:":            "User row cache (30s TTL)",
-        "cache:driver:":          "Driver row cache by id (30s TTL)",
-        "cache:driver:by_user:":  "Driver row cache by user_id (30s TTL)",
-        "idem:":                  "Idempotency-Key response cache (24h TTL)",
-        "session:":               "Active login sessions",
-        "otp:":                   "OTP records + lockout state",
-        "ratelimit:":             "SlowAPI rate-limit counters",
-        "spinr:retry_budget:":    "Per-second global retry budget counter",
-        "spinr:ws:":              "WebSocket pub/sub state",
+        "cache:user:": "User row cache (30s TTL)",
+        "cache:driver:": "Driver row cache by id (30s TTL)",
+        "cache:driver:by_user:": "Driver row cache by user_id (30s TTL)",
+        "idem:": "Idempotency-Key response cache (24h TTL)",
+        "session:": "Active login sessions",
+        "otp:": "OTP records + lockout state",
+        "ratelimit:": "SlowAPI rate-limit counters",
+        "spinr:retry_budget:": "Per-second global retry budget counter",
+        "spinr:ws:": "WebSocket pub/sub state",
         "spinr:presence:driver:": "Driver presence heartbeat (90s TTL)",
-        "fares:":                 "Per-area fare config cache (5min TTL)",
-        "__other__":              "Keys outside known prefixes",
+        "fares:": "Per-area fare config cache (5min TTL)",
+        "__other__": "Keys outside known prefixes",
     }
     prefixes_with_meta = [
         {
@@ -323,8 +326,7 @@ async def flush_redis_prefix(
     if prefix not in _FLUSHABLE_PREFIXES:
         raise HTTPException(
             status_code=403,
-            detail=f"Prefix '{prefix}' is not in the flushable allowlist. "
-                   f"Allowed: {sorted(_FLUSHABLE_PREFIXES)}",
+            detail=f"Prefix '{prefix}' is not in the flushable allowlist. Allowed: {sorted(_FLUSHABLE_PREFIXES)}",
         )
 
     deleted = await redis_delete_pattern(f"{prefix}*")
@@ -360,9 +362,11 @@ async def get_infrastructure_stats(current_admin: dict = Depends(get_admin_user)
     # Process memory + CPU — `resource` is stdlib, no extra deps.
     try:
         import resource as _resource  # Unix-only; macOS + Linux OK, Windows doesn't have it
+
         ru = _resource.getrusage(_resource.RUSAGE_SELF)
         # ru_maxrss is bytes on Linux, kilobytes on macOS. Normalise to bytes.
         import sys as _sys
+
         if _sys.platform == "darwin":
             rss_bytes = ru.ru_maxrss  # already bytes on macOS (apparently)
         else:
@@ -381,6 +385,7 @@ async def get_infrastructure_stats(current_admin: dict = Depends(get_admin_user)
     # initialised stdlib loops) don't carry `_default_executor` at all,
     # and a raw attribute access would raise AttributeError.
     import asyncio as _asyncio
+
     loop = _asyncio.get_running_loop()
     executor = getattr(loop, "_default_executor", None)
     max_workers = getattr(executor, "_max_workers", None) if executor is not None else None

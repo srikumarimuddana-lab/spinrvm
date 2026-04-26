@@ -17,8 +17,10 @@
  * manually via docs/MOBILE_SMOKE.md §E (see P3-19 xfail in test_p3_push_notifications.py).
  */
 
-const mockScheduleNotification = jest.fn();
-const mockCancelNotification = jest.fn();
+jest.mock('react', () => ({
+  ...jest.requireActual('react'),
+  useCallback: (fn: any) => fn,
+}));
 
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios' },
@@ -36,19 +38,24 @@ jest.mock('@react-native-async-storage/async-storage', () => {
 });
 
 jest.mock('expo-notifications', () => ({
-  scheduleNotificationAsync: mockScheduleNotification,
-  cancelScheduledNotificationAsync: mockCancelNotification,
-}));
+  scheduleNotificationAsync: jest.fn(),
+  cancelScheduledNotificationAsync: jest.fn(),
+}), { virtual: true });
 
 jest.mock('../../../config', () => ({
   API_URL: 'http://localhost:8000',
-}));
+}), { virtual: true });
 
 import {
   useScheduledRideReminder,
   handleScheduledRideReminderFCM,
 } from '../useScheduledRideReminder';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const ExpoNotifications = require('expo-notifications') as Record<string, jest.Mock>;
+const mockScheduleNotification = ExpoNotifications.scheduleNotificationAsync;
+const mockCancelNotification = ExpoNotifications.cancelScheduledNotificationAsync;
 
 const REMINDER_MAP_KEY = '@spinr:scheduled_reminders';
 const RIDE_ID = 'ride-sch-001';

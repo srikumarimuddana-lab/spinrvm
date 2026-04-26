@@ -65,10 +65,7 @@ async def test_no_double_accept(client, ride_id, driver_1_headers, driver_2_head
             return_exceptions=True,
         )
 
-    statuses = sorted([
-        200 if isinstance(r, dict) else r.status_code
-        for r in results
-    ])
+    statuses = sorted([200 if isinstance(r, dict) else r.status_code for r in results])
     assert statuses == [200, 409]
 
 
@@ -193,9 +190,7 @@ async def test_full_ride_lifecycle():
         from backend.routes.drivers import RideOTPRequest
 
         otp_req = RideOTPRequest(otp=otp_plain)
-        await drv_mod.verify_pickup_otp(
-            ride_id=ride_id, request=otp_req, current_user={"id": user_driver_id}
-        )
+        await drv_mod.verify_pickup_otp(ride_id=ride_id, request=otp_req, current_user={"id": user_driver_id})
         assert ride["status"] == "in_progress"
 
         # Step 4: Complete ride – in_progress → completed

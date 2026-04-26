@@ -43,6 +43,7 @@ Currency
 
 CAD, hardcoded. See P0-5 scoping doc §9 for the multi-currency question.
 """
+
 from __future__ import annotations
 
 import logging
@@ -193,7 +194,10 @@ async def charge_ride(
         decline_code = getattr(err, "decline_code", None) or getattr(err, "code", None)
         logger.info(
             "Card declined for ride=%s rider=%s code=%s: %s",
-            ride_id, rider_id, decline_code, e,
+            ride_id,
+            rider_id,
+            decline_code,
+            e,
         )
         return ChargeOutcome(
             status="declined",
@@ -203,9 +207,7 @@ async def charge_ride(
     except _StripeBaseError as e:
         # Non-decline Stripe error (api_connection_error, authentication_error,
         # invalid_request_error, rate_limit_error, etc.). Not the rider's fault.
-        logger.error(
-            "Stripe error charging ride=%s rider=%s: %s", ride_id, rider_id, e
-        )
+        logger.error("Stripe error charging ride=%s rider=%s: %s", ride_id, rider_id, e)
         return ChargeOutcome(
             status="failed",
             error_message=str(e),
@@ -249,7 +251,9 @@ async def charge_ride(
     # canceled means someone else killed the PI.
     logger.warning(
         "Unhandled PaymentIntent status=%s for ride=%s pi=%s",
-        status, ride_id, pi_id,
+        status,
+        ride_id,
+        pi_id,
     )
     return ChargeOutcome(
         status="failed",

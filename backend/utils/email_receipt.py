@@ -4,7 +4,6 @@ Generates HTML receipt and sends via email (SendGrid when configured, logs other
 """
 
 import logging
-from datetime import datetime
 
 try:
     from .datetime_utils import parse_iso_utc

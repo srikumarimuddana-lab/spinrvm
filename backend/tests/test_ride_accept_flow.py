@@ -100,12 +100,14 @@ class TestAcceptRideFlipsStatus:
         send_ws_mock = AsyncMock()
         send_push_mock = AsyncMock()
 
-        with patch("backend.routes.drivers.db_supabase.get_ride", get_ride_mock), \
-             patch("backend.routes.drivers.db_supabase.update_ride", update_ride_mock), \
-             patch("backend.routes.drivers.db_supabase.get_rows", get_rows_mock), \
-             patch("backend.routes.drivers.db.find_one", find_one_mock), \
-             patch("backend.routes.drivers.manager.send_personal_message", send_ws_mock), \
-             patch("backend.routes.drivers.send_push_notification", send_push_mock):
+        with (
+            patch("backend.routes.drivers.db_supabase.get_ride", get_ride_mock),
+            patch("backend.routes.drivers.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.drivers.db_supabase.get_rows", get_rows_mock),
+            patch("backend.routes.drivers.db.find_one", find_one_mock),
+            patch("backend.routes.drivers.manager.send_personal_message", send_ws_mock),
+            patch("backend.routes.drivers.send_push_notification", send_push_mock),
+        ):
             result = asyncio.run(
                 drivers_mod.accept_ride(
                     ride_id=RIDE_ID,
@@ -155,20 +157,19 @@ class TestAcceptRideFlipsStatus:
         # Stale row after the "write" — simulates the silent-no-op case.
         stuck_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
 
-        with patch(
-            "backend.routes.drivers.db_supabase.get_ride",
-            AsyncMock(side_effect=[pre_ride, stuck_ride]),
-        ), patch(
-            "backend.routes.drivers.db_supabase.update_ride", AsyncMock(return_value=None)
-        ), patch(
-            "backend.routes.drivers.db_supabase.get_rows",
-            AsyncMock(return_value=[_driver_row()]),
-        ), patch(
-            "backend.routes.drivers.db.find_one", AsyncMock(return_value=stuck_ride)
-        ), patch(
-            "backend.routes.drivers.manager.send_personal_message", AsyncMock()
-        ), patch(
-            "backend.routes.drivers.send_push_notification", AsyncMock()
+        with (
+            patch(
+                "backend.routes.drivers.db_supabase.get_ride",
+                AsyncMock(side_effect=[pre_ride, stuck_ride]),
+            ),
+            patch("backend.routes.drivers.db_supabase.update_ride", AsyncMock(return_value=None)),
+            patch(
+                "backend.routes.drivers.db_supabase.get_rows",
+                AsyncMock(return_value=[_driver_row()]),
+            ),
+            patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=stuck_ride)),
+            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
         ):
             with pytest.raises(HTTPException) as excinfo:
                 asyncio.run(
@@ -196,15 +197,19 @@ class TestGetRideReturnsAcceptedStatus:
         )
         driver = _driver_row()
 
-        with patch(
-            "backend.routes.rides.db_supabase.get_ride",
-            AsyncMock(return_value=dict(post_ride)),
-        ), patch(
-            "backend.routes.rides.db_supabase.get_rows",
-            AsyncMock(return_value=[]),  # caller is the rider, not a driver
-        ), patch(
-            "backend.routes.rides.db_supabase.get_driver_by_id",
-            AsyncMock(return_value=driver),
+        with (
+            patch(
+                "backend.routes.rides.db_supabase.get_ride",
+                AsyncMock(return_value=dict(post_ride)),
+            ),
+            patch(
+                "backend.routes.rides.db_supabase.get_rows",
+                AsyncMock(return_value=[]),  # caller is the rider, not a driver
+            ),
+            patch(
+                "backend.routes.rides.db_supabase.get_driver_by_id",
+                AsyncMock(return_value=driver),
+            ),
         ):
             result = asyncio.run(
                 rides_mod.get_ride(
@@ -246,22 +251,25 @@ class TestAdminCancelRide:
         send_ws_mock = AsyncMock()
         send_push_mock = AsyncMock()
 
-        with patch(
-            "backend.routes.admin.rides.db_supabase.get_ride", get_ride_mock
-        ), patch(
-            "backend.routes.admin.rides.db_supabase.update_ride", update_ride_mock
-        ), patch(
-            "backend.routes.admin.rides.db_supabase.set_driver_available",
-            set_avail_mock,
-        ), patch(
-            "backend.routes.admin.rides.db_supabase.get_driver_by_id",
-            get_driver_mock,
-        ), patch(
-            "backend.routes.admin.rides.manager.send_personal_message",
-            send_ws_mock,
-        ), patch(
-            "backend.routes.admin.rides.send_push_notification",
-            send_push_mock,
+        with (
+            patch("backend.routes.admin.rides.db_supabase.get_ride", get_ride_mock),
+            patch("backend.routes.admin.rides.db_supabase.update_ride", update_ride_mock),
+            patch(
+                "backend.routes.admin.rides.db_supabase.set_driver_available",
+                set_avail_mock,
+            ),
+            patch(
+                "backend.routes.admin.rides.db_supabase.get_driver_by_id",
+                get_driver_mock,
+            ),
+            patch(
+                "backend.routes.admin.rides.manager.send_personal_message",
+                send_ws_mock,
+            ),
+            patch(
+                "backend.routes.admin.rides.send_push_notification",
+                send_push_mock,
+            ),
         ):
             from backend.routes.admin.rides import AdminCancelRideRequest
 
@@ -299,11 +307,12 @@ class TestAdminCancelRide:
         from backend.routes.admin.rides import AdminCancelRideRequest
 
         update_ride_mock = AsyncMock()
-        with patch(
-            "backend.routes.admin.rides.db_supabase.get_ride",
-            AsyncMock(return_value=_ride_row("completed", driver_id=DRIVER_ID)),
-        ), patch(
-            "backend.routes.admin.rides.db_supabase.update_ride", update_ride_mock
+        with (
+            patch(
+                "backend.routes.admin.rides.db_supabase.get_ride",
+                AsyncMock(return_value=_ride_row("completed", driver_id=DRIVER_ID)),
+            ),
+            patch("backend.routes.admin.rides.db_supabase.update_ride", update_ride_mock),
         ):
             with pytest.raises(HTTPException) as excinfo:
                 asyncio.run(

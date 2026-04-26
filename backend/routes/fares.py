@@ -36,6 +36,7 @@ def _fd(v) -> float:
     except (TypeError, ValueError, decimal.InvalidOperation):
         return 0.0
 
+
 def serialize_doc(doc):
     """Identity passthrough kept for legacy callers (Supabase dicts)."""
     return doc
@@ -53,6 +54,7 @@ async def invalidate_fare_cache() -> int:
         logger.info(f"Fare cache invalidated: {deleted} keys removed")
     return deleted
 
+
 @api_router.get("/vehicle-types")
 async def get_vehicle_types():
     types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
@@ -68,9 +70,7 @@ async def get_public_service_areas():
     active areas with the minimum fields the UI needs; admins use
     /admin/service-areas for the full record including surge config.
     """
-    areas = await db_supabase.get_rows(
-        "service_areas", {"is_active": True}, order="name", limit=500
-    )
+    areas = await db_supabase.get_rows("service_areas", {"is_active": True}, order="name", limit=500)
     return [
         {
             "id": a.get("id"),
@@ -158,11 +158,7 @@ async def build_fares_for_area(matched_area, vehicle_types):
     # toggle is off. Matches surge_engine.py's convention (only
     # writes multiplier when active) and the admin UI toggle under
     # Service Areas → General.
-    surge = (
-        matched_area.get("surge_multiplier", 1.0)
-        if matched_area.get("surge_active", False)
-        else 1.0
-    )
+    surge = matched_area.get("surge_multiplier", 1.0) if matched_area.get("surge_active", False) else 1.0
 
     # Name → pricing row from vehicle_pricing JSONB (source of truth).
     # Field names: vehicle_type (NAME), base_fare, per_km, per_min,

@@ -20,12 +20,12 @@ Branches exercised:
     * Stripe raises a non-card StripeError → failed (ops issue)
     * Stripe returns an unhandled status → failed
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 _KW = dict(
     ride={"id": "ride_helper_1"},
@@ -65,9 +65,7 @@ class TestZeroAmount:
         from backend.utils.stripe_charge import charge_ride
 
         # No settings or stripe patching — should not be reached
-        outcome = await charge_ride(
-            ride={"id": "r"}, rider_id="u", total_amount=0.0
-        )
+        outcome = await charge_ride(ride={"id": "r"}, rider_id="u", total_amount=0.0)
         assert outcome.status == "succeeded"
         assert outcome.charged_amount == 0.0
         assert outcome.payment_intent_id is None
@@ -75,9 +73,7 @@ class TestZeroAmount:
     async def test_negative_amount_also_short_circuits(self):
         from backend.utils.stripe_charge import charge_ride
 
-        outcome = await charge_ride(
-            ride={"id": "r"}, rider_id="u", total_amount=-5.0
-        )
+        outcome = await charge_ride(ride={"id": "r"}, rider_id="u", total_amount=-5.0)
         assert outcome.status == "succeeded"
 
 
@@ -161,7 +157,8 @@ class TestRequiresAction:
         from backend.utils.stripe_charge import charge_ride
 
         intent = MagicMock(
-            id="pi_ra_1", status="requires_action",
+            id="pi_ra_1",
+            status="requires_action",
             client_secret="pi_ra_1_secret_yyy",
         )
         stripe_patch, _ = _patch_stripe(create_return=intent)
@@ -178,7 +175,8 @@ class TestRequiresAction:
         from backend.utils.stripe_charge import charge_ride
 
         intent = MagicMock(
-            id="pi_rsa", status="requires_source_action",
+            id="pi_rsa",
+            status="requires_source_action",
             client_secret="pi_rsa_secret",
         )
         stripe_patch, _ = _patch_stripe(create_return=intent)
@@ -214,9 +212,11 @@ class TestCardDecline:
         mock_stripe = MagicMock()
         mock_stripe.PaymentIntent.create.side_effect = _FakeCardError()
 
-        with _patch_settings(), \
-             patch("backend.utils.stripe_charge.stripe", mock_stripe), \
-             patch("backend.utils.stripe_charge._StripeCardError", _FakeCardError):
+        with (
+            _patch_settings(),
+            patch("backend.utils.stripe_charge.stripe", mock_stripe),
+            patch("backend.utils.stripe_charge._StripeCardError", _FakeCardError),
+        ):
             outcome = await charge_ride(**_KW)
 
         assert outcome.status == "declined"
@@ -229,7 +229,9 @@ class TestCardDecline:
         from backend.utils.stripe_charge import charge_ride
 
         intent = MagicMock(
-            id="pi_rpm", status="requires_payment_method", client_secret=None,
+            id="pi_rpm",
+            status="requires_payment_method",
+            client_secret=None,
         )
         stripe_patch, _ = _patch_stripe(create_return=intent)
 
@@ -251,13 +253,13 @@ class TestStripeOpsError:
             pass
 
         mock_stripe = MagicMock()
-        mock_stripe.PaymentIntent.create.side_effect = _FakeStripeError(
-            "api_connection_error: Unable to reach Stripe"
-        )
+        mock_stripe.PaymentIntent.create.side_effect = _FakeStripeError("api_connection_error: Unable to reach Stripe")
 
-        with _patch_settings(), \
-             patch("backend.utils.stripe_charge.stripe", mock_stripe), \
-             patch("backend.utils.stripe_charge._StripeBaseError", _FakeStripeError):
+        with (
+            _patch_settings(),
+            patch("backend.utils.stripe_charge.stripe", mock_stripe),
+            patch("backend.utils.stripe_charge._StripeBaseError", _FakeStripeError),
+        ):
             outcome = await charge_ride(**_KW)
 
         assert outcome.status == "failed"
@@ -292,8 +294,5 @@ class TestIdempotencyKey:
             await charge_ride(**_KW)
             await charge_ride(**_KW)
 
-        keys = [
-            call.kwargs["idempotency_key"]
-            for call in mock_stripe.PaymentIntent.create.call_args_list
-        ]
+        keys = [call.kwargs["idempotency_key"] for call in mock_stripe.PaymentIntent.create.call_args_list]
         assert keys == ["ride-charge-ride_helper_1", "ride-charge-ride_helper_1"]

@@ -8,7 +8,7 @@ env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(env_path)
 
 import uuid  # noqa: E402
-from datetime import datetime  # noqa: E402, timezone
+from datetime import datetime, timezone  # noqa: E402
 
 import db_supabase  # noqa: E402
 

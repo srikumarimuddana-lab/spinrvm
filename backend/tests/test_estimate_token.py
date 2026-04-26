@@ -4,6 +4,7 @@ Tests for the P0-4 surge-lock estimate_token.
 See backend/utils/estimate_token.py. The token locks the surge shown at
 estimate time so the rider doesn't get bait-and-switched at confirm.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -13,7 +14,6 @@ from backend.utils.estimate_token import (
     sign_estimate_token,
     verify_estimate_token,
 )
-
 
 RIDER = "rider_ut"
 VT = "economy"
@@ -59,23 +59,17 @@ class TestTamperingRejection:
         """A rider cannot replay another rider's low-surge token."""
         tok = sign_estimate_token(surge_multiplier=1.0, total_fare=18.5, **_kwargs())
         with pytest.raises(EstimateTokenError, match="rider"):
-            verify_estimate_token(
-                tok, **{**_kwargs(), "rider_id": "different_rider"}
-            )
+            verify_estimate_token(tok, **{**_kwargs(), "rider_id": "different_rider"})
 
     def test_vehicle_type_mismatch_rejected(self):
         tok = sign_estimate_token(surge_multiplier=1.0, total_fare=18.5, **_kwargs())
         with pytest.raises(EstimateTokenError, match="vehicle"):
-            verify_estimate_token(
-                tok, **{**_kwargs(), "vehicle_type_id": "xl"}
-            )
+            verify_estimate_token(tok, **{**_kwargs(), "vehicle_type_id": "xl"})
 
     def test_pickup_coord_mismatch_rejected(self):
         tok = sign_estimate_token(surge_multiplier=1.0, total_fare=18.5, **_kwargs())
         with pytest.raises(EstimateTokenError, match="pickup"):
-            verify_estimate_token(
-                tok, **{**_kwargs(), "pickup_lat": 52.99}
-            )
+            verify_estimate_token(tok, **{**_kwargs(), "pickup_lat": 52.99})
 
     def test_malformed_token_rejected(self):
         for bad in ("", "no-dot", "too.many.dots.here", "invalid!.base64!"):
@@ -85,17 +79,13 @@ class TestTamperingRejection:
 
 class TestExpiry:
     def test_fresh_token_accepted(self):
-        tok = sign_estimate_token(
-            surge_multiplier=1.5, total_fare=27.75, now=1000.0, **_kwargs()
-        )
+        tok = sign_estimate_token(surge_multiplier=1.5, total_fare=27.75, now=1000.0, **_kwargs())
         # 30s later — well within the 300s default TTL
         payload = verify_estimate_token(tok, now=1030.0, **_kwargs())
         assert payload["sm"] == 1.5
 
     def test_expired_token_rejected(self):
-        tok = sign_estimate_token(
-            surge_multiplier=1.5, total_fare=27.75, now=1000.0, **_kwargs()
-        )
+        tok = sign_estimate_token(surge_multiplier=1.5, total_fare=27.75, now=1000.0, **_kwargs())
         # 10 minutes later — past the 5-minute default TTL
         with pytest.raises(EstimateTokenError, match="expired"):
             verify_estimate_token(tok, now=1600.0, **_kwargs())
@@ -107,9 +97,7 @@ class TestCoordTolerance:
         6th decimal should not invalidate the token — riders' pins move
         slightly between estimate and confirm on real devices."""
         tok = sign_estimate_token(surge_multiplier=1.0, total_fare=18.5, **_kwargs())
-        payload = verify_estimate_token(
-            tok, **{**_kwargs(), "pickup_lat": PU_LAT + 0.000001}
-        )
+        payload = verify_estimate_token(tok, **{**_kwargs(), "pickup_lat": PU_LAT + 0.000001})
         assert payload["sm"] == 1.0
 
     def test_material_pickup_move_rejected(self):
@@ -118,6 +106,4 @@ class TestCoordTolerance:
         confirm from a high-surge one."""
         tok = sign_estimate_token(surge_multiplier=1.0, total_fare=18.5, **_kwargs())
         with pytest.raises(EstimateTokenError, match="pickup"):
-            verify_estimate_token(
-                tok, **{**_kwargs(), "pickup_lat": PU_LAT + 0.001}
-            )
+            verify_estimate_token(tok, **{**_kwargs(), "pickup_lat": PU_LAT + 0.001})

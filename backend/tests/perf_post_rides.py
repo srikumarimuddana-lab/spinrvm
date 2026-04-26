@@ -386,7 +386,9 @@ def print_report(current: Dict[str, Any], baseline: Optional[Dict[str, Any]]) ->
     print(f"  min/max:    {current['min_ms']} / {current['max_ms']} ms")
     counts = current["db_calls_per_request"]
     total = counts["total_max"]
-    print(f"  DB calls/req (total):    {counts['total_min']}-{counts['total_max']}  (get_rows: {counts['get_rows_max']}, direct: {counts['direct_max']})")
+    print(
+        f"  DB calls/req (total):    {counts['total_min']}-{counts['total_max']}  (get_rows: {counts['get_rows_max']}, direct: {counts['direct_max']})"
+    )
     print("  calls by table (last sample):")
     for tbl, n in sorted(counts["by_table_last_sample"].items(), key=lambda kv: -kv[1]):
         print(f"    {tbl:<24} {n}")
@@ -398,7 +400,9 @@ def print_report(current: Dict[str, Any], baseline: Optional[Dict[str, Any]]) ->
         if baseline.get("p95_ms"):
             p95_delta = current["p95_ms"] - baseline["p95_ms"]
             p95_pct = (p95_delta / baseline["p95_ms"] * 100) if baseline["p95_ms"] else 0
-            print(f"  vs baseline -- P95:      {baseline['p95_ms']} -> {current['p95_ms']} ms  ({p95_delta:+.2f} ms, {p95_pct:+.1f}%)")
+            print(
+                f"  vs baseline -- P95:      {baseline['p95_ms']} -> {current['p95_ms']} ms  ({p95_delta:+.2f} ms, {p95_pct:+.1f}%)"
+            )
     print(divider + "\n")
 
 

@@ -16,12 +16,12 @@ credentials; those cases are marked xfail(strict=False).
 Run:
     pytest backend/tests/test_p3_push_notifications.py -v
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 
 USER_ID = "user_p3_19"
 
@@ -52,6 +52,7 @@ def _notif(nid: str = "notif-001", is_read: bool = False) -> dict:
 # POST /notifications/register-token
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 class TestRegisterPushToken:
     """Pins register_push_token: upsert behavior + users.fcm_token mirror.
@@ -59,9 +60,8 @@ class TestRegisterPushToken:
     Code under test: backend/routes/notifications.py::register_push_token (~line 49).
     """
 
-    async def _register(self, existing_row=None, platform: str = "ios",
-                        token: str = "fcm-xyz"):
-        from backend.routes.notifications import register_push_token, RegisterTokenRequest
+    async def _register(self, existing_row=None, platform: str = "ios", token: str = "fcm-xyz"):
+        from backend.routes.notifications import RegisterTokenRequest, register_push_token
 
         body = RegisterTokenRequest(token=token, platform=platform)
         updates = []
@@ -79,14 +79,10 @@ class TestRegisterPushToken:
             inserted.append((table, row))
 
         with (
-            patch("backend.routes.notifications.db_supabase.get_rows",
-                  AsyncMock(side_effect=_get_rows)),
-            patch("backend.routes.notifications.db_supabase.update_one",
-                  AsyncMock(side_effect=_update)),
-            patch("backend.routes.notifications.db_supabase.insert_one",
-                  AsyncMock(side_effect=_insert)),
-            patch("backend.routes.notifications.db.update_one",
-                  AsyncMock(side_effect=_update)),
+            patch("backend.routes.notifications.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.notifications.db_supabase.update_one", AsyncMock(side_effect=_update)),
+            patch("backend.routes.notifications.db_supabase.insert_one", AsyncMock(side_effect=_insert)),
+            patch("backend.routes.notifications.db.update_one", AsyncMock(side_effect=_update)),
         ):
             result = await register_push_token(
                 body=body,
@@ -122,8 +118,10 @@ class TestRegisterPushToken:
 
         user_updates = [(t, q, d) for t, q, d in updates if t == "users"]
         assert user_updates, "Token not mirrored to users.fcm_token"
-        assert user_updates[0][2].get("fcm_token") == "fcm-xyz" or \
-               user_updates[0][2].get("$set", {}).get("fcm_token") == "fcm-xyz"
+        assert (
+            user_updates[0][2].get("fcm_token") == "fcm-xyz"
+            or user_updates[0][2].get("$set", {}).get("fcm_token") == "fcm-xyz"
+        )
 
     async def test_ios_and_android_stored_as_separate_rows(self):
         """One row per (user, platform) — iOS and Android tokens are distinct."""
@@ -141,6 +139,7 @@ class TestRegisterPushToken:
 # GET /notifications
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 class TestGetNotifications:
     """Pins get_notifications: pagination, unread_only filter, unread_count.
@@ -154,13 +153,13 @@ class TestGetNotifications:
         notifs = [_notif("n1", is_read=False), _notif("n2", is_read=True)]
 
         with (
-            patch("backend.routes.notifications.db_supabase.get_rows",
-                  AsyncMock(return_value=notifs)),
-            patch("backend.routes.notifications.db_supabase.count_documents",
-                  AsyncMock(return_value=1)),
+            patch("backend.routes.notifications.db_supabase.get_rows", AsyncMock(return_value=notifs)),
+            patch("backend.routes.notifications.db_supabase.count_documents", AsyncMock(return_value=1)),
         ):
             result = await get_notifications(
-                limit=30, offset=0, unread_only=False,
+                limit=30,
+                offset=0,
+                unread_only=False,
                 current_user={"id": USER_ID},
             )
 
@@ -177,23 +176,25 @@ class TestGetNotifications:
             return []
 
         with (
-            patch("backend.routes.notifications.db_supabase.get_rows",
-                  AsyncMock(side_effect=_get_rows)),
-            patch("backend.routes.notifications.db_supabase.count_documents",
-                  AsyncMock(return_value=0)),
+            patch("backend.routes.notifications.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+            patch("backend.routes.notifications.db_supabase.count_documents", AsyncMock(return_value=0)),
         ):
             await get_notifications(
-                limit=30, offset=0, unread_only=True,
+                limit=30,
+                offset=0,
+                unread_only=True,
                 current_user={"id": USER_ID},
             )
 
-        assert any(f.get("is_read") is False for f in received_filters), \
+        assert any(f.get("is_read") is False for f in received_filters), (
             "unread_only=True did not filter by is_read=False"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PUT /notifications/{id}/read  +  read-all
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 class TestMarkNotificationsRead:
@@ -207,8 +208,10 @@ class TestMarkNotificationsRead:
 
         updates = []
 
-        with patch("backend.routes.notifications.db_supabase.update_one",
-                   AsyncMock(side_effect=lambda t, q, d: updates.append((t, q, d)))):
+        with patch(
+            "backend.routes.notifications.db_supabase.update_one",
+            AsyncMock(side_effect=lambda t, q, d: updates.append((t, q, d))),
+        ):
             result = await mark_as_read(
                 notification_id="notif-001",
                 current_user={"id": USER_ID},
@@ -226,8 +229,10 @@ class TestMarkNotificationsRead:
 
         updates = []
 
-        with patch("backend.routes.notifications.db_supabase.update_one",
-                   AsyncMock(side_effect=lambda t, q, d: updates.append((t, q, d)))):
+        with patch(
+            "backend.routes.notifications.db_supabase.update_one",
+            AsyncMock(side_effect=lambda t, q, d: updates.append((t, q, d))),
+        ):
             result = await mark_all_read(current_user={"id": USER_ID})
 
         assert result["success"] is True
@@ -240,6 +245,7 @@ class TestMarkNotificationsRead:
 # GET /notifications/preferences  (defaults returned when no row)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 class TestNotificationPreferences:
     """Pins preferences endpoints: defaults, partial update, upsert.
@@ -251,37 +257,40 @@ class TestNotificationPreferences:
     async def test_default_prefs_returned_when_no_row(self):
         from backend.routes.notifications import get_preferences
 
-        with patch("backend.routes.notifications.db_supabase.get_rows",
-                   AsyncMock(return_value=[])):
+        with patch("backend.routes.notifications.db_supabase.get_rows", AsyncMock(return_value=[])):
             result = await get_preferences(current_user={"id": USER_ID})
 
         assert result["push_enabled"] is True
         assert result["safety_alerts"] is True
 
     async def test_update_prefs_partial_only_sets_non_none(self):
-        from backend.routes.notifications import update_preferences, PreferencesUpdate
+        from backend.routes.notifications import PreferencesUpdate, update_preferences
 
         req = PreferencesUpdate(promotions=False)  # only set promotions
         updates = []
 
         with (
-            patch("backend.routes.notifications.db_supabase.get_rows",
-                  AsyncMock(return_value=[{"id": "pref-001", "user_id": USER_ID}])),
-            patch("backend.routes.notifications.db_supabase.update_one",
-                  AsyncMock(side_effect=lambda t, q, d: updates.append(d))),
+            patch(
+                "backend.routes.notifications.db_supabase.get_rows",
+                AsyncMock(return_value=[{"id": "pref-001", "user_id": USER_ID}]),
+            ),
+            patch(
+                "backend.routes.notifications.db_supabase.update_one",
+                AsyncMock(side_effect=lambda t, q, d: updates.append(d)),
+            ),
         ):
             result = await update_preferences(req=req, current_user={"id": USER_ID})
 
         assert result["success"] is True
         # Only promotions should be in the update payload
         assert updates[0].get("promotions") is False
-        assert "push_enabled" not in updates[0], \
-            "Unset fields must not be included in partial update"
+        assert "push_enabled" not in updates[0], "Unset fields must not be included in partial update"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # create_notification() helper — deeplink injection
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 class TestCreateNotificationHelper:
@@ -291,12 +300,14 @@ class TestCreateNotificationHelper:
     """
 
     async def test_deeplink_injected_for_known_type(self):
-        from backend.routes.notifications import create_notification, NOTIFICATION_DEEPLINKS
+        from backend.routes.notifications import NOTIFICATION_DEEPLINKS, create_notification
 
         inserted = []
 
-        with patch("backend.routes.notifications.db_supabase.insert_one",
-                   AsyncMock(side_effect=lambda t, r: inserted.append(r) or r)):
+        with patch(
+            "backend.routes.notifications.db_supabase.insert_one",
+            AsyncMock(side_effect=lambda t, r: inserted.append(r) or r),
+        ):
             notif = await create_notification(
                 user_id=USER_ID,
                 title="Payout complete",
@@ -311,8 +322,10 @@ class TestCreateNotificationHelper:
 
         inserted = []
 
-        with patch("backend.routes.notifications.db_supabase.insert_one",
-                   AsyncMock(side_effect=lambda t, r: inserted.append(r) or r)):
+        with patch(
+            "backend.routes.notifications.db_supabase.insert_one",
+            AsyncMock(side_effect=lambda t, r: inserted.append(r) or r),
+        ):
             notif = await create_notification(
                 user_id=USER_ID,
                 title="Hello",
@@ -325,8 +338,7 @@ class TestCreateNotificationHelper:
     async def test_caller_supplied_deeplink_not_overwritten(self):
         from backend.routes.notifications import create_notification
 
-        with patch("backend.routes.notifications.db_supabase.insert_one",
-                   AsyncMock(return_value=None)):
+        with patch("backend.routes.notifications.db_supabase.insert_one", AsyncMock(return_value=None)):
             notif = await create_notification(
                 user_id=USER_ID,
                 title="Custom",
@@ -341,6 +353,7 @@ class TestCreateNotificationHelper:
 # ─────────────────────────────────────────────────────────────────────────────
 # Native delivery path (FCM/APNs send) — requires live creds
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 class TestNativePushDelivery:
@@ -364,16 +377,18 @@ class TestNativePushDelivery:
         user_row = {"id": USER_ID, "fcm_token": token}
 
         with (
-            patch.dict(sys.modules, {
-                "firebase_admin": mock_firebase,
-                "firebase_admin.messaging": mock_messaging,
-            }),
-            patch("backend.features.db_supabase.find_one",
-                  AsyncMock(return_value=user_row)),
-            patch("backend.features.db_supabase.get_user_by_id",
-                  AsyncMock(return_value=user_row)),
+            patch.dict(
+                sys.modules,
+                {
+                    "firebase_admin": mock_firebase,
+                    "firebase_admin.messaging": mock_messaging,
+                },
+            ),
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=user_row)),
+            patch("backend.features.db_supabase.get_user_by_id", AsyncMock(return_value=user_row)),
         ):
             from backend import features as features_mod
+
             result = await features_mod.send_push_notification(
                 user_id=USER_ID,
                 title="Ride accepted",
@@ -392,9 +407,7 @@ class TestNativePushDelivery:
         # Message was built with the correct FCM token
         msg_arg = mock_messaging.Message.call_args
         assert msg_arg is not None
-        assert msg_arg.kwargs.get("token") == ios_token or (
-            msg_arg.args and ios_token in str(msg_arg.args)
-        )
+        assert msg_arg.kwargs.get("token") == ios_token or (msg_arg.args and ios_token in str(msg_arg.args))
 
     async def test_push_delivered_to_android_device(self):
         """Android FCM registration token reaches messaging.send."""
@@ -405,6 +418,4 @@ class TestNativePushDelivery:
         mock_messaging.send.assert_called_once()
         msg_arg = mock_messaging.Message.call_args
         assert msg_arg is not None
-        assert msg_arg.kwargs.get("token") == android_token or (
-            msg_arg.args and android_token in str(msg_arg.args)
-        )
+        assert msg_arg.kwargs.get("token") == android_token or (msg_arg.args and android_token in str(msg_arg.args))

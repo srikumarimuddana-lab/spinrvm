@@ -40,14 +40,16 @@ jobs:
 
       - name: Install backend deps
         working-directory: backend
-        run: pip install -r requirements.txt --quiet
+        run: |
+          pip install -r requirements.txt --quiet
+          pip install pytest pytest-asyncio pytest-cov --quiet
 
       - name: Run coverage on PR branch
         working-directory: backend
         env:
           SUPABASE_URL: https://test.supabase.co
           SUPABASE_SERVICE_ROLE_KEY: test_key
-          SECRET_KEY: test-secret-key-for-ci-guardrails
+          JWT_SECRET: ci-only-not-a-real-secret-000000000000
           ENV: test
         run: |
           pytest --cov=. --cov-report=json:../pr-coverage.json -q --no-header 2>/dev/null || true

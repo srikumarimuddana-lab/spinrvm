@@ -65,12 +65,12 @@ class Settings(BaseSettings):
     WS_REDIS_URL: str = ""
 
     # OTP brute-force lockout (SEC-008)
-    OTP_MAX_FAILURES: int = 5                  # attempts before lockout
-    OTP_FAILURE_WINDOW_SECONDS: int = 3600     # sliding window (1 hr)
+    OTP_MAX_FAILURES: int = 5  # attempts before lockout
+    OTP_FAILURE_WINDOW_SECONDS: int = 3600  # sliding window (1 hr)
     OTP_LOCKOUT_DURATION_SECONDS: int = 86400  # lockout duration (24 hr)
 
     # Fare cache TTL (PERF-001)
-    FARE_CACHE_TTL_SECONDS: int = 300          # 5-minute cache per lat/lng grid cell
+    FARE_CACHE_TTL_SECONDS: int = 300  # 5-minute cache per lat/lng grid cell
 
     # File storage
     STORAGE_BUCKET: str = "driver-documents"

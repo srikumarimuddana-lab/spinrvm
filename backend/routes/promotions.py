@@ -5,7 +5,7 @@ promotions.py – Promo codes & referral system for Spinr.
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -99,8 +99,8 @@ async def validate_promo(
     if expiry and isinstance(expiry, str):
         try:
             exp_dt = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
-            if exp_dt.tzinfo:
-                exp_dt = exp_dt.replace(tzinfo=None)
+            if exp_dt.tzinfo is None:
+                exp_dt = exp_dt.replace(tzinfo=timezone.utc)
             if exp_dt < now:
                 raise HTTPException(status_code=400, detail="This promo code has expired")
         except (ValueError, HTTPException) as e:
@@ -193,12 +193,14 @@ async def validate_promo(
     discount_value = float(promo.get("discount_value", 0))
 
     if discount_type == "percentage":
-        discount = round(req.ride_fare * (discount_value / 100), 2)
+        discount = (req.ride_fare * Decimal(str(discount_value)) / Decimal("100")).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
         max_cap = promo.get("max_discount")
-        if max_cap and discount > max_cap:
-            discount = max_cap
+        if max_cap and discount > Decimal(str(max_cap)):
+            discount = Decimal(str(max_cap))
     else:
-        discount = min(discount_value, req.ride_fare)
+        discount = min(Decimal(str(discount_value)), req.ride_fare)
 
     return {
         "valid": True,

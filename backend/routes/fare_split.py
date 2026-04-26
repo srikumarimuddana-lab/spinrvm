@@ -39,7 +39,9 @@ def _d(v) -> Decimal:
 
 class CreateFareSplitRequest(BaseModel):
     ride_id: str
-    participant_phones: List[str] = Field(..., min_length=1, max_length=5)  # Product limit: max 5 participants by design
+    participant_phones: List[str] = Field(
+        ..., min_length=1, max_length=5
+    )  # Product limit: max 5 participants by design
 
     @validator("participant_phones", each_item=True)
     def validate_phone(cls, v: str) -> str:
@@ -118,7 +120,6 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
         "participants": [
             {
                 "id": p["id"],
-                "phone": p["phone"],
                 "share_amount": p["share_amount"],
                 "status": p["status"],
             }
@@ -299,7 +300,7 @@ async def pay_split_share(
             )
         except ValueError as exc:
             if "insufficient_funds" in str(exc):
-                raise HTTPException(status_code=400, detail="Insufficient wallet balance")
+                raise HTTPException(status_code=400, detail="Insufficient wallet balance") from exc
             raise
 
         await _record_transaction(
@@ -387,8 +388,6 @@ async def cancel_fare_split(split_id: str, current_user: dict = Depends(get_curr
                     description=f"Fare split cancellation refund ${refund:.2f}",
                 )
             except Exception as refund_err:
-                logger.error(
-                    f"[FARE_SPLIT] Refund failed for participant {p['id']} on split {split_id}: {refund_err}"
-                )
+                logger.error(f"[FARE_SPLIT] Refund failed for participant {p['id']} on split {split_id}: {refund_err}")
 
     return {"status": "cancelled"}

@@ -98,7 +98,7 @@ class WalletPayRequest(BaseModel):
 
 
 class TransferRequest(BaseModel):
-    recipient_phone: str = Field(..., pattern=r'^\+1\d{10}$')
+    recipient_phone: str = Field(..., pattern=r"^\+1\d{10}$")
     amount: float = Field(..., gt=0, le=200)
 
 
@@ -127,9 +127,6 @@ async def top_up_wallet(
     """Add funds to wallet. In production this would charge via Stripe first."""
     wallet = await get_or_create_wallet(current_user["id"])
 
-    if not wallet.get("is_active", True):
-        raise HTTPException(status_code=403, detail="Wallet is suspended")
-
     new_balance = await wallet_increment_balance(wallet["id"], _d(req.amount))
 
     txn = await _record_transaction(
@@ -151,9 +148,6 @@ async def top_up_wallet(
 async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_current_user)):
     """Pay for a ride using wallet balance."""
     wallet = await get_or_create_wallet(current_user["id"])
-
-    if not wallet.get("is_active", True):
-        raise HTTPException(status_code=403, detail="Wallet is suspended")
 
     # R-P1-19: Validate client-supplied amount against the server-stored ride fare
     # to prevent a malicious caller from paying less than the actual fare.

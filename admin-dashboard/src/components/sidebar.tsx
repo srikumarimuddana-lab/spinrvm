@@ -5,8 +5,8 @@ import { useRouter, usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
     LayoutDashboard, Car, Users, DollarSign, Settings, MapPin, Ticket,
-    HelpCircle, Flame, Building2, LifeBuoy,
-    LogOut, Menu, FileText, X, CreditCard, ChevronLeft, ChevronRight,
+    Flame, Building2, LifeBuoy,
+    LogOut, Menu, X, ChevronLeft, ChevronRight,
     Sun, Moon, Shield, Cloud, Trophy, TrendingUp, Activity,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";

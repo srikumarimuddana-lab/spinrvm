@@ -637,16 +637,26 @@ async def admin_get_earnings(period: str = Query("month")):
 # ---------- Exports ----------
 
 
+_EXPORT_MAX_ROWS = 10_000
+
+
 @router.get("/export/rides")
 async def admin_export_rides(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    limit: int = Query(1000, ge=1, le=_EXPORT_MAX_ROWS),
     admin: dict = Depends(get_admin_user),
 ):
     """Export rides data (schema: total_fare). Writes an audit log entry (F-41)."""
     import uuid  # noqa: PLC0415
 
-    rides = await db_supabase.get_rows("rides", order="created_at", desc=True, limit=1000)
+    date_filter: Dict[str, Any] = {}
+    if start_date:
+        date_filter.setdefault("created_at", {})["$gte"] = start_date
+    if end_date:
+        date_filter.setdefault("created_at", {})["$lte"] = end_date + "T23:59:59Z"
+
+    rides = await db_supabase.get_rows("rides", date_filter, order="created_at", desc=True, limit=limit)
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
     drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
@@ -686,11 +696,14 @@ async def admin_export_rides(
 
 
 @router.get("/export/drivers")
-async def admin_export_drivers(admin: dict = Depends(get_admin_user)):
+async def admin_export_drivers(
+    limit: int = Query(1000, ge=1, le=_EXPORT_MAX_ROWS),
+    admin: dict = Depends(get_admin_user),
+):
     """Export drivers data. Writes an audit log entry (F-41)."""
     import uuid  # noqa: PLC0415
 
-    drivers = await db_supabase.get_rows("drivers", order="created_at", desc=True, limit=1000)
+    drivers = await db_supabase.get_rows("drivers", order="created_at", desc=True, limit=limit)
     user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
     users_list = (
         await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []

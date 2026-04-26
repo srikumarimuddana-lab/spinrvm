@@ -1,0 +1,132 @@
+# Path-based auto-labels for actions/labeler@v5.
+# Applied by .github/workflows/pr-checks.yml on every PR open/sync.
+#
+# Labels are grouped by meaning:
+#   surface:*  — which product surface is touched
+#   area:*     — domain area that triggers specific review (money, auth, etc.)
+#   type:*     — applied from PR title/body by the workflow, not here
+#   risk:*     — computed from diff + declared risk, not here
+#
+# Sync-labels is on, so a PR that stops touching a surface loses the label.
+
+surface:backend:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'backend/**'
+
+surface:rider-app:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'rider-app/**'
+
+surface:driver-app:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'driver-app/**'
+
+surface:admin:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'admin-dashboard/**'
+
+surface:shared:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'shared/**'
+
+surface:infra:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/workflows/**'
+          - 'scripts/**'
+          - 'Dockerfile*'
+          - 'docker-compose*'
+          - 'railway.json'
+          - 'render.yaml'
+          - 'vercel.json'
+
+surface:docs:
+  - changed-files:
+      - all-globs-to-all-files:
+          - '**/*.md'
+
+# ---- Area labels (domain-specific review routing) ----
+
+area:migrations:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'backend/migrations/**'
+
+area:money:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'backend/services/fare_*.py'
+          - 'backend/services/corporate_*.py'
+          - 'backend/routes/payments.py'
+          - 'backend/routes/wallet.py'
+          - 'backend/routes/corporate*.py'
+          - 'backend/routes/fares.py'
+          - 'backend/routes/tips.py'
+          - 'backend/routes/payouts.py'
+          - 'backend/utils/surge_engine.py'
+          - 'backend/utils/payment_retry.py'
+
+area:auth:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'backend/routes/auth.py'
+          - 'backend/routes/admin/auth*.py'
+          - 'backend/utils/crypto.py'
+          - 'backend/utils/rate_limiter.py'
+
+area:safety:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'backend/routes/safety.py'
+          - 'backend/routes/sos.py'
+          - 'backend/services/insurance_*.py'
+          - 'backend/utils/emergency_*.py'
+
+area:dispatch:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'backend/services/dispatch_service.py'
+          - 'backend/routes/rides.py'
+          - 'backend/socket_manager.py'
+          - 'backend/utils/ws_pubsub.py'
+          - 'backend/utils/scheduled_rides.py'
+
+area:rls:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'backend/migrations/**/*rls*.sql'
+          - 'backend/migrations/**/*policy*.sql'
+
+area:ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/workflows/**'
+
+area:claude-config:
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.claude/**'
+          - 'CLAUDE.md'
+
+# ---- Risk indicators (computed — presence of these tightens review) ----
+
+risk:shared-break:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'shared/api/**'
+          - 'shared/types/**'
+          - 'shared/schema/**'
+
+risk:infra:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'backend/core/lifespan.py'
+          - 'backend/core/middleware.py'
+          - 'backend/core/config.py'
+          - 'backend/db_supabase.py'
+          - 'backend/server.py'

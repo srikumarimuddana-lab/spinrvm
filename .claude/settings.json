@@ -51,13 +51,19 @@
       "Write(CLAUDE.md)",
       "Write(.claude/settings.json)",
       "Write(.claude/commands/**)",
-      "Write(.github/workflows/claude.yml)"
+      "Write(.claude/agents/**)",
+      "Write(.claude/hooks/**)",
+      "Write(.claude/context/**)",
+      "Write(.github/workflows/claude.yml)",
+      "Write(.github/workflows/claude-review.yml)",
+      "Write(.github/workflows/pr-checks.yml)",
+      "Write(.github/pull_request_template.md)",
+      "Write(.github/labeler.yml)"
     ],
     "deny": [
       "Bash(rm -rf*)",
       "Bash(git push --force*)",
       "Bash(git push origin main*)",
-      "Bash(git push origin develop*)",
       "Bash(git reset --hard*)",
       "Write(.env*)",
       "Write(*.pem)",
@@ -80,5 +86,31 @@
   },
   "enabledPlugins": {
     "andrej-karpathy-skills@karpathy-skills": true
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "bash .claude/hooks/session-start.sh" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          { "type": "command", "command": "bash .claude/hooks/pre-migration-write.sh" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          { "type": "command", "command": "bash .claude/hooks/post-python-write.sh" }
+        ]
+      }
+    ]
   }
 }

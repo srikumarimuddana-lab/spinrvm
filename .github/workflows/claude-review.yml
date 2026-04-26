@@ -1,0 +1,94 @@
+name: Claude PR review
+
+# Runs the Claude Code GitHub Action against every new/updated PR or when an
+# authorised reviewer comments "/claude review". Findings are posted as a PR
+# review comment. Never merges; never pushes code back.
+#
+# Required repo secret:
+#   ANTHROPIC_API_KEY — Spinr org-scoped, with billing alerts enabled.
+#
+# Optional (recommended):
+#   SUPABASE_READONLY_TOKEN, CONTEXT7_API_KEY — mirror of .claude/mcp.example.json
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    # Skip drafts to avoid burning tokens on work-in-progress branches
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  # Coalesce rapid pushes to the same PR — only latest review matters
+  group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Run on PRs (non-draft) or on comments that explicitly ask for a review
+    if: >-
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request != null &&
+       contains(github.event.comment.body, '/claude review') &&
+       (github.event.comment.author_association == 'OWNER' ||
+        github.event.comment.author_association == 'MEMBER' ||
+        github.event.comment.author_association == 'COLLABORATOR'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Inline prompt — keeps review behaviour under source control
+          prompt: |
+            You are reviewing a Spinr pull request. Load CLAUDE.md and the
+            relevant .claude/context/domain-*.md files for the files in this
+            diff.
+
+            The PR body follows the tiered template at
+            .github/pull_request_template.md. Other jobs in
+            .github/workflows/pr-checks.yml already handle:
+              - path-based labels (auto-label)
+              - PR size advisory (size-advisory)
+              - required Tier 1–4 fields (required-fields, blocking)
+              - merge-commit detection (merge-conflict-detect)
+              - Tier 5–7 subsection expansion (expand-sections)
+              - declared-vs-diff summary table (auto-summary)
+            Do NOT duplicate any of that. Your job is the deep code-level
+            audit plus the per-agent IMPACT MISMATCHES cross-check the
+            existing summary cannot perform.
+
+            Pass the full PR body (`$PR_BODY` is exposed via the action) to
+            each agent so its "Impact cross-check" section can run. If the
+            body is empty, note "no PR body supplied" once and proceed with
+            the regular audit.
+
+            Run these agents in order, surfacing each report — including its
+            IMPACT MISMATCHES block — under its own heading:
+              1. spinr-security-auditor   (always)
+              2. spinr-money-auditor      (only if diff touches payments,
+                                           fares, wallets, corporate, Stripe)
+              3. spinr-migration-reviewer (only if diff adds or edits
+                                           backend/migrations/*.sql)
+
+            Then provide an overall verdict on a single line:
+              SAFE TO MERGE / FIX BLOCKERS / NEEDS HUMAN REVIEW (security|finance|dba|legal)
+
+            Be terse. Quote file:line for every code-level finding. Do NOT
+            suggest code edits inline — reviewers will ask for fixes
+            separately. Do NOT restate the auto-summary table or the size
+            advisory.
+          # Hard budget — Spinr controls cost, not the model
+          max_turns: "8"

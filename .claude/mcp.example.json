@@ -1,0 +1,22 @@
+{
+  "_comment": "Template for Spinr MCP server configuration. Do NOT commit real keys. Copy the block(s) you want into .claude/settings.local.json (gitignored) under a top-level 'mcpServers' key, replacing the ${...} placeholders with real values from 1Password / settings.",
+  "mcpServers": {
+    "supabase": {
+      "_comment": "Read-only Supabase MCP. Use a service key with row-level read access scoped to non-PII tables, OR use the anon key restricted by RLS. NEVER put the service role key here — that bypasses RLS and defeats PIPEDA guardrails.",
+      "command": "npx",
+      "args": ["-y", "@supabase/mcp-server-supabase@latest", "--read-only"],
+      "env": {
+        "SUPABASE_URL": "${SPINR_SUPABASE_URL}",
+        "SUPABASE_ACCESS_TOKEN": "${SPINR_SUPABASE_READONLY_TOKEN}"
+      }
+    },
+    "context7": {
+      "_comment": "Context7 for up-to-date library documentation (FastAPI, Supabase, Stripe, Expo, Next.js). Free tier is fine for read-only docs; no user data ever leaves to this service.",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@latest"],
+      "env": {
+        "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}"
+      }
+    }
+  }
+}

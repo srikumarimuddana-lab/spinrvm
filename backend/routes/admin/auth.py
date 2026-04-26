@@ -581,6 +581,13 @@ async def _require_staff_from_token(authorization: str | None) -> dict:
 # ── MFA endpoints ─────────────────────────────────────────────────────────
 
 
+@admin_auth_router.get("/mfa/status")
+async def admin_mfa_status(authorization: Optional[str] = Header(None)):
+    """Return MFA enrollment status for the authenticated staff member."""
+    staff = await _require_staff_from_token(authorization)
+    return {"mfa_enabled": bool(staff.get("mfa_enabled"))}
+
+
 @admin_auth_router.post("/mfa/enroll")
 @limiter.limit("5/minute")
 async def admin_mfa_enroll(request: Request, authorization: Optional[str] = Header(None)):

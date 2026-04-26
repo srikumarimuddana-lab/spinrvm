@@ -87,6 +87,17 @@ async def admin_get_promotions(
 @router.post("/promotions")
 async def admin_create_promotion(promotion: Dict[str, Any]):
     """Create a new promotion/discount code."""
+    from fastapi import HTTPException  # noqa: PLC0415
+
+    # Reject negative discount values — a negative discount is a charge (F-30).
+    dv = promotion.get("discount_value", 0)
+    if dv is not None and float(dv) < 0:
+        raise HTTPException(status_code=400, detail="discount_value cannot be negative")
+    for field in ("max_discount", "total_budget", "referrer_reward", "min_ride_fare"):
+        fv = promotion.get(field)
+        if fv is not None and float(fv) < 0:
+            raise HTTPException(status_code=400, detail=f"{field} cannot be negative")
+
     # Only include fields that exist in the Supabase promotions table schema
     doc: Dict[str, Any] = {
         "code": (promotion.get("code") or "").strip().upper(),

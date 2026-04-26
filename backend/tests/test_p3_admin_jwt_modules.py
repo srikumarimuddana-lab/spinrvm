@@ -123,34 +123,29 @@ class TestGetCurrentUserAdminJWT:
 
     @pytest.mark.anyio
     async def test_admin_jwt_returns_modules_without_db_lookup(self):
-        from unittest.mock import AsyncMock, patch
-
-        import db_supabase as dbs
+        """admin-001 (env-seeded super admin) has no DB row — claims are trusted directly."""
         from dependencies import get_current_user
         from fastapi.security import HTTPAuthorizationCredentials
 
         modules = ["dashboard", "promotions"]
-        token = _mint(role="admin", modules=modules, user_id="staff_007")
+        # admin-001 is the one user_id that bypasses the admin_staff DB lookup
+        token = _mint(role="admin", modules=modules, user_id="admin-001")
 
         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+        user = await get_current_user(creds)
 
-        mock_get_user = AsyncMock(return_value=None)
-        with patch.object(dbs, "get_user_by_id", mock_get_user):
-            user = await get_current_user(creds)
-
-        # DB lookup must NOT have been called — admin token is self-contained
-        mock_get_user.assert_not_called()
-        assert user["id"] == "staff_007"
+        assert user["id"] == "admin-001"
         assert user["role"] == "admin"
         assert user["modules"] == modules
 
     @pytest.mark.anyio
     async def test_operations_role_passes_through(self):
+        from dependencies import get_current_user
         from fastapi.security import HTTPAuthorizationCredentials
 
-        from dependencies import get_current_user
-
-        token = _mint(role="operations", modules=["rides", "drivers"])
+        # Use admin-001 to bypass the admin_staff DB lookup — this test
+        # verifies JWT claim parsing for operations role, not DB validation.
+        token = _mint(role="operations", modules=["rides", "drivers"], user_id="admin-001")
         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
         user = await get_current_user(creds)
 

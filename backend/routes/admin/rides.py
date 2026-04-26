@@ -57,9 +57,7 @@ async def admin_get_rides(
     # regular rides keep the created_at-desc feed.
     order_col = "scheduled_time" if is_scheduled else "created_at"
     order_desc = not is_scheduled
-    rides = await db_supabase.get_rows(
-        "rides", filters, order=order_col, desc=order_desc, limit=limit, offset=offset
-    )
+    rides = await db_supabase.get_rows("rides", filters, order=order_col, desc=order_desc, limit=limit, offset=offset)
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
     drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
@@ -181,9 +179,7 @@ async def admin_cancel_ride(
     try:
         await db_supabase.update_ride(ride_id, with_38)
     except Exception as e38:
-        logger.warning(
-            f"admin_cancel_ride: attribution write failed ({e38}); retrying without mig-38 fields"
-        )
+        logger.warning(f"admin_cancel_ride: attribution write failed ({e38}); retrying without mig-38 fields")
         try:
             await db_supabase.update_ride(ride_id, with_37)
         except Exception as e37:
@@ -241,9 +237,7 @@ async def admin_cancel_ride(
         except Exception as e:
             logger.warning(f"admin_cancel_ride: rider push failed: {e}")
 
-    await manager.broadcast_ride_status(
-        ride_id, "cancelled", rider_id=rider_id, reason=reason, source="admin"
-    )
+    await manager.broadcast_ride_status(ride_id, "cancelled", rider_id=rider_id, reason=reason, source="admin")
     try:
         await manager.broadcast_to_admins(
             {"type": "ride_cancelled", "ride_id": ride_id, "reason": reason, "source": "admin"}

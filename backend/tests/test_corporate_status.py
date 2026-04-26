@@ -5,12 +5,15 @@ from backend.tests._factories import corporate_account_row
 
 
 def test_suspend_active_company(test_client, admin_override):
-    with patch(
-        "routes.corporate_accounts.get_corporate_account_by_id",
-        AsyncMock(return_value=corporate_account_row("active")),
-    ), patch(
-        "db_supabase.update_corporate_account_status",
-        AsyncMock(return_value=corporate_account_row("suspended")),
+    with (
+        patch(
+            "routes.corporate_accounts.get_corporate_account_by_id",
+            AsyncMock(return_value=corporate_account_row("active")),
+        ),
+        patch(
+            "db_supabase.update_corporate_account_status",
+            AsyncMock(return_value=corporate_account_row("suspended")),
+        ),
     ):
         resp = test_client.post(
             "/api/admin/corporate-accounts/c1/status",

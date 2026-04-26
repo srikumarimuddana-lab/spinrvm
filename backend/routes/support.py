@@ -18,8 +18,7 @@ except ImportError:
 api_router = APIRouter(tags=["Support Chat"])
 
 FALLBACK_REPLY = (
-    "I'm unable to answer that right now. Please call our driver support line: "
-    "1-800-SPINR or email support@spinr.ca"
+    "I'm unable to answer that right now. Please call our driver support line: 1-800-SPINR or email support@spinr.ca"
 )
 
 SYSTEM_PROMPT = """You are a helpful support assistant for Spinr, a Canadian rideshare platform.
@@ -108,5 +107,6 @@ async def support_chat(
 
     except Exception as exc:
         import logging
+
         logging.warning("Gemini support chat failed: %s", exc)
         return {"reply": FALLBACK_REPLY}

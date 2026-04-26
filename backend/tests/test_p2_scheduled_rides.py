@@ -20,13 +20,13 @@ These tests pin:
 Run:
     pytest backend/tests/test_p2_scheduled_rides.py -v
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 RIDER_ID = "rider_p2_17"
 RIDE_ID = "ride_p2_17_001"
@@ -47,6 +47,7 @@ def _scheduled_ride(status: str = "searching", **extra) -> dict:
 
 class _SimpleCursor:
     """Minimal cursor stub — mirrors the pattern used in other P2 tests."""
+
     def __init__(self, items):
         self._items = items
 
@@ -57,6 +58,7 @@ class _SimpleCursor:
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /rides/scheduled
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.e2e
 @pytest.mark.asyncio
@@ -72,8 +74,7 @@ class TestGetScheduledRides:
         rides = [_scheduled_ride(), _scheduled_ride(id="ride-002")]
         cursor = _SimpleCursor(rides)
 
-        with patch("backend.routes.rides.db_supabase.get_rides_for_user",
-                   MagicMock(return_value=cursor)):
+        with patch("backend.routes.rides.db_supabase.get_rides_for_user", MagicMock(return_value=cursor)):
             result = await rides_mod.get_scheduled_rides(
                 current_user={"id": RIDER_ID},
             )
@@ -86,8 +87,7 @@ class TestGetScheduledRides:
 
         cursor = _SimpleCursor([])
 
-        with patch("backend.routes.rides.db_supabase.get_rides_for_user",
-                   MagicMock(return_value=cursor)):
+        with patch("backend.routes.rides.db_supabase.get_rides_for_user", MagicMock(return_value=cursor)):
             result = await rides_mod.get_scheduled_rides(
                 current_user={"id": RIDER_ID},
             )
@@ -98,6 +98,7 @@ class TestGetScheduledRides:
 # ─────────────────────────────────────────────────────────────────────────────
 # DELETE /rides/scheduled/{ride_id}
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.e2e
 @pytest.mark.asyncio
@@ -114,10 +115,10 @@ class TestCancelScheduledRide:
         updates = []
 
         with (
-            patch("backend.routes.rides.db_supabase.get_rows",
-                  AsyncMock(return_value=[ride])),
-            patch("backend.routes.rides.db_supabase.update_ride",
-                  AsyncMock(side_effect=lambda rid, d: updates.append(d))),
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])),
+            patch(
+                "backend.routes.rides.db_supabase.update_ride", AsyncMock(side_effect=lambda rid, d: updates.append(d))
+            ),
         ):
             result = await rides_mod.cancel_scheduled_ride(
                 ride_id=RIDE_ID,
@@ -131,11 +132,11 @@ class TestCancelScheduledRide:
     async def test_non_owner_or_non_scheduled_returns_404(self):
         """Ride lookup includes rider_id + is_scheduled filter;
         wrong owner or non-scheduled ride returns 404."""
-        from backend.routes import rides as rides_mod
         from fastapi import HTTPException
 
-        with patch("backend.routes.rides.db_supabase.get_rows",
-                   AsyncMock(return_value=[])):
+        from backend.routes import rides as rides_mod
+
+        with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])):
             with pytest.raises(HTTPException) as exc_info:
                 await rides_mod.cancel_scheduled_ride(
                     ride_id=RIDE_ID,
@@ -145,13 +146,13 @@ class TestCancelScheduledRide:
         assert exc_info.value.status_code == 404
 
     async def test_already_cancelled_raises_400(self):
-        from backend.routes import rides as rides_mod
         from fastapi import HTTPException
+
+        from backend.routes import rides as rides_mod
 
         ride = _scheduled_ride(status="cancelled")
 
-        with patch("backend.routes.rides.db_supabase.get_rows",
-                   AsyncMock(return_value=[ride])):
+        with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])):
             with pytest.raises(HTTPException) as exc_info:
                 await rides_mod.cancel_scheduled_ride(
                     ride_id=RIDE_ID,
@@ -162,13 +163,13 @@ class TestCancelScheduledRide:
         assert "cancel" in exc_info.value.detail.lower()
 
     async def test_completed_ride_cannot_be_cancelled(self):
-        from backend.routes import rides as rides_mod
         from fastapi import HTTPException
+
+        from backend.routes import rides as rides_mod
 
         ride = _scheduled_ride(status="completed")
 
-        with patch("backend.routes.rides.db_supabase.get_rows",
-                   AsyncMock(return_value=[ride])):
+        with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])):
             with pytest.raises(HTTPException) as exc_info:
                 await rides_mod.cancel_scheduled_ride(
                     ride_id=RIDE_ID,
@@ -181,6 +182,7 @@ class TestCancelScheduledRide:
 # ─────────────────────────────────────────────────────────────────────────────
 # DST boundary (E14)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestDSTBoundary:
     """E14 — scheduled ride times and DST boundary handling."""
@@ -205,6 +207,7 @@ class TestDSTBoundary:
         — uses zoneinfo round-trip to detect non-existent wall-clock times.
         """
         from pydantic import ValidationError
+
         from backend.schemas import CreateRideRequest
 
         # 2027-03-14 is the spring-forward Sunday for Eastern time.

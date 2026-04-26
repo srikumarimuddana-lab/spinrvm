@@ -32,7 +32,7 @@ def _is_valid_uuid(value: str) -> bool:
 # --- File Upload Security ---
 ALLOWED_MIME_TYPES = {
     "image/jpeg",
-    "image/jpg",   # alias — some devices/pickers send this
+    "image/jpg",  # alias — some devices/pickers send this
     "image/png",
     "image/gif",
     "image/webp",
@@ -47,12 +47,12 @@ _MAGIC_BYTES = {
     b"%PDF": "application/pdf",
 }
 
-ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf'}
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf"}
 
 
 def _is_valid_webp(data: bytes) -> bool:
     """Return True only if data has both the RIFF container and WEBP marker."""
-    return data[:4] == b'RIFF' and data[8:12] == b'WEBP'
+    return data[:4] == b"RIFF" and data[8:12] == b"WEBP"
 
 
 def _validate_file_type(content: bytes, declared_type: str) -> None:
@@ -216,7 +216,12 @@ async def _supersede_and_flag_pending_review(
             await db_supabase.update_one(
                 "drivers",
                 {"id": driver_id},
-                {"status": "needs_review", "is_online": False, "is_available": False, "updated_at": datetime.now(timezone.utc)},
+                {
+                    "status": "needs_review",
+                    "is_online": False,
+                    "is_available": False,
+                    "updated_at": datetime.now(timezone.utc),
+                },
             )
         else:
             await db_supabase.update_one("drivers", {"id": driver_id}, {"updated_at": datetime.now(timezone.utc)})
@@ -413,9 +418,7 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
     # and raise 22P02 before we reach the service-area fallback below).
     req = None
     if _is_valid_uuid(doc_data.requirement_id):
-        rows = await db_supabase.get_rows(
-            "document_requirements", {"id": doc_data.requirement_id}, limit=1
-        )
+        rows = await db_supabase.get_rows("document_requirements", {"id": doc_data.requirement_id}, limit=1)
         req = rows[0] if rows else None
     if not req:
         # Try looking it up from the driver's service area
@@ -839,7 +842,7 @@ async def upload_file(
         getattr(file, "content_type", None),
     )
     try:
-        content_length = request.headers.get('content-length')
+        content_length = request.headers.get("content-length")
         if content_length and int(content_length) > MAX_FILE_SIZE:
             raise FileTooLargeError()
 

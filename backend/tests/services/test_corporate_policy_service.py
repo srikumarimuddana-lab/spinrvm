@@ -2,12 +2,11 @@
 
 Pure-function tests — no DB, no mocks needed.
 """
-import pytest
 
 from services.corporate_policy_service import evaluate_policy
 
-
 # ── helpers ──────────────────────────────────────────────────────────────────
+
 
 def _ok(result):
     assert result["pass"] is True, f"Expected pass but got failed_rules={result['failed_rules']}"
@@ -21,6 +20,7 @@ def _fail(result, *rules):
 
 # ── empty / null policy ───────────────────────────────────────────────────────
 
+
 def test_empty_policy_always_passes():
     _ok(evaluate_policy({}, {"estimated_fare": 999}))
 
@@ -31,6 +31,7 @@ def test_none_policy_treated_as_empty():
 
 
 # ── Rule 1: max_fare_per_ride ─────────────────────────────────────────────────
+
 
 def test_max_fare_allows_cheap_ride():
     policy = {"max_fare_per_ride": 50}
@@ -57,6 +58,7 @@ def test_max_fare_absent_never_fails():
 
 
 # ── Rule 2: time_window ───────────────────────────────────────────────────────
+
 
 def test_time_window_passes_when_no_windows_set():
     policy = {"allowed_time_windows": []}
@@ -100,6 +102,7 @@ def test_time_window_parse_error_treated_as_pass():
 
 # ── Rule 3: allowed_payment_source ───────────────────────────────────────────
 
+
 def test_allowed_source_both_always_passes():
     policy = {"allowed_payment_source": "both"}
     _ok(evaluate_policy(policy, {"allowance": {"amount": 0, "used": 0}}))
@@ -138,8 +141,10 @@ def test_allowed_source_master_only_no_check():
 
 # ── Rule 4: geofence (stub) ───────────────────────────────────────────────────
 
+
 def test_geofence_stub_always_passes(caplog):
     import logging
+
     policy = {"allowed_geofence": {"type": "FeatureCollection", "features": []}}
     with caplog.at_level(logging.WARNING, logger="services.corporate_policy_service"):
         result = evaluate_policy(policy, {"estimated_fare": 20})
@@ -148,6 +153,7 @@ def test_geofence_stub_always_passes(caplog):
 
 
 # ── Multiple failures ─────────────────────────────────────────────────────────
+
 
 def test_multiple_rules_fail_returns_all():
     policy = {
@@ -165,6 +171,7 @@ def test_multiple_rules_fail_returns_all():
 
 
 # ── Policy override ───────────────────────────────────────────────────────────
+
 
 def test_policy_override_short_circuits_all_rules():
     policy = {

@@ -1,0 +1,185 @@
+name: CI Change Request
+description: Propose an improvement, enhancement, or non-critical fix identified during a CI audit. Must be approved before implementation.
+title: "[CR] <short description>"
+labels: ["change-request", "ci-audit", "needs-approval"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Change Request
+        Use this template for any improvement identified during a CI audit that goes **beyond** directly fixing a broken CI step.
+        This includes refactors, threshold changes, tooling upgrades, process improvements, and performance enhancements.
+
+        > ⚠️ **Do not implement until this CR is approved.** Implementation PRs must reference this issue.
+
+  - type: input
+    id: cr_id
+    attributes:
+      label: Change Request ID
+      description: Auto-generated or assigned (e.g. CR-2026-001)
+      placeholder: CR-YYYY-NNN
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      description: What area does this change affect?
+      options:
+        - CI/CD Configuration
+        - Test Infrastructure
+        - Linting / Formatting
+        - Security Tooling
+        - Dependency Management
+        - Coverage Thresholds
+        - Deployment Configuration
+        - Developer Experience
+        - Performance
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How urgent is this change?
+      options:
+        - "P0 — Blocking (must fix before next release)"
+        - "P1 — High (fix in current sprint)"
+        - "P2 — Medium (fix in next sprint)"
+        - "P3 — Low (backlog)"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What is being proposed?
+      description: Clear, concise description of the change.
+      placeholder: |
+        Reduce the admin-dashboard ESLint warning tolerance from 600 to 100
+        by fixing the underlying lint issues across the codebase.
+    validations:
+      required: true
+
+  - type: textarea
+    id: where
+    attributes:
+      label: Where does this change live?
+      description: Specific files, directories, or systems affected.
+      placeholder: |
+        - admin-dashboard/package.json (eslint --max-warnings flag)
+        - admin-dashboard/src/** (fixing underlying issues)
+        - .github/workflows/ci-guardrails.yml (baseline constant)
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why does this need to be done?
+      description: Root cause, technical debt, risk driver, or improvement rationale.
+      placeholder: |
+        The current 600-warning tolerance means new warnings can accumulate invisibly.
+        At 600 warnings, developers stop treating lint output as signal.
+        A lower threshold enforces code quality standards consistently.
+    validations:
+      required: true
+
+  - type: textarea
+    id: benefits
+    attributes:
+      label: Benefits if implemented
+      description: What improves? Quantify if possible.
+      placeholder: |
+        - Developers catch type errors and code smells earlier
+        - CI failures become more actionable (clear signal vs noise)
+        - Aligns admin-dashboard with rider/driver-app standards
+        - Reduces time spent debugging runtime errors caused by silenced warnings
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks_if_not_done
+    attributes:
+      label: Risk / impact if NOT done
+      description: What degrades over time if this is left unaddressed?
+      placeholder: |
+        - Warning count will continue to grow unchecked
+        - True errors become hidden in noise
+        - Technical debt compounds — harder to fix later when count is 1200+
+        - Security-related lint warnings may be missed
+    validations:
+      required: true
+
+  - type: textarea
+    id: risks_of_change
+    attributes:
+      label: Risks of making this change
+      description: What could go wrong? How will it be mitigated?
+      placeholder: |
+        - Low risk: fixing lint issues is non-functional, cosmetic changes only
+        - Some auto-fixes may alter code formatting — full test suite must pass
+        - Mitigation: run all tests before/after, review each changed file
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollback
+    attributes:
+      label: Rollback plan
+      description: How do we undo this if it causes problems?
+      placeholder: |
+        Revert the PR. No data migration or infrastructure changes involved.
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation_plan
+    attributes:
+      label: Implementation plan
+      description: Step-by-step approach to implement safely.
+      placeholder: |
+        1. Run eslint --fix on admin-dashboard/src/** (auto-fixable issues)
+        2. Manually review and fix remaining warnings (10 per session max)
+        3. Lower --max-warnings threshold incrementally: 600 → 400 → 200 → 100
+        4. Update ci-guardrails.yml BASELINE constant at each step
+        5. Verify all tests pass after each increment
+    validations:
+      required: true
+
+  - type: input
+    id: linked_audit
+    attributes:
+      label: Linked CI audit issue / run
+      description: URL or run ID of the CI audit that identified this
+      placeholder: "https://github.com/org/repo/issues/NNN or run #12345"
+
+  - type: dropdown
+    id: approval_status
+    attributes:
+      label: Approval status
+      description: To be updated by reviewer
+      options:
+        - "⏳ Pending review"
+        - "✅ Approved — proceed with implementation"
+        - "❌ Rejected — see comment"
+        - "🔄 Approved with modifications — see comment"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-approval checklist
+      options:
+        - label: Change does not modify application business logic
+        - label: Rollback plan documented
+        - label: Affected tests identified
+        - label: No new dependencies introduced (or justified if so)
+        - label: Impact on other CI jobs assessed

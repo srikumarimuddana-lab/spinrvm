@@ -18,15 +18,14 @@ carried through ``asyncio.create_task`` / background coroutines spawned
 inside the request, and so ``run_sync`` doesn't need to accept a
 ``request`` parameter on every caller.
 """
+
 from __future__ import annotations
 
 import time as _time
 from contextvars import ContextVar, Token
 from typing import Optional
 
-_request_deadline: ContextVar[Optional[float]] = ContextVar(
-    "spinr_request_deadline_monotonic", default=None
-)
+_request_deadline: ContextVar[Optional[float]] = ContextVar("spinr_request_deadline_monotonic", default=None)
 
 
 def set_request_deadline(

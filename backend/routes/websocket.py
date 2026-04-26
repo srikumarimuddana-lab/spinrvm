@@ -142,17 +142,14 @@ async def heartbeat_task(
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
             try:
-                await websocket.send_json(
-                    {"type": "ping", "timestamp": datetime.now(timezone.utc).isoformat()}
-                )
+                await websocket.send_json({"type": "ping", "timestamp": datetime.now(timezone.utc).isoformat()})
             except Exception:
                 logger.info(f"Heartbeat send failed for {connection_key} — connection likely dead")
                 break
             last_pong = conn_state.get("last_pong_at", 0.0)
             if loop.time() - last_pong > stale_threshold:
                 logger.info(
-                    f"[WS] {connection_key} no pong for {loop.time() - last_pong:.1f}s — "
-                    f"closing stale connection"
+                    f"[WS] {connection_key} no pong for {loop.time() - last_pong:.1f}s — closing stale connection"
                 )
                 try:
                     await websocket.close(code=1001)  # 1001 = going away
@@ -226,8 +223,12 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 # live-monitoring console. Mirrors get_current_user() in
                 # dependencies/__init__.py.
                 _admin_roles = {
-                    "admin", "super_admin", "operations",
-                    "support", "finance", "custom",
+                    "admin",
+                    "super_admin",
+                    "operations",
+                    "support",
+                    "finance",
+                    "custom",
                 }
                 if payload.get("role") in _admin_roles and payload.get("email"):
                     user = {
@@ -375,8 +376,10 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                             "driver_id": driver_id,
                             "status": {
                                 "$in": [
-                                    "driver_assigned", "driver_accepted",
-                                    "driver_arrived", "in_progress",
+                                    "driver_assigned",
+                                    "driver_accepted",
+                                    "driver_arrived",
+                                    "in_progress",
                                 ]
                             },
                         },
@@ -392,8 +395,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                         "in_progress": "trip_in_progress",
                     }
                     tracking_phase = (
-                        status_map.get(active_ride.get("status", ""), "online_idle")
-                        if active_ride else "online_idle"
+                        status_map.get(active_ride.get("status", ""), "online_idle") if active_ride else "online_idle"
                     )
 
                     breadcrumb = {
@@ -561,9 +563,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
         # specific socket is still the one the manager has for this key —
         # otherwise we'd evict the newer socket from active_connections
         # and clear its presence key, stranding a live connection.
-        still_current = bool(
-            connection_key and manager.active_connections.get(connection_key) is websocket
-        )
+        still_current = bool(connection_key and manager.active_connections.get(connection_key) is websocket)
         logger.info(
             f"[GO-ONLINE] WS branch=WebSocketDisconnect connection_key={connection_key} "
             f"code={getattr(_wsd, 'code', None)} reason={getattr(_wsd, 'reason', None)} "
@@ -580,9 +580,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 await clear_presence(current_driver_id)
             await _handle_driver_ws_disconnect(connection_key, user)
     except Exception as e:
-        still_current = bool(
-            connection_key and manager.active_connections.get(connection_key) is websocket
-        )
+        still_current = bool(connection_key and manager.active_connections.get(connection_key) is websocket)
         logger.exception(
             f"[GO-ONLINE] WS branch=Exception connection_key={connection_key} "
             f"current_driver_id={current_driver_id} still_current={still_current} err={e}"

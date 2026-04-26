@@ -12,6 +12,9 @@
 
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios' },
+  Alert: { alert: jest.fn() },
+  Linking: { openURL: jest.fn() },
+  NativeModules: {},
 }));
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
@@ -22,6 +25,15 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
 
 jest.mock('../../config', () => ({
   API_URL: 'http://localhost:8000',
+}));
+
+jest.mock('@shared/api/client', () => ({
+  __esModule: true,
+  default: { post: jest.fn(), get: jest.fn(), put: jest.fn(), patch: jest.fn(), delete: jest.fn() },
+}));
+
+jest.mock('@shared/store/authStore', () => ({
+  useAuthStore: { getState: jest.fn(() => ({ user: null, token: null })) },
 }));
 
 import { useRideStore } from '../rideStore';

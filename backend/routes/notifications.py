@@ -80,7 +80,9 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
 
     if existing:
         await db_supabase.update_one(
-            "push_tokens", {"id": existing["id"]}, {"token": token, "updated_at": datetime.now(timezone.utc).isoformat()}
+            "push_tokens",
+            {"id": existing["id"]},
+            {"token": token, "updated_at": datetime.now(timezone.utc).isoformat()},
         )
     else:
         await db_supabase.insert_one(

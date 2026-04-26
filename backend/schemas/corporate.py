@@ -1,4 +1,5 @@
 """Pydantic v2 schemas for corporate accounts (B2B v1)."""
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -311,6 +312,7 @@ class AllowedDomainCreate(BaseModel):
 
 # ── Policy ────────────────────────────────────────────────────────────────────
 
+
 class PaymentSourcePolicy(str, Enum):
     ALLOWANCE_ONLY = "allowance_only"
     MASTER_ONLY = "master_only"
@@ -319,6 +321,7 @@ class PaymentSourcePolicy(str, Enum):
 
 class TimeWindow(BaseModel):
     """One allowed day+time slot for the time_window policy rule."""
+
     model_config = ConfigDict(extra="forbid")
 
     day: str = Field(
@@ -346,16 +349,19 @@ class TimeWindow(BaseModel):
 
 class PolicyCreate(BaseModel):
     """Full policy replacement payload (PUT /company/{id}/policy)."""
+
     model_config = ConfigDict(extra="forbid")
 
     max_fare_per_ride: Optional[float] = Field(
-        None, gt=0, le=10000,
+        None,
+        gt=0,
+        le=10000,
         description="Max CAD fare per work ride.  NULL means no cap.",
     )
     allowed_geofence: Optional[dict] = Field(
         None,
         description="GeoJSON FeatureCollection.  Pickup AND dropoff must be "
-                    "inside at least one polygon.  NULL means no restriction.",
+        "inside at least one polygon.  NULL means no restriction.",
     )
     allowed_time_windows: Optional[list[TimeWindow]] = Field(
         None,
@@ -367,6 +373,7 @@ class PolicyCreate(BaseModel):
 
 class PolicyUpdate(BaseModel):
     """Partial policy update (PATCH /company/{id}/policy)."""
+
     model_config = ConfigDict(extra="forbid")
 
     max_fare_per_ride: Optional[float] = Field(None, gt=0, le=10000)
@@ -378,6 +385,7 @@ class PolicyUpdate(BaseModel):
 
 class PolicyResponse(BaseModel):
     """Policy row as returned to the company portal and rider Work Profile."""
+
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
     id: str

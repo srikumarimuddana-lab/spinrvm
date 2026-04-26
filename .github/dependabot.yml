@@ -1,0 +1,182 @@
+version: 2
+
+updates:
+  # ─── Backend Python dependencies ─────────────────────────────────────────
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Regina
+    open-pull-requests-limit: 5
+    groups:
+      fastapi-stack:
+        patterns:
+          - "fastapi"
+          - "uvicorn"
+          - "starlette"
+          - "pydantic*"
+      testing:
+        patterns:
+          - "pytest*"
+          - "httpx"
+      security-critical:
+        patterns:
+          - "cryptography"
+          - "PyJWT"
+          - "bcrypt"
+          - "firebase-admin"
+    labels:
+      - "dependencies"
+      - "backend"
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    reviewers:
+      - "srikumarimuddana-lab"
+    ignore:
+      # Pin major versions — bump manually with full testing
+      - dependency-name: "supabase"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "stripe"
+        update-types: ["version-update:semver-major"]
+
+  # ─── Admin Dashboard (Next.js) ────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /admin-dashboard
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:30"
+      timezone: America/Regina
+    open-pull-requests-limit: 5
+    groups:
+      next-stack:
+        patterns:
+          - "next"
+          - "react"
+          - "react-dom"
+          - "@types/react*"
+      testing:
+        patterns:
+          - "vitest*"
+          - "playwright*"
+          - "@playwright/*"
+          - "@testing-library/*"
+    labels:
+      - "dependencies"
+      - "admin-dashboard"
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    ignore:
+      - dependency-name: "next"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "tailwindcss"
+        update-types: ["version-update:semver-major"]
+
+  # ─── Rider App ───────────────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /rider-app
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "06:00"
+      timezone: America/Regina
+    open-pull-requests-limit: 5
+    groups:
+      expo-stack:
+        patterns:
+          - "expo"
+          - "expo-*"
+          - "react-native"
+          - "@react-navigation/*"
+      testing:
+        patterns:
+          - "jest*"
+          - "jest-expo"
+          - "playwright*"
+    labels:
+      - "dependencies"
+      - "rider-app"
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    ignore:
+      - dependency-name: "expo"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-native"
+        update-types: ["version-update:semver-major"]
+
+  # ─── Driver App ──────────────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /driver-app
+    schedule:
+      interval: weekly
+      day: tuesday
+      time: "06:30"
+      timezone: America/Regina
+    open-pull-requests-limit: 5
+    groups:
+      expo-stack:
+        patterns:
+          - "expo"
+          - "expo-*"
+          - "react-native"
+          - "@react-navigation/*"
+      testing:
+        patterns:
+          - "jest*"
+          - "jest-expo"
+          - "playwright*"
+    labels:
+      - "dependencies"
+      - "driver-app"
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    ignore:
+      - dependency-name: "expo"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-native"
+        update-types: ["version-update:semver-major"]
+
+  # ─── Shared package ───────────────────────────────────────────────────────
+  - package-ecosystem: npm
+    directory: /shared
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "06:00"
+      timezone: America/Regina
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "shared"
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+
+  # ─── GitHub Actions ───────────────────────────────────────────────────────
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "07:00"
+      timezone: America/Regina
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci"
+    commit-message:
+      prefix: "chore(ci)"
+      include: scope
+    groups:
+      actions-core:
+        patterns:
+          - "actions/*"
+      docker:
+        patterns:
+          - "docker/*"

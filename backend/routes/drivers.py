@@ -64,9 +64,7 @@ async def _vault_encrypt(value: str, hint: str = "") -> str:
     if not _sb:
         return value
     try:
-        res = await db_supabase.run_sync(
-            lambda: _sb.rpc("encrypt_driver_pii", {"plaintext": value}).execute()
-        )
+        res = await db_supabase.run_sync(lambda: _sb.rpc("encrypt_driver_pii", {"plaintext": value}).execute())
         return str(res.data) if res.data else value
     except Exception as exc:
         logger.warning("vault encrypt unavailable for %s: %s — storing plaintext", hint, exc)
@@ -84,9 +82,7 @@ async def _vault_decrypt(value: str, hint: str = "") -> str:
     if not _sb:
         return value
     try:
-        res = await db_supabase.run_sync(
-            lambda: _sb.rpc("decrypt_driver_pii", {"secret_id": value}).execute()
-        )
+        res = await db_supabase.run_sync(lambda: _sb.rpc("decrypt_driver_pii", {"secret_id": value}).execute())
         return str(res.data) if res.data else value
     except Exception as exc:
         logger.warning("vault decrypt unavailable for %s: %s — returning raw value", hint, exc)
@@ -159,13 +155,13 @@ async def _generate_and_store_ride_snapshot(
         return
     try:
         try:
-            from ..utils.route_snapshot import render_ride_snapshot
-            from ..supabase_client import supabase  # type: ignore
             from ..core.config import settings
+            from ..supabase_client import supabase  # type: ignore
+            from ..utils.route_snapshot import render_ride_snapshot
         except ImportError:
-            from utils.route_snapshot import render_ride_snapshot  # type: ignore
-            from supabase_client import supabase  # type: ignore
             from core.config import settings  # type: ignore
+            from supabase_client import supabase  # type: ignore
+            from utils.route_snapshot import render_ride_snapshot  # type: ignore
 
         loop = asyncio.get_event_loop()
         # Tile fetches + PIL rendering are blocking; punt to the executor.
@@ -298,7 +294,7 @@ def serialize_doc(doc):
     return doc
 
 
-_STRIP_FROM_SELF_RESPONSE = {'stripe_account_id', 'bank_account', 'fcm_token'}
+_STRIP_FROM_SELF_RESPONSE = {"stripe_account_id", "bank_account", "fcm_token"}
 
 
 @api_router.get("/me")
@@ -1297,7 +1293,7 @@ class BankAccountCreate(BaseModel):
 class PayoutRequest(BaseModel):
     amount: Decimal = Field(
         ...,
-        ge=Decimal('10.00'),
+        ge=Decimal("10.00"),
         decimal_places=2,
         description="Minimum payout is $10.00",
     )
@@ -1590,15 +1586,11 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
         # 5. Uploaded documents
         documents: list = []
         if driver_id:
-            documents = await db_supabase.get_rows(
-                "driver_documents", {"driver_id": driver_id}, limit=50
-            )
+            documents = await db_supabase.get_rows("driver_documents", {"driver_id": driver_id}, limit=50)
 
         # 6. Notification preferences
         notification_prefs: list = []
-        notification_prefs = await db_supabase.get_rows(
-            "notification_preferences", {"user_id": user_id}, limit=1
-        )
+        notification_prefs = await db_supabase.get_rows("notification_preferences", {"user_id": user_id}, limit=1)
 
         export_payload = {
             "export_generated_at": datetime.now(timezone.utc).isoformat() + "Z",
@@ -1606,9 +1598,7 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
             "driver_profile": {k: v for k, v in driver.items() if k not in ("password_hash",)},
             "rides": rides,
             "payouts": payouts,
-            "documents": [
-                {k: v for k, v in doc.items() if k != "document_url"} for doc in documents
-            ],
+            "documents": [{k: v for k, v in doc.items() if k != "document_url"} for doc in documents],
             "notification_preferences": notification_prefs,
         }
 
@@ -1622,8 +1612,7 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
             "If you have any questions about your data or would like to request deletion, "
             "please contact privacy@spinr.ca.\n\n"
             "— The Spinr Team\n\n"
-            "---\n\n"
-            + export_json
+            "---\n\n" + export_json
         )
 
         await send_email(to=email, subject=subject, body=body)
@@ -1844,9 +1833,7 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             "Your driver has accepted the ride and is on the way.",
             data={"type": "driver_accepted", "ride_id": str(ride_id)},
         )
-    await manager.broadcast_ride_status(
-        ride_id, "driver_accepted", rider_id=(ride or {}).get("rider_id")
-    )
+    await manager.broadcast_ride_status(ride_id, "driver_accepted", rider_id=(ride or {}).get("rider_id"))
 
     return {"success": True}
 
@@ -1860,7 +1847,9 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
         raise HTTPException(status_code=404, detail="Driver not found")
 
     # If assigned, unassign. If searching, just ignore/record decline.
-    await db_supabase.update_ride(ride_id, {"driver_id": None, "status": "searching", "updated_at": datetime.now(timezone.utc)})
+    await db_supabase.update_ride(
+        ride_id, {"driver_id": None, "status": "searching", "updated_at": datetime.now(timezone.utc)}
+    )
 
     # Record the decline in audit_logs so daily stats can count it
     try:
@@ -1927,7 +1916,12 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
             )
 
     await db_supabase.update_ride(
-        ride_id, {"status": "driver_arrived", "driver_arrived_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
+        ride_id,
+        {
+            "status": "driver_arrived",
+            "driver_arrived_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        },
     )
 
     if ride.get("rider_id"):
@@ -1938,9 +1932,7 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
             "Your driver has arrived at the pickup location.",
             data={"type": "driver_arrived", "ride_id": str(ride_id)},
         )
-    await manager.broadcast_ride_status(
-        ride_id, "driver_arrived", rider_id=ride.get("rider_id")
-    )
+    await manager.broadcast_ride_status(ride_id, "driver_arrived", rider_id=ride.get("rider_id"))
 
     return {"success": True}
 
@@ -1964,7 +1956,12 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
 
     # OTP correct, start ride
     await db_supabase.update_ride(
-        ride_id, {"status": "in_progress", "ride_started_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
+        ride_id,
+        {
+            "status": "in_progress",
+            "ride_started_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        },
     )
 
     if ride.get("rider_id"):
@@ -1975,9 +1972,7 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
             "Your ride has started. Have a safe trip!",
             data={"type": "ride_started", "ride_id": str(ride_id)},
         )
-    await manager.broadcast_ride_status(
-        ride_id, "in_progress", rider_id=ride.get("rider_id")
-    )
+    await manager.broadcast_ride_status(ride_id, "in_progress", rider_id=ride.get("rider_id"))
 
     return {"success": True}
 
@@ -1993,7 +1988,12 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
         raise HTTPException(status_code=404, detail="Driver not found")
 
     await db_supabase.update_ride(
-        ride_id, {"status": "in_progress", "ride_started_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
+        ride_id,
+        {
+            "status": "in_progress",
+            "ride_started_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        },
     )
 
     ride = await db_supabase.get_ride(ride_id)
@@ -2005,9 +2005,7 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
             "Your ride has started. Have a safe trip!",
             data={"type": "ride_started", "ride_id": str(ride_id)},
         )
-    await manager.broadcast_ride_status(
-        ride_id, "in_progress", rider_id=(ride or {}).get("rider_id")
-    )
+    await manager.broadcast_ride_status(ride_id, "in_progress", rider_id=(ride or {}).get("rider_id"))
     return {"success": True}
 
 
@@ -2026,9 +2024,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         raise HTTPException(status_code=404, detail="Ride not found")
 
     if ride.get("status") not in COMPLETE_FROM_STATES:
-        raise RideStateError(
-            f"Cannot complete ride from state '{ride.get('status')}'; ride must be in_progress"
-        )
+        raise RideStateError(f"Cannot complete ride from state '{ride.get('status')}'; ride must be in_progress")
 
     # ── Aggregate all GPS breadcrumbs for this ride ──
     # On completion we compute everything once and store it on the ride row.
@@ -2111,9 +2107,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
             # Legacy combined polyline (kept for the existing ride-detail
             # map renderer that hasn't moved to phase_polylines yet).
-            trip_points = [
-                b for b in all_breadcrumbs if b.get("tracking_phase") in phases_to_split
-            ]
+            trip_points = [b for b in all_breadcrumbs if b.get("tracking_phase") in phases_to_split]
             if trip_points:
                 MAX_POINTS = 200
                 step = max(1, len(trip_points) // MAX_POINTS)
@@ -2250,9 +2244,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # Keep the specific ``ride_completed`` event on admin too for dashboards
     # that switch directly on the event name rather than status.
     try:
-        await manager.broadcast_to_admins(
-            {"type": "ride_completed", "ride_id": ride_id, "total_fare": total_fare}
-        )
+        await manager.broadcast_to_admins({"type": "ride_completed", "ride_id": ride_id, "total_fare": total_fare})
     except Exception as _exc:  # pragma: no cover - best effort
         logger.warning(f"complete_ride: admin broadcast failed: {_exc}")
 
@@ -2271,7 +2263,7 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    if ride.get("status") == 'trip_in_progress':
+    if ride.get("status") == "trip_in_progress":
         raise RideStateError("Cannot cancel a trip that is already in progress")
 
     now = datetime.now(timezone.utc)
@@ -2298,8 +2290,7 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
         )
     except Exception as exc:
         logger.warning(
-            f"[CANCEL] cancelled_by/cancellation_reason write failed "
-            f"(likely PGRST204); retrying minimal update: {exc}"
+            f"[CANCEL] cancelled_by/cancellation_reason write failed (likely PGRST204); retrying minimal update: {exc}"
         )
         await db_supabase.update_ride(ride_id, base_update)
 
@@ -2326,9 +2317,7 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
     # Keep the specific ``ride_cancelled`` event on admin for dashboards
     # that switch on event name.
     try:
-        await manager.broadcast_to_admins(
-            {"type": "ride_cancelled", "ride_id": ride_id, "reason": "driver_cancelled"}
-        )
+        await manager.broadcast_to_admins({"type": "ride_cancelled", "ride_id": ride_id, "reason": "driver_cancelled"})
     except Exception as _exc:  # pragma: no cover - best effort
         logger.warning(f"driver cancel admin broadcast failed: {_exc}")
 
@@ -2694,9 +2683,7 @@ async def update_driver_status(
                     await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1)
                 )
                 if area_row:
-                    mandatory_reqs = [
-                        r for r in (area_row.get("required_documents") or []) if r.get("required", True)
-                    ]
+                    mandatory_reqs = [r for r in (area_row.get("required_documents") or []) if r.get("required", True)]
             except Exception:
                 mandatory_reqs = []
 
@@ -2868,8 +2855,7 @@ async def update_driver_status(
         _combined = f"{_col_exc} {_detail} {_cause_text}".lower()
         if "last_status_changed_at" in _combined or "pgrst204" in _combined:
             logger.warning(
-                f"[GO-ONLINE] last_status_changed_at missing; retrying minimal. "
-                f"original={_detail or _col_exc}"
+                f"[GO-ONLINE] last_status_changed_at missing; retrying minimal. original={_detail or _col_exc}"
             )
             await db_supabase.update_one("drivers", {"id": driver_id}, _base)
         else:
@@ -3437,7 +3423,7 @@ async def check_expiring_subscriptions():
                                 "is_online": False,
                             }
                         )
-                    except Exception:
+                    except Exception:  # noqa: S110
                         pass
 
                     enforced_count += 1

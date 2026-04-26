@@ -3,6 +3,7 @@
 Uses sync MagicMock on supabase.rpc(...).execute() because the service
 wraps the sync call with run_sync (see plan header re: supabase-py 2.x).
 """
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -48,12 +49,8 @@ async def test_idempotent_on_duplicate_stripe_pi():
         mock_sb.rpc = rpc
         from services.corporate_wallet_service import apply_topup
 
-        a = await apply_topup(
-            wallet_id="w1", amount=100, stripe_payment_intent_id="pi_123"
-        )
-        b = await apply_topup(
-            wallet_id="w1", amount=100, stripe_payment_intent_id="pi_123"
-        )
+        a = await apply_topup(wallet_id="w1", amount=100, stripe_payment_intent_id="pi_123")
+        b = await apply_topup(wallet_id="w1", amount=100, stripe_payment_intent_id="pi_123")
     assert a == b
 
 
@@ -95,9 +92,7 @@ async def test_adjustment_rejects_zero_amount():
     from services.corporate_wallet_service import apply_adjustment
 
     with pytest.raises(ValueError, match="zero"):
-        await apply_adjustment(
-            wallet_id="w1", amount=0, notes="noop", actor_user_id="a1"
-        )
+        await apply_adjustment(wallet_id="w1", amount=0, notes="noop", actor_user_id="a1")
 
 
 @pytest.mark.asyncio
@@ -128,6 +123,4 @@ async def test_raises_when_rpc_returns_empty():
         from services.corporate_wallet_service import apply_topup
 
         with pytest.raises(RuntimeError, match="no row"):
-            await apply_topup(
-                wallet_id="w1", amount=100, stripe_payment_intent_id="pi_x"
-            )
+            await apply_topup(wallet_id="w1", amount=100, stripe_payment_intent_id="pi_x")

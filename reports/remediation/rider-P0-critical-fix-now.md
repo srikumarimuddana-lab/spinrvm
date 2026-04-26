@@ -242,7 +242,7 @@ async def _check_otp_lockout(phone: str) -> None:
 ## R-P0-8 · Real Supabase Service-Role Key Committed in backend/.env.example
 
 **Audit finding [03-1 CRITICAL].** `backend/.env.example` contains a live Supabase
-service-role JWT (`eyJhbGci…`) pointing at project `dbbadhihiwztmnqnbdke.supabase.co`.
+service-role JWT (`eyJhbGci…`) pointing at project `[redacted-project].supabase.co` (project ref redacted on 2026-04-26).
 The `role: "service_role"` claim in the JWT payload bypasses all Row Level Security.
 Anyone with repository access can use this key to read/write every table.
 

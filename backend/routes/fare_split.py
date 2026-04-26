@@ -118,7 +118,6 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
         "participants": [
             {
                 "id": p["id"],
-                "phone": p["phone"],
                 "share_amount": p["share_amount"],
                 "status": p["status"],
             }
@@ -159,7 +158,6 @@ async def get_fare_split(split_id: str, current_user: dict = Depends(get_current
         "participants": [
             {
                 "id": p["id"],
-                "phone": p.get("phone"),
                 "user_id": p.get("user_id"),
                 "share_amount": p["share_amount"],
                 "status": p["status"],
@@ -184,6 +182,12 @@ async def get_fare_split_for_ride(ride_id: str, current_user: dict = Depends(get
         limit=10,
     )
 
+    # P1-7: ownership check — must be the requester or a participant on this split
+    user_id = current_user["id"]
+    is_participant = any(p.get("user_id") == user_id for p in participants)
+    if split["requester_id"] != user_id and not is_participant:
+        raise HTTPException(status_code=403, detail="Not authorized to view this fare split")
+
     share_amount = float(_d(split["total_fare"] / split["split_count"]))
 
     return {
@@ -197,7 +201,6 @@ async def get_fare_split_for_ride(ride_id: str, current_user: dict = Depends(get
             "participants": [
                 {
                     "id": p["id"],
-                    "phone": p.get("phone"),
                     "share_amount": p["share_amount"],
                     "status": p["status"],
                 }

@@ -23,6 +23,10 @@ except ImportError:
     from db import db
     from dependencies import get_current_user
 
+# db is the db_supabase module (re-exported by backend/db.py shim); .rpc is the
+# Supabase RPC caller used for atomic wallet credits during point redemption.
+db_rpc = db.rpc
+
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/loyalty", tags=["Loyalty"])
 
@@ -141,6 +145,27 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
     new_lifetime = account.get("lifetime_points", 0) + total_points
     new_tier = _calculate_tier(new_lifetime)
 
+    # P1-1: insert the transaction FIRST — the DB UNIQUE index on
+    # (user_id, reference_id) WHERE type='ride_earned' is the real guard
+    # against double-award races.  Account update only runs if insert succeeds.
+    try:
+        await db.insert_one(
+            "loyalty_transactions",
+            {
+                "id": str(uuid.uuid4()),
+                "user_id": current_user["id"],
+                "points": total_points,
+                "type": "ride_earned",
+                "reference_id": ride_id,
+                "description": f"Earned {base_points} pts + {bonus_points} bonus ({tier} {multiplier}x)",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as e:
+        if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            return {"already_awarded": True, "points": 0}
+        raise HTTPException(status_code=503, detail="Failed to record loyalty points") from e
+
     await db.update_one(
         "loyalty_accounts",
         {"id": account["id"]},
@@ -151,20 +176,6 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
                 "tier": new_tier,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
-        },
-    )
-
-    # Record transaction
-    await db.insert_one(
-        "loyalty_transactions",
-        {
-            "id": str(uuid.uuid4()),
-            "user_id": current_user["id"],
-            "points": total_points,
-            "type": "ride_earned",
-            "reference_id": ride_id,
-            "description": f"Earned {base_points} pts + {bonus_points} bonus ({tier} {multiplier}x)",
-            "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )
 
@@ -197,34 +208,36 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
     credit_amount = round(req.points / REDEMPTION_RATE, 2)
     new_balance = account.get("points", 0) - req.points
 
+    # P1-6: credit wallet BEFORE debiting points so a wallet failure leaves
+    # points intact.  Uses the atomic RPC to avoid a TOCTOU race on the wallet.
+    from .wallet import _d, _record_transaction, get_or_create_wallet
+
+    wallet = await get_or_create_wallet(current_user["id"])
+    try:
+        new_wb_raw = await db_rpc(
+            "wallet_increment_balance",
+            {"p_wallet_id": wallet["id"], "p_amount": str(_d(credit_amount))},
+        )
+    except Exception as e:
+        logger.error(f"Loyalty redeem wallet credit failed for user {current_user['id']}: {e}")
+        raise HTTPException(status_code=503, detail="Wallet credit failed; points not deducted") from e
+
+    new_wb = _d(new_wb_raw)
+    await _record_transaction(
+        wallet_id=wallet["id"],
+        user_id=current_user["id"],
+        txn_type="bonus",
+        amount=credit_amount,
+        balance_after=float(new_wb),
+        description=f"Loyalty redemption: {req.points} pts → ${credit_amount:.2f}",
+    )
+
+    # Wallet credited — now safe to debit loyalty points
     await db.update_one(
         "loyalty_accounts",
         {"id": account["id"]},
         {"$set": {"points": new_balance, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
-
-    # Credit to wallet
-    try:
-        from .wallet import _d, _record_transaction, get_or_create_wallet
-
-        wallet = await get_or_create_wallet(current_user["id"])
-        old_wb = _d(wallet.get("balance", 0))
-        new_wb = old_wb + _d(credit_amount)
-        await db.update_one(
-            "wallets",
-            {"id": wallet["id"]},
-            {"$set": {"balance": float(new_wb), "updated_at": datetime.now(timezone.utc).isoformat()}},
-        )
-        await _record_transaction(
-            wallet_id=wallet["id"],
-            user_id=current_user["id"],
-            txn_type="bonus",
-            amount=credit_amount,
-            balance_after=float(new_wb),
-            description=f"Loyalty redemption: {req.points} pts → ${credit_amount:.2f}",
-        )
-    except Exception as e:
-        logger.error(f"Loyalty redeem wallet credit failed: {e}")
 
     await db.insert_one(
         "loyalty_transactions",

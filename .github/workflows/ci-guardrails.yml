@@ -85,11 +85,13 @@ jobs:
       - name: Assert no regression
         run: |
           PR_PCT=$(cat .coverage-pr)
-          BASE_PCT="${{ steps.base_coverage.outputs.base_pct }}"
+          # GHA expressions are expanded before the shell runs, so
+          # ${{ ... }} works even inside a single-quoted <<'PYEOF' heredoc.
+          # A plain shell variable ($BASE_PCT) would NOT be expanded there.
           python3 - <<'PYEOF'
           import sys
           pr_pct   = float(open('.coverage-pr').read().strip() or 0)
-          base_pct = float("$BASE_PCT" or 0)
+          base_pct = float("${{ steps.base_coverage.outputs.base_pct }}" or 0)
           # Allow up to 2% regression before blocking (accounts for flaky mocks)
           TOLERANCE = 2.0
           delta = pr_pct - base_pct

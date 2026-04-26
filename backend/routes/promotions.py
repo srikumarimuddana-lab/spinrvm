@@ -18,9 +18,11 @@ try:
     from ..utils.rate_limiter import promo_available_limit, promo_validate_limit
 except ImportError:
     import db_supabase
-    from dependencies import get_current_user
+    from dependencies import get_admin_user, get_current_user
     from utils.datetime_utils import parse_iso_utc
     from utils.rate_limiter import promo_available_limit, promo_validate_limit
+
+db_rpc = db_supabase.rpc  # atomic promo increment (P1-2)
 
 logger = logging.getLogger(__name__)
 
@@ -233,12 +235,15 @@ async def apply_promo(
     }
     await db_supabase.insert_one("promo_applications", application)
 
-    # Increment usage count
-    promo = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("promotions", {"id": validation["promo_id"]}, limit=1)
-    )
-    if promo:
-        await db_supabase.update_one("promotions", {"id": validation["promo_id"]}, {"uses": promo.get("uses", 0) + 1})
+    # Atomic increment — prevents two concurrent applys both reading the same
+    # uses count and each writing uses+1 (net +1 instead of +2). P1-2.
+    try:
+        await db_rpc("promo_increment_uses", {"p_promo_id": validation["promo_id"]})
+    except Exception as e:
+        msg = str(e).lower()
+        if "limit reached" in msg:
+            raise HTTPException(status_code=400, detail="Promo code has reached its usage limit") from e
+        raise HTTPException(status_code=503, detail="Failed to record promo usage") from e
 
     return {
         "success": True,
@@ -398,6 +403,12 @@ async def admin_create_promo_code(req: CreatePromoCodeRequest):
 
     if req.discount_type not in ("flat", "percentage"):
         raise HTTPException(status_code=400, detail="discount_type must be 'flat' or 'percentage'")
+
+    # P1-4: cap discount_value to prevent absurd promo creation
+    if req.discount_type == "percentage" and req.discount_value > 100:
+        raise HTTPException(status_code=400, detail="Percentage discount cannot exceed 100%")
+    if req.discount_type == "flat" and req.discount_value > 500:
+        raise HTTPException(status_code=400, detail="Flat discount cannot exceed $500")
 
     promo = {
         "id": str(uuid.uuid4()),

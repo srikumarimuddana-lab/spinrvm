@@ -17,7 +17,7 @@ try:
     from ..settings_loader import get_app_settings
 except ImportError:
     import db_supabase
-    from dependencies import get_current_user
+    from dependencies import get_admin_user, get_current_user
     from settings_loader import get_app_settings
 
 db = db_supabase  # legacy alias
@@ -126,16 +126,28 @@ async def admin_get_disputes(
         "disputes", filters, order="created_at", desc=True, limit=limit, offset=offset
     )
 
-    # Enrich with user + ride info
+    # Batch-fetch users and rides (one query each instead of 2N queries) — P1-10.
+    # user_phone is intentionally omitted from the response — P1-9 (PIPEDA: no PII in bulk list).
+    user_ids = [d["user_id"] for d in disputes if d.get("user_id")]
+    ride_ids = [d["ride_id"] for d in disputes if d.get("ride_id")]
+
+    users_by_id: Dict[str, Any] = {}
+    rides_by_id: Dict[str, Any] = {}
+    if user_ids:
+        users = await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=len(user_ids))
+        users_by_id = {u["id"]: u for u in users}
+    if ride_ids:
+        rides = await db_supabase.get_rows("rides", {"id": {"$in": ride_ids}}, limit=len(ride_ids))
+        rides_by_id = {r["id"]: r for r in rides}
+
     enriched = []
     for d in disputes:
-        user = await db_supabase.get_user_by_id(d.get("user_id")) if d.get("user_id") else None
-        ride = await db_supabase.get_ride(d.get("ride_id")) if d.get("ride_id") else None
+        user = users_by_id.get(d.get("user_id") or "")
+        ride = rides_by_id.get(d.get("ride_id") or "")
         enriched.append(
             {
                 **d,
                 "user_name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Unknown",
-                "user_phone": user.get("phone") if user else None,
                 "ride_status": ride.get("status") if ride else None,
                 "ride_fare": ride.get("total_fare") if ride else None,
             }
@@ -157,22 +169,13 @@ async def admin_resolve_dispute(
     if dispute.get("status") in ("resolved", "rejected"):
         raise HTTPException(status_code=400, detail="Dispute already resolved")
 
-    update_data = {
-        "status": "resolved" if req.resolution != "rejected" else "rejected",
-        "resolution": req.resolution,
-        "refund_amount": req.refund_amount or 0,
-        "admin_note": req.admin_note or "",
-        "resolved_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-    await db_supabase.update_one("disputes", {"id": dispute_id}, update_data)
-
-    # If approved/partial, initiate Stripe refund against the ride's PaymentIntent
+    # P1-3 + P1-5: Stripe refund runs BEFORE we mark the dispute resolved.
+    # If Stripe fails we raise 502 — the dispute stays open so the admin can retry
+    # rather than discovering later that no money was actually moved.
     refund_result: Dict[str, Any] = {}
     if req.resolution in ("approved", "partial_refund") and req.refund_amount:
         refund_amount_cents = int(float(req.refund_amount) * 100)
-        ride = await db.find_one("rides", {"id": dispute.get("ride_id")})
+        ride = await db_supabase.get_ride(dispute.get("ride_id"))
         payment_intent_id = (ride or {}).get("stripe_charge_id") or (ride or {}).get("payment_intent_id")
 
         if not payment_intent_id:
@@ -182,18 +185,19 @@ async def admin_resolve_dispute(
             )
             refund_result = {"status": "manual_required", "reason": "no_payment_intent"}
         else:
+            import stripe as _stripe  # noqa: PLC0415
+
+            settings = await get_app_settings()
+            stripe_secret = settings.get("stripe_secret_key", "")
+            if not stripe_secret:
+                raise HTTPException(status_code=503, detail="Stripe not configured")
+
             try:
-                import stripe as _stripe  # noqa: PLC0415
-
-                settings = await get_app_settings()
-                stripe_secret = settings.get("stripe_secret_key", "")
-                if not stripe_secret:
-                    raise ValueError("Stripe secret key not configured")
-
                 refund = _stripe.Refund.create(
                     payment_intent=payment_intent_id,
                     amount=refund_amount_cents,
                     reason="requested_by_customer",
+                    idempotency_key=f"refund-dispute-{dispute_id}",
                     metadata={
                         "dispute_id": dispute_id,
                         "ride_id": str(dispute.get("ride_id")),
@@ -206,18 +210,23 @@ async def admin_resolve_dispute(
                     f"[REFUND] Stripe refund {refund.id} ({refund.status}) "
                     f"${req.refund_amount} for dispute {dispute_id}"
                 )
-            except Exception as refund_err:  # noqa: BLE001
-                # Don't roll back the resolved status — log and surface the error so
-                # the admin knows they may need to issue the refund manually.
+            except Exception as refund_err:
                 logger.error(f"[REFUND] Stripe refund failed for dispute {dispute_id}: {refund_err}")
-                refund_result = {"status": "failed", "error": str(refund_err)}
+                raise HTTPException(
+                    status_code=502, detail="Stripe refund failed; dispute not marked resolved"
+                ) from refund_err
 
-        # Persist refund outcome on the dispute record
-        await db.update_one(
-            "disputes",
-            {"id": dispute_id},
-            {"$set": {"refund_result": refund_result, "updated_at": datetime.now(timezone.utc).isoformat()}},
-        )
+    # Stripe succeeded (or no payment to refund) — persist resolution in a single write
+    update_data = {
+        "status": "resolved" if req.resolution != "rejected" else "rejected",
+        "resolution": req.resolution,
+        "refund_amount": req.refund_amount or 0,
+        "admin_note": req.admin_note or "",
+        "resolved_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "refund_result": refund_result,
+    }
+    await db_supabase.update_one("disputes", {"id": dispute_id}, update_data)
 
     return {
         "success": True,

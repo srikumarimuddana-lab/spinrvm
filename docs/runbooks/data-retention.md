@@ -33,9 +33,9 @@ finds zero matching rows.
 | `ride_messages` | 90 days | Hard DELETE | In-app chat — covers chargeback + dispute lifecycle |
 | `refresh_tokens` | `expires_at` + 30 days | Hard DELETE | Tokens are already invalid at expiry; 30d grace lets `/auth/logout-all` forensics inspect recently-revoked sessions (B-P1-13) |
 | `stripe_events` | 90 days | Hard DELETE | Stripe replays only within 30 days; 90d gives margin for late-investigated payment disputes |
+| `audit_logs` | 7 years | Hard DELETE | Saskatchewan Transportation Act ceiling on action history; PIPEDA "no longer needed" applies after the regulatory window. Append-only between then; UPDATE blocked by trigger. |
 
 **Out of scope for this job** (handled elsewhere or follow-ups):
-- `audit_logs` — retain 7y by policy; separate migration when policy hardens
 - `disputes` — retain 7y by policy; separate migration
 - `saved_addresses`, `emergency_contacts` — cascaded with user soft-delete
 
@@ -140,8 +140,10 @@ calendar so the suspension does not silently outlive its purpose.
 
 ## Recovery: Mistaken Mass Deletion
 
-Symptom: `audit_logs.details->>'rides_deleted'` is unexpectedly large
-(thousands of rows in a single run).
+Symptom: `(audit_logs.details::jsonb)->>'rides_deleted'` is unexpectedly
+large (thousands of rows in a single run). The cast is required because
+production stores `details` as TEXT — the function writes
+`v_result::text` so the column always contains valid JSON.
 
 Possible causes:
 1. The `c_ride_keep_age` constant was lowered without a migration
@@ -181,6 +183,40 @@ Recovery:
 
 ---
 
+## audit_logs append-only contract (B-P1-7)
+
+Migration 51 locked `audit_logs` down to enforce its forensic role:
+
+- **RLS**: SELECT-only for admins (gated by `users.role IN ('admin',
+  'super_admin')`); service-role bypass for the backend's INSERT/DELETE.
+- **PostgREST**: anon has no grant; authenticated has SELECT only.
+- **UPDATE**: blocked unconditionally by trigger `audit_logs_no_update`,
+  including for service_role. A backend bug that issues
+  `update_one("audit_logs", ...)` raises `check_violation` instead of
+  silently rewriting forensic history.
+- **DELETE**: allowed only via the 7y retention step in
+  `purge_pii_retention()`. No application code path DELETEs audit rows.
+
+Migration 51 also fixed a latent bug in migration 50: the function's
+own audit-log INSERT used column names from migration 08's
+never-applied schema (`actor_id`, `actor_role`, `resource`). The fix
+maps them to the production schema:
+
+| Original (broken) | Production column | Value the function writes |
+|---|---|---|
+| `actor_id = 'system:retention_purge'` | `user_email` | `'system:retention_purge'` |
+| `actor_role = 'system'` | (dropped — recorded in `details` JSON) | — |
+| `action = 'pii_retention_purge'` | `action` (unchanged) | `'pii_retention_purge'` |
+| `resource = 'system'` | `entity_type` | `'system'` |
+| (missing) | `entity_id` | `v_started_at::text` (per-run identifier) |
+| `details` JSONB | `details` TEXT | `v_result::text` |
+| (missing) | `id` | `gen_random_uuid()::text` |
+
+If a future migration moves `details` to JSONB on the live table,
+update the cast in the same migration.
+
+---
+
 ## Known Follow-Ups
 
 - **Cloudinary asset deletion at 3y.** The 3-year scrub nulls
@@ -191,7 +227,4 @@ Recovery:
   job that reads `rides.route_snapshot_url` for rows with
   `gps_anonymized_at < now() - INTERVAL '7 days'` and calls Cloudinary
   destroy on each public_id. Out of scope for B-P1-6.
-- **`audit_logs` retention.** Currently retained indefinitely; policy
-  is 7 years. A separate migration will add the cutoff once the
-  audit-log RLS lockdown (B-P1-7) lands.
-- **`disputes` retention.** Same — 7-year policy, separate migration.
+- **`disputes` retention.** 7-year policy, separate migration.

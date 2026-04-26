@@ -33,6 +33,7 @@ async def test_run_tick_parses_jsonb_result_and_forwards_dry_run():
         "ride_messages_deleted": 87,
         "refresh_tokens_deleted": 21,
         "stripe_events_deleted": 9,
+        "audit_logs_deleted": 0,
     }
 
     rpc_mock = MagicMock()

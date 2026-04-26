@@ -13,14 +13,16 @@ from pydantic import BaseModel
 
 try:
     from .. import db_supabase
-    from ..dependencies import get_current_user
+    from ..dependencies import get_admin_user, get_current_user
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.rate_limiter import promo_available_limit, promo_validate_limit
 except ImportError:
     import db_supabase
-    from dependencies import get_current_user
+    from dependencies import get_admin_user, get_current_user
     from utils.datetime_utils import parse_iso_utc
     from utils.rate_limiter import promo_available_limit, promo_validate_limit
+
+get_current_admin = get_admin_user
 
 logger = logging.getLogger(__name__)
 
@@ -372,7 +374,11 @@ async def get_available_promos(
 
 # ============ Admin Promo Code CRUD ============
 
-admin_router = APIRouter(prefix="/admin/promo-codes", tags=["Admin Promotions"])
+admin_router = APIRouter(
+    prefix="/admin/promo-codes",
+    tags=["Admin Promotions"],
+    dependencies=[Depends(get_current_admin)],
+)
 
 
 @admin_router.get("")

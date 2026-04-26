@@ -259,5 +259,6 @@ async def my_requests(
     current_user: dict = Depends(get_current_user),
 ):
     membership = await _ensure_member(current_user, company_id)
-    rows = await list_company_allowance_requests(company_id, statuses=None)
-    return [r for r in rows if r.get("member_id") == membership["id"]]
+    return await list_company_allowance_requests(
+        company_id, statuses=None, member_id=membership["id"]
+    )

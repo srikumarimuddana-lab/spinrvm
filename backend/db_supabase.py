@@ -1335,6 +1335,40 @@ async def increment_promo_uses(promo_id: str, max_uses: int) -> bool:
     return await run_sync(_fn)
 
 
+async def fare_split_pay_share(
+    wallet_id: str, participant_id: str, amount: "Decimal"
+) -> "Decimal":
+    """Atomically deduct `amount` from `wallet_id` and mark `participant_id`
+    as paid in a single Postgres transaction. Returns the new wallet balance.
+    Raises ValueError('insufficient_funds') when balance is insufficient.
+    """
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        res = supabase.rpc(
+            "fare_split_pay_share",
+            {
+                "p_wallet_id": wallet_id,
+                "p_participant_id": participant_id,
+                "p_amount": str(amount),
+            },
+        ).execute()
+        data = getattr(res, "data", None)
+        if data is None:
+            raise DatabaseError(details={"original": "fare_split_pay_share returned no data"})
+        return data
+
+    try:
+        raw = await run_sync(_fn)
+        return Decimal(str(raw))
+    except Exception as exc:
+        msg = str(exc)
+        if "insufficient_funds" in msg:
+            raise ValueError("insufficient_funds") from exc
+        raise
+
+
 # ============ Rides Admin Dashboard – New Helpers ============
 
 
@@ -2356,7 +2390,9 @@ async def list_pending_allowance_requests_for_member(
 
 
 async def list_company_allowance_requests(
-    company_id: str, statuses: Optional[List[str]] = None
+    company_id: str,
+    statuses: Optional[List[str]] = None,
+    member_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     def _fn():
         q = (
@@ -2367,6 +2403,8 @@ async def list_company_allowance_requests(
             )
             .eq("member.company_id", company_id)
         )
+        if member_id:
+            q = q.eq("member_id", member_id)
         if statuses:
             q = q.in_("status", statuses)
         res = q.order("created_at", desc=True).execute()

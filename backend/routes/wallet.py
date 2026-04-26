@@ -98,7 +98,7 @@ class WalletPayRequest(BaseModel):
 
 
 class TransferRequest(BaseModel):
-    recipient_phone: str
+    recipient_phone: str = Field(..., pattern=r'^\+1\d{10}$')
     amount: float = Field(..., gt=0, le=200)
 
 
@@ -206,17 +206,13 @@ async def get_transactions(
     """Get wallet transaction history for the current user."""
     wallet = await get_or_create_wallet(current_user["id"])
 
-    try:
-        txns = await db.get_rows(
-            "wallet_transactions",
-            {"wallet_id": wallet["id"]},
-            limit=limit,
-            skip=offset,
-            order="created_at",
-        )
-    except Exception as e:
-        logger.error(f"Error fetching transactions: {e}")
-        txns = []
+    txns = await db.get_rows(
+        "wallet_transactions",
+        {"wallet_id": wallet["id"]},
+        limit=limit,
+        skip=offset,
+        order="created_at",
+    )
 
     return {
         "transactions": [

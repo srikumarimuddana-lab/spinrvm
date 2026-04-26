@@ -284,6 +284,17 @@ async def get_available_promos(
         },
     )
 
+    # Pre-fetch all user promo applications in one query so per-promo usage
+    # check is O(1) instead of one DB call per promo (N+1 reduction).
+    all_user_apps = await db_supabase.get_rows(
+        "promo_applications", {"user_id": current_user["id"]}, limit=2000
+    ) or []
+    user_usage_by_promo: dict = {}
+    for app in all_user_apps:
+        pid = app.get("promo_id")
+        if pid:
+            user_usage_by_promo[pid] = user_usage_by_promo.get(pid, 0) + 1
+
     available = []
     for p in promos:
         try:
@@ -301,12 +312,10 @@ async def get_available_promos(
             if max_uses > 0 and p.get("uses", 0) >= max_uses:
                 continue  # noqa: E701
 
-            # Per-user usage (0 = unlimited)
+            # Per-user usage (0 = unlimited) — uses pre-fetched map, not a per-promo query
             max_per_user = p.get("max_uses_per_user", 1)
             if max_per_user > 0:
-                user_uses = await db_supabase.count_documents(
-                    "promo_applications", {"promo_id": p["id"], "user_id": current_user["id"]}
-                )
+                user_uses = user_usage_by_promo.get(p["id"], 0)
                 if user_uses >= max_per_user:
                     continue  # noqa: E701
 
@@ -375,8 +384,9 @@ async def get_available_promos(
                     "min_ride_fare": p.get("min_ride_fare", 0),
                 }
             )
-        except Exception:  # noqa: S112
-            continue  # skip broken promos
+        except Exception as promo_err:
+            logger.error(f"[PROMOS] Skipping promo {p.get('id')} due to error: {promo_err}")
+            continue
 
     # Sort by biggest discount first
     available.sort(key=lambda x: x["discount_amount"], reverse=True)

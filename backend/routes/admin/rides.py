@@ -641,8 +641,11 @@ async def admin_get_earnings(period: str = Query("month")):
 async def admin_export_rides(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    admin: dict = Depends(get_admin_user),
 ):
-    """Export rides data (schema: total_fare)."""
+    """Export rides data (schema: total_fare). Writes an audit log entry (F-41)."""
+    import uuid  # noqa: PLC0415
+
     rides = await db_supabase.get_rows("rides", order="created_at", desc=True, limit=1000)
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
@@ -666,12 +669,27 @@ async def admin_export_rides(
                 else (driver.get("name") if driver else None),
             }
         )
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "export_rides",
+            "resource": "rides",
+            "resource_id": None,
+            "details": {"row_count": len(out), "start_date": start_date, "end_date": end_date},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     return {"rides": out, "count": len(out)}
 
 
 @router.get("/export/drivers")
-async def admin_export_drivers():
-    """Export drivers data."""
+async def admin_export_drivers(admin: dict = Depends(get_admin_user)):
+    """Export drivers data. Writes an audit log entry (F-41)."""
+    import uuid  # noqa: PLC0415
+
     drivers = await db_supabase.get_rows("drivers", order="created_at", desc=True, limit=1000)
     user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
     users_list = (
@@ -696,6 +714,19 @@ async def admin_export_drivers():
                 "created_at": d.get("created_at"),
             }
         )
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "export_drivers",
+            "resource": "drivers",
+            "resource_id": None,
+            "details": {"row_count": len(out)},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     return {"drivers": out, "count": len(out)}
 
 

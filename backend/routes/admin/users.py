@@ -2,9 +2,10 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 try:
     from ... import db_supabase
@@ -16,6 +17,11 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class UserStatusRequest(BaseModel):
+    status: Literal["active", "suspended", "banned"]
+
 
 # ---------- Users (riders) ----------
 
@@ -79,13 +85,9 @@ async def admin_get_user_details(user_id: str):
 
 
 @router.put("/users/{user_id}/status")
-async def admin_update_user_status(user_id: str, status_data: Dict[str, Any], admin: dict = Depends(get_admin_user)):
+async def admin_update_user_status(user_id: str, status_data: UserStatusRequest, admin: dict = Depends(get_admin_user)):
     """Update user status (e.g., suspend, activate)."""
-    valid_status = ["active", "suspended", "banned"]
-    new_status = status_data.get("status")
-
-    if new_status not in valid_status:
-        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_status}")
+    new_status = status_data.status
 
     user = await db_supabase.get_user_by_id(user_id)
     if not user:

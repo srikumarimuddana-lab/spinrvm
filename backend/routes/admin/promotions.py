@@ -1,8 +1,10 @@
 import logging
+import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 try:
     from ... import db_supabase
@@ -12,6 +14,69 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ---------- Pydantic models ----------
+
+
+class PromotionCreateRequest(BaseModel):
+    code: str
+    description: str = ""
+    promo_type: str = "discount"
+    discount_type: str = "flat"
+    discount_value: float = 0
+    max_discount: Optional[float] = None
+    max_uses: int = 0
+    max_uses_per_user: int = 1
+    valid_from: Optional[str] = None
+    expiry_date: Optional[str] = None
+    min_ride_fare: float = 0
+    first_ride_only: bool = False
+    new_user_days: int = 0
+    is_active: bool = True
+    applicable_areas: Optional[List[Any]] = None
+    applicable_vehicles: Optional[List[Any]] = None
+    user_segments: Optional[List[Any]] = None
+    valid_days: Optional[List[Any]] = None
+    valid_hours_start: Optional[Any] = None
+    valid_hours_end: Optional[Any] = None
+    total_budget: Optional[float] = None
+    referrer_user_id: Optional[str] = None
+    referrer_reward: Optional[float] = None
+    assigned_user_ids: List[str] = []
+    inactive_days: int = 0
+    min_total_rides: int = 0
+    max_total_rides: int = 0
+
+
+class PromotionUpdateRequest(BaseModel):
+    code: Optional[str] = None
+    description: Optional[str] = None
+    promo_type: Optional[str] = None
+    discount_type: Optional[str] = None
+    discount_value: Optional[float] = None
+    max_discount: Optional[float] = None
+    max_uses: Optional[int] = None
+    max_uses_per_user: Optional[int] = None
+    valid_from: Optional[str] = None
+    expiry_date: Optional[str] = None
+    min_ride_fare: Optional[float] = None
+    first_ride_only: Optional[bool] = None
+    new_user_days: Optional[int] = None
+    applicable_areas: Optional[List[Any]] = None
+    applicable_vehicles: Optional[List[Any]] = None
+    user_segments: Optional[List[Any]] = None
+    total_budget: Optional[float] = None
+    valid_days: Optional[List[Any]] = None
+    valid_hours_start: Optional[Any] = None
+    valid_hours_end: Optional[Any] = None
+    referrer_reward: Optional[float] = None
+    is_active: Optional[bool] = None
+    assigned_user_ids: Optional[List[str]] = None
+    inactive_days: Optional[int] = None
+    min_total_rides: Optional[int] = None
+    max_total_rides: Optional[int] = None
+
 
 # ---------- Promotions (Discount Codes) ----------
 
@@ -33,8 +98,6 @@ async def admin_get_promotions(
       (expiry_date in the past), or omit for all.
     - `search`: case-insensitive contains match on `code` or `description`.
     """
-    import re
-
     filters: Dict[str, Any] = {}
 
     if promo_type == "private":
@@ -85,67 +148,68 @@ async def admin_get_promotions(
 
 
 @router.post("/promotions")
-async def admin_create_promotion(promotion: Dict[str, Any]):
+async def admin_create_promotion(promotion: PromotionCreateRequest):
     """Create a new promotion/discount code."""
-    from fastapi import HTTPException  # noqa: PLC0415
-
     # Reject negative discount values — a negative discount is a charge (F-30).
-    dv = promotion.get("discount_value", 0)
-    if dv is not None and float(dv) < 0:
+    if promotion.discount_value < 0:
         raise HTTPException(status_code=400, detail="discount_value cannot be negative")
-    for field in ("max_discount", "total_budget", "referrer_reward", "min_ride_fare"):
-        fv = promotion.get(field)
-        if fv is not None and float(fv) < 0:
+    for field, value in [
+        ("max_discount", promotion.max_discount),
+        ("total_budget", promotion.total_budget),
+        ("referrer_reward", promotion.referrer_reward),
+        ("min_ride_fare", promotion.min_ride_fare),
+    ]:
+        if value is not None and float(value) < 0:
             raise HTTPException(status_code=400, detail=f"{field} cannot be negative")
 
     # Only include fields that exist in the Supabase promotions table schema
     doc: Dict[str, Any] = {
-        "code": (promotion.get("code") or "").strip().upper(),
-        "description": promotion.get("description", ""),
-        "promo_type": promotion.get("promo_type", "discount"),
-        "discount_type": promotion.get("discount_type", "flat"),
-        "discount_value": promotion.get("discount_value", 0),
-        "max_discount": promotion.get("max_discount"),
-        "max_uses": promotion.get("max_uses", 0),
-        "max_uses_per_user": promotion.get("max_uses_per_user", 1),
+        "code": promotion.code.strip().upper(),
+        "description": promotion.description,
+        "promo_type": promotion.promo_type,
+        "discount_type": promotion.discount_type,
+        "discount_value": promotion.discount_value,
+        "max_discount": promotion.max_discount,
+        "max_uses": promotion.max_uses,
+        "max_uses_per_user": promotion.max_uses_per_user,
         "uses": 0,
-        "valid_from": promotion.get("valid_from", datetime.now(timezone.utc).isoformat()),
-        "expiry_date": promotion.get("expiry_date"),
-        "min_ride_fare": promotion.get("min_ride_fare", 0),
-        "first_ride_only": promotion.get("first_ride_only", False),
-        "new_user_days": promotion.get("new_user_days", 0),
-        "is_active": promotion.get("is_active", True),
+        "valid_from": promotion.valid_from or datetime.now(timezone.utc).isoformat(),
+        "expiry_date": promotion.expiry_date,
+        "min_ride_fare": promotion.min_ride_fare,
+        "first_ride_only": promotion.first_ride_only,
+        "new_user_days": promotion.new_user_days,
+        "is_active": promotion.is_active,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     # Optional JSONB fields that exist in the schema
-    if promotion.get("applicable_areas"):
-        doc["applicable_areas"] = promotion["applicable_areas"]
-    if promotion.get("applicable_vehicles"):
-        doc["applicable_vehicles"] = promotion["applicable_vehicles"]
-    if promotion.get("user_segments"):
-        doc["user_segments"] = promotion["user_segments"]
-    if promotion.get("valid_days"):
-        doc["valid_days"] = promotion["valid_days"]
-    if promotion.get("valid_hours_start") is not None:
-        doc["valid_hours_start"] = promotion["valid_hours_start"]
-    if promotion.get("valid_hours_end") is not None:
-        doc["valid_hours_end"] = promotion["valid_hours_end"]
-    if promotion.get("total_budget"):
-        doc["total_budget"] = promotion["total_budget"]
-    if promotion.get("referrer_user_id"):
-        doc["referrer_user_id"] = promotion["referrer_user_id"]
-    if promotion.get("referrer_reward"):
-        doc["referrer_reward"] = promotion["referrer_reward"]
+    if promotion.applicable_areas:
+        doc["applicable_areas"] = promotion.applicable_areas
+    if promotion.applicable_vehicles:
+        doc["applicable_vehicles"] = promotion.applicable_vehicles
+    if promotion.user_segments:
+        doc["user_segments"] = promotion.user_segments
+    if promotion.valid_days:
+        doc["valid_days"] = promotion.valid_days
+    if promotion.valid_hours_start is not None:
+        doc["valid_hours_start"] = promotion.valid_hours_start
+    if promotion.valid_hours_end is not None:
+        doc["valid_hours_end"] = promotion.valid_hours_end
+    if promotion.total_budget:
+        doc["total_budget"] = promotion.total_budget
+    if promotion.referrer_user_id:
+        doc["referrer_user_id"] = promotion.referrer_user_id
+    if promotion.referrer_reward:
+        doc["referrer_reward"] = promotion.referrer_reward
 
     # Fields that require migration (may not exist yet in DB)
     # Insert safely - skip if column doesn't exist
     optional_fields = {
-        "assigned_user_ids": promotion.get("assigned_user_ids", []),
-        "inactive_days": promotion.get("inactive_days", 0),
-        "min_total_rides": promotion.get("min_total_rides", 0),
-        "max_total_rides": promotion.get("max_total_rides", 0),
+        "assigned_user_ids": promotion.assigned_user_ids,
+        "inactive_days": promotion.inactive_days,
+        "min_total_rides": promotion.min_total_rides,
+        "max_total_rides": promotion.max_total_rides,
     }
 
     try:
@@ -279,37 +343,9 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
 
 
 @router.put("/promotions/{promotion_id}")
-async def admin_update_promotion(promotion_id: str, promotion: Dict[str, Any]):
+async def admin_update_promotion(promotion_id: str, promotion: PromotionUpdateRequest):
     """Update a promotion."""
-    allowed_fields = [
-        "code",
-        "description",
-        "promo_type",
-        "discount_type",
-        "discount_value",
-        "max_discount",
-        "max_uses",
-        "max_uses_per_user",
-        "valid_from",
-        "expiry_date",
-        "min_ride_fare",
-        "first_ride_only",
-        "new_user_days",
-        "applicable_areas",
-        "applicable_vehicles",
-        "user_segments",
-        "total_budget",
-        "valid_days",
-        "valid_hours_start",
-        "valid_hours_end",
-        "referrer_reward",
-        "is_active",
-        "assigned_user_ids",
-        "inactive_days",
-        "min_total_rides",
-        "max_total_rides",
-    ]
-    updates = {k: v for k, v in promotion.items() if k in allowed_fields and v is not None}
+    updates = promotion.model_dump(exclude_none=True)
 
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()

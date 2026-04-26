@@ -136,6 +136,21 @@ _DEFAULT_HEATMAP_SETTINGS = {
 }
 
 
+class HeatmapSettingsRequest(BaseModel):
+    heat_map_enabled: Optional[bool] = None
+    heat_map_default_range: Optional[str] = None
+    heat_map_intensity: Optional[str] = None
+    heat_map_radius: Optional[int] = None
+    heat_map_blur: Optional[int] = None
+    heat_map_gradient_start: Optional[str] = None
+    heat_map_gradient_mid: Optional[str] = None
+    heat_map_gradient_end: Optional[str] = None
+    heat_map_show_pickups: Optional[bool] = None
+    heat_map_show_dropoffs: Optional[bool] = None
+    corporate_heat_map_enabled: Optional[bool] = None
+    regular_rider_heat_map_enabled: Optional[bool] = None
+
+
 @router.get("/settings/heatmap")
 async def admin_get_heatmap_settings(admin: dict = Depends(get_admin_user)):
     """Return heat-map display settings (single settings row)."""
@@ -151,11 +166,11 @@ async def admin_get_heatmap_settings(admin: dict = Depends(get_admin_user)):
 
 
 @router.put("/settings/heatmap")
-async def admin_update_heatmap_settings(data: Dict[str, Any], admin: dict = Depends(get_admin_user)):
+async def admin_update_heatmap_settings(data: HeatmapSettingsRequest, admin: dict = Depends(get_admin_user)):
     """Update heat-map display settings."""
     payload = {
         "id": _HEATMAP_SETTINGS_ID,
-        **{k: v for k, v in data.items() if k in _DEFAULT_HEATMAP_SETTINGS},
+        **{k: v for k, v in data.model_dump(exclude_none=True).items() if k in _DEFAULT_HEATMAP_SETTINGS},
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 

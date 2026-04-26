@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
 except ImportError:
     import db_supabase
 
@@ -76,7 +77,7 @@ async def admin_get_user_details(user_id: str):
 
 
 @router.put("/users/{user_id}/status")
-async def admin_update_user_status(user_id: str, status_data: Dict[str, Any]):
+async def admin_update_user_status(user_id: str, status_data: Dict[str, Any], admin: dict = Depends(get_admin_user)):
     """Update user status (e.g., suspend, activate)."""
     valid_status = ["active", "suspended", "banned"]
     new_status = status_data.get("status")
@@ -84,7 +85,27 @@ async def admin_update_user_status(user_id: str, status_data: Dict[str, Any]):
     if new_status not in valid_status:
         raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_status}")
 
+    user = await db_supabase.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    old_status = user.get("status")
+
     await db_supabase.update_one(
         "users", {"id": user_id}, {"status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}
     )
+
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "status_change",
+            "resource": "user",
+            "resource_id": user_id,
+            "details": {"old_status": old_status, "new_status": new_status},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
     return {"message": f"User status updated to {new_status}"}

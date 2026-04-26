@@ -124,6 +124,26 @@ async def admin_credit_wallet(req: AdminCreditRequest, admin: dict = Depends(get
         metadata={"admin_id": admin["id"], "reason": req.reason},
     )
 
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "wallet_credit",
+            "resource": "user",
+            "resource_id": req.user_id,
+            "details": {
+                "amount": float(credit),
+                "old_balance": float(old_balance),
+                "new_balance": float(new_balance),
+                "reason": req.reason,
+                "transaction_id": txn["id"],
+            },
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
     return {
         "balance": float(new_balance),
         "transaction_id": txn["id"],
@@ -160,6 +180,26 @@ async def admin_debit_wallet(req: AdminDebitRequest, admin: dict = Depends(get_a
         balance_after=float(new_balance),
         description=f"Admin debit: {req.reason}",
         metadata={"admin_id": admin["id"], "reason": req.reason},
+    )
+
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "wallet_debit",
+            "resource": "user",
+            "resource_id": req.user_id,
+            "details": {
+                "amount": float(debit),
+                "old_balance": float(old_balance),
+                "new_balance": float(new_balance),
+                "reason": req.reason,
+                "transaction_id": txn["id"],
+            },
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
     )
 
     return {

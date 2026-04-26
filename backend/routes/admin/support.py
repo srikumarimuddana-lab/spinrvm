@@ -3,13 +3,15 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user
 
 logger = logging.getLogger(__name__)
 
@@ -138,13 +140,13 @@ async def admin_update_dispute(dispute_id: str, dispute: Dict[str, Any]):
 
 
 @router.put("/disputes/{dispute_id}/resolve")
-async def admin_resolve_dispute(dispute_id: str, resolution: Dict[str, Any]):
-    """Resolve a dispute."""
+async def admin_resolve_dispute(dispute_id: str, resolution: Dict[str, Any], admin: dict = Depends(get_admin_user)):
+    """Resolve a dispute. resolved_by is set from the authenticated admin (F-32)."""
     resolution_data = {
         "resolution_status": resolution.get("status"),  # resolved, rejected, pending
         "resolution_notes": resolution.get("notes", ""),
         "resolved_at": datetime.now(timezone.utc).isoformat(),
-        "resolved_by": resolution.get("resolved_by", "admin"),
+        "resolved_by": admin["id"],
     }
 
     await db_supabase.update_one("disputes", {"id": dispute_id}, resolution_data)
@@ -221,12 +223,12 @@ async def admin_get_ticket_details(ticket_id: str):
 
 
 @router.post("/tickets/{ticket_id}/reply")
-async def admin_reply_to_ticket(ticket_id: str, reply: Dict[str, Any]):
-    """Reply to a support ticket."""
+async def admin_reply_to_ticket(ticket_id: str, reply: Dict[str, Any], admin: dict = Depends(get_admin_user)):
+    """Reply to a support ticket. sender_id is set from the authenticated admin (F-29)."""
     message_doc = {
         "ticket_id": ticket_id,
         "sender_type": "admin",
-        "sender_id": "admin-001",  # Could be dynamic based on current admin
+        "sender_id": admin["id"],
         "message": reply.get("message", ""),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -373,14 +375,16 @@ async def admin_create_complaint(ride_id: str, req: ComplaintRequest):
 
 
 @router.put("/complaints/{complaint_id}/resolve")
-async def admin_resolve_complaint(complaint_id: str, req: ComplaintResolveRequest):
-    """Resolve or dismiss a complaint."""
+async def admin_resolve_complaint(
+    complaint_id: str, req: ComplaintResolveRequest, admin: dict = Depends(get_admin_user)
+):
+    """Resolve or dismiss a complaint. resolved_by is set from the authenticated admin (F-32)."""
     result = await db_supabase.resolve_complaint(
         complaint_id,
         {
             "status": req.status,
             "resolution": req.resolution,
-            "resolved_by": "admin",
+            "resolved_by": admin["id"],
             "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )

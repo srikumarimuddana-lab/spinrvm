@@ -30,8 +30,6 @@ except ImportError:
 
 # db is the db_supabase module (re-exported by backend/db.py shim); .rpc is the
 # Supabase RPC caller used for atomic wallet credits during point redemption.
-db_rpc = db.rpc
-
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/loyalty", tags=["Loyalty"])
 
@@ -255,7 +253,7 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
             await wallet_increment_balance(wallet["id"], -credit_amount)
         except Exception as reverse_err:
             logger.error(f"Loyalty redeem wallet reversal also failed: {reverse_err}")
-        raise HTTPException(status_code=503, detail="Redemption failed — please retry")
+        raise HTTPException(status_code=503, detail="Redemption failed — please retry") from deduct_err
 
     await db.insert_one(
         "loyalty_transactions",

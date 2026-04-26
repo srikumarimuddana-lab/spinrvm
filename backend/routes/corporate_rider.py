@@ -15,7 +15,6 @@ try:
         get_rows,
         insert_allowance_request,
         list_active_memberships_for_user,
-        list_allowed_domains,
         list_company_allowance_requests,
         list_pending_allowance_requests_for_member,
     )

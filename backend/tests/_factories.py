@@ -4,6 +4,7 @@ Kept out of conftest.py because pytest loads conftest modules by file path,
 not by package-qualified name, so `from tests.conftest import X` fails.
 This module is a regular importable module for shared test data builders.
 """
+
 from typing import Any, Dict
 
 

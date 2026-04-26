@@ -14,19 +14,21 @@ an explicit allowlist from settings.ALLOWED_ORIGINS. Tests pin:
 Run:
     pytest backend/tests/test_p1_cors.py -v
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper: build a minimal app-like object to test init_middleware in isolation
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _fake_app():
     """Minimal stand-in: records add_middleware calls without importing FastAPI."""
+
     class FakeApp:
         middlewares = []
         exception_handlers: dict = {}
@@ -39,6 +41,7 @@ def _fake_app():
             def _deco(fn):
                 self.exception_handlers[exc_type] = fn
                 return fn
+
             return _deco
 
         def add_exception_handler(self, exc_type, handler):
@@ -60,8 +63,8 @@ class TestCorsWildcardProductionGuard:
 
     def test_wildcard_raises_in_production(self):
         """Starting the server with ALLOWED_ORIGINS=* in production must fail."""
+
         from backend.core.middleware import init_middleware
-        from fastapi.middleware.cors import CORSMiddleware
 
         fake_app = _fake_app()
 
@@ -101,8 +104,9 @@ class TestCorsWildcardProductionGuard:
     def test_wildcard_disables_allow_credentials(self):
         """When wildcard is configured, allow_credentials must be False
         (CORS spec forbids credentials with wildcard origin)."""
-        from backend.core.middleware import init_middleware
         from fastapi.middleware.cors import CORSMiddleware
+
+        from backend.core.middleware import init_middleware
 
         fake_app = _fake_app()
 
@@ -128,8 +132,9 @@ class TestCorsWildcardProductionGuard:
 
     def test_explicit_origins_enable_allow_credentials(self):
         """Explicit allowed origins must set allow_credentials=True."""
-        from backend.core.middleware import init_middleware
         from fastapi.middleware.cors import CORSMiddleware
+
+        from backend.core.middleware import init_middleware
 
         fake_app = _fake_app()
 
@@ -174,6 +179,7 @@ class TestCorsExceptionHandlerReflection:
 
         async def cors_exception_handler(request, exc):
             from fastapi.responses import JSONResponse
+
             origin = request.headers.get("origin")
             if hasattr(exc, "status_code") and hasattr(exc, "detail"):
                 response = JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
@@ -251,8 +257,9 @@ class TestAlwaysAllowedOrigins:
     """Certain dev origins are always added regardless of env variables."""
 
     def test_localhost_3000_always_allowed(self):
-        from backend.core.middleware import init_middleware
         from fastapi.middleware.cors import CORSMiddleware
+
+        from backend.core.middleware import init_middleware
 
         fake_app = _fake_app()
 
@@ -275,8 +282,9 @@ class TestAlwaysAllowedOrigins:
         )
 
     def test_admin_vercel_always_allowed(self):
-        from backend.core.middleware import init_middleware
         from fastapi.middleware.cors import CORSMiddleware
+
+        from backend.core.middleware import init_middleware
 
         fake_app = _fake_app()
 

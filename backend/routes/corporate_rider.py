@@ -1,4 +1,5 @@
 """Rider-app Work Profile endpoints (`/rider/work-profile/**`)."""
+
 from __future__ import annotations
 
 from typing import Optional
@@ -11,7 +12,6 @@ try:
         get_corporate_account_by_id,
         get_corporate_wallet_by_company,
         get_member_allowance,
-        get_ride,
         get_rows,
         insert_allowance_request,
         list_active_memberships_for_user,
@@ -33,7 +33,6 @@ except ImportError:
         get_corporate_account_by_id,
         get_corporate_wallet_by_company,
         get_member_allowance,
-        get_ride,
         get_rows,
         insert_allowance_request,
         list_active_memberships_for_user,
@@ -95,10 +94,12 @@ async def list_work_profiles(current_user: dict = Depends(get_current_user)):
     out = []
     for m in memberships:
         company = await get_corporate_account_by_id(m["company_id"]) or {}
-        out.append({
-            "membership": m,
-            "company": {"id": company.get("id"), "name": company.get("name")},
-        })
+        out.append(
+            {
+                "membership": m,
+                "company": {"id": company.get("id"), "name": company.get("name")},
+            }
+        )
     return out
 
 
@@ -130,7 +131,9 @@ async def do_join_domain(
     current_user: dict = Depends(get_current_user),
 ):
     member = await join_via_domain(
-        company_id=body.company_id, user_id=current_user["id"], email=body.email,
+        company_id=body.company_id,
+        user_id=current_user["id"],
+        email=body.email,
     )
     company = await get_corporate_account_by_id(body.company_id) or {}
     return {"company": company, "member": member}
@@ -190,11 +193,7 @@ async def my_rides(
     rides_by_id = {r["id"]: r for r in rides_list}
 
     rps_by_ride = {r["ride_id"]: r for r in rps_rows}
-    return [
-        {**rides_by_id[rid], "payment_source": rps_by_ride[rid]}
-        for rid in ride_ids
-        if rid in rides_by_id
-    ]
+    return [{**rides_by_id[rid], "payment_source": rps_by_ride[rid]} for rid in ride_ids if rid in rides_by_id]
 
 
 @router.post("/{company_id}/allowance-requests")
@@ -218,8 +217,10 @@ async def submit_request(
         and used_auto < int(auto_monthly)
     ):
         row = await insert_allowance_request(
-            member_id=membership["id"], amount=body.amount,
-            reason=body.reason, status="auto_approved",
+            member_id=membership["id"],
+            amount=body.amount,
+            reason=body.reason,
+            status="auto_approved",
         )
         wallet = await get_corporate_wallet_by_company(company_id)
         if wallet and allowance.get("id"):
@@ -234,8 +235,10 @@ async def submit_request(
             )
         return row
     return await insert_allowance_request(
-        member_id=membership["id"], amount=body.amount,
-        reason=body.reason, status="pending",
+        member_id=membership["id"],
+        amount=body.amount,
+        reason=body.reason,
+        status="pending",
     )
 
 

@@ -37,12 +37,14 @@ async def health_check():
     """
     try:
         import db_supabase  # noqa: PLC0415
+
         await db_supabase.ping()
         return {"status": "healthy", "db": "ok"}
-    except Exception:
+    except Exception:  # noqa: S110
         pass
     try:
         from .. import db_supabase as _db  # noqa: PLC0415
+
         await _db.ping()
         return {"status": "healthy", "db": "ok"}
     except Exception as exc:

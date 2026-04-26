@@ -23,6 +23,7 @@ If we later adopt the real prometheus_client, this module stays a
 compat shim and the metric names are already Prometheus-idiomatic
 (snake_case_total / _total).
 """
+
 from __future__ import annotations
 
 import threading

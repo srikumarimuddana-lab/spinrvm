@@ -2,6 +2,7 @@
 Cryptographic helpers for Spinr backend.
 All functions here are pure (no I/O) and use the standard library only.
 """
+
 import hashlib
 import hmac
 
@@ -24,8 +25,5 @@ def hash_otp(code: str) -> str:
 
 def verify_otp_hash(stored_hash: str, input_otp: str) -> bool:
     """Constant-time OTP hash comparison to prevent timing attacks."""
-    is_valid = hmac.compare_digest(
-        stored_hash,
-        hashlib.sha256(input_otp.encode()).hexdigest()
-    )
+    is_valid = hmac.compare_digest(stored_hash, hashlib.sha256(input_otp.encode()).hexdigest())
     return is_valid

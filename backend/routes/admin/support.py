@@ -320,9 +320,7 @@ async def admin_list_flags(
         filters["service_area_id"] = service_area_id
     if is_active is not None:
         filters["is_active"] = is_active
-    flags = await db_supabase.get_rows(
-        "flags", filters, order="created_at", desc=True, limit=limit, offset=offset
-    )
+    flags = await db_supabase.get_rows("flags", filters, order="created_at", desc=True, limit=limit, offset=offset)
     return flags
 
 
@@ -407,9 +405,7 @@ async def admin_list_complaints(
         filters["against_type"] = against_type
     if service_area_id and service_area_id != "all":
         filters["service_area_id"] = service_area_id
-    return await db_supabase.get_rows(
-        "complaints", filters, order="created_at", desc=True, limit=limit, offset=offset
-    )
+    return await db_supabase.get_rows("complaints", filters, order="created_at", desc=True, limit=limit, offset=offset)
 
 
 @router.delete("/complaints/{complaint_id}")

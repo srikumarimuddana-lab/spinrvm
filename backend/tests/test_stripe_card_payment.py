@@ -10,8 +10,9 @@ Covers:
 Pattern follows test_corporate_wallet_routes.py: patch the real stripe module's
 methods rather than replacing the whole module.
 """
+
 import sys
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -68,9 +69,7 @@ def _common_patches(*, rider=None):
         "routes.rides.db_supabase.get_user_by_id": AsyncMock(return_value=_rider),
         "routes.rides.db_supabase.get_driver_by_id": AsyncMock(return_value=None),
         "routes.rides.manager.send_personal_message": AsyncMock(return_value=None),
-        "routes.rides.get_app_settings": AsyncMock(
-            return_value={"stripe_secret_key": "sk_test_fake"}
-        ),
+        "routes.rides.get_app_settings": AsyncMock(return_value={"stripe_secret_key": "sk_test_fake"}),
     }
 
 
@@ -136,7 +135,7 @@ def test_stripe_create_called_with_correct_args(test_client, rider_override):
     mock_create.assert_called_once()
     kw = mock_create.call_args.kwargs
     assert kw["idempotency_key"] == f"ride-payment-{_RIDE_ID}"
-    assert kw["amount"] == 2000          # $20.00 → 2000 cents
+    assert kw["amount"] == 2000  # $20.00 → 2000 cents
     assert kw["currency"] == "cad"
     assert kw["payment_method"] == "pm_test_abc123"
     assert kw["customer"] == "cus_test_xyz"
@@ -153,9 +152,7 @@ def test_card_declined_returns_402_and_marks_failed(test_client, rider_override)
     try:
         with patch(
             "stripe.PaymentIntent.create",
-            side_effect=stripe.error.CardError(
-                "Your card was declined.", param=None, code="card_declined"
-            ),
+            side_effect=stripe.error.CardError("Your card was declined.", param=None, code="card_declined"),
         ):
             resp = test_client.post(
                 f"/api/v1/rides/{_RIDE_ID}/process-payment",
@@ -169,7 +166,8 @@ def test_card_declined_returns_402_and_marks_failed(test_client, rider_override)
     assert resp.status_code == 402
 
     failed = [
-        c for c in patches["routes.rides.db_supabase.update_ride"].call_args_list
+        c
+        for c in patches["routes.rides.db_supabase.update_ride"].call_args_list
         if c.args[1].get("payment_status") == "failed"
     ]
     assert failed, "expected update_ride with payment_status='failed'"
@@ -197,7 +195,8 @@ def test_generic_stripe_error_returns_402(test_client, rider_override):
 
     assert resp.status_code == 402
     failed = [
-        c for c in patches["routes.rides.db_supabase.update_ride"].call_args_list
+        c
+        for c in patches["routes.rides.db_supabase.update_ride"].call_args_list
         if c.args[1].get("payment_status") == "failed"
     ]
     assert failed
@@ -243,7 +242,8 @@ def test_requires_action_intent_returns_402(test_client, rider_override):
 
     assert resp.status_code == 402
     failed = [
-        c for c in patches["routes.rides.db_supabase.update_ride"].call_args_list
+        c
+        for c in patches["routes.rides.db_supabase.update_ride"].call_args_list
         if c.args[1].get("payment_status") == "failed"
     ]
     assert failed

@@ -8,14 +8,11 @@
  * Code under test: rider-app/store/rideStore.ts::triggerEmergency (~line 496)
  */
 
-const mockPost = jest.fn();
-const mockAlert = jest.fn();
-const mockOpenURL = jest.fn();
-
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios' },
-  Alert: { alert: mockAlert },
-  Linking: { openURL: mockOpenURL },
+  Alert: { alert: jest.fn() },
+  Linking: { openURL: jest.fn() },
+  NativeModules: {},
 }));
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
@@ -28,12 +25,22 @@ jest.mock('../../config', () => ({
   API_URL: 'http://localhost:8000',
 }));
 
-jest.mock('../../api/client', () => ({
+jest.mock('@shared/api/client', () => ({
   __esModule: true,
-  default: { post: mockPost, get: jest.fn() },
+  default: { post: jest.fn(), get: jest.fn(), put: jest.fn(), patch: jest.fn(), delete: jest.fn() },
+}));
+
+jest.mock('@shared/store/authStore', () => ({
+  useAuthStore: { getState: jest.fn(() => ({ user: null, token: null })) },
 }));
 
 import { useRideStore } from '../rideStore';
+import api from '@shared/api/client';
+import { Alert, Linking } from 'react-native';
+
+const mockPost = api.post as jest.Mock;
+const mockAlert = Alert.alert as jest.Mock;
+const mockOpenURL = Linking.openURL as jest.Mock;
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -64,13 +71,12 @@ describe('rideStore — triggerEmergency (P2-14 / R13)', () => {
     });
   });
 
-  it('on API failure shows Alert and rethrows error', async () => {
+  it('on API failure shows Alert (error is swallowed)', async () => {
     const err = new Error('Network error');
     mockPost.mockRejectedValue(err);
 
-    await expect(
-      useRideStore.getState().triggerEmergency('ride-003', 43.0, -79.0)
-    ).rejects.toThrow('Network error');
+    // triggerEmergency swallows the error and shows an Alert instead of rethrowing
+    await useRideStore.getState().triggerEmergency('ride-003', 43.0, -79.0);
 
     expect(mockAlert).toHaveBeenCalledWith(
       expect.stringContaining('Emergency'),

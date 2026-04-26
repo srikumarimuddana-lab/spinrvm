@@ -120,8 +120,8 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
         raise HTTPException(status_code=400, detail="Ride not completed")
 
     # Check if already awarded
-    existing = await db.find_one("loyalty_transactions",
-        {"user_id": current_user["id"], "reference_id": ride_id, "type": "ride_earned"}
+    existing = await db.find_one(
+        "loyalty_transactions", {"user_id": current_user["id"], "reference_id": ride_id, "type": "ride_earned"}
     )
     if existing:
         return {"already_awarded": True, "points": 0}
@@ -155,7 +155,8 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
     )
 
     # Record transaction
-    await db.insert_one("loyalty_transactions",
+    await db.insert_one(
+        "loyalty_transactions",
         {
             "id": str(uuid.uuid4()),
             "user_id": current_user["id"],
@@ -164,7 +165,7 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
             "reference_id": ride_id,
             "description": f"Earned {base_points} pts + {bonus_points} bonus ({tier} {multiplier}x)",
             "created_at": datetime.now(timezone.utc).isoformat(),
-        }
+        },
     )
 
     tier_upgraded = new_tier != tier

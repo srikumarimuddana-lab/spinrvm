@@ -43,35 +43,32 @@ except ImportError:
     from utils.rate_limiter import cancel_ride_limit, ride_request_limit
     from validators import validate_ride_location
 
-import stripe
 
 from .fares import _fares_for_location_impl, get_fares_for_location
 
 try:
     from ..utils.datetime_utils import parse_iso_utc
-    from ..utils.error_handling import RideStateError
     from ..utils.ride_code import generate_ride_code
 except ImportError:
     from utils.datetime_utils import parse_iso_utc
-    from utils.error_handling import RideStateError
     from utils.ride_code import generate_ride_code
 
 try:
+    from ..services import corporate_allowance_service, corporate_wallet_service  # type: ignore
+    from ..services.corporate_policy_service import evaluate_policy  # type: ignore
     from ..utils.estimate_token import (
         EstimateTokenError,
         sign_estimate_token,
         verify_estimate_token,
     )
-    from ..services import corporate_allowance_service, corporate_wallet_service  # type: ignore
-    from ..services.corporate_policy_service import evaluate_policy  # type: ignore
 except ImportError:
+    from services import corporate_allowance_service, corporate_wallet_service  # type: ignore
+    from services.corporate_policy_service import evaluate_policy  # type: ignore
     from utils.estimate_token import (
         EstimateTokenError,
         sign_estimate_token,
         verify_estimate_token,
     )
-    from services import corporate_allowance_service, corporate_wallet_service  # type: ignore
-    from services.corporate_policy_service import evaluate_policy  # type: ignore
 
 # Lift to module scope so tests can patch backend.routes.rides.charge_ride
 # directly; the handler's card branch references this bound name.
@@ -116,6 +113,7 @@ dispatch = DispatchService(db_supabase)  # module-level instance for legacy call
 
 # ── Decimal helpers for accurate currency arithmetic ──────────────────────────
 _TWO_PLACES = Decimal("0.01")
+
 
 def _d(v) -> Decimal:
     """Convert any numeric value to Decimal safely (avoids float precision loss)."""
@@ -184,9 +182,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
     app_settings = await get_app_settings()
 
     # Algorithm + radius + rating floor (area overrides app settings).
-    algorithm, min_rating, search_radius = await dispatch.resolve_matching_config(
-        ride, app_settings=app_settings
-    )
+    algorithm, min_rating, search_radius = await dispatch.resolve_matching_config(ride, app_settings=app_settings)
 
     logger.info(
         f"[DISPATCH] match start ride_id={ride_id} "
@@ -626,9 +622,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                     {**base_update, "cancelled_by": "system", "cancellation_type": "no_drivers_found"},
                 )
             except Exception as _col_exc:
-                logger.warning(
-                    f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
-                )
+                logger.warning(f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal")
                 await db_supabase.update_ride(r_id, base_update)
             await manager.send_personal_message(
                 {
@@ -665,9 +659,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
 @api_router.post("")
 @ride_request_limit
 @idempotent_endpoint(scope="ride_create")
-async def create_ride(
-    request: Request, body: CreateRideRequest, current_user: dict = Depends(get_current_user)
-):
+async def create_ride(request: Request, body: CreateRideRequest, current_user: dict = Depends(get_current_user)):
     # SlowAPI's @ride_request_limit needs a parameter literally named
     # ``request`` that is a starlette Request; otherwise it raises
     # "parameter `request` must be an instance of starlette.requests.Request"
@@ -742,9 +734,7 @@ async def create_ride(
         vehicle_types=vehicle_types,
     )
 
-    fare_info = next(
-        (f for f in fares if f["vehicle_type"]["id"] == body.vehicle_type_id), fares[0] if fares else None
-    )
+    fare_info = next((f for f in fares if f["vehicle_type"]["id"] == body.vehicle_type_id), fares[0] if fares else None)
 
     if not fare_info:
         raise HTTPException(status_code=400, detail="Invalid vehicle type")
@@ -758,7 +748,6 @@ async def create_ride(
     # pre-token behavior (read current surge).
     current_surge = _d(fare_info.get("surge_multiplier", 1.0))
     surge = current_surge
-    surge_locked = False
     if body.estimate_token:
         try:
             payload = verify_estimate_token(
@@ -771,7 +760,6 @@ async def create_ride(
                 dropoff_lng=body.dropoff_lng,
             )
             surge = _d(payload["sm"])
-            surge_locked = True
             logger.info(
                 f"Surge locked from estimate_token for rider={current_user['id']} "
                 f"vt={body.vehicle_type_id}: {float(surge)} (current was {float(current_surge)})"
@@ -921,9 +909,7 @@ async def create_ride(
 
         # 1. Resolve active membership
         _memberships = await db_supabase.list_active_memberships_for_user(current_user["id"])
-        _membership = next(
-            (m for m in _memberships if m.get("company_id") == _corp_company_id), None
-        )
+        _membership = next((m for m in _memberships if m.get("company_id") == _corp_company_id), None)
         if not _membership:
             raise HTTPException(
                 status_code=400,
@@ -951,12 +937,8 @@ async def create_ride(
         _allowance = _policy_result.allowance
         _policy = _policy_result.policy
         if _allowance.get("type") != "unlimited":
-            _remaining = _d(str(_allowance.get("amount") or 0)) - _d(
-                str(max(float(_allowance.get("used") or 0), 0.0))
-            )
-            _master_permitted = _policy.get("allowed_payment_source", "both") in (
-                "master_only", "both"
-            )
+            _remaining = _d(str(_allowance.get("amount") or 0)) - _d(str(max(float(_allowance.get("used") or 0), 0.0)))
+            _master_permitted = _policy.get("allowed_payment_source", "both") in ("master_only", "both")
             if _remaining < _round(_d(str(_f(total_fare))) * _d("1.5")) and not _master_permitted:
                 raise HTTPException(
                     status_code=400,
@@ -994,9 +976,7 @@ async def create_ride(
                 continue  # retry with a new code
             raise
     else:
-        logger.error(
-            f"create_ride: could not allocate unique ride_code after 3 tries: {last_exc}"
-        )
+        logger.error(f"create_ride: could not allocate unique ride_code after 3 tries: {last_exc}")
         raise HTTPException(status_code=503, detail="Could not allocate ride code")
 
     fresh_ride = inserted or ride_data
@@ -1150,9 +1130,7 @@ async def get_ride_history(
 
     # Cursor-based pagination: skip rides up to and including the cursor id
     if before:
-        cursor_idx = next(
-            (i for i, r in enumerate(result) if r.get("id") == before), None
-        )
+        cursor_idx = next((i for i, r in enumerate(result) if r.get("id") == before), None)
         if cursor_idx is not None:
             result = result[cursor_idx + 1 :]
 
@@ -1437,9 +1415,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
 
         # 1. Resolve membership
         _corp_memberships = await db_supabase.list_active_memberships_for_user(ride["rider_id"])
-        _corp_membership = next(
-            (m for m in _corp_memberships if m.get("company_id") == _company_id), None
-        )
+        _corp_membership = next((m for m in _corp_memberships if m.get("company_id") == _company_id), None)
         if not _corp_membership:
             await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
             raise HTTPException(status_code=400, detail="Corporate membership not found")
@@ -1455,8 +1431,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             _master_debit = _round(Decimal("0"))
         else:
             _remaining = _round(
-                _d(str(_corp_allowance.get("amount") or 0))
-                - _d(str(max(float(_corp_allowance.get("used") or 0), 0.0)))
+                _d(str(_corp_allowance.get("amount") or 0)) - _d(str(max(float(_corp_allowance.get("used") or 0), 0.0)))
             )
             _remaining = max(_remaining, _round(Decimal("0")))
             _allowance_debit = min(_remaining, _total)
@@ -1489,15 +1464,18 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             )
 
         # 7. Insert ride_payment_sources row
-        await db_supabase.insert_one("ride_payment_sources", {
-            "ride_id": ride_id,
-            "source_type": "company_allowance",
-            "allowance_debit_amount": float(_allowance_debit),
-            "master_fallback_amount": float(_master_debit),
-            "member_id": _corp_membership["id"],
-            "company_id": _company_id,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
+        await db_supabase.insert_one(
+            "ride_payment_sources",
+            {
+                "ride_id": ride_id,
+                "source_type": "company_allowance",
+                "allowance_debit_amount": float(_allowance_debit),
+                "master_fallback_amount": float(_master_debit),
+                "member_id": _corp_membership["id"],
+                "company_id": _company_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
 
         # 8. Policy re-check at completion (log only — never strand driver)
         _completion_ctx = {
@@ -1507,16 +1485,19 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         }
         _completion_eval = evaluate_policy(_corp_policy, _completion_ctx)
         if not _completion_eval["pass"] or _flag_violation:
-            await db_supabase.insert_one("corporate_policy_evaluations", {
-                "ride_id": ride_id,
-                "member_id": _corp_membership["id"],
-                "company_id": _company_id,
-                "phase": "completion",
-                "result": "violation",
-                "failed_rules": _completion_eval.get("failed_rules", []),
-                "bypassed_rules": [],
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            })
+            await db_supabase.insert_one(
+                "corporate_policy_evaluations",
+                {
+                    "ride_id": ride_id,
+                    "member_id": _corp_membership["id"],
+                    "company_id": _company_id,
+                    "phase": "completion",
+                    "result": "violation",
+                    "failed_rules": _completion_eval.get("failed_rules", []),
+                    "bypassed_rules": [],
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
 
         await db_supabase.update_ride(
             ride_id,
@@ -1588,9 +1569,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 },
             )
         elif outcome.status == "unconfigured":
-            logger.warning(
-                "Stripe unconfigured — marking ride %s paid without real charge", ride_id
-            )
+            logger.warning("Stripe unconfigured — marking ride %s paid without real charge", ride_id)
             await db_supabase.update_ride(
                 ride_id,
                 {
@@ -1966,9 +1945,7 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
             {**_base_update, "cancelled_by": "rider", "cancellation_type": "rider_cancel"},
         )
     except Exception as _col_exc:
-        logger.warning(
-            f"[CANCEL] attribution write failed ({_col_exc}); retrying minimal"
-        )
+        logger.warning(f"[CANCEL] attribution write failed ({_col_exc}); retrying minimal")
         await db_supabase.update_ride(ride_id, _base_update)
 
     # Verify the cancel actually landed in the database. Same class of
@@ -2017,13 +1994,9 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
                 f"driver_{driver['user_id']}",
             )
 
-    await manager.broadcast_ride_status(
-        ride_id, "cancelled", reason="rider_cancelled"
-    )
+    await manager.broadcast_ride_status(ride_id, "cancelled", reason="rider_cancelled")
     try:
-        await manager.broadcast_to_admins(
-            {"type": "ride_cancelled", "ride_id": ride_id, "reason": "rider_cancelled"}
-        )
+        await manager.broadcast_to_admins({"type": "ride_cancelled", "ride_id": ride_id, "reason": "rider_cancelled"})
     except Exception as _exc:  # pragma: no cover - best effort
         logger.warning(f"rider cancel admin broadcast failed: {_exc}")
 
@@ -2409,9 +2382,7 @@ async def cancel_scheduled_ride(ride_id: str, current_user: dict = Depends(get_c
             {**_base, "cancelled_by": "rider", "cancellation_type": "rider_cancel"},
         )
     except Exception as _col_exc:
-        logger.warning(
-            f"[SCHED-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
-        )
+        logger.warning(f"[SCHED-CANCEL] attribution write failed ({_col_exc}); retrying minimal")
         await db_supabase.update_ride(ride_id, _base)
     return {"success": True}
 
@@ -2426,7 +2397,12 @@ async def simulate_driver_arrival(ride_id: str, current_user: dict = Depends(get
         raise HTTPException(status_code=403, detail="Not authorized")
 
     await db_supabase.update_ride(
-        ride_id, {"status": "driver_arrived", "driver_arrived_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
+        ride_id,
+        {
+            "status": "driver_arrived",
+            "driver_arrived_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        },
     )
     updated_ride = await db_supabase.get_ride(ride_id)
     return {"success": True, "pickup_otp": updated_ride.get("pickup_otp", "0000")}
@@ -2451,7 +2427,12 @@ async def rider_start_ride(ride_id: str, current_user: dict = Depends(get_curren
         raise HTTPException(status_code=400, detail=f"Cannot start ride with status: {ride.get('status')}")
 
     await db_supabase.update_ride(
-        ride_id, {"status": "in_progress", "ride_started_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
+        ride_id,
+        {
+            "status": "in_progress",
+            "ride_started_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        },
     )
     return {"success": True}
 

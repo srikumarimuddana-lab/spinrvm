@@ -96,12 +96,12 @@ class DriverVerifyRequest(BaseModel):
 
 
 class DriverActionRequest(BaseModel):
-    action: str  # approve, reject, suspend, ban, unban, reactivate
+    action: Literal["approve", "reject", "suspend", "ban", "unban", "reactivate"]
     reason: Optional[str] = None
 
 
 class DriverStatusOverride(BaseModel):
-    status: str  # pending, active, rejected, suspended, banned
+    status: Literal["pending", "active", "rejected", "suspended", "banned"]
     is_verified: Optional[bool] = None
     reason: Optional[str] = None
 

@@ -254,31 +254,51 @@ async def admin_cancel_ride(
 @router.get("/stats")
 async def admin_get_stats():
     """Get admin dashboard statistics."""
-    total_drivers = await db_supabase.count_documents("drivers", {})
-    active_drivers = await db_supabase.count_documents("drivers", {"is_online": True})
-    online_drivers = active_drivers
-    total_rides = await db_supabase.count_documents("rides", {})
-    completed_rides = await db_supabase.count_documents("rides", {"status": "completed"})
-    cancelled_rides = await db_supabase.count_documents("rides", {"status": "cancelled"})
-    active_rides = await db_supabase.count_documents(
-        "rides",
-        {"status": {"$in": ["requested", "driver_assigned", "driver_arrived", "in_progress"]}},
+    import asyncio  # noqa: PLC0415
+
+    now_utc = datetime.now(timezone.utc)
+    today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    month_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+    # Parallelise all independent DB calls (F-49: previously 11 sequential round-trips).
+    (
+        total_drivers,
+        online_drivers,
+        total_rides,
+        completed_rides,
+        cancelled_rides,
+        active_rides,
+        total_users,
+        rides_today,
+        pending_applications,
+        completed_today,
+        completed_month,
+    ) = await asyncio.gather(
+        db_supabase.count_documents("drivers", {}),
+        db_supabase.count_documents("drivers", {"is_online": True}),
+        db_supabase.count_documents("rides", {}),
+        db_supabase.count_documents("rides", {"status": "completed"}),
+        db_supabase.count_documents("rides", {"status": "cancelled"}),
+        db_supabase.count_documents(
+            "rides",
+            {"status": {"$in": ["requested", "driver_assigned", "driver_arrived", "in_progress"]}},
+        ),
+        db_supabase.count_documents("users", {}),
+        db_supabase.count_documents("rides", {"created_at": {"$gte": today_start}}),
+        db_supabase.count_documents("drivers", {"is_verified": False}),
+        db_supabase.get_rows(
+            "rides",
+            {"status": "completed", "ride_completed_at": {"$gte": today_start}},
+            limit=5000,
+        ),
+        db_supabase.get_rows(
+            "rides",
+            {"status": "completed", "ride_completed_at": {"$gte": month_start}},
+            limit=5000,
+        ),
     )
-    total_users = await db_supabase.count_documents("users", {})
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    rides_today = await db_supabase.count_documents("rides", {"created_at": {"$gte": today_start}})
-    completed_today = await db_supabase.get_rows(
-        "rides",
-        {"status": "completed", "ride_completed_at": {"$gte": today_start}},
-        limit=10000,
-    )
+
     revenue_today = sum(float(r.get("total_fare") or 0) for r in (completed_today or []))
-    month_start = (datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)).isoformat()
-    completed_month = await db_supabase.get_rows(
-        "rides",
-        {"status": "completed", "ride_completed_at": {"$gte": month_start}},
-        limit=10000,
-    )
     revenue_month = sum(float(r.get("total_fare") or 0) for r in completed_month)
     # Earnings + tip totals are aggregated over completed rides in the
     # current month; upstream's stats API never wired these up so we compute
@@ -286,7 +306,6 @@ async def admin_get_stats():
     total_driver_earnings = sum(float(r.get("driver_earnings") or 0) for r in completed_month)
     total_admin_earnings = sum(float(r.get("admin_earnings") or 0) for r in completed_month)
     total_tips = sum(float(r.get("tip_amount") or 0) for r in completed_month)
-    pending_applications = await db_supabase.count_documents("drivers", {"is_verified": False})
     return {
         # Fields the dashboard page expects
         "total_rides": total_rides,

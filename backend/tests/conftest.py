@@ -323,6 +323,31 @@ def patch_external_dependencies(
         p.stop()
 
 
+@pytest.fixture(autouse=True)
+def reset_db_circuit_breaker() -> None:
+    """Reset the db_supabase circuit breaker to closed state before each test.
+
+    The circuit breaker is a module-level singleton whose failure count
+    accumulates across the test session. Tests that call real Supabase URLs
+    (which fail in CI) can open the breaker and cause subsequent tests to
+    receive ServiceUnavailableException even when they mock the client.
+    Resetting it here prevents cross-test contamination.
+    """
+    import importlib
+
+    for mod_path in ("backend.db_supabase", "db_supabase"):
+        try:
+            mod = importlib.import_module(mod_path)
+            breaker = getattr(mod, "_breaker", None)
+            if breaker is not None:
+                breaker._state = "closed"
+                breaker._failure_times = []
+                breaker._opened_at = None
+                breaker._probe_in_flight = False
+        except (ImportError, ModuleNotFoundError):
+            continue
+
+
 @pytest.fixture
 def test_client() -> TestClient:
     """Create a test client for the FastAPI app."""

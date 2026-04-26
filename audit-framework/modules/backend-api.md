@@ -1,6 +1,8 @@
 # Module: Backend API
 
-**Status:** Partially audited (as part of driver-app v4 audit)
+**Status:** Plan v1 ready — Phase A–E execution pending (2026-04-23)
+**Audit plan:** `reports/audits/2026-04-23-backend-api-audit-plan-v1.md`
+**Applicable dimensions:** 17 (D01–D04, D07–D12, D14, D17–D22)
 **Tech stack:** FastAPI Python 3.12, Supabase (PostgreSQL + RLS), Redis, Stripe
 **Root folder:** `backend/`
 
@@ -22,7 +24,16 @@
 | 12 | Compliance | Required | RLS, data retention, PIPEDA |
 | 14 | Performance | Required | DB queries, pagination, indexes |
 
+| 17 | Observability | Required | Structured logging, request_id, SLIs, heartbeats, PII redaction in logs |
+| 18 | DR / BCP | Required | PITR config, Redis replica, graceful degradation, drill cadence |
+| 19 | Fraud | Required | Velocity, impossible-travel, promo abuse, Stripe Radar, sanctions |
+| 20 | Financial reconciliation | Required | Stripe↔DB delta cron, wallet function enforcement, T4A, GST/PST columns |
+| 21 | Threat model / STRIDE | Required | Backend is the trust boundary; GPS spoof, token replay, corporate wallet siphon |
+| 22 | Third-party risk | Required | Vendor inventory, DPAs, sub-processors, SBOM, Docker image scanning |
+
 *Dimensions 05 (UI/UX), 06 (GPS), 13 (notifications UI), 15 (accessibility), 16 (i18n) — not applicable to the API itself.*
+
+**Total applicable dimensions: 17** (D01–D04, D07–D12, D14, D17–D22)
 
 ---
 
@@ -31,17 +42,22 @@
 | Route file | Status |
 |---|---|
 | `backend/routes/admin/` | Not audited — admin panel has separate security concerns |
-| `backend/routes/disputes.py` | Discovered but not audited |
-| `backend/routes/fare_split.py` | Discovered but not audited |
-| `backend/routes/fares.py` | Discovered but not audited |
-| `backend/routes/favorites.py` | Discovered but not audited |
-| `backend/routes/loyalty.py` | Discovered but not audited |
-| `backend/routes/promotions.py` | Discovered but not audited |
-| `backend/routes/corporate_accounts.py` | Discovered but not audited |
-| `backend/routes/corporate_company.py` | Discovered but not audited |
-| `backend/routes/corporate_rider.py` | Discovered but not audited |
-| `backend/routes/corporate_wallet.py` | Discovered but not audited |
-| `backend/routes/wallet.py` | Discovered but not audited |
+
+## Audited Routes
+
+| Route file | Audit report | Key findings |
+|---|---|---|
+| `backend/routes/disputes.py` | `reports/audits/2026-04-26-backend-api-v1.txt` | CRITICAL: admin endpoints unprotected (no auth); PIPEDA: phone exposure; HIGH: N+1 queries; HIGH: Stripe refund non-rollback |
+| `backend/routes/fare_split.py` | `reports/audits/2026-04-26-backend-api-v1.txt` | MEDIUM: missing ride ownership check; MEDIUM: participant phone exposure; MEDIUM: non-atomic wallet+status |
+| `backend/routes/fares.py` | `reports/audits/2026-04-26-backend-api-v1.txt` | MEDIUM: lat/lng params lack bounds; PASS: Redis cache implemented |
+| `backend/routes/favorites.py` | `reports/audits/2026-04-26-backend-api-v1.txt` | MEDIUM: no GPS bounds validation; MEDIUM: name field unbounded |
+| `backend/routes/loyalty.py` | `reports/audits/2026-04-26-backend-api-v1.txt` | HIGH: non-atomic idempotency check (double-award race); MEDIUM: redemption non-rollback |
+| `backend/routes/promotions.py` | `reports/audits/2026-04-26-backend-api-v1.txt` | CRITICAL: 4 admin endpoints unprotected; HIGH: promo exhaustion race; HIGH: no discount upper bound |
+| `backend/routes/corporate_accounts.py` | `reports/audits/2026-04-26-backend-api-v1.txt` | HIGH: IDOR on all record-level endpoints; MEDIUM: silent wallet creation failure |
+| `backend/routes/corporate_company.py` | `reports/audits/2026-04-26-backend-api-v1.txt` | MEDIUM: float instead of Decimal for allowances; MEDIUM: unbounded billing queries |
+| `backend/routes/corporate_rider.py` | `reports/audits/2026-04-26-backend-api-v1.txt` | CRITICAL: join-domain authorization bypass (no domain ownership check) |
+| `backend/routes/corporate_wallet.py` | `reports/audits/2026-04-26-backend-api-v1.txt` | HIGH: IDOR on all endpoints; MEDIUM: unbounded adjustment amount |
+| `backend/routes/wallet.py` | `reports/audits/2026-04-26-backend-api-v1.txt` | CRITICAL: 3× TOCTOU race conditions (top-up, pay, transfer) — balances corruptible |
 
 ---
 

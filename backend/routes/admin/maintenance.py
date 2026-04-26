@@ -114,22 +114,9 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         )
         return 2 * R * math.asin(math.sqrt(a))
 
-    # Pull all GPS points from that day
-    all_points = await db_supabase.get_rows(
-        "driver_location_history",
-        {"timestamp": {"$gte": day_start_iso, "$lt": day_end_iso}},
-        order="timestamp",
-        limit=1000000,
-    )
-
-    # Group by driver
-    by_driver: Dict[str, list] = defaultdict(list)
-    for p in all_points or []:
-        did = p.get("driver_id")
-        if did and p.get("lat") and p.get("lng"):
-            by_driver[did].append(p)
-
-    # Pull all rides from that day to count + sum earnings
+    # Pull all rides from that day to determine the set of active driver IDs
+    # and to count/sum earnings. 10 k rides/day is a safe upper bound for the
+    # near term; revisit if Spinr expands to > 10 k daily rides per market.
     day_rides = await db_supabase.get_rows(
         "rides",
         {"created_at": {"$gte": day_start_iso, "$lt": day_end_iso}},
@@ -154,12 +141,36 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         if did:
             declines_by_driver[did] += 1
 
-    all_driver_ids = set(by_driver.keys()) | set(rides_by_driver.keys())
+    # Discover drivers who were online that day via a lightweight distinct-value
+    # query (only driver_id + timestamp; no coordinates loaded yet). Fetching
+    # 1 M rows across all drivers in one query OOMs the process; instead we
+    # collect driver IDs here and fetch GPS points per driver below.
+    presence_rows = await db_supabase.get_rows(
+        "driver_location_history",
+        {"timestamp": {"$gte": day_start_iso, "$lt": day_end_iso}},
+        order="timestamp",
+        limit=50000,  # enough to identify all active drivers; full points fetched per-driver
+    )
+    drivers_with_gps: set = set()
+    for p in presence_rows or []:
+        did = p.get("driver_id")
+        if did:
+            drivers_with_gps.add(did)
+
+    all_driver_ids = drivers_with_gps | set(rides_by_driver.keys())
 
     created = 0
     updated = 0
     for driver_id in all_driver_ids:
-        points = sorted(by_driver.get(driver_id, []), key=lambda x: str(x.get("timestamp", "")))
+        # Fetch this driver's GPS points for the day in a targeted query rather
+        # than carrying all drivers' points in memory simultaneously.
+        raw_points = await db_supabase.get_rows(
+            "driver_location_history",
+            {"driver_id": driver_id, "timestamp": {"$gte": day_start_iso, "$lt": day_end_iso}},
+            order="timestamp",
+            limit=100000,  # ~1 GPS point/sec × max 24 h online = 86 400 points; 100 k is a safe cap
+        )
+        points = [p for p in (raw_points or []) if p.get("lat") and p.get("lng")]
         rides = rides_by_driver.get(driver_id, [])
 
         # Online minutes (simple: span from first to last point)

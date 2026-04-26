@@ -1,0 +1,1176 @@
+================================================================================
+SPINR BACKEND API — PRODUCTION-READINESS AUDIT v1
+================================================================================
+Date         : 2026-04-24
+Branch       : claude/review-pending-audits-Pu1aP
+Scope        : backend/ (FastAPI Python 3.12, Supabase, Redis, Stripe)
+Plan         : reports/audits/2026-04-23-backend-api-audit-plan-v1.md
+Phase        : A (Dimensions 01–04) — first phase of 5
+
+AUDIT GROUND RULES
+──────────────────
+• OTP is 4 digits by design; dev OTP "1234" is gated to non-prod env.
+• Severity scale: CRITICAL | HIGH | MEDIUM | LOW | PASS | RECOMMENDATION
+• CRITICAL/HIGH require file:line:snippet evidence
+• Per audit-framework/ground-rules.md (8 rules; v1.3 adds rules 7+8)
+• Risk-score formula per reports/audits/OPEN-ITEMS-TRACKER.md
+
+================================================================================
+PHASE A — DIMENSIONS 01 (FEATURE), 02 (AUTH), 03 (SECRETS), 04 (INPUT VALID)
+================================================================================
+
+[01-1] HIGH | UnboundLocalError on first-ever rating: average_rating only
+defined inside `if rated_rides:` block but used unconditionally
+File: backend/routes/rides.py:1788,1796,1801-1803
+Finding: `average_rating = round(...)` is assigned only inside the
+`if rated_rides:` branch (line 1796), but lines 1801-1803 reference it
+unconditionally to build the update payload. When a driver receives their
+first rating and no prior `rated_rides` exist, this raises
+UnboundLocalError → 500 response → first-ever rating endpoint crashes.
+Compounds 19-1 (rating field-name mismatch) — even after 19-1 fixes the
+field, the FIRST rating against any driver still trips this path.
+Fix: `average_rating = driver.get('rating', 5.0)` before the conditional;
+update the local only when `rated_rides` is non-empty.
+Effort: 1 h
+Risk score: 24 (HIGH × org × likely)
+Regulations: SK-CPPA
+Owner: backend · Sprint: P0
+
+[02-1] HIGH | Firebase ID token verified without `audience=` parameter
+(DV-10 dup at HEAD)
+File: backend/routes/auth.py:392,403,407,408
+Finding: `_firebase_auth.verify_id_token(body.firebase_token)` is called
+without an audience parameter. A subsequent manual aud-claim check is
+gated on `if driver_app_id` — if `FIREBASE_DRIVER_APP_ID` is unset, the
+audience check is skipped. Confirms DV-10 still open at HEAD. The same
+issue exists for the rider audience (rider Phase E flagged this as 19-6,
+21-1, 22-5).
+Fix: Pass `audience=settings.FIREBASE_DRIVER_APP_ID` to verify_id_token;
+fail startup if the env var is missing in production.
+Effort: 2 h
+Risk score: 24 (HIGH × org × possible) — duplicate_of: DV-10
+Regulations: PIPEDA
+Owner: backend · Sprint: P1
+
+[03-1] HIGH | JWT_SECRET length not enforced — only known-weak placeholder
+values are blocked
+File: backend/core/config.py:84-99
+Finding: `_guard_production_secrets` checks `JWT_SECRET` against a list
+of placeholder strings (`your-strong-secret-key`, etc.) but does not
+enforce a minimum length. A 4-character secret passes validation. HS256
+uses the secret as the symmetric signing key — short secret = weak
+signature. CLAUDE.md says "JWT_SECRET — must be ≥32 chars; startup fails
+in production with weak value" but this isn't actually enforced.
+Fix: After the placeholder check, add `if len(value) < 32: raise
+ValueError("JWT_SECRET must be ≥32 chars in production")`.
+Effort: 1 h
+Risk score: 28 (HIGH × org × likely)
+Regulations: PIPEDA, SOC2
+Owner: backend · Sprint: P1
+
+[04-1] MEDIUM | `float()` used for monetary amounts in corporate allowance
+grant — CLAUDE.md "Decimal only" violation on a non-fare path
+File: backend/routes/corporate_company.py:269,272
+Finding: `amount=float(request["amount"])`, `floor=float(wallet.get(
+"soft_negative_floor", -50))`. The pre-commit float-arithmetic hook
+covers fare code; corporate wallet code is outside the hook's path.
+Same family as 20-1 (rider Phase E flagged the rider wallet path) — this
+is the corporate-wallet sibling.
+Fix: Replace with `Decimal(str(...))`; sweep `corporate_*.py` for the same
+pattern; add the corporate paths to the pre-commit hook scope.
+Effort: 2 h
+Risk score: 16 (MEDIUM × self × likely)
+Regulations: CRA, PCI-DSS
+Owner: backend · Sprint: P2
+
+================================================================================
+PHASE A FINDINGS YAML
+================================================================================
+
+===FINDINGS-YAML===
+- id: "01-1"
+  severity: HIGH
+  dimension: "01"
+  evidence:
+    file: backend/routes/rides.py
+    lines: [1788, 1796, 1801, 1803]
+    snippet: "if rated_rides: average_rating = round(...) — used unconditionally below"
+    test_file: null
+    test_lines: null
+  root_cause: "average_rating local only set inside if-block; used unconditionally on first rating where rated_rides is empty"
+  impact: "First-ever rating against any driver crashes 500 with UnboundLocalError"
+  fix: "Initialize average_rating = driver.get('rating', 5.0) before the conditional; update inside if-block"
+  effort_hours: 1
+  regression_test: "test_first_rating_does_not_crash — driver with no prior ratings receives one"
+  sprint: P0
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 24
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "02-1"
+  severity: HIGH
+  dimension: "02"
+  evidence:
+    file: backend/routes/auth.py
+    lines: [392, 403, 407, 408]
+    snippet: "verify_id_token(body.firebase_token) — no audience= param"
+    test_file: null
+    test_lines: null
+  root_cause: "Audience param omitted; manual aud-claim check gated on `if driver_app_id` — silent skip when env unset"
+  impact: "Cross-app token acceptance still possible if FIREBASE_*_APP_ID env unset; DV-10 open"
+  fix: "Pass audience=settings.FIREBASE_DRIVER_APP_ID; fail startup if env missing in prod"
+  effort_hours: 2
+  regression_test: "rider Firebase token rejected on driver auth path; absent env → startup fails"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: "DV-10"
+  blast_radius: org
+  likelihood: possible
+  risk_score: 24
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "03-1"
+  severity: HIGH
+  dimension: "03"
+  evidence:
+    file: backend/core/config.py
+    lines: [84, 99]
+    snippet: "_guard_production_secrets — checks placeholder values only, no length check"
+    test_file: null
+    test_lines: null
+  root_cause: "Validation blocks known-weak literals but not short secrets; CLAUDE.md ≥32 char rule not enforced in code"
+  impact: "Production JWT_SECRET can be ≤4 chars; HS256 signature trivially brute-forced"
+  fix: "After placeholder check: if len(value) < 32: raise ValueError"
+  effort_hours: 1
+  regression_test: "test_jwt_secret_length_enforced — startup fails when JWT_SECRET length < 32 in prod"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["PIPEDA", "SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 28
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "04-1"
+  severity: MEDIUM
+  dimension: "04"
+  evidence:
+    file: backend/routes/corporate_company.py
+    lines: [269, 272]
+    snippet: "amount=float(request['amount']); floor=float(wallet.get('soft_negative_floor', -50))"
+    test_file: null
+    test_lines: null
+  root_cause: "Money handled as float in corporate wallet path; outside fare pre-commit hook coverage"
+  impact: "Cents lost on large grants; corporate ledger drift; same family as 20-1 on rider wallet"
+  fix: "Decimal(str(amount)); sweep corporate_*.py; extend pre-commit hook to corporate paths"
+  effort_hours: 2
+  regression_test: "test_allowance_grant_preserves_cents; grep -nE 'float\\(' backend/routes/corporate_*.py returns 0"
+  sprint: P2
+  owners: ["backend"]
+  regulations: ["CRA", "PCI-DSS"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: self
+  likelihood: likely
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+===END-FINDINGS-YAML===
+
+===AUDIT-COMPLETE=== phase=A module=backend-api dimensions=01,02,03,04 findings=4 critical=0 high=3 medium=1
+
+================================================================================
+END OF PHASE A — backend-api v1
+================================================================================
+
+================================================================================
+PHASE B — DIMENSIONS 07 (STATE MACHINE), 08 (PAYMENTS)
+================================================================================
+
+[07-1] CRITICAL | Ride state-string mismatch between complete_ride and
+process_payment — rider literally cannot pay after a completed ride
+File: backend/routes/rides.py:1309,1312 (process_payment) +
+backend/routes/drivers.py:2088 (complete_ride)
+Finding: `complete_ride` writes `status='completed'`. The
+`process_payment` endpoint guards with `if _ride_status != 'trip_completed'`
+and raises 409 otherwise. Once the driver completes the ride, the rider
+hits the payment endpoint and gets 409 — fare collection blocked, support
+escalation required for every ride.
+Same family as DV-3 (`COMPLETE_FROM_STATES = ('in_progress',)` vs
+`'trip_in_progress'`). Different specific instance.
+Fix: Standardize state strings via a `RideStatus` enum (per DV-3); short
+term, change `process_payment` to also accept `'completed'` (or canonicalize
+on `'trip_completed'`). Sweep the repo for every state-string literal.
+Effort: 2 h (short fix) + 4 h (enum refactor — recommended)
+Risk score: 48 (CRITICAL × org × likely)
+Regulations: PCI-DSS, SK-CPPA
+Owner: backend · Sprint: P0
+
+[08-1] MEDIUM | Stripe webhook handler has no event-type allowlist; unknown
+events silently marked processed
+File: backend/routes/webhooks.py:94,138,190,218-219
+Finding: Webhook routing uses an if/elif chain on `event_type`; the else
+branch logs `"Unhandled event"` but still calls
+`mark_stripe_event_processed(event_id)`. Any future event type Stripe adds
+(refund, dispute, chargeback, payout.paid, account.updated, etc.) is
+silently accepted with no business logic + audit trail incomplete.
+Fix: ALLOWED_EVENTS allowlist; reject unknown types with 400 + alert
+(don't 200 + processed_at).
+Effort: 2 h
+Risk score: 16 (MEDIUM × org × possible)
+Regulations: PCI-DSS, SOC2
+Owner: backend · Sprint: P2
+
+================================================================================
+PHASE B FINDINGS YAML
+================================================================================
+
+===FINDINGS-YAML===
+- id: "07-1"
+  severity: CRITICAL
+  dimension: "07"
+  evidence:
+    file: backend/routes/rides.py
+    lines: [1309, 1312]
+    snippet: "if _ride_status != 'trip_completed': raise HTTPException(...) — but complete_ride sets 'completed'"
+    test_file: null
+    test_lines: null
+  root_cause: "State-string mismatch: complete_ride writes 'completed' but process_payment requires 'trip_completed'"
+  impact: "After driver completes ride, rider gets 409 on payment; fare collection blocked for every completed ride"
+  fix: "Canonicalize state strings via RideStatus enum (per DV-3); short-term: accept 'completed' in process_payment"
+  effort_hours: 2
+  regression_test: "test_rider_payment_after_driver_completes — driver completes ride, rider calls process_payment, expect 200"
+  sprint: P0
+  owners: ["backend"]
+  regulations: ["PCI-DSS", "SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: certain
+  risk_score: 48
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "08-1"
+  severity: MEDIUM
+  dimension: "08"
+  evidence:
+    file: backend/routes/webhooks.py
+    lines: [94, 138, 218, 219]
+    snippet: "if-elif on event_type, else: logger.info('Unhandled') + mark_processed"
+    test_file: null
+    test_lines: null
+  root_cause: "No allowlist on event_type; unknown event types are logged but still marked processed_at"
+  impact: "Future Stripe event types (refund, dispute, payout.paid, account.updated) silently accepted without business logic"
+  fix: "Define ALLOWED_EVENTS set; reject unknown with 400 + alert; don't mark processed"
+  effort_hours: 2
+  regression_test: "Send 'charge.refunded' event; expect 400 + SRE alert, not 200 + processed_at"
+  sprint: P2
+  owners: ["backend"]
+  regulations: ["PCI-DSS", "SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+===END-FINDINGS-YAML===
+
+===AUDIT-COMPLETE=== phase=B module=backend-api dimensions=07,08 findings=2 critical=1 medium=1
+
+================================================================================
+END OF PHASE B — backend-api v1
+================================================================================
+
+================================================================================
+PHASE C — DIMENSIONS 09 (TESTS), 10 (ERRORS), 11 (HEADERS), 12 (COMPLIANCE)
+================================================================================
+
+[09-1] MEDIUM | Coverage reported but not gated — no `--cov-fail-under`
+File: backend/pytest.ini:14-19
+Finding: pytest emits term-missing/html/xml coverage reports but no
+`--cov-fail-under=N` directive. Comment in the file acknowledges ~6%
+baseline and treats raising it as P1 debt. Coverage can drop to 0% in any
+module without CI failure.
+Fix: `--cov-fail-under=70`; per-route targets (auth ≥95%, payments ≥90%,
+rides ≥85%) tracked separately. Effort: 4 h
+Risk score: 24 (MEDIUM × org × possible) — P1
+Regulations: SK-CPPA
+Owner: backend
+
+[09-2] HIGH | Large `_STALE_TEST_CLASSES` list — pre-Supabase tests skipped
+at collection
+File: backend/tests/conftest.py:378-407
+Finding: Significant fraction of test classes are explicitly skipped via
+the `_STALE_TEST_CLASSES` frozenset. Comments mark them "0/N stale,
+needs rewrite for Supabase backend". Without rewrite, integration
+coverage on critical paths is nominal.
+Fix: Quarterly audit of the frozenset; rewrite ≥10 classes/quarter;
+metric-track `tests_stale` and `days_since_rewrite`. Effort: 24 h (over
+multiple sprints)
+Risk score: 32 (HIGH × org × likely) — P1
+Regulations: —
+Owner: backend
+
+[10-1] HIGH | `logger.warning` on Firebase auth / DB persistence failures —
+CLAUDE.md rule violation
+File: backend/routes/auth.py:96,100,437,443
+Finding: `logger.warning(f"firebase_auth: could not persist user {uid}: {e}")`.
+CLAUDE.md ground rule: DB / auth / payment errors must use `logger.error`
+with full exception, not warning. Production log aggregation typically
+filters warnings — silent partial-state bugs (user created in Firebase
+but not in DB) hide.
+Fix: Replace warning → error; pass `exc_info=True`; alert on error rate.
+Effort: 2 h
+Risk score: 24 (HIGH × org × possible) — P1
+Regulations: PIPEDA
+Owner: backend
+
+[10-2] MEDIUM | App Check error logs missing `request_id` correlation
+File: backend/core/middleware.py:78,94
+Finding: App Check token failures log warnings without binding the
+`request_id` set by RequestIDMiddleware. Cross-request log correlation
+fails for App Check rejection investigations.
+Fix: `with logger.contextualize(request_id=request.state.request_id):`
+around App Check exception logging. Effort: 1 h
+Risk score: 12 (MEDIUM × self × possible) — P2
+Regulations: —
+Owner: backend
+
+[11-1] PASS | HSTS + CSP + X-Frame-Options + nosniff configured
+File: backend/core/middleware.py:157-173
+Evidence: `Strict-Transport-Security: max-age=31536000; includeSubDomains;
+preload`; CSP strict/docs variants; `X-Frame-Options: DENY`. Tested in
+backend/tests/test_p1_security.py.
+
+[11-2] PASS | CORS wildcard rejected at startup in production
+File: backend/core/middleware.py:333,351,358
+Evidence: When `ENV=production` and ALLOWED_ORIGINS contains `*`,
+`RuntimeError` raised with clear message. Test in
+backend/tests/test_p1_cors.py.
+
+[12-1] HIGH | Soft-delete columns exist but no automated retention purge cron
+(DV-8 confirmed at HEAD)
+File: backend/migrations/33_soft_delete_columns.sql:1-13
+Finding: `deleted_at` columns added on drivers/users/rides plus indexes,
+but no scheduled hard-delete loop. Soft-deleted rows persist beyond the
+2-year PIPEDA retention horizon (and 7-year CRA horizon for tax
+records). Confirms DV-8 still open.
+Fix: Per `docs/runbooks/` PIPEDA retention runbook: create
+`backend/utils/retention_purge.py`; spawn from lifespan.py at 02:00 UTC
+daily; per-table thresholds; alert on row counts > N. Effort: 6 h
+Risk score: 28 (HIGH × org × likely) — P1 · duplicate_of: DV-8
+Regulations: PIPEDA, CRA
+Owner: backend + data
+
+[12-2] MEDIUM | DSAR `/me/export-data` endpoint exists but no SLA test or
+completeness assertion (DV-17 family)
+File: backend/routes/drivers.py:1503
+Finding: PIPEDA s.9 mandates 30-day DSAR response. Endpoint defined but
+no test asserts the export includes every required field across rides /
+drivers / users / payments / ratings / documents. No metric tracks
+response latency. Confirms DV-17 family at HEAD.
+Fix: Test asserting all PII surfaces present in export; metric
+`dsar_response_seconds`; alert if request open > 7 days. Effort: 4 h
+Risk score: 20 (MEDIUM × org × possible) — P1 · duplicate_of: DV-17
+Regulations: PIPEDA
+Owner: backend + compliance
+
+[12-3] MEDIUM | `audit_logs` table has RLS but no append-only trigger
+File: backend/migrations/06_cloud_messaging.sql:70-72
+Finding: RLS allows admin full access (and service-role bypass), but no
+trigger blocks UPDATE/DELETE on audit_logs. An admin with UPDATE
+privilege could modify or remove audit entries post-hoc — breaks
+non-repudiation, fails SOC2 CC6.2 audit-log immutability.
+Fix: Trigger on audit_logs `BEFORE UPDATE OR DELETE RAISE EXCEPTION
+'audit_logs is append-only'`. Effort: 3 h
+Risk score: 20 (MEDIUM × org × possible) — P2
+Regulations: SOC2
+Owner: backend
+
+[12-4] PASS | `deleted_at` indexes present on drivers / users / rides
+File: backend/migrations/33_soft_delete_columns.sql:9-13
+Evidence: `idx_drivers_deleted_at`, `idx_users_deleted_at`,
+`idx_rides_deleted_at` — soft-delete queries don't N+1.
+
+================================================================================
+PHASE C FINDINGS YAML
+================================================================================
+
+===FINDINGS-YAML===
+- id: "09-1"
+  severity: MEDIUM
+  dimension: "09"
+  evidence:
+    file: backend/pytest.ini
+    lines: [14, 19]
+    snippet: "--cov-report=term-missing/html/xml — no --cov-fail-under"
+    test_file: null
+    test_lines: null
+  root_cause: "Coverage reported but not enforced; comment notes ~6% baseline"
+  impact: "Coverage can drop to 0% in any module without CI failure"
+  fix: "Add --cov-fail-under=70; per-route targets for auth/payments/rides"
+  effort_hours: 4
+  regression_test: "CI fails when coverage drops below 70% for any module"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 24
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "09-2"
+  severity: HIGH
+  dimension: "09"
+  evidence:
+    file: backend/tests/conftest.py
+    lines: [378, 407]
+    snippet: "_STALE_TEST_CLASSES: frozenset = frozenset({...}) — pre-Supabase tests skipped at collection"
+    test_file: null
+    test_lines: null
+  root_cause: "Pre-Supabase test harness skipped; rewrites pending; meaningful integration coverage on critical paths nominal"
+  impact: "Old tests don't match current Supabase code; regressions on auth/payments may pass CI silently"
+  fix: "Quarterly audit; rewrite ≥10 stale classes/quarter; track tests_stale + days_since_rewrite metrics"
+  effort_hours: 24
+  regression_test: "_STALE_TEST_CLASSES frozenset shrinks ≥25% per quarter"
+  sprint: P1
+  owners: ["backend"]
+  regulations: []
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "10-1"
+  severity: HIGH
+  dimension: "10"
+  evidence:
+    file: backend/routes/auth.py
+    lines: [96, 100, 437, 443]
+    snippet: "logger.warning(f'firebase_auth: could not persist user {uid}: {e}')"
+    test_file: null
+    test_lines: null
+  root_cause: "DB/auth errors logged at warning level; CLAUDE.md rule requires logger.error with full exception"
+  impact: "Production log aggregation filters warnings; user-created-in-Firebase-but-not-DB partial-state bugs hide"
+  fix: "warning → error; exc_info=True; Sentry alerting on error rate"
+  effort_hours: 2
+  regression_test: "test_firebase_user_creation_logs_error_on_db_failure — verify ERROR level"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 24
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "10-2"
+  severity: MEDIUM
+  dimension: "10"
+  evidence:
+    file: backend/core/middleware.py
+    lines: [78, 94]
+    snippet: "App Check warning logs lack request_id binding"
+    test_file: null
+    test_lines: null
+  root_cause: "App Check error logs not bound to request_id from RequestIDMiddleware"
+  impact: "Cross-request log correlation fails; debugging App Check rejections requires manual timestamp matching"
+  fix: "with logger.contextualize(request_id=request.state.request_id) around App Check exception logging"
+  effort_hours: 1
+  regression_test: "test_app_check_token_error_includes_request_id — capture log, verify X-Request-ID present"
+  sprint: P2
+  owners: ["backend"]
+  regulations: []
+  confidence: high
+  duplicate_of: null
+  blast_radius: self
+  likelihood: possible
+  risk_score: 12
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "11-1"
+  severity: PASS
+  dimension: "11"
+  evidence:
+    file: backend/core/middleware.py
+    lines: [157, 166, 168, 173]
+    snippet: "HSTS max-age=31536000 + includeSubDomains + preload; CSP; X-Frame-Options: DENY"
+    test_file: backend/tests/test_p1_security.py
+    test_lines: null
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: "test_security_headers_present — every response has HSTS/CSP/X-Frame"
+  sprint: null
+  owners: null
+  regulations: ["SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "11-2"
+  severity: PASS
+  dimension: "11"
+  evidence:
+    file: backend/core/middleware.py
+    lines: [333, 351, 358]
+    snippet: "Wildcard '*' rejected at startup if ENV=production (RuntimeError)"
+    test_file: backend/tests/test_p1_cors.py
+    test_lines: [61, 81]
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: null
+  sprint: null
+  owners: null
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "12-1"
+  severity: HIGH
+  dimension: "12"
+  evidence:
+    file: backend/migrations/33_soft_delete_columns.sql
+    lines: [1, 7]
+    snippet: "ALTER TABLE drivers/users/rides ADD COLUMN deleted_at TIMESTAMPTZ — no purge cron"
+    test_file: null
+    test_lines: null
+  root_cause: "Soft-delete columns exist but no scheduled hard-delete; data sits beyond PIPEDA 2y / CRA 7y horizons"
+  impact: "PIPEDA retention non-compliance; storage cost grows unbounded; breach impact extends with retention"
+  fix: "backend/utils/retention_purge.py; spawn daily 02:00 UTC; alert on row counts > threshold"
+  effort_hours: 6
+  regression_test: "Insert row 720+ days ago; run purge; verify hard DELETE executed"
+  sprint: P1
+  owners: ["backend", "data"]
+  regulations: ["PIPEDA", "CRA"]
+  confidence: high
+  duplicate_of: "DV-8"
+  blast_radius: org
+  likelihood: likely
+  risk_score: 28
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "12-2"
+  severity: MEDIUM
+  dimension: "12"
+  evidence:
+    file: backend/routes/drivers.py
+    lines: [1503]
+    snippet: "@api_router.post('/me/export-data') — no SLA test or completeness assertion"
+    test_file: null
+    test_lines: null
+  root_cause: "DSAR endpoint exists but no test asserts complete PII export or 30d response SLA"
+  impact: "PIPEDA s.9 30-day SLA cannot be evidenced; export may miss fields"
+  fix: "Test asserting export rows for rides/payments/documents; metric dsar_response_seconds; alert > 7d open"
+  effort_hours: 4
+  regression_test: "test_export_includes_rides_payments_documents; test_dsar_response_under_7_days"
+  sprint: P1
+  owners: ["backend", "compliance"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: "DV-17"
+  blast_radius: org
+  likelihood: possible
+  risk_score: 20
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "12-3"
+  severity: MEDIUM
+  dimension: "12"
+  evidence:
+    file: backend/migrations/06_cloud_messaging.sql
+    lines: [70, 72]
+    snippet: "audit_logs has RLS but no UPDATE/DELETE-blocking trigger"
+    test_file: null
+    test_lines: null
+  root_cause: "Append-only invariant not enforced at DB level; admin with UPDATE could erase audit entries"
+  impact: "Audit log tamper-evident requirement (SOC2 CC6.2) unmet; non-repudiation lost"
+  fix: "Trigger BEFORE UPDATE OR DELETE on audit_logs RAISE EXCEPTION 'audit_logs is append-only'"
+  effort_hours: 3
+  regression_test: "test_audit_logs_append_only — INSERT ok; UPDATE/DELETE fail"
+  sprint: P2
+  owners: ["backend"]
+  regulations: ["SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 20
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "12-4"
+  severity: PASS
+  dimension: "12"
+  evidence:
+    file: backend/migrations/33_soft_delete_columns.sql
+    lines: [9, 13]
+    snippet: "idx_drivers_deleted_at, idx_users_deleted_at, idx_rides_deleted_at"
+    test_file: null
+    test_lines: null
+  root_cause: null
+  impact: null
+  fix: null
+  effort_hours: 0
+  regression_test: null
+  sprint: null
+  owners: null
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: null
+  likelihood: null
+  risk_score: 0
+  dollars_at_risk: null
+  reviewed_by: null
+===END-FINDINGS-YAML===
+
+===AUDIT-COMPLETE=== phase=C module=backend-api dimensions=09,10,11,12 findings=10 high=3 medium=4 pass=3
+
+================================================================================
+END OF PHASE C — backend-api v1
+================================================================================
+
+================================================================================
+PHASE D — DIMENSION 14 PERFORMANCE & SCALABILITY
+================================================================================
+
+[14-1] HIGH | `get_ride_history` fetches 2000 rows then filters/paginates in Python
+File: backend/routes/rides.py:1092,1097
+Finding: `all_rides = await db_supabase.get_rows('rides', {'rider_id':
+current_user['id']}, limit=2000)`. Filter by status, sort, and pagination
+are all done in Python after the fetch. Every history request scans 2000
+rows from DB even when the caller only wants page 1 (10 rows).
+Fix: Push status filter + ordering to DB; cursor-based offset; cap LIMIT
+at the page size (≤100). Effort: 3 h
+Risk score: 32 (HIGH × org × likely) — P1
+Regulations: SK-CPPA
+Owner: backend
+
+[14-2] HIGH | Round-robin dispatch query scans the entire `rides` table to
+find one row
+File: backend/services/dispatch_service.py:239
+Finding: `await self.db.get_rows('rides', {'driver_id': {'$ne': None}},
+order='created_at', desc=True, limit=1)` to find the last-assigned driver.
+No supporting index. As `rides` grows past 100k, every dispatch decision
+incurs a sequential scan.
+Fix: `CREATE INDEX idx_rides_driver_assigned_at ON rides(driver_id,
+assigned_at DESC NULLS LAST)`; query by `assigned_at` instead of
+`created_at`. Effort: 2 h
+Risk score: 28 (HIGH × org × likely) — P1
+Regulations: SK-CPPA (dispatch SLA)
+Owner: backend
+
+[14-3] MEDIUM | Driver candidate query has no composite index for
+(is_online, is_available, vehicle_type_id)
+File: backend/migrations/34_rides_performance_indexes.sql
+Finding: Existing indexes target `rides`. The driver-candidate filter in
+dispatch (`is_online=true, is_available=true, vehicle_type_id=...`) has
+no composite index — sequential scan until driver pool exceeds ~500.
+Fix: `CREATE INDEX CONCURRENTLY idx_drivers_online_available_type ON
+drivers(is_online, is_available, vehicle_type_id)`. Effort: 2 h
+Risk score: 20 (MEDIUM × org × likely) — P2
+Regulations: —
+Owner: backend
+
+[14-4] MEDIUM | DSAR export makes 6 sequential `get_rows` calls instead of
+parallel
+File: backend/routes/drivers.py:1529-1541
+Finding: `_build_and_email_data_export` issues 6 awaits in series (drivers,
+users, rides, payouts, documents, notification_prefs). Total latency =
+sum of 6 round-trips. Compounds the DSAR SLA risk flagged in 12-2.
+Fix: `asyncio.gather(*[get_rows(...), ...])` for parallel fetch.
+Effort: 2 h
+Risk score: 16 (MEDIUM × org × possible) — P2
+Regulations: PIPEDA
+Owner: backend
+
+[14-5] MEDIUM | `run_sync` thread pool size unconfigured — default scales
+with CPU count, saturates under load
+File: backend/db_supabase.py:83-95
+Finding: `loop.run_in_executor(None, func)` uses the default executor.
+Default `ThreadPoolExecutor` has `max_workers = min(32, cpu_count + 4)`.
+On a 4-core container that's 8 threads — concurrent DB calls block each
+other under load.
+Fix: Explicit `ThreadPoolExecutor(max_workers=16)` (configurable via
+`DB_THREAD_POOL_SIZE` env var); export queue-depth + active-thread
+metrics. Effort: 3 h
+Risk score: 16 (MEDIUM × org × possible) — P2
+Regulations: —
+Owner: backend
+
+[14-6] MEDIUM | `broadcast()` sends to every connection synchronously —
+blocks event loop at high connection count
+File: backend/socket_manager.py:97-99
+Finding: `for connection in self.active_connections.values():
+await connection.send_json(msg)`. At 500+ connections per replica, a
+broadcast blocks the loop for the duration of all `send_json` calls.
+Fix: `asyncio.gather(*[c.send_json(msg) for c in connections],
+return_exceptions=True)`; per-message timeout; log slow broadcasts.
+Effort: 2 h
+Risk score: 12 (MEDIUM × org × possible) — P3
+Regulations: —
+Owner: backend
+
+[14-7] LOW | Background loops have no jitter — multiple loops wake at the
+same second
+File: backend/core/lifespan.py:96-115
+Finding: Hardcoded `asyncio.sleep(interval)` per loop. Every 5-min mark
+all 5-min loops wake at the same second causing periodic load spikes
+on the DB pool.
+Fix: Add ±10% jitter to each sleep; per-loop duration / error metrics.
+(Also closes the heartbeat-emission gap from Phase E 17-5/17-10.)
+Effort: 2 h
+Risk score: 8 (LOW × org × possible) — P3
+Regulations: —
+Owner: backend
+
+================================================================================
+PHASE D FINDINGS YAML
+================================================================================
+
+===FINDINGS-YAML===
+- id: "14-1"
+  severity: HIGH
+  dimension: "14"
+  evidence:
+    file: backend/routes/rides.py
+    lines: [1092, 1097]
+    snippet: "all_rides = await db_supabase.get_rows('rides', {'rider_id': id}, limit=2000)"
+    test_file: null
+    test_lines: null
+  root_cause: "History endpoint fetches 2000 rows + filters/sorts in Python; no DB-level status filter or pagination"
+  impact: "Every history request scans 2000 rows; high CPU + bandwidth per page click; latency grows with rider history size"
+  fix: "Push status filter to DB; cursor offset; cap LIMIT at page size (≤100)"
+  effort_hours: 3
+  regression_test: "Log SQL; verify LIMIT 100 + WHERE status IN applied; benchmark vs old"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "14-2"
+  severity: HIGH
+  dimension: "14"
+  evidence:
+    file: backend/services/dispatch_service.py
+    lines: [239]
+    snippet: "get_rows('rides', {'driver_id': {'$ne': None}}, order='created_at', desc=True, limit=1)"
+    test_file: null
+    test_lines: null
+  root_cause: "Round-robin scans full rides table to find last-assigned driver; no supporting index"
+  impact: "Every dispatch decision incurs O(n) scan on rides; SLA breach as table grows past 100k"
+  fix: "INDEX idx_rides_driver_assigned_at(driver_id, assigned_at DESC); query by assigned_at"
+  effort_hours: 2
+  regression_test: "EXPLAIN shows index scan; benchmark dispatch latency at 100k rides"
+  sprint: P1
+  owners: ["backend"]
+  regulations: ["SK-CPPA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 28
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "14-3"
+  severity: MEDIUM
+  dimension: "14"
+  evidence:
+    file: backend/migrations/34_rides_performance_indexes.sql
+    lines: [1, 9]
+    snippet: "no composite index on drivers(is_online, is_available, vehicle_type_id)"
+    test_file: null
+    test_lines: null
+  root_cause: "Driver-candidate dispatch filter has no composite index"
+  impact: "Sequential scan on drivers table once fleet exceeds ~500; dispatch latency grows linearly with fleet"
+  fix: "CREATE INDEX CONCURRENTLY idx_drivers_online_available_type ON drivers(is_online, is_available, vehicle_type_id)"
+  effort_hours: 2
+  regression_test: "EXPLAIN ANALYZE shows index scan, not seq scan"
+  sprint: P2
+  owners: ["backend"]
+  regulations: []
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: likely
+  risk_score: 20
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "14-4"
+  severity: MEDIUM
+  dimension: "14"
+  evidence:
+    file: backend/routes/drivers.py
+    lines: [1529, 1541]
+    snippet: "6 sequential get_rows calls in _build_and_email_data_export"
+    test_file: null
+    test_lines: null
+  root_cause: "DSAR export issues 6 awaits in series; total latency = sum of 6 round-trips"
+  impact: "Compounds the 30-day DSAR SLA risk (cf. 12-2 / DV-17)"
+  fix: "asyncio.gather() the 6 fetches; no order dependency in export"
+  effort_hours: 2
+  regression_test: "Mock get_rows; assert concurrent dispatch; measure < 200ms total"
+  sprint: P2
+  owners: ["backend"]
+  regulations: ["PIPEDA"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "14-5"
+  severity: MEDIUM
+  dimension: "14"
+  evidence:
+    file: backend/db_supabase.py
+    lines: [83, 95]
+    snippet: "run_sync uses loop.run_in_executor(None, ...) — default thread pool min(32, cpu+4)"
+    test_file: null
+    test_lines: null
+  root_cause: "Default executor on a 4-core container = 8 threads; concurrent DB calls block each other under load"
+  impact: "Dispatch stalls during traffic spikes; rider timeouts during demand surges"
+  fix: "Explicit ThreadPoolExecutor(max_workers=16); env-configurable; export queue depth + active threads"
+  effort_hours: 3
+  regression_test: "Load test 50 concurrent requests; verify p99 dispatch within budget; max_workers visible in metrics"
+  sprint: P2
+  owners: ["backend"]
+  regulations: []
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 16
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "14-6"
+  severity: MEDIUM
+  dimension: "14"
+  evidence:
+    file: backend/socket_manager.py
+    lines: [97, 99]
+    snippet: "for connection in self.active_connections.values(): await connection.send_json(msg)"
+    test_file: null
+    test_lines: null
+  root_cause: "Sequential send_json across all connections blocks event loop; no backpressure"
+  impact: "At 500+ connections/replica, broadcast hangs the loop multiple seconds; affects in-flight requests"
+  fix: "asyncio.gather(*[send_json(msg) for c in connections], return_exceptions=True); per-message timeout"
+  effort_hours: 2
+  regression_test: "1000 mock sockets; broadcast latency < 200ms; no blocking"
+  sprint: P3
+  owners: ["backend"]
+  regulations: []
+  confidence: medium
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 12
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "14-7"
+  severity: LOW
+  dimension: "14"
+  evidence:
+    file: backend/core/lifespan.py
+    lines: [96, 115]
+    snippet: "asyncio.sleep(interval) — no jitter; loops wake on common boundary"
+    test_file: null
+    test_lines: null
+  root_cause: "Hardcoded sleep intervals; same-second wakes cause synchronized DB load spikes"
+  impact: "Periodic load spikes on DB pool; poor dispatch quality at the spike moments"
+  fix: "Add ±10% jitter; per-loop duration + error metrics (closes 17-5/17-10 too)"
+  effort_hours: 2
+  regression_test: "Parse logs over 1h; verify <2 loops wake in same second window"
+  sprint: P3
+  owners: ["backend"]
+  regulations: []
+  confidence: medium
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 8
+  dollars_at_risk: null
+  reviewed_by: null
+===END-FINDINGS-YAML===
+
+===AUDIT-COMPLETE=== phase=D module=backend-api dimension=14 findings=7 high=2 medium=4 low=1
+
+================================================================================
+END OF PHASE D — backend-api v1
+================================================================================
+
+================================================================================
+PHASE E — DIMENSIONS 17–22 (OPERATIONAL READINESS)
+================================================================================
+Note: rider Phase E (reports/audits/2026-04-23-rider-app-v1-phase-e.txt)
+already exhaustively audits the BACKEND code paths shared by both apps.
+Backend Phase E filters to genuinely NEW findings beyond rider Phase E
++ DV-1..DV-17 + Phase A+B+C+D findings.
+
+  Dups confirmed at HEAD (do not re-file — see rider Phase E):
+    Sentry send_default_pii (rider 17-1, 17-9)
+    /health Redis check missing (rider 17-4)
+    Background loop heartbeats missing (rider 17-5; also 14-7 Phase D)
+    Supabase PITR startup verification (rider 18-9)
+
+  Genuinely new backend-only findings: 4 (supply-chain + Docker + payment
+  retry audit + sub-processor monitoring cadence).
+
+[22-1B] HIGH | `requirements.txt` lacks SHA256 hash verification —
+supply-chain attack window
+File: backend/requirements.txt:1-90
+Finding: Dependencies pinned by version string only (e.g.
+`redis[asyncio]>=5.0.0`); no hash-mode locking. PyPI typosquatter or
+compromised package version can land in production builds undetected.
+Fix: `pip-compile --generate-hashes` → `requirements-locked.txt`; CI
+enforces hash-only install (`pip install --require-hashes -r ...`).
+Effort: 4 h
+Risk score: 32 (HIGH × org × possible) — P1
+Regulations: SOC2
+Owner: devops + backend
+
+[22-2B] MEDIUM | Dockerfile uses mutable base tag; no read-only root FS;
+no seccomp/AppArmor profile
+File: backend/Dockerfile:35-42
+Finding: `FROM python:3.12.9-slim` is version-pinned but the tag is
+mutable (registry can repoint). Container runs as `spinr` (good) but the
+root FS is writable; no seccomp profile. Container-breakout + persistence
+would survive a restart.
+Fix: `FROM python@sha256:<digest>` to lock by content; mount RFS read-only
+in Railway/Render; document a baseline seccomp profile.
+Effort: 3 h
+Risk score: 20 (MEDIUM × org × possible) — P2
+Regulations: SOC2
+Owner: devops
+
+[20-1B] LOW | Payment-retry loop doesn't log per-attempt audit events
+File: backend/utils/payment_retry.py:114,133,145
+Finding: Retry loop is correctly idempotent (Stripe key reused) but
+doesn't write a `financial_events` row per attempt. Reconciliation can't
+distinguish original-attempt-settled vs retry-attempt-settled.
+Fix: After each retry settles, INSERT `financial_events(event_type=
+'payment_retried', ride_id, attempt, idempotency_key, settled_at)`.
+Blocked on 20-3 (`financial_events` table).
+Effort: 2 h
+Risk score: 12 (LOW × self × possible) — P2 (blocked on rider-Phase-E 20-3)
+Regulations: SOC2, CRA
+Owner: backend
+
+[22-3B] LOW | No scheduled sub-processor monitoring cadence
+File: docs/vendor-inventory.md:129
+Finding: Vendor inventory notes "monthly sub-processor list check" as a
+TODO but no scheduled job. New sub-processors (e.g. Stripe adds a
+reseller) drift outside the privacy-policy disclosure for weeks.
+Fix: Quarterly scheduled task that diffs each vendor's published
+sub-processor list against `docs/vendor-inventory.md`; alert on any diff.
+Effort: 3 h
+Risk score: 12 (LOW × self × possible) — P3
+Regulations: PIPEDA
+Owner: compliance
+
+================================================================================
+PHASE E DUPS CONFIRMED AT HEAD (informational — work tracked elsewhere)
+================================================================================
+
+The following backend issues exist at HEAD but are filed under rider
+Phase E (reports/audits/2026-04-23-rider-app-v1-phase-e.txt). Do NOT
+file them again here — Phase E auditor confirmed them but they're
+already captured.
+
+  17-1 / 17-9 Sentry send_default_pii=True without scrubbing
+        — backend/server.py:179
+  17-4         /health endpoint doesn't probe Redis
+        — backend/routes/main.py:32-52
+  17-5         7 background loops emit no per-cycle heartbeat
+        — backend/core/lifespan.py:76-152
+  18-9         Supabase PITR tier not verified at startup
+        — docs/runbooks/pitr-restore.md:23,130
+
+================================================================================
+PHASE E NEW FINDINGS YAML
+================================================================================
+
+===FINDINGS-YAML===
+- id: "22-1B"
+  severity: HIGH
+  dimension: "22"
+  evidence:
+    file: backend/requirements.txt
+    lines: [1, 90]
+    snippet: "All deps lack ==hash format; no SHA256 integrity"
+    test_file: null
+    test_lines: null
+  root_cause: "requirements.txt pins versions but not hashes; PyPI compromise lands undetected"
+  impact: "Supply-chain attack window; compromised dep ships to production"
+  fix: "pip-compile --generate-hashes; CI enforces --require-hashes install"
+  effort_hours: 4
+  regression_test: "Modify hash → CI build fails; unmodified passes"
+  sprint: P1
+  owners: ["devops", "backend"]
+  regulations: ["SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 32
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "22-2B"
+  severity: MEDIUM
+  dimension: "22"
+  evidence:
+    file: backend/Dockerfile
+    lines: [35, 42]
+    snippet: "FROM python:3.12.9-slim — mutable tag; no read-only FS; no seccomp"
+    test_file: null
+    test_lines: null
+  root_cause: "Base image not pinned by content hash; root FS writable; no seccomp baseline"
+  impact: "Container breakout can persist via /tmp recompile; tag can be repointed by registry"
+  fix: "FROM python@sha256:<digest>; mount RFS read-only in Railway; baseline seccomp profile"
+  effort_hours: 3
+  regression_test: "Image FROM uses @sha256; deploy config has read-only-root-filesystem: true"
+  sprint: P2
+  owners: ["devops"]
+  regulations: ["SOC2"]
+  confidence: high
+  duplicate_of: null
+  blast_radius: org
+  likelihood: possible
+  risk_score: 20
+  dollars_at_risk: null
+  reviewed_by: null
+
+- id: "20-1B"
+  severity: LOW
+  dimension: "20"
+  evidence:
+    file: backend/utils/payment_retry.py
+    lines: [114, 133, 145]
+    snippet: "Retry loop idempotent via Stripe key but no financial_events audit row per attempt"
+    test_file: null
+    test_lines: null
+  root_cause: "Payment retries log nothing per-attempt; reconciliation cannot disambiguate original vs retried settlement"
+  impact: "Audit trail incomplete for payment investigations; chargeback disputes harder to resolve"
+  fix: "INSERT financial_events(type='payment_retried', ride_id, attempt, idempotency_key) per retry"
+  effort_hours: 2
+  regression_test: "Trigger retry; verify financial_events row with attempt count"
+  sprint: P2
+  owners: ["backend"]
+  regulations: ["SOC2", "CRA"]
+  confidence: medium
+  duplicate_of: null
+  blast_radius: self
+  likelihood: possible
+  risk_score: 12
+  dollars_at_risk: null
+  reviewed_by: null
+  notes: "Blocked on rider Phase E 20-3 (financial_events table)"
+
+- id: "22-3B"
+  severity: LOW
+  dimension: "22"
+  evidence:
+    file: docs/vendor-inventory.md
+    lines: [129]
+    snippet: "monthly sub-processor monitoring TODO; no scheduled job"
+    test_file: null
+    test_lines: null
+  root_cause: "Vendor sub-processor list changes are not monitored on a schedule; discovery is ad-hoc"
+  impact: "New sub-processor drifts outside privacy policy for weeks"
+  fix: "Quarterly diff: each vendor's published sub-processor list vs docs/vendor-inventory.md; alert on diff"
+  effort_hours: 3
+  regression_test: "Schedule task; simulate Stripe sub-processor add → alert fires"
+  sprint: P3
+  owners: ["compliance"]
+  regulations: ["PIPEDA", "SOC2"]
+  confidence: medium
+  duplicate_of: null
+  blast_radius: self
+  likelihood: possible
+  risk_score: 12
+  dollars_at_risk: null
+  reviewed_by: null
+===END-FINDINGS-YAML===
+
+===AUDIT-COMPLETE=== phase=E module=backend-api dimensions=17,18,19,20,21,22 findings=4 high=1 medium=1 low=2 dups_carried=4
+
+================================================================================
+END OF PHASE E — backend-api v1
+================================================================================
+
+================================================================================
+BACKEND-API v1 AUDIT COMPLETE — all 17 applicable dimensions
+================================================================================
+Total NEW findings: 27 (Phase A+B+C+D = 23, Phase E = 4)
+By severity: 1 CRITICAL · 10 HIGH · 10 MEDIUM · 3 LOW · 3 PASS
+Plus: 4 dups confirmed at HEAD (filed under rider Phase E)
+                                  — bringing total open backend issues
+                                  visible in audit artifacts to 31.
+
+P0 (1 CRITICAL — already counted in rider phase-e P0 issues file):
+  07-1 state-string complete vs trip_completed → rider can't pay
+
+Top P1 (HIGH risk_score ≥ 28):
+  09-2 stale test classes — pre-Supabase
+  10-1 logger.warning on auth/DB (CLAUDE.md violation)
+  12-1 retention purge cron missing (DV-8)
+  14-1 ride history fetches 2000 rows
+  14-2 round-robin scans full rides table
+  22-1B requirements.txt no hash verification
+
+Recommendation: derive backend-P{0..4}-*.md remediation files from these
+findings + the rider Phase E P0 issues file already in place.
+
+Next: Admin Phase A–E (admin-panel-audit-plan-v1.md).
+================================================================================

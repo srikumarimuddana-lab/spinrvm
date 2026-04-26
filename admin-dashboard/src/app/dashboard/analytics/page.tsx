@@ -12,11 +12,11 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
-  BarChart3, TrendingUp, TrendingDown, XCircle, CheckCircle, Users,
-  Clock, RefreshCw, Activity, Car, DollarSign, Target,
+  BarChart3, TrendingDown, XCircle, CheckCircle,
+  RefreshCw, Activity, Car, DollarSign, Target,
 } from "lucide-react";
 import {
-  BarChart, Bar, PieChart, Pie, Cell, LineChart, Line,
+  BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import {

@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { Download, Car, CreditCard, Users, TrendingUp, DollarSign, UserPlus, XCircle, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle } from "lucide-react";
+import { Download, Car, CreditCard, Users, TrendingUp, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle } from "lucide-react";
 import { getPayouts, getPayoutStats } from "@/lib/api";
 import { Legend } from "recharts";
 import { Input } from "@/components/ui/input";

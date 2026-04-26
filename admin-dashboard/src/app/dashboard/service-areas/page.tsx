@@ -3,8 +3,7 @@
 import { useEffect, useState, lazy, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans, createSubscriptionPlan, updateSubscriptionPlan, deleteSubscriptionPlan, getDriverSubscriptions, getAreaFees, createAreaFee, updateAreaFee, deleteAreaFee, getVehicleTypes } from "@/lib/api";
-import { Infinity as InfinityIcon } from "lucide-react";
-import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, X, FileText, GripVertical, Clock, ShieldCheck, ShieldAlert, CheckCircle, AlertTriangle, Image, Plane, Radar } from "lucide-react";
+import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, FileText, Clock, ShieldCheck, ShieldAlert, CheckCircle, Image, Plane, Radar } from "lucide-react";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
@@ -606,7 +605,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
         </div>
         <p className="text-sm text-gray-500 mb-3">
           Temporarily raise fares in this area during high-demand periods. When active,
-          every vehicle's fare is multiplied by the surge factor.
+          every vehicle&apos;s fare is multiplied by the surge factor.
           {area.surge_source === "auto" && (
             <span className="text-blue-600"> Currently auto-managed by the surge engine; editing these fields will switch it to manual.</span>
           )}
@@ -717,7 +716,7 @@ function FieldInput({ label, value, type = "text", onSave }: { label: string; va
   );
 }
 
-function FieldSelect({ label, value, options, onSave }: { label: string; value: string; options: string[]; onSave: (v: string) => void }) {
+function _FieldSelect({ label, value, options, onSave }: { label: string; value: string; options: string[]; onSave: (v: string) => void }) {
   return (
     <div>
       <label className="block text-xs font-semibold text-gray-500 mb-1">{label}</label>

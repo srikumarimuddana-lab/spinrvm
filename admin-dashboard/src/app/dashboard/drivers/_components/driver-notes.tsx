@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { getDriverNotes, addDriverNote, deleteDriverNote } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
     MessageSquare, Plus, Trash2, AlertTriangle, FileText, ShieldCheck,
     Flag, Clock, Loader2, StickyNote,

@@ -3,16 +3,20 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
     from ...features import send_push_notification
+    from ...utils.audit_logger import log_admin_action
     from ...utils.datetime_utils import parse_iso_utc
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user  # noqa: F401
     from features import send_push_notification
+    from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.datetime_utils import parse_iso_utc
 
 db = db_supabase  # legacy alias
@@ -375,7 +379,7 @@ async def admin_get_driver_stats(
 
 
 @router.put("/drivers/{driver_id}")
-async def admin_update_driver(driver_id: str, updates: Dict[str, Any]):
+async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: dict = Depends(get_admin_user)):
     """Update driver details from admin dashboard."""
     allowed = {
         "first_name",
@@ -412,6 +416,7 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Failed to update driver {driver_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}") from e
+    await log_admin_action(admin, "driver_updated", "drivers", driver_id, {"updated_fields": list(filtered.keys())})
     return {"message": "Driver updated", "updated_fields": list(filtered.keys())}
 
 

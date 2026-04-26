@@ -11,7 +11,7 @@ import {
     CompanyStatus,
 } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -29,7 +29,6 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-    DialogTrigger,
 } from "@/components/ui/dialog";
 import {
     AlertDialog,
@@ -423,7 +422,7 @@ export default function CorporateAccountsPage() {
                     <AlertDialogHeader>
                         <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                         <AlertDialogDescription>
-                            This will permanently delete the corporate account "{currentAccount?.name}".
+                            This will permanently delete the corporate account &quot;{currentAccount?.name}&quot;.
                             This action cannot be undone.
                         </AlertDialogDescription>
                     </AlertDialogHeader>

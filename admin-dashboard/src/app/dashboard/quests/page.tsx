@@ -17,7 +17,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
-  Trophy, Plus, Users, Calendar, DollarSign, Target, Clock,
+  Trophy, Plus, Users,
   RefreshCw, ChevronDown, ChevronUp, BarChart3,
 } from "lucide-react";
 import { getQuests, createQuest, updateQuest, getQuestParticipants } from "@/lib/api";

@@ -3,18 +3,20 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...utils.password import hash_password
+    from ...utils.rate_limiter import admin_staff_delete_limit
     from ...utils.refresh_tokens import revoke_all_for_user
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
     from utils.password import hash_password
+    from utils.rate_limiter import admin_staff_delete_limit
     from utils.refresh_tokens import revoke_all_for_user
 
 db = db_supabase  # legacy alias
@@ -232,7 +234,8 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Dep
 
 
 @router.delete("/staff/{staff_id}")
-async def delete_staff(staff_id: str, admin: dict = Depends(get_admin_user)):
+@admin_staff_delete_limit
+async def delete_staff(request: Request, staff_id: str, admin: dict = Depends(get_admin_user)):
     """Delete a staff member."""
     if admin.get("role") != "super_admin":
         raise HTTPException(status_code=403, detail="Only super admins can delete staff")

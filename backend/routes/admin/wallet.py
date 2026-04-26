@@ -10,19 +10,21 @@ import uuid
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
     from ...db import db
     from ...dependencies import get_admin_user
+    from ...utils.rate_limiter import admin_wallet_limit
     from ..wallet import _record_transaction, get_or_create_wallet
 except ImportError:
     import db_supabase
     from db import db
     from dependencies import get_admin_user
     from routes.wallet import _record_transaction, get_or_create_wallet
+    from utils.rate_limiter import admin_wallet_limit
 
 router = APIRouter(prefix="/wallet", tags=["Admin Wallet"])
 
@@ -102,7 +104,12 @@ async def admin_get_wallet(
 
 
 @router.post("/credit")
-async def admin_credit_wallet(req: AdminCreditRequest, admin: dict = Depends(get_admin_user)):
+@admin_wallet_limit
+async def admin_credit_wallet(
+    request: Request,
+    req: AdminCreditRequest,
+    admin: dict = Depends(get_admin_user),
+):
     """Credit a user's wallet. Writes an audited ledger entry."""
     # Idempotency guard (F-37): if a key was supplied, return the existing
     # transaction rather than applying the credit a second time on retry.
@@ -171,7 +178,12 @@ async def admin_credit_wallet(req: AdminCreditRequest, admin: dict = Depends(get
 
 
 @router.post("/debit")
-async def admin_debit_wallet(req: AdminDebitRequest, admin: dict = Depends(get_admin_user)):
+@admin_wallet_limit
+async def admin_debit_wallet(
+    request: Request,
+    req: AdminDebitRequest,
+    admin: dict = Depends(get_admin_user),
+):
     """Debit (deduct from) a user's wallet — refunds, correction, fraud clawback."""
     # Idempotency guard (F-37): return existing result on retry.
     if req.idempotency_key:

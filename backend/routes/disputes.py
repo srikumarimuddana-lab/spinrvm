@@ -13,14 +13,15 @@ from pydantic import BaseModel
 
 try:
     from .. import db_supabase
-    from ..dependencies import get_current_user
+    from ..dependencies import get_admin_user, get_current_user
     from ..settings_loader import get_app_settings
 except ImportError:
     import db_supabase
-    from dependencies import get_current_user
+    from dependencies import get_admin_user, get_current_user
     from settings_loader import get_app_settings
 
 db = db_supabase  # legacy alias
+get_current_admin = get_admin_user
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +117,7 @@ async def admin_get_disputes(
     status: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    current_admin: dict = Depends(get_current_admin),
 ):
     """Get all disputes with optional status filter."""
     filters: Dict[str, Any] = {}
@@ -134,7 +136,6 @@ async def admin_get_disputes(
             {
                 **d,
                 "user_name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Unknown",
-                "user_phone": user.get("phone") if user else None,
                 "ride_status": ride.get("status") if ride else None,
                 "ride_fare": ride.get("total_fare") if ride else None,
             }
@@ -143,7 +144,11 @@ async def admin_get_disputes(
 
 
 @admin_router.put("/{dispute_id}/resolve")
-async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
+async def admin_resolve_dispute(
+    dispute_id: str,
+    req: ResolveDisputeRequest,
+    current_admin: dict = Depends(get_current_admin),
+):
     """Resolve a dispute (approve/reject refund)."""
     dispute = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("disputes", {"id": dispute_id}, limit=1))
     if not dispute:
@@ -152,18 +157,8 @@ async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
     if dispute.get("status") in ("resolved", "rejected"):
         raise HTTPException(status_code=400, detail="Dispute already resolved")
 
-    update_data = {
-        "status": "resolved" if req.resolution != "rejected" else "rejected",
-        "resolution": req.resolution,
-        "refund_amount": req.refund_amount or 0,
-        "admin_note": req.admin_note or "",
-        "resolved_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-    await db_supabase.update_one("disputes", {"id": dispute_id}, update_data)
-
-    # If approved/partial, initiate Stripe refund against the ride's PaymentIntent
+    # Attempt Stripe refund BEFORE updating DB status so a Stripe failure never
+    # leaves the dispute marked "resolved" without money returned to the rider.
     refund_result: Dict[str, Any] = {}
     if req.resolution in ("approved", "partial_refund") and req.refund_amount:
         refund_amount_cents = int(float(req.refund_amount) * 100)
@@ -177,18 +172,19 @@ async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
             )
             refund_result = {"status": "manual_required", "reason": "no_payment_intent"}
         else:
+            import stripe as _stripe  # noqa: PLC0415
+
+            settings = await get_app_settings()
+            stripe_secret = settings.get("stripe_secret_key", "")
+            if not stripe_secret:
+                raise HTTPException(status_code=500, detail="Stripe not configured")
+
             try:
-                import stripe as _stripe  # noqa: PLC0415
-
-                settings = await get_app_settings()
-                stripe_secret = settings.get("stripe_secret_key", "")
-                if not stripe_secret:
-                    raise ValueError("Stripe secret key not configured")
-
                 refund = _stripe.Refund.create(
                     payment_intent=payment_intent_id,
                     amount=refund_amount_cents,
                     reason="requested_by_customer",
+                    idempotency_key=f"refund-dispute-{dispute_id}",
                     metadata={
                         "dispute_id": dispute_id,
                         "ride_id": str(dispute.get("ride_id")),
@@ -201,18 +197,23 @@ async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
                     f"[REFUND] Stripe refund {refund.id} ({refund.status}) "
                     f"${req.refund_amount} for dispute {dispute_id}"
                 )
-            except Exception as refund_err:  # noqa: BLE001
-                # Don't roll back the resolved status — log and surface the error so
-                # the admin knows they may need to issue the refund manually.
+            except Exception as refund_err:
                 logger.error(f"[REFUND] Stripe refund failed for dispute {dispute_id}: {refund_err}")
-                refund_result = {"status": "failed", "error": str(refund_err)}
+                raise HTTPException(status_code=502, detail=f"Stripe refund failed — retry to reuse idempotency key") from refund_err
 
-        # Persist refund outcome on the dispute record
-        await db.update_one(
-            "disputes",
-            {"id": dispute_id},
-            {"$set": {"refund_result": refund_result, "updated_at": datetime.now(timezone.utc).isoformat()}},
-        )
+    # Stripe succeeded (or not required) — persist the resolved status
+    update_data: Dict[str, Any] = {
+        "status": "resolved" if req.resolution != "rejected" else "rejected",
+        "resolution": req.resolution,
+        "refund_amount": req.refund_amount or 0,
+        "admin_note": req.admin_note or "",
+        "resolved_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if refund_result:
+        update_data["refund_result"] = refund_result
+
+    await db_supabase.update_one("disputes", {"id": dispute_id}, update_data)
 
     return {
         "success": True,

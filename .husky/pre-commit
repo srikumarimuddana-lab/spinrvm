@@ -4,6 +4,15 @@
 
 set -e
 
+# ── Secret scanning: gitleaks on staged files ──────────────────────────────
+# Install once: brew install gitleaks  OR  https://github.com/gitleaks/gitleaks
+if command -v gitleaks >/dev/null 2>&1; then
+    echo "▶ gitleaks protect (staged)"
+    gitleaks protect --staged --config .gitleaks.toml --redact
+else
+    echo "⚠ gitleaks not installed — skipping secret scan (install: brew install gitleaks)"
+fi
+
 # ── Python: ruff on staged backend/ files ──────────────────────────────────
 STAGED_PY=$(git diff --cached --name-only --diff-filter=ACM | grep '^backend/.*\.py$' || true)
 if [ -n "$STAGED_PY" ]; then

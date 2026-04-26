@@ -294,14 +294,14 @@ export default function DriversPage() {
                     <div className="flex items-center gap-1.5">
                         <MapPin className="h-4 w-4 text-muted-foreground" />
                         <Select value={serviceAreaId || "all"} onValueChange={(v) => setServiceAreaId(v === "all" ? "" : v)}>
-                            <SelectTrigger className="h-9 text-xs w-[180px]"><SelectValue placeholder="All Service Areas" /></SelectTrigger>
+                            <SelectTrigger className="h-9 text-xs w-[180px]" aria-label="Filter by service area"><SelectValue placeholder="All Service Areas" /></SelectTrigger>
                             <SelectContent><SelectItem value="all">All Service Areas</SelectItem>{serviceAreas.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}</SelectContent>
                         </Select>
                     </div>
                     <div className="flex items-center gap-1.5">
                         <Car className="h-4 w-4 text-muted-foreground" />
                         <Select value={vehicleTypeFilter || "all"} onValueChange={(v) => setVehicleTypeFilter(v === "all" ? "" : v)}>
-                            <SelectTrigger className="h-9 text-xs w-[160px]"><SelectValue placeholder="All Vehicle Types" /></SelectTrigger>
+                            <SelectTrigger className="h-9 text-xs w-[160px]" aria-label="Filter by vehicle type"><SelectValue placeholder="All Vehicle Types" /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="all">All Vehicle Types</SelectItem>
                                 {vehicleTypes.map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
@@ -310,9 +310,9 @@ export default function DriversPage() {
                     </div>
                     <div className="flex items-center gap-1.5">
                         <CalendarRange className="h-4 w-4 text-muted-foreground" />
-                        <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="h-9 w-[140px] text-xs" />
+                        <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="Filter from date" />
                         <span className="text-xs text-muted-foreground">to</span>
-                        <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="h-9 w-[140px] text-xs" />
+                        <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="Filter to date" />
                     </div>
                     {(serviceAreaId || vehicleTypeFilter || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
                     <Button variant="outline" size="sm" onClick={handleExport} disabled={filtered.length === 0}><Download className="h-4 w-4" /> Export</Button>
@@ -330,7 +330,7 @@ export default function DriversPage() {
                             </button>
                         ))}
                     </div>
-                    <div className="relative w-full sm:w-72"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by name, email, plate..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 h-9 text-sm" /></div>
+                    <div className="relative w-full sm:w-72"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by name, email, plate..." aria-label="Search drivers" value={search} onChange={e => setSearch(e.target.value)} className="pl-9 h-9 text-sm" /></div>
                 </div>
 
                 <div className="bg-card border rounded-2xl overflow-hidden shadow-sm">

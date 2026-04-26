@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 try:
     from .. import db_supabase
-    from ..dependencies import get_current_user
+    from ..dependencies import get_admin_user, get_current_user
     from ..settings_loader import get_app_settings
 except ImportError:
     import db_supabase
@@ -116,6 +116,7 @@ async def admin_get_disputes(
     status: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    current_admin: dict = Depends(get_admin_user),
 ):
     """Get all disputes with optional status filter."""
     filters: Dict[str, Any] = {}
@@ -143,7 +144,11 @@ async def admin_get_disputes(
 
 
 @admin_router.put("/{dispute_id}/resolve")
-async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
+async def admin_resolve_dispute(
+    dispute_id: str,
+    req: ResolveDisputeRequest,
+    current_admin: dict = Depends(get_admin_user),
+):
     """Resolve a dispute (approve/reject refund)."""
     dispute = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("disputes", {"id": dispute_id}, limit=1))
     if not dispute:

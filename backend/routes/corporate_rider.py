@@ -145,7 +145,9 @@ async def do_join_domain(
         raise HTTPException(status_code=403, detail="Your email domain is not authorized for this company")
 
     member = await join_via_domain(
-        company_id=body.company_id, user_id=current_user["id"], email=user_email,
+        company_id=body.company_id,
+        user_id=current_user["id"],
+        email=user_email,
     )
     company = await get_corporate_account_by_id(body.company_id) or {}
     return {"company": company, "member": member}
@@ -260,6 +262,4 @@ async def my_requests(
     current_user: dict = Depends(get_current_user),
 ):
     membership = await _ensure_member(current_user, company_id)
-    return await list_company_allowance_requests(
-        company_id, statuses=None, member_id=membership["id"]
-    )
+    return await list_company_allowance_requests(company_id, statuses=None, member_id=membership["id"])

@@ -286,9 +286,7 @@ async def get_available_promos(
 
     # Pre-fetch all user promo applications in one query so per-promo usage
     # check is O(1) instead of one DB call per promo (N+1 reduction).
-    all_user_apps = await db_supabase.get_rows(
-        "promo_applications", {"user_id": current_user["id"]}, limit=2000
-    ) or []
+    all_user_apps = await db_supabase.get_rows("promo_applications", {"user_id": current_user["id"]}, limit=2000) or []
     user_usage_by_promo: dict = {}
     for app in all_user_apps:
         pid = app.get("promo_id")
@@ -421,6 +419,12 @@ async def admin_create_promo_code(req: CreatePromoCodeRequest):
 
     if req.discount_type not in ("flat", "percentage"):
         raise HTTPException(status_code=400, detail="discount_type must be 'flat' or 'percentage'")
+
+    # P1-4: cap discount_value to prevent absurd promo creation
+    if req.discount_type == "percentage" and req.discount_value > 100:
+        raise HTTPException(status_code=400, detail="Percentage discount cannot exceed 100%")
+    if req.discount_type == "flat" and req.discount_value > 500:
+        raise HTTPException(status_code=400, detail="Flat discount cannot exceed $500")
 
     promo = {
         "id": str(uuid.uuid4()),

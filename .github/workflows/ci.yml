@@ -323,7 +323,7 @@ jobs:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           npm i -g @railway/cli@4.40.2
-          railway up --service backend
+          railway up --service spinr-backend
 
   # Deploy Frontend
   deploy-frontend:

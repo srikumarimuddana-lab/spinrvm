@@ -350,11 +350,11 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             )
             await manager.send_personal_message(dispatch_payload, f"driver_{selected_driver['user_id']}")
 
-            # Push-notification fallback. The driver-app listens for
-            # data.type == 'new_ride_offer' (useDriverDashboard.ts:457) and
-            # refetches the active ride via HTTP when this arrives, so we
-            # don't need to put the full ride data in the push — just
-            # a wake-up with the ride id.
+            # Push-notification fallback for backgrounded/killed app.
+            # The driver-app background handler (app/_layout.tsx) persists
+            # the full ride data to AsyncStorage; useDriverDashboard.ts then
+            # hydrates the store on cold-start without a network round-trip.
+            # FCM `data` values MUST be strings — all numbers are str()-wrapped.
             try:
                 await send_push_notification(
                     selected_driver["user_id"],
@@ -364,12 +364,23 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                         f"→ {ride.get('dropoff_address') or 'destination'}"
                     ),
                     {
-                        "type": "new_ride_offer",
+                        "type": "new_ride_assignment",
                         "ride_id": ride_id,
+                        "pickup_address": ride.get("pickup_address") or "",
+                        "dropoff_address": ride.get("dropoff_address") or "",
+                        "pickup_lat": str(ride.get("pickup_lat") or 0),
+                        "pickup_lng": str(ride.get("pickup_lng") or 0),
+                        "dropoff_lat": str(ride.get("dropoff_lat") or 0),
+                        "dropoff_lng": str(ride.get("dropoff_lng") or 0),
+                        "fare": str(ride.get("driver_earnings") or 0),
+                        "distance_km": str(ride.get("distance_km") or ""),
+                        "duration_minutes": str(ride.get("duration_minutes") or ""),
+                        "rider_name": rider_display_name or "",
+                        "rider_rating": str((rider_user or {}).get("rating") or ""),
                         "deeplink": "/driver/",
                     },
                 )
-                logger.info(f"[DISPATCH] push new_ride_offer sent to user_id={selected_driver['user_id']}")
+                logger.info(f"[DISPATCH] push new_ride_assignment sent to user_id={selected_driver['user_id']}")
             except Exception as e:
                 logger.warning(f"[DISPATCH] push notification failed for user_id={selected_driver['user_id']}: {e}")
         else:

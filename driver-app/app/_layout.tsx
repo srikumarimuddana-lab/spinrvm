@@ -75,11 +75,36 @@ if (Notifications) {
 // 2. Background FCM handler. Must be registered at module top level,
 //    outside of any React component, so the JS runtime wakes when a
 //    message arrives while the app is backgrounded or killed.
-//    The OS notification itself is rendered by the Android channel
-//    configured below (or APNs on iOS); this handler just keeps the
-//    runtime alive long enough to let RN Firebase do its thing.
+//    Persists the full ride-offer payload to AsyncStorage so the driver
+//    home screen can hydrate the offer panel instantly on cold start
+//    (useDriverDashboard.ts reads PENDING_OFFER_KEY on mount).
+const PENDING_OFFER_KEY = 'spinr_pending_ride_offer';
 setBackgroundMessageHandler(async (remoteMessage: any) => {
-  console.log('[Push] Background FCM:', remoteMessage?.data?.type || remoteMessage?.notification?.title);
+  const data = remoteMessage?.data || {};
+  if (data?.type === 'new_ride_assignment' && data?.ride_id) {
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      await AsyncStorage.setItem(
+        PENDING_OFFER_KEY,
+        JSON.stringify({
+          ride_id: data.ride_id,
+          pickup_address: data.pickup_address || '',
+          dropoff_address: data.dropoff_address || '',
+          pickup_lat: parseFloat(data.pickup_lat || '0'),
+          pickup_lng: parseFloat(data.pickup_lng || '0'),
+          dropoff_lat: parseFloat(data.dropoff_lat || '0'),
+          dropoff_lng: parseFloat(data.dropoff_lng || '0'),
+          fare: parseFloat(data.fare || '0'),
+          distance_km: data.distance_km ? parseFloat(data.distance_km) : undefined,
+          duration_minutes: data.duration_minutes ? parseFloat(data.duration_minutes) : undefined,
+          rider_name: data.rider_name || undefined,
+          rider_rating: data.rider_rating ? parseFloat(data.rider_rating) : undefined,
+        }),
+      );
+    } catch (e) {
+      console.warn('[Push] Failed to persist background ride offer:', e);
+    }
+  }
 });
 
 export default function RootLayout() {

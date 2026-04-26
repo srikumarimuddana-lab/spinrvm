@@ -1,20 +1,44 @@
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
     from ...settings_loader import get_app_settings
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user
     from settings_loader import get_app_settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Credential fields that must never be returned verbatim in API responses.
+_CREDENTIAL_FIELDS = frozenset(
+    {
+        "stripe_secret_key",
+        "stripe_webhook_secret",
+        "twilio_auth_token",
+        "google_maps_api_key",
+    }
+)
+
+
+def _mask_credentials(settings: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy of the settings dict with credential values masked."""
+    result = {}
+    for k, v in settings.items():
+        if k in _CREDENTIAL_FIELDS and isinstance(v, str) and v:
+            result[k] = v[:8] + "*****"
+        else:
+            result[k] = v
+    return result
 
 
 # ---------- Settings (single row id='app_settings', flat keys) ----------
@@ -44,14 +68,15 @@ class SettingsUpdateRequest(BaseModel):
 
 
 @router.get("/settings")
-async def admin_get_settings():
-    """Get all settings (normalized single app_settings row as dict)."""
-    return await get_app_settings()
+async def admin_get_settings(admin: dict = Depends(get_admin_user)):
+    """Get all settings. Credential fields are masked — use the reveal endpoint to read a value."""
+    raw = await get_app_settings()
+    return _mask_credentials(raw)
 
 
 @router.put("/settings")
-async def admin_update_settings(settings: SettingsUpdateRequest):
-    """Update settings (upsert single app_settings row)."""
+async def admin_update_settings(settings: SettingsUpdateRequest, admin: dict = Depends(get_admin_user)):
+    """Update settings (upsert single app_settings row). Writes an audit log entry."""
     # First check if settings row exists
     existing = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("settings", {"id": "app_settings"}, limit=1)
@@ -70,8 +95,23 @@ async def admin_update_settings(settings: SettingsUpdateRequest):
         update_payload = {k: v for k, v in payload.items() if k != "id"}
         await db_supabase.update_one("settings", {"id": "app_settings"}, update_payload)
     else:
-        # Insert new row
         await db_supabase.insert_one("settings", payload)
+
+    # Audit log — record which keys changed, never the values.
+    changed_keys = list(update_fields.keys())
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "settings_updated",
+            "resource": "settings",
+            "resource_id": "app_settings",
+            "details": {"changed_keys": changed_keys},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
 
     return {"message": "Settings updated"}
 
@@ -96,8 +136,23 @@ _DEFAULT_HEATMAP_SETTINGS = {
 }
 
 
+class HeatmapSettingsRequest(BaseModel):
+    heat_map_enabled: Optional[bool] = None
+    heat_map_default_range: Optional[str] = None
+    heat_map_intensity: Optional[str] = None
+    heat_map_radius: Optional[int] = None
+    heat_map_blur: Optional[int] = None
+    heat_map_gradient_start: Optional[str] = None
+    heat_map_gradient_mid: Optional[str] = None
+    heat_map_gradient_end: Optional[str] = None
+    heat_map_show_pickups: Optional[bool] = None
+    heat_map_show_dropoffs: Optional[bool] = None
+    corporate_heat_map_enabled: Optional[bool] = None
+    regular_rider_heat_map_enabled: Optional[bool] = None
+
+
 @router.get("/settings/heatmap")
-async def admin_get_heatmap_settings():
+async def admin_get_heatmap_settings(admin: dict = Depends(get_admin_user)):
     """Return heat-map display settings (single settings row)."""
     row = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("settings", {"id": _HEATMAP_SETTINGS_ID}, limit=1)
@@ -111,11 +166,11 @@ async def admin_get_heatmap_settings():
 
 
 @router.put("/settings/heatmap")
-async def admin_update_heatmap_settings(data: Dict[str, Any]):
+async def admin_update_heatmap_settings(data: HeatmapSettingsRequest, admin: dict = Depends(get_admin_user)):
     """Update heat-map display settings."""
     payload = {
         "id": _HEATMAP_SETTINGS_ID,
-        **{k: v for k, v in data.items() if k in _DEFAULT_HEATMAP_SETTINGS},
+        **{k: v for k, v in data.model_dump(exclude_none=True).items() if k in _DEFAULT_HEATMAP_SETTINGS},
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 

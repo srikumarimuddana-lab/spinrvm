@@ -28,6 +28,8 @@ except ImportError:
     from dependencies import get_current_user
     from utils.error_handling import DuplicateRecordError
 
+# db is the db_supabase module (re-exported by backend/db.py shim); .rpc is the
+# Supabase RPC caller used for atomic wallet credits during point redemption.
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/loyalty", tags=["Loyalty"])
 
@@ -160,6 +162,27 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
     new_lifetime = account.get("lifetime_points", 0) + total_points
     new_tier = _calculate_tier(new_lifetime)
 
+    # P1-1: insert the transaction FIRST — the DB UNIQUE index on
+    # (user_id, reference_id) WHERE type='ride_earned' is the real guard
+    # against double-award races.  Account update only runs if insert succeeds.
+    try:
+        await db.insert_one(
+            "loyalty_transactions",
+            {
+                "id": str(uuid.uuid4()),
+                "user_id": current_user["id"],
+                "points": total_points,
+                "type": "ride_earned",
+                "reference_id": ride_id,
+                "description": f"Earned {base_points} pts + {bonus_points} bonus ({tier} {multiplier}x)",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as e:
+        if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            return {"already_awarded": True, "points": 0}
+        raise HTTPException(status_code=503, detail="Failed to record loyalty points") from e
+
     await db.update_one(
         "loyalty_accounts",
         {"id": account["id"]},
@@ -199,9 +222,7 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
     if account.get("points", 0) < req.points:
         raise HTTPException(status_code=400, detail="Insufficient points")
 
-    credit_amount = (Decimal(req.points) / Decimal(REDEMPTION_RATE)).quantize(
-        Decimal("0.01"), rounding=ROUND_HALF_UP
-    )
+    credit_amount = (Decimal(req.points) / Decimal(REDEMPTION_RATE)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     # Step 1: Credit the wallet first. If this fails the rider keeps their points.
     from .wallet import _record_transaction, get_or_create_wallet
@@ -232,7 +253,7 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
             await wallet_increment_balance(wallet["id"], -credit_amount)
         except Exception as reverse_err:
             logger.error(f"Loyalty redeem wallet reversal also failed: {reverse_err}")
-        raise HTTPException(status_code=503, detail="Redemption failed — please retry")
+        raise HTTPException(status_code=503, detail="Redemption failed — please retry") from deduct_err
 
     await db.insert_one(
         "loyalty_transactions",

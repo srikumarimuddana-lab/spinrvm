@@ -15,6 +15,11 @@ const REFRESH_BEFORE_EXPIRY_MS = 5 * 60 * 1000; // refresh 5 min before access t
 
 let _refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
+// NOTE (F-02): document.cookie cannot set HttpOnly — the flag is only settable
+// by the server. A full fix requires a Next.js API route (/api/auth/set-cookie)
+// that accepts the token and responds with Set-Cookie: HttpOnly; Secure.
+// Until that API route is implemented, SameSite=Strict reduces XSS exposure
+// by blocking cross-site requests from carrying this cookie.
 function setAuthCookie(token: string) {
     if (typeof document === 'undefined') return;
     const secure = typeof window !== 'undefined' && window.location.protocol === 'https:';
@@ -22,7 +27,7 @@ function setAuthCookie(token: string) {
         `${COOKIE_NAME}=${encodeURIComponent(token)}`,
         'path=/',
         `max-age=${COOKIE_MAX_AGE_SECONDS}`,
-        'SameSite=Lax',
+        'SameSite=Strict',
     ];
     if (secure) parts.push('Secure');
     document.cookie = parts.join('; ');
@@ -30,7 +35,7 @@ function setAuthCookie(token: string) {
 
 function clearAuthCookie() {
     if (typeof document === 'undefined') return;
-    document.cookie = `${COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
+    document.cookie = `${COOKIE_NAME}=; path=/; max-age=0; SameSite=Strict`;
 }
 
 function cancelRefreshTimer() {

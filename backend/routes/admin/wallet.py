@@ -6,6 +6,7 @@ here re-checks auth. Credits and debits recorded via this module carry
 ``admin_id`` in the ledger metadata so refunds/adjustments are auditable.
 """
 
+import uuid
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 

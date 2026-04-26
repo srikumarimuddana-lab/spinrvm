@@ -254,31 +254,51 @@ async def admin_cancel_ride(
 @router.get("/stats")
 async def admin_get_stats():
     """Get admin dashboard statistics."""
-    total_drivers = await db_supabase.count_documents("drivers", {})
-    active_drivers = await db_supabase.count_documents("drivers", {"is_online": True})
-    online_drivers = active_drivers
-    total_rides = await db_supabase.count_documents("rides", {})
-    completed_rides = await db_supabase.count_documents("rides", {"status": "completed"})
-    cancelled_rides = await db_supabase.count_documents("rides", {"status": "cancelled"})
-    active_rides = await db_supabase.count_documents(
-        "rides",
-        {"status": {"$in": ["requested", "driver_assigned", "driver_arrived", "in_progress"]}},
+    import asyncio  # noqa: PLC0415
+
+    now_utc = datetime.now(timezone.utc)
+    today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    month_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+    # Parallelise all independent DB calls (F-49: previously 11 sequential round-trips).
+    (
+        total_drivers,
+        online_drivers,
+        total_rides,
+        completed_rides,
+        cancelled_rides,
+        active_rides,
+        total_users,
+        rides_today,
+        pending_applications,
+        completed_today,
+        completed_month,
+    ) = await asyncio.gather(
+        db_supabase.count_documents("drivers", {}),
+        db_supabase.count_documents("drivers", {"is_online": True}),
+        db_supabase.count_documents("rides", {}),
+        db_supabase.count_documents("rides", {"status": "completed"}),
+        db_supabase.count_documents("rides", {"status": "cancelled"}),
+        db_supabase.count_documents(
+            "rides",
+            {"status": {"$in": ["requested", "driver_assigned", "driver_arrived", "in_progress"]}},
+        ),
+        db_supabase.count_documents("users", {}),
+        db_supabase.count_documents("rides", {"created_at": {"$gte": today_start}}),
+        db_supabase.count_documents("drivers", {"is_verified": False}),
+        db_supabase.get_rows(
+            "rides",
+            {"status": "completed", "ride_completed_at": {"$gte": today_start}},
+            limit=5000,
+        ),
+        db_supabase.get_rows(
+            "rides",
+            {"status": "completed", "ride_completed_at": {"$gte": month_start}},
+            limit=5000,
+        ),
     )
-    total_users = await db_supabase.count_documents("users", {})
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    rides_today = await db_supabase.count_documents("rides", {"created_at": {"$gte": today_start}})
-    completed_today = await db_supabase.get_rows(
-        "rides",
-        {"status": "completed", "ride_completed_at": {"$gte": today_start}},
-        limit=10000,
-    )
+
     revenue_today = sum(float(r.get("total_fare") or 0) for r in (completed_today or []))
-    month_start = (datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)).isoformat()
-    completed_month = await db_supabase.get_rows(
-        "rides",
-        {"status": "completed", "ride_completed_at": {"$gte": month_start}},
-        limit=10000,
-    )
     revenue_month = sum(float(r.get("total_fare") or 0) for r in completed_month)
     # Earnings + tip totals are aggregated over completed rides in the
     # current month; upstream's stats API never wired these up so we compute
@@ -286,7 +306,6 @@ async def admin_get_stats():
     total_driver_earnings = sum(float(r.get("driver_earnings") or 0) for r in completed_month)
     total_admin_earnings = sum(float(r.get("admin_earnings") or 0) for r in completed_month)
     total_tips = sum(float(r.get("tip_amount") or 0) for r in completed_month)
-    pending_applications = await db_supabase.count_documents("drivers", {"is_verified": False})
     return {
         # Fields the dashboard page expects
         "total_rides": total_rides,
@@ -431,19 +450,10 @@ async def admin_get_ride_invoice(ride_id: str):
         "driver_phone": ride.get("driver_phone", ""),
         "driver_vehicle": ride.get("driver_vehicle", ""),
         "driver_license_plate": ride.get("driver_license_plate", ""),
-        "pickup_lat": ride.get("pickup_lat"),
-        "pickup_lng": ride.get("pickup_lng"),
-        "dropoff_lat": ride.get("dropoff_lat"),
-        "dropoff_lng": ride.get("dropoff_lng"),
         "actual_distance_km": ride.get("actual_distance_km"),
-        # Privacy: only expose trail phases relevant to the paid ride.
-        # Filters out `online_idle` and any other pre-trip wandering so the
-        # invoice cannot leak the driver's unrelated movements.
-        "location_trail": [
-            p
-            for p in (ride.get("location_trail") or [])
-            if p.get("tracking_phase") in ("navigating_to_pickup", "trip_in_progress")
-        ],
+        # GPS coordinates are omitted (F-42/PIPEDA data minimisation).
+        # The route map image is served separately via /rides/{id}/route-map.png,
+        # which keeps raw coordinates server-side and returns only a PNG.
     }
 
 
@@ -637,13 +647,26 @@ async def admin_get_earnings(period: str = Query("month")):
 # ---------- Exports ----------
 
 
+_EXPORT_MAX_ROWS = 10_000
+
+
 @router.get("/export/rides")
 async def admin_export_rides(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    limit: int = Query(1000, ge=1, le=_EXPORT_MAX_ROWS),
+    admin: dict = Depends(get_admin_user),
 ):
-    """Export rides data (schema: total_fare)."""
-    rides = await db_supabase.get_rows("rides", order="created_at", desc=True, limit=1000)
+    """Export rides data (schema: total_fare). Writes an audit log entry (F-41)."""
+    import uuid  # noqa: PLC0415
+
+    date_filter: Dict[str, Any] = {}
+    if start_date:
+        date_filter.setdefault("created_at", {})["$gte"] = start_date
+    if end_date:
+        date_filter.setdefault("created_at", {})["$lte"] = end_date + "T23:59:59Z"
+
+    rides = await db_supabase.get_rows("rides", date_filter, order="created_at", desc=True, limit=limit)
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
     drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
@@ -666,13 +689,31 @@ async def admin_export_rides(
                 else (driver.get("name") if driver else None),
             }
         )
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "export_rides",
+            "resource": "rides",
+            "resource_id": None,
+            "details": {"row_count": len(out), "start_date": start_date, "end_date": end_date},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     return {"rides": out, "count": len(out)}
 
 
 @router.get("/export/drivers")
-async def admin_export_drivers():
-    """Export drivers data."""
-    drivers = await db_supabase.get_rows("drivers", order="created_at", desc=True, limit=1000)
+async def admin_export_drivers(
+    limit: int = Query(1000, ge=1, le=_EXPORT_MAX_ROWS),
+    admin: dict = Depends(get_admin_user),
+):
+    """Export drivers data. Writes an audit log entry (F-41)."""
+    import uuid  # noqa: PLC0415
+
+    drivers = await db_supabase.get_rows("drivers", order="created_at", desc=True, limit=limit)
     user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
     users_list = (
         await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
@@ -696,6 +737,19 @@ async def admin_export_drivers():
                 "created_at": d.get("created_at"),
             }
         )
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "export_drivers",
+            "resource": "drivers",
+            "resource_id": None,
+            "details": {"row_count": len(out)},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     return {"drivers": out, "count": len(out)}
 
 

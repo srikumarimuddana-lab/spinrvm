@@ -114,6 +114,13 @@ export interface AdminLoginResponse {
     };
 }
 
+export interface AdminMfaRequired {
+    mfa_required: true;
+    mfa_token: string;
+}
+
+export type AdminLoginResult = AdminLoginResponse | AdminMfaRequired;
+
 export const loginAdmin = (phone: string, code: string) =>
     request<AuthResponse>("/api/auth/verify-otp", {
         method: "POST",
@@ -121,9 +128,33 @@ export const loginAdmin = (phone: string, code: string) =>
     });
 
 export const loginAdminSession = (email: string, password: string) =>
-    request<AdminLoginResponse>("/api/admin/auth/login", {
+    request<AdminLoginResult>("/api/admin/auth/login", {
         method: "POST",
         body: JSON.stringify({ email, password }),
+    });
+
+export const mfaChallenge = (mfa_token: string, totp_code: string) =>
+    request<AdminLoginResponse>("/api/admin/auth/mfa/challenge", {
+        method: "POST",
+        body: JSON.stringify({ mfa_token, totp_code }),
+    });
+
+export const mfaStatus = () =>
+    request<{ mfa_enabled: boolean }>("/api/admin/auth/mfa/status");
+
+export const mfaEnroll = () =>
+    request<{ secret: string; otpauth_uri: string }>("/api/admin/auth/mfa/enroll", { method: "POST" });
+
+export const mfaConfirm = (totp_code: string) =>
+    request<{ backup_codes: string[] }>("/api/admin/auth/mfa/confirm", {
+        method: "POST",
+        body: JSON.stringify({ totp_code }),
+    });
+
+export const mfaDisable = (totp_code: string, password: string) =>
+    request<{ success: boolean }>("/api/admin/auth/mfa/disable", {
+        method: "POST",
+        body: JSON.stringify({ totp_code, password }),
     });
 
 export const sendOtp = (phone: string) =>

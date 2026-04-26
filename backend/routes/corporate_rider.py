@@ -15,6 +15,7 @@ try:
         get_rows,
         insert_allowance_request,
         list_active_memberships_for_user,
+        list_allowed_domains,
         list_company_allowance_requests,
         list_pending_allowance_requests_for_member,
     )
@@ -130,6 +131,16 @@ async def do_join_domain(
     body: JoinDomainBody,
     current_user: dict = Depends(get_current_user),
 ):
+    # Validate the email domain is in this company's allowlist before creating
+    # the membership. Without this check any authenticated rider could supply
+    # an arbitrary company_id and join that account.
+    if "@" not in body.email:
+        raise HTTPException(status_code=400, detail="invalid email address")
+    domain = body.email.split("@")[-1].lower()
+    allowed = await list_allowed_domains(body.company_id)
+    if not any(d.get("domain", "").lower() == domain for d in allowed):
+        raise HTTPException(status_code=403, detail="email domain not authorized for this company")
+
     member = await join_via_domain(
         company_id=body.company_id,
         user_id=current_user["id"],

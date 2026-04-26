@@ -15,11 +15,6 @@
  * Code under test: driver-app/hooks/useDriverDashboard.ts::uploadLocationBatch (~L251)
  */
 
-const mockPost = jest.fn();
-const mockRemoveItem = jest.fn(() => Promise.resolve());
-const mockSetItem = jest.fn(() => Promise.resolve());
-const mockGetItem = jest.fn(() => Promise.resolve(null));
-
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios', select: (o: any) => o.ios },
   Vibration: { vibrate: jest.fn() },
@@ -30,9 +25,9 @@ jest.mock('react-native', () => ({
 jest.mock('@react-native-async-storage/async-storage', () => ({
   __esModule: true,
   default: {
-    getItem: mockGetItem,
-    setItem: mockSetItem,
-    removeItem: mockRemoveItem,
+    getItem: jest.fn(() => Promise.resolve(null)),
+    setItem: jest.fn(() => Promise.resolve()),
+    removeItem: jest.fn(() => Promise.resolve()),
   },
 }));
 
@@ -52,7 +47,7 @@ jest.mock('../../config', () => ({
 
 jest.mock('../../api/client', () => ({
   __esModule: true,
-  default: { post: mockPost, get: jest.fn(), put: jest.fn() },
+  default: { post: jest.fn(), get: jest.fn(), put: jest.fn() },
 }));
 
 jest.mock('@shared/services/firebase', () => ({
@@ -70,6 +65,10 @@ const MAX_LOCATION_RETRIES = 3;
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from '../../api/client';
+
+const mockPost = api.post as jest.Mock;
+const mockSetItem = AsyncStorage.setItem as jest.Mock;
+const mockRemoveItem = AsyncStorage.removeItem as jest.Mock;
 
 async function uploadLocationBatch(
   buffer: { current: any[] },

@@ -3,13 +3,17 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
+    from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user  # noqa: F401
+    from utils.audit_logger import log_admin_action  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +152,7 @@ async def admin_get_promotions(
 
 
 @router.post("/promotions")
-async def admin_create_promotion(promotion: PromotionCreateRequest):
+async def admin_create_promotion(promotion: PromotionCreateRequest, admin: dict = Depends(get_admin_user)):
     """Create a new promotion/discount code."""
     # Reject negative discount values — a negative discount is a charge (F-30).
     if promotion.discount_value < 0:
@@ -221,7 +225,15 @@ async def admin_create_promotion(promotion: PromotionCreateRequest):
         logger.warning("Promotions insert failed with optional fields, retrying without them")
         row = await db_supabase.insert_one("promotions", doc)
 
-    return {"promotion_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+    promotion_id = str(row.get("id") if row and isinstance(row, dict) else "")
+    await log_admin_action(
+        admin,
+        "promotion_created",
+        "promotions",
+        promotion_id,
+        {"code": doc["code"], "promo_type": doc["promo_type"], "discount_value": doc["discount_value"]},
+    )
+    return {"promotion_id": promotion_id}
 
 
 @router.get("/promotions/usage")
@@ -343,7 +355,9 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
 
 
 @router.put("/promotions/{promotion_id}")
-async def admin_update_promotion(promotion_id: str, promotion: PromotionUpdateRequest):
+async def admin_update_promotion(
+    promotion_id: str, promotion: PromotionUpdateRequest, admin: dict = Depends(get_admin_user)
+):
     """Update a promotion."""
     updates = promotion.model_dump(exclude_none=True)
 
@@ -357,11 +371,19 @@ async def admin_update_promotion(promotion_id: str, promotion: PromotionUpdateRe
                 updates.pop(f, None)
             if updates:
                 await db_supabase.update_one("promotions", {"id": promotion_id}, updates)
+        await log_admin_action(
+            admin,
+            "promotion_updated",
+            "promotions",
+            promotion_id,
+            {"updated_fields": list(updates.keys())},
+        )
     return {"message": "Promotion updated"}
 
 
 @router.delete("/promotions/{promotion_id}")
-async def admin_delete_promotion(promotion_id: str):
+async def admin_delete_promotion(promotion_id: str, admin: dict = Depends(get_admin_user)):
     """Delete a promotion."""
     await db_supabase.delete_many("promotions", {"id": promotion_id})
+    await log_admin_action(admin, "promotion_deleted", "promotions", promotion_id)
     return {"message": "Promotion deleted"}

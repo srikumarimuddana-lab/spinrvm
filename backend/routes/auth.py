@@ -93,9 +93,7 @@ async def _record_otp_failure(phone: str) -> None:
                 "1",
                 settings.OTP_LOCKOUT_DURATION_SECONDS,
             )
-            logger.warning(
-                f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures"
-            )
+            logger.warning(f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures")
     except Exception as e:
         logger.warning(f"_record_otp_failure: {e}")
 
@@ -133,6 +131,7 @@ def _make_auth_response(
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
     )
+
 
 @api_router.post("/send-otp")
 @limiter.limit("3/minute")
@@ -212,6 +211,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
         # R-P1-14: Fetch by phone only; compare hashes in constant time with
         # hmac.compare_digest to prevent timing-based hash-prefix leakage.
         import hmac as _hmac
+
         otp_record = await db_supabase.get_otp_record_by_phone(phone)
         if otp_record:
             expected = otp_record.get("code", "")
@@ -278,10 +278,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             # wraps the original exception in .details["original"]; str(e)
             # only gives the generic "Database operation failed" message.
             original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
-            logger.error(
-                f"get_user_by_phone failed for {phone}: type={type(e).__name__} "
-                f"msg={e} original={original}"
-            )
+            logger.error(f"get_user_by_phone failed for {phone}: type={type(e).__name__} msg={e} original={original}")
             # Refuse to silently fall through to user creation — a DB read
             # failure is NOT the same as "user doesn't exist". Creating a
             # new row here generates duplicate accounts on every retry and
@@ -400,6 +397,7 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
     """
     try:
         from firebase_admin import auth as _firebase_auth  # type: ignore
+
         payload = _firebase_auth.verify_id_token(body.firebase_token)
     except Exception as e:
         raise HTTPException(status_code=401, detail="Invalid Firebase token") from e

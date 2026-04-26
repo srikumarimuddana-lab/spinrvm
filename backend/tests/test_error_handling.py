@@ -1,6 +1,5 @@
 """Tests for error handling utilities (tasks 10-3 through 10-6)."""
 
-
 import pytest
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
@@ -30,6 +29,7 @@ def _make_request(origin: str = "http://localhost:3000") -> Request:
 # ---------------------------------------------------------------------------
 # DatabaseError / DuplicateRecordError class tests (task 10-6)
 # ---------------------------------------------------------------------------
+
 
 class TestDatabaseErrorClass:
     def test_database_error_status(self):
@@ -67,6 +67,7 @@ class TestDuplicateRecordErrorClass:
 # run_sync wrapping tests (task 10-6)
 # ---------------------------------------------------------------------------
 
+
 class TestRunSyncErrorWrapping:
     @pytest.mark.asyncio
     async def test_run_sync_wraps_generic_error_as_database_error(self):
@@ -103,6 +104,7 @@ class TestRunSyncErrorWrapping:
 # CORS headers on spinr_exception_handler (task 10-4)
 # ---------------------------------------------------------------------------
 
+
 class TestSpinrExceptionHandlerError:
     @pytest.mark.asyncio
     async def test_spinr_handler_has_cors_headers(self):
@@ -121,6 +123,7 @@ class TestSpinrExceptionHandlerError:
     @pytest.mark.asyncio
     async def test_spinr_handler_includes_request_id_in_body(self):
         import json
+
         request = _make_request()
         exc = SpinrException(message="oops", status_code=400)
         response = await spinr_exception_handler(request, exc)
@@ -131,6 +134,7 @@ class TestSpinrExceptionHandlerError:
 # ---------------------------------------------------------------------------
 # CORS headers on validation_exception_handler (task 10-3)
 # ---------------------------------------------------------------------------
+
 
 class TestValidationExceptionHandlerError:
     @pytest.mark.asyncio
@@ -185,6 +189,7 @@ class TestValidationExceptionHandlerError:
 # ---------------------------------------------------------------------------
 # Supabase connection pool timeout (task 10-5)
 # ---------------------------------------------------------------------------
+
 
 class TestSupabaseClientTimeout:
     def test_explicit_timeout_configured(self):

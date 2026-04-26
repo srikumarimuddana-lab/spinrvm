@@ -269,9 +269,7 @@ async def get_audit_logs(
                 {"entity_id": {"$regex": term, "$options": "i"}},
                 {"details": {"$regex": term, "$options": "i"}},
             ]
-    logs = await db_supabase.get_rows(
-        "audit_logs", filters, order="created_at", desc=True, limit=limit, offset=offset
-    )
+    logs = await db_supabase.get_rows("audit_logs", filters, order="created_at", desc=True, limit=limit, offset=offset)
     return logs
 
 

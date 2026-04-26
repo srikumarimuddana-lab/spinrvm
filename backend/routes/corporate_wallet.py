@@ -1,4 +1,5 @@
 """Super-admin corporate wallet endpoints."""
+
 from __future__ import annotations
 
 from typing import Optional
@@ -43,9 +44,7 @@ async def get_wallet(
     limit: int = 50,
     current_admin: dict = Depends(get_admin_user),
 ):
-    _valid, normalized_id = validate_id(
-        company_id, "Corporate Account ID", raise_exception=True
-    )
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
     wallet = await get_corporate_wallet_by_company(normalized_id)
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found")
@@ -75,9 +74,7 @@ async def manual_topup(
     body: TopUpRequest,
     current_admin: dict = Depends(get_admin_user),
 ):
-    _valid, normalized_id = validate_id(
-        company_id, "Corporate Account ID", raise_exception=True
-    )
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
     company = await get_corporate_account_by_id(normalized_id)
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
@@ -123,9 +120,7 @@ async def manual_adjust(
     body: AdjustRequest,
     current_admin: dict = Depends(get_admin_user),
 ):
-    _valid, normalized_id = validate_id(
-        company_id, "Corporate Account ID", raise_exception=True
-    )
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
     wallet = await get_corporate_wallet_by_company(normalized_id)
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found")
@@ -153,9 +148,7 @@ async def update_wallet_config(
     body: WalletConfigPatch,
     current_admin: dict = Depends(get_admin_user),
 ):
-    _valid, normalized_id = validate_id(
-        company_id, "Corporate Account ID", raise_exception=True
-    )
+    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
     wallet = await get_corporate_wallet_by_company(normalized_id)
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found")

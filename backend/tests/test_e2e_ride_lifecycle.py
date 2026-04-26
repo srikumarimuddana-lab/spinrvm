@@ -25,13 +25,13 @@ Marked `e2e` so CI can filter them independently from fast unit tests:
     pytest -m "not e2e"    # fast
     pytest -m e2e          # full lifecycle
 """
+
 from __future__ import annotations
 
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 RIDER_ID = "rider_e2e"
 DRIVER_USER_ID = "driver_user_e2e"
@@ -105,9 +105,7 @@ class TestRideLifecycleHappyPath:
             patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()) as ws_mock,
             patch("backend.routes.drivers.send_push_notification", AsyncMock()),
         ):
-            result = await drv_mod.accept_ride(
-                ride_id=RIDE_ID, current_user={"id": DRIVER_USER_ID}
-            )
+            result = await drv_mod.accept_ride(ride_id=RIDE_ID, current_user={"id": DRIVER_USER_ID})
 
         assert isinstance(result, dict)
         assert result.get("status") == "driver_accepted"
@@ -201,9 +199,7 @@ class TestRideLifecycleConcurrency:
                 return_exceptions=True,
             )
 
-        statuses = sorted(
-            [200 if isinstance(r, dict) else r.status_code for r in results]
-        )
+        statuses = sorted([200 if isinstance(r, dict) else r.status_code for r in results])
         assert statuses == [200, 409]
 
 

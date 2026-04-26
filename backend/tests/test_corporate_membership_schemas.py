@@ -1,4 +1,5 @@
 """Schema tests for Plan 3 (members, allowances, requests, domains)."""
+
 from datetime import date
 
 import pytest

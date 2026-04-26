@@ -15,6 +15,7 @@ Run as:
     pytest backend/tests/test_p0_ship_blockers.py -v
     pytest -m e2e backend/tests/test_p0_ship_blockers.py  # lifecycle subset
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -23,7 +24,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from backend.utils.stripe_charge import ChargeOutcome
-
 
 RIDER_ID = "rider_p0"
 DRIVER_USER_ID = "driver_user_p0"
@@ -121,8 +121,7 @@ class TestDriverCancelNotifiesRider:
 
         rider_channels = [c for c, _ in ws_calls if f"rider_{RIDER_ID}" in str(c)]
         assert rider_channels, (
-            f"Driver cancellation did not notify rider channel. "
-            f"Channels seen: {[c for c, _ in ws_calls]}"
+            f"Driver cancellation did not notify rider channel. Channels seen: {[c for c, _ in ws_calls]}"
         )
 
         cancel_msgs = [m for _, m in ws_calls if m.get("type") == "ride_cancelled"]
@@ -204,10 +203,9 @@ class TestNoDriversAvailableTimeout:
         assert update_patch["status"] == "cancelled"
         assert "cancellation_reason" in update_patch
 
-        assert any(
-            f"rider_{RIDER_ID}" in str(c) and m.get("type") == "ride_cancelled"
-            for c, m in ws_calls
-        ), "Rider channel was not notified on search timeout"
+        assert any(f"rider_{RIDER_ID}" in str(c) and m.get("type") == "ride_cancelled" for c, m in ws_calls), (
+            "Rider channel was not notified on search timeout"
+        )
 
         assert push_calls and push_calls[0]["user_id"] == RIDER_ID
         assert push_calls[0]["data"].get("is_auto") is True
@@ -280,9 +278,7 @@ class TestDuplicateRideRequestGuardHandler:
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[active])),
         ):
             with pytest.raises(HTTPException) as exc_info:
-                await rides_mod.create_ride(
-                    request=fake_request, body=body, current_user={"id": RIDER_ID}
-                )
+                await rides_mod.create_ride(request=fake_request, body=body, current_user={"id": RIDER_ID})
 
         assert exc_info.value.status_code == 409
         assert "active" in exc_info.value.detail.lower()
@@ -317,9 +313,7 @@ class TestDuplicateRideRequestGuardHandler:
             patch("backend.routes.rides.db_supabase.find_one", AsyncMock(return_value=original)),
             patch("backend.routes.rides.db_supabase.insert_ride", insert_mock),
         ):
-            result = await rides_mod.create_ride(
-                request=fake_request, body=body, current_user={"id": RIDER_ID}
-            )
+            result = await rides_mod.create_ride(request=fake_request, body=body, current_user={"id": RIDER_ID})
 
         assert result == original
         insert_mock.assert_not_called()
@@ -347,7 +341,10 @@ class TestDuplicateRideRequestGuard:
 
         with (
             patch("backend.routes.rides.db_supabase.find_one", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.db.find_one", AsyncMock(return_value={"id": RIDER_ID, "status": "active", "stripe_customer_id": "cus_x"})),
+            patch(
+                "backend.routes.rides.db.find_one",
+                AsyncMock(return_value={"id": RIDER_ID, "status": "active", "stripe_customer_id": "cus_x"}),
+            ),
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[active])),
             patch("backend.dependencies.get_current_user", lambda: {"id": RIDER_ID}),
         ):
@@ -489,9 +486,7 @@ class TestSurgeBoundaryConsistency:
             dropoff_lng=-106.65,
         )
 
-        assert payload["sm"] == 1.5, (
-            "Surge-lock broken: estimate_token did not preserve surge_multiplier"
-        )
+        assert payload["sm"] == 1.5, "Surge-lock broken: estimate_token did not preserve surge_multiplier"
         assert payload["tf"] == 27.75
 
 
@@ -563,22 +558,31 @@ class TestCreateRideHonorsEstimateToken:
 
         with (
             patch("backend.routes.rides.db.find_one", AsyncMock(return_value=rider_row)),
-            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=[
-                [],  # no active ride
-                [],  # service_areas (empty is fine — no airport)
-                [{"id": "economy"}],  # vehicle_types
-            ])),
+            patch(
+                "backend.routes.rides.db_supabase.get_rows",
+                AsyncMock(
+                    side_effect=[
+                        [],  # no active ride
+                        [],  # service_areas (empty is fine — no airport)
+                        [{"id": "economy"}],  # vehicle_types
+                    ]
+                ),
+            ),
             patch("backend.routes.rides._fares_for_location_impl", AsyncMock(return_value=[fare_info])),
             patch("backend.routes.rides.calculate_airport_fee", AsyncMock(return_value={"airport_fee": 0.0})),
-            patch("backend.routes.rides.calculate_all_fees", AsyncMock(return_value={"fees_total": 0.0, "tax_amount": 0.0})),
+            patch(
+                "backend.routes.rides.calculate_all_fees",
+                AsyncMock(return_value={"fees_total": 0.0, "tax_amount": 0.0}),
+            ),
             patch("backend.routes.rides.db_supabase.insert_ride", AsyncMock(side_effect=_capture_insert)),
             patch("backend.routes.rides.match_driver_to_ride", AsyncMock()),
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value={"id": "ride_new_001", "status": "searching"})),
+            patch(
+                "backend.routes.rides.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_new_001", "status": "searching"}),
+            ),
             patch("backend.routes.rides.asyncio.create_task", lambda coro: coro.close()),
         ):
-            await rides_mod.create_ride(
-                request=fake_request, body=body, current_user={"id": RIDER_ID}
-            )
+            await rides_mod.create_ride(request=fake_request, body=body, current_user={"id": RIDER_ID})
 
         assert inserted_rows, "create_ride did not insert a ride"
         inserted = inserted_rows[0]
@@ -628,7 +632,10 @@ class TestPaymentFailureAtComplete:
             patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=completed)),
             patch("backend.routes.rides.db.update_one", AsyncMock(return_value=update_one_mock)),
             patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()),
-            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value={"id": RIDER_ID, "email": "r@s.ca"})),
+            patch(
+                "backend.routes.rides.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"id": RIDER_ID, "email": "r@s.ca"}),
+            ),
             patch("backend.routes.wallet.get_or_create_wallet", AsyncMock(return_value=wallet)),
             patch("backend.routes.wallet._record_transaction", AsyncMock()),
         ):
@@ -636,9 +643,7 @@ class TestPaymentFailureAtComplete:
             from backend.routes.rides import ProcessPaymentRequest
 
             req = ProcessPaymentRequest(tip_amount=2.0)
-            result = await rides_mod.process_payment(
-                ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID}
-            )
+            result = await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         assert result["success"] is True
         assert result["charged_amount"] == 20.5  # 18.5 + 2.0 tip
@@ -674,16 +679,11 @@ class TestPaymentFailureAtComplete:
             req = ProcessPaymentRequest(tip_amount=0)
 
             with pytest.raises(HTTPException) as exc:
-                await rides_mod.process_payment(
-                    ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID}
-                )
+                await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         assert exc.value.status_code == 400
         # Retry is possible — payment_status must be released back to pending
-        assert any(
-            p.get("payment_status") == "pending"
-            for _, p in update_ride_calls
-        ), (
+        assert any(p.get("payment_status") == "pending" for _, p in update_ride_calls), (
             "Insufficient-balance rejection did not release the payment_status "
             "lock. Rider is now blocked from retrying with a card."
         )
@@ -722,28 +722,29 @@ class TestPaymentFailureAtComplete:
         with (
             patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=completed)),
             patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
-            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value={"id": RIDER_ID, "email": "r@s.ca", "stripe_customer_id": "cus_test"})),
+            patch(
+                "backend.routes.rides.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"id": RIDER_ID, "email": "r@s.ca", "stripe_customer_id": "cus_test"}),
+            ),
             patch("backend.routes.rides.charge_ride", AsyncMock(return_value=declined_outcome)),
         ):
             from backend.routes.rides import ProcessPaymentRequest
 
             req = ProcessPaymentRequest(tip_amount=0)
             with pytest.raises(HTTPException) as exc:
-                await rides_mod.process_payment(
-                    ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID}
-                )
+                await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         assert exc.value.status_code == 402
         assert exc.value.detail.get("code") == "card_declined"
 
         # payment_status must be set to 'failed' so the rider can retry
-        assert any(
-            p.get("payment_status") == "failed"
-            for _, p in update_ride_calls
-        ), "Card decline did not flip payment_status to 'failed' — rider cannot retry."
+        assert any(p.get("payment_status") == "failed" for _, p in update_ride_calls), (
+            "Card decline did not flip payment_status to 'failed' — rider cannot retry."
+        )
 
 
 # ── E3: Stripe charge at completion ─────────────────────────────────────────
+
 
 def _patch_settings(secret: str = "sk_test_xxx"):
     from unittest.mock import AsyncMock as _AM
@@ -777,6 +778,7 @@ _BASE_KW = dict(
 
 # ── E3-1: Happy path — PaymentIntent.confirm succeeds ───────────────────────
 
+
 @pytest.mark.asyncio
 class TestE3HappyPath:
     async def test_confirm_called_instead_of_create(self):
@@ -805,9 +807,7 @@ class TestE3HappyPath:
         from backend.utils.stripe_charge import charge_ride
 
         mock_stripe = MagicMock()
-        mock_stripe.PaymentIntent.create.return_value = MagicMock(
-            id="pi_new", status="succeeded", client_secret=None
-        )
+        mock_stripe.PaymentIntent.create.return_value = MagicMock(id="pi_new", status="succeeded", client_secret=None)
 
         kw = {**_BASE_KW, "payment_intent_id": None}
         with _patch_settings(), patch("backend.utils.stripe_charge.stripe", mock_stripe):
@@ -819,6 +819,7 @@ class TestE3HappyPath:
 
 
 # ── E3-2: Card declined — confirm raises CardError → HTTP 402 ───────────────
+
 
 @pytest.mark.asyncio
 class TestE3CardDecline:
@@ -840,9 +841,11 @@ class TestE3CardDecline:
         mock_stripe = MagicMock()
         mock_stripe.PaymentIntent.confirm.side_effect = _FakeCardError()
 
-        with _patch_settings(), \
-             patch("backend.utils.stripe_charge.stripe", mock_stripe), \
-             patch("backend.utils.stripe_charge._StripeCardError", _FakeCardError):
+        with (
+            _patch_settings(),
+            patch("backend.utils.stripe_charge.stripe", mock_stripe),
+            patch("backend.utils.stripe_charge._StripeCardError", _FakeCardError),
+        ):
             outcome = await charge_ride(**_BASE_KW)
 
         assert outcome.status == "declined"
@@ -864,6 +867,7 @@ class TestE3CardDecline:
 
 # ── E3-3: Stripe unavailable — network / import failure → graceful fallback ─
 
+
 @pytest.mark.asyncio
 class TestE3StripeUnavailable:
     async def test_stripe_base_error_returns_failed(self):
@@ -877,9 +881,7 @@ class TestE3StripeUnavailable:
             pass
 
         mock_stripe = MagicMock()
-        mock_stripe.PaymentIntent.confirm.side_effect = _FakeStripeError(
-            "api_connection_error: Unable to reach Stripe"
-        )
+        mock_stripe.PaymentIntent.confirm.side_effect = _FakeStripeError("api_connection_error: Unable to reach Stripe")
 
         # Patch _StripeCardError to a class _FakeStripeError does NOT inherit
         # from so the except-CardError branch is skipped and the
@@ -887,10 +889,12 @@ class TestE3StripeUnavailable:
         class _UnrelatedCardError(Exception):
             pass
 
-        with _patch_settings(), \
-             patch("backend.utils.stripe_charge.stripe", mock_stripe), \
-             patch("backend.utils.stripe_charge._StripeCardError", _UnrelatedCardError), \
-             patch("backend.utils.stripe_charge._StripeBaseError", _FakeStripeError):
+        with (
+            _patch_settings(),
+            patch("backend.utils.stripe_charge.stripe", mock_stripe),
+            patch("backend.utils.stripe_charge._StripeCardError", _UnrelatedCardError),
+            patch("backend.utils.stripe_charge._StripeBaseError", _FakeStripeError),
+        ):
             outcome = await charge_ride(**_BASE_KW)
 
         assert outcome.status == "failed"
@@ -920,6 +924,7 @@ class TestE3StripeUnavailable:
 # These tests stub charge_ride() and db_supabase to verify that process_payment
 # maps ChargeOutcome → the correct HTTP status codes without needing a live DB.
 
+
 def _make_ride(payment_intent_id: str | None = None) -> dict:
     return {
         "id": "ride_http_1",
@@ -943,11 +948,11 @@ def _app_with_mocked_auth(user_id: str = "user_1"):
     from fastapi.testclient import TestClient
 
     try:
-        from backend.routes.rides import api_router
         from backend.dependencies import get_current_user
+        from backend.routes.rides import api_router
     except ImportError:
-        from routes.rides import api_router
         from dependencies import get_current_user
+        from routes.rides import api_router
 
     app = FastAPI()
     app.include_router(api_router)  # router has prefix="/rides" built in
@@ -993,16 +998,15 @@ class TestProcessPaymentHTTP:
         ride = _make_ride()
         outcome = ChargeOutcome(status="succeeded", payment_intent_id="pi_ok", charged_amount=20.0)
 
-        with patch.object(rides_mod, "db_supabase") as mock_db, \
-             patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)), \
-             patch.object(rides_mod, "db") as _mock_legacy_db:
-
+        with (
+            patch.object(rides_mod, "db_supabase") as mock_db,
+            patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)),
+            patch.object(rides_mod, "db") as _mock_legacy_db,
+        ):
             mock_db.get_ride = AsyncMock(return_value=ride)
             mock_db.get_user_by_id = AsyncMock(return_value={"stripe_customer_id": "cus_1"})
             mock_db.update_ride = AsyncMock()
-            _mock_legacy_db.update_one = AsyncMock(
-                return_value=MagicMock(modified_count=1)
-            )
+            _mock_legacy_db.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
 
             client = _app_with_mocked_auth()
             resp = client.post("/rides/ride_http_1/process-payment", json={"tip_amount": "0"})
@@ -1020,16 +1024,15 @@ class TestProcessPaymentHTTP:
             error_message="Your card has insufficient funds.",
         )
 
-        with patch.object(rides_mod, "db_supabase") as mock_db, \
-             patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)), \
-             patch.object(rides_mod, "db") as _mock_legacy_db:
-
+        with (
+            patch.object(rides_mod, "db_supabase") as mock_db,
+            patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)),
+            patch.object(rides_mod, "db") as _mock_legacy_db,
+        ):
             mock_db.get_ride = AsyncMock(return_value=ride)
             mock_db.get_user_by_id = AsyncMock(return_value={"stripe_customer_id": "cus_1"})
             mock_db.update_ride = AsyncMock()
-            _mock_legacy_db.update_one = AsyncMock(
-                return_value=MagicMock(modified_count=1)
-            )
+            _mock_legacy_db.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
 
             client = _app_with_mocked_auth()
             resp = client.post("/rides/ride_http_1/process-payment", json={"tip_amount": "0"})
@@ -1048,16 +1051,15 @@ class TestProcessPaymentHTTP:
             error_message="api_connection_error: Unable to reach Stripe",
         )
 
-        with patch.object(rides_mod, "db_supabase") as mock_db, \
-             patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)), \
-             patch.object(rides_mod, "db") as _mock_legacy_db:
-
+        with (
+            patch.object(rides_mod, "db_supabase") as mock_db,
+            patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)),
+            patch.object(rides_mod, "db") as _mock_legacy_db,
+        ):
             mock_db.get_ride = AsyncMock(return_value=ride)
             mock_db.get_user_by_id = AsyncMock(return_value={"stripe_customer_id": "cus_1"})
             mock_db.update_ride = AsyncMock()
-            _mock_legacy_db.update_one = AsyncMock(
-                return_value=MagicMock(modified_count=1)
-            )
+            _mock_legacy_db.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
 
             client = _app_with_mocked_auth()
             resp = client.post("/rides/ride_http_1/process-payment", json={"tip_amount": "0"})

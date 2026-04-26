@@ -106,9 +106,7 @@ async def check_expiring_documents():
         # spam-guard below — expiry events must always trigger a new notification.
         if expired_docs:
             doc_list = ", ".join(expired_docs)
-            logger.warning(
-                f"Doc expiry: driver {driver['id']} has expired docs ({doc_list}) — suspending"
-            )
+            logger.warning(f"Doc expiry: driver {driver['id']} has expired docs ({doc_list}) — suspending")
             # 1. Suspension
             try:
                 await db.update_one(
@@ -149,24 +147,15 @@ async def check_expiring_documents():
 
         if days_left == 0:
             notif_title = f"{soonest['label']} expires today"
-            notif_body = (
-                f"Your {soonest['label']} expires today. "
-                "Renew now to avoid account suspension."
-            )
+            notif_body = f"Your {soonest['label']} expires today. Renew now to avoid account suspension."
             notif_type = "document_expiry_today"
         elif days_left == 1:
             notif_title = f"{soonest['label']} expires tomorrow"
-            notif_body = (
-                f"Your {soonest['label']} expires tomorrow — "
-                "renew now or you'll be suspended."
-            )
+            notif_body = f"Your {soonest['label']} expires tomorrow — renew now or you'll be suspended."
             notif_type = "document_expiry_1day"
         else:
             notif_title = f"Document expiring in {days_left} days"
-            notif_body = (
-                f"Please renew: {doc_list}. "
-                "You won't be able to go online with expired documents."
-            )
+            notif_body = f"Please renew: {doc_list}. You won't be able to go online with expired documents."
             notif_type = "document_expiry_warning"
 
         # Spam-guard: apply 24 h throttle only for the 7-day tier.

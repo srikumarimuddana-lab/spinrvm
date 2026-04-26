@@ -17,13 +17,13 @@ Code under test: backend/routes/rides.py::create_ride (~line 589)
 Run:
     pytest backend/tests/test_e8_duplicate_ride.py -v
 """
+
 from __future__ import annotations
 
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 RIDER_ID = "rider_e8"
 RIDE_ID = "ride_e8_001"
@@ -43,6 +43,7 @@ def _active_ride(status: str = "searching") -> dict:
 
 def _body():
     from backend.schemas import CreateRideRequest
+
     return CreateRideRequest(
         vehicle_type_id="standard",
         pickup_address="123 Main St",
@@ -64,6 +65,7 @@ def _mock_request(idempotency_key: str | None = None):
 # Active-ride guard (double-tap without idempotency key)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.e2e
 @pytest.mark.asyncio
 class TestActiveRideGuard:
@@ -73,11 +75,18 @@ class TestActiveRideGuard:
     The first request creates a ride; the second must be rejected.
     """
 
-    @pytest.mark.parametrize("active_status", [
-        "searching", "driver_accepted", "driver_arrived", "in_progress",
-    ])
+    @pytest.mark.parametrize(
+        "active_status",
+        [
+            "searching",
+            "driver_accepted",
+            "driver_arrived",
+            "in_progress",
+        ],
+    )
     async def test_second_request_rejected_409_when_ride_active(self, active_status):
         from fastapi import HTTPException
+
         from backend.routes import rides as rides_mod
 
         rider_row = {"id": RIDER_ID, "status": "active", "stripe_customer_id": "cus_x"}
@@ -85,8 +94,7 @@ class TestActiveRideGuard:
         with (
             patch("backend.routes.rides.db_supabase.find_one", AsyncMock(return_value=None)),
             patch("backend.routes.rides.db.find_one", AsyncMock(return_value=rider_row)),
-            patch("backend.routes.rides.db_supabase.get_rows",
-                  AsyncMock(return_value=[_active_ride(active_status)])),
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[_active_ride(active_status)])),
             patch("backend.routes.rides.validate_ride_location", return_value=None),
         ):
             with pytest.raises(HTTPException) as exc:
@@ -114,10 +122,8 @@ class TestActiveRideGuard:
             patch("backend.routes.rides.validate_ride_location", return_value=None),
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={})),
-            patch("backend.routes.rides.db_supabase.insert_ride",
-                  AsyncMock(return_value=new_ride)),
-            patch("backend.routes.rides.db_supabase.insert_one",
-                  AsyncMock(return_value=new_ride)),
+            patch("backend.routes.rides.db_supabase.insert_ride", AsyncMock(return_value=new_ride)),
+            patch("backend.routes.rides.db_supabase.insert_one", AsyncMock(return_value=new_ride)),
             patch("backend.routes.rides.asyncio.create_task", MagicMock()),
             patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
             patch("backend.routes.rides.send_push_notification", AsyncMock()),
@@ -135,13 +141,13 @@ class TestActiveRideGuard:
             except Exception as exc:
                 # Any non-409 exception is acceptable (e.g. missing fare config)
                 if hasattr(exc, "status_code"):
-                    assert exc.status_code != 409, \
-                        f"Got unexpected 409 after terminal ride: {exc.detail}"
+                    assert exc.status_code != 409, f"Got unexpected 409 after terminal ride: {exc.detail}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Idempotency-Key guard (network-retry / double-send)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.e2e
 @pytest.mark.asyncio
@@ -158,8 +164,7 @@ class TestIdempotencyKeyGuard:
         original = _active_ride()
 
         with (
-            patch("backend.routes.rides.db_supabase.find_one",
-                  AsyncMock(return_value=original)),
+            patch("backend.routes.rides.db_supabase.find_one", AsyncMock(return_value=original)),
             patch("backend.routes.rides.validate_ride_location", return_value=None),
         ):
             result = await rides_mod.create_ride(
@@ -173,8 +178,9 @@ class TestIdempotencyKeyGuard:
 
     async def test_different_idempotency_key_not_matched(self):
         """A different key does NOT return a previous ride — scoped per key."""
-        from backend.routes import rides as rides_mod
         from fastapi import HTTPException
+
+        from backend.routes import rides as rides_mod
 
         rider_row = {"id": RIDER_ID, "status": "active", "stripe_customer_id": "cus_x"}
 
@@ -183,8 +189,7 @@ class TestIdempotencyKeyGuard:
             patch("backend.routes.rides.db_supabase.find_one", AsyncMock(return_value=None)),
             patch("backend.routes.rides.db.find_one", AsyncMock(return_value=rider_row)),
             # Active ride exists → 409
-            patch("backend.routes.rides.db_supabase.get_rows",
-                  AsyncMock(return_value=[_active_ride()])),
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[_active_ride()])),
             patch("backend.routes.rides.validate_ride_location", return_value=None),
         ):
             with pytest.raises(HTTPException) as exc:
@@ -198,8 +203,8 @@ class TestIdempotencyKeyGuard:
 
     async def test_idempotency_key_scoped_to_rider(self):
         """Same idempotency key for a different rider must NOT return the original ride."""
+
         from backend.routes import rides as rides_mod
-        from fastapi import HTTPException
 
         other_rider = {"id": "other_rider", "status": "active", "stripe_customer_id": "cus_y"}
 

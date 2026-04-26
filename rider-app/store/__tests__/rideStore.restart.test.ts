@@ -9,13 +9,11 @@
  * Key: @spinr:active_ride, TERMINAL_STATUSES, _persistRide
  */
 
-const mockAsyncStorage = {
+jest.mock('@react-native-async-storage/async-storage', () => ({
   setItem: jest.fn(() => Promise.resolve()),
   getItem: jest.fn(() => Promise.resolve(null)),
   removeItem: jest.fn(() => Promise.resolve()),
-};
-
-jest.mock('@react-native-async-storage/async-storage', () => mockAsyncStorage);
+}));
 
 jest.mock('@shared/api/client', () => ({
   __esModule: true,
@@ -38,8 +36,10 @@ jest.mock('expo-router', () => ({
 
 import { useRideStore } from '../rideStore';
 import api from '@shared/api/client';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const mockApi = api as jest.Mocked<typeof api>;
+const mockAsyncStorage = AsyncStorage as jest.Mocked<typeof AsyncStorage>;
 
 const ACTIVE_RIDE_KEY = '@spinr:active_ride';
 

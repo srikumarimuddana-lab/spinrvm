@@ -21,14 +21,13 @@ Store-level dedup tests live in:
 Run:
     pytest backend/tests/test_p2_chat.py -v
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
+from unittest.mock import AsyncMock, patch
 
 import pytest
-
 
 RIDER_ID = "rider_p2_13"
 DRIVER_USER_ID = "driver_user_p2_13"
@@ -57,6 +56,7 @@ def _driver_row(user_id: str = DRIVER_USER_ID) -> dict:
 # POST /{ride_id}/messages
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.e2e
 @pytest.mark.asyncio
 class TestSendRideMessage:
@@ -73,6 +73,7 @@ class TestSendRideMessage:
 
         class _Body:
             pass
+
         body = _Body()
         body.text = text
 
@@ -114,10 +115,7 @@ class TestSendRideMessage:
         ride = _ride("in_progress")
         _, ws_calls, _ = await self._send(ride, RIDER_ID)
 
-        driver_events = [
-            (ch, msg) for ch, msg in ws_calls
-            if f"driver_{DRIVER_USER_ID}" in str(ch)
-        ]
+        driver_events = [(ch, msg) for ch, msg in ws_calls if f"driver_{DRIVER_USER_ID}" in str(ch)]
         assert driver_events, "Driver was not notified via WS"
         assert driver_events[0][1]["type"] == "chat_message"
         assert driver_events[0][1]["text"] == "Hello"
@@ -140,11 +138,11 @@ class TestSendRideMessage:
 
         with (
             # find_one: ride, driver (for auth check)
-            patch("backend.routes.rides.db.find_one",
-                  AsyncMock(side_effect=[ride, _driver_row(user_id=DRIVER_USER_ID)])),
+            patch(
+                "backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride, _driver_row(user_id=DRIVER_USER_ID)])
+            ),
             patch("backend.routes.rides.db.insert_one", AsyncMock(side_effect=_insert)),
-            patch("backend.routes.rides.manager.send_personal_message",
-                  AsyncMock(side_effect=_capture_ws)),
+            patch("backend.routes.rides.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
         ):
             result = await rides_mod.send_ride_message(
                 ride_id=RIDE_ID,
@@ -155,23 +153,22 @@ class TestSendRideMessage:
         assert result["success"] is True
         assert inserted[0]["sender"] == "driver"
 
-        rider_events = [
-            (ch, msg) for ch, msg in ws_calls
-            if f"rider_{RIDER_ID}" in str(ch)
-        ]
+        rider_events = [(ch, msg) for ch, msg in ws_calls if f"rider_{RIDER_ID}" in str(ch)]
         assert rider_events, "Rider was not notified via WS after driver message"
 
     async def test_non_participant_cannot_send(self):
-        from backend.routes import rides as rides_mod
         from fastapi import HTTPException
+
+        from backend.routes import rides as rides_mod
 
         ride = _ride("in_progress")
 
         class _Body:
             text = "Intruder"
 
-        with patch("backend.routes.rides.db.find_one",
-                   AsyncMock(side_effect=[ride, None])):  # no driver row for outsider
+        with patch(
+            "backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride, None])
+        ):  # no driver row for outsider
             with pytest.raises(HTTPException) as exc_info:
                 await rides_mod.send_ride_message(
                     ride_id=RIDE_ID,
@@ -182,8 +179,9 @@ class TestSendRideMessage:
         assert exc_info.value.status_code == 403
 
     async def test_cancelled_ride_blocks_chat(self):
-        from backend.routes import rides as rides_mod
         from fastapi import HTTPException
+
+        from backend.routes import rides as rides_mod
 
         ride = _ride("cancelled")
 
@@ -210,8 +208,9 @@ class TestSendRideMessage:
         assert inserted[0]["text"] == "Thanks!"
 
     async def test_post_trip_chat_blocked_after_24h(self):
-        from backend.routes import rides as rides_mod
         from fastapi import HTTPException
+
+        from backend.routes import rides as rides_mod
 
         completed_at = (datetime.utcnow() - timedelta(hours=25)).isoformat()
         ride = _ride("completed", ride_completed_at=completed_at)
@@ -235,6 +234,7 @@ class TestSendRideMessage:
 # GET /{ride_id}/messages
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 class TestGetRideMessages:
     """Pins get_ride_messages: history returned only to participants.
@@ -247,16 +247,21 @@ class TestGetRideMessages:
 
         ride = _ride("in_progress")
         msgs = [
-            {"id": "m1", "ride_id": RIDE_ID, "text": "Hi", "sender": "rider",
-             "timestamp": datetime.utcnow().isoformat()},
+            {
+                "id": "m1",
+                "ride_id": RIDE_ID,
+                "text": "Hi",
+                "sender": "rider",
+                "timestamp": datetime.utcnow().isoformat(),
+            },
         ]
 
         with (
             patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.rides.db_supabase.get_rows",
-                  AsyncMock(return_value=[])),  # no driver row for rider auth
-            patch("backend.routes.rides.db_supabase.get_rows",
-                  AsyncMock(side_effect=[[], msgs])),
+            patch(
+                "backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])
+            ),  # no driver row for rider auth
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=[[], msgs])),
         ):
             # Use a simpler direct approach: mock the specific calls
             call_count = [0]
@@ -269,10 +274,8 @@ class TestGetRideMessages:
                     return msgs
                 return []
 
-            with patch("backend.routes.rides.db_supabase.get_rows",
-                       AsyncMock(side_effect=_get_rows)):
-                with patch("backend.routes.rides.db_supabase.get_ride",
-                           AsyncMock(return_value=ride)):
+            with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)):
+                with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
                     result = await rides_mod.get_ride_messages(
                         ride_id=RIDE_ID,
                         current_user={"id": RIDER_ID},
@@ -283,8 +286,9 @@ class TestGetRideMessages:
         assert result["messages"][0]["text"] == "Hi"
 
     async def test_outsider_cannot_fetch_messages(self):
-        from backend.routes import rides as rides_mod
         from fastapi import HTTPException
+
+        from backend.routes import rides as rides_mod
 
         ride = _ride("in_progress")
 

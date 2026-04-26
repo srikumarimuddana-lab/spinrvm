@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 try:
     import httpx as _httpx
+
     _HTTPX_TIMEOUT_EXC = _httpx.TimeoutException
 except ImportError:  # pragma: no cover
     _httpx = None  # type: ignore
@@ -21,12 +22,14 @@ except ImportError:
 try:
     from .utils.deadline import deadline_exhausted as _deadline_exhausted  # type: ignore
     from .utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
-    from .utils.metrics import inc as _metric_inc, set_gauge as _metric_gauge  # type: ignore
+    from .utils.metrics import inc as _metric_inc  # type: ignore
+    from .utils.metrics import set_gauge as _metric_gauge
     from .utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set  # type: ignore
 except ImportError:
     from utils.deadline import deadline_exhausted as _deadline_exhausted  # type: ignore
     from utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
-    from utils.metrics import inc as _metric_inc, set_gauge as _metric_gauge  # type: ignore
+    from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.metrics import set_gauge as _metric_gauge
     from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set  # type: ignore
 
 import time as _time
@@ -114,9 +117,9 @@ _breaker = _CircuitBreaker()
 
 RetryPolicy = Literal["read", "idempotent_write", "write"]
 _BACKOFFS_BY_POLICY: Dict[str, list] = {
-    "read": [0.5, 1.5],          # 3 attempts, ~2s worst-case
+    "read": [0.5, 1.5],  # 3 attempts, ~2s worst-case
     "idempotent_write": [0.75],  # 2 attempts, ~0.75s worst-case
-    "write": [],                 # 1 attempt, no retry
+    "write": [],  # 1 attempt, no retry
 }
 
 # ── Global retry budget ──────────────────────────────────────────────
@@ -130,7 +133,7 @@ _BACKOFFS_BY_POLICY: Dict[str, list] = {
 # in prod). Fails open on Redis errors so the budget never becomes a
 # new SPOF.
 
-import os as _os
+import os as _os  # noqa: E402
 
 _RETRY_BUDGET_PER_SEC = int(_os.environ.get("RETRY_BUDGET_PER_SEC", "50"))
 
@@ -142,6 +145,7 @@ async def _consume_retry_token() -> bool:
         return True  # budget disabled
     try:
         import time as _t
+
         second = int(_t.time())
         key = f"spinr:retry_budget:{second}"
         count = await redis_incr(key)
@@ -213,9 +217,7 @@ async def run_sync(
             exc_str = str(exc)
             is_conn_terminated = "ConnectionTerminated" in exc_name or "ConnectionTerminated" in exc_str
             is_remote_disconnect = (
-                "RemoteProtocolError" in exc_name
-                or "Server disconnected" in exc_str
-                or "ConnectionClosed" in exc_name
+                "RemoteProtocolError" in exc_name or "Server disconnected" in exc_str or "ConnectionClosed" in exc_name
             )
             is_timeout = _HTTPX_TIMEOUT_EXC is not None and isinstance(exc, _HTTPX_TIMEOUT_EXC)
             is_transient = is_conn_terminated or is_remote_disconnect or is_timeout
@@ -266,16 +268,13 @@ async def run_sync(
                     {"policy": retry_policy, "reason": exc_name},
                 )
                 logger.warning(
-                    f"Supabase transient failure ({exc_name}) on attempt {attempt + 1}, "
-                    f"retrying in {delay:.2f}s: {exc}"
+                    f"Supabase transient failure ({exc_name}) on attempt {attempt + 1}, retrying in {delay:.2f}s: {exc}"
                 )
                 await asyncio.sleep(delay)
                 continue
 
             # Out of retries — fall through to the failure path below.
-            logger.error(
-                f"Supabase transient failure ({exc_name}) exhausted retries: {exc}"
-            )
+            logger.error(f"Supabase transient failure ({exc_name}) exhausted retries: {exc}")
 
     _breaker.record_failure()
     _metric_gauge(
@@ -425,7 +424,7 @@ async def _read_cached_row(key: str) -> Optional[Dict[str, Any]]:
         _metric_inc("spinr_cache_error_total", {"prefix": prefix, "op": "decode"})
         try:
             await redis_delete(key)
-        except Exception:
+        except Exception:  # noqa: S110
             pass
         return None
 
@@ -608,9 +607,11 @@ async def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
         # {} is the negative-cache sentinel ("no such user") — preserve that meaning.
         return None if cached == {} else cached
 
-    user = await run_sync(lambda: _single_row_from_res(
-        supabase.table("users").select("*").eq("id", user_id).is_("deleted_at", "null").execute()
-    ))
+    user = await run_sync(
+        lambda: _single_row_from_res(
+            supabase.table("users").select("*").eq("id", user_id).is_("deleted_at", "null").execute()
+        )
+    )
     await _write_cached_row(key, user, ttl=_USER_CACHE_TTL_SECONDS)
     return user
 
@@ -834,9 +835,11 @@ async def claim_ride_atomic(ride_id: str, driver_id: str) -> bool:
 async def get_ride(ride_id: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table("rides").select("*").eq("id", ride_id).is_("deleted_at", "null").execute()
-    ))
+    return await run_sync(
+        lambda: _single_row_from_res(
+            supabase.table("rides").select("*").eq("id", ride_id).is_("deleted_at", "null").execute()
+        )
+    )
 
 
 async def insert_ride(payload: Dict[str, Any]):
@@ -1856,6 +1859,7 @@ async def mark_stripe_event_processed(event_id: str) -> None:
 
 # ── Corporate Accounts (B2B v1) ──────────────────────────────────────
 
+
 async def list_corporate_accounts_filtered(
     *,
     status: Optional[str],
@@ -1865,6 +1869,7 @@ async def list_corporate_accounts_filtered(
     limit: int,
 ) -> List[Dict[str, Any]]:
     """List corporate accounts with optional status / size-tier / name-search filters."""
+
     def _fn():
         q = supabase.table("corporate_accounts").select("*")
         if status:
@@ -1879,18 +1884,15 @@ async def list_corporate_accounts_filtered(
             q = q.or_(f"name.ilike.%{safe}%,legal_name.ilike.%{safe}%")
         q = q.order("created_at", desc=True).range(skip, skip + limit - 1)
         return _rows_from_res(q.execute())
+
     return await run_sync(_fn)
 
 
 async def update_corporate_account_status(company_id: str, status: str) -> Optional[Dict[str, Any]]:
     def _fn():
-        res = (
-            supabase.table("corporate_accounts")
-            .update({"status": status})
-            .eq("id", company_id)
-            .execute()
-        )
+        res = supabase.table("corporate_accounts").update({"status": status}).eq("id", company_id).execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
@@ -1916,53 +1918,39 @@ async def record_kyb_decision(
         patch["kyb_review_note"] = note  # column added in a follow-up migration if desired
 
     def _fn():
-        res = (
-            supabase.table("corporate_accounts")
-            .update(patch)
-            .eq("id", company_id)
-            .execute()
-        )
+        res = supabase.table("corporate_accounts").update(patch).eq("id", company_id).execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
 async def get_corporate_wallet_by_company(company_id: str) -> Optional[Dict[str, Any]]:
     """Return the master wallet row for a company, or None."""
+
     def _fn():
-        res = (
-            supabase.table("corporate_wallets")
-            .select("*")
-            .eq("company_id", company_id)
-            .limit(1)
-            .execute()
-        )
+        res = supabase.table("corporate_wallets").select("*").eq("company_id", company_id).limit(1).execute()
         return _rows_from_res(res)
 
     rows = await run_sync(_fn)
     return rows[0] if rows else None
 
 
-async def update_corporate_stripe_customer_id(
-    *, company_id: str, stripe_customer_id: str
-) -> None:
+async def update_corporate_stripe_customer_id(*, company_id: str, stripe_customer_id: str) -> None:
     """Persist the Stripe customer id for a corporate account."""
+
     def _fn():
-        supabase.table("corporate_accounts").update(
-            {"stripe_customer_id": stripe_customer_id}
-        ).eq("id", company_id).execute()
+        supabase.table("corporate_accounts").update({"stripe_customer_id": stripe_customer_id}).eq(
+            "id", company_id
+        ).execute()
+
     await run_sync(_fn)
 
 
 async def ensure_corporate_wallet(*, company_id: str) -> Dict[str, Any]:
     """Idempotently create the master wallet for a company. Returns the row."""
+
     def _select():
-        res = (
-            supabase.table("corporate_wallets")
-            .select("*")
-            .eq("company_id", company_id)
-            .limit(1)
-            .execute()
-        )
+        res = supabase.table("corporate_wallets").select("*").eq("company_id", company_id).limit(1).execute()
         return _rows_from_res(res)
 
     existing = await run_sync(_select)
@@ -1986,6 +1974,7 @@ async def get_corporate_members_for_user(user_id: str) -> List[Dict[str, Any]]:
 
     Hot path: called on every work-profile check.
     """
+
     def _fn():
         res = (
             supabase.table("corporate_members")
@@ -1995,6 +1984,7 @@ async def get_corporate_members_for_user(user_id: str) -> List[Dict[str, Any]]:
             .execute()
         )
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
@@ -2005,9 +1995,7 @@ _KYB_CONTENT_EXT = {
 }
 
 
-async def create_kyb_upload_url(
-    *, company_id: str, content_type: str, ttl_seconds: int = 3600
-) -> Dict[str, Any]:
+async def create_kyb_upload_url(*, company_id: str, content_type: str, ttl_seconds: int = 3600) -> Dict[str, Any]:
     """Return a short-lived signed upload URL for a KYB document.
 
     The bucket 'kyb-documents' is private; the caller uploads with the
@@ -2038,29 +2026,22 @@ async def list_wallets_needing_autotopup() -> List[Dict[str, Any]]:
     Threshold is filtered in Python because supabase-py doesn't support
     cross-column comparisons in .filter().
     """
+
     def _fn():
-        return (
-            supabase.table("corporate_wallets")
-            .select("*")
-            .eq("auto_topup_enabled", True)
-            .execute()
-        )
+        return supabase.table("corporate_wallets").select("*").eq("auto_topup_enabled", True).execute()
 
     res = await run_sync(_fn)
     rows = _rows_from_res(res)
     return [
         r
         for r in rows
-        if r.get("auto_topup_threshold") is not None
-        and float(r["balance"]) < float(r["auto_topup_threshold"])
+        if r.get("auto_topup_threshold") is not None and float(r["balance"]) < float(r["auto_topup_threshold"])
     ]
 
 
 async def sum_autotopups_today(wallet_id: str) -> float:
     """Sum of today's successful top-ups for a wallet (for daily-cap enforcement)."""
-    today_start = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
     def _fn():
         return (
@@ -2077,16 +2058,12 @@ async def sum_autotopups_today(wallet_id: str) -> float:
     return sum(float(r["amount"]) for r in rows)
 
 
-async def get_default_payment_method(
-    stripe_customer_id: str, stripe_secret: str
-) -> Optional[str]:
+async def get_default_payment_method(stripe_customer_id: str, stripe_secret: str) -> Optional[str]:
     """Return the Stripe customer's first card payment method, if any."""
     import stripe
 
     def _fn():
-        return stripe.PaymentMethod.list(
-            customer=stripe_customer_id, type="card", api_key=stripe_secret
-        )
+        return stripe.PaymentMethod.list(customer=stripe_customer_id, type="card", api_key=stripe_secret)
 
     methods = await run_sync(_fn)
     data = getattr(methods, "data", None) or []
@@ -2095,21 +2072,16 @@ async def get_default_payment_method(
 
 async def list_wallets_low_balance_no_autotopup() -> List[Dict[str, Any]]:
     """Wallets with auto-topup disabled whose balance has dipped below threshold."""
+
     def _fn():
-        return (
-            supabase.table("corporate_wallets")
-            .select("*")
-            .eq("auto_topup_enabled", False)
-            .execute()
-        )
+        return supabase.table("corporate_wallets").select("*").eq("auto_topup_enabled", False).execute()
 
     res = await run_sync(_fn)
     rows = _rows_from_res(res)
     return [
         r
         for r in rows
-        if r.get("auto_topup_threshold") is not None
-        and float(r["balance"]) < float(r["auto_topup_threshold"])
+        if r.get("auto_topup_threshold") is not None and float(r["balance"]) < float(r["auto_topup_threshold"])
     ]
 
 
@@ -2117,16 +2089,12 @@ async def mark_low_balance_notified(*, wallet_id: str) -> None:
     now_iso = datetime.now(timezone.utc).isoformat()
 
     def _fn():
-        supabase.table("corporate_wallets").update(
-            {"low_balance_notified_at": now_iso}
-        ).eq("id", wallet_id).execute()
+        supabase.table("corporate_wallets").update({"low_balance_notified_at": now_iso}).eq("id", wallet_id).execute()
 
     await run_sync(_fn)
 
 
-async def list_wallet_transactions(
-    *, wallet_id: str, skip: int = 0, limit: int = 50
-) -> List[Dict[str, Any]]:
+async def list_wallet_transactions(*, wallet_id: str, skip: int = 0, limit: int = 50) -> List[Dict[str, Any]]:
     """Return the most recent ledger entries for a wallet, newest first."""
     upper = skip + max(limit, 1) - 1
 
@@ -2144,17 +2112,11 @@ async def list_wallet_transactions(
     return _rows_from_res(res)
 
 
-async def update_corporate_wallet_config(
-    *, wallet_id: str, patch: Dict[str, Any]
-) -> Optional[Dict[str, Any]]:
+async def update_corporate_wallet_config(*, wallet_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Patch one or more configuration columns on a corporate_wallets row."""
+
     def _fn():
-        res = (
-            supabase.table("corporate_wallets")
-            .update(patch)
-            .eq("id", wallet_id)
-            .execute()
-        )
+        res = supabase.table("corporate_wallets").update(patch).eq("id", wallet_id).execute()
         return _single_row_from_res(res)
 
     return await run_sync(_fn)
@@ -2163,6 +2125,7 @@ async def update_corporate_wallet_config(
 # ============================================================
 # Corporate B2B Plan 3 — members, allowances, requests, domains
 # ============================================================
+
 
 # ---------- Members ----------
 async def insert_corporate_member_invite(
@@ -2177,19 +2140,22 @@ async def insert_corporate_member_invite(
     def _fn():
         res = (
             supabase.table("corporate_members")
-            .insert({
-                "company_id": company_id,
-                "invited_email": email,
-                "role": role,
-                "invite_token": invite_token,
-                "invited_at": datetime.now(timezone.utc).isoformat(),
-                "invited_by": invited_by,
-                "policy_override": policy_override,
-                "status": "invited",
-            })
+            .insert(
+                {
+                    "company_id": company_id,
+                    "invited_email": email,
+                    "role": role,
+                    "invite_token": invite_token,
+                    "invited_at": datetime.now(timezone.utc).isoformat(),
+                    "invited_by": invited_by,
+                    "policy_override": policy_override,
+                    "status": "invited",
+                }
+            )
             .execute()
         )
         return _single_row_from_res(res) or {}
+
     return await run_sync(_fn)
 
 
@@ -2204,57 +2170,47 @@ async def list_company_members(
             q = q.in_("status", statuses)
         res = q.order("created_at", desc=False).execute()
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
 async def get_corporate_member_by_id(member_id: str) -> Optional[Dict[str, Any]]:
     def _fn():
-        res = (
-            supabase.table("corporate_members")
-            .select("*").eq("id", member_id).limit(1).execute()
-        )
+        res = supabase.table("corporate_members").select("*").eq("id", member_id).limit(1).execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
 async def get_member_by_invite_token(token: str) -> Optional[Dict[str, Any]]:
     def _fn():
-        res = (
-            supabase.table("corporate_members")
-            .select("*").eq("invite_token", token).limit(1).execute()
-        )
+        res = supabase.table("corporate_members").select("*").eq("invite_token", token).limit(1).execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
 async def list_active_memberships_for_user(user_id: str) -> List[Dict[str, Any]]:
     def _fn():
-        res = (
-            supabase.table("corporate_members")
-            .select("*").eq("user_id", user_id).eq("status", "active").execute()
-        )
+        res = supabase.table("corporate_members").select("*").eq("user_id", user_id).eq("status", "active").execute()
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
-async def update_corporate_member(
-    member_id: str, patch: Dict[str, Any]
-) -> Optional[Dict[str, Any]]:
+async def update_corporate_member(member_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not patch:
         return await get_corporate_member_by_id(member_id)
     patch = {**patch, "updated_at": datetime.now(timezone.utc).isoformat()}
+
     def _fn():
-        res = (
-            supabase.table("corporate_members")
-            .update(patch).eq("id", member_id).execute()
-        )
+        res = supabase.table("corporate_members").update(patch).eq("id", member_id).execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
-async def accept_member_invite(
-    *, member_id: str, user_id: str
-) -> Optional[Dict[str, Any]]:
+async def accept_member_invite(*, member_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     """Atomically flip invited → active and stamp user_id + joined_at.
 
     Guarded by `.eq("status", "invited")` so we only flip pending invites,
@@ -2267,35 +2223,28 @@ async def accept_member_invite(
         "invite_token": None,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+
     def _fn():
-        res = (
-            supabase.table("corporate_members")
-            .update(patch)
-            .eq("id", member_id)
-            .eq("status", "invited")
-            .execute()
-        )
+        res = supabase.table("corporate_members").update(patch).eq("id", member_id).eq("status", "invited").execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
 # ---------- Allowances ----------
 async def get_member_allowance(member_id: str) -> Optional[Dict[str, Any]]:
     def _fn():
-        res = (
-            supabase.table("corporate_member_allowances")
-            .select("*").eq("member_id", member_id).limit(1).execute()
-        )
+        res = supabase.table("corporate_member_allowances").select("*").eq("member_id", member_id).limit(1).execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
-async def upsert_member_allowance(
-    *, member_id: str, patch: Dict[str, Any]
-) -> Dict[str, Any]:
+async def upsert_member_allowance(*, member_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
     """Insert if no allowance row exists, else update. Returns the row."""
     existing = await get_member_allowance(member_id)
     if existing:
+
         def _upd():
             res = (
                 supabase.table("corporate_member_allowances")
@@ -2304,6 +2253,7 @@ async def upsert_member_allowance(
                 .execute()
             )
             return _single_row_from_res(res) or existing
+
         return await run_sync(_upd)
 
     def _ins():
@@ -2313,27 +2263,28 @@ async def upsert_member_allowance(
             .execute()
         )
         return _single_row_from_res(res) or {}
+
     return await run_sync(_ins)
 
 
 async def list_company_allowances(company_id: str) -> List[Dict[str, Any]]:
     """Join allowances with their members, scoped to one company."""
+
     def _fn():
         res = (
             supabase.table("corporate_member_allowances")
-            .select(
-                "*, member:corporate_members!inner"
-                "(id,company_id,user_id,invited_email,status,role)"
-            )
+            .select("*, member:corporate_members!inner(id,company_id,user_id,invited_email,status,role)")
             .eq("member.company_id", company_id)
             .execute()
         )
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
 async def list_allowances_due_for_reset(as_of: str) -> List[Dict[str, Any]]:
     """Active fixed_recurring allowances whose period_end < as_of (ISO date)."""
+
     def _fn():
         res = (
             supabase.table("corporate_member_allowances")
@@ -2344,25 +2295,27 @@ async def list_allowances_due_for_reset(as_of: str) -> List[Dict[str, Any]]:
             .execute()
         )
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
-async def reset_allowance_period(
-    *, allowance_id: str, period_start: str, period_end: str
-) -> Optional[Dict[str, Any]]:
+async def reset_allowance_period(*, allowance_id: str, period_start: str, period_end: str) -> Optional[Dict[str, Any]]:
     def _fn():
         res = (
             supabase.table("corporate_member_allowances")
-            .update({
-                "period_start": period_start,
-                "period_end": period_end,
-                "auto_approved_this_period": 0,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            })
+            .update(
+                {
+                    "period_start": period_start,
+                    "period_end": period_end,
+                    "auto_approved_this_period": 0,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
             .eq("id", allowance_id)
             .execute()
         )
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
@@ -2373,15 +2326,18 @@ async def insert_allowance_request(
     def _fn():
         res = (
             supabase.table("corporate_allowance_requests")
-            .insert({
-                "member_id": member_id,
-                "amount": amount,
-                "reason": reason,
-                "status": status,
-            })
+            .insert(
+                {
+                    "member_id": member_id,
+                    "amount": amount,
+                    "reason": reason,
+                    "status": status,
+                }
+            )
             .execute()
         )
         return _single_row_from_res(res) or {}
+
     return await run_sync(_fn)
 
 
@@ -2398,6 +2354,7 @@ async def list_pending_allowance_requests_for_member(
             .execute()
         )
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
@@ -2409,10 +2366,7 @@ async def list_company_allowance_requests(
     def _fn():
         q = (
             supabase.table("corporate_allowance_requests")
-            .select(
-                "*, member:corporate_members!inner"
-                "(id,company_id,invited_email,user_id)"
-            )
+            .select("*, member:corporate_members!inner(id,company_id,invited_email,user_id)")
             .eq("member.company_id", company_id)
         )
         if member_id:
@@ -2421,6 +2375,7 @@ async def list_company_allowance_requests(
             q = q.in_("status", statuses)
         res = q.order("created_at", desc=True).execute()
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
@@ -2428,11 +2383,9 @@ async def get_allowance_request_by_id(
     request_id: str,
 ) -> Optional[Dict[str, Any]]:
     def _fn():
-        res = (
-            supabase.table("corporate_allowance_requests")
-            .select("*").eq("id", request_id).limit(1).execute()
-        )
+        res = supabase.table("corporate_allowance_requests").select("*").eq("id", request_id).limit(1).execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
@@ -2449,61 +2402,51 @@ async def update_allowance_request(
         "reviewed_at": datetime.now(timezone.utc).isoformat(),
         "decision_notes": decision_notes,
     }
+
     def _fn():
-        res = (
-            supabase.table("corporate_allowance_requests")
-            .update(patch).eq("id", request_id).execute()
-        )
+        res = supabase.table("corporate_allowance_requests").update(patch).eq("id", request_id).execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
 # ---------- Allowed domains ----------
-async def add_allowed_domain(
-    *, company_id: str, domain: str
-) -> Dict[str, Any]:
+async def add_allowed_domain(*, company_id: str, domain: str) -> Dict[str, Any]:
     def _fn():
-        res = (
-            supabase.table("corporate_allowed_domains")
-            .insert({"company_id": company_id, "domain": domain})
-            .execute()
-        )
+        res = supabase.table("corporate_allowed_domains").insert({"company_id": company_id, "domain": domain}).execute()
         return _single_row_from_res(res) or {"company_id": company_id, "domain": domain}
+
     return await run_sync(_fn)
 
 
 async def list_allowed_domains(company_id: str) -> List[Dict[str, Any]]:
     def _fn():
-        res = (
-            supabase.table("corporate_allowed_domains")
-            .select("*").eq("company_id", company_id).execute()
-        )
+        res = supabase.table("corporate_allowed_domains").select("*").eq("company_id", company_id).execute()
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
 async def delete_allowed_domain(*, company_id: str, domain: str) -> None:
     def _fn():
-        supabase.table("corporate_allowed_domains").delete().eq(
-            "company_id", company_id
-        ).eq("domain", domain).execute()
+        supabase.table("corporate_allowed_domains").delete().eq("company_id", company_id).eq("domain", domain).execute()
+
     await run_sync(_fn)
 
 
 async def find_companies_by_email_domain(domain: str) -> List[Dict[str, Any]]:
     """Active companies that whitelist this email domain for auto-match."""
+
     def _fn():
         res = (
             supabase.table("corporate_allowed_domains")
-            .select(
-                "company_id, corporate_accounts:corporate_accounts!inner"
-                "(id,name,status)"
-            )
+            .select("company_id, corporate_accounts:corporate_accounts!inner(id,name,status)")
             .eq("domain", domain)
             .eq("corporate_accounts.status", "active")
             .execute()
         )
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
@@ -2525,11 +2468,7 @@ async def list_company_ride_payment_sources(
     upper = offset + max(limit, 1) - 1
 
     def _fn():
-        q = (
-            supabase.table("ride_payment_sources")
-            .select("*")
-            .eq("company_id", company_id)
-        )
+        q = supabase.table("ride_payment_sources").select("*").eq("company_id", company_id)
         if member_id:
             q = q.eq("member_id", member_id)
         if from_iso:
@@ -2544,6 +2483,7 @@ async def list_company_ride_payment_sources(
 
 async def get_corporate_policy(company_id: str) -> Optional[Dict[str, Any]]:
     """Fetch the active corporate_policies row for a company."""
+
     def _fn():
         res = (
             supabase.table("corporate_policies")
@@ -2554,12 +2494,11 @@ async def get_corporate_policy(company_id: str) -> Optional[Dict[str, Any]]:
             .execute()
         )
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
-async def upsert_corporate_policy(
-    company_id: str, patch: Dict[str, Any]
-) -> Dict[str, Any]:
+async def upsert_corporate_policy(company_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
     """Insert or update the company's policy row.
 
     The table has a UNIQUE constraint on company_id so we upsert on that
@@ -2572,12 +2511,7 @@ async def upsert_corporate_policy(
         update_patch = {**patch, "updated_at": now}
 
         def _upd():
-            res = (
-                supabase.table("corporate_policies")
-                .update(update_patch)
-                .eq("id", existing["id"])
-                .execute()
-            )
+            res = supabase.table("corporate_policies").update(update_patch).eq("id", existing["id"]).execute()
             return _single_row_from_res(res) or {**existing, **update_patch}
 
         return await run_sync(_upd) or existing
@@ -2601,6 +2535,7 @@ async def ping() -> None:
     """Minimal liveness probe — executes a trivial Supabase query to verify
     the DB connection is functional. Raises on any error so callers can
     return 503 to load-balancers."""
+
     def _check():
         supabase.table("app_settings").select("key").limit(1).execute()
 

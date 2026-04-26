@@ -25,6 +25,7 @@ in-process dict when ``REDIS_URL`` is unset. Single-replica dev works
 without Redis; multi-replica prod must have Redis configured for
 presence to fan out correctly.
 """
+
 from __future__ import annotations
 
 import logging
@@ -32,19 +33,19 @@ from typing import List, Optional
 
 try:
     from .redis_client import (
+        _get_redis,
+        _local,
         redis_delete,
         redis_get,
         redis_set,
-        _get_redis,
-        _local,
     )
 except ImportError:  # pragma: no cover
     from utils.redis_client import (  # type: ignore
+        _get_redis,
+        _local,
         redis_delete,
         redis_get,
         redis_set,
-        _get_redis,
-        _local,
     )
 
 logger = logging.getLogger(__name__)
@@ -106,9 +107,7 @@ async def present_driver_ids(candidate_ids: List[str]) -> set:
         try:
             keys = [_key(i) for i in candidate_ids]
             vals = await r.mget(*keys)
-            return {
-                cid for cid, v in zip(candidate_ids, vals) if v is not None
-            }
+            return {cid for cid, v in zip(candidate_ids, vals, strict=False) if v is not None}
         except Exception as exc:
             logger.warning(f"[presence] MGET failed, falling back: {exc}")
 
@@ -136,7 +135,7 @@ async def list_present_ids() -> List[str]:
     try:
         async for key in r.scan_iter(match=f"{_PREFIX}*", count=500):
             k = key.decode() if isinstance(key, bytes) else key
-            ids.append(k[len(_PREFIX):])
+            ids.append(k[len(_PREFIX) :])
     except Exception as exc:
         logger.warning(f"[presence] SCAN failed: {exc}")
     return ids
@@ -156,6 +155,7 @@ async def presence_ttl(driver_id: str) -> Optional[int]:
         if not entry or entry.get("expires_at") is None:
             return None
         import time
+
         remaining = int(entry["expires_at"] - time.monotonic())
         return remaining if remaining > 0 else None
     try:

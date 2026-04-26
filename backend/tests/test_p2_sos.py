@@ -17,13 +17,13 @@ These tests pin:
 Run:
     pytest backend/tests/test_p2_sos.py -v
 """
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 import pytest
-
 
 RIDER_ID = "rider_p2_14"
 DRIVER_USER_ID = "driver_user_p2_14"
@@ -53,6 +53,7 @@ class _Req:
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /{ride_id}/emergency
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.e2e
 @pytest.mark.asyncio
@@ -88,8 +89,10 @@ class TestTriggerEmergency:
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
             patch("backend.routes.rides.db_supabase.insert_one", AsyncMock(side_effect=_insert)),
             patch("backend.routes.rides.manager.send_personal_message", AsyncMock(side_effect=_ws)),
-            patch("backend.routes.rides.db_supabase.get_user_by_id",
-                  AsyncMock(return_value={"first_name": "Test", "last_name": "User"})),
+            patch(
+                "backend.routes.rides.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"first_name": "Test", "last_name": "User"}),
+            ),
         ):
             result = await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
@@ -130,8 +133,9 @@ class TestTriggerEmergency:
         assert row["reported_by_user_id"] == DRIVER_USER_ID
 
     async def test_non_participant_cannot_trigger_sos(self):
-        from backend.routes import rides as rides_mod
         from fastapi import HTTPException
+
+        from backend.routes import rides as rides_mod
 
         with (
             patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=_ride())),
@@ -147,8 +151,9 @@ class TestTriggerEmergency:
         assert exc_info.value.status_code == 403
 
     async def test_unknown_ride_returns_404(self):
-        from backend.routes import rides as rides_mod
         from fastapi import HTTPException
+
+        from backend.routes import rides as rides_mod
 
         with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=None)):
             with pytest.raises(HTTPException) as exc_info:

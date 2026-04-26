@@ -13,6 +13,7 @@
 
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios' },
+  NativeModules: {},
 }));
 
 jest.mock('@react-native-async-storage/async-storage', () => ({

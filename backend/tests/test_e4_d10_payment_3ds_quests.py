@@ -31,13 +31,13 @@ D10 — code under test: backend/routes/quests.py
 Run:
     pytest backend/tests/test_e4_d10_payment_3ds_quests.py -v
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 DRIVER_USER_ID = "driver_user_e4d10"
 DRIVER_ID = "driver_e4d10"
@@ -108,6 +108,7 @@ def _driver_row() -> dict:
 # E4: 3DS / requires_action payment retry
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 class TestPayment3DSRetry:
     """Pins retry_failed_payments for the Stripe requires_action / 3DS path.
@@ -115,8 +116,7 @@ class TestPayment3DSRetry:
     Code under test: backend/utils/payment_retry.py::retry_failed_payments
     """
 
-    async def _run_retry(self, rides, mock_intent_status: str,
-                         stripe_secret: str = "sk_test_x"):
+    async def _run_retry(self, rides, mock_intent_status: str, stripe_secret: str = "sk_test_x"):
         import sys
         from unittest.mock import MagicMock
 
@@ -132,23 +132,28 @@ class TestPayment3DSRetry:
         with (
             patch.dict(sys.modules, {"stripe": mock_stripe}),
             patch("backend.utils.payment_retry.db.get_rows", AsyncMock(return_value=rides)),
-            patch("backend.utils.payment_retry.db.update_one",
-                  AsyncMock(side_effect=lambda t, q, d: updates.append((q, d)))),
-            patch("backend.utils.payment_retry.get_app_settings",
-                  AsyncMock(return_value={"stripe_secret_key": stripe_secret})),
-            patch("backend.utils.payment_retry.send_push_notification",
-                  AsyncMock(side_effect=lambda uid, t, b, **kw: push_calls.append(uid))),
+            patch(
+                "backend.utils.payment_retry.db.update_one",
+                AsyncMock(side_effect=lambda t, q, d: updates.append((q, d))),
+            ),
+            patch(
+                "backend.utils.payment_retry.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": stripe_secret}),
+            ),
+            patch(
+                "backend.utils.payment_retry.send_push_notification",
+                AsyncMock(side_effect=lambda uid, t, b, **kw: push_calls.append(uid)),
+            ),
         ):
             from backend.utils.payment_retry import retry_failed_payments
+
             await retry_failed_payments()
 
         return updates, push_calls, mock_stripe
 
     async def test_already_succeeded_intent_marks_paid(self):
         """If the PaymentIntent already succeeded (webhook missed), mark paid."""
-        updates, _, mock_stripe = await self._run_retry(
-            [_ride("requires_action", 0)], "succeeded"
-        )
+        updates, _, mock_stripe = await self._run_retry([_ride("requires_action", 0)], "succeeded")
 
         assert updates, "No DB update performed"
         _, data = updates[0]
@@ -157,9 +162,7 @@ class TestPayment3DSRetry:
 
     async def test_requires_confirmation_submits_retry(self):
         """PaymentIntent needs confirmation → confirm() called, status=processing."""
-        updates, _, mock_stripe = await self._run_retry(
-            [_ride("requires_action", 0)], "requires_confirmation"
-        )
+        updates, _, mock_stripe = await self._run_retry([_ride("requires_action", 0)], "requires_confirmation")
 
         mock_stripe.PaymentIntent.confirm.assert_called_once()
         _, data = updates[0]
@@ -169,9 +172,8 @@ class TestPayment3DSRetry:
     async def test_cancelled_intent_is_capped_not_retried(self):
         """A cancelled PaymentIntent should not be retried — cap at MAX_RETRIES."""
         from backend.utils.payment_retry import MAX_RETRIES
-        updates, _, mock_stripe = await self._run_retry(
-            [_ride("requires_action", 0)], "canceled"
-        )
+
+        updates, _, mock_stripe = await self._run_retry([_ride("requires_action", 0)], "canceled")
 
         mock_stripe.PaymentIntent.confirm.assert_not_called()
         _, data = updates[0]
@@ -180,6 +182,7 @@ class TestPayment3DSRetry:
     async def test_ride_at_max_retries_is_skipped(self):
         """A ride that already exhausted retries must not trigger another confirm."""
         from backend.utils.payment_retry import MAX_RETRIES
+
         updates, _, mock_stripe = await self._run_retry(
             [_ride("failed", retry_count=MAX_RETRIES)], "requires_confirmation"
         )
@@ -190,7 +193,8 @@ class TestPayment3DSRetry:
     async def test_missing_stripe_secret_skips_all_rides(self):
         """Without a Stripe secret key no API call is made."""
         updates, _, mock_stripe = await self._run_retry(
-            [_ride("requires_action", 0)], "requires_confirmation",
+            [_ride("requires_action", 0)],
+            "requires_confirmation",
             stripe_secret="",
         )
 
@@ -200,15 +204,15 @@ class TestPayment3DSRetry:
     async def test_final_failure_sends_push_to_rider(self):
         """On last retry attempt rider is notified via push."""
         from backend.utils.payment_retry import MAX_RETRIES
+
         # retry_count = MAX_RETRIES - 1 → this attempt reaches MAX_RETRIES
         ride = _ride("failed", retry_count=MAX_RETRIES - 1)
 
         # Simulate a Stripe exception on this retry
         import sys
+
         mock_stripe = MagicMock()
-        mock_stripe.PaymentIntent.retrieve = MagicMock(
-            side_effect=Exception("Network error")
-        )
+        mock_stripe.PaymentIntent.retrieve = MagicMock(side_effect=Exception("Network error"))
 
         push_calls = []
 
@@ -216,14 +220,20 @@ class TestPayment3DSRetry:
             patch.dict(sys.modules, {"stripe": mock_stripe}),
             patch("backend.utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
             patch("backend.utils.payment_retry.db.update_one", AsyncMock()),
-            patch("backend.utils.payment_retry.get_app_settings",
-                  AsyncMock(return_value={"stripe_secret_key": "sk_test_x"})),
-            patch("backend.utils.payment_retry.send_push_notification",
-                  AsyncMock(side_effect=lambda uid, *a, **kw: push_calls.append(uid))),
+            patch(
+                "backend.utils.payment_retry.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test_x"}),
+            ),
+            patch(
+                "backend.utils.payment_retry.send_push_notification",
+                AsyncMock(side_effect=lambda uid, *a, **kw: push_calls.append(uid)),
+            ),
         ):
-            from backend.utils import payment_retry
             # Reload to avoid module caching
             import importlib
+
+            from backend.utils import payment_retry
+
             importlib.reload(payment_retry)
             await payment_retry.retry_failed_payments()
 
@@ -233,6 +243,7 @@ class TestPayment3DSRetry:
 # ─────────────────────────────────────────────────────────────────────────────
 # D10: Quest / bonus challenge flows
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 class TestGetAvailableQuests:
@@ -249,10 +260,15 @@ class TestGetAvailableQuests:
 
         with (
             patch("backend.routes.quests.db.find_one", AsyncMock(return_value=_driver_row())),
-            patch("backend.routes.quests.db.get_rows", AsyncMock(side_effect=[
-                [q],          # quests
-                [prog],       # quest_progress
-            ])),
+            patch(
+                "backend.routes.quests.db.get_rows",
+                AsyncMock(
+                    side_effect=[
+                        [q],  # quests
+                        [prog],  # quest_progress
+                    ]
+                ),
+            ),
         ):
             result = await get_available_quests(current_user={"id": DRIVER_USER_ID})
 
@@ -268,9 +284,7 @@ class TestGetAvailableQuests:
 
         with (
             patch("backend.routes.quests.db.find_one", AsyncMock(return_value=_driver_row())),
-            patch("backend.routes.quests.db.get_rows", AsyncMock(side_effect=[
-                [past_quest], []
-            ])),
+            patch("backend.routes.quests.db.get_rows", AsyncMock(side_effect=[[past_quest], []])),
         ):
             result = await get_available_quests(current_user={"id": DRIVER_USER_ID})
 
@@ -278,6 +292,7 @@ class TestGetAvailableQuests:
 
     async def test_driver_not_found_returns_404(self):
         from fastapi import HTTPException
+
         from backend.routes.quests import get_available_quests
 
         with patch("backend.routes.quests.db.find_one", AsyncMock(return_value=None)):
@@ -300,13 +315,17 @@ class TestJoinQuest:
         inserted = []
 
         with (
-            patch("backend.routes.quests.db.find_one", AsyncMock(side_effect=[
-                _driver_row(),   # driver lookup
-                _quest(),        # quest lookup
-                None,            # no existing progress
-            ])),
-            patch("backend.routes.quests.db.insert_one",
-                  AsyncMock(side_effect=lambda t, row: inserted.append(row))),
+            patch(
+                "backend.routes.quests.db.find_one",
+                AsyncMock(
+                    side_effect=[
+                        _driver_row(),  # driver lookup
+                        _quest(),  # quest lookup
+                        None,  # no existing progress
+                    ]
+                ),
+            ),
+            patch("backend.routes.quests.db.insert_one", AsyncMock(side_effect=lambda t, row: inserted.append(row))),
         ):
             result = await join_quest(quest_id=QUEST_ID, current_user={"id": DRIVER_USER_ID})
 
@@ -316,13 +335,19 @@ class TestJoinQuest:
 
     async def test_already_joined_returns_400(self):
         from fastapi import HTTPException
+
         from backend.routes.quests import join_quest
 
-        with patch("backend.routes.quests.db.find_one", AsyncMock(side_effect=[
-            _driver_row(),
-            _quest(),
-            _progress(),   # already joined
-        ])):
+        with patch(
+            "backend.routes.quests.db.find_one",
+            AsyncMock(
+                side_effect=[
+                    _driver_row(),
+                    _quest(),
+                    _progress(),  # already joined
+                ]
+            ),
+        ):
             with pytest.raises(HTTPException) as exc:
                 await join_quest(quest_id=QUEST_ID, current_user={"id": DRIVER_USER_ID})
 
@@ -330,14 +355,20 @@ class TestJoinQuest:
 
     async def test_expired_quest_returns_400(self):
         from fastapi import HTTPException
+
         from backend.routes.quests import join_quest
 
         expired = {**_quest(), "end_date": (datetime.utcnow() - timedelta(hours=1)).isoformat()}
 
-        with patch("backend.routes.quests.db.find_one", AsyncMock(side_effect=[
-            _driver_row(),
-            expired,
-        ])):
+        with patch(
+            "backend.routes.quests.db.find_one",
+            AsyncMock(
+                side_effect=[
+                    _driver_row(),
+                    expired,
+                ]
+            ),
+        ):
             with pytest.raises(HTTPException) as exc:
                 await join_quest(quest_id=QUEST_ID, current_user={"id": DRIVER_USER_ID})
 
@@ -345,17 +376,23 @@ class TestJoinQuest:
 
     async def test_full_quest_returns_400(self):
         from fastapi import HTTPException
+
         from backend.routes.quests import join_quest
 
         full_quest = {**_quest(), "max_participants": 1}
-        existing_participant = [_progress()]   # 1 participant = full
+        existing_participant = [_progress()]  # 1 participant = full
 
         with (
-            patch("backend.routes.quests.db.find_one", AsyncMock(side_effect=[
-                _driver_row(),
-                full_quest,
-                None,   # not already joined
-            ])),
+            patch(
+                "backend.routes.quests.db.find_one",
+                AsyncMock(
+                    side_effect=[
+                        _driver_row(),
+                        full_quest,
+                        None,  # not already joined
+                    ]
+                ),
+            ),
             patch("backend.routes.quests.db.get_rows", AsyncMock(return_value=existing_participant)),
         ):
             with pytest.raises(HTTPException) as exc:
@@ -379,13 +416,19 @@ class TestClaimQuestReward:
         db_updates = []
 
         with (
-            patch("backend.routes.quests.db.find_one", AsyncMock(side_effect=[
-                _driver_row(),
-                _progress(status="completed"),
-                _quest(),
-            ])),
-            patch("backend.routes.quests.db.update_one",
-                  AsyncMock(side_effect=lambda t, q, d: db_updates.append((t, d)))),
+            patch(
+                "backend.routes.quests.db.find_one",
+                AsyncMock(
+                    side_effect=[
+                        _driver_row(),
+                        _progress(status="completed"),
+                        _quest(),
+                    ]
+                ),
+            ),
+            patch(
+                "backend.routes.quests.db.update_one", AsyncMock(side_effect=lambda t, q, d: db_updates.append((t, d)))
+            ),
             patch("backend.routes.wallet.get_or_create_wallet", AsyncMock(return_value=wallet)),
             patch("backend.routes.wallet._record_transaction", AsyncMock()),
         ):
@@ -402,12 +445,18 @@ class TestClaimQuestReward:
 
     async def test_not_completed_quest_returns_400(self):
         from fastapi import HTTPException
+
         from backend.routes.quests import claim_quest_reward
 
-        with patch("backend.routes.quests.db.find_one", AsyncMock(side_effect=[
-            _driver_row(),
-            _progress(status="active"),  # not completed
-        ])):
+        with patch(
+            "backend.routes.quests.db.find_one",
+            AsyncMock(
+                side_effect=[
+                    _driver_row(),
+                    _progress(status="active"),  # not completed
+                ]
+            ),
+        ):
             with pytest.raises(HTTPException) as exc:
                 await claim_quest_reward(
                     progress_id=PROGRESS_ID,
@@ -418,15 +467,21 @@ class TestClaimQuestReward:
 
     async def test_non_owner_returns_403(self):
         from fastapi import HTTPException
+
         from backend.routes.quests import claim_quest_reward
 
-        other_driver = {**_driver_row(), "id": "other-driver-id"}
+        _other_driver = {**_driver_row(), "id": "other-driver-id"}
         progress_for_other = {**_progress(status="completed"), "driver_id": "other-driver-id"}
 
-        with patch("backend.routes.quests.db.find_one", AsyncMock(side_effect=[
-            _driver_row(),          # current driver
-            progress_for_other,     # progress belongs to other driver
-        ])):
+        with patch(
+            "backend.routes.quests.db.find_one",
+            AsyncMock(
+                side_effect=[
+                    _driver_row(),  # current driver
+                    progress_for_other,  # progress belongs to other driver
+                ]
+            ),
+        ):
             with pytest.raises(HTTPException) as exc:
                 await claim_quest_reward(
                     progress_id=PROGRESS_ID,

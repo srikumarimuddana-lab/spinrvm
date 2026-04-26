@@ -88,6 +88,7 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
         # Verify the token with the Firebase Admin SDK.
         try:
             import firebase_admin.app_check as app_check  # noqa: PLC0415
+
             app_check.verify_token(token)
         except Exception as exc:
             if self._enforce:
@@ -99,6 +100,7 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
             logger.debug("App Check: token verification failed (enforcement disabled): %s", exc)
 
         return await call_next(request)
+
 
 # ── Correlation / Request-ID middleware ──────────────────────────────
 # Each request gets a UUID in X-Request-ID (caller may supply their own).
@@ -469,6 +471,7 @@ def init_middleware(app):
                 try:
                     deadline_epoch_ms = int(deadline_header)
                     import time as _t
+
                     now_epoch_ms = int(_t.time() * 1000)
                     remaining_ms = deadline_epoch_ms - now_epoch_ms
                     # Convert the client's epoch deadline into a

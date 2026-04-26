@@ -41,7 +41,6 @@
       "Write(backend/**)",
       "Write(rider-app/**)",
       "Write(driver-app/**)",
-      "Write(frontend/**)",
       "Write(admin-dashboard/**)",
       "Write(shared/**)",
       "Write(tests/**)",
@@ -51,13 +50,20 @@
       "Write(CLAUDE.md)",
       "Write(.claude/settings.json)",
       "Write(.claude/commands/**)",
-      "Write(.github/workflows/claude.yml)"
+      "Write(.claude/agents/**)",
+      "Write(.claude/hooks/**)",
+      "Write(.claude/context/**)",
+      "Write(.github/workflows/claude.yml)",
+      "Write(.github/workflows/claude-audit.yml)",
+      "Write(.github/workflows/claude-review.yml)",
+      "Write(.github/workflows/pr-checks.yml)",
+      "Write(.github/pull_request_template.md)",
+      "Write(.github/labeler.yml)"
     ],
     "deny": [
       "Bash(rm -rf*)",
       "Bash(git push --force*)",
       "Bash(git push origin main*)",
-      "Bash(git push origin develop*)",
       "Bash(git reset --hard*)",
       "Write(.env*)",
       "Write(*.pem)",
@@ -70,6 +76,55 @@
       "Write(.github/workflows/apply-supabase-schema.yml)"
     ]
   },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'test -x .git/hooks/pre-commit || (cp .claude/hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit && echo \"pre-commit hook installed\")'"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/session-start.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'cd backend && python3 -m pip install -q -r requirements.txt 2>/dev/null && echo \"backend deps ok\" || echo \"backend pip install skipped (no venv?)\"'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'test -d rider-app/node_modules && echo \"rider-app deps ok\" || (cd rider-app && yarn install --frozen-lockfile --silent && echo \"rider-app deps installed\")'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'test -d driver-app/node_modules && echo \"driver-app deps ok\" || (cd driver-app && yarn install --frozen-lockfile --silent && echo \"driver-app deps installed\")'"
+          },
+          {
+            "type": "command",
+            "command": "bash -c 'test -d admin-dashboard/node_modules && echo \"admin deps ok\" || (cd admin-dashboard && npm ci --silent && echo \"admin deps installed\")'"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          { "type": "command", "command": "bash .claude/hooks/pre-migration-write.sh" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          { "type": "command", "command": "bash .claude/hooks/post-python-write.sh" }
+        ]
+      }
+    ]
+  },
   "extraKnownMarketplaces": {
     "karpathy-skills": {
       "source": {
@@ -79,6 +134,6 @@
     }
   },
   "enabledPlugins": {
-    "andrej-karpathy-skills@karpathy-skills": true
+    "andrej-karpathy-skills@karpathy-skills@2c60614": true
   }
 }

@@ -1,0 +1,105 @@
+# .gitleaks.toml — Spinr secret-scanning configuration
+# Used by: CI (gitleaks/gitleaks-action@v2) and local pre-commit (`gitleaks protect --staged`)
+# Extends the built-in ruleset; only overrides are listed here.
+
+title = "Spinr Gitleaks Config"
+
+[extend]
+# Pull the full upstream ruleset so we get all generic secret patterns.
+useDefault = true
+
+# ── Path exclusions ────────────────────────────────────────────────────────────
+[allowlist]
+description = "Build artefacts, lockfiles, and vendored code"
+paths = [
+    # JS build outputs — no live secrets, only bundled env-var placeholders
+    '''\.next/''',
+    '''out/''',
+    '''build/''',
+    '''dist/''',
+    # Package lockfiles — may contain registry tokens in tarball URLs but these
+    # are public package hashes, not credentials
+    '''yarn\.lock''',
+    '''package-lock\.json''',
+    # Node / Python caches
+    '''node_modules/''',
+    '''__pycache__/''',
+    '''\.venv/''',
+    # Expo / EAS local caches
+    '''\.expo/''',
+]
+
+# ── Global regex stops (values that look like secrets but are test fixtures) ───
+# Rule: stop entries must be unique per rule; these go in [[rules]] overrides
+# or in the global [allowlist] regexes field (covers ALL rules).
+regexes = [
+    # Stripe test-mode key stubs used in pytest fixtures (never real keys)
+    # Real Stripe test keys are 107 chars; these are deliberately short/fake
+    '''sk_test_(123|xxx|x|fake|test|stub|mock)["\s]''',
+    '''pk_test_(123|xxx|x|fake|test|stub|mock)["\s]''',
+    '''rk_test_(123|xxx|x|fake|test|stub|mock)["\s]''',
+    # Webhook signing secret stubs
+    '''whsec_(test|x|fake|stub|mock)["\s]''',
+    # JWT secret placeholder that appears in CI env docs (not a real key)
+    '''supersecretjwtkey''',
+    # Supabase URL example in migration docs
+    '''https://xxxx\.supabase\.co''',
+    # Railway token example in workflow comments
+    '''RAILWAY_TOKEN\s*=\s*<token>''',
+]
+
+# ── Per-rule overrides ────────────────────────────────────────────────────────
+# Suppress noisy generic-secret hits inside test files where values are
+# intentionally fake. These complement the global regexes above.
+
+[[rules]]
+id = "stripe-secret-key"
+description = "Stripe secret key (test fixtures allowed)"
+regex = '''(?i)sk_(live|test)_[0-9a-z]{10,}'''
+secretGroup = 1
+[rules.allowlist]
+paths = [
+    # pytest fixtures — all values confirmed fake/stub
+    '''backend/tests/''',
+]
+regexes = [
+    # Short stubs that couldn't be real (real keys are 107 chars)
+    '''sk_test_[a-z0-9]{1,10}["\s,]''',
+]
+
+[[rules]]
+id = "stripe-webhook-secret"
+description = "Stripe webhook signing secret (test stubs allowed)"
+regex = '''(?i)whsec_[0-9a-zA-Z]{10,}'''
+secretGroup = 1
+[rules.allowlist]
+paths = [
+    '''backend/tests/''',
+]
+regexes = [
+    '''whsec_(test|x|fake|stub|mock)["\s,]''',
+]
+
+[[rules]]
+id = "jwt-token"
+description = "JWT HS256/RS256 bearer token"
+# Matches compact JWTs (header.payload.signature). Exclude obvious test tokens.
+regex = '''eyJ[a-zA-Z0-9\-_]+\.eyJ[a-zA-Z0-9\-_]+\.[a-zA-Z0-9\-_]+'''
+[rules.allowlist]
+paths = [
+    '''backend/tests/''',
+    # Playwright/Vitest fixtures may contain test JWTs
+    '''admin-dashboard/.*\.spec\.''',
+    '''admin-dashboard/.*\.test\.''',
+]
+
+[[rules]]
+id = "generic-api-key"
+description = "Generic high-entropy API key"
+regex = '''(?i)(api[_\-]?key|apikey|api[_\-]?token)["\s]*[=:]["\s]*[0-9a-zA-Z\-_]{20,}'''
+[rules.allowlist]
+paths = [
+    '''backend/tests/''',
+    '''\.md$''',
+    '''CLAUDE\.md''',
+]

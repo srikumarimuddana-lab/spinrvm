@@ -1,4 +1,5 @@
 """Low-balance email notification tick."""
+
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
@@ -15,17 +16,18 @@ async def test_sends_email_when_below_threshold_and_autotopup_off():
         "auto_topup_threshold": "100.00",
         "low_balance_notified_at": None,
     }
-    with patch(
-        "utils.corporate_low_balance.list_wallets_low_balance_no_autotopup",
-        AsyncMock(return_value=[wallet]),
-    ), patch(
-        "utils.corporate_low_balance.get_corporate_account_by_id",
-        AsyncMock(return_value={"billing_email": "billing@acme.test", "name": "Acme"}),
-    ), patch(
-        "utils.corporate_low_balance.mark_low_balance_notified", AsyncMock()
-    ) as m_mark, patch(
-        "utils.corporate_low_balance.send_email", AsyncMock()
-    ) as m_send:
+    with (
+        patch(
+            "utils.corporate_low_balance.list_wallets_low_balance_no_autotopup",
+            AsyncMock(return_value=[wallet]),
+        ),
+        patch(
+            "utils.corporate_low_balance.get_corporate_account_by_id",
+            AsyncMock(return_value={"billing_email": "billing@acme.test", "name": "Acme"}),
+        ),
+        patch("utils.corporate_low_balance.mark_low_balance_notified", AsyncMock()) as m_mark,
+        patch("utils.corporate_low_balance.send_email", AsyncMock()) as m_send,
+    ):
         from utils.corporate_low_balance import run_low_balance_tick
 
         await run_low_balance_tick()
@@ -48,14 +50,14 @@ async def test_rate_limited_within_12h():
         "auto_topup_threshold": "100.00",
         "low_balance_notified_at": recent,
     }
-    with patch(
-        "utils.corporate_low_balance.list_wallets_low_balance_no_autotopup",
-        AsyncMock(return_value=[wallet]),
-    ), patch(
-        "utils.corporate_low_balance.send_email", AsyncMock()
-    ) as m_send, patch(
-        "utils.corporate_low_balance.mark_low_balance_notified", AsyncMock()
-    ) as m_mark:
+    with (
+        patch(
+            "utils.corporate_low_balance.list_wallets_low_balance_no_autotopup",
+            AsyncMock(return_value=[wallet]),
+        ),
+        patch("utils.corporate_low_balance.send_email", AsyncMock()) as m_send,
+        patch("utils.corporate_low_balance.mark_low_balance_notified", AsyncMock()) as m_mark,
+    ):
         from utils.corporate_low_balance import run_low_balance_tick
 
         await run_low_balance_tick()
@@ -75,17 +77,18 @@ async def test_resends_after_rate_limit_elapsed():
         "auto_topup_threshold": "100.00",
         "low_balance_notified_at": stale,
     }
-    with patch(
-        "utils.corporate_low_balance.list_wallets_low_balance_no_autotopup",
-        AsyncMock(return_value=[wallet]),
-    ), patch(
-        "utils.corporate_low_balance.get_corporate_account_by_id",
-        AsyncMock(return_value={"billing_email": "ops@acme.test", "name": "Acme"}),
-    ), patch(
-        "utils.corporate_low_balance.mark_low_balance_notified", AsyncMock()
-    ), patch(
-        "utils.corporate_low_balance.send_email", AsyncMock()
-    ) as m_send:
+    with (
+        patch(
+            "utils.corporate_low_balance.list_wallets_low_balance_no_autotopup",
+            AsyncMock(return_value=[wallet]),
+        ),
+        patch(
+            "utils.corporate_low_balance.get_corporate_account_by_id",
+            AsyncMock(return_value={"billing_email": "ops@acme.test", "name": "Acme"}),
+        ),
+        patch("utils.corporate_low_balance.mark_low_balance_notified", AsyncMock()),
+        patch("utils.corporate_low_balance.send_email", AsyncMock()) as m_send,
+    ):
         from utils.corporate_low_balance import run_low_balance_tick
 
         await run_low_balance_tick()
@@ -103,17 +106,18 @@ async def test_skips_when_company_missing_billing_email():
         "auto_topup_threshold": "100.00",
         "low_balance_notified_at": None,
     }
-    with patch(
-        "utils.corporate_low_balance.list_wallets_low_balance_no_autotopup",
-        AsyncMock(return_value=[wallet]),
-    ), patch(
-        "utils.corporate_low_balance.get_corporate_account_by_id",
-        AsyncMock(return_value={"billing_email": None, "name": "Acme"}),
-    ), patch(
-        "utils.corporate_low_balance.mark_low_balance_notified", AsyncMock()
-    ) as m_mark, patch(
-        "utils.corporate_low_balance.send_email", AsyncMock()
-    ) as m_send:
+    with (
+        patch(
+            "utils.corporate_low_balance.list_wallets_low_balance_no_autotopup",
+            AsyncMock(return_value=[wallet]),
+        ),
+        patch(
+            "utils.corporate_low_balance.get_corporate_account_by_id",
+            AsyncMock(return_value={"billing_email": None, "name": "Acme"}),
+        ),
+        patch("utils.corporate_low_balance.mark_low_balance_notified", AsyncMock()) as m_mark,
+        patch("utils.corporate_low_balance.send_email", AsyncMock()) as m_send,
+    ):
         from utils.corporate_low_balance import run_low_balance_tick
 
         await run_low_balance_tick()

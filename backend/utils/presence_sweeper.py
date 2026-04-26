@@ -37,6 +37,7 @@ No idempotency key is needed. If a driver's presence briefly disappears
 app's next heartbeat or status ping will refresh presence and the driver
 reappears on the next sweep within a minute.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -107,8 +108,10 @@ async def _sweep_once() -> int:
     # ETA calculation, admin monitoring, and post-trip settlement. The
     # ride lifecycle drives the status transition in that case.
     ACTIVE_RIDE_STATUSES = [
-        "driver_assigned", "driver_accepted",
-        "driver_arrived", "in_progress",
+        "driver_assigned",
+        "driver_accepted",
+        "driver_arrived",
+        "in_progress",
     ]
     active_driver_ids: set = set()
     try:
@@ -188,7 +191,7 @@ async def _sweep_once() -> int:
                         "is_online": False,
                     }
                 )
-            except Exception:  # pragma: no cover - best effort
+            except Exception:  # pragma: no cover - best effort  # noqa: S110
                 pass
         except Exception as exc:
             logger.warning(f"[presence_sweeper] flip failed for {d['id']}: {exc}")
@@ -202,6 +205,7 @@ async def presence_sweeper_loop() -> None:
     """Background loop: reconcile presence → DB every SWEEP_INTERVAL_SECONDS."""
     # Small initial jitter so replicas don't all sweep on the same tick.
     import random
+
     await asyncio.sleep(random.uniform(0, SWEEP_INTERVAL_SECONDS))
     while True:
         try:

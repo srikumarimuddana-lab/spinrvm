@@ -40,9 +40,9 @@ Note: the scope must be unique per endpoint family (e.g. "ride",
 "wallet_topup") so the same key used on two different endpoints does
 not collide. The user_id is mixed in so keys are per-user.
 """
+
 from __future__ import annotations
 
-import asyncio
 import functools
 import hashlib
 import json as _json

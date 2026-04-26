@@ -204,8 +204,7 @@ class _WSPubSub:
                 except Exception as e:
                     _consecutive_errors += 1
                     logger.warning(
-                        f"WS pub/sub: consumer read error "
-                        f"({_consecutive_errors}/{_reconnect_threshold}): {e}"
+                        f"WS pub/sub: consumer read error ({_consecutive_errors}/{_reconnect_threshold}): {e}"
                     )
                     if _consecutive_errors >= _reconnect_threshold:
                         reconnected = await self._reconnect()

@@ -166,7 +166,11 @@ class ConnectionManager:
                 logger.warning(f"Failed to send to {key}: {e}")
 
     def update_driver_location(self, driver_id: str, lat: float, lng: float):
-        self.driver_locations[driver_id] = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc).isoformat()}
+        self.driver_locations[driver_id] = {
+            "lat": lat,
+            "lng": lng,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
 
     def get_driver_location(self, driver_id: str):
         return self.driver_locations.get(driver_id)

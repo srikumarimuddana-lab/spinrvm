@@ -4,6 +4,7 @@ zeroes `used` for non-rollover allowances.
 Runs as a scheduled loop (pattern: utils/scheduled_rides.py). Idempotent:
 `list_allowances_due_for_reset` short-circuits when `period_end >= today`.
 """
+
 from __future__ import annotations
 
 import asyncio

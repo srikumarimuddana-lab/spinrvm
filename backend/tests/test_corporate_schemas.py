@@ -59,9 +59,7 @@ class TestCorporateAccountCreate:
 
 class TestEnums:
     def test_company_status_values(self):
-        assert {s.value for s in CompanyStatus} == {
-            "pending_verification", "active", "suspended", "closed"
-        }
+        assert {s.value for s in CompanyStatus} == {"pending_verification", "active", "suspended", "closed"}
 
     def test_size_tier_values(self):
         assert {s.value for s in SizeTier} == {"smb", "mid_market", "enterprise"}

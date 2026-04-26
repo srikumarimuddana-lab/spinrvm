@@ -4,6 +4,7 @@ and used by the rider app for read paths (balances).
 Separation: writes requiring admin role use require_company_admin.
 Reads available to any active member use require_company_member.
 """
+
 from __future__ import annotations
 
 from decimal import ROUND_HALF_UP, Decimal
@@ -308,6 +309,7 @@ async def decide_allowance_request(
 
 # ---------- Policy ----------
 
+
 @router.get("/policy")
 async def get_policy(
     company_id: str,
@@ -333,17 +335,18 @@ async def replace_policy(
     Idempotent — safe to call multiple times; always returns the current state.
     """
     patch = body.model_dump()
-    patch["allowed_payment_source"] = patch["allowed_payment_source"].value \
-        if hasattr(patch["allowed_payment_source"], "value") \
+    patch["allowed_payment_source"] = (
+        patch["allowed_payment_source"].value
+        if hasattr(patch["allowed_payment_source"], "value")
         else patch["allowed_payment_source"]
+    )
 
     _validate_geofence(patch.get("allowed_geofence"))
 
     # Serialise TimeWindow objects to plain dicts for JSON storage.
     if patch.get("allowed_time_windows") is not None:
         patch["allowed_time_windows"] = [
-            w.model_dump() if hasattr(w, "model_dump") else w
-            for w in patch["allowed_time_windows"]
+            w.model_dump() if hasattr(w, "model_dump") else w for w in patch["allowed_time_windows"]
         ]
 
     return await upsert_corporate_policy(company_id, patch)
@@ -364,9 +367,7 @@ async def patch_policy(
     if not patch:
         return await get_corporate_policy(company_id) or {}
 
-    if "allowed_payment_source" in patch and hasattr(
-        patch["allowed_payment_source"], "value"
-    ):
+    if "allowed_payment_source" in patch and hasattr(patch["allowed_payment_source"], "value"):
         patch["allowed_payment_source"] = patch["allowed_payment_source"].value
 
     if "allowed_geofence" in patch:
@@ -374,14 +375,14 @@ async def patch_policy(
 
     if "allowed_time_windows" in patch and patch["allowed_time_windows"] is not None:
         patch["allowed_time_windows"] = [
-            w.model_dump() if hasattr(w, "model_dump") else w
-            for w in patch["allowed_time_windows"]
+            w.model_dump() if hasattr(w, "model_dump") else w for w in patch["allowed_time_windows"]
         ]
 
     return await upsert_corporate_policy(company_id, patch)
 
 
 # ---------- Billing (Plan 6) ----------
+
 
 def _month_bounds(month: str) -> tuple[str, str]:
     """Return (from_iso, to_iso) [inclusive-exclusive] bounds for YYYY-MM."""

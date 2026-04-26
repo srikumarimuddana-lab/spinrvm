@@ -10,10 +10,12 @@ try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...utils.password import hash_password
+    from ...utils.refresh_tokens import revoke_all_for_user
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
     from utils.password import hash_password
+    from utils.refresh_tokens import revoke_all_for_user
 
 db = db_supabase  # legacy alias
 
@@ -138,6 +140,19 @@ async def create_staff(req: StaffCreateRequest, admin: dict = Depends(get_admin_
     }
 
     await db_supabase.insert_one("admin_staff", staff)
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "staff_created",
+            "resource": "staff",
+            "resource_id": staff["id"],
+            "details": {"email": staff["email"], "role": staff["role"], "modules": staff["modules"]},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     staff.pop("password_hash")
     return staff
 
@@ -163,7 +178,7 @@ async def get_staff(staff_id: str):
 
 
 @router.put("/staff/{staff_id}")
-async def update_staff(staff_id: str, req: StaffUpdateRequest):
+async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Depends(get_admin_user)):
     """Update staff member role/modules/status."""
     s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
     if not s:
@@ -176,6 +191,11 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest):
         updates["last_name"] = req.last_name
     if req.is_active is not None:
         updates["is_active"] = req.is_active
+        if req.is_active is False:
+            # Bump token_version so the dependency gate rejects all existing
+            # access tokens for this staff member immediately (audit [03-2]).
+            updates["token_version"] = int(s.get("token_version") or 0) + 1
+            await revoke_all_for_user(staff_id)
     if req.role is not None:
         updates["role"] = req.role
         if req.role in ROLE_PRESETS:
@@ -186,12 +206,42 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest):
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("admin_staff", {"id": staff_id}, updates)
+        await db_supabase.insert_one(
+            "audit_logs",
+            {
+                "id": str(uuid.uuid4()),
+                "actor_id": admin["id"],
+                "actor_role": admin.get("role"),
+                "action": "staff_updated",
+                "resource": "staff",
+                "resource_id": staff_id,
+                "details": {k: v for k, v in updates.items() if k != "updated_at"},
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
 
     return {"success": True}
 
 
 @router.delete("/staff/{staff_id}")
-async def delete_staff(staff_id: str):
+async def delete_staff(staff_id: str, admin: dict = Depends(get_admin_user)):
     """Delete a staff member."""
+    s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
+    # Revoke all refresh tokens before the row is gone so any in-flight
+    # session cannot exchange a refresh token after deletion (audit [03-3]).
+    await revoke_all_for_user(staff_id)
     await db_supabase.delete_many("admin_staff", {"id": staff_id})
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "staff_deleted",
+            "resource": "staff",
+            "resource_id": staff_id,
+            "details": {"email": s.get("email") if s else None, "role": s.get("role") if s else None},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     return {"success": True}

@@ -5,6 +5,7 @@ scans wallets whose balance has fallen below their auto_topup_threshold
 and whose auto_topup_enabled is False, then sends a single reminder
 email per wallet per 12-hour window.
 """
+
 from __future__ import annotations
 
 import asyncio

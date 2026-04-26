@@ -1,6 +1,8 @@
 # Module: Backend API
 
-**Status:** Partially audited (as part of driver-app v4 audit)
+**Status:** Plan v1 ready — Phase A–E execution pending (2026-04-23)
+**Audit plan:** `reports/audits/2026-04-23-backend-api-audit-plan-v1.md`
+**Applicable dimensions:** 17 (D01–D04, D07–D12, D14, D17–D22)
 **Tech stack:** FastAPI Python 3.12, Supabase (PostgreSQL + RLS), Redis, Stripe
 **Root folder:** `backend/`
 
@@ -22,7 +24,16 @@
 | 12 | Compliance | Required | RLS, data retention, PIPEDA |
 | 14 | Performance | Required | DB queries, pagination, indexes |
 
+| 17 | Observability | Required | Structured logging, request_id, SLIs, heartbeats, PII redaction in logs |
+| 18 | DR / BCP | Required | PITR config, Redis replica, graceful degradation, drill cadence |
+| 19 | Fraud | Required | Velocity, impossible-travel, promo abuse, Stripe Radar, sanctions |
+| 20 | Financial reconciliation | Required | Stripe↔DB delta cron, wallet function enforcement, T4A, GST/PST columns |
+| 21 | Threat model / STRIDE | Required | Backend is the trust boundary; GPS spoof, token replay, corporate wallet siphon |
+| 22 | Third-party risk | Required | Vendor inventory, DPAs, sub-processors, SBOM, Docker image scanning |
+
 *Dimensions 05 (UI/UX), 06 (GPS), 13 (notifications UI), 15 (accessibility), 16 (i18n) — not applicable to the API itself.*
+
+**Total applicable dimensions: 17** (D01–D04, D07–D12, D14, D17–D22)
 
 ---
 

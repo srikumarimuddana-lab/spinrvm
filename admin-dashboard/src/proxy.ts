@@ -23,6 +23,29 @@ import { NextRequest, NextResponse } from "next/server";
  * NOTE: renamed from `middleware` → `proxy` per Next.js 16 convention.
  */
 
+// IP allowlist (F-06): set ADMIN_ALLOWED_IPS to a comma-separated list of
+// exact IPs or network prefixes (e.g. "10.0.0.,192.168.1.100").
+// Leave unset or empty to disable the check (development / cloud deployments
+// where IPs are dynamic). An IP is allowed if any entry in the list is a
+// prefix of the client IP — exact match ("1.2.3.4") works as a strict subset
+// of prefix match ("1.2.3.4" starts with "1.2.3.4").
+function buildAllowedIpEntries(): string[] {
+  const raw = process.env.ADMIN_ALLOWED_IPS ?? "";
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+const ALLOWED_IP_ENTRIES = buildAllowedIpEntries();
+
+function isIpAllowed(request: NextRequest): boolean {
+  if (ALLOWED_IP_ENTRIES.length === 0) return true;
+  const forwarded = request.headers.get("x-forwarded-for");
+  const clientIp = (forwarded ? forwarded.split(",")[0] : request.ip ?? "").trim();
+  return ALLOWED_IP_ENTRIES.some((entry) => clientIp.startsWith(entry));
+}
+
 const PUBLIC_PATHS = ["/login"];
 const PUBLIC_PREFIXES = ["/register/", "/track/"];
 
@@ -62,6 +85,11 @@ function isTokenValid(token: string): boolean {
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  // IP allowlist check — runs before auth so blocked IPs see 403, not /login
+  if (!isIpAllowed(request)) {
+    return new NextResponse("Forbidden", { status: 403 });
+  }
 
   // Public page — no auth required
   if (isPublic(pathname)) {

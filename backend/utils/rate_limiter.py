@@ -190,6 +190,15 @@ document_upload_limit = default_limiter.limit("5/minute")
 # Admin endpoints - restrictive for security
 admin_rate_limit = default_limiter.limit("100/minute")
 
+# Admin wallet mutations — additional friction against accidental bulk credit/debit (F-36)
+admin_wallet_limit = default_limiter.limit("10/minute")
+
+# Admin mass notifications — prevent accidental spam blasts (F-36)
+admin_mass_notify_limit = default_limiter.limit("3/minute")
+
+# Admin staff deletion — one-way destructive action, extra caution (F-36)
+admin_staff_delete_limit = default_limiter.limit("5/minute")
+
 
 # ============================================================================
 # Rate Limit Exceeded Handler

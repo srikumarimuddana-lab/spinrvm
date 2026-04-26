@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     from ..db import db
@@ -23,24 +23,29 @@ api_router = APIRouter(prefix="/favorites", tags=["Favorite Routes"])
 
 
 class SaveFavoriteRequest(BaseModel):
-    name: str
+    name: str = Field(..., max_length=100)
     pickup_address: str
-    pickup_lat: float
-    pickup_lng: float
+    pickup_lat: float = Field(..., ge=-90.0, le=90.0)
+    pickup_lng: float = Field(..., ge=-180.0, le=180.0)
     dropoff_address: str
-    dropoff_lat: float
-    dropoff_lng: float
+    dropoff_lat: float = Field(..., ge=-90.0, le=90.0)
+    dropoff_lng: float = Field(..., ge=-180.0, le=180.0)
     vehicle_type_id: Optional[str] = None
 
 
 @api_router.get("")
-async def get_favorite_routes(current_user: dict = Depends(get_current_user)):
+async def get_favorite_routes(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=50),
+    current_user: dict = Depends(get_current_user),
+):
     """Get user's saved favorite routes."""
     try:
         favorites = await db.get_rows(
             "favorite_routes",
             {"user_id": current_user["id"]},
-            limit=20,
+            limit=limit,
+            skip=skip,
             order="use_count",
         )
     except Exception as e:

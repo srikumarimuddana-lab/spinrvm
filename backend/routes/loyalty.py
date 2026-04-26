@@ -12,6 +12,7 @@ Tiers give bonus multipliers and can be redeemed for wallet credits.
 import logging
 import uuid
 from datetime import datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -198,20 +199,20 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
     if account.get("points", 0) < req.points:
         raise HTTPException(status_code=400, detail="Insufficient points")
 
-    from decimal import Decimal
-
-    credit_amount = round(req.points / REDEMPTION_RATE, 2)
+    credit_amount = (Decimal(req.points) / Decimal(REDEMPTION_RATE)).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
 
     # Step 1: Credit the wallet first. If this fails the rider keeps their points.
     from .wallet import _record_transaction, get_or_create_wallet
 
     wallet = await get_or_create_wallet(current_user["id"])
-    new_wallet_balance = await wallet_increment_balance(wallet["id"], Decimal(str(credit_amount)))
+    new_wallet_balance = await wallet_increment_balance(wallet["id"], credit_amount)
     await _record_transaction(
         wallet_id=wallet["id"],
         user_id=current_user["id"],
         txn_type="bonus",
-        amount=credit_amount,
+        amount=float(credit_amount),
         balance_after=float(new_wallet_balance),
         description=f"Loyalty redemption: {req.points} pts → ${credit_amount:.2f}",
     )
@@ -228,7 +229,7 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
     except Exception as deduct_err:
         logger.error(f"Loyalty redeem points deduction failed, reversing wallet credit: {deduct_err}")
         try:
-            await wallet_increment_balance(wallet["id"], Decimal(str(-credit_amount)))
+            await wallet_increment_balance(wallet["id"], -credit_amount)
         except Exception as reverse_err:
             logger.error(f"Loyalty redeem wallet reversal also failed: {reverse_err}")
         raise HTTPException(status_code=503, detail="Redemption failed — please retry")

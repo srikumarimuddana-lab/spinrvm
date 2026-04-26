@@ -68,11 +68,12 @@ class TopUpRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     amount: float = Field(..., ge=100, le=10000, description="CAD between 100 and 10000")
     payment_method_id: Optional[str] = None
+    client_idempotency_key: Optional[str] = None
 
 
 class AdjustRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    amount: float
+    amount: float = Field(..., ge=-100000.0, le=100000.0)
     notes: str = Field(..., min_length=1, max_length=500)
 
 
@@ -120,6 +121,8 @@ async def manual_topup(
             off_session=True,
             confirm=True,
         )
+    if body.client_idempotency_key:
+        intent_kwargs["idempotency_key"] = body.client_idempotency_key
     intent = stripe.PaymentIntent.create(**intent_kwargs)
     return {"payment_intent_id": intent.id, "client_secret": intent.client_secret}
 

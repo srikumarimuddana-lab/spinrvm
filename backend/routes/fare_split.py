@@ -39,7 +39,7 @@ def _d(v) -> Decimal:
 
 class CreateFareSplitRequest(BaseModel):
     ride_id: str
-    participant_phones: List[str] = Field(..., min_length=1, max_length=5)
+    participant_phones: List[str] = Field(..., min_length=1, max_length=5)  # Product limit: max 5 participants by design
 
     @validator('participant_phones', each_item=True)
     def validate_phone(cls, v: str) -> str:
@@ -285,41 +285,40 @@ async def pay_split_share(
     if participant["status"] != "accepted":
         raise HTTPException(status_code=400, detail="Must accept the split first")
 
-    share_amount = float(participant["share_amount"])
+    share_amount = _d(participant["share_amount"])
 
     if req.payment_method == "wallet":
-        # Import wallet helper
         from .wallet import _record_transaction, get_or_create_wallet
 
         wallet = await get_or_create_wallet(current_user["id"])
-        balance = _d(wallet.get("balance", 0))
-        debit = _d(share_amount)
+        try:
+            new_balance = await db.fare_split_pay_share(
+                wallet_id=wallet["id"],
+                participant_id=participant_id,
+                amount=share_amount,
+            )
+        except ValueError as exc:
+            if "insufficient_funds" in str(exc):
+                raise HTTPException(status_code=400, detail="Insufficient wallet balance")
+            raise
 
-        if balance < debit:
-            raise HTTPException(status_code=400, detail="Insufficient wallet balance")
-
-        new_balance = balance - debit
-        await db.update_one(
-            "wallets",
-            {"id": wallet["id"]},
-            {"$set": {"balance": float(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
-        )
         await _record_transaction(
             wallet_id=wallet["id"],
             user_id=current_user["id"],
             txn_type="fare_split_sent",
-            amount=-share_amount,
+            amount=-float(share_amount),
             balance_after=float(new_balance),
             reference_id=participant["fare_split_id"],
             description=f"Fare split payment ${share_amount:.2f}",
         )
-
-    # Mark participant as paid
-    await db.update_one(
-        "fare_split_participants",
-        {"id": participant_id},
-        {"$set": {"status": "paid", "paid_at": datetime.now(timezone.utc).isoformat()}},
-    )
+        # Participant already marked 'paid' atomically by fare_split_pay_share RPC
+    else:
+        # Card path: mark participant as paid
+        await db.update_one(
+            "fare_split_participants",
+            {"id": participant_id},
+            {"$set": {"status": "paid", "paid_at": datetime.now(timezone.utc).isoformat()}},
+        )
 
     # Check if all participants have paid → mark split as completed
     split = await db.find_one("fare_splits", {"id": participant["fare_split_id"]})
@@ -337,7 +336,7 @@ async def pay_split_share(
                 {"$set": {"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat()}},
             )
 
-    return {"status": "paid", "share_amount": share_amount}
+    return {"status": "paid", "share_amount": float(share_amount)}
 
 
 @api_router.post("/{split_id}/cancel")
@@ -358,5 +357,38 @@ async def cancel_fare_split(split_id: str, current_user: dict = Depends(get_curr
         {"id": split_id},
         {"$set": {"status": "cancelled", "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
+
+    # Refund any participants who had already paid
+    participants = await db.get_rows(
+        "fare_split_participants",
+        {"fare_split_id": split_id},
+        limit=10,
+    )
+    paid_participants = [p for p in participants if p.get("status") == "paid"]
+    if paid_participants:
+        from .wallet import _record_transaction, get_or_create_wallet
+
+        for p in paid_participants:
+            if not p.get("user_id"):
+                continue
+            try:
+                wallet = await get_or_create_wallet(p["user_id"])
+                refund = _d(p["share_amount"])
+                await db.wallet_increment_balance(wallet["id"], refund)
+                updated_wallet = await db.find_one("wallets", {"id": wallet["id"]})
+                balance_after = float(updated_wallet.get("balance", 0)) if updated_wallet else 0.0
+                await _record_transaction(
+                    wallet_id=wallet["id"],
+                    user_id=p["user_id"],
+                    txn_type="fare_split_refund",
+                    amount=float(refund),
+                    balance_after=balance_after,
+                    reference_id=split_id,
+                    description=f"Fare split cancellation refund ${refund:.2f}",
+                )
+            except Exception as refund_err:
+                logger.error(
+                    f"[FARE_SPLIT] Refund failed for participant {p['id']} on split {split_id}: {refund_err}"
+                )
 
     return {"status": "cancelled"}

@@ -269,7 +269,10 @@ async def _fares_for_location_impl(
 
 
 @api_router.get("/fares")
-async def get_fares_for_location(lat: float = Query(...), lng: float = Query(...)):
+async def get_fares_for_location(
+    lat: float = Query(..., ge=-90.0, le=90.0),
+    lng: float = Query(..., ge=-180.0, le=180.0),
+):
     """HTTP handler for /fares with Redis caching.
 
     Check cache first using a coordinates-based key (~1.1km grid).

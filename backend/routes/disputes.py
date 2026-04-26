@@ -14,10 +14,12 @@ from pydantic import BaseModel
 try:
     from .. import db_supabase
     from ..dependencies import get_admin_user, get_current_user
+    from ..routes.admin.maintenance import log_audit
     from ..settings_loader import get_app_settings
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user, get_current_user
+    from routes.admin.maintenance import log_audit
     from settings_loader import get_app_settings
 
 db = db_supabase  # legacy alias
@@ -166,6 +168,13 @@ async def admin_resolve_dispute(
 
     # Attempt Stripe refund BEFORE updating DB status so a Stripe failure never
     # leaves the dispute marked "resolved" without money returned to the rider.
+    original_fare = Decimal(str(dispute.get("original_fare") or 0))
+    if req.refund_amount and req.refund_amount > original_fare:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Refund amount ${req.refund_amount} exceeds original fare ${original_fare}",
+        )
+
     refund_result: Dict[str, Any] = {}
     if req.resolution in ("approved", "partial_refund") and req.refund_amount:
         refund_amount_cents = int(float(req.refund_amount) * 100)
@@ -221,6 +230,17 @@ async def admin_resolve_dispute(
         update_data["refund_result"] = refund_result
 
     await db_supabase.update_one("disputes", {"id": dispute_id}, update_data)
+
+    try:
+        await log_audit(
+            "dispute_resolved",
+            "dispute",
+            dispute_id,
+            current_admin.get("email", current_admin.get("id", "unknown")),
+            f"Resolution: {req.resolution}. Amount: {req.refund_amount or 0}. Note: {req.admin_note or ''}",
+        )
+    except Exception as audit_err:
+        logger.error(f"[AUDIT] Failed to write audit log for dispute {dispute_id}: {audit_err}")
 
     return {
         "success": True,

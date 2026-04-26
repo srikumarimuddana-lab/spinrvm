@@ -1,15 +1,17 @@
 import logging
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user
 
 logger = logging.getLogger(__name__)
 

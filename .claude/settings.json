@@ -1,8 +1,8 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "model": "claude-opus-4-7",
-  "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
-  },
+  "autoCompactWindow": 150000,
+  "cleanupPeriodDays": 7,
   "attribution": {
     "commit": "Co-developed with Claude Code (claude-opus-4-7)\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
     "pr": "AI-assisted — spinr platform (Claude Code)"
@@ -50,14 +50,20 @@
       "Write(CLAUDE.md)",
       "Write(.claude/settings.json)",
       "Write(.claude/commands/**)",
+      "Write(.claude/agents/**)",
+      "Write(.claude/hooks/**)",
+      "Write(.claude/context/**)",
       "Write(.github/workflows/claude.yml)",
-      "Write(.github/workflows/claude-audit.yml)"
+      "Write(.github/workflows/claude-audit.yml)",
+      "Write(.github/workflows/claude-review.yml)",
+      "Write(.github/workflows/pr-checks.yml)",
+      "Write(.github/pull_request_template.md)",
+      "Write(.github/labeler.yml)"
     ],
     "deny": [
       "Bash(rm -rf*)",
       "Bash(git push --force*)",
       "Bash(git push origin main*)",
-      "Bash(git push origin develop*)",
       "Bash(git reset --hard*)",
       "Write(.env*)",
       "Write(*.pem)",
@@ -81,6 +87,10 @@
           },
           {
             "type": "command",
+            "command": "bash .claude/hooks/session-start.sh"
+          },
+          {
+            "type": "command",
             "command": "bash -c 'cd backend && python3 -m pip install -q -r requirements.txt 2>/dev/null && echo \"backend deps ok\" || echo \"backend pip install skipped (no venv?)\"'"
           },
           {
@@ -95,6 +105,22 @@
             "type": "command",
             "command": "bash -c 'test -d admin-dashboard/node_modules && echo \"admin deps ok\" || (cd admin-dashboard && npm ci --silent && echo \"admin deps installed\")'"
           }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          { "type": "command", "command": "bash .claude/hooks/pre-migration-write.sh" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          { "type": "command", "command": "bash .claude/hooks/post-python-write.sh" }
         ]
       }
     ]

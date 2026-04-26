@@ -1,0 +1,175 @@
+name: Security Gates
+
+# Gates G1–G5 from docs/ci-security-gates.md (SAST, Semgrep, dep audit, secrets).
+# Non-blocking for the first 2 weeks — treat as baselining window. After that,
+# flip `continue-on-error` to `false` for each job to enforce.
+#
+# Runs on every PR to main and on a daily schedule for main itself.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Daily 02:00 UTC — catches drift in main between PRs
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: security-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write      # to post finding comments
+  security-events: write    # to upload SARIF
+
+jobs:
+  # G1 — Python SAST (Bandit)
+  bandit:
+    name: G1 · Bandit (Python SAST)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install bandit[toml]
+      - name: Run Bandit
+        run: |
+          bandit -r backend/ \
+            --severity-level high \
+            --confidence-level high \
+            -f json -o bandit-report.json || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit-report.json
+
+  # G2 — JS SAST (ESLint with security plugin; uses each module's own config)
+  eslint-security:
+    name: G2 · ESLint security plugin
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      matrix:
+        module: [rider-app, driver-app, admin-dashboard]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          # No `cache:` here — admin-dashboard uses package-lock.json, others
+          # use yarn.lock. A fixed cache-dependency-path would fail for
+          # whichever module doesn't match. Cache miss cost is ~30s and
+          # security-gates is not a hot-path workflow.
+      - name: Install deps
+        working-directory: ${{ matrix.module }}
+        continue-on-error: true
+        run: |
+          if [ -f yarn.lock ]; then yarn install --frozen-lockfile
+          elif [ -f package-lock.json ]; then npm ci
+          else echo "No lockfile; skipping ${{ matrix.module }}"; exit 0
+          fi
+      - name: Lint
+        working-directory: ${{ matrix.module }}
+        # Respects the repo's own lint script (e.g. admin-dashboard intentionally
+        # allows --max-warnings 600). Security gates are baselining — module
+        # owners tune strictness in their own package.json.
+        run: |
+          if [ -f yarn.lock ]; then yarn lint || true
+          elif [ -f package-lock.json ]; then npm run lint || true
+          fi
+
+  # G3 — Semgrep with Spinr-specific ruleset + public registry rules
+  semgrep:
+    name: G3 · Semgrep (Spinr rules + public)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    container:
+      image: semgrep/semgrep:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Semgrep scan
+        run: |
+          semgrep scan \
+            --config=.semgrep/spinr-rules.yml \
+            --config=p/python \
+            --config=p/typescript \
+            --config=p/secrets \
+            --config=p/owasp-top-ten \
+            --severity=ERROR \
+            --severity=WARNING \
+            --sarif --output=semgrep.sarif || true
+      - uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+
+  # G4 — Dependency audit (Python + JS)
+  pip-audit:
+    name: G4a · pip-audit (Python deps)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pip-audit
+      - run: pip-audit -r backend/requirements.txt --vulnerability-service osv || true
+
+  yarn-audit:
+    name: G4b · yarn audit (JS deps)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      matrix:
+        module: [rider-app, driver-app, admin-dashboard, shared]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Audit
+        working-directory: ${{ matrix.module }}
+        run: |
+          if [ -f yarn.lock ]; then yarn audit --level high || true
+          elif [ -f package-lock.json ]; then npm audit --audit-level=high || true
+          else echo "No lockfile in ${{ matrix.module }}"
+          fi
+
+  # G5 — Secret scanning
+  gitleaks:
+    name: G5 · Gitleaks (secrets)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Summary job — required check for branch protection once gates are enforced
+  summary:
+    name: Security gates summary
+    needs: [bandit, eslint-security, semgrep, pip-audit, yarn-audit, gitleaks]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summarize
+        run: |
+          echo "## Security Gates Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All gates are **non-blocking** during the baselining window" >> $GITHUB_STEP_SUMMARY
+          echo "(first 2 weeks after rollout). Review findings in individual" >> $GITHUB_STEP_SUMMARY
+          echo "job outputs; file P2 items for HIGH/CRITICAL results in" >> $GITHUB_STEP_SUMMARY
+          echo "\`OPEN-ITEMS-TRACKER.md\`." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "After baseline is clean, set \`continue-on-error: false\` on" >> $GITHUB_STEP_SUMMARY
+          echo "each job and add a branch-protection rule requiring this" >> $GITHUB_STEP_SUMMARY
+          echo "workflow on PRs." >> $GITHUB_STEP_SUMMARY

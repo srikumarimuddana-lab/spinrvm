@@ -15,6 +15,7 @@ These pin the glue between the handler and charge_ride():
 charge_ride() itself is covered by test_stripe_charge.py; here we only
 validate the handler's response shapes and DB-write contracts.
 """
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -22,7 +23,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-
 
 RIDER_ID = "rider_pc_1"
 RIDE_ID = "ride_pc_1"
@@ -105,13 +105,12 @@ class TestCardSuccess:
         patches, updates = _install_common_patches(outcome)
 
         from contextlib import ExitStack
+
         with ExitStack() as st:
             for p in patches:
                 st.enter_context(p)
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
-            result = await rides_mod.process_payment(
-                ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID}
-            )
+            result = await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         assert result["success"] is True
         assert result["charged_amount"] == 18.5
@@ -132,13 +131,12 @@ class TestCardSuccess:
         patches, updates = _install_common_patches(outcome)
 
         from contextlib import ExitStack
+
         with ExitStack() as st:
             for p in patches:
                 st.enter_context(p)
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("2"))
-            result = await rides_mod.process_payment(
-                ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID}
-            )
+            result = await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         # Fare was 18.5, tip 2 → 20.5
         assert result["charged_amount"] == 20.5
@@ -163,13 +161,12 @@ class TestRequiresAction3DS:
         patches, updates = _install_common_patches(outcome)
 
         from contextlib import ExitStack
+
         with ExitStack() as st:
             for p in patches:
                 st.enter_context(p)
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
-            result = await rides_mod.process_payment(
-                ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID}
-            )
+            result = await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         assert result["success"] is False
         assert result["status"] == "requires_action"
@@ -193,14 +190,13 @@ class TestCardDecline:
         patches, updates = _install_common_patches(outcome)
 
         from contextlib import ExitStack
+
         with ExitStack() as st:
             for p in patches:
                 st.enter_context(p)
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
             with pytest.raises(HTTPException) as exc_info:
-                await rides_mod.process_payment(
-                    ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID}
-                )
+                await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         assert exc_info.value.status_code == 402
         body = exc_info.value.detail
@@ -228,14 +224,13 @@ class TestStripeOpsFailure:
         patches, updates = _install_common_patches(outcome)
 
         from contextlib import ExitStack
+
         with ExitStack() as st:
             for p in patches:
                 st.enter_context(p)
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
             with pytest.raises(HTTPException) as exc_info:
-                await rides_mod.process_payment(
-                    ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID}
-                )
+                await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         assert exc_info.value.status_code == 502
         body = exc_info.value.detail
@@ -256,13 +251,12 @@ class TestUnconfiguredFallback:
         patches, updates = _install_common_patches(outcome)
 
         from contextlib import ExitStack
+
         with ExitStack() as st:
             for p in patches:
                 st.enter_context(p)
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
-            result = await rides_mod.process_payment(
-                ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID}
-            )
+            result = await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         assert result["success"] is True
         assert _last_payment_status_write(updates) == "paid"
@@ -291,9 +285,7 @@ class TestIdempotencyGuards:
             patch("backend.routes.rides.charge_ride", charge_mock),
         ):
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
-            result = await rides_mod.process_payment(
-                ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID}
-            )
+            result = await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         assert result.get("already_paid") is True
         charge_mock.assert_not_called()
@@ -313,6 +305,7 @@ class TestIdempotencyGuards:
         charge_mock = AsyncMock(return_value=outcome)
 
         from contextlib import ExitStack
+
         with ExitStack() as st:
             for p in patches:
                 st.enter_context(p)
@@ -320,9 +313,7 @@ class TestIdempotencyGuards:
             st.enter_context(patch("backend.routes.rides.charge_ride", charge_mock))
 
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
-            result = await rides_mod.process_payment(
-                ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID}
-            )
+            result = await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         assert result.get("already_paid") is True
         charge_mock.assert_not_called()
@@ -339,8 +330,6 @@ class TestAuthorization:
         ):
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
             with pytest.raises(HTTPException) as exc_info:
-                await rides_mod.process_payment(
-                    ride_id=RIDE_ID, req=req, current_user={"id": "someone_else"}
-                )
+                await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": "someone_else"})
 
         assert exc_info.value.status_code == 403

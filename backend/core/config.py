@@ -35,8 +35,9 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     # Legacy days TTL — preserved for mobile clients that haven't adopted rotation yet.
     ACCESS_TOKEN_TTL_DAYS: int = 30
-    # Admin-console access-token TTL in hours. Cap at 12h for security.
-    ADMIN_ACCESS_TOKEN_TTL_HOURS: int = 12
+    # Admin-console access-token TTL in hours. 1h forces frequent rotation via
+    # the refresh token flow; reduces the blast radius of a captured token.
+    ADMIN_ACCESS_TOKEN_TTL_HOURS: int = 1
     # Refresh-token TTL in days (30 days "remember this device").
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
@@ -65,12 +66,12 @@ class Settings(BaseSettings):
     WS_REDIS_URL: str = ""
 
     # OTP brute-force lockout (SEC-008)
-    OTP_MAX_FAILURES: int = 5                  # attempts before lockout
-    OTP_FAILURE_WINDOW_SECONDS: int = 3600     # sliding window (1 hr)
+    OTP_MAX_FAILURES: int = 5  # attempts before lockout
+    OTP_FAILURE_WINDOW_SECONDS: int = 3600  # sliding window (1 hr)
     OTP_LOCKOUT_DURATION_SECONDS: int = 86400  # lockout duration (24 hr)
 
     # Fare cache TTL (PERF-001)
-    FARE_CACHE_TTL_SECONDS: int = 300          # 5-minute cache per lat/lng grid cell
+    FARE_CACHE_TTL_SECONDS: int = 300  # 5-minute cache per lat/lng grid cell
 
     # File storage
     STORAGE_BUCKET: str = "driver-documents"

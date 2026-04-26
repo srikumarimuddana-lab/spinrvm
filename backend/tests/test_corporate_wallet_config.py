@@ -1,4 +1,5 @@
 """PUT /admin/corporate-accounts/{id}/wallet/config — auto-topup configuration."""
+
 from unittest.mock import AsyncMock, patch
 
 
@@ -12,13 +13,16 @@ def test_update_autotopup_config(test_client, admin_override):
         "auto_topup_amount": "500.00",
         "auto_topup_daily_cap": "5000.00",
     }
-    with patch(
-        "routes.corporate_wallet.get_corporate_wallet_by_company",
-        AsyncMock(return_value={"id": "w1", "auto_topup_enabled": False}),
-    ), patch(
-        "routes.corporate_wallet.update_corporate_wallet_config",
-        AsyncMock(return_value=updated),
-    ) as m_upd:
+    with (
+        patch(
+            "routes.corporate_wallet.get_corporate_wallet_by_company",
+            AsyncMock(return_value={"id": "w1", "auto_topup_enabled": False}),
+        ),
+        patch(
+            "routes.corporate_wallet.update_corporate_wallet_config",
+            AsyncMock(return_value=updated),
+        ) as m_upd,
+    ):
         resp = test_client.put(
             "/api/admin/corporate-accounts/c1/wallet/config",
             json={
@@ -72,19 +76,22 @@ def test_enabling_without_threshold_or_amount_rejected(test_client, admin_overri
 
 def test_disabling_autotopup_is_allowed_without_other_fields(test_client, admin_override):
     updated = {"id": "w1", "auto_topup_enabled": False}
-    with patch(
-        "routes.corporate_wallet.get_corporate_wallet_by_company",
-        AsyncMock(
-            return_value={
-                "id": "w1",
-                "auto_topup_enabled": True,
-                "auto_topup_threshold": "100",
-                "auto_topup_amount": "500",
-            }
+    with (
+        patch(
+            "routes.corporate_wallet.get_corporate_wallet_by_company",
+            AsyncMock(
+                return_value={
+                    "id": "w1",
+                    "auto_topup_enabled": True,
+                    "auto_topup_threshold": "100",
+                    "auto_topup_amount": "500",
+                }
+            ),
         ),
-    ), patch(
-        "routes.corporate_wallet.update_corporate_wallet_config",
-        AsyncMock(return_value=updated),
+        patch(
+            "routes.corporate_wallet.update_corporate_wallet_config",
+            AsyncMock(return_value=updated),
+        ),
     ):
         resp = test_client.put(
             "/api/admin/corporate-accounts/c1/wallet/config",
@@ -95,12 +102,13 @@ def test_disabling_autotopup_is_allowed_without_other_fields(test_client, admin_
 
 def test_empty_body_returns_wallet_unchanged(test_client, admin_override):
     wallet = {"id": "w1", "auto_topup_enabled": False}
-    with patch(
-        "routes.corporate_wallet.get_corporate_wallet_by_company",
-        AsyncMock(return_value=wallet),
-    ), patch(
-        "routes.corporate_wallet.update_corporate_wallet_config", AsyncMock()
-    ) as m_upd:
+    with (
+        patch(
+            "routes.corporate_wallet.get_corporate_wallet_by_company",
+            AsyncMock(return_value=wallet),
+        ),
+        patch("routes.corporate_wallet.update_corporate_wallet_config", AsyncMock()) as m_upd,
+    ):
         resp = test_client.put(
             "/api/admin/corporate-accounts/c1/wallet/config",
             json={},

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import {
     View,
     Text,
@@ -12,7 +12,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import api from '@shared/api/client';
+import {
+    useNotifications,
+    useMarkNotificationRead,
+    useMarkAllNotificationsRead,
+} from '@shared/hooks/queries';
 import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -34,10 +38,16 @@ export default function NotificationsScreen() {
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
     const { t } = useLanguageStore();
-    const [notifications, setNotifications] = useState<Notification[]>([]);
-    const [unreadCount, setUnreadCount] = useState(0);
-    const [refreshing, setRefreshing] = useState(false);
-    const [loading, setLoading] = useState(true);
+
+    // /notifications is owned by the useNotifications hook. The hook
+    // handles dedupe, cache, refetch on focus, and the persisted cache
+    // means re-opening this screen renders the inbox instantly while a
+    // background refetch keeps it fresh.
+    const { data, isFetching, refetch } = useNotifications(50);
+    const notifications: Notification[] = data?.notifications ?? [];
+    const unreadCount: number = data?.unread_count ?? 0;
+    const markReadMutation = useMarkNotificationRead();
+    const markAllReadMutation = useMarkAllNotificationsRead();
 
     const iconMap: Record<string, { name: string; color: string }> = {
         ride_update: { name: 'car', color: colors.primary },
@@ -49,50 +59,17 @@ export default function NotificationsScreen() {
         safety: { name: 'shield-checkmark', color: colors.danger },
     };
 
-    const fetchNotifications = useCallback(async () => {
-        try {
-            const res = await api.get('/notifications?limit=50&offset=0');
-            setNotifications(res.data?.notifications || []);
-            setUnreadCount(res.data?.unread_count || 0);
-        } catch (e) {
-            console.log('[Notifications] fetch error:', e);
-        } finally {
-            setLoading(false);
-        }
-    }, []);
-
-    useEffect(() => {
-        fetchNotifications();
-    }, [fetchNotifications]);
-
-    const markAsRead = async (id: string) => {
-        // Optimistic update
-        setNotifications((prev) =>
-            prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
-        );
-        setUnreadCount((c) => Math.max(0, c - 1));
-        try {
-            await api.put(`/notifications/${id}/read`);
-        } catch (e) {
-            console.log('[Notifications] markAsRead error:', e);
-        }
+    const markAsRead = (id: string) => {
+        // Mutation invalidates the list cache on success; the screen
+        // re-renders with the row's is_read=true once the server confirms.
+        markReadMutation.mutate(id);
     };
 
-    const markAllRead = async () => {
-        setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
-        setUnreadCount(0);
-        try {
-            await api.put('/notifications/read-all');
-        } catch (e) {
-            console.log('[Notifications] markAllRead error:', e);
-        }
+    const markAllRead = () => {
+        markAllReadMutation.mutate();
     };
 
-    const onRefresh = async () => {
-        setRefreshing(true);
-        await fetchNotifications();
-        setRefreshing(false);
-    };
+    const onRefresh = () => { refetch(); };
 
     const formatTime = (dateStr: string) => {
         const diff = Date.now() - new Date(dateStr).getTime();
@@ -173,7 +150,7 @@ export default function NotificationsScreen() {
                     index,
                 })}
                 refreshControl={
-                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+                    <RefreshControl refreshing={isFetching} onRefresh={onRefresh} tintColor={colors.primary} />
                 }
                 ListEmptyComponent={
                     <View style={styles.emptyState}>

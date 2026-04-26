@@ -33,6 +33,7 @@ async def admin_create_faq(faq: Dict[str, Any]):
         "question": faq.get("question"),
         "answer": faq.get("answer"),
         "category": faq.get("category", "general"),
+        "audience": faq.get("audience", "both"),
         "is_active": faq.get("is_active", True),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -50,6 +51,8 @@ async def admin_update_faq(faq_id: str, faq: Dict[str, Any]):
         updates["answer"] = faq.get("answer")
     if faq.get("category") is not None:
         updates["category"] = faq.get("category")
+    if faq.get("audience") is not None:
+        updates["audience"] = faq.get("audience")
     if faq.get("is_active") is not None:
         updates["is_active"] = faq.get("is_active")
 

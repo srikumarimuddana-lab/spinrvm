@@ -39,8 +39,8 @@ const DROPOFF_SOURCE = "heat-dropoff-src";
 const PICKUP_LAYER = "heat-pickup-lyr";
 const DROPOFF_LAYER = "heat-dropoff-lyr";
 
-// Colour stops for heatmap-color expression. We mirror the previous
-// Leaflet.heat gradients: blue-scale for pickups, green→red for dropoffs.
+// Colour stops for MapLibre heatmap-color expression.
+// Blue-scale for pickups, green→red for dropoffs.
 const PICKUP_GRADIENT_EXPR: ExpressionSpecification = [
     "interpolate", ["linear"], ["heatmap-density"],
     0.0, "rgba(0,0,0,0)",

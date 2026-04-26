@@ -20,10 +20,12 @@ from loguru import logger
 try:
     from . import db_supabase
     from .core.config import settings
+    from .utils.error_handling import DatabaseError, ServiceUnavailableException
     from .utils.redis_client import redis_get
 except ImportError:
     import db_supabase
     from core.config import settings
+    from utils.error_handling import DatabaseError, ServiceUnavailableException
     from utils.redis_client import redis_get
 
 db = db_supabase  # legacy alias
@@ -103,6 +105,7 @@ def create_jwt_token(
 
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=JWT_ALGORITHM)
 
+
 def verify_jwt_token(token: str) -> dict:
     try:
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[JWT_ALGORITHM])
@@ -181,9 +184,10 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 db_session = user.get("current_session_id")
                 if db_session and token_session and token_session != db_session:
                     raise HTTPException(status_code=401, detail="ERR_SESSION_EXPIRED")
-                driver = (lambda _r: _r[0] if _r else None)(
-                    await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
-                )
+                # Cached (30s) — get_current_user runs on every
+                # authenticated request so this lookup used to dominate
+                # the Supabase read load.
+                driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
                 user["is_driver"] = True if driver else False
             return user
     except HTTPException:
@@ -216,11 +220,21 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             "is_driver": False,
         }
 
-    user = None
+    # Look up the user row. A transient Supabase failure here MUST surface
+    # as a 503 so the client retries — not be silently swallowed, which
+    # previously cascaded into the "create new user" path below and
+    # produced phantom duplicates (see CLAUDE.md: "Never logger.warning
+    # and continue on a DB/auth error").
     try:
         user = await db_supabase.get_user_by_id(payload["user_id"])
+    except (DatabaseError, ServiceUnavailableException):
+        # run_sync already retried the transient error — it's genuinely
+        # unreachable. Let the DB error propagate to the global handler
+        # which returns a clean 503.
+        raise
     except Exception as e:
-        logger.warning(f"Could not look up user from DB: {e}")
+        logger.error(f"Unexpected error looking up user from DB: {e}", exc_info=True)
+        raise DatabaseError(details={"original": str(e)}) from e
 
     if user:
         token_session = payload.get("session_id")
@@ -264,18 +278,31 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         try:
             await db_supabase.create_user(user)
             logger.info(f"Created new user {user['id']} from JWT")
+        except (DatabaseError, ServiceUnavailableException):
+            # Same rule as the lookup above — surface DB outages as a
+            # clean 503 rather than returning a user dict whose backing
+            # row doesn't exist. That used to cause cascading 401/500s
+            # on every subsequent authenticated call in the session.
+            raise
         except Exception as e:
-            logger.warning(f"Could not insert user into DB: {e}")
+            logger.error(f"Unexpected error inserting user into DB: {e}", exc_info=True)
+            raise DatabaseError(details={"original": str(e)}) from e
         user["is_driver"] = False
         return user
 
     try:
-        driver = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
-        )
+        # Cached driver-by-user lookup (30s). Same reason as the Firebase
+        # path above — this is the JWT hot path for every API call.
+        driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
         user["is_driver"] = True if driver else False
-    except Exception:
-        user["is_driver"] = False
+    except (DatabaseError, ServiceUnavailableException):
+        # Treat the drivers lookup the same as the users lookup — if the
+        # DB is flaking, 503 so the client retries. Silently defaulting
+        # is_driver=False caused drivers to see the rider UI mid-outage.
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error looking up driver row: {e}", exc_info=True)
+        raise DatabaseError(details={"original": str(e)}) from e
     return user
 
 

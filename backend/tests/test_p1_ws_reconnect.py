@@ -20,13 +20,13 @@ Run:
     pytest backend/tests/test_p1_ws_reconnect.py -v
     pytest -m e2e backend/tests/test_p1_ws_reconnect.py
 """
+
 from __future__ import annotations
 
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 RIDER_ID = "rider_p1_6"
 DRIVER_USER_ID = "driver_user_p1_6"
@@ -187,9 +187,7 @@ class TestActiveRideHttpRecovery:
                 AsyncMock(return_value=driver_user),
             ),
         ):
-            result = await rides_mod.get_active_ride(
-                current_user={"id": RIDER_ID}
-            )
+            result = await rides_mod.get_active_ride(current_user={"id": RIDER_ID})
 
         assert result["active"] is True
         assert result["ride"]["id"] == RIDE_ID
@@ -213,9 +211,7 @@ class TestActiveRideHttpRecovery:
                 AsyncMock(return_value=None),
             ),
         ):
-            result = await rides_mod.get_active_ride(
-                current_user={"id": RIDER_ID}
-            )
+            result = await rides_mod.get_active_ride(current_user={"id": RIDER_ID})
 
         assert result["active"] is True
         assert result["ride"]["status"] == "driver_accepted"
@@ -229,9 +225,7 @@ class TestActiveRideHttpRecovery:
             "backend.routes.rides.db_supabase.get_rows",
             AsyncMock(return_value=[]),
         ):
-            result = await rides_mod.get_active_ride(
-                current_user={"id": RIDER_ID}
-            )
+            result = await rides_mod.get_active_ride(current_user={"id": RIDER_ID})
 
         assert result["active"] is False
         assert result["ride"] is None
@@ -249,9 +243,7 @@ class TestActiveRideHttpRecovery:
                 AsyncMock(side_effect=[[], [ride]]),
             ),
         ):
-            result = await rides_mod.get_active_ride(
-                current_user={"id": RIDER_ID}
-            )
+            result = await rides_mod.get_active_ride(current_user={"id": RIDER_ID})
 
         assert result["active"] is True
         assert result["ride"]["status"] == "searching"

@@ -553,13 +553,24 @@ def pydantic_coordinates_validator(v: Union[float, int, str]) -> float:
 # ============================================================================
 
 _BN_FORMAT = re.compile(r"^\d{9}(?:R[CMPRTZ]\d{4})?$")
-_CA_TAX_REGIONS = frozenset({
-    "ON", "QC", "BC", "AB", "SK", "MB",
-    "NS", "NB", "NL", "PE", "YT", "NT", "NU",
-})
-_DOMAIN_RE = re.compile(
-    r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"
+_CA_TAX_REGIONS = frozenset(
+    {
+        "ON",
+        "QC",
+        "BC",
+        "AB",
+        "SK",
+        "MB",
+        "NS",
+        "NB",
+        "NL",
+        "PE",
+        "YT",
+        "NT",
+        "NU",
+    }
 )
+_DOMAIN_RE = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 
 
 def validate_cra_business_number(bn: str) -> str:
@@ -595,7 +606,7 @@ def validate_license_plate(plate: str) -> str:
     if not isinstance(plate, str):
         raise ValueError("Licence plate must be a string")
     normalized = plate.strip().upper()
-    if not re.match(r'^[A-Z0-9]{2,8}$', normalized):
+    if not re.match(r"^[A-Z0-9]{2,8}$", normalized):
         raise ValueError("Licence plate must be 2–8 uppercase alphanumeric characters")
     return normalized
 
@@ -605,7 +616,7 @@ def validate_vin(vin: str) -> str:
     if not isinstance(vin, str):
         raise ValueError("VIN must be a string")
     normalized = vin.strip().upper()
-    if not re.match(r'^[A-HJ-NPR-Z0-9]{17}$', normalized):
+    if not re.match(r"^[A-HJ-NPR-Z0-9]{17}$", normalized):
         raise ValueError("VIN must be exactly 17 valid VIN characters (I, O, Q not allowed)")
     return normalized
 

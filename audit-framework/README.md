@@ -51,7 +51,10 @@ audit-framework/
 
 ---
 
-## The 16 Audit Dimensions
+## The 22 Audit Dimensions
+
+Core 16 (product-facing) + 6 operational/governance dimensions added
+2026-04-23 for pre-launch readiness.
 
 | # | Dimension | Who Needs It | Effort |
 |---|---|---|---|
@@ -71,8 +74,22 @@ audit-framework/
 | 14 | **Performance & scalability** | Every module | Medium |
 | 15 | **Accessibility (WCAG 2.1)** | Mobile apps + web | Medium |
 | 16 | **i18n / Localisation** | Every module (French required in CA) | Medium |
+| 17 | **Observability** (logging / metrics / tracing / SLOs) | Backend + admin | Medium |
+| 18 | **DR / BCP** (RTO/RPO · PITR · graceful degradation) | Backend + infra | Medium |
+| 19 | **Fraud detection** | Backend + admin | Medium |
+| 20 | **Financial reconciliation** (Stripe ↔ DB ↔ wallet ↔ payout) | Backend + finance | Medium |
+| 21 | **Threat model** (STRIDE + ride-share-specific scenarios) | Every module | Medium |
+| 22 | **Third-party / supply-chain risk** (vendors · DPAs · sub-processors · SBOM) | Every module | Medium |
 
-Dimensions 14–16 are the ones most often skipped under deadline pressure — don't skip them.
+Dimensions 14–16 are skipped most often under deadline pressure — don't skip them.
+Dimensions 17–22 are skipped most often when a launch "feels ready" — they
+are exactly what the first incident will probe. Run them before public launch.
+
+### Canonical Regulatory Reference
+
+`regulatory-matrix.md` holds the canonical list of Canadian + SK + industry
+regulations. Every finding tags one or more IDs from that file in its
+`regulations:` field.
 
 ---
 

@@ -13,7 +13,7 @@ export const MAP_STYLE_POSITRON = "https://tiles.openfreemap.org/styles/positron
 
 // Saskatoon by default — Spinr is a Saskatchewan-first service, so maps
 // should land somewhere operational even before service areas load or
-// the user's geolocation resolves. MapLibre uses [lng, lat] (opposite of Leaflet).
+// the user's geolocation resolves. MapLibre uses [lng, lat] ordering.
 export const DEFAULT_CENTER: [number, number] = [-106.67, 52.13];
 
 /** Build a styled DOM <div> for a circular map marker. */

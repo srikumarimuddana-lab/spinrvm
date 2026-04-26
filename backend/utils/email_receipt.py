@@ -4,7 +4,6 @@ Generates HTML receipt and sends via email (SendGrid when configured, logs other
 """
 
 import logging
-from datetime import datetime
 
 try:
     from .datetime_utils import parse_iso_utc
@@ -34,6 +33,23 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: flo
     # receipt so the rider can quote it to support.
     ride_ref = ride.get("ride_code") or (str(ride.get("id", ""))[:8].upper() or "—")
 
+    # Route map snapshot (migration 41). Rendered from phase_polylines at
+    # ride completion and uploaded to Cloudinary. Present only when the
+    # snapshot pipeline succeeded; legacy rides without a snapshot get a
+    # receipt without the map section (the route addresses below still
+    # carry the essential info).
+    route_snapshot_url = ride.get("route_snapshot_url") or ""
+    route_snapshot_html = (
+        f"""
+        <tr><td style="padding:0 24px 16px;">
+          <img src="{route_snapshot_url}" alt="Your route" width="472"
+               style="width:100%;max-width:472px;height:auto;border-radius:12px;display:block;" />
+        </td></tr>
+        """
+        if route_snapshot_url
+        else ""
+    )
+
     return f"""
     <!DOCTYPE html>
     <html>
@@ -59,6 +75,8 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: flo
           <p style="color:#999;font-size:11px;margin:6px 0 0;letter-spacing:0.5px;">Ride <strong style="color:#1a1a1a;font-weight:700;">{ride_ref}</strong></p>
         </td></tr>
 
+        <!-- Route map (only rendered when snapshot exists) -->
+        {route_snapshot_html}
         <!-- Route -->
         <tr><td style="padding:0 24px 16px;">
         <table width="100%" style="background:#f9f9f9;border-radius:12px;padding:16px;">

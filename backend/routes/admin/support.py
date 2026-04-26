@@ -40,14 +40,57 @@ class ComplaintResolveRequest(BaseModel):
 
 
 @router.get("/disputes")
-async def admin_get_disputes():
-    """Get all disputes."""
+async def admin_get_disputes(
+    limit: int = 50,
+    offset: int = 0,
+    status: Optional[str] = None,
+):
+    """Get disputes with pagination. Optional `status` filter."""
+    filters: Dict[str, Any] = {}
+    if status and status != "all":
+        filters["status"] = status
     try:
-        disputes = await db_supabase.get_rows("disputes", order="created_at", desc=True, limit=500)
+        disputes = await db_supabase.get_rows(
+            "disputes",
+            filters,
+            order="created_at",
+            desc=True,
+            limit=limit,
+            offset=offset,
+        )
     except Exception:
         logger.warning("disputes table may not exist yet")
         return []
     return disputes
+
+
+@router.get("/disputes/stats")
+async def admin_get_dispute_stats():
+    """Aggregate dispute counts and refund totals across all rows."""
+    try:
+        rows = await db_supabase.get_rows("disputes", {}, limit=10000)
+    except Exception:
+        logger.warning("disputes table may not exist yet")
+        return {
+            "open": 0,
+            "under_review": 0,
+            "resolved": 0,
+            "rejected": 0,
+            "total_refunded": 0,
+        }
+
+    counts = {"open": 0, "under_review": 0, "resolved": 0, "rejected": 0}
+    total_refunded = 0.0
+    for d in rows or []:
+        s = d.get("status")
+        if s in counts:
+            counts[s] += 1
+        if s == "resolved":
+            try:
+                total_refunded += float(d.get("refund_amount") or 0)
+            except (TypeError, ValueError):
+                pass
+    return {**counts, "total_refunded": round(total_refunded, 2)}
 
 
 @router.post("/disputes")
@@ -119,9 +162,26 @@ async def admin_delete_dispute(dispute_id: str):
 
 
 @router.get("/tickets")
-async def admin_get_tickets():
-    """Get all support tickets."""
-    tickets = await db_supabase.get_rows("support_tickets", order="created_at", desc=True, limit=500)
+async def admin_get_tickets(
+    limit: int = 50,
+    offset: int = 0,
+    status: Optional[str] = None,
+    service_area_id: Optional[str] = None,
+):
+    """Get support tickets with pagination. Optional `status` / `service_area_id` filters."""
+    filters: Dict[str, Any] = {}
+    if status and status != "all":
+        filters["status"] = status
+    if service_area_id and service_area_id != "all":
+        filters["service_area_id"] = service_area_id
+    tickets = await db_supabase.get_rows(
+        "support_tickets",
+        filters,
+        order="created_at",
+        desc=True,
+        limit=limit,
+        offset=offset,
+    )
     return tickets
 
 
@@ -248,9 +308,19 @@ async def admin_flag_ride_participant(ride_id: str, req: FlagRequest):
 async def admin_list_flags(
     limit: int = 100,
     offset: int = 0,
+    target_type: Optional[str] = None,
+    service_area_id: Optional[str] = None,
+    is_active: Optional[bool] = None,
 ):
-    """List all flags with optional pagination."""
-    flags = await db_supabase.get_rows("flags", order="created_at", desc=True, limit=limit, offset=offset)
+    """List all flags. Optional `target_type` / `service_area_id` / `is_active` filters."""
+    filters: Dict[str, Any] = {}
+    if target_type and target_type != "all":
+        filters["target_type"] = target_type
+    if service_area_id and service_area_id != "all":
+        filters["service_area_id"] = service_area_id
+    if is_active is not None:
+        filters["is_active"] = is_active
+    flags = await db_supabase.get_rows("flags", filters, order="created_at", desc=True, limit=limit, offset=offset)
     return flags
 
 
@@ -320,9 +390,22 @@ async def admin_resolve_complaint(complaint_id: str, req: ComplaintResolveReques
 
 
 @router.get("/complaints")
-async def admin_list_complaints(limit: int = 100, offset: int = 0):
-    """List all complaints."""
-    return await db_supabase.get_rows("complaints", order="created_at", desc=True, limit=limit, offset=offset)
+async def admin_list_complaints(
+    limit: int = 100,
+    offset: int = 0,
+    status: Optional[str] = None,
+    against_type: Optional[str] = None,
+    service_area_id: Optional[str] = None,
+):
+    """List all complaints. Optional `status` / `against_type` / `service_area_id` filters."""
+    filters: Dict[str, Any] = {}
+    if status and status != "all":
+        filters["status"] = status
+    if against_type and against_type != "all":
+        filters["against_type"] = against_type
+    if service_area_id and service_area_id != "all":
+        filters["service_area_id"] = service_area_id
+    return await db_supabase.get_rows("complaints", filters, order="created_at", desc=True, limit=limit, offset=offset)
 
 
 @router.delete("/complaints/{complaint_id}")

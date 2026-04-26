@@ -1,10 +1,14 @@
 import asyncio
+import json as _json
+import random as _random
 import re
 from datetime import date, datetime, timezone
-from typing import Any, Dict, List, Optional
+from decimal import Decimal
+from typing import Any, Dict, List, Literal, Optional
 
 try:
     import httpx as _httpx
+
     _HTTPX_TIMEOUT_EXC = _httpx.TimeoutException
 except ImportError:  # pragma: no cover
     _httpx = None  # type: ignore
@@ -16,9 +20,17 @@ except ImportError:
     from supabase_client import supabase  # type: ignore
 
 try:
+    from .utils.deadline import deadline_exhausted as _deadline_exhausted  # type: ignore
     from .utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
+    from .utils.metrics import inc as _metric_inc  # type: ignore
+    from .utils.metrics import set_gauge as _metric_gauge
+    from .utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set  # type: ignore
 except ImportError:
+    from utils.deadline import deadline_exhausted as _deadline_exhausted  # type: ignore
     from utils.error_handling import DatabaseError, DuplicateRecordError, ServiceUnavailableException  # type: ignore
+    from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.metrics import set_gauge as _metric_gauge
+    from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set  # type: ignore
 
 import time as _time
 from typing import Callable, TypeVar
@@ -32,7 +44,12 @@ class _CircuitBreaker:
     """Half-open circuit breaker for the Supabase connection pool.
 
     Opens after FAILURE_THRESHOLD failures within WINDOW seconds.
-    Allows one probe after OPEN_DURATION seconds (half-open).
+    After OPEN_DURATION elapses, allows **exactly one** probe request
+    through in half-open state; the next call is blocked until the
+    probe resolves. This prevents a thundering-herd recovery where
+    hundreds of queued requests all flood Supabase at the same moment
+    it's coming back, re-tripping the breaker.
+
     Closes on first success in any state.
     """
 
@@ -44,6 +61,7 @@ class _CircuitBreaker:
         self._state = "closed"
         self._failure_times: list = []
         self._opened_at: float | None = None
+        self._probe_in_flight = False
 
     def should_allow(self) -> bool:
         now = _time.monotonic()
@@ -51,10 +69,17 @@ class _CircuitBreaker:
             return True
         if self._state == "open":
             if self._opened_at is not None and now - self._opened_at >= self.OPEN_DURATION:
+                # Transition to half-open and let this single caller probe.
                 self._state = "half_open"
+                self._probe_in_flight = True
+                logger.info("[DB] Circuit breaker half-open — releasing one probe request")
                 return True
             return False
-        return True  # half_open: allow one probe
+        # half_open: only allow a probe if one is not already in flight.
+        if not self._probe_in_flight:
+            self._probe_in_flight = True
+            return True
+        return False
 
     def record_success(self) -> None:
         if self._state != "closed":
@@ -62,6 +87,7 @@ class _CircuitBreaker:
         self._state = "closed"
         self._failure_times.clear()
         self._opened_at = None
+        self._probe_in_flight = False
 
     def record_failure(self) -> None:
         now = _time.monotonic()
@@ -70,70 +96,214 @@ class _CircuitBreaker:
         if self._state == "closed" and len(self._failure_times) >= self.FAILURE_THRESHOLD:
             self._state = "open"
             self._opened_at = now
+            self._probe_in_flight = False
             logger.error("[DB] Circuit breaker OPENED — raising ServiceUnavailableException on future calls")
         elif self._state == "half_open":
             self._state = "open"
             self._opened_at = now
+            self._probe_in_flight = False
             logger.warning("[DB] Circuit breaker probe failed — back to OPEN")
 
 
 _breaker = _CircuitBreaker()
 
 
-async def run_sync(func: Callable[[], T]) -> T:
-    """Run a synchronous Supabase call in a thread and retry once on transient
+# ── Retry policy per call class ──────────────────────────────────────
+# Different DB call classes have different retry semantics. Hot reads
+# want many retries (cheap, safe). Idempotent writes want one. Non-
+# idempotent writes MUST NOT retry — duplicate INSERTs double-book
+# rides or double-charge wallets. Callers pass retry_policy into
+# run_sync; default is "read" for backwards-compat.
+
+RetryPolicy = Literal["read", "idempotent_write", "write"]
+_BACKOFFS_BY_POLICY: Dict[str, list] = {
+    "read": [0.5, 1.5],  # 3 attempts, ~2s worst-case
+    "idempotent_write": [0.75],  # 2 attempts, ~0.75s worst-case
+    "write": [],  # 1 attempt, no retry
+}
+
+# ── Global retry budget ──────────────────────────────────────────────
+# Cap total retry RPS across the fleet so a Supabase outage can't
+# amplify load via retries. Implemented as a per-second Redis counter.
+# When the budget for the current second is exhausted, retries are
+# skipped and the original error is returned to the caller.
+#
+# Default: 50 retries/sec fleet-wide. Override with RETRY_BUDGET_PER_SEC
+# env var. Set to 0 to disable the budget check entirely (don't do this
+# in prod). Fails open on Redis errors so the budget never becomes a
+# new SPOF.
+
+import os as _os  # noqa: E402
+
+_RETRY_BUDGET_PER_SEC = int(_os.environ.get("RETRY_BUDGET_PER_SEC", "50"))
+
+
+async def _consume_retry_token() -> bool:
+    """Reserve one retry from the global per-second budget. Return True
+    if allowed, False if the budget is exhausted for this second."""
+    if _RETRY_BUDGET_PER_SEC <= 0:
+        return True  # budget disabled
+    try:
+        import time as _t
+
+        second = int(_t.time())
+        key = f"spinr:retry_budget:{second}"
+        count = await redis_incr(key)
+        if count == 1:
+            # First increment in this second — attach a 5s TTL so the
+            # key expires well after the second is over. No global
+            # cleanup job needed.
+            await redis_expire(key, 5)
+        return count <= _RETRY_BUDGET_PER_SEC
+    except Exception as exc:
+        logger.debug(f"[RETRY] Budget check failed (fail-open): {exc}")
+        return True
+
+
+def _jittered(delay: float) -> float:
+    """Multiply the backoff by 0.5 + random() to spread retries so 1000
+    clients don't hit Supabase at exactly the same moment. Classic
+    "full jitter" pattern (AWS Architecture Blog, 2015)."""
+    return delay * (0.5 + _random.random())
+
+
+async def run_sync(
+    func: Callable[[], T],
+    retry_policy: RetryPolicy = "read",
+) -> T:
+    """Run a synchronous Supabase call in a thread and retry on transient
     HTTP/2 connection errors. Two flavors show up in practice:
       - h2.ConnectionTerminated / GOAWAY when the stream limit is reached on
         a long-lived connection.
       - httpx.RemoteProtocolError("Server disconnected") when Supabase's edge
         drops the HTTP/2 connection mid-response (observed on Railway with
-        larger result sets — e.g. the 5000-row heatmap query)."""
+        larger result sets — e.g. the 5000-row heatmap query).
+
+    Retry behaviour is policy-gated:
+      - read: 3 attempts, exponential backoff 500ms→1500ms with jitter.
+      - idempotent_write: 2 attempts, 750ms with jitter.
+      - write: 1 attempt, no retry (non-idempotent; the caller is
+        responsible for making the operation safe to replay).
+
+    All retries also consume one token from the global per-second
+    retry budget — if the budget is exhausted, the retry is skipped
+    and the original error is raised, preventing retry storms from
+    amplifying a Supabase outage.
+    """
     if not _breaker.should_allow():
+        _metric_inc("spinr_db_calls_rejected_total", {"reason": "circuit_open"})
         raise ServiceUnavailableException("database")
+
     loop = asyncio.get_running_loop()
-    try:
-        result = await loop.run_in_executor(None, func)  # type: ignore
-        _breaker.record_success()
-        return result
-    except Exception as exc:
-        exc_name = type(exc).__name__
-        exc_str = str(exc)
-        is_conn_terminated = "ConnectionTerminated" in exc_name or "ConnectionTerminated" in exc_str
-        is_remote_disconnect = (
-            "RemoteProtocolError" in exc_name
-            or "Server disconnected" in exc_str
-            or "ConnectionClosed" in exc_name
-        )
-        is_timeout = _HTTPX_TIMEOUT_EXC is not None and isinstance(exc, _HTTPX_TIMEOUT_EXC)
-        if is_conn_terminated or is_remote_disconnect or is_timeout:
-            logger.warning(f"Supabase transient failure ({exc_name}) — retrying once: {exc}")
-            await asyncio.sleep(0.25)
-            try:
-                result = await loop.run_in_executor(None, func)  # type: ignore
-                _breaker.record_success()
-                return result
-            except Exception as retry_exc:
-                _breaker.record_failure()
-                retry_str = str(retry_exc)
-                retry_str_lower = retry_str.lower()
-                if "duplicate key" in retry_str_lower or "unique constraint" in retry_str_lower or "23505" in retry_str:
-                    raise DuplicateRecordError(details={"original": retry_str}) from retry_exc
-                raise DatabaseError(details={"original": retry_str}) from retry_exc
-        _breaker.record_failure()
-        exc_str_lower = exc_str.lower()
-        if "duplicate key" in exc_str_lower or "unique constraint" in exc_str_lower or "23505" in exc_str:
-            raise DuplicateRecordError(details={"original": exc_str}) from exc
-        raise DatabaseError(details={"original": exc_str}) from exc
+    backoffs = _BACKOFFS_BY_POLICY.get(retry_policy, _BACKOFFS_BY_POLICY["read"])
+    last_exc: Exception | None = None
+    _metric_inc("spinr_db_calls_total", {"policy": retry_policy})
+
+    for attempt in range(len(backoffs) + 1):
+        try:
+            result = await loop.run_in_executor(None, func)  # type: ignore
+            _breaker.record_success()
+            _metric_gauge("spinr_db_circuit_state", 0, {"state": "closed"})
+            return result
+        except Exception as exc:
+            last_exc = exc
+            exc_name = type(exc).__name__
+            exc_str = str(exc)
+            is_conn_terminated = "ConnectionTerminated" in exc_name or "ConnectionTerminated" in exc_str
+            is_remote_disconnect = (
+                "RemoteProtocolError" in exc_name or "Server disconnected" in exc_str or "ConnectionClosed" in exc_name
+            )
+            is_timeout = _HTTPX_TIMEOUT_EXC is not None and isinstance(exc, _HTTPX_TIMEOUT_EXC)
+            is_transient = is_conn_terminated or is_remote_disconnect or is_timeout
+
+            # Non-transient errors (duplicate key, constraint violations,
+            # PGRST204 column-not-found, etc.) are final — don't waste
+            # retries on them.
+            if not is_transient:
+                break
+
+            if attempt < len(backoffs):
+                # Deadline check — if the client already gave up
+                # (X-Deadline-Ms in the past, or less than the next
+                # backoff's worth of budget left), skip the retry and
+                # fail fast. Frees the worker for a request whose
+                # client is still listening. No-op when no deadline is
+                # set (absent header).
+                next_backoff = backoffs[attempt]
+                if _deadline_exhausted(now_margin_seconds=next_backoff):
+                    _metric_inc(
+                        "spinr_db_retry_skipped_total",
+                        {"reason": "deadline_exhausted", "policy": retry_policy},
+                    )
+                    logger.warning(
+                        f"Supabase transient failure ({exc_name}) — client deadline exhausted, "
+                        f"skipping {next_backoff}s retry"
+                    )
+                    break
+
+                # Check the fleet-wide retry budget BEFORE sleeping. If
+                # we're out of budget, skip the remaining retries and
+                # let the original transient error propagate (as a
+                # clean 503 via DatabaseError below).
+                if not await _consume_retry_token():
+                    _metric_inc(
+                        "spinr_db_retry_skipped_total",
+                        {"reason": "budget_exhausted", "policy": retry_policy},
+                    )
+                    logger.warning(
+                        f"Supabase transient failure ({exc_name}) — retry budget exhausted, "
+                        f"returning 503 instead of retrying"
+                    )
+                    break
+
+                delay = _jittered(next_backoff)
+                _metric_inc(
+                    "spinr_db_retry_total",
+                    {"policy": retry_policy, "reason": exc_name},
+                )
+                logger.warning(
+                    f"Supabase transient failure ({exc_name}) on attempt {attempt + 1}, retrying in {delay:.2f}s: {exc}"
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            # Out of retries — fall through to the failure path below.
+            logger.error(f"Supabase transient failure ({exc_name}) exhausted retries: {exc}")
+
+    _breaker.record_failure()
+    _metric_gauge(
+        "spinr_db_circuit_state",
+        1 if _breaker._state == "open" else (0.5 if _breaker._state == "half_open" else 0),
+        {"state": _breaker._state},
+    )
+    assert last_exc is not None  # loop above always records an exception before breaking
+    exc_str = str(last_exc)
+    exc_name = type(last_exc).__name__
+    exc_str_lower = exc_str.lower()
+    if "duplicate key" in exc_str_lower or "unique constraint" in exc_str_lower or "23505" in exc_str:
+        _metric_inc("spinr_db_errors_total", {"kind": "duplicate_key"})
+        raise DuplicateRecordError(details={"original": exc_str}) from last_exc
+    _metric_inc("spinr_db_errors_total", {"kind": "database_error"})
+    logger.error(f"[DB] Supabase call failed ({exc_name}): {exc_str}")
+    raise DatabaseError(details={"original": exc_str}) from last_exc
 
 
 def _serialize_for_api(data: Any) -> Any:
-    """Recursively convert datetime/date objects to ISO format strings."""
+    """Recursively prepare a payload for Supabase/PostgREST JSON encoding.
+
+    Converts datetime/date → ISO strings and Decimal → float. Decimal
+    conversion matches the _f() convention used throughout fare code and
+    catches Pydantic models whose Decimal-typed fields leak through
+    .dict() (e.g. Ride.base_fare, Ride.tip_amount) without a manual _f().
+    """
     if isinstance(data, dict):
         return {k: _serialize_for_api(v) for k, v in data.items()}
     if isinstance(data, list):
         return [_serialize_for_api(v) for v in data]
     if isinstance(data, (datetime, date)):
         return data.isoformat()
+    if isinstance(data, Decimal):
+        return float(data)
     return data
 
 
@@ -167,6 +337,122 @@ def _rows_from_res(res: Any) -> List[Dict[str, Any]]:
         data = getattr(res, "data", None)
 
     return data or []
+
+
+# ============ Row-level Redis Cache ============
+#
+# /auth/me (and every authenticated endpoint via get_current_user) reads
+# the same user + driver-by-user rows on every request. A 30-second
+# Redis cache in front of those two lookups cuts >90% of the Supabase
+# reads on hot auth paths. Short TTL keeps the staleness window inside
+# the access-token TTL and inside the 15s window users already tolerate
+# after profile edits.
+#
+# Cache is NOT applied to get_rows/update_one broadly — only the two
+# specific lookup helpers below — because the invalidation contract is
+# simple: touch the users or drivers row → invalidate_user_cache() or
+# invalidate_driver_cache(). update_one() / delete_many() call those
+# automatically for the matching tables so no individual route has to
+# remember to invalidate.
+
+_USER_CACHE_TTL_SECONDS = 30
+_DRIVER_CACHE_TTL_SECONDS = 30
+_DRIVER_BY_USER_CACHE_TTL_SECONDS = 30
+# Negative-cache "no driver row" for this user so unauthenticated path
+# repeatedly hitting the same user ID doesn't hammer Supabase.
+_NEGATIVE_CACHE_SENTINEL = "__none__"
+
+
+def _user_cache_key(user_id: str) -> str:
+    return f"cache:user:{user_id}"
+
+
+def _driver_cache_key(driver_id: str) -> str:
+    return f"cache:driver:{driver_id}"
+
+
+def _driver_by_user_cache_key(user_id: str) -> str:
+    return f"cache:driver:by_user:{user_id}"
+
+
+def _metric_prefix_for_key(key: str) -> str:
+    """Map a cache key to a stable low-cardinality prefix label.
+
+    `cache:user:12345` → "user", `cache:driver:by_user:abc` → "driver_by_user".
+    Keeps the metric label set bounded — we never want per-user-id labels."""
+    parts = key.split(":", 3)
+    if len(parts) < 2:
+        return "unknown"
+    if len(parts) >= 3 and parts[1] == "driver" and parts[2] == "by_user":
+        return "driver_by_user"
+    return parts[1]
+
+
+async def _read_cached_row(key: str) -> Optional[Dict[str, Any]]:
+    """Return the cached row, or None on miss / corrupt entry.
+
+    Returns the sentinel `{}` for a cached "no such row" to let callers
+    distinguish a negative cache hit (row does not exist) from a miss
+    (never looked up) — but since `None` has the same meaning for both,
+    we collapse them in the caller.
+    """
+    prefix = _metric_prefix_for_key(key)
+    try:
+        raw = await redis_get(key)
+    except Exception as exc:
+        _metric_inc("spinr_cache_error_total", {"prefix": prefix, "op": "get"})
+        logger.debug(f"[CACHE] redis_get failed for {key}: {exc}")
+        return None
+    if raw is None:
+        _metric_inc("spinr_cache_miss_total", {"prefix": prefix})
+        return None
+    if raw == _NEGATIVE_CACHE_SENTINEL:
+        _metric_inc("spinr_cache_hit_total", {"prefix": prefix, "kind": "negative"})
+        return {}  # caller treats empty dict as "negative hit"
+    try:
+        value = _json.loads(raw)
+        _metric_inc("spinr_cache_hit_total", {"prefix": prefix, "kind": "positive"})
+        return value
+    except Exception:
+        # Corrupt entry — treat as miss, best-effort delete so we don't loop.
+        _metric_inc("spinr_cache_error_total", {"prefix": prefix, "op": "decode"})
+        try:
+            await redis_delete(key)
+        except Exception:  # noqa: S110
+            pass
+        return None
+
+
+async def _write_cached_row(key: str, value: Optional[Dict[str, Any]], ttl: int) -> None:
+    try:
+        if value is None:
+            await redis_set(key, _NEGATIVE_CACHE_SENTINEL, ttl=ttl)
+        else:
+            await redis_set(key, _json.dumps(value, default=str), ttl=ttl)
+    except Exception as exc:
+        logger.debug(f"[CACHE] redis_set failed for {key}: {exc}")
+
+
+async def invalidate_user_cache(user_id: Optional[str]) -> None:
+    """Drop the cached users row. Safe to call with None."""
+    if not user_id:
+        return
+    try:
+        await redis_delete(_user_cache_key(user_id))
+    except Exception as exc:
+        logger.debug(f"[CACHE] Failed to invalidate user cache {user_id}: {exc}")
+
+
+async def invalidate_driver_cache(driver_id: Optional[str] = None, user_id: Optional[str] = None) -> None:
+    """Drop the cached drivers row (and the by-user index). Supply either
+    identifier — both keys are dropped when known."""
+    try:
+        if driver_id:
+            await redis_delete(_driver_cache_key(driver_id))
+        if user_id:
+            await redis_delete(_driver_by_user_cache_key(user_id))
+    except Exception as exc:
+        logger.debug(f"[CACHE] Failed to invalidate driver cache d={driver_id} u={user_id}: {exc}")
 
 
 # ============ Corporate Accounts Functions ============
@@ -306,9 +592,22 @@ async def delete_corporate_account(account_id: str) -> bool:
 async def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table("users").select("*").eq("id", user_id).is_("deleted_at", "null").execute()
-    ))
+
+    # Redis read-through cache (30s TTL). Absorbs the /auth/me-on-every-call
+    # traffic pattern without adding staleness beyond the access-token TTL.
+    key = _user_cache_key(user_id)
+    cached = await _read_cached_row(key)
+    if cached is not None:
+        # {} is the negative-cache sentinel ("no such user") — preserve that meaning.
+        return None if cached == {} else cached
+
+    user = await run_sync(
+        lambda: _single_row_from_res(
+            supabase.table("users").select("*").eq("id", user_id).is_("deleted_at", "null").execute()
+        )
+    )
+    await _write_cached_row(key, user, ttl=_USER_CACHE_TTL_SECONDS)
+    return user
 
 
 async def get_user_by_phone(phone: str) -> Optional[Dict[str, Any]]:
@@ -325,7 +624,14 @@ async def create_user(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not supabase:
         raise RuntimeError("Supabase client not configured")
     payload = _serialize_for_api(payload)
-    return await run_sync(lambda: _single_row_from_res(supabase.table("users").insert(payload).execute()))
+    result = await run_sync(lambda: _single_row_from_res(supabase.table("users").insert(payload).execute()))
+    # Drop any negative-cache entry so the next get_user_by_id picks up
+    # the fresh row instead of the "no such user" sentinel we may have
+    # cached from a prior look-up attempt.
+    if isinstance(result, dict):
+        await invalidate_user_cache(result.get("id"))
+    await invalidate_user_cache(payload.get("id") if isinstance(payload, dict) else None)
+    return result
 
 
 # ============ Driver Helpers ============
@@ -334,11 +640,44 @@ async def create_user(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 async def get_driver_by_id(driver_id: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
-    return await run_sync(
+
+    key = _driver_cache_key(driver_id)
+    cached = await _read_cached_row(key)
+    if cached is not None:
+        return None if cached == {} else cached
+
+    driver = await run_sync(
         lambda: _single_row_from_res(
             supabase.table("drivers").select("*").eq("id", driver_id).is_("deleted_at", "null").execute()
         )
     )
+    await _write_cached_row(key, driver, ttl=_DRIVER_CACHE_TTL_SECONDS)
+    return driver
+
+
+async def get_driver_by_user_id_cached(user_id: str) -> Optional[Dict[str, Any]]:
+    """Driver row for the given user_id, with a 30s Redis cache.
+
+    Hot path: get_current_user reads this on every authenticated request
+    to set user["is_driver"]. Raw Supabase look-up adds ~40-80ms per call;
+    caching collapses that to ~1ms on the hit path.
+    """
+    if not supabase:
+        return None
+
+    key = _driver_by_user_cache_key(user_id)
+    cached = await _read_cached_row(key)
+    if cached is not None:
+        return None if cached == {} else cached
+
+    rows = await run_sync(
+        lambda: _rows_from_res(
+            supabase.table("drivers").select("*").eq("user_id", user_id).is_("deleted_at", "null").limit(1).execute()
+        )
+    )
+    driver = rows[0] if rows else None
+    await _write_cached_row(key, driver, ttl=_DRIVER_BY_USER_CACHE_TTL_SECONDS)
+    return driver
 
 
 async def find_nearby_drivers(lat: float, lng: float, radius_meters: float) -> List[Dict[str, Any]]:
@@ -400,7 +739,12 @@ async def set_driver_available(driver_id: str, available: bool = True, total_rid
         res = supabase.table("drivers").update(payload).eq("id", driver_id).execute()
         return _single_row_from_res(res)
 
-    return await run_sync(_update)
+    result = await run_sync(_update)
+    # Driver row changed (is_available / total_rides) → evict both the
+    # by-id and by-user cache entries.
+    user_id = result.get("user_id") if isinstance(result, dict) else None
+    await invalidate_driver_cache(driver_id=driver_id, user_id=user_id)
+    return result
 
 
 async def claim_driver_atomic(driver_id: str) -> bool:
@@ -419,7 +763,13 @@ async def claim_driver_atomic(driver_id: str) -> bool:
         data = _rows_from_res(res)
         return len(data) > 0
 
-    return await run_sync(_claim)
+    claimed = await run_sync(_claim)
+    if claimed:
+        # The driver row is now is_available=false — make sure the cache
+        # doesn't keep serving a stale "still available" value to
+        # concurrent dispatch queries for the next 30s.
+        await invalidate_driver_cache(driver_id=driver_id)
+    return claimed
 
 
 async def claim_ride_atomic(ride_id: str, driver_id: str) -> bool:
@@ -479,16 +829,26 @@ async def claim_ride_atomic(ride_id: str, driver_id: str) -> bool:
 async def get_ride(ride_id: str) -> Optional[Dict[str, Any]]:
     if not supabase:
         return None
-    return await run_sync(lambda: _single_row_from_res(
-        supabase.table("rides").select("*").eq("id", ride_id).is_("deleted_at", "null").execute()
-    ))
+    return await run_sync(
+        lambda: _single_row_from_res(
+            supabase.table("rides").select("*").eq("id", ride_id).is_("deleted_at", "null").execute()
+        )
+    )
 
 
 async def insert_ride(payload: Dict[str, Any]):
     if not supabase:
         raise RuntimeError("Supabase client not configured")
     payload = _serialize_for_api(payload)
-    return await run_sync(lambda: _single_row_from_res(supabase.table("rides").insert(payload).execute()))
+    logger.info(f"[DEBUG-INSERT-RIDE] payload keys: {sorted(payload.keys())}")
+    logger.info(f"[DEBUG-INSERT-RIDE] full payload: {payload}")
+    try:
+        result = await run_sync(lambda: _single_row_from_res(supabase.table("rides").insert(payload).execute()))
+        logger.info(f"[DEBUG-INSERT-RIDE] SUCCESS ride_id={payload.get('id')}")
+        return result
+    except Exception as e:
+        logger.error(f"[DEBUG-INSERT-RIDE] FAILED: {e}")
+        raise
 
 
 async def update_ride(ride_id: str, updates: Dict[str, Any]):
@@ -598,10 +958,60 @@ async def delete_otp_record(record_id: str):
 # ============ Query Helpers ============
 
 
+def _postgrest_pattern(value: str) -> str:
+    """PostgREST treats `*` as a wildcard in (i)like filters. Escape `*` and
+    `,` so user input cannot inject extra clauses into an or_()."""
+    return str(value).replace("*", r"\*").replace(",", r"\,").replace("(", r"\(").replace(")", r"\)")
+
+
+def _build_or_clause_term(col: str, val: Any) -> Optional[str]:
+    """Convert one {col: predicate} pair into a PostgREST or_() leaf term."""
+    if isinstance(val, dict):
+        if "$regex" in val:
+            op = "ilike" if val.get("$options") == "i" else "like"
+            return f"{col}.{op}.*{_postgrest_pattern(val['$regex'])}*"
+        if "$ne" in val:
+            return f"{col}.neq.{val['$ne']}"
+        if "$gt" in val:
+            return f"{col}.gt.{val['$gt']}"
+        if "$gte" in val:
+            return f"{col}.gte.{val['$gte']}"
+        if "$lt" in val:
+            return f"{col}.lt.{val['$lt']}"
+        if "$lte" in val:
+            return f"{col}.lte.{val['$lte']}"
+        return None
+    if val is None:
+        return f"{col}.is.null"
+    return f"{col}.eq.{val}"
+
+
+def _build_or_clause(clauses: List[Dict[str, Any]]) -> str:
+    """Flatten a list of {col: predicate} dicts into a PostgREST or_() string."""
+    parts: List[str] = []
+    for clause in clauses or []:
+        for col, val in clause.items():
+            term = _build_or_clause_term(col, val)
+            if term:
+                parts.append(term)
+    return ",".join(parts)
+
+
 def _apply_filters(q, filters: Optional[Dict[str, Any]]):
     if not filters:
         return q
     for k, v in filters.items():
+        if k == "$or" and isinstance(v, list):
+            clause = _build_or_clause(v)
+            if clause:
+                q = q.or_(clause)
+            continue
+        if k == "$and" and isinstance(v, list):
+            # PostgREST has no native AND inside or_(), but a top-level $and is
+            # simply intersection — apply each sub-filter sequentially.
+            for sub in v:
+                q = _apply_filters(q, sub)
+            continue
         if isinstance(v, dict):
             if "$in" in v and isinstance(v["$in"], (list, tuple)):
                 q = q.in_(k, list(v["$in"]))
@@ -618,6 +1028,12 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
             elif "$nin" in v and isinstance(v["$nin"], (list, tuple)):
                 # Supabase: not.in_(k, values)
                 q = q.not_.in_(k, list(v["$nin"]))
+            elif "$regex" in v:
+                pattern = f"%{v['$regex']}%"
+                if v.get("$options") == "i":
+                    q = q.ilike(k, pattern)
+                else:
+                    q = q.like(k, pattern)
             # Add more query operators as needed
         else:
             q = q.eq(k, v)
@@ -733,7 +1149,32 @@ async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any]
 
         return _single_row_from_res(res)
 
-    return await run_sync(_fn)
+    result = await run_sync(_fn)
+
+    # Auto-invalidate the row-level cache so callers don't have to. Every
+    # write path that goes through update_one() picks up invalidation for
+    # free, which is the whole reason we put the cache here and not inside
+    # the HTTP handlers.
+    if table == "users":
+        # Prefer the post-update row id; fall back to the filter.
+        user_id = None
+        if isinstance(result, dict):
+            user_id = result.get("id")
+        if not user_id:
+            user_id = filters.get("id") if isinstance(filters, dict) else None
+        await invalidate_user_cache(user_id)
+    elif table == "drivers":
+        driver_id = None
+        user_id = None
+        if isinstance(result, dict):
+            driver_id = result.get("id")
+            user_id = result.get("user_id")
+        if isinstance(filters, dict):
+            driver_id = driver_id or filters.get("id")
+            user_id = user_id or filters.get("user_id")
+        await invalidate_driver_cache(driver_id=driver_id, user_id=user_id)
+
+    return result
 
 
 async def delete_many(table: str, filters: Dict[str, Any]):
@@ -746,7 +1187,23 @@ async def delete_many(table: str, filters: Dict[str, Any]):
         res = q.execute()
         return _rows_from_res(res)
 
-    return await run_sync(_fn)
+    rows = await run_sync(_fn)
+
+    # Match the invalidation semantics of update_one — any row-level
+    # cache for users/drivers must be evicted on delete too.
+    if table == "users":
+        for r in rows or []:
+            await invalidate_user_cache(r.get("id") if isinstance(r, dict) else None)
+        if isinstance(filters, dict) and filters.get("id"):
+            await invalidate_user_cache(filters["id"])
+    elif table == "drivers":
+        for r in rows or []:
+            if isinstance(r, dict):
+                await invalidate_driver_cache(driver_id=r.get("id"), user_id=r.get("user_id"))
+        if isinstance(filters, dict):
+            await invalidate_driver_cache(driver_id=filters.get("id"), user_id=filters.get("user_id"))
+
+    return rows
 
 
 async def delete_one(table: str, filters: Dict[str, Any]):
@@ -1242,6 +1699,7 @@ async def mark_stripe_event_processed(event_id: str) -> None:
 
 # ── Corporate Accounts (B2B v1) ──────────────────────────────────────
 
+
 async def list_corporate_accounts_filtered(
     *,
     status: Optional[str],
@@ -1251,6 +1709,7 @@ async def list_corporate_accounts_filtered(
     limit: int,
 ) -> List[Dict[str, Any]]:
     """List corporate accounts with optional status / size-tier / name-search filters."""
+
     def _fn():
         q = supabase.table("corporate_accounts").select("*")
         if status:
@@ -1265,18 +1724,15 @@ async def list_corporate_accounts_filtered(
             q = q.or_(f"name.ilike.%{safe}%,legal_name.ilike.%{safe}%")
         q = q.order("created_at", desc=True).range(skip, skip + limit - 1)
         return _rows_from_res(q.execute())
+
     return await run_sync(_fn)
 
 
 async def update_corporate_account_status(company_id: str, status: str) -> Optional[Dict[str, Any]]:
     def _fn():
-        res = (
-            supabase.table("corporate_accounts")
-            .update({"status": status})
-            .eq("id", company_id)
-            .execute()
-        )
+        res = supabase.table("corporate_accounts").update({"status": status}).eq("id", company_id).execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
@@ -1302,53 +1758,39 @@ async def record_kyb_decision(
         patch["kyb_review_note"] = note  # column added in a follow-up migration if desired
 
     def _fn():
-        res = (
-            supabase.table("corporate_accounts")
-            .update(patch)
-            .eq("id", company_id)
-            .execute()
-        )
+        res = supabase.table("corporate_accounts").update(patch).eq("id", company_id).execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
 async def get_corporate_wallet_by_company(company_id: str) -> Optional[Dict[str, Any]]:
     """Return the master wallet row for a company, or None."""
+
     def _fn():
-        res = (
-            supabase.table("corporate_wallets")
-            .select("*")
-            .eq("company_id", company_id)
-            .limit(1)
-            .execute()
-        )
+        res = supabase.table("corporate_wallets").select("*").eq("company_id", company_id).limit(1).execute()
         return _rows_from_res(res)
 
     rows = await run_sync(_fn)
     return rows[0] if rows else None
 
 
-async def update_corporate_stripe_customer_id(
-    *, company_id: str, stripe_customer_id: str
-) -> None:
+async def update_corporate_stripe_customer_id(*, company_id: str, stripe_customer_id: str) -> None:
     """Persist the Stripe customer id for a corporate account."""
+
     def _fn():
-        supabase.table("corporate_accounts").update(
-            {"stripe_customer_id": stripe_customer_id}
-        ).eq("id", company_id).execute()
+        supabase.table("corporate_accounts").update({"stripe_customer_id": stripe_customer_id}).eq(
+            "id", company_id
+        ).execute()
+
     await run_sync(_fn)
 
 
 async def ensure_corporate_wallet(*, company_id: str) -> Dict[str, Any]:
     """Idempotently create the master wallet for a company. Returns the row."""
+
     def _select():
-        res = (
-            supabase.table("corporate_wallets")
-            .select("*")
-            .eq("company_id", company_id)
-            .limit(1)
-            .execute()
-        )
+        res = supabase.table("corporate_wallets").select("*").eq("company_id", company_id).limit(1).execute()
         return _rows_from_res(res)
 
     existing = await run_sync(_select)
@@ -1372,6 +1814,7 @@ async def get_corporate_members_for_user(user_id: str) -> List[Dict[str, Any]]:
 
     Hot path: called on every work-profile check.
     """
+
     def _fn():
         res = (
             supabase.table("corporate_members")
@@ -1381,6 +1824,7 @@ async def get_corporate_members_for_user(user_id: str) -> List[Dict[str, Any]]:
             .execute()
         )
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
@@ -1391,9 +1835,7 @@ _KYB_CONTENT_EXT = {
 }
 
 
-async def create_kyb_upload_url(
-    *, company_id: str, content_type: str, ttl_seconds: int = 3600
-) -> Dict[str, Any]:
+async def create_kyb_upload_url(*, company_id: str, content_type: str, ttl_seconds: int = 3600) -> Dict[str, Any]:
     """Return a short-lived signed upload URL for a KYB document.
 
     The bucket 'kyb-documents' is private; the caller uploads with the
@@ -1424,29 +1866,22 @@ async def list_wallets_needing_autotopup() -> List[Dict[str, Any]]:
     Threshold is filtered in Python because supabase-py doesn't support
     cross-column comparisons in .filter().
     """
+
     def _fn():
-        return (
-            supabase.table("corporate_wallets")
-            .select("*")
-            .eq("auto_topup_enabled", True)
-            .execute()
-        )
+        return supabase.table("corporate_wallets").select("*").eq("auto_topup_enabled", True).execute()
 
     res = await run_sync(_fn)
     rows = _rows_from_res(res)
     return [
         r
         for r in rows
-        if r.get("auto_topup_threshold") is not None
-        and float(r["balance"]) < float(r["auto_topup_threshold"])
+        if r.get("auto_topup_threshold") is not None and float(r["balance"]) < float(r["auto_topup_threshold"])
     ]
 
 
 async def sum_autotopups_today(wallet_id: str) -> float:
     """Sum of today's successful top-ups for a wallet (for daily-cap enforcement)."""
-    today_start = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
     def _fn():
         return (
@@ -1463,16 +1898,12 @@ async def sum_autotopups_today(wallet_id: str) -> float:
     return sum(float(r["amount"]) for r in rows)
 
 
-async def get_default_payment_method(
-    stripe_customer_id: str, stripe_secret: str
-) -> Optional[str]:
+async def get_default_payment_method(stripe_customer_id: str, stripe_secret: str) -> Optional[str]:
     """Return the Stripe customer's first card payment method, if any."""
     import stripe
 
     def _fn():
-        return stripe.PaymentMethod.list(
-            customer=stripe_customer_id, type="card", api_key=stripe_secret
-        )
+        return stripe.PaymentMethod.list(customer=stripe_customer_id, type="card", api_key=stripe_secret)
 
     methods = await run_sync(_fn)
     data = getattr(methods, "data", None) or []
@@ -1481,21 +1912,16 @@ async def get_default_payment_method(
 
 async def list_wallets_low_balance_no_autotopup() -> List[Dict[str, Any]]:
     """Wallets with auto-topup disabled whose balance has dipped below threshold."""
+
     def _fn():
-        return (
-            supabase.table("corporate_wallets")
-            .select("*")
-            .eq("auto_topup_enabled", False)
-            .execute()
-        )
+        return supabase.table("corporate_wallets").select("*").eq("auto_topup_enabled", False).execute()
 
     res = await run_sync(_fn)
     rows = _rows_from_res(res)
     return [
         r
         for r in rows
-        if r.get("auto_topup_threshold") is not None
-        and float(r["balance"]) < float(r["auto_topup_threshold"])
+        if r.get("auto_topup_threshold") is not None and float(r["balance"]) < float(r["auto_topup_threshold"])
     ]
 
 
@@ -1503,16 +1929,12 @@ async def mark_low_balance_notified(*, wallet_id: str) -> None:
     now_iso = datetime.now(timezone.utc).isoformat()
 
     def _fn():
-        supabase.table("corporate_wallets").update(
-            {"low_balance_notified_at": now_iso}
-        ).eq("id", wallet_id).execute()
+        supabase.table("corporate_wallets").update({"low_balance_notified_at": now_iso}).eq("id", wallet_id).execute()
 
     await run_sync(_fn)
 
 
-async def list_wallet_transactions(
-    *, wallet_id: str, skip: int = 0, limit: int = 50
-) -> List[Dict[str, Any]]:
+async def list_wallet_transactions(*, wallet_id: str, skip: int = 0, limit: int = 50) -> List[Dict[str, Any]]:
     """Return the most recent ledger entries for a wallet, newest first."""
     upper = skip + max(limit, 1) - 1
 
@@ -1530,17 +1952,11 @@ async def list_wallet_transactions(
     return _rows_from_res(res)
 
 
-async def update_corporate_wallet_config(
-    *, wallet_id: str, patch: Dict[str, Any]
-) -> Optional[Dict[str, Any]]:
+async def update_corporate_wallet_config(*, wallet_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Patch one or more configuration columns on a corporate_wallets row."""
+
     def _fn():
-        res = (
-            supabase.table("corporate_wallets")
-            .update(patch)
-            .eq("id", wallet_id)
-            .execute()
-        )
+        res = supabase.table("corporate_wallets").update(patch).eq("id", wallet_id).execute()
         return _single_row_from_res(res)
 
     return await run_sync(_fn)
@@ -1549,6 +1965,7 @@ async def update_corporate_wallet_config(
 # ============================================================
 # Corporate B2B Plan 3 — members, allowances, requests, domains
 # ============================================================
+
 
 # ---------- Members ----------
 async def insert_corporate_member_invite(
@@ -1563,19 +1980,22 @@ async def insert_corporate_member_invite(
     def _fn():
         res = (
             supabase.table("corporate_members")
-            .insert({
-                "company_id": company_id,
-                "invited_email": email,
-                "role": role,
-                "invite_token": invite_token,
-                "invited_at": datetime.now(timezone.utc).isoformat(),
-                "invited_by": invited_by,
-                "policy_override": policy_override,
-                "status": "invited",
-            })
+            .insert(
+                {
+                    "company_id": company_id,
+                    "invited_email": email,
+                    "role": role,
+                    "invite_token": invite_token,
+                    "invited_at": datetime.now(timezone.utc).isoformat(),
+                    "invited_by": invited_by,
+                    "policy_override": policy_override,
+                    "status": "invited",
+                }
+            )
             .execute()
         )
         return _single_row_from_res(res) or {}
+
     return await run_sync(_fn)
 
 
@@ -1590,57 +2010,47 @@ async def list_company_members(
             q = q.in_("status", statuses)
         res = q.order("created_at", desc=False).execute()
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
 async def get_corporate_member_by_id(member_id: str) -> Optional[Dict[str, Any]]:
     def _fn():
-        res = (
-            supabase.table("corporate_members")
-            .select("*").eq("id", member_id).limit(1).execute()
-        )
+        res = supabase.table("corporate_members").select("*").eq("id", member_id).limit(1).execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
 async def get_member_by_invite_token(token: str) -> Optional[Dict[str, Any]]:
     def _fn():
-        res = (
-            supabase.table("corporate_members")
-            .select("*").eq("invite_token", token).limit(1).execute()
-        )
+        res = supabase.table("corporate_members").select("*").eq("invite_token", token).limit(1).execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
 async def list_active_memberships_for_user(user_id: str) -> List[Dict[str, Any]]:
     def _fn():
-        res = (
-            supabase.table("corporate_members")
-            .select("*").eq("user_id", user_id).eq("status", "active").execute()
-        )
+        res = supabase.table("corporate_members").select("*").eq("user_id", user_id).eq("status", "active").execute()
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
-async def update_corporate_member(
-    member_id: str, patch: Dict[str, Any]
-) -> Optional[Dict[str, Any]]:
+async def update_corporate_member(member_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not patch:
         return await get_corporate_member_by_id(member_id)
     patch = {**patch, "updated_at": datetime.now(timezone.utc).isoformat()}
+
     def _fn():
-        res = (
-            supabase.table("corporate_members")
-            .update(patch).eq("id", member_id).execute()
-        )
+        res = supabase.table("corporate_members").update(patch).eq("id", member_id).execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
-async def accept_member_invite(
-    *, member_id: str, user_id: str
-) -> Optional[Dict[str, Any]]:
+async def accept_member_invite(*, member_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     """Atomically flip invited → active and stamp user_id + joined_at.
 
     Guarded by `.eq("status", "invited")` so we only flip pending invites,
@@ -1653,35 +2063,28 @@ async def accept_member_invite(
         "invite_token": None,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+
     def _fn():
-        res = (
-            supabase.table("corporate_members")
-            .update(patch)
-            .eq("id", member_id)
-            .eq("status", "invited")
-            .execute()
-        )
+        res = supabase.table("corporate_members").update(patch).eq("id", member_id).eq("status", "invited").execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
 # ---------- Allowances ----------
 async def get_member_allowance(member_id: str) -> Optional[Dict[str, Any]]:
     def _fn():
-        res = (
-            supabase.table("corporate_member_allowances")
-            .select("*").eq("member_id", member_id).limit(1).execute()
-        )
+        res = supabase.table("corporate_member_allowances").select("*").eq("member_id", member_id).limit(1).execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
-async def upsert_member_allowance(
-    *, member_id: str, patch: Dict[str, Any]
-) -> Dict[str, Any]:
+async def upsert_member_allowance(*, member_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
     """Insert if no allowance row exists, else update. Returns the row."""
     existing = await get_member_allowance(member_id)
     if existing:
+
         def _upd():
             res = (
                 supabase.table("corporate_member_allowances")
@@ -1690,6 +2093,7 @@ async def upsert_member_allowance(
                 .execute()
             )
             return _single_row_from_res(res) or existing
+
         return await run_sync(_upd)
 
     def _ins():
@@ -1699,27 +2103,28 @@ async def upsert_member_allowance(
             .execute()
         )
         return _single_row_from_res(res) or {}
+
     return await run_sync(_ins)
 
 
 async def list_company_allowances(company_id: str) -> List[Dict[str, Any]]:
     """Join allowances with their members, scoped to one company."""
+
     def _fn():
         res = (
             supabase.table("corporate_member_allowances")
-            .select(
-                "*, member:corporate_members!inner"
-                "(id,company_id,user_id,invited_email,status,role)"
-            )
+            .select("*, member:corporate_members!inner(id,company_id,user_id,invited_email,status,role)")
             .eq("member.company_id", company_id)
             .execute()
         )
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
 async def list_allowances_due_for_reset(as_of: str) -> List[Dict[str, Any]]:
     """Active fixed_recurring allowances whose period_end < as_of (ISO date)."""
+
     def _fn():
         res = (
             supabase.table("corporate_member_allowances")
@@ -1730,25 +2135,27 @@ async def list_allowances_due_for_reset(as_of: str) -> List[Dict[str, Any]]:
             .execute()
         )
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
-async def reset_allowance_period(
-    *, allowance_id: str, period_start: str, period_end: str
-) -> Optional[Dict[str, Any]]:
+async def reset_allowance_period(*, allowance_id: str, period_start: str, period_end: str) -> Optional[Dict[str, Any]]:
     def _fn():
         res = (
             supabase.table("corporate_member_allowances")
-            .update({
-                "period_start": period_start,
-                "period_end": period_end,
-                "auto_approved_this_period": 0,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            })
+            .update(
+                {
+                    "period_start": period_start,
+                    "period_end": period_end,
+                    "auto_approved_this_period": 0,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
             .eq("id", allowance_id)
             .execute()
         )
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
@@ -1759,15 +2166,18 @@ async def insert_allowance_request(
     def _fn():
         res = (
             supabase.table("corporate_allowance_requests")
-            .insert({
-                "member_id": member_id,
-                "amount": amount,
-                "reason": reason,
-                "status": status,
-            })
+            .insert(
+                {
+                    "member_id": member_id,
+                    "amount": amount,
+                    "reason": reason,
+                    "status": status,
+                }
+            )
             .execute()
         )
         return _single_row_from_res(res) or {}
+
     return await run_sync(_fn)
 
 
@@ -1784,6 +2194,7 @@ async def list_pending_allowance_requests_for_member(
             .execute()
         )
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
@@ -1793,16 +2204,14 @@ async def list_company_allowance_requests(
     def _fn():
         q = (
             supabase.table("corporate_allowance_requests")
-            .select(
-                "*, member:corporate_members!inner"
-                "(id,company_id,invited_email,user_id)"
-            )
+            .select("*, member:corporate_members!inner(id,company_id,invited_email,user_id)")
             .eq("member.company_id", company_id)
         )
         if statuses:
             q = q.in_("status", statuses)
         res = q.order("created_at", desc=True).execute()
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
@@ -1810,11 +2219,9 @@ async def get_allowance_request_by_id(
     request_id: str,
 ) -> Optional[Dict[str, Any]]:
     def _fn():
-        res = (
-            supabase.table("corporate_allowance_requests")
-            .select("*").eq("id", request_id).limit(1).execute()
-        )
+        res = supabase.table("corporate_allowance_requests").select("*").eq("id", request_id).limit(1).execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
@@ -1831,61 +2238,51 @@ async def update_allowance_request(
         "reviewed_at": datetime.now(timezone.utc).isoformat(),
         "decision_notes": decision_notes,
     }
+
     def _fn():
-        res = (
-            supabase.table("corporate_allowance_requests")
-            .update(patch).eq("id", request_id).execute()
-        )
+        res = supabase.table("corporate_allowance_requests").update(patch).eq("id", request_id).execute()
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
 # ---------- Allowed domains ----------
-async def add_allowed_domain(
-    *, company_id: str, domain: str
-) -> Dict[str, Any]:
+async def add_allowed_domain(*, company_id: str, domain: str) -> Dict[str, Any]:
     def _fn():
-        res = (
-            supabase.table("corporate_allowed_domains")
-            .insert({"company_id": company_id, "domain": domain})
-            .execute()
-        )
+        res = supabase.table("corporate_allowed_domains").insert({"company_id": company_id, "domain": domain}).execute()
         return _single_row_from_res(res) or {"company_id": company_id, "domain": domain}
+
     return await run_sync(_fn)
 
 
 async def list_allowed_domains(company_id: str) -> List[Dict[str, Any]]:
     def _fn():
-        res = (
-            supabase.table("corporate_allowed_domains")
-            .select("*").eq("company_id", company_id).execute()
-        )
+        res = supabase.table("corporate_allowed_domains").select("*").eq("company_id", company_id).execute()
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
 async def delete_allowed_domain(*, company_id: str, domain: str) -> None:
     def _fn():
-        supabase.table("corporate_allowed_domains").delete().eq(
-            "company_id", company_id
-        ).eq("domain", domain).execute()
+        supabase.table("corporate_allowed_domains").delete().eq("company_id", company_id).eq("domain", domain).execute()
+
     await run_sync(_fn)
 
 
 async def find_companies_by_email_domain(domain: str) -> List[Dict[str, Any]]:
     """Active companies that whitelist this email domain for auto-match."""
+
     def _fn():
         res = (
             supabase.table("corporate_allowed_domains")
-            .select(
-                "company_id, corporate_accounts:corporate_accounts!inner"
-                "(id,name,status)"
-            )
+            .select("company_id, corporate_accounts:corporate_accounts!inner(id,name,status)")
             .eq("domain", domain)
             .eq("corporate_accounts.status", "active")
             .execute()
         )
         return _rows_from_res(res)
+
     return await run_sync(_fn)
 
 
@@ -1907,11 +2304,7 @@ async def list_company_ride_payment_sources(
     upper = offset + max(limit, 1) - 1
 
     def _fn():
-        q = (
-            supabase.table("ride_payment_sources")
-            .select("*")
-            .eq("company_id", company_id)
-        )
+        q = supabase.table("ride_payment_sources").select("*").eq("company_id", company_id)
         if member_id:
             q = q.eq("member_id", member_id)
         if from_iso:
@@ -1926,6 +2319,7 @@ async def list_company_ride_payment_sources(
 
 async def get_corporate_policy(company_id: str) -> Optional[Dict[str, Any]]:
     """Fetch the active corporate_policies row for a company."""
+
     def _fn():
         res = (
             supabase.table("corporate_policies")
@@ -1936,12 +2330,11 @@ async def get_corporate_policy(company_id: str) -> Optional[Dict[str, Any]]:
             .execute()
         )
         return _single_row_from_res(res)
+
     return await run_sync(_fn)
 
 
-async def upsert_corporate_policy(
-    company_id: str, patch: Dict[str, Any]
-) -> Dict[str, Any]:
+async def upsert_corporate_policy(company_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
     """Insert or update the company's policy row.
 
     The table has a UNIQUE constraint on company_id so we upsert on that
@@ -1954,12 +2347,7 @@ async def upsert_corporate_policy(
         update_patch = {**patch, "updated_at": now}
 
         def _upd():
-            res = (
-                supabase.table("corporate_policies")
-                .update(update_patch)
-                .eq("id", existing["id"])
-                .execute()
-            )
+            res = supabase.table("corporate_policies").update(update_patch).eq("id", existing["id"]).execute()
             return _single_row_from_res(res) or {**existing, **update_patch}
 
         return await run_sync(_upd) or existing
@@ -1983,6 +2371,7 @@ async def ping() -> None:
     """Minimal liveness probe — executes a trivial Supabase query to verify
     the DB connection is functional. Raises on any error so callers can
     return 503 to load-balancers."""
+
     def _check():
         supabase.table("app_settings").select("key").limit(1).execute()
 

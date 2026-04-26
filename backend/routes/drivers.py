@@ -19,7 +19,9 @@ try:
     from ..socket_manager import manager
     from ..utils.crypto import hash_otp
     from ..utils.datetime_utils import parse_iso_utc
+    from ..utils.driver_presence import clear_presence, mark_present, present_driver_ids
     from ..utils.error_handling import RideStateError
+    from ..utils.idempotency import idempotent_endpoint
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user, get_current_user
@@ -30,7 +32,9 @@ except ImportError:
     from socket_manager import manager
     from utils.crypto import hash_otp
     from utils.datetime_utils import parse_iso_utc
+    from utils.driver_presence import clear_presence, mark_present, present_driver_ids
     from utils.error_handling import RideStateError
+    from utils.idempotency import idempotent_endpoint
 
 db = db_supabase  # legacy alias
 
@@ -60,9 +64,7 @@ async def _vault_encrypt(value: str, hint: str = "") -> str:
     if not _sb:
         return value
     try:
-        res = await db_supabase.run_sync(
-            lambda: _sb.rpc("encrypt_driver_pii", {"plaintext": value}).execute()
-        )
+        res = await db_supabase.run_sync(lambda: _sb.rpc("encrypt_driver_pii", {"plaintext": value}).execute())
         return str(res.data) if res.data else value
     except Exception as exc:
         logger.warning("vault encrypt unavailable for %s: %s — storing plaintext", hint, exc)
@@ -80,9 +82,7 @@ async def _vault_decrypt(value: str, hint: str = "") -> str:
     if not _sb:
         return value
     try:
-        res = await db_supabase.run_sync(
-            lambda: _sb.rpc("decrypt_driver_pii", {"secret_id": value}).execute()
-        )
+        res = await db_supabase.run_sync(lambda: _sb.rpc("decrypt_driver_pii", {"secret_id": value}).execute())
         return str(res.data) if res.data else value
     except Exception as exc:
         logger.warning("vault decrypt unavailable for %s: %s — returning raw value", hint, exc)
@@ -128,6 +128,94 @@ ARRIVE_FROM_STATES = ("driver_assigned", "driver_accepted", "driver_arrived")
 # in_progress is idempotent for both (retry after network blip).
 START_FROM_STATES = ("driver_arrived", "in_progress")
 COMPLETE_FROM_STATES = ("in_progress",)
+
+
+async def _generate_and_store_ride_snapshot(
+    *,
+    ride_id: str,
+    pickup_lat,
+    pickup_lng,
+    dropoff_lat,
+    dropoff_lng,
+    phase_polylines,
+    route_polyline,
+) -> None:
+    """Render the ride's route PNG and upload to Supabase Storage.
+
+    Called as a background task from ``complete_ride`` — the driver's
+    request has already returned by the time this runs. Any failure
+    (tile server down, bucket missing, Pillow missing) is logged and
+    swallowed; the ride row already has phase_polylines so the drawer
+    and email can always fall back to the live map.
+
+    Requires a public ``ride-snapshots`` bucket in Supabase Storage.
+    See backend/docs/STORAGE_BUCKETS.md for one-time setup.
+    """
+    if pickup_lat is None or pickup_lng is None or dropoff_lat is None or dropoff_lng is None:
+        return
+    try:
+        try:
+            from ..core.config import settings
+            from ..supabase_client import supabase  # type: ignore
+            from ..utils.route_snapshot import render_ride_snapshot
+        except ImportError:
+            from core.config import settings  # type: ignore
+            from supabase_client import supabase  # type: ignore
+            from utils.route_snapshot import render_ride_snapshot  # type: ignore
+
+        loop = asyncio.get_event_loop()
+        # Tile fetches + PIL rendering are blocking; punt to the executor.
+        png_bytes = await loop.run_in_executor(
+            None,
+            lambda: render_ride_snapshot(
+                pickup_lat=float(pickup_lat),
+                pickup_lng=float(pickup_lng),
+                dropoff_lat=float(dropoff_lat),
+                dropoff_lng=float(dropoff_lng),
+                phase_polylines=phase_polylines,
+                route_polyline=route_polyline,
+            ),
+        )
+        if not png_bytes:
+            return
+
+        # Supabase Storage upload. Public bucket, stable filename so a
+        # re-run for the same ride_id overwrites cleanly via upsert.
+        # The public URL never expires — safe for email embeds.
+        bucket = "ride-snapshots"
+        storage_path = f"ride_{ride_id}.png"
+        try:
+            await loop.run_in_executor(
+                None,
+                lambda: supabase.storage.from_(bucket).upload(
+                    path=storage_path,
+                    file=png_bytes,
+                    file_options={
+                        "content-type": "image/png",
+                        # supabase-py serialises bools as JSON, so the string
+                        # form is what ends up on the wire; lowercase "true".
+                        "upsert": "true",
+                    },
+                ),
+            )
+        except Exception as upload_exc:
+            logger.warning(f"Supabase Storage upload failed for ride {ride_id}: {upload_exc}")
+            return
+
+        base = (settings.SUPABASE_URL or "").rstrip("/")
+        if not base:
+            logger.warning("SUPABASE_URL not configured; cannot build public snapshot URL")
+            return
+        url = f"{base}/storage/v1/object/public/{bucket}/{storage_path}"
+
+        # Persist the URL. Wrap in try/except so if migration 41 hasn't
+        # landed yet the write fails gracefully instead of raising.
+        try:
+            await db_supabase.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
+        except Exception as exc:
+            logger.warning(f"route_snapshot_url write failed for ride {ride_id} (migration 41 missing?): {exc}")
+    except Exception as exc:
+        logger.warning(f"Ride snapshot pipeline failed for {ride_id}: {exc}")
 
 
 async def _require_ride_in_state(ride_id: str, driver_id: str, allowed_states: tuple) -> Dict[str, Any]:
@@ -206,7 +294,7 @@ def serialize_doc(doc):
     return doc
 
 
-_STRIP_FROM_SELF_RESPONSE = {'stripe_account_id', 'bank_account', 'fcm_token'}
+_STRIP_FROM_SELF_RESPONSE = {"stripe_account_id", "bank_account", "fcm_token"}
 
 
 @api_router.get("/me")
@@ -1058,12 +1146,33 @@ async def get_nearby_drivers_public(
     current_user: dict = Depends(get_current_user),
 ):
     """Get nearby active drivers for riders. Filters by service area + vehicle type."""
-    query = {"is_online": True, "is_available": True}
+    # is_verified + status='active' prevent unverified / suspended / needs_review
+    # drivers from appearing on the rider map even if their is_online flag is
+    # stale.
+    query = {
+        "is_online": True,
+        "is_available": True,
+        "is_verified": True,
+        "status": "active",
+    }
     if vehicle_type:
         query["vehicle_type_id"] = vehicle_type
 
     # Get all matching drivers — service area filtering by distance (not polygon yet)
     drivers = await db_supabase.get_rows("drivers", query, limit=100)
+
+    # Presence filter: hide drivers whose app is not reachable (force-killed,
+    # phone dead, backgrounded past the TTL). Without this, the rider sees
+    # ghost cars on the map and tries to book someone who will never receive
+    # the offer. Safe-fallback: if presence lookup fails, show DB state —
+    # dispatch still filters on presence so a ghost booking cannot complete.
+    try:
+        driver_ids = [d["id"] for d in drivers if d.get("id")]
+        present = await present_driver_ids(driver_ids) if driver_ids else set()
+        if present:
+            drivers = [d for d in drivers if d["id"] in present]
+    except Exception as exc:
+        logger.warning(f"/drivers/nearby presence filter failed, using DB state: {exc}")
 
     # Manual filtering by distance
     nearby = []
@@ -1157,6 +1266,15 @@ async def update_location_batch(batch: Union[List[dict], dict], current_user: di
         # (Though update_one might not support setting multiple top-level fields easily if we rely on $set mapping)
         # Let's trust db.drivers.update_one to handle the schema or the wrapper.
 
+        # Keep presence alive even when the driver's WebSocket briefly
+        # drops but the REST location batch keeps flowing (e.g. phone on
+        # cellular switching towers).
+        driver_row = (lambda _r: _r[0] if _r else None)(
+            await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+        )
+        if driver_row and driver_row.get("is_online"):
+            await mark_present(driver_row["id"])
+
     return {"success": True}
 
 
@@ -1175,7 +1293,7 @@ class BankAccountCreate(BaseModel):
 class PayoutRequest(BaseModel):
     amount: Decimal = Field(
         ...,
-        ge=Decimal('10.00'),
+        ge=Decimal("10.00"),
         decimal_places=2,
         description="Minimum payout is $10.00",
     )
@@ -1299,7 +1417,12 @@ async def delete_bank_account(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.post("/payouts")
-async def request_payout(req: PayoutRequest, current_user: dict = Depends(get_current_user)):
+@idempotent_endpoint(scope="driver_payout")
+async def request_payout(
+    req: PayoutRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
     )
@@ -1463,15 +1586,11 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
         # 5. Uploaded documents
         documents: list = []
         if driver_id:
-            documents = await db_supabase.get_rows(
-                "driver_documents", {"driver_id": driver_id}, limit=50
-            )
+            documents = await db_supabase.get_rows("driver_documents", {"driver_id": driver_id}, limit=50)
 
         # 6. Notification preferences
         notification_prefs: list = []
-        notification_prefs = await db_supabase.get_rows(
-            "notification_preferences", {"user_id": user_id}, limit=1
-        )
+        notification_prefs = await db_supabase.get_rows("notification_preferences", {"user_id": user_id}, limit=1)
 
         export_payload = {
             "export_generated_at": datetime.now(timezone.utc).isoformat() + "Z",
@@ -1479,9 +1598,7 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
             "driver_profile": {k: v for k, v in driver.items() if k not in ("password_hash",)},
             "rides": rides,
             "payouts": payouts,
-            "documents": [
-                {k: v for k, v in doc.items() if k != "document_url"} for doc in documents
-            ],
+            "documents": [{k: v for k, v in doc.items() if k != "document_url"} for doc in documents],
             "notification_preferences": notification_prefs,
         }
 
@@ -1495,8 +1612,7 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
             "If you have any questions about your data or would like to request deletion, "
             "please contact privacy@spinr.ca.\n\n"
             "— The Spinr Team\n\n"
-            "---\n\n"
-            + export_json
+            "---\n\n" + export_json
         )
 
         await send_email(to=email, subject=subject, body=body)
@@ -1717,6 +1833,7 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             "Your driver has accepted the ride and is on the way.",
             data={"type": "driver_accepted", "ride_id": str(ride_id)},
         )
+    await manager.broadcast_ride_status(ride_id, "driver_accepted", rider_id=(ride or {}).get("rider_id"))
 
     return {"success": True}
 
@@ -1730,7 +1847,9 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
         raise HTTPException(status_code=404, detail="Driver not found")
 
     # If assigned, unassign. If searching, just ignore/record decline.
-    await db_supabase.update_ride(ride_id, {"driver_id": None, "status": "searching", "updated_at": datetime.now(timezone.utc)})
+    await db_supabase.update_ride(
+        ride_id, {"driver_id": None, "status": "searching", "updated_at": datetime.now(timezone.utc)}
+    )
 
     # Record the decline in audit_logs so daily stats can count it
     try:
@@ -1797,7 +1916,12 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
             )
 
     await db_supabase.update_ride(
-        ride_id, {"status": "driver_arrived", "driver_arrived_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
+        ride_id,
+        {
+            "status": "driver_arrived",
+            "driver_arrived_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        },
     )
 
     if ride.get("rider_id"):
@@ -1808,6 +1932,7 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
             "Your driver has arrived at the pickup location.",
             data={"type": "driver_arrived", "ride_id": str(ride_id)},
         )
+    await manager.broadcast_ride_status(ride_id, "driver_arrived", rider_id=ride.get("rider_id"))
 
     return {"success": True}
 
@@ -1831,7 +1956,12 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
 
     # OTP correct, start ride
     await db_supabase.update_ride(
-        ride_id, {"status": "in_progress", "ride_started_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
+        ride_id,
+        {
+            "status": "in_progress",
+            "ride_started_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        },
     )
 
     if ride.get("rider_id"):
@@ -1842,6 +1972,7 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
             "Your ride has started. Have a safe trip!",
             data={"type": "ride_started", "ride_id": str(ride_id)},
         )
+    await manager.broadcast_ride_status(ride_id, "in_progress", rider_id=ride.get("rider_id"))
 
     return {"success": True}
 
@@ -1857,7 +1988,12 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
         raise HTTPException(status_code=404, detail="Driver not found")
 
     await db_supabase.update_ride(
-        ride_id, {"status": "in_progress", "ride_started_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}
+        ride_id,
+        {
+            "status": "in_progress",
+            "ride_started_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        },
     )
 
     ride = await db_supabase.get_ride(ride_id)
@@ -1869,6 +2005,7 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
             "Your ride has started. Have a safe trip!",
             data={"type": "ride_started", "ride_id": str(ride_id)},
         )
+    await manager.broadcast_ride_status(ride_id, "in_progress", rider_id=(ride or {}).get("rider_id"))
     return {"success": True}
 
 
@@ -1887,9 +2024,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         raise HTTPException(status_code=404, detail="Ride not found")
 
     if ride.get("status") not in COMPLETE_FROM_STATES:
-        raise RideStateError(
-            f"Cannot complete ride from state '{ride.get('status')}'; ride must be in_progress"
-        )
+        raise RideStateError(f"Cannot complete ride from state '{ride.get('status')}'; ride must be in_progress")
 
     # ── Aggregate all GPS breadcrumbs for this ride ──
     # On completion we compute everything once and store it on the ride row.
@@ -1972,9 +2107,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
             # Legacy combined polyline (kept for the existing ride-detail
             # map renderer that hasn't moved to phase_polylines yet).
-            trip_points = [
-                b for b in all_breadcrumbs if b.get("tracking_phase") in phases_to_split
-            ]
+            trip_points = [b for b in all_breadcrumbs if b.get("tracking_phase") in phases_to_split]
             if trip_points:
                 MAX_POINTS = 200
                 step = max(1, len(trip_points) // MAX_POINTS)
@@ -2060,6 +2193,24 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     if rider and rider.get("email"):
         logger.info(f"Sending email receipt for ride {ride_id} to {rider['email']}")
 
+    # Fire-and-forget: render the route PNG from phase_polylines and
+    # upload to Cloudinary so the admin drawer + email receipt can
+    # embed a permanent image URL. Runs as a background task so the
+    # driver's "Complete" response isn't blocked on OSM tile fetches.
+    # Any failure here is swallowed — the snapshot is best-effort and
+    # the ride is already fully persisted with phase data.
+    asyncio.create_task(
+        _generate_and_store_ride_snapshot(
+            ride_id=ride_id,
+            pickup_lat=ride.get("pickup_lat"),
+            pickup_lng=ride.get("pickup_lng"),
+            dropoff_lat=ride.get("dropoff_lat"),
+            dropoff_lng=ride.get("dropoff_lng"),
+            phase_polylines=phase_polylines,
+            route_polyline=route_polyline,
+        )
+    )
+
     # Update driver stats
     await db_supabase.update_one(
         "drivers", {"id": driver["id"]}, {"$inc": {"total_rides": 1}, "$set": {"is_available": True}}
@@ -2083,6 +2234,20 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             data={"type": "ride_completed", "ride_id": str(ride_id)},
         )
 
+    total_fare = (completed_ride or {}).get("total_fare", ride.get("total_fare", 0))
+    await manager.broadcast_ride_status(
+        ride_id,
+        "completed",
+        rider_id=(completed_ride or {}).get("rider_id"),
+        total_fare=total_fare,
+    )
+    # Keep the specific ``ride_completed`` event on admin too for dashboards
+    # that switch directly on the event name rather than status.
+    try:
+        await manager.broadcast_to_admins({"type": "ride_completed", "ride_id": ride_id, "total_fare": total_fare})
+    except Exception as _exc:  # pragma: no cover - best effort
+        logger.warning(f"complete_ride: admin broadcast failed: {_exc}")
+
     return serialize_doc(completed_ride)
 
 
@@ -2098,7 +2263,7 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    if ride.get("status") == 'trip_in_progress':
+    if ride.get("status") == "trip_in_progress":
         raise RideStateError("Cannot cancel a trip that is already in progress")
 
     now = datetime.now(timezone.utc)
@@ -2125,8 +2290,7 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
         )
     except Exception as exc:
         logger.warning(
-            f"[CANCEL] cancelled_by/cancellation_reason write failed "
-            f"(likely PGRST204); retrying minimal update: {exc}"
+            f"[CANCEL] cancelled_by/cancellation_reason write failed (likely PGRST204); retrying minimal update: {exc}"
         )
         await db_supabase.update_ride(ride_id, base_update)
 
@@ -2144,6 +2308,18 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
             "Your driver has cancelled the ride.",
             data={"type": "ride_cancelled", "ride_id": str(ride_id)},
         )
+    await manager.broadcast_ride_status(
+        ride_id,
+        "cancelled",
+        rider_id=(ride or {}).get("rider_id"),
+        reason="driver_cancelled",
+    )
+    # Keep the specific ``ride_cancelled`` event on admin for dashboards
+    # that switch on event name.
+    try:
+        await manager.broadcast_to_admins({"type": "ride_cancelled", "ride_id": ride_id, "reason": "driver_cancelled"})
+    except Exception as _exc:  # pragma: no cover - best effort
+        logger.warning(f"driver cancel admin broadcast failed: {_exc}")
 
     return {"success": True}
 
@@ -2497,18 +2673,42 @@ async def update_driver_status(
 
         # For each mandatory requirement, the latest approved doc wins. If
         # it has an expiry and that expiry is in the past, block.
-        try:
-            requirements = await db_supabase.get_rows("driver_requirements", {}, limit=100)
-        except Exception:
-            requirements = []
-        mandatory_reqs = [r for r in (requirements or []) if r.get("is_mandatory")]
+        # Requirements come from the driver's service-area required_documents
+        # (slug-keyed) — the global document_requirements table is legacy and
+        # misses slug-based uploads where requirement_id is NULL.
+        mandatory_reqs: list = []
+        if driver.get("service_area_id"):
+            try:
+                area_row = (lambda _r: _r[0] if _r else None)(
+                    await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1)
+                )
+                if area_row:
+                    mandatory_reqs = [r for r in (area_row.get("required_documents") or []) if r.get("required", True)]
+            except Exception:
+                mandatory_reqs = []
+
+        def _matches_req(doc: Dict[str, Any], req: Dict[str, Any]) -> bool:
+            req_key = (req.get("key") or "").lower()
+            req_label = (req.get("label") or "").lower()
+            req_id = req.get("id")
+            dkey = (doc.get("requirement_key") or "").lower()
+            if dkey and dkey == req_key:
+                return True
+            drid = doc.get("requirement_id")
+            if drid and (drid == req_id or (isinstance(drid, str) and drid.lower() == req_key)):
+                return True
+            dt = (doc.get("document_type") or "").lower()
+            if dt and (dt == req_label or dt == req_key.replace("_", " ")):
+                return True
+            if dt and req_key and req_key.replace("_", "") in dt.replace(" ", "").replace("_", ""):
+                return True
+            return False
 
         covered_legacy_fields = set()
         for req_row in mandatory_reqs:
-            req_id = req_row.get("id")
-            req_name = req_row.get("name") or "Document"
+            req_name = req_row.get("label") or req_row.get("key") or "Document"
             # Pick the most recent approved doc for this requirement.
-            docs = [d for d in approved_docs if d.get("requirement_id") == req_id]
+            docs = [d for d in approved_docs if _matches_req(d, req_row)]
             if not docs:
                 continue
             docs.sort(key=lambda d: str(d.get("uploaded_at") or ""), reverse=True)
@@ -2629,11 +2829,37 @@ async def update_driver_status(
         f"pre_update_row_is_online={driver.get('is_online')} "
         f"pre_update_row_is_available={driver.get('is_available')}"
     )
-    await db_supabase.update_one(
-        "drivers",
-        {"id": driver_id},
-        {"is_online": is_online, "is_available": is_online, "updated_at": datetime.now(timezone.utc).isoformat()},
-    )
+    # last_status_changed_at (migration 42) gets bumped only when
+    # is_online actually flips — idempotent toggles (same value) shouldn't
+    # reset the "online since / offline since" clock the admin UI shows.
+    # On PGRST204 (column missing pre-migration) fall back to the legacy
+    # payload so the flip itself still lands.
+    _now_iso = datetime.now(timezone.utc).isoformat()
+    _base = {"is_online": is_online, "is_available": is_online, "updated_at": _now_iso}
+    status_flipped = bool(driver.get("is_online")) != bool(is_online)
+    _payload = {**_base, "last_status_changed_at": _now_iso} if status_flipped else _base
+    try:
+        await db_supabase.update_one("drivers", {"id": driver_id}, _payload)
+    except Exception as _col_exc:
+        # db_supabase.run_sync wraps PostgREST APIErrors in DatabaseError, so
+        # str(_col_exc) is the generic "Database operation failed" sentinel —
+        # the real column-missing text lives in details['original'] and the
+        # __cause__ chain. Inspect both before deciding whether to fall back.
+        if not status_flipped:
+            raise
+        _detail = ""
+        _details_attr = getattr(_col_exc, "details", None)
+        if isinstance(_details_attr, dict):
+            _detail = str(_details_attr.get("original") or "")
+        _cause_text = str(getattr(_col_exc, "__cause__", "") or "")
+        _combined = f"{_col_exc} {_detail} {_cause_text}".lower()
+        if "last_status_changed_at" in _combined or "pgrst204" in _combined:
+            logger.warning(
+                f"[GO-ONLINE] last_status_changed_at missing; retrying minimal. original={_detail or _col_exc}"
+            )
+            await db_supabase.update_one("drivers", {"id": driver_id}, _base)
+        else:
+            raise
 
     # Verify the update actually landed. db_supabase.update_one silently
     # returns None if the write matched zero rows (RLS deny, schema cache miss,
@@ -2667,6 +2893,16 @@ async def update_driver_status(
                 "may be misconfigured — verify SUPABASE_SERVICE_ROLE_KEY."
             ),
         )
+
+    # Presence: Go Online is the strongest possible liveness signal — the
+    # driver is actively using the app. Refresh the TTL now so dispatch can
+    # see them immediately without waiting for the next WS heartbeat. Go
+    # Offline clears the key so admin monitoring and dispatch drop them
+    # from the pool without waiting for the 90 s TTL to expire.
+    if is_online:
+        await mark_present(driver_id)
+    else:
+        await clear_presence(driver_id)
 
     return {"success": True, "is_online": is_online}
 
@@ -3041,13 +3277,32 @@ async def cancel_subscription(current_user: dict = Depends(get_current_user)):
 
 
 async def check_expiring_subscriptions():
-    """Background task: sends push notifications to drivers whose
-    Spinr Pass expires within 24 hours.
+    """Background task: handles Spinr Pass expiry end-to-end.
 
-    Runs periodically (every 6 hours) from the FastAPI lifespan.
-    Marks warned subscriptions with `expiry_warned: true` so the
-    driver isn't notified more than once.
+    Two jobs, both run every 6 hours from the FastAPI lifespan:
+
+    1. **Warn** drivers whose active subscription expires within 24 h
+       (push notification, once per subscription via ``expiry_warned``).
+    2. **Enforce** expiry on subscriptions whose ``expires_at`` is in the
+       past — but only when the admin toggle
+       ``require_driver_subscription`` is on. Enforcement:
+         - mark the sub row ``status='expired'``
+         - if the driver is currently ``is_online``, flip them offline,
+           clear Redis presence, disconnect any active WebSocket, and
+           push a notification explaining why.
+         - broadcast ``driver_status_changed`` to admin monitoring.
+
+    Without step 2, a subscription-gated driver could stay online and
+    keep accepting rides past their paid-for period: the Go-Online path
+    re-checks the sub, but drivers who were already online when their
+    sub expired would never hit that gate until they voluntarily tapped
+    off and back on.
     """
+    try:
+        from ..settings_loader import get_app_settings  # type: ignore
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+
     while True:
         try:
             now = datetime.now(timezone.utc)
@@ -3055,22 +3310,128 @@ async def check_expiring_subscriptions():
 
             active_subs = await db.get_rows("driver_subscriptions", {"status": "active"}, limit=500)
 
-            warned_count = 0
-            for sub in active_subs:
-                if sub.get("expiry_warned"):
-                    continue
+            # Only enforce the offline flip when the admin has turned on
+            # the subscription gate — otherwise expiry is purely advisory.
+            try:
+                app_settings = await get_app_settings()
+                require_sub = bool(app_settings.get("require_driver_subscription", False))
+            except Exception as e:
+                logger.warning(f"[SUB-EXPIRY] get_app_settings failed, skipping enforcement this tick: {e}")
+                require_sub = False
 
+            warned_count = 0
+            enforced_count = 0
+            for sub in active_subs:
                 expires_at = sub.get("expires_at")
                 if not expires_at:
                     continue
 
                 if isinstance(expires_at, str):
                     try:
-                        expires_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00")).replace(tzinfo=None)
+                        expires_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                        if expires_dt.tzinfo is None:
+                            expires_dt = expires_dt.replace(tzinfo=timezone.utc)
                     except ValueError:
                         continue
                 else:
                     expires_dt = expires_at
+                    if expires_dt.tzinfo is None:
+                        expires_dt = expires_dt.replace(tzinfo=timezone.utc)
+
+                # ── Enforcement branch: already expired ──────────────────
+                if expires_dt <= now:
+                    try:
+                        await db.update_one(
+                            "driver_subscriptions",
+                            {"id": sub["id"]},
+                            {"status": "expired"},
+                        )
+                    except Exception as e:
+                        logger.warning(f"[SUB-EXPIRY] Failed to mark sub {sub['id']} expired: {e}")
+                        continue
+
+                    if not require_sub:
+                        # Gate is off — just flip the row state, leave the
+                        # driver alone. (They'll re-gate on next Go Online
+                        # if the admin turns enforcement back on.)
+                        continue
+
+                    driver = await db.find_one("drivers", {"id": sub["driver_id"]})
+                    if not driver or not driver.get("is_online"):
+                        continue
+
+                    try:
+                        await db.update_one(
+                            "drivers",
+                            {"id": driver["id"]},
+                            {
+                                "is_online": False,
+                                "is_available": False,
+                                "updated_at": now.isoformat(),
+                                "last_status_changed_at": now.isoformat(),
+                            },
+                        )
+                    except Exception as e:
+                        logger.error(f"[SUB-EXPIRY] Failed to flip driver {driver['id']} offline: {e}")
+                        continue
+
+                    try:
+                        await clear_presence(driver["id"])
+                    except Exception as e:
+                        logger.warning(f"[SUB-EXPIRY] clear_presence failed for {driver['id']}: {e}")
+
+                    if driver.get("user_id"):
+                        manager.disconnect(f"driver_{driver['user_id']}")
+
+                    try:
+                        await db.insert_one(
+                            "driver_activity_log",
+                            {
+                                "id": str(uuid.uuid4()),
+                                "driver_id": driver["id"],
+                                "event_type": "went_offline",
+                                "title": "Went offline (Spinr Pass expired)",
+                                "description": "System flipped driver offline — active subscription expired and Spinr Pass is required to drive.",
+                                "metadata": {
+                                    "reason": "subscription_expired",
+                                    "source": "check_expiring_subscriptions",
+                                    "subscription_id": sub["id"],
+                                },
+                                "actor": "system",
+                                "created_at": now.isoformat(),
+                            },
+                        )
+                    except Exception as e:
+                        logger.warning(f"[SUB-EXPIRY] activity log insert failed for {driver['id']}: {e}")
+
+                    if driver.get("user_id"):
+                        try:
+                            await send_push_notification(
+                                driver["user_id"],
+                                "Spinr Pass expired",
+                                "Your Spinr Pass has expired and you've been set offline. Renew from your dashboard to keep driving.",
+                                {"type": "subscription_expired", "driver_id": driver["id"]},
+                            )
+                        except Exception as e:
+                            logger.warning(f"[SUB-EXPIRY] Push failed for driver {driver['id']}: {e}")
+
+                    try:
+                        await manager.broadcast_to_admins(
+                            {
+                                "type": "driver_status_changed",
+                                "driver_id": driver["id"],
+                                "is_online": False,
+                            }
+                        )
+                    except Exception:  # noqa: S110
+                        pass
+
+                    enforced_count += 1
+                    continue
+
+                # ── Warning branch: expires within 24 h ───────────────────
+                if sub.get("expiry_warned"):
+                    continue
 
                 if now < expires_dt <= window:
                     driver = await db.find_one("drivers", {"id": sub["driver_id"]})
@@ -3094,7 +3455,10 @@ async def check_expiring_subscriptions():
                         {"$set": {"expiry_warned": True}},
                     )
 
-            logger.info(f"[SUB-EXPIRY] Check complete. {len(active_subs)} scanned, {warned_count} warned.")
+            logger.info(
+                f"[SUB-EXPIRY] Check complete. {len(active_subs)} scanned, "
+                f"{warned_count} warned, {enforced_count} enforced offline."
+            )
 
         except Exception as e:
             logger.warning(f"[SUB-EXPIRY] Background check error: {e}")

@@ -53,7 +53,24 @@ jobs:
       - name: Show Railway CLI version
         run: railway --version
 
+      # Diagnostic: print the list of services in this project.
+      # Service name is assumed to be "spinr-backend" based on the test-env
+      # URL (spinr-backend-test.up.railway.app). If deploy fails with
+      # "Service not found", check this output for the exact name.
+      - name: List Railway services (diagnostic)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          echo "===== railway status ====="
+          railway status || true
+          echo ""
+          echo "===== railway status --json ====="
+          railway status --json || true
+          echo ""
+          echo "===== railway service list ====="
+          railway service list || true
+
       - name: Deploy to Railway
-        run: railway up --service backend
+        run: railway up --service spinr-backend
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

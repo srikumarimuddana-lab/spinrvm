@@ -166,7 +166,7 @@ describe('rideStore — ride lifecycle', () => {
     expect(mockApi.post).toHaveBeenCalledWith('/rides', expect.objectContaining({
       vehicle_type_id: 'vt-1',
       payment_method: 'card',
-    }));
+    }), expect.objectContaining({ headers: expect.any(Object) }));
     expect(useRideStore.getState().currentRide).toEqual(createdRide);
     expect(result).toEqual(createdRide);
   });
@@ -296,14 +296,10 @@ describe('rideStore — double-booking prevention', () => {
       currentRide: makeRide('searching') as any,
     });
 
-    // Backend should reject; simulate 409
-    const err: any = new Error('Ride already active');
-    err.response = { status: 409, data: { detail: 'You already have an active ride' } };
-    mockApi.post.mockRejectedValueOnce(err);
-
+    // The store guard throws before the API is ever called, so no mock is needed.
     await expect(
       act(async () => useRideStore.getState().createRide('card'))
-    ).rejects.toThrow();
+    ).rejects.toThrow('A ride is already active');
   });
 });
 

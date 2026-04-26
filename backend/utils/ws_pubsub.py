@@ -12,14 +12,20 @@ Design (Socket.IO Redis-adapter style):
 
   1. Every machine subscribes to ONE shared channel, ``CHANNEL``.
   2. Every outbound ``send_personal_message`` is published to the
-     channel as ``{"client_id": <key>, "message": <payload>}``.
+     channel as
+     ``{"kind": "unicast", "client_id": <key>, "message": <payload>}``.
+     Broadcasts (e.g. admin live monitoring) publish
+     ``{"kind": "broadcast", "prefix": <key-prefix>, "message": <payload>}``
+     and every VM delivers to its local connections whose key starts
+     with ``prefix``.
   3. Every machine's subscriber receives EVERY message (including its
      own, via Redis loopback) and delivers locally iff the client is
      in its ``active_connections`` dict. Non-local messages are dropped.
-  4. Redis outage ⇒ ``publish()`` returns False and the caller falls
-     back to the original local-only path. That degrades to today's
-     behaviour (works for the VM that has the socket; silent miss for
-     the others) rather than bringing WS traffic down entirely.
+  4. Redis outage ⇒ ``publish()`` / ``publish_broadcast()`` return False
+     and the caller falls back to the original local-only path. That
+     degrades to today's behaviour (works for the VM that has the
+     socket; silent miss for the others) rather than bringing WS
+     traffic down entirely.
 
 This module owns the Redis client and the consumer task; it is
 started from ``core/lifespan.py`` and stopped during shutdown so the
@@ -108,7 +114,7 @@ class _WSPubSub:
         return True
 
     async def publish(self, client_id: str, message: dict) -> bool:
-        """Publish a message to the shared channel.
+        """Publish a unicast message to the shared channel.
 
         Returns True if the message was handed to Redis; False means
         Redis is not active and the caller must deliver locally.
@@ -121,7 +127,7 @@ class _WSPubSub:
         if not self.active:
             return False
         try:
-            body = json.dumps({"client_id": client_id, "message": message})
+            body = json.dumps({"kind": "unicast", "client_id": client_id, "message": message})
         except (TypeError, ValueError) as e:
             # Non-JSON-serialisable payloads would cause every message
             # to fail silently if we swallowed this; log loudly.
@@ -132,6 +138,29 @@ class _WSPubSub:
             return True
         except Exception as e:
             logger.warning(f"WS pub/sub: publish failed, falling back to local delivery: {e}")
+            return False
+
+    async def publish_broadcast(self, prefix: str, message: dict) -> bool:
+        """Publish a prefix-broadcast to every VM.
+
+        Each replica delivers ``message`` to every local connection whose
+        key starts with ``prefix`` (e.g. ``admin_`` for admin live
+        monitoring). Without this, ``broadcast_to_admins`` only reaches
+        admins on the VM that happened to trigger the event — an admin
+        on another replica would miss driver status changes.
+        """
+        if not self.active:
+            return False
+        try:
+            body = json.dumps({"kind": "broadcast", "prefix": prefix, "message": message})
+        except (TypeError, ValueError) as e:
+            logger.error(f"WS pub/sub: could not serialise broadcast for {prefix}: {e}")
+            return False
+        try:
+            await self._redis.publish(CHANNEL, body)
+            return True
+        except Exception as e:
+            logger.warning(f"WS pub/sub: broadcast publish failed, falling back to local: {e}")
             return False
 
     async def _reconnect(self) -> bool:
@@ -175,8 +204,7 @@ class _WSPubSub:
                 except Exception as e:
                     _consecutive_errors += 1
                     logger.warning(
-                        f"WS pub/sub: consumer read error "
-                        f"({_consecutive_errors}/{_reconnect_threshold}): {e}"
+                        f"WS pub/sub: consumer read error ({_consecutive_errors}/{_reconnect_threshold}): {e}"
                     )
                     if _consecutive_errors >= _reconnect_threshold:
                         reconnected = await self._reconnect()
@@ -199,11 +227,27 @@ class _WSPubSub:
                 except (TypeError, ValueError):
                     continue
 
-                client_id = data.get("client_id")
                 payload = data.get("message")
-                if not client_id or payload is None:
+                if payload is None:
                     continue
 
+                # Backwards compat: older envelopes had no "kind" field and
+                # were always unicast. Treat a missing kind as unicast so a
+                # rolling deploy across VMs doesn't drop in-flight messages.
+                kind = data.get("kind") or "unicast"
+                if kind == "broadcast":
+                    prefix = data.get("prefix") or ""
+                    if not prefix:
+                        continue
+                    try:
+                        await self._manager._deliver_broadcast_local(prefix, payload)
+                    except Exception as e:
+                        logger.warning(f"WS pub/sub: local broadcast failed for {prefix}: {e}")
+                    continue
+
+                client_id = data.get("client_id")
+                if not client_id:
+                    continue
                 try:
                     await self._manager._deliver_local(payload, client_id)
                 except Exception as e:

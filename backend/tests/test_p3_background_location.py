@@ -24,13 +24,13 @@ and remains xfail below.
 Run:
     pytest backend/tests/test_p3_background_location.py -v
 """
+
 from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 
 DRIVER_USER_ID = "driver_user_p3_20"
 
@@ -49,6 +49,7 @@ def _point(lat: float = 52.1332, lng: float = -106.6700, seq: int = 1) -> dict:
 # POST /drivers/location-batch
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.e2e
 @pytest.mark.asyncio
 class TestUpdateLocationBatch:
@@ -62,8 +63,10 @@ class TestUpdateLocationBatch:
 
         db_updates = []
 
-        with patch("backend.routes.drivers.db_supabase.update_one",
-                   AsyncMock(side_effect=lambda t, q, d: db_updates.append((t, q, d)))):
+        with patch(
+            "backend.routes.drivers.db_supabase.update_one",
+            AsyncMock(side_effect=lambda t, q, d: db_updates.append((t, q, d))),
+        ):
             result = await update_location_batch(
                 batch=batch,
                 current_user={"id": DRIVER_USER_ID},
@@ -140,10 +143,7 @@ class TestUpdateLocationBatch:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _TS_HOOK = Path(__file__).parents[2] / "driver-app" / "hooks" / "useDriverDashboard.ts"
-_JEST_COVERAGE = (
-    Path(__file__).parents[2]
-    / "driver-app" / "hooks" / "__tests__" / "goOnlinePermission.test.ts"
-)
+_JEST_COVERAGE = Path(__file__).parents[2] / "driver-app" / "hooks" / "__tests__" / "goOnlinePermission.test.ts"
 
 
 class TestBackgroundPermissionCodePath:
@@ -163,9 +163,7 @@ class TestBackgroundPermissionCodePath:
         assert "requestBackgroundPermissionsAsync" in src, (
             "requestBackgroundPermissionsAsync call removed from useDriverDashboard.ts"
         )
-        assert _JEST_COVERAGE.exists(), (
-            "goOnlinePermission.test.ts is missing — Jest coverage dropped"
-        )
+        assert _JEST_COVERAGE.exists(), "goOnlinePermission.test.ts is missing — Jest coverage dropped"
 
     def test_android_background_location_permission_requested(self):
         """Same expo-location API call handles Android ACCESS_BACKGROUND_LOCATION.

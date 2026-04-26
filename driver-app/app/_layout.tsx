@@ -1,10 +1,16 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import * as SplashScreen from 'expo-splash-screen';
+
+// Keep the native splash up until our React-rendered splash is mounted,
+// otherwise the driver home (which contains the SOSButton) momentarily
+// flashes through during the boot transition.
+SplashScreen.preventAutoHideAsync().catch(() => {});
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
@@ -12,6 +18,8 @@ import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
+import { queryClient, asyncStoragePersister, QUERY_CACHE_BUSTER } from '@shared/api/queryClient';
 import { captureMessage, setUser } from '@shared/services/errorReporting';
 import {
   initFirebaseServices,
@@ -224,10 +232,14 @@ export default function RootLayout() {
     };
   }, [isAuthInitialized, authToken]);
 
+  const onLoadingLayout = useCallback(() => {
+    SplashScreen.hideAsync().catch(() => {});
+  }, []);
+
   if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized) {
     return (
       <ErrorBoundary>
-        <View style={styles.loadingContainer}>
+        <View style={styles.loadingContainer} onLayout={onLoadingLayout}>
           <Text style={styles.logoText}>Spinr</Text>
           <ActivityIndicator size="large" color="#FFFFFF" style={{ marginTop: 20 }} />
         </View>
@@ -236,9 +248,20 @@ export default function RootLayout() {
   }
 
   return (
-    <ThemeProvider>
-      <DriverRootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} />
-    </ThemeProvider>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister: asyncStoragePersister,
+        // 24h max age — anything older is dropped on rehydrate, so the
+        // app can't boot with a week-old earnings number on screen.
+        maxAge: 24 * 60 * 60 * 1000,
+        buster: QUERY_CACHE_BUSTER,
+      }}
+    >
+      <ThemeProvider>
+        <DriverRootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} />
+      </ThemeProvider>
+    </PersistQueryClientProvider>
   );
 }
 
@@ -262,12 +285,14 @@ function DriverRootLayoutInner({
               animation: 'slide_from_right',
             }}
           >
-            <Stack.Screen name="index" />
+            <Stack.Screen name="index" options={{ animation: 'none' }} />
             <Stack.Screen name="login" />
             <Stack.Screen name="otp" />
             <Stack.Screen name="profile-setup" options={{ gestureEnabled: false }} />
             <Stack.Screen name="become-driver" options={{ gestureEnabled: false }} />
-            <Stack.Screen name="driver" options={{ animation: "fade", gestureEnabled: false }} />
+            {/* Instant cut so the driver home's SOSButton doesn't flash
+                through a cross-fade out of the splash. */}
+            <Stack.Screen name="driver" options={{ animation: "none", gestureEnabled: false }} />
           </Stack>
         </SafeAreaProvider>
       </GestureHandlerRootView>

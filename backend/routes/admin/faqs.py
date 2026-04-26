@@ -3,12 +3,14 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 
 try:
     from ... import db_supabase
+    from ...utils.rate_limiter import admin_mass_notify_limit
 except ImportError:
     import db_supabase
+    from utils.rate_limiter import admin_mass_notify_limit
 
 db = db_supabase  # legacy alias
 
@@ -73,7 +75,8 @@ async def admin_delete_faq(faq_id: str):
 
 
 @router.post("/notifications/send")
-async def admin_send_notification(notification: Dict[str, Any]):
+@admin_mass_notify_limit
+async def admin_send_notification(request: Request, notification: Dict[str, Any]):
     """Send a notification to a specific user or audience."""
     user_id = notification.get("user_id")
     title = notification.get("title", "")

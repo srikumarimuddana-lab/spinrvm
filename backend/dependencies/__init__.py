@@ -203,14 +203,21 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
     # Admin tokens are minted by routes/admin/auth.py and carry `role` +
     # `email` + `modules` claims that regular rider/driver tokens do not
-    # have. Since the token is signed with our own JWT_SECRET, we can
-    # trust these claims and return the user directly without a DB lookup.
-    # Without this check, admin-001 (which has no users row) would be
-    # auto-created as a rider and fail the get_admin_user role check.
+    # have. admin-001 (super admin from env) has no DB row — trust JWT claims
+    # directly. All other staff are validated against admin_staff to enforce
+    # is_active and token_version revocation (fixes audit [03-2/03-3]).
     _admin_roles = {"admin", "super_admin", "operations", "support", "finance", "custom"}
     if payload.get("role") in _admin_roles and payload.get("email"):
+        user_id = payload["user_id"]
+        if user_id != "admin-001":
+            staff_rows = await db_supabase.get_rows("admin_staff", {"id": user_id}, limit=1)
+            staff = staff_rows[0] if staff_rows else None
+            if not staff or not staff.get("is_active", True):
+                raise HTTPException(status_code=401, detail="ERR_ACCOUNT_INACTIVE")
+            if _token_version_mismatch(payload, staff):
+                raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
         return {
-            "id": payload["user_id"],
+            "id": user_id,
             "email": payload.get("email"),
             "phone": payload.get("phone", ""),
             "role": payload["role"],
@@ -312,6 +319,36 @@ async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict
     if role not in ("admin", "super_admin", "operations", "support", "finance", "custom"):
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
+
+
+def require_module(module: str):
+    """Return a FastAPI dependency that enforces module-level RBAC.
+
+    Usage::
+
+        @router.post("/wallet/credit")
+        async def credit(admin: dict = Depends(require_module("earnings"))):
+            ...
+
+    Or at include_router time::
+
+        admin_router.include_router(wallet_router, dependencies=[Depends(require_module("earnings"))])
+
+    super_admin always passes regardless of the modules claim.
+    """
+
+    async def _check(current_user: dict = Depends(get_admin_user)) -> dict:
+        if current_user.get("role") == "super_admin":
+            return current_user
+        modules: list = current_user.get("modules") or []
+        if module not in modules:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access denied — module '{module}' not in your role permissions",
+            )
+        return current_user
+
+    return _check
 
 
 # Alias for backward compatibility

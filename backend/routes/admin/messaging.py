@@ -1,9 +1,10 @@
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
@@ -16,29 +17,30 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+class CloudMessageRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=100)
+    description: str = Field(..., min_length=1, max_length=500)
+    audience: Literal["customers", "drivers", "particular_customer", "particular_driver", "all"] = "customers"
+    type: str = "info"
+    channels: List[Literal["push", "sms", "email"]] = ["push"]
+    particular_ids: Optional[List[str]] = None
+    scheduled_at: Optional[str] = None
+
+
 # ---------- Cloud Messaging ----------
 
 
 @router.post("/cloud-messaging/send")
-async def admin_send_cloud_message(payload: Dict[str, Any]):
+async def admin_send_cloud_message(payload: CloudMessageRequest):
     """Send or schedule a cloud message to users/drivers."""
-    title = payload.get("title", "")
-    description = payload.get("description", "")
-    audience = payload.get("audience", "customers")
-    msg_type = payload.get("type", "info")
-    channels = payload.get("channels")
-    if not channels:
-        channel = payload.get("channel", "push")
-        channels = [channel]
-    particular_ids = payload.get("particular_ids") or []
-    if not particular_ids:
-        pid = payload.get("particular_id")
-        if pid:
-            particular_ids = [pid]
-    scheduled_at = payload.get("scheduled_at")
-
-    if not title or not description:
-        raise HTTPException(status_code=400, detail="Title and description are required")
+    title = payload.title
+    description = payload.description
+    audience = payload.audience
+    msg_type = payload.type
+    channels = payload.channels
+    particular_ids = payload.particular_ids or []
+    scheduled_at = payload.scheduled_at
 
     is_scheduled = bool(scheduled_at)
     status = "scheduled" if is_scheduled else "sent"

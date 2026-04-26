@@ -15,10 +15,6 @@
  * This test covers the code path (function is called) without a simulator.
  */
 
-const mockRequestBackgroundPermissions = jest.fn(() =>
-  Promise.resolve({ status: 'granted' }),
-);
-
 jest.mock('react-native', () => ({
   Platform: { OS: 'ios', select: (o: any) => o.ios },
   Vibration: { vibrate: jest.fn() },
@@ -28,7 +24,7 @@ jest.mock('react-native', () => ({
 
 jest.mock('expo-location', () => ({
   requestForegroundPermissionsAsync: jest.fn().mockResolvedValue({ status: 'granted' }),
-  requestBackgroundPermissionsAsync: mockRequestBackgroundPermissions,
+  requestBackgroundPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted' })),
   getLastKnownPositionAsync: jest.fn().mockResolvedValue(null),
   getCurrentPositionAsync: jest.fn().mockResolvedValue({
     coords: { latitude: 52.1, longitude: -106.6, speed: 0, heading: 0, accuracy: 5, altitude: 0 },
@@ -86,20 +82,20 @@ describe('go-online background permission (P3-20)', () => {
   it('calls requestBackgroundPermissionsAsync when driver goes online (iOS "Always")', async () => {
     await goOnlineWithPermission(async () => {});
 
-    expect(mockRequestBackgroundPermissions).toHaveBeenCalledTimes(1);
+    expect(Location.requestBackgroundPermissionsAsync).toHaveBeenCalledTimes(1);
   });
 
   it('calls requestBackgroundPermissionsAsync when driver goes online (Android ACCESS_BACKGROUND_LOCATION)', async () => {
     // Android routes the same expo-location API to ACCESS_BACKGROUND_LOCATION
     await goOnlineWithPermission(async () => {});
 
-    expect(mockRequestBackgroundPermissions).toHaveBeenCalledTimes(1);
+    expect(Location.requestBackgroundPermissionsAsync).toHaveBeenCalledTimes(1);
   });
 
   it('does NOT call requestBackgroundPermissionsAsync when going offline', async () => {
     await goOfflineNoPermission(async () => {});
 
-    expect(mockRequestBackgroundPermissions).not.toHaveBeenCalled();
+    expect(Location.requestBackgroundPermissionsAsync).not.toHaveBeenCalled();
   });
 
   it('permission request happens after updateDriverStatus succeeds', async () => {
@@ -110,6 +106,6 @@ describe('go-online background permission (P3-20)', () => {
     });
 
     expect(calls).toEqual(['updateStatus']);
-    expect(mockRequestBackgroundPermissions).toHaveBeenCalledTimes(1);
+    expect(Location.requestBackgroundPermissionsAsync).toHaveBeenCalledTimes(1);
   });
 });

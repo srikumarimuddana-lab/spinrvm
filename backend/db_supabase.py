@@ -1316,6 +1316,25 @@ async def wallet_transfer(
     return await run_sync(_fn)
 
 
+async def increment_promo_uses(promo_id: str, max_uses: int) -> bool:
+    """Atomically increment promo uses if uses < max_uses. Returns True if
+    the promo still had capacity (row updated), False if exhausted.
+    Callers should raise HTTP 409 on False.
+    """
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        res = supabase.rpc(
+            "increment_promo_uses",
+            {"p_promo_id": promo_id, "p_max_uses": max_uses},
+        ).execute()
+        data = getattr(res, "data", None)
+        return data is True or data == 1 or (isinstance(data, list) and len(data) > 0)
+
+    return await run_sync(_fn)
+
+
 # ============ Rides Admin Dashboard – New Helpers ============
 
 

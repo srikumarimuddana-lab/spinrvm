@@ -9,15 +9,17 @@ from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, validator
 
 try:
     from .. import db_supabase
+    from ..db_supabase import increment_promo_uses
     from ..dependencies import get_admin_user, get_current_user
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.rate_limiter import promo_available_limit, promo_validate_limit
 except ImportError:
     import db_supabase
+    from db_supabase import increment_promo_uses
     from dependencies import get_admin_user, get_current_user
     from utils.datetime_utils import parse_iso_utc
     from utils.rate_limiter import promo_available_limit, promo_validate_limit
@@ -45,13 +47,19 @@ class ApplyPromoRequest(BaseModel):
 class CreatePromoCodeRequest(BaseModel):
     code: str
     discount_type: str = "flat"  # flat | percentage
-    discount_value: Decimal  # e.g. 5.00 for $5 off, or 10.0 for 10%
+    discount_value: Decimal = Field(..., gt=0, le=500)  # flat: max $500 off; percentage: capped at 100 below
     max_discount: Optional[Decimal] = None  # Cap for percentage discounts
     max_uses: int = 100
     max_uses_per_user: int = 1
     expiry_date: Optional[str] = None  # ISO 8601
     is_active: bool = True
     description: Optional[str] = None
+
+    @validator("discount_value")
+    def validate_discount_value(cls, v, values):
+        if values.get("discount_type") == "percentage" and v > 100:
+            raise ValueError("Percentage discount cannot exceed 100")
+        return v
 
 
 class UpdatePromoCodeRequest(BaseModel):
@@ -235,12 +243,15 @@ async def apply_promo(
     }
     await db_supabase.insert_one("promo_applications", application)
 
-    # Increment usage count
-    promo = (lambda _r: _r[0] if _r else None)(
+    # Atomically increment usage count. The RPC does UPDATE ... WHERE uses < max_uses,
+    # so two concurrent applications of a max_uses=1 promo can't both succeed.
+    promo_row = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("promotions", {"id": validation["promo_id"]}, limit=1)
     )
-    if promo:
-        await db_supabase.update_one("promotions", {"id": validation["promo_id"]}, {"uses": promo.get("uses", 0) + 1})
+    max_uses = int((promo_row or {}).get("max_uses", 0))
+    incremented = await increment_promo_uses(validation["promo_id"], max_uses)
+    if not incremented:
+        raise HTTPException(status_code=409, detail="Promo code has been fully redeemed")
 
     return {
         "success": True,

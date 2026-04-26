@@ -1,14 +1,17 @@
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, BackgroundTasks, Query
 
 try:
     from ... import db_supabase
+    from ...features import send_push_notification
 except ImportError:
     import db_supabase
+    from features import send_push_notification
 
 db = db_supabase  # legacy alias
 
@@ -73,7 +76,7 @@ async def admin_delete_faq(faq_id: str):
 
 
 @router.post("/notifications/send")
-async def admin_send_notification(notification: Dict[str, Any]):
+async def admin_send_notification(notification: Dict[str, Any], background_tasks: BackgroundTasks):
     """Send a notification to a specific user or audience."""
     user_id = notification.get("user_id")
     title = notification.get("title", "")
@@ -81,7 +84,6 @@ async def admin_send_notification(notification: Dict[str, Any]):
     notification_type = notification.get("type", "general")
     audience = notification.get("audience", "user")  # user, all, riders, drivers
 
-    # Create notification document
     notification_doc = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
@@ -94,31 +96,29 @@ async def admin_send_notification(notification: Dict[str, Any]):
         "sent_count": 1 if user_id else 0,
     }
 
-    try:
-        from ...features import send_push_notification
-    except ImportError:
-        from features import send_push_notification
+    async def _broadcast(role_filter: Optional[Dict] = None) -> None:
+        users = await db.get_rows("users", role_filter or {}, limit=10000)
+        results = await asyncio.gather(
+            *[send_push_notification(u["id"], title, body) for u in (users or [])],
+            return_exceptions=True,
+        )
+        failures = sum(1 for r in results if isinstance(r, Exception))
+        if failures:
+            logger.error(f"Broadcast ({audience!r}): {failures}/{len(results)} FCM sends failed")
 
-    # If targeting specific user, insert and send
     if user_id:
         await db_supabase.insert_one("notifications", notification_doc)
-        # TODO: Integrate with push notification service (FCM)
-        logger.info(f"Notification sent to user {user_id}: {title}")
+        await send_push_notification(user_id, title, body)
+        logger.info(f"Notification dispatched to user {user_id}: {title}")
     elif audience == "all":
-        all_users = await db.get_rows("users", {}, limit=10000)
-        for u in all_users or []:
-            await send_push_notification(u["id"], title, body)
-        logger.info(f"Broadcast notification to all users: {title}")
+        background_tasks.add_task(_broadcast)
+        logger.info(f"Broadcast queued for all users: {title}")
     elif audience == "riders":
-        riders = await db.get_rows("users", {"role": "rider"}, limit=10000)
-        for u in riders or []:
-            await send_push_notification(u["id"], title, body)
-        logger.info(f"Broadcast notification to all riders: {title}")
+        background_tasks.add_task(_broadcast, {"role": "rider"})
+        logger.info(f"Broadcast queued for riders: {title}")
     elif audience == "drivers":
-        drivers = await db.get_rows("users", {"role": "driver"}, limit=10000)
-        for u in drivers or []:
-            await send_push_notification(u["id"], title, body)
-        logger.info(f"Broadcast notification to all drivers: {title}")
+        background_tasks.add_task(_broadcast, {"role": "driver"})
+        logger.info(f"Broadcast queued for drivers: {title}")
 
     return {"success": True, "notification": notification_doc}
 

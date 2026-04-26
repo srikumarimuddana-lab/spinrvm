@@ -43,6 +43,14 @@ get_current_admin = get_admin_user
 
 router = APIRouter(prefix="/admin/corporate-accounts", tags=["Corporate Accounts"])
 
+# OWNERSHIP ASSUMPTION: All Spinr admins are currently global staff — there are
+# no org-scoped admin roles. For this reason, endpoints authenticate via
+# get_current_admin but do NOT check that the admin "owns" the company_id in
+# the path. If per-org admin roles are ever added, every endpoint in this file
+# must gain an ownership check (e.g. fetched_account["admin_email"] == current_admin["email"])
+# before returning or mutating data.
+
+
 
 # Pydantic models for request/response validation
 class CorporateAccountBase(BaseModel):

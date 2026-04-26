@@ -214,6 +214,6 @@ rides_by_id = {r["id"]: r for r in (rides or [])}
 - [x] P1-5 Move Stripe refund call before DB status update in admin_resolve_dispute
 - [x] P1-6 Reverse loyalty redemption order; add compensating credit on failure
 - [x] P1-7 Add ownership check to GET /fare-split/ride/{ride_id}; remove phone from response
-- [ ] P1-8 Add company ownership check or document global-admin assumption in corporate endpoints
+- [x] P1-8 Add company ownership check or document global-admin assumption in corporate endpoints
 - [x] P1-9 Remove/mask phone_number from dispute and fare-split response payloads
-- [ ] P1-10 Replace per-dispute DB loop with batch user + ride fetch in admin_get_disputes
+- [x] P1-10 Replace per-dispute DB loop with batch user + ride fetch in admin_get_disputes

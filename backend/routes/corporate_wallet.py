@@ -33,6 +33,13 @@ except ImportError:
 
 router = APIRouter(prefix="/admin/corporate-accounts", tags=["Corporate Wallet"])
 
+# OWNERSHIP ASSUMPTION: All Spinr admins are currently global staff — there are
+# no org-scoped admin roles. For this reason, these endpoints authenticate via
+# get_admin_user but do NOT check that the admin "owns" the company_id in the
+# path. If per-org admin roles are ever added, every endpoint in this file must
+# gain an ownership check (e.g. fetched_account["admin_email"] == current_admin["email"])
+# before returning or mutating data.
+
 _MAX_TXN_PAGE = 200
 
 

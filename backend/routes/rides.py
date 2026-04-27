@@ -1873,7 +1873,7 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
     if driver:
         # Fetch all rides for this driver to compute precise average
         driver_rides = await db_supabase.get_rows("rides", {"driver_id": driver_id}, limit=1000)
-        rated_rides = [float(r.get("driver_rating")) for r in driver_rides if r.get("driver_rating") is not None]
+        rated_rides = [float(r.get("rider_rating")) for r in driver_rides if r.get("rider_rating") is not None]
 
         if rated_rides:
             average_rating = round(sum(rated_rides) / len(rated_rides), 2)

@@ -230,6 +230,10 @@ async def stripe_webhook(request: Request):
                 "add to dispatch or update Stripe dashboard webhook subscriptions",
                 extra={"domain": "payments", "event_id": event_id},
             )
+        # Leave processed_at NULL for unknown/unhandled events so the nightly
+        # reconciliation job can replay them if they later become actionable.
+        # Return 200 to Stripe so it does not retry indefinitely.
+        return {"received": True, "unhandled": True, "event_id": event_id}
 
     # Success — stamp processed_at. Non-fatal if this fails (we've
     # already finished the side effects, and Stripe won't retry a 2xx).

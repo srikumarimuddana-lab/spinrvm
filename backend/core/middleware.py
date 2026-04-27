@@ -94,10 +94,14 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         token = request.headers.get("X-Firebase-AppCheck")
+        # Prefer the request_id already set by RequestIDMiddleware; fall back
+        # to the caller-supplied header so App Check failures are always
+        # cross-correlatable even if middleware ordering changes.
+        _req_id = getattr(request.state, "request_id", None) or request.headers.get("X-Request-ID", "-")
 
         if not token:
             if self._enforce:
-                logger.warning("App Check: missing token for %s", path)
+                logger.warning("App Check: missing token for %s", path, extra={"request_id": _req_id})
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "App Check token required"},
@@ -113,7 +117,7 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
             app_check.verify_token(token)
         except Exception as exc:
             if self._enforce:
-                logger.warning("App Check: invalid token for %s — %s", path, exc)
+                logger.warning("App Check: invalid token for %s — %s", path, exc, extra={"request_id": _req_id})
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "Invalid App Check token"},

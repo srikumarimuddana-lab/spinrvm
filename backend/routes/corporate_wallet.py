@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Optional
 
 import stripe
@@ -139,7 +140,7 @@ async def manual_adjust(
         amount=body.amount,
         notes=body.notes,
         actor_user_id=current_admin["id"],
-        floor=float(wallet.get("soft_negative_floor", -50)),
+        floor=Decimal(str(wallet.get("soft_negative_floor", -50))),
     )
     return result
 

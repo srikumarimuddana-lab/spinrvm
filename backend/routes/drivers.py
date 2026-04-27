@@ -1573,37 +1573,28 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
     import json  # noqa: PLC0415
 
     try:
-        # 1. Driver profile
-        driver_rows = await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1)
+        # Phase 1 — parallel: driver profile, user account, notification prefs
+        # (all only need user_id so there's no ordering dependency).
+        driver_rows, user_rows, notification_prefs = await asyncio.gather(
+            db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1),
+            db_supabase.get_rows("users", {"id": user_id}, limit=1),
+            db_supabase.get_rows("notification_preferences", {"user_id": user_id}, limit=1),
+        )
         driver = driver_rows[0] if driver_rows else {}
+        user = user_rows[0] if user_rows else {}
         driver_id = driver.get("id", "")
 
-        # 2. User account record
-        user_rows = await db_supabase.get_rows("users", {"id": user_id}, limit=1)
-        user = user_rows[0] if user_rows else {}
-
-        # 3. Ride history (last 500 trips)
-        rides: list = []
+        # Phase 2 — parallel: rides, payouts, documents (all need driver_id from phase 1).
         if driver_id:
-            rides = await db_supabase.get_rows(
-                "rides", {"driver_id": driver_id}, limit=500, order="created_at", desc=True
+            rides, payouts, documents = await asyncio.gather(
+                db_supabase.get_rows("rides", {"driver_id": driver_id}, limit=500, order="created_at", desc=True),
+                db_supabase.get_rows(
+                    "driver_payouts", {"driver_id": driver_id}, limit=200, order="created_at", desc=True
+                ),
+                db_supabase.get_rows("driver_documents", {"driver_id": driver_id}, limit=50),
             )
-
-        # 4. Payout history
-        payouts: list = []
-        if driver_id:
-            payouts = await db_supabase.get_rows(
-                "driver_payouts", {"driver_id": driver_id}, limit=200, order="created_at", desc=True
-            )
-
-        # 5. Uploaded documents
-        documents: list = []
-        if driver_id:
-            documents = await db_supabase.get_rows("driver_documents", {"driver_id": driver_id}, limit=50)
-
-        # 6. Notification preferences
-        notification_prefs: list = []
-        notification_prefs = await db_supabase.get_rows("notification_preferences", {"user_id": user_id}, limit=1)
+        else:
+            rides, payouts, documents = [], [], []
 
         export_payload = {
             "export_generated_at": datetime.now(timezone.utc).isoformat() + "Z",

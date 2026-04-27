@@ -14,6 +14,19 @@ import logging
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+# Event types we explicitly handle. Any type outside this set is rejected
+# with 400 and NOT marked processed — so it stays in the stripe_events table
+# for reconciliation and Stripe keeps it in the retry queue. Add new event
+# types here deliberately after writing the handler, not before.
+ALLOWED_STRIPE_EVENTS: frozenset[str] = frozenset(
+    {
+        "payment_intent.succeeded",
+        "payment_intent.payment_failed",
+        "checkout.session.completed",
+    }
+)
+
 # IMPORTANT: This router does NOT have a /api/ prefix in the original server.py
 # In server.py: app.post("/webhooks/stripe")
 # So we should probably mount it at root or handle it carefully.
@@ -85,6 +98,14 @@ async def stripe_webhook(request: Request):
 
     if not is_new:
         return {"received": True, "duplicate": True, "event_id": event_id}
+
+    # ── Allowlist gate ───────────────────────────────────────────────
+    if event_type not in ALLOWED_STRIPE_EVENTS:
+        logger.error(
+            "stripe_webhook: unknown event type — not processed",
+            extra={"event_type": event_type, "event_id": event_id},
+        )
+        raise HTTPException(status_code=400, detail="unknown_event_type")
 
     # ── Dispatch ─────────────────────────────────────────────────────
     # Any exception raised below propagates as 5xx, leaving processed_at
@@ -211,9 +232,6 @@ async def stripe_webhook(request: Request):
                 f"[WEBHOOK] checkout.session.completed but payment not yet paid: "
                 f"status={data_object.get('payment_status')} subscription={subscription_id}"
             )
-
-    else:
-        logger.info(f"Unhandled Stripe event type: {event_type}")
 
     # Success — stamp processed_at. Non-fatal if this fails (we've
     # already finished the side effects, and Stripe won't retry a 2xx).

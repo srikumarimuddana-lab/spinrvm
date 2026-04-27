@@ -54,25 +54,42 @@ _VAULT_PII_FIELDS: frozenset = frozenset({"license_number", "vehicle_vin"})
 
 
 async def _vault_encrypt(value: str, hint: str = "") -> str:
-    """Encrypt a PII string via Supabase Vault (encrypt_driver_pii RPC)."""
+    """Encrypt a PII string via Supabase Vault (encrypt_driver_pii RPC).
+
+    Fail-closed: any failure raises 503 rather than storing plaintext PII.
+    Storing unencrypted license numbers or VINs is a PIPEDA violation.
+    """
     if not value:
         return value
     try:
         from supabase_client import supabase as _sb  # type: ignore[import]
     except ImportError:
-        return value
+        logger.error(
+            "vault_encrypt: supabase_client unavailable for %s — refusing to store plaintext", hint, exc_info=True
+        )
+        raise HTTPException(status_code=503, detail="Encryption service unavailable")
     if not _sb:
-        return value
+        logger.error("vault_encrypt: Supabase client not initialised for %s — refusing to store plaintext", hint)
+        raise HTTPException(status_code=503, detail="Encryption service unavailable")
     try:
         res = await db_supabase.run_sync(lambda: _sb.rpc("encrypt_driver_pii", {"plaintext": value}).execute())
-        return str(res.data) if res.data else value
-    except Exception as exc:
-        logger.warning("vault encrypt unavailable for %s: %s — storing plaintext", hint, exc)
-        return value
+        if not res.data:
+            logger.error("vault_encrypt: RPC returned no data for %s — refusing to store plaintext", hint)
+            raise HTTPException(status_code=503, detail="Encryption service unavailable")
+        return str(res.data)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.error("vault_encrypt: RPC failed for %s — refusing to store plaintext", hint, exc_info=True)
+        raise HTTPException(status_code=503, detail="Encryption service unavailable")
 
 
 async def _vault_decrypt(value: str, hint: str = "") -> str:
-    """Decrypt a Vault-encrypted PII token via Supabase RPC (decrypt_driver_pii)."""
+    """Decrypt a Vault-encrypted PII token via Supabase RPC (decrypt_driver_pii).
+
+    On failure, returns the raw token rather than raising — the encrypted token
+    is not PII, so this degrades to unreadable data rather than a privacy leak.
+    """
     if not value:
         return value
     try:
@@ -84,8 +101,8 @@ async def _vault_decrypt(value: str, hint: str = "") -> str:
     try:
         res = await db_supabase.run_sync(lambda: _sb.rpc("decrypt_driver_pii", {"secret_id": value}).execute())
         return str(res.data) if res.data else value
-    except Exception as exc:
-        logger.warning("vault decrypt unavailable for %s: %s — returning raw value", hint, exc)
+    except Exception:
+        logger.error("vault_decrypt: RPC failed for %s — returning raw token", hint, exc_info=True)
         return value
 
 

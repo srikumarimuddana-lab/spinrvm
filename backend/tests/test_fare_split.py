@@ -17,7 +17,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-SAMPLE_USER = {"id": "user_123", "phone": "+1234567890", "role": "rider", "is_driver": False}
+SAMPLE_USER = {"id": "user_123", "phone": "+12225551234", "role": "rider", "is_driver": False}
 
 SAMPLE_RIDE = {
     "id": "ride_123",
@@ -50,14 +50,31 @@ SAMPLE_PARTICIPANT = {
 
 
 def make_mock_db():
+    from decimal import Decimal
+
     mock = MagicMock()
     mock.get_rows = AsyncMock(return_value=[])
+    mock.fare_split_pay_share = AsyncMock(return_value=Decimal("35.00"))
+    mock.wallet_increment_balance = AsyncMock(return_value=Decimal("10.00"))
     for col in ("rides", "fare_splits", "fare_split_participants", "users", "wallets", "wallet_transactions"):
         col_mock = MagicMock()
         col_mock.find_one = AsyncMock(return_value=None)
         col_mock.insert_one = AsyncMock(return_value=None)
         col_mock.update_one = AsyncMock(return_value=None)
         setattr(mock, col, col_mock)
+
+    async def _find_one(table, *args, **kwargs):
+        return await getattr(mock, table).find_one(*args, **kwargs)
+
+    async def _insert_one(table, *args, **kwargs):
+        return await getattr(mock, table).insert_one(*args, **kwargs)
+
+    async def _update_one(table, *args, **kwargs):
+        return await getattr(mock, table).update_one(*args, **kwargs)
+
+    mock.find_one = _find_one
+    mock.insert_one = _insert_one
+    mock.update_one = _update_one
     return mock
 
 
@@ -78,7 +95,7 @@ class TestCreateFareSplit:
     """POST /api/v1/fare-split"""
 
     def test_create_split_success(self, client):
-        participant_user = {"id": "user_456", "phone": "+9876543210"}
+        participant_user = {"id": "user_456", "phone": "+19875551234"}
         mock_db = make_mock_db()
         mock_db.rides.find_one = AsyncMock(return_value=SAMPLE_RIDE)
         mock_db.fare_splits.find_one = AsyncMock(return_value=None)
@@ -87,7 +104,7 @@ class TestCreateFareSplit:
         with patch("routes.fare_split.db", mock_db):
             resp = client.post(
                 "/api/v1/fare-split",
-                json={"ride_id": "ride_123", "participant_phones": ["+9876543210"]},
+                json={"ride_id": "ride_123", "participant_phones": ["+19875551234"]},
             )
 
         assert resp.status_code == 200
@@ -105,7 +122,7 @@ class TestCreateFareSplit:
         with patch("routes.fare_split.db", mock_db):
             resp = client.post(
                 "/api/v1/fare-split",
-                json={"ride_id": "bad_ride", "participant_phones": ["+9876543210"]},
+                json={"ride_id": "bad_ride", "participant_phones": ["+19875551234"]},
             )
 
         assert resp.status_code == 404
@@ -118,7 +135,7 @@ class TestCreateFareSplit:
         with patch("routes.fare_split.db", mock_db):
             resp = client.post(
                 "/api/v1/fare-split",
-                json={"ride_id": "ride_123", "participant_phones": ["+9876543210"]},
+                json={"ride_id": "ride_123", "participant_phones": ["+19875551234"]},
             )
 
         assert resp.status_code == 403
@@ -132,7 +149,7 @@ class TestCreateFareSplit:
         with patch("routes.fare_split.db", mock_db):
             resp = client.post(
                 "/api/v1/fare-split",
-                json={"ride_id": "ride_123", "participant_phones": ["+9876543210"]},
+                json={"ride_id": "ride_123", "participant_phones": ["+19875551234"]},
             )
 
         assert resp.status_code == 400
@@ -148,7 +165,7 @@ class TestCreateFareSplit:
         with patch("routes.fare_split.db", mock_db):
             resp = client.post(
                 "/api/v1/fare-split",
-                json={"ride_id": "ride_123", "participant_phones": ["+111", "+222"]},
+                json={"ride_id": "ride_123", "participant_phones": ["+19995551111", "+19995552222"]},
             )
 
         assert resp.status_code == 200
@@ -333,6 +350,7 @@ class TestPaySplitShare:
         mock_db = make_mock_db()
         mock_db.fare_split_participants.find_one = AsyncMock(return_value=participant)
         mock_db.wallets.find_one = AsyncMock(return_value=empty_wallet)
+        mock_db.fare_split_pay_share = AsyncMock(side_effect=ValueError("insufficient_funds"))
 
         with patch("routes.fare_split.db", mock_db), patch("routes.wallet.db", mock_db):
             resp = client.post(

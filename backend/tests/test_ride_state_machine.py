@@ -23,12 +23,17 @@ class TestRequireRideInState:
 
     async def _patched_db(self, find_results):
         """
-        Return a context manager that patches backend.routes.drivers.db
-        so find_one returns results in the order given.
+        Return a mock db where find_one delegates to mock_db.rides.find_one
+        so the flat-interface callers in routes/drivers.py work correctly.
         """
         mock_db = MagicMock()
         mock_db.rides = MagicMock()
         mock_db.rides.find_one = AsyncMock(side_effect=find_results)
+
+        async def _find_one(table, filters=None, **kwargs):
+            return await getattr(mock_db, table).find_one(filters)
+
+        mock_db.find_one = _find_one
         return mock_db
 
     async def test_returns_ride_when_in_allowed_state(self):

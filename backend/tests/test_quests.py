@@ -24,8 +24,8 @@ _FUTURE = (datetime.utcnow() + timedelta(days=30)).isoformat()
 _PAST = (datetime.utcnow() - timedelta(days=1)).isoformat()
 _NOW = datetime.utcnow().isoformat()
 
-SAMPLE_USER = {"id": "user_123", "phone": "+1234567890", "role": "rider", "is_driver": True}
-SAMPLE_ADMIN = {"id": "admin_1", "phone": "+1112223333", "role": "admin", "is_driver": False}
+SAMPLE_USER = {"id": "user_123", "phone": "+12225551234", "role": "rider", "is_driver": True}
+SAMPLE_ADMIN = {"id": "admin_1", "phone": "+11112223333", "role": "admin", "is_driver": False}
 
 SAMPLE_DRIVER = {
     "id": "driver_123",
@@ -73,6 +73,19 @@ def make_mock_db():
         col_mock.insert_one = AsyncMock(return_value=None)
         col_mock.update_one = AsyncMock(return_value=None)
         setattr(mock, col, col_mock)
+
+    async def _find_one(table, *args, **kwargs):
+        return await getattr(mock, table).find_one(*args, **kwargs)
+
+    async def _insert_one(table, *args, **kwargs):
+        return await getattr(mock, table).insert_one(*args, **kwargs)
+
+    async def _update_one(table, *args, **kwargs):
+        return await getattr(mock, table).update_one(*args, **kwargs)
+
+    mock.find_one = _find_one
+    mock.insert_one = _insert_one
+    mock.update_one = _update_one
     return mock
 
 

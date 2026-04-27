@@ -224,7 +224,7 @@ class DispatchService:
             {"id": driver_id, "is_available": True},
             {"$set": {"is_available": False}},
         )
-        return result.modified_count > 0
+        return result is not None
 
     async def claim_any_driver(
         self, drivers_with_distance: List[Tuple[Dict[str, Any], float]]

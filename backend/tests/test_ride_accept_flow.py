@@ -93,19 +93,23 @@ class TestAcceptRideFlipsStatus:
             driver_accepted_at=datetime.utcnow().isoformat(),
         )
 
-        get_ride_mock = AsyncMock(side_effect=[pre_ride, post_ride])
-        update_ride_mock = AsyncMock(return_value=post_ride)
+        from unittest.mock import MagicMock
+
+        get_ride_mock = AsyncMock(return_value=pre_ride)
+        update_one_mock = AsyncMock(return_value=MagicMock(modified_count=1))
         get_rows_mock = AsyncMock(return_value=[_driver_row()])
         find_one_mock = AsyncMock(return_value=post_ride)
         send_ws_mock = AsyncMock()
         send_push_mock = AsyncMock()
+        broadcast_mock = AsyncMock()
 
         with (
             patch("backend.routes.drivers.db_supabase.get_ride", get_ride_mock),
-            patch("backend.routes.drivers.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.drivers.db.update_one", update_one_mock),
             patch("backend.routes.drivers.db_supabase.get_rows", get_rows_mock),
             patch("backend.routes.drivers.db.find_one", find_one_mock),
             patch("backend.routes.drivers.manager.send_personal_message", send_ws_mock),
+            patch("backend.routes.drivers.manager.broadcast_ride_status", broadcast_mock),
             patch("backend.routes.drivers.send_push_notification", send_push_mock),
         ):
             result = asyncio.run(
@@ -117,14 +121,13 @@ class TestAcceptRideFlipsStatus:
 
         assert result == {"success": True}
 
-        # 1) update_ride was called with status=driver_accepted + driver_id
-        assert update_ride_mock.await_count == 1
-        _, kwargs = update_ride_mock.call_args
-        args = update_ride_mock.call_args.args
-        patch_payload = args[1] if len(args) > 1 else kwargs.get("updates")
-        assert patch_payload["status"] == "driver_accepted"
-        assert patch_payload["driver_id"] == DRIVER_ID
-        assert "driver_accepted_at" in patch_payload
+        # 1) atomic update was called — args: (table, filter, {"$set": {...}})
+        assert update_one_mock.await_count == 1
+        call_args = update_one_mock.call_args.args
+        update_payload = call_args[2].get("$set", call_args[2])
+        assert update_payload["status"] == "driver_accepted"
+        assert update_payload["driver_id"] == DRIVER_ID
+        assert "driver_accepted_at" in update_payload
 
         # 2) WS notification fired on the rider_<id> channel — this is
         #    what the rider-app's useRiderSocket.ts listens for to
@@ -144,31 +147,33 @@ class TestAcceptRideFlipsStatus:
         assert send_push_mock.await_count == 1
 
     def test_verify_reread_catches_silent_noop(self):
-        """If update_ride succeeds but the row didn't flip (missing column,
-        stale cache, etc.), the endpoint MUST 4xx instead of returning
-        {success:true}. Returning success here is exactly what caused
-        the bug in the first place — client thinks it worked but the
-        rider keeps polling a `searching` row."""
+        """Atomic guard (modified_count=0) means another driver claimed the
+        ride first. The endpoint raises 409 so the client knows the accept
+        was rejected — not a silent success that leaves the rider stuck."""
+        from unittest.mock import MagicMock
+
         from fastapi import HTTPException
 
         from backend.routes import drivers as drivers_mod
 
         pre_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
-        # Stale row after the "write" — simulates the silent-no-op case.
-        stuck_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
 
         with (
             patch(
                 "backend.routes.drivers.db_supabase.get_ride",
-                AsyncMock(side_effect=[pre_ride, stuck_ride]),
+                AsyncMock(return_value=pre_ride),
             ),
-            patch("backend.routes.drivers.db_supabase.update_ride", AsyncMock(return_value=None)),
+            patch(
+                "backend.routes.drivers.db.update_one",
+                AsyncMock(return_value=MagicMock(modified_count=0)),
+            ),
             patch(
                 "backend.routes.drivers.db_supabase.get_rows",
                 AsyncMock(return_value=[_driver_row()]),
             ),
-            patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=stuck_ride)),
+            patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=pre_ride)),
             patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
             patch("backend.routes.drivers.send_push_notification", AsyncMock()),
         ):
             with pytest.raises(HTTPException) as excinfo:
@@ -178,7 +183,7 @@ class TestAcceptRideFlipsStatus:
                         current_user={"id": DRIVER_USER_ID},
                     )
                 )
-        assert excinfo.value.status_code == 400
+        assert excinfo.value.status_code == 409
 
 
 class TestGetRideReturnsAcceptedStatus:

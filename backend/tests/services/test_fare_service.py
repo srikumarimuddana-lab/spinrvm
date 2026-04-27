@@ -8,7 +8,7 @@ a service layer.
 
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -135,19 +135,19 @@ class TestMergeFareConfigs:
 
 
 def _make_db(vehicle_types=None, areas=None, fare_configs=None):
-    """Build a mock db that supports the chain `db.X.find(...).to_list(N)`."""
+    """Build a mock db that supports FareService's flat get_rows interface."""
     db = MagicMock()
 
-    def make_table(rows):
-        find_result = MagicMock()
-        find_result.to_list = AsyncMock(return_value=rows or [])
-        table = MagicMock()
-        table.find = MagicMock(return_value=find_result)
-        return table
+    _data = {
+        "vehicle_types": vehicle_types or [],
+        "service_areas": areas or [],
+        "fare_configs": fare_configs or [],
+    }
 
-    db.vehicle_types = make_table(vehicle_types)
-    db.service_areas = make_table(areas)
-    db.fare_configs = make_table(fare_configs)
+    async def _get_rows(table, *args, **kwargs):
+        return _data.get(table, [])
+
+    db.get_rows = _get_rows
     return db
 
 

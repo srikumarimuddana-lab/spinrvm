@@ -186,6 +186,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import presence sweeper loop: {e}")
 
+    # PII retention purge — daily SECURITY DEFINER call to anonymize
+    # ride GPS at 3y, hard-delete rides at 7y, delete location history
+    # / chat / stripe events at 90d, delete expired refresh tokens after
+    # a 30d grace period. Closes audit B-P1-6 (Saskatchewan Transportation
+    # Act + PIPEDA). The Postgres function is naturally idempotent; the
+    # Redis leader lock inside the loop is belt-and-braces.
+    try:
+        from utils.retention_purge import retention_purge_loop
+
+        _spawn("retention_purge (24h)", retention_purge_loop)
+    except Exception as e:
+        logger.warning(f"Failed to import retention purge loop: {e}")
+
     app.state.background_tasks = background_tasks
 
     # WebSocket pub/sub (audit P0-B3): before this, socket sends were

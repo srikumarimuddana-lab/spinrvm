@@ -1,5 +1,6 @@
 module.exports = {
   preset: 'jest-expo',
+  setupFiles: ['<rootDir>/__mocks__/expo-jest-setup.js'],
   setupFilesAfterEnv: ['@testing-library/jest-native/extend-expect'],
   testPathIgnorePatterns: [
     '/node_modules/',
@@ -11,6 +12,14 @@ module.exports = {
   modulePaths: ['<rootDir>/node_modules'],
   moduleNameMapper: {
     '^@shared/(.*)$': '<rootDir>/../shared/$1',
+    // Jest 30 + Expo SDK 54: the winter runtime installs global getters for
+    // import.meta polyfills. The lazy require() inside those getters is called
+    // through closures that jest-runtime 30 does not recognise as "inside test
+    // code", triggering isInsideTestCode === false and a ReferenceError.
+    // Stub the entire winter side-effect chain — none of it is needed under Jest.
+    'expo/src/winter/ImportMetaRegistry': '<rootDir>/__mocks__/expo-winter-stub.js',
+    'expo/src/winter/runtime(\\.native)?': '<rootDir>/__mocks__/expo-winter-stub.js',
+    'expo/src/winter/index': '<rootDir>/__mocks__/expo-winter-stub.js',
   },
   // R-P1-22: Enforce minimum coverage thresholds before merging to main.
   // Scoped to store/ files where unit tests exist; app screens are covered by e2e.

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
+import time
 from datetime import datetime, timedelta, timezone
 
 try:
@@ -26,6 +28,13 @@ except ImportError:
         mark_low_balance_notified,
     )
     from features import send_email  # type: ignore
+
+try:
+    from .metrics import inc as _metric_inc
+    from .metrics import set_gauge as _metric_gauge
+except ImportError:
+    from utils.metrics import inc as _metric_inc
+    from utils.metrics import set_gauge as _metric_gauge
 
 
 logger = logging.getLogger(__name__)
@@ -69,8 +78,14 @@ async def corporate_low_balance_loop() -> None:
     """Background loop — one tick per hour."""
     logger.info("Corporate low-balance notifier started")
     while True:
+        _t0 = time.monotonic()
+        _had_error = False
         try:
             await run_low_balance_tick()
         except Exception as e:
             logger.error("low-balance loop error: %s", e)
-        await asyncio.sleep(3600)
+            _had_error = True
+        _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "corporate_low_balance"})
+        if _had_error:
+            _metric_inc("spinr_bgloop_errors_total", {"loop": "corporate_low_balance"})
+        await asyncio.sleep(3600 * (0.9 + random.random() * 0.2))

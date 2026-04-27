@@ -7,6 +7,8 @@ Also resolves driver payouts stuck as 'pending' after transfer failures.
 
 import asyncio
 import logging
+import random
+import time
 from datetime import datetime, timezone
 
 try:
@@ -14,11 +16,15 @@ try:
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
     from .datetime_utils import parse_iso_utc
+    from .metrics import inc as _metric_inc
+    from .metrics import set_gauge as _metric_gauge
 except ImportError:
     from db import db
     from features import send_push_notification
     from settings_loader import get_app_settings
     from utils.datetime_utils import parse_iso_utc
+    from utils.metrics import inc as _metric_inc
+    from utils.metrics import set_gauge as _metric_gauge
 
 logger = logging.getLogger(__name__)
 
@@ -203,12 +209,19 @@ async def payment_retry_loop():
     """Background loop that retries failed payments every RETRY_INTERVAL_SECONDS."""
     logger.info(f"Payment retry service started (interval={RETRY_INTERVAL_SECONDS}s)")
     while True:
+        _t0 = time.monotonic()
+        _had_error = False
         try:
             await retry_failed_payments()
         except Exception as e:
             logger.error(f"Payment retry loop error: {e}")
+            _had_error = True
         try:
             await retry_stuck_payouts()
         except Exception as e:
             logger.error(f"Payout retry loop error: {e}")
-        await asyncio.sleep(RETRY_INTERVAL_SECONDS)
+            _had_error = True
+        _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "payment_retry"})
+        if _had_error:
+            _metric_inc("spinr_bgloop_errors_total", {"loop": "payment_retry"})
+        await asyncio.sleep(RETRY_INTERVAL_SECONDS * (0.9 + random.random() * 0.2))

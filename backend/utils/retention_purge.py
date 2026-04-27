@@ -17,7 +17,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
+import time
 from datetime import datetime, timedelta, timezone
+
+try:
+    from .metrics import inc as _metric_inc
+    from .metrics import set_gauge as _metric_gauge
+except ImportError:
+    from utils.metrics import inc as _metric_inc
+    from utils.metrics import set_gauge as _metric_gauge
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +38,17 @@ INTERVAL_SECONDS = 86400  # 24 h
 async def retention_purge_loop() -> None:
     """Entry point spawned by core/lifespan.py."""
     while True:
+        _t0 = time.monotonic()
+        _had_error = False
         try:
             await _tick()
         except Exception:
             logger.error("retention_purge_loop tick failed", exc_info=True)
-        await asyncio.sleep(INTERVAL_SECONDS)
+            _had_error = True
+        _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "retention_purge"})
+        if _had_error:
+            _metric_inc("spinr_bgloop_errors_total", {"loop": "retention_purge"})
+        await asyncio.sleep(INTERVAL_SECONDS * (0.9 + random.random() * 0.2))
 
 
 async def _tick() -> None:

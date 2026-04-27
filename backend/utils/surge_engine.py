@@ -7,6 +7,8 @@ service_areas.surge_multiplier for areas where surge_source == 'auto'.
 """
 
 import asyncio
+import random
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
@@ -17,10 +19,14 @@ try:
     from db import db
     from geo_utils import get_service_area_polygon, point_in_polygon
     from utils.driver_presence import present_driver_ids
+    from utils.metrics import inc as _metric_inc
+    from utils.metrics import set_gauge as _metric_gauge
 except ImportError:
     from ..db import db
     from ..geo_utils import get_service_area_polygon, point_in_polygon
     from .driver_presence import present_driver_ids
+    from .metrics import inc as _metric_inc
+    from .metrics import set_gauge as _metric_gauge
 
 # ── Surge tier mapping ───────────────────────────────────────────────
 # Maps demand/supply ratio to multiplier. Thresholds are tuned for a
@@ -242,6 +248,8 @@ async def surge_recalculation_loop():
     """Background loop that recalculates surge every RECALC_INTERVAL_SECONDS."""
     logger.info(f"Surge engine started (interval={RECALC_INTERVAL_SECONDS}s)")
     while True:
+        _t0 = time.monotonic()
+        _had_error = False
         try:
             results = await recalculate_all_surges()
             if results:
@@ -249,4 +257,8 @@ async def surge_recalculation_loop():
                 logger.debug(f"Surge recalc complete: {len(results)} areas, {active} surging")
         except Exception as e:
             logger.error(f"Surge recalculation loop error: {e}")
-        await asyncio.sleep(RECALC_INTERVAL_SECONDS)
+            _had_error = True
+        _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "surge_recalculation"})
+        if _had_error:
+            _metric_inc("spinr_bgloop_errors_total", {"loop": "surge_recalculation"})
+        await asyncio.sleep(RECALC_INTERVAL_SECONDS * (0.9 + random.random() * 0.2))

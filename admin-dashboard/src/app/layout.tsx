@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Analytics } from "@vercel/analytics/next";
+import { AuthInitializer } from "@/components/auth-initializer";
 
 export const metadata: Metadata = {
   title: "Spinr Admin",
@@ -30,6 +31,7 @@ export default async function RootLayout({
         >
           <SidebarProvider>
             <TooltipProvider>
+              <AuthInitializer />
               {children}
               <Toaster />
             </TooltipProvider>

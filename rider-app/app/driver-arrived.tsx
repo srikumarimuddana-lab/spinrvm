@@ -25,7 +25,7 @@ const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 export default function DriverArrivedScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
-  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide } = useRideStore();
+  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency } = useRideStore();
   const { wsConnected } = useRiderSocket();
   const mapRef = React.useRef<MapView>(null);
   const bottomSheetRef = React.useRef<BottomSheet>(null);
@@ -228,9 +228,7 @@ export default function DriverArrivedScreen() {
             <View style={styles.pulseGreen} />
             <Text style={styles.arrivedChipText} allowFontScaling={false}>Driver has arrived</Text>
           </View>
-          <SOSButton rideId={rideId as string} onTrigger={async (id, lat, lng) => {
-            try { await api.post(`/rides/${id}/emergency`, { latitude: lat, longitude: lng }); } catch {}
-          }} />
+          <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} />
         </View>
       </SafeAreaView>
 

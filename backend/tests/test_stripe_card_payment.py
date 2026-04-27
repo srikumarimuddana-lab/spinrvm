@@ -154,8 +154,8 @@ async def test_card_declined_returns_402_and_marks_failed():
 
 
 @pytest.mark.asyncio
-async def test_generic_stripe_error_returns_502():
-    """charge_ride returns status='failed' → HTTP 502, ride marked failed."""
+async def test_generic_stripe_error_returns_402():
+    """charge_ride returns status='failed' → HTTP 402, ride marked failed."""
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as exc_info:
@@ -166,18 +166,17 @@ async def test_generic_stripe_error_returns_502():
             )
         )
 
-    assert exc_info.value.status_code == 502
+    assert exc_info.value.status_code == 402
     detail = exc_info.value.detail
-    assert detail["code"] == "payment_processor_error"
+    assert detail["code"] == "payment_error"
 
 
 @pytest.mark.asyncio
-async def test_no_saved_payment_method_returns_502():
-    """Rider has no default_payment_method → charge_ride returns failed → 502.
+async def test_no_saved_payment_method_returns_400():
+    """Rider has no default_payment_method → pre-flight guard raises 400.
 
-    Note: there is no pre-flight 400 guard in process_payment; the missing PM
-    is detected inside charge_ride which returns ChargeOutcome(status='failed').
-    process_payment maps 'failed' → HTTP 502.
+    process_payment validates the payment method before calling charge_ride
+    and raises 400 if none is configured.
     """
     from fastapi import HTTPException
 
@@ -191,31 +190,28 @@ async def test_no_saved_payment_method_returns_502():
             ),
         )
 
-    assert exc_info.value.status_code == 502
+    assert exc_info.value.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_requires_action_intent_returns_200_with_client_secret():
-    """Intent status 'requires_action' (3DS) → HTTP 200 success=False with client_secret.
+async def test_requires_action_intent_returns_402():
+    """Intent status 'requires_action' (3DS off-session) → HTTP 402 authentication_required.
 
-    The process_payment handler returns the client_secret to the app so it can
-    run the Stripe confirmPayment() sheet — it does NOT raise 402.
+    Off-session 3DS charges cannot be completed without rider interaction.
+    process_payment treats this as a payment failure and tells the rider to
+    use a different card (simpler UX than returning a client_secret for 3DS).
     """
-    result, mocks = await _call(
-        charge_outcome=ChargeOutcome(
-            status="requires_action",
-            payment_intent_id="pi_3ds",
-            client_secret="pi_3ds_secret_abc",
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _call(
+            charge_outcome=ChargeOutcome(
+                status="requires_action",
+                payment_intent_id="pi_3ds",
+                client_secret="pi_3ds_secret_abc",
+            )
         )
-    )
 
-    # requires_action → dict with success=False and client_secret (HTTP 200)
-    assert result["success"] is False
-    assert result["status"] == "requires_action"
-    assert result["client_secret"] == "pi_3ds_secret_abc"
-    assert result["payment_intent_id"] == "pi_3ds"
-
-    # ride is marked requires_action (not failed)
-    update_ride = mocks["backend.routes.rides.db_supabase.update_ride"]
-    ra_calls = [c for c in update_ride.call_args_list if c.args[1].get("payment_status") == "requires_action"]
-    assert ra_calls, "expected update_ride with payment_status='requires_action'"
+    assert exc_info.value.status_code == 402
+    detail = exc_info.value.detail
+    assert detail["code"] == "authentication_required"

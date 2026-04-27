@@ -62,6 +62,7 @@ def rider_override():
 def _common_patches(*, rider=None):
     """Patches shared by all card-branch tests."""
     _rider = rider if rider is not None else _FAKE_RIDER_WITH_PM
+    _settings = AsyncMock(return_value={"stripe_secret_key": "sk_test_fake"})
     return {
         "routes.rides.db_supabase.get_ride": AsyncMock(return_value=_FAKE_RIDE),
         "routes.rides.db.update_one": AsyncMock(return_value=MagicMock(modified_count=1)),
@@ -69,7 +70,9 @@ def _common_patches(*, rider=None):
         "routes.rides.db_supabase.get_user_by_id": AsyncMock(return_value=_rider),
         "routes.rides.db_supabase.get_driver_by_id": AsyncMock(return_value=None),
         "routes.rides.manager.send_personal_message": AsyncMock(return_value=None),
-        "routes.rides.get_app_settings": AsyncMock(return_value={"stripe_secret_key": "sk_test_fake"}),
+        "routes.rides.get_app_settings": _settings,
+        "backend.utils.stripe_charge.get_app_settings": _settings,
+        "utils.stripe_charge.get_app_settings": _settings,
     }
 
 
@@ -134,7 +137,7 @@ def test_stripe_create_called_with_correct_args(test_client, rider_override):
 
     mock_create.assert_called_once()
     kw = mock_create.call_args.kwargs
-    assert kw["idempotency_key"] == f"ride-payment-{_RIDE_ID}"
+    assert kw["idempotency_key"] == f"ride-charge-{_RIDE_ID}"
     assert kw["amount"] == 2000  # $20.00 → 2000 cents
     assert kw["currency"] == "cad"
     assert kw["payment_method"] == "pm_test_abc123"
@@ -152,7 +155,7 @@ def test_card_declined_returns_402_and_marks_failed(test_client, rider_override)
     try:
         with patch(
             "stripe.PaymentIntent.create",
-            side_effect=stripe.error.CardError("Your card was declined.", param=None, code="card_declined"),
+            side_effect=stripe.CardError("Your card was declined.", param=None, code="card_declined"),
         ):
             resp = test_client.post(
                 f"/api/v1/rides/{_RIDE_ID}/process-payment",
@@ -182,7 +185,7 @@ def test_generic_stripe_error_returns_402(test_client, rider_override):
     try:
         with patch(
             "stripe.PaymentIntent.create",
-            side_effect=stripe.error.APIConnectionError("network error"),
+            side_effect=stripe.APIConnectionError("network error"),
         ):
             resp = test_client.post(
                 f"/api/v1/rides/{_RIDE_ID}/process-payment",

@@ -325,6 +325,7 @@ class TestOTPRecordOperations:
         mock_query = MagicMock()
         mock_query.select.return_value = mock_query
         mock_query.eq.return_value = mock_query
+        mock_query.limit.return_value = mock_query
         mock_query.execute = MagicMock(return_value=mock_response)
         mock_supabase_client.table.return_value = mock_query
 

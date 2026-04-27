@@ -297,6 +297,7 @@ def patch_external_dependencies(
 
     _specs = [
         ("backend.db_supabase", "db_supabase", "supabase", mock_supabase_client),
+        ("backend.core.lifespan", "core.lifespan", "supabase", mock_supabase_client),
         ("backend.core.security", "core.security", "firebase_admin", mock_firebase_admin),
         ("backend.sms_service", "sms_service", "send_sms", mock_sms_service.send),
         ("backend.sms_service", "sms_service", "send_otp_sms", mock_sms_service.send_otp),
@@ -304,18 +305,20 @@ def patch_external_dependencies(
 
     patches = []
     for qualified_mod, bare_mod, attr, mock_obj in _specs:
-        mod = None
+        # Patch every importable path — both the qualified package path
+        # (backend.*) and the bare path (used when backend/ is on sys.path).
+        # They are often different module objects in sys.modules, so we must
+        # patch both; breaking after the first leaves the other uncovered.
         for mod_path in (qualified_mod, bare_mod):
             try:
                 mod = importlib.import_module(mod_path)
-                break
             except (ImportError, ModuleNotFoundError):
                 continue
-        if mod is None:
-            continue
-        p = patch.object(mod, attr, mock_obj)
-        p.start()
-        patches.append(p)
+            if not hasattr(mod, attr):
+                continue
+            p = patch.object(mod, attr, mock_obj)
+            p.start()
+            patches.append(p)
 
     yield
 

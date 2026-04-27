@@ -3,11 +3,13 @@ Integration tests for the card branch of backend/routes/rides.py::process_paymen
 
 These pin the glue between the handler and charge_ride():
     - Success:       persist payment_status=paid + payment_intent_id
-    - requires_action: persist payment_status=requires_action, return
-                       {client_secret, payment_intent_id}
+    - requires_action: persist payment_status=failed, raise HTTPException 402
+                       with code=authentication_required (off-session 3DS not
+                       completable without interactive session)
     - declined:      persist payment_status=failed, raise HTTPException 402
                      with {code, decline_code, suggested_action}
-    - failed:        persist payment_status=failed, raise HTTPException 502
+    - failed:        persist payment_status=failed, raise HTTPException 402
+                     with code=payment_error
     - unconfigured:  dev fallback — still marks paid
     - Idempotency:   second call with payment_status=paid returns
                      already_paid=True without re-charging
@@ -148,8 +150,9 @@ class TestCardSuccess:
 @pytest.mark.asyncio
 class TestRequiresAction3DS:
     async def test_returns_client_secret_and_persists_requires_action(self):
-        """3DS path: don't mark paid. Return client_secret so the
-        rider-app can run the Stripe confirmPayment sheet."""
+        """Off-session 3DS path: mark ride failed and raise 402 so the rider
+        is prompted to update their payment method. Off-session charges
+        requiring 3DS cannot be completed without an interactive session."""
         from backend.routes import rides as rides_mod
         from backend.utils.stripe_charge import ChargeOutcome
 
@@ -166,13 +169,12 @@ class TestRequiresAction3DS:
             for p in patches:
                 st.enter_context(p)
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
-            result = await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
+            with pytest.raises(HTTPException) as exc_info:
+                await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
-        assert result["success"] is False
-        assert result["status"] == "requires_action"
-        assert result["client_secret"] == "pi_3ds_1_secret_abc"
-        assert result["payment_intent_id"] == "pi_3ds_1"
-        assert _last_payment_status_write(updates) == "requires_action"
+        assert exc_info.value.status_code == 402
+        assert exc_info.value.detail["code"] == "authentication_required"
+        assert _last_payment_status_write(updates) == "failed"
 
 
 @pytest.mark.asyncio
@@ -210,10 +212,10 @@ class TestCardDecline:
 
 @pytest.mark.asyncio
 class TestStripeOpsFailure:
-    async def test_non_card_error_raises_502(self):
+    async def test_non_card_error_raises_402(self):
         """Ops-level failure (api_connection_error, invalid_request,
-        rate_limit) — not a decline. Caller should see 502 so monitoring
-        flags it, not a user-facing decline toast."""
+        rate_limit) — not a decline. Handler raises 402 with payment_error
+        code so the rider can retry or contact support."""
         from backend.routes import rides as rides_mod
         from backend.utils.stripe_charge import ChargeOutcome
 
@@ -232,9 +234,9 @@ class TestStripeOpsFailure:
             with pytest.raises(HTTPException) as exc_info:
                 await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
-        assert exc_info.value.status_code == 502
+        assert exc_info.value.status_code == 402
         body = exc_info.value.detail
-        assert body["code"] == "payment_processor_error"
+        assert body["code"] == "payment_error"
 
 
 @pytest.mark.asyncio

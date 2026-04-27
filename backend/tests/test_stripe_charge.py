@@ -252,12 +252,18 @@ class TestStripeOpsError:
         class _FakeStripeError(Exception):
             pass
 
+        class _FakeCardError(Exception):
+            pass
+
         mock_stripe = MagicMock()
         mock_stripe.PaymentIntent.create.side_effect = _FakeStripeError("api_connection_error: Unable to reach Stripe")
 
         with (
             _patch_settings(),
             patch("backend.utils.stripe_charge.stripe", mock_stripe),
+            # _StripeCardError must NOT match _FakeStripeError so the base-error
+            # branch is reached rather than the card-decline branch.
+            patch("backend.utils.stripe_charge._StripeCardError", _FakeCardError),
             patch("backend.utils.stripe_charge._StripeBaseError", _FakeStripeError),
         ):
             outcome = await charge_ride(**_KW)

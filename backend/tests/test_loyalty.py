@@ -9,13 +9,16 @@ Routes under test (backend/routes/loyalty.py):
 
 import os
 import sys
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-SAMPLE_USER = {"id": "user_123", "phone": "+1234567890", "role": "rider", "is_driver": False}
+from utils.error_handling import DuplicateRecordError  # noqa: E402
+
+SAMPLE_USER = {"id": "user_123", "phone": "+12225551234", "role": "rider", "is_driver": False}
 
 SAMPLE_ACCOUNT = {
     "id": "acct_123",
@@ -44,6 +47,19 @@ def make_mock_db():
         col_mock.insert_one = AsyncMock(return_value=None)
         col_mock.update_one = AsyncMock(return_value=None)
         setattr(mock, col, col_mock)
+
+    async def _find_one(table, *args, **kwargs):
+        return await getattr(mock, table).find_one(*args, **kwargs)
+
+    async def _insert_one(table, *args, **kwargs):
+        return await getattr(mock, table).insert_one(*args, **kwargs)
+
+    async def _update_one(table, *args, **kwargs):
+        return await getattr(mock, table).update_one(*args, **kwargs)
+
+    mock.find_one = _find_one
+    mock.insert_one = _insert_one
+    mock.update_one = _update_one
     return mock
 
 
@@ -151,7 +167,6 @@ class TestEarnPoints:
     def test_earn_points_for_completed_ride(self, client):
         mock_db = make_mock_db()
         mock_db.rides.find_one = AsyncMock(return_value=SAMPLE_RIDE)
-        mock_db.loyalty_transactions.find_one = AsyncMock(return_value=None)
         mock_db.loyalty_accounts.find_one = AsyncMock(return_value=SAMPLE_ACCOUNT)
 
         with patch("routes.loyalty.db", mock_db):
@@ -167,7 +182,6 @@ class TestEarnPoints:
         """Silver tier (1.25×) earns bonus points."""
         mock_db = make_mock_db()
         mock_db.rides.find_one = AsyncMock(return_value=SAMPLE_RIDE)  # $20 fare
-        mock_db.loyalty_transactions.find_one = AsyncMock(return_value=None)
         mock_db.loyalty_accounts.find_one = AsyncMock(return_value=SAMPLE_ACCOUNT)
 
         with patch("routes.loyalty.db", mock_db):
@@ -202,7 +216,9 @@ class TestEarnPoints:
     def test_already_awarded_returns_idempotent(self, client):
         mock_db = make_mock_db()
         mock_db.rides.find_one = AsyncMock(return_value=SAMPLE_RIDE)
-        mock_db.loyalty_transactions.find_one = AsyncMock(return_value={"id": "txn_existing", "type": "ride_earned"})
+        mock_db.loyalty_accounts.find_one = AsyncMock(return_value=SAMPLE_ACCOUNT)
+        # Route detects duplicates via DuplicateRecordError on INSERT, not via a prior find_one
+        mock_db.loyalty_transactions.insert_one = AsyncMock(side_effect=DuplicateRecordError())
 
         with patch("routes.loyalty.db", mock_db):
             resp = client.post("/api/v1/loyalty/earn?ride_id=ride_123")
@@ -231,7 +247,14 @@ class TestRedeemPoints:
         sample_wallet = {"id": "wallet_1", "user_id": "user_123", "balance": 10.0, "is_active": True}
         mock_db.wallets.find_one = AsyncMock(return_value=sample_wallet)
 
-        with patch("routes.loyalty.db", mock_db):
+        # wallet_increment_balance is imported directly into routes.loyalty; patch it there.
+        # routes.wallet.db must also be patched because get_or_create_wallet and
+        # _record_transaction use that module's db binding.
+        with (
+            patch("routes.loyalty.wallet_increment_balance", AsyncMock(return_value=Decimal("11.00"))),
+            patch("routes.loyalty.db", mock_db),
+            patch("routes.wallet.db", mock_db),
+        ):
             resp = client.post("/api/v1/loyalty/redeem", json={"points": 100})
 
         assert resp.status_code == 200

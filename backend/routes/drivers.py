@@ -2274,7 +2274,7 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    if ride.get("status") == "trip_in_progress":
+    if ride.get("status") == "in_progress":
         raise RideStateError("Cannot cancel a trip that is already in progress")
 
     now = datetime.now(timezone.utc)

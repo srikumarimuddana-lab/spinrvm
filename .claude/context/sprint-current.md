@@ -10,12 +10,12 @@ Close all P0 security/safety findings across backend, admin, and rider surfaces 
 
 | Ticket | Owner | State | Notes |
 |---|---|---|---|
-| A-P0-1 | — | pending | Admin JWT → HttpOnly cookie; remove sessionStorage persist |
-| A-P0-2 | — | pending | Admin access token TTL 12 h → 1 h + silent refresh |
-| B-P0-1 | — | pending | `UnboundLocalError` on first-ever driver rating (rides.py:1796) |
-| B-P0-2 | — | pending | `process_payment` 409 after `complete_ride` — state string mismatch |
-| A-P0-3 | — | pending | GPS OOM: `limit=1000000` in maintenance.py → Supabase-side aggregation |
-| R-P0-1 | — | pending | SOS silent failure on network error in `triggerEmergency` |
+| A-P0-1 | — | shipped (PR #117) | Admin JWT → HttpOnly cookie; CSRF double-submit; remove sessionStorage persist |
+| A-P0-2 | — | shipped (PR #117) | Admin access token TTL already 1 h in config; confirmed end-to-end |
+| B-P0-1 | — | shipped (PR #117) | Fixed `rider_rating` column name + rolling-average rating; no more wrong-column miss |
+| B-P0-2 | — | shipped (PR #117) | Replaced MongoDB `$nin` atomic guard with Supabase `update_one` filter on `payment_status="pending"` |
+| A-P0-3 | — | shipped (PR #117) | GPS breadcrumb cap: `limit=10000` → `limit=1000, order="timestamp"` in `complete_ride()` |
+| R-P0-1 | — | shipped (PR #117) | `triggerEmergency` retries 3× (1 s / 2 s backoff) before showing 911 Alert |
 
 ## Blocked
 
@@ -30,7 +30,7 @@ None currently open in production (pre-launch).
 ## Do not touch this sprint
 
 - `backend/routes/rides.py` ride-state machine paths other than the rating endpoint and payment guard — active area, coordinate before touching
-- `admin-dashboard/src/store/authStore.ts` — A-P0-1 owns this file; don't add new sessionStorage reads while it's in flight
+- PR #117 is the landing zone for all P0 fixes; don't re-open any of these tickets without verifying the fix is on that branch
 
 ## Recently shipped
 

@@ -57,9 +57,11 @@ except ImportError:
 
 try:
     import stripe
-    from stripe.error import CardError as _StripeCardError
-    from stripe.error import StripeError as _StripeBaseError
-except ImportError:  # pragma: no cover — stripe is a runtime dep in prod
+    # stripe v10+ exposes errors directly on the top-level package;
+    # the stripe.error sub-module was removed in stripe-python v15.
+    _StripeCardError = stripe.CardError  # type: ignore[attr-defined]
+    _StripeBaseError = stripe.StripeError  # type: ignore[attr-defined]
+except (ImportError, AttributeError):  # pragma: no cover
     stripe = None  # type: ignore[assignment]
     _StripeCardError = Exception  # type: ignore[misc,assignment]
     _StripeBaseError = Exception  # type: ignore[misc,assignment]

@@ -54,6 +54,9 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
   return event;
 }
 
+// [22-2] PIPEDA data residency: Sentry has no Canadian region.
+// Use the EU-region DSN (sentry.io → Settings → Data Storage → EU) as the
+// closest compliant option. EU DSN host pattern: o<org>.ingest.de.sentry.io
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
 

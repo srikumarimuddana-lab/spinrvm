@@ -437,7 +437,7 @@ async def admin_logout_all(request: Request, authorization: Optional[str] = Head
         # generic "Invalid token" so the auth path can't be
         # fingerprinted by sending malformed tokens and reading the
         # rejection reasons.
-        logger.warning("Admin auth rejected malformed token", exc_info=e)
+        logger.error("Admin auth rejected malformed token", exc_info=True, extra={"domain": "admin"})
         raise HTTPException(status_code=401, detail="Invalid token") from e
 
     user_id = payload.get("user_id")
@@ -464,7 +464,9 @@ async def admin_logout_all(request: Request, authorization: Optional[str] = Head
         except ImportError:  # pragma: no cover — package-relative fallback
             from socket_manager import manager as ws_manager
         await ws_manager.kick_user(
-            user_id, client_types=["admin"], reason="logout_all",
+            user_id,
+            client_types=["admin"],
+            reason="logout_all",
         )
     except Exception as e:
         logger.warning(f"admin logout-all: WS kick failed for {user_id}: {e}")
@@ -510,7 +512,7 @@ async def change_password(request: Request, body: ChangePasswordRequest, authori
         # generic "Invalid token" so the auth path can't be
         # fingerprinted by sending malformed tokens and reading the
         # rejection reasons.
-        logger.warning("Admin auth rejected malformed token", exc_info=e)
+        logger.error("Admin auth rejected malformed token", exc_info=True, extra={"domain": "admin"})
         raise HTTPException(status_code=401, detail="Invalid token") from e
 
     user_id = payload.get("user_id")

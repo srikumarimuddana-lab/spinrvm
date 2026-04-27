@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Alert, Linking } from 'react-native';
+import { Alert } from 'react-native';
 import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -499,21 +499,14 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
 
   triggerEmergency: async (rideId: string, latitude?: number, longitude?: number) => {
-    try {
-      await api.post(`/rides/${rideId}/emergency`, {
-        message: 'Emergency assistance requested via app button',
-        latitude,
-        longitude
-      });
-    } catch (error: any) {
-      Alert.alert(
-        'Emergency Alert May Not Have Sent',
-        'Could not reach the server. Please call 911 directly.',
-        [{ text: 'Call 911', onPress: () => Linking.openURL('tel:911') }]
-      );
-      // Swallow the error — caller does not need to handle this; the Alert is
-      // the user-facing feedback. Rethrowing would crash uncaught promise chains.
-    }
+    // Let the error propagate — SOSButton.triggerSOS catches it to distinguish
+    // success from failure and show the correct UX (retry vs "Alert Sent").
+    // Swallowing here broke SOSButton's retry logic and always showed "Alert Sent".
+    await api.post(`/rides/${rideId}/emergency`, {
+      message: 'Emergency assistance requested via app button',
+      latitude,
+      longitude,
+    });
   },
 
   fetchSavedAddresses: async () => {

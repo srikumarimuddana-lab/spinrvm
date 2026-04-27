@@ -288,7 +288,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
         # Find or create user
         existing_user = None
         try:
-            logger.info(f"Searching for user with phone: {phone}")
+            logger.info(f"Searching for user with phone: ...{phone[-4:]}")
             existing_user = await db_supabase.get_user_by_phone(phone)
             logger.info(f"User search result found: {bool(existing_user)}")
         except Exception as e:
@@ -296,7 +296,10 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             # wraps the original exception in .details["original"]; str(e)
             # only gives the generic "Database operation failed" message.
             original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
-            logger.error(f"get_user_by_phone failed for {phone}: type={type(e).__name__} msg={e} original={original}")
+            logger.error(
+                f"get_user_by_phone failed for ...{phone[-4:]}: type={type(e).__name__} msg={e} original={original}",
+                exc_info=True,
+            )
             # Refuse to silently fall through to user creation — a DB read
             # failure is NOT the same as "user doesn't exist". Creating a
             # new row here generates duplicate accounts on every retry and
@@ -451,9 +454,13 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_remote_address(request)
 
-    user = await db_supabase.get_user_by_id(uid)
-    if not user and phone:
-        user = await db_supabase.get_user_by_phone(phone)
+    try:
+        user = await db_supabase.get_user_by_id(uid)
+        if not user and phone:
+            user = await db_supabase.get_user_by_phone(phone)
+    except Exception as e:
+        logger.error(f"firebase_auth: user lookup failed uid={uid}: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="auth_lookup_failed") from e
 
     is_new_user = False
     session_id = str(uuid.uuid4())

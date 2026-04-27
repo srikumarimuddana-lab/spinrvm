@@ -290,11 +290,14 @@ async def decide_allowance_request(
         wallet = await get_corporate_wallet_by_company(company_id)
         if not allowance or not wallet:
             raise HTTPException(status_code=409, detail="missing allowance or wallet")
+        amount_raw = request.get("amount")
+        if amount_raw is None:
+            raise HTTPException(status_code=422, detail="allowance request amount is required")
         await apply_grant(
             wallet_id=wallet["id"],
             allowance_id=allowance["id"],
             member_id=request["member_id"],
-            amount=Decimal(str(request["amount"])),
+            amount=Decimal(str(amount_raw)),
             actor_user_id=guard["user"]["id"],
             notes=f"approved request {request_id}",
             floor=Decimal(str(wallet.get("soft_negative_floor", "-50"))),

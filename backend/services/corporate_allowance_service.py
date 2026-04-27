@@ -35,10 +35,14 @@ async def _apply(
         "p_allowance_id": allowance_id,
         "p_member_id": member_id,
         "p_type": type_,
-        "p_amount": amount,
+        # supabase-py serialises params via stdlib json which cannot handle
+        # Decimal. Follow the str() convention used by wallet_increment_balance
+        # and wallet_pay_for_ride in db_supabase.py — Postgres numeric accepts
+        # string literals and preserves full precision.
+        "p_amount": str(amount),
         "p_actor_user_id": actor_user_id,
         "p_notes": notes,
-        "p_floor": floor,
+        "p_floor": str(floor) if floor is not None else None,
     }
 
     def _fn():

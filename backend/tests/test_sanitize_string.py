@@ -47,10 +47,12 @@ class TestHTMLStripping:
         assert val == "bold"
 
     def test_strips_script_tags(self):
-        # After HTML stripping, 'alert' still triggers the suspicious-content check
+        # HTML tags are stripped; the remaining text is logged for security
+        # monitoring but allowed through (suspicious patterns are not rejected —
+        # they are stopped at the parameterised-query layer instead).
         ok, val = sanitize_string('<script>alert("xss")</script>', raise_exception=False)
-        assert ok is False
-        assert val is None
+        assert ok is True
+        assert val is not None
 
     def test_strips_nested_html(self):
         ok, val = sanitize_string("<div><p>text</p></div>")
@@ -121,14 +123,19 @@ class TestNoneAndEmpty:
 
 class TestSuspiciousPatterns:
     def test_sql_injection_still_passes(self):
-        # SQL injection patterns ARE detected and rejected by the implementation
+        # Suspicious patterns are detected and LOGGED for security monitoring
+        # but NOT rejected — parameterised queries in Supabase are the actual
+        # injection defence. User notes may legitimately contain SQL keywords.
         ok, val = sanitize_string("SELECT * FROM users", raise_exception=False)
-        assert ok is False
+        assert ok is True
+        assert val is not None
 
     def test_sql_comment_markers(self):
-        # '--' is flagged as a suspicious SQL comment marker
+        # '--' is detected as suspicious and logged, but the string is allowed
+        # through so legitimate inputs like "call me at 5pm -- thanks" work.
         ok, val = sanitize_string("normal text -- comment", raise_exception=False)
-        assert ok is False
+        assert ok is True
+        assert val is not None
 
     def test_normal_text_not_flagged(self):
         ok, val = sanitize_string("Pick me up at 123 Main St")

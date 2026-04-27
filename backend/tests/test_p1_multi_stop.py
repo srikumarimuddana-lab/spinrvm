@@ -14,13 +14,13 @@ These tests pin:
 Run:
     pytest backend/tests/test_p1_multi_stop.py -v
 """
+
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-
 
 RIDER_ID = "rider_p1_9"
 DRIVER_USER_ID = "driver_user_p1_9"
@@ -35,12 +35,19 @@ def _ride(status: str, stops: list | None = None, **extra) -> dict:
         "status": status,
         "driver_id": DRIVER_ID,
         "stops": stops or [],
-        "pickup_lat": 52.13, "pickup_lng": -106.67,
-        "dropoff_lat": 52.12, "dropoff_lng": -106.65,
-        "pickup_address": "123 Main", "dropoff_address": "456 Broadway",
-        "estimated_fare": 18.5, "total_fare": 18.5, "grand_total": 18.5,
-        "distance_km": 3.2, "duration_minutes": 8,
-        "payment_method": "card", "payment_status": "pending",
+        "pickup_lat": 52.13,
+        "pickup_lng": -106.67,
+        "dropoff_lat": 52.12,
+        "dropoff_lng": -106.65,
+        "pickup_address": "123 Main",
+        "dropoff_address": "456 Broadway",
+        "estimated_fare": 18.5,
+        "total_fare": 18.5,
+        "grand_total": 18.5,
+        "distance_km": 3.2,
+        "duration_minutes": 8,
+        "payment_method": "card",
+        "payment_status": "pending",
         "created_at": datetime.utcnow().isoformat(),
         **extra,
     }
@@ -57,6 +64,7 @@ def _stop(address: str, lat: float = 52.14, lng: float = -106.66) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /{ride_id}/stops — add stop mid-trip
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.e2e
 @pytest.mark.asyncio
@@ -78,6 +86,7 @@ class TestAddStopMidTrip:
 
         class _Req:
             pass
+
         req = _Req()
         req.address = address
         req.lat = lat
@@ -123,17 +132,15 @@ class TestAddStopMidTrip:
         ride = _ride(status="in_progress")
         result, ws_calls = await self._call_add_stop(ride)
 
-        driver_events = [
-            (ch, msg) for ch, msg in ws_calls
-            if f"driver_{DRIVER_USER_ID}" in str(ch)
-        ]
+        driver_events = [(ch, msg) for ch, msg in ws_calls if f"driver_{DRIVER_USER_ID}" in str(ch)]
         assert driver_events, "Driver was not notified via WS after stop added"
         assert driver_events[0][1]["type"] == "stops_updated"
         assert driver_events[0][1]["ride_id"] == RIDE_ID
 
     async def test_rejects_stop_on_searching_ride(self):
-        from backend.routes import rides as rides_mod
         from fastapi import HTTPException
+
+        from backend.routes import rides as rides_mod
 
         ride = _ride(status="searching")
 
@@ -155,8 +162,9 @@ class TestAddStopMidTrip:
         assert "active ride" in exc_info.value.detail.lower()
 
     async def test_rejects_non_rider_owner(self):
-        from backend.routes import rides as rides_mod
         from fastapi import HTTPException
+
+        from backend.routes import rides as rides_mod
 
         ride = _ride(status="in_progress")
 
@@ -176,15 +184,6 @@ class TestAddStopMidTrip:
 
         assert exc_info.value.status_code == 403
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "Fare recalculation on mid-trip stop is not yet implemented. "
-            "add_stop_mid_trip() updates the stops array and notifies the driver "
-            "but does not call the fare estimator or update estimated_fare / total_fare. "
-            "TODO: add fare re-estimate on stop mutation; update riders and driver UIs."
-        ),
-    )
     async def test_fare_is_recalculated_after_stop_added(self):
         """Adding a stop should trigger a fare recalculation."""
         ride = _ride(status="in_progress")
@@ -207,6 +206,7 @@ class TestAddStopMidTrip:
             patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
         ):
             from backend.routes import rides as rides_mod
+
             await rides_mod.add_stop_mid_trip(
                 ride_id=RIDE_ID,
                 req=_Req(),
@@ -215,14 +215,13 @@ class TestAddStopMidTrip:
 
         # Assert that the update included a new estimated_fare — not yet implemented
         updates = updated_calls[0].get("$set", {}) if updated_calls else {}
-        assert "estimated_fare" in updates, (
-            "Fare was not recalculated — add_stop_mid_trip must update estimated_fare"
-        )
+        assert "estimated_fare" in updates, "Fare was not recalculated — add_stop_mid_trip must update estimated_fare"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DELETE /{ride_id}/stops/{stop_index} — remove stop mid-trip
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.e2e
 @pytest.mark.asyncio
@@ -238,7 +237,7 @@ class TestRemoveStopMidTrip:
         stops = [_stop("Stop A"), _stop("Stop B"), _stop("Stop C")]
         ride = _ride(status="in_progress", stops=stops)
 
-        updated_stops = [_stop("Stop A"), _stop("Stop C")]
+        _updated_stops = [_stop("Stop A"), _stop("Stop C")]
 
         ws_calls = []
 
@@ -288,8 +287,9 @@ class TestRemoveStopMidTrip:
         assert driver_ws[0]["type"] == "stops_updated"
 
     async def test_rejects_invalid_stop_index(self):
-        from backend.routes import rides as rides_mod
         from fastapi import HTTPException
+
+        from backend.routes import rides as rides_mod
 
         ride = _ride(status="in_progress", stops=[_stop("Only Stop")])
 

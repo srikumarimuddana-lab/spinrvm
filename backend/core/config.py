@@ -35,8 +35,9 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     # Legacy days TTL — preserved for mobile clients that haven't adopted rotation yet.
     ACCESS_TOKEN_TTL_DAYS: int = 30
-    # Admin-console access-token TTL in hours. Cap at 12h for security.
-    ADMIN_ACCESS_TOKEN_TTL_HOURS: int = 12
+    # Admin-console access-token TTL in hours. 1h forces frequent rotation via
+    # the refresh token flow; reduces the blast radius of a captured token.
+    ADMIN_ACCESS_TOKEN_TTL_HOURS: int = 1
     # Refresh-token TTL in days (30 days "remember this device").
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
@@ -65,12 +66,12 @@ class Settings(BaseSettings):
     WS_REDIS_URL: str = ""
 
     # OTP brute-force lockout (SEC-008)
-    OTP_MAX_FAILURES: int = 5                  # attempts before lockout
-    OTP_FAILURE_WINDOW_SECONDS: int = 3600     # sliding window (1 hr)
+    OTP_MAX_FAILURES: int = 5  # attempts before lockout
+    OTP_FAILURE_WINDOW_SECONDS: int = 3600  # sliding window (1 hr)
     OTP_LOCKOUT_DURATION_SECONDS: int = 86400  # lockout duration (24 hr)
 
     # Fare cache TTL (PERF-001)
-    FARE_CACHE_TTL_SECONDS: int = 300          # 5-minute cache per lat/lng grid cell
+    FARE_CACHE_TTL_SECONDS: int = 300  # 5-minute cache per lat/lng grid cell
 
     # File storage
     STORAGE_BUCKET: str = "driver-documents"
@@ -83,7 +84,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _guard_production_secrets(self) -> "Settings":
-        """Refuse to start in production with known-weak placeholder values."""
+        """Refuse to start in production with weak placeholder values, short
+        secrets, or missing Firebase audience identifiers.
+
+        - JWT_SECRET: ≥32 chars (B-P1-2 / CLAUDE.md). HS256 with a short shared
+          secret is brute-forceable in seconds on a modern GPU.
+        - FIREBASE_DRIVER_APP_ID / FIREBASE_RIDER_APP_ID: required so the manual
+          audience check (B-P1-1 / DV-10) cannot be silently skipped.
+        """
         if self.ENV.lower() == "production":
             weak = {
                 "JWT_SECRET": ("your-strong-secret-key",),
@@ -97,6 +105,23 @@ class Settings(BaseSettings):
                         "Set a strong secret in your environment before running in production."
                     )
                     raise ValueError(msg)
+
+            jwt_secret = self.JWT_SECRET or ""
+            if len(jwt_secret) < 32:
+                raise ValueError(
+                    f"JWT_SECRET must be at least 32 characters in production "
+                    f"(got {len(jwt_secret)}). HS256 with a short shared secret "
+                    "is brute-forceable. Generate one with: "
+                    "python -c 'import secrets; print(secrets.token_urlsafe(48))'"
+                )
+
+            for field in ("FIREBASE_DRIVER_APP_ID", "FIREBASE_RIDER_APP_ID"):
+                if not getattr(self, field, ""):
+                    raise ValueError(
+                        f"{field} must be set in production. The Firebase ID-token "
+                        "audience check is gated on this value; an unset env var "
+                        "would silently allow cross-app token reuse (DV-10)."
+                    )
         return self
 
     @property

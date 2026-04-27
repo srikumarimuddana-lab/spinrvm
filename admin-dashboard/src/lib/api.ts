@@ -79,6 +79,27 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
             // For the login endpoint, fall through to the !res.ok handler so
             // "Invalid credentials" is shown to the user rather than "Unauthorized".
             if (path !== "/api/admin/auth/login") {
+                const store = useAuthStore.getState();
+                // Attempt one silent refresh before giving up. The HttpOnly
+                // refresh cookie is sent automatically — no need to check for
+                // a token in JS state.
+                await store.silentRefresh();
+                const newToken = useAuthStore.getState().token;
+                if (newToken) {
+                    const retryHeaders = { ...headers, Authorization: `Bearer ${newToken}` };
+                    const retryRes = await fetch(url, { ...options, headers: retryHeaders });
+                    if (retryRes.ok) return retryRes.json() as T;
+                    if (retryRes.status !== 401) {
+                        const retryBody = await retryRes.json().catch(() => ({}));
+                        const retryMsg =
+                            retryBody.detail ||
+                            retryBody.error?.detail ||
+                            retryBody.error?.message ||
+                            retryBody.message ||
+                            retryRes.statusText;
+                        throw new Error(retryMsg);
+                    }
+                }
                 useAuthStore.getState().logout();
                 if (typeof window !== "undefined") {
                     window.location.href = "/login";
@@ -162,6 +183,7 @@ export interface AuthResponse {
 
 export interface AdminLoginResponse {
     token: string;
+    access_expires_at: string;
     user: {
         id: string;
         email: string;
@@ -172,6 +194,13 @@ export interface AdminLoginResponse {
     };
 }
 
+export interface AdminMfaRequired {
+    mfa_required: true;
+    mfa_token: string;
+}
+
+export type AdminLoginResult = AdminLoginResponse | AdminMfaRequired;
+
 export const loginAdmin = (phone: string, code: string) =>
     request<AuthResponse>("/api/auth/verify-otp", {
         method: "POST",
@@ -179,9 +208,33 @@ export const loginAdmin = (phone: string, code: string) =>
     });
 
 export const loginAdminSession = (email: string, password: string) =>
-    request<AdminLoginResponse>("/api/admin/auth/login", {
+    request<AdminLoginResult>("/api/admin/auth/login", {
         method: "POST",
         body: JSON.stringify({ email, password }),
+    });
+
+export const mfaChallenge = (mfa_token: string, totp_code: string) =>
+    request<AdminLoginResponse>("/api/admin/auth/mfa/challenge", {
+        method: "POST",
+        body: JSON.stringify({ mfa_token, totp_code }),
+    });
+
+export const mfaStatus = () =>
+    request<{ mfa_enabled: boolean }>("/api/admin/auth/mfa/status");
+
+export const mfaEnroll = () =>
+    request<{ secret: string; otpauth_uri: string }>("/api/admin/auth/mfa/enroll", { method: "POST" });
+
+export const mfaConfirm = (totp_code: string) =>
+    request<{ backup_codes: string[] }>("/api/admin/auth/mfa/confirm", {
+        method: "POST",
+        body: JSON.stringify({ totp_code }),
+    });
+
+export const mfaDisable = (totp_code: string, password: string) =>
+    request<{ success: boolean }>("/api/admin/auth/mfa/disable", {
+        method: "POST",
+        body: JSON.stringify({ totp_code, password }),
     });
 
 export const sendOtp = (phone: string) =>
@@ -301,24 +354,84 @@ export const sendRideInvoice = (rideId: string) =>
         method: "POST",
         body: JSON.stringify({ tip_amount: 0 }),
     });
-export const getFlags = () => request<any[]>("/api/admin/flags");
+export const getFlags = (opts: {
+    limit?: number;
+    offset?: number;
+    target_type?: string;
+    service_area_id?: string;
+    is_active?: boolean;
+} = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.target_type) sp.set("target_type", opts.target_type);
+    if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
+    if (opts.is_active != null) sp.set("is_active", String(opts.is_active));
+    const qs = sp.toString();
+    return request<any[]>(`/api/admin/flags${qs ? `?${qs}` : ""}`);
+};
 export const deactivateFlag = (flagId: string) =>
     request<any>(`/api/admin/flags/${flagId}/deactivate`, { method: "PUT" });
 export const deleteFlag = (flagId: string) =>
     request<any>(`/api/admin/flags/${flagId}`, { method: "DELETE" });
-export const getLostAndFoundItems = () => request<any[]>("/api/admin/lost-and-found");
+export const getLostAndFoundItems = (opts: {
+    limit?: number;
+    offset?: number;
+    status?: string;
+    service_area_id?: string;
+} = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.status) sp.set("status", opts.status);
+    if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
+    const qs = sp.toString();
+    return request<any[]>(`/api/admin/lost-and-found${qs ? `?${qs}` : ""}`);
+};
 export const updateLostItem = (itemId: string, data: any) =>
     request<any>(`/api/admin/lost-and-found/${itemId}`, { method: "PUT", body: JSON.stringify(data) });
 export const deleteLostItem = (itemId: string) =>
     request<any>(`/api/admin/lost-and-found/${itemId}`, { method: "DELETE" });
 export const deleteDispute = (disputeId: string) =>
     request<any>(`/api/admin/disputes/${disputeId}`, { method: "DELETE" });
-export const getComplaints = () => request<any[]>("/api/admin/complaints");
+export const getComplaints = (opts: {
+    limit?: number;
+    offset?: number;
+    status?: string;
+    against_type?: string;
+    service_area_id?: string;
+} = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.status) sp.set("status", opts.status);
+    if (opts.against_type) sp.set("against_type", opts.against_type);
+    if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
+    const qs = sp.toString();
+    return request<any[]>(`/api/admin/complaints${qs ? `?${qs}` : ""}`);
+};
 export const deleteComplaint = (complaintId: string) =>
     request<any>(`/api/admin/complaints/${complaintId}`, { method: "DELETE" });
 
 /* ── Drivers ──────────────────────────────── */
-export const getDrivers = () => request<any[]>("/api/admin/drivers");
+export const getDrivers = (opts: {
+    limit?: number;
+    offset?: number;
+    is_verified?: boolean;
+    is_online?: boolean;
+    status?: string;
+    service_area_id?: string;
+} = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.is_verified != null) sp.set("is_verified", String(opts.is_verified));
+    if (opts.is_online != null) sp.set("is_online", String(opts.is_online));
+    if (opts.status) sp.set("status", opts.status);
+    if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
+    const qs = sp.toString();
+    return request<any[]>(`/api/admin/drivers${qs ? `?${qs}` : ""}`);
+};
 export const getDriverRides = (id: string) =>
     request<any>(`/api/admin/drivers/${id}/rides`);
 
@@ -913,6 +1026,20 @@ export const getPromoStats = (range?: string) => {
 export const getUsers = (role: "all" | "rider" | "driver" | "admin" = "all") =>
     request<any[]>(`/api/admin/users?role=${role}`);
 
+export const getUsersPaginated = (opts: {
+    role?: "all" | "rider" | "driver" | "admin";
+    search?: string;
+    limit?: number;
+    offset?: number;
+} = {}) => {
+    const sp = new URLSearchParams();
+    sp.set("role", opts.role ?? "all");
+    if (opts.search) sp.set("search", opts.search);
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    return request<any[]>(`/api/admin/users?${sp.toString()}`);
+};
+
 export const getUserDetails = (id: string) =>
     request<any>(`/api/admin/users/${id}`);
 
@@ -952,8 +1079,22 @@ export const debitUserWallet = (userId: string, amount: number, reason: string) 
     });
 
 /* ── Promotions ─────────────────────────────── */
-export const getPromotions = () =>
-    request<any[]>("/api/admin/promotions");
+export const getPromotions = (opts: {
+    limit?: number;
+    offset?: number;
+    promo_type?: "public" | "private";
+    status?: "active" | "inactive" | "not_expired" | "expired";
+    search?: string;
+} = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.promo_type) sp.set("promo_type", opts.promo_type);
+    if (opts.status) sp.set("status", opts.status);
+    if (opts.search) sp.set("search", opts.search);
+    const qs = sp.toString();
+    return request<any[]>(`/api/admin/promotions${qs ? `?${qs}` : ""}`);
+};
 
 export const createPromotion = (data: any) =>
     request<any>("/api/admin/promotions", {
@@ -971,8 +1112,19 @@ export const deletePromotion = (id: string) =>
     request<any>(`/api/admin/promotions/${id}`, { method: "DELETE" });
 
 /* ── Disputes ───────────────────────────────── */
-export const getDisputes = () =>
-    request<any[]>("/api/admin/disputes");
+export const getDisputes = (opts: { limit?: number; offset?: number; status?: string } = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.status && opts.status !== "all") sp.set("status", opts.status);
+    const qs = sp.toString();
+    return request<any[]>(`/api/admin/disputes${qs ? `?${qs}` : ""}`);
+};
+
+export const getDisputeStats = () =>
+    request<{ open: number; under_review: number; resolved: number; rejected: number; total_refunded: number }>(
+        "/api/admin/disputes/stats"
+    );
 
 export const getDisputeDetails = (id: string) =>
     request<any>(`/api/admin/disputes/${id}`);
@@ -990,8 +1142,20 @@ export const updateDispute = (id: string, data: any) =>
     });
 
 /* ── Support Tickets ────────────────────────── */
-export const getTickets = () =>
-    request<any[]>("/api/admin/tickets");
+export const getTickets = (opts: {
+    limit?: number;
+    offset?: number;
+    status?: string;
+    service_area_id?: string;
+} = {}) => {
+    const sp = new URLSearchParams();
+    if (opts.limit != null) sp.set("limit", String(opts.limit));
+    if (opts.offset != null) sp.set("offset", String(opts.offset));
+    if (opts.status) sp.set("status", opts.status);
+    if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
+    const qs = sp.toString();
+    return request<any[]>(`/api/admin/tickets${qs ? `?${qs}` : ""}`);
+};
 
 export const getTicketDetails = (id: string) =>
     request<any>(`/api/admin/tickets/${id}`);
@@ -1038,6 +1202,20 @@ export const updateFaq = (id: string, data: any) =>
 
 export const deleteFaq = (id: string) =>
     request<any>(`/api/admin/faqs/${id}`, { method: "DELETE" });
+
+/* ── Legal Documents (per-audience ToS / Privacy) ─────────────── */
+export const getLegalDocuments = () =>
+    request<any[]>("/api/admin/legal-documents");
+
+export const upsertLegalDocument = (data: {
+    audience: "rider" | "driver";
+    type: "tos" | "privacy";
+    content: string;
+}) =>
+    request<any>("/api/admin/legal-documents", {
+        method: "PUT",
+        body: JSON.stringify(data),
+    });
 
 /* ── Notifications (uses sendNotification defined above) ── */
 
@@ -1192,8 +1370,21 @@ export const getDriverSubscriptions = (status?: string) =>
     request<any[]>(`/api/admin/driver-subscriptions${status ? `?status=${status}` : ''}`);
 
 /* ── Audit Logs ──────────────────────────── */
-export const getAuditLogs = (limit = 50) =>
-    request<any[]>(`/api/admin/audit-logs?limit=${limit}`);
+export const getAuditLogs = (opts: {
+    limit?: number;
+    offset?: number;
+    action?: string;
+    entity_type?: string;
+    search?: string;
+} = {}) => {
+    const sp = new URLSearchParams();
+    sp.set("limit", String(opts.limit ?? 50));
+    sp.set("offset", String(opts.offset ?? 0));
+    if (opts.action) sp.set("action", opts.action);
+    if (opts.entity_type) sp.set("entity_type", opts.entity_type);
+    if (opts.search) sp.set("search", opts.search);
+    return request<any[]>(`/api/admin/audit-logs?${sp.toString()}`);
+};
 
 /* ── Quests / Bonus Challenges ──────────── */
 export const getQuests = (isActive?: boolean) =>
@@ -1254,5 +1445,88 @@ export const adminCancelRide = (rideId: string, reason?: string) =>
         {
             method: "POST",
             body: JSON.stringify({ reason: reason ?? "Cancelled by admin" }),
+        },
+    );
+
+// ── Monitoring: Redis + Infrastructure ────────────────────────────────
+
+export type RedisStats = {
+    backend: "redis" | "in_process";
+    connected: boolean;
+    used_memory_bytes?: number | null;
+    used_memory_human?: string;
+    maxmemory_bytes?: number | null;
+    maxmemory_human?: string;
+    maxmemory_policy?: string;
+    used_memory_percent?: number | null;
+    used_memory_peak_bytes?: number;
+    total_keys?: number;
+    keyspace_hits_total?: number | null;
+    keyspace_misses_total?: number | null;
+    hit_rate_percent?: number | null;
+    evicted_keys_total?: number;
+    expired_keys_total?: number;
+    connected_clients?: number;
+    uptime_seconds?: number | null;
+    total_commands_processed?: number | null;
+    error?: string;
+};
+
+export type RedisPrefixCount = {
+    prefix: string;
+    count: number;
+    description: string;
+    flushable: boolean;
+};
+
+export type RedisHealthResponse = {
+    stats: RedisStats;
+    prefix_counts: RedisPrefixCount[];
+    flushable_prefixes: string[];
+};
+
+export type InfrastructureStats = {
+    replica: {
+        hostname: string;
+        pid: number;
+        uptime_seconds: number;
+        python_version: string | null;
+    };
+    process: {
+        rss_bytes: number | null;
+        rss_human: string | null;
+        cpu_user_seconds: number | null;
+        cpu_system_seconds: number | null;
+    };
+    thread_pool: { max_workers: number | null; note: string };
+    db_circuit_breaker: {
+        state: "closed" | "open" | "half_open";
+        recent_failures: number;
+        opened_at_monotonic: number | null;
+    };
+    redis: {
+        connected: boolean;
+        used_memory_bytes: number | null;
+        used_memory_human: string | null;
+        maxmemory_human: string | null;
+        used_memory_percent: number | null;
+        total_keys: number | null;
+        evicted_keys_total: number | null;
+    };
+    metrics: Record<string, number>;
+};
+
+export const getRedisHealth = () =>
+    request<RedisHealthResponse>("/api/admin/monitoring/redis");
+
+export const getInfrastructureStats = () =>
+    request<InfrastructureStats>("/api/admin/monitoring/infrastructure");
+
+export const flushRedisPrefix = (prefix: string) =>
+    request<{ prefix: string; deleted_keys: number; admin_id: string }>(
+        "/api/admin/monitoring/redis/flush-prefix",
+        {
+            method: "POST",
+            body: JSON.stringify({ prefix, confirm: "FLUSH" }),
         },
     );

@@ -1,4 +1,5 @@
 """Rider-app Work Profile endpoints (`/rider/work-profile/**`)."""
+
 from __future__ import annotations
 
 from typing import Optional
@@ -11,7 +12,6 @@ try:
         get_corporate_account_by_id,
         get_corporate_wallet_by_company,
         get_member_allowance,
-        get_ride,
         get_rows,
         insert_allowance_request,
         list_active_memberships_for_user,
@@ -33,7 +33,6 @@ except ImportError:
         get_corporate_account_by_id,
         get_corporate_wallet_by_company,
         get_member_allowance,
-        get_ride,
         get_rows,
         insert_allowance_request,
         list_active_memberships_for_user,
@@ -95,10 +94,12 @@ async def list_work_profiles(current_user: dict = Depends(get_current_user)):
     out = []
     for m in memberships:
         company = await get_corporate_account_by_id(m["company_id"]) or {}
-        out.append({
-            "membership": m,
-            "company": {"id": company.get("id"), "name": company.get("name")},
-        })
+        out.append(
+            {
+                "membership": m,
+                "company": {"id": company.get("id"), "name": company.get("name")},
+            }
+        )
     return out
 
 
@@ -129,8 +130,24 @@ async def do_join_domain(
     body: JoinDomainBody,
     current_user: dict = Depends(get_current_user),
 ):
+    # Validate that the rider's JWT email domain is authorized for this company.
+    # body.email is not trusted for this check — we use the JWT-sourced identity.
+    user_email = (current_user.get("phone_or_email") or current_user.get("email") or "").lower()
+    domain = user_email.split("@")[-1] if "@" in user_email else ""
+    if not domain:
+        raise HTTPException(status_code=400, detail="Account has no email address; cannot join via domain")
+    allowed = await get_rows(
+        "corporate_allowed_domains",
+        {"company_id": body.company_id, "domain": domain},
+        limit=1,
+    )
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Your email domain is not authorized for this company")
+
     member = await join_via_domain(
-        company_id=body.company_id, user_id=current_user["id"], email=body.email,
+        company_id=body.company_id,
+        user_id=current_user["id"],
+        email=user_email,
     )
     company = await get_corporate_account_by_id(body.company_id) or {}
     return {"company": company, "member": member}
@@ -190,11 +207,7 @@ async def my_rides(
     rides_by_id = {r["id"]: r for r in rides_list}
 
     rps_by_ride = {r["ride_id"]: r for r in rps_rows}
-    return [
-        {**rides_by_id[rid], "payment_source": rps_by_ride[rid]}
-        for rid in ride_ids
-        if rid in rides_by_id
-    ]
+    return [{**rides_by_id[rid], "payment_source": rps_by_ride[rid]} for rid in ride_ids if rid in rides_by_id]
 
 
 @router.post("/{company_id}/allowance-requests")
@@ -218,8 +231,10 @@ async def submit_request(
         and used_auto < int(auto_monthly)
     ):
         row = await insert_allowance_request(
-            member_id=membership["id"], amount=body.amount,
-            reason=body.reason, status="auto_approved",
+            member_id=membership["id"],
+            amount=body.amount,
+            reason=body.reason,
+            status="auto_approved",
         )
         wallet = await get_corporate_wallet_by_company(company_id)
         if wallet and allowance.get("id"):
@@ -234,8 +249,10 @@ async def submit_request(
             )
         return row
     return await insert_allowance_request(
-        member_id=membership["id"], amount=body.amount,
-        reason=body.reason, status="pending",
+        member_id=membership["id"],
+        amount=body.amount,
+        reason=body.reason,
+        status="pending",
     )
 
 
@@ -245,5 +262,4 @@ async def my_requests(
     current_user: dict = Depends(get_current_user),
 ):
     membership = await _ensure_member(current_user, company_id)
-    rows = await list_company_allowance_requests(company_id, statuses=None)
-    return [r for r in rows if r.get("member_id") == membership["id"]]
+    return await list_company_allowance_requests(company_id, statuses=None, member_id=membership["id"])

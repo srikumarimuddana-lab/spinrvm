@@ -98,13 +98,15 @@ class TestSendOtpShadowingRegression:
     def test_db_returns_twilio_config_dict(self):
         """get_app_settings returns a dict WITH twilio creds — the code must
         still use .get() on the dict, not .get() on the pydantic Settings."""
-        result = asyncio.run(_call_send_otp(
-            db_settings_return={
-                "twilio_account_sid": "AC_test",
-                "twilio_auth_token": "token_test",
-                "twilio_from_number": "+10000000000",
-            }
-        ))
+        result = asyncio.run(
+            _call_send_otp(
+                db_settings_return={
+                    "twilio_account_sid": "AC_test",
+                    "twilio_auth_token": "token_test",
+                    "twilio_from_number": "+10000000000",
+                }
+            )
+        )
         assert result["success"] is True
 
     def test_db_settings_fetch_raises(self):

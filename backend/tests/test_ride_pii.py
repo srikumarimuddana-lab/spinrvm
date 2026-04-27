@@ -45,6 +45,7 @@ def test_field_not_in_rider_response(field, client, auth_headers):
     response = client.get(f"/rides/{_ride_id}/driver", headers=auth_headers)
     assert field not in response.json()
 
+
 # Full driver row as it would come from the database — includes every
 # sensitive field that the PII filter must strip.
 FULL_DRIVER_ROW = {

@@ -88,6 +88,7 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
         # Verify the token with the Firebase Admin SDK.
         try:
             import firebase_admin.app_check as app_check  # noqa: PLC0415
+
             app_check.verify_token(token)
         except Exception as exc:
             if self._enforce:
@@ -99,6 +100,7 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
             logger.debug("App Check: token verification failed (enforcement disabled): %s", exc)
 
         return await call_next(request)
+
 
 # ── Correlation / Request-ID middleware ──────────────────────────────
 # Each request gets a UUID in X-Request-ID (caller may supply their own).
@@ -448,6 +450,47 @@ def init_middleware(app):
             return response
 
     app.add_middleware(RelativeRedirectMiddleware)
+
+    # Deadline propagation — clients send `X-Deadline-Ms: <epoch-ms>`
+    # (derived from their local axios / fetch timeout). The backend
+    # stashes the deadline on a contextvar so any code running inside
+    # the request coroutine can consult it — most importantly
+    # db_supabase.run_sync, which checks remaining budget before each
+    # retry sleep. If the client has already given up, we skip the
+    # retry and fail fast instead of burning thread-pool workers on a
+    # doomed request.
+    #
+    # Absent header = no deadline enforced (current behaviour).
+    from utils.deadline import set_request_deadline
+
+    class DeadlineMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            deadline_header = request.headers.get("x-deadline-ms")
+            token = None
+            if deadline_header:
+                try:
+                    deadline_epoch_ms = int(deadline_header)
+                    import time as _t
+
+                    now_epoch_ms = int(_t.time() * 1000)
+                    remaining_ms = deadline_epoch_ms - now_epoch_ms
+                    # Convert the client's epoch deadline into a
+                    # monotonic-clock one so comparisons inside the
+                    # request (which may run for many seconds) aren't
+                    # affected by system clock jumps.
+                    monotonic_deadline = _t.monotonic() + (remaining_ms / 1000.0)
+                    request.state.deadline_monotonic = monotonic_deadline
+                    token = set_request_deadline(monotonic_deadline)
+                except (ValueError, TypeError):
+                    # Malformed header — ignore silently. Not worth a 400.
+                    pass
+            try:
+                return await call_next(request)
+            finally:
+                if token is not None:
+                    set_request_deadline(None, reset_token=token)
+
+    app.add_middleware(DeadlineMiddleware)
 
     # Rate Limiting Middleware
     app.state.limiter = default_limiter

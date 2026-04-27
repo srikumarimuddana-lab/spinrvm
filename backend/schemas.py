@@ -15,6 +15,7 @@ except ImportError:
 
 class DriverPublicView(BaseModel):
     """Safe subset of driver fields exposed to riders — no PII."""
+
     id: str
     name: str
     rating: Optional[float] = None
@@ -34,7 +35,7 @@ class SendOTPRequest(BaseModel):
         ...,
         min_length=12,
         max_length=12,
-        pattern=r'^\+1\d{10}$',
+        pattern=r"^\+1\d{10}$",
         description="Canadian/US phone in E.164 format: +1XXXXXXXXXX",
     )
 
@@ -44,17 +45,16 @@ class VerifyOTPRequest(BaseModel):
         ...,
         min_length=12,
         max_length=12,
-        pattern=r'^\+1\d{10}$',
+        pattern=r"^\+1\d{10}$",
         description="Canadian/US phone in E.164 format: +1XXXXXXXXXX",
     )
-    code: str = Field(..., min_length=4, max_length=4, pattern=r'^\d{4}$')
+    code: str = Field(..., min_length=4, max_length=4, pattern=r"^\d{4}$")
 
 
 class CreateProfileRequest(BaseModel):
     first_name: str = Field(..., min_length=1, max_length=50)
     last_name: str = Field(..., min_length=1, max_length=50)
     email: EmailStr
-    address: str = Field(..., min_length=10, max_length=200)
     gender: str
     role: Optional[str] = None  # 'driver' when coming from driver app
 
@@ -90,8 +90,10 @@ class OTPRecord(BaseModel):
     verified: bool = False
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
+
 
 class AuthResponse(BaseModel):
     token: str
@@ -125,6 +127,15 @@ class AppSettings(BaseModel):
     require_driver_subscription: bool = False
     terms_of_service_text: str = ""
     privacy_policy_text: str = ""
+    # Public company / contact info. Exposed via GET /api/company-info (no
+    # auth) so the rider and driver apps can embed these in their Support
+    # / Profile footers without each app hard-coding them. None of these
+    # fields are sensitive — they're the same info on a business card.
+    company_name: str = "Spinr"
+    company_address: str = ""
+    company_phone: str = ""
+    company_email: str = ""
+    company_website: str = ""
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -218,17 +229,17 @@ class Driver(BaseModel):
     is_available: bool = True
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    @validator('license_plate')
+    @validator("license_plate")
     def _check_license_plate(cls, v: str) -> str:
         return validate_license_plate(v)
 
-    @validator('vehicle_vin', pre=True, always=True)
+    @validator("vehicle_vin", pre=True, always=True)
     def _check_vin(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return v
         return validate_vin(v)
 
-    @validator('vehicle_year', pre=True, always=True)
+    @validator("vehicle_year", pre=True, always=True)
     def _check_vehicle_year(cls, v: Optional[int]) -> Optional[int]:
         if v is None:
             return v
@@ -315,68 +326,74 @@ class CreateRideRequest(BaseModel):
 
     # ── Input validation (SEC-017) ──────────────────────────────────────── #
 
-    @validator('pickup_address', 'dropoff_address')
+    @validator("pickup_address", "dropoff_address")
     def validate_address(cls, v: str) -> str:
         v = v.strip()
         if len(v) < 3:
-            raise ValueError('Address must be at least 3 characters')
+            raise ValueError("Address must be at least 3 characters")
         if len(v) > 500:
-            raise ValueError('Address must be 500 characters or fewer')
+            raise ValueError("Address must be 500 characters or fewer")
         return v
 
-    @validator('pickup_lat', 'dropoff_lat')
+    @validator("pickup_lat", "dropoff_lat")
     def validate_lat(cls, v: float) -> float:
         if not (-90.0 <= v <= 90.0):
-            raise ValueError('Latitude must be between -90 and 90')
+            raise ValueError("Latitude must be between -90 and 90")
         return v
 
-    @validator('pickup_lng', 'dropoff_lng')
+    @validator("pickup_lng", "dropoff_lng")
     def validate_lng(cls, v: float) -> float:
         if not (-180.0 <= v <= 180.0):
-            raise ValueError('Longitude must be between -180 and 180')
+            raise ValueError("Longitude must be between -180 and 180")
         return v
 
-    @validator('stops')
+    @validator("stops")
     def validate_stops(cls, stops: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         for stop in stops:
-            lat = stop.get('lat')
-            lng = stop.get('lng')
+            lat = stop.get("lat")
+            lng = stop.get("lng")
             if lat is None or lng is None:
-                raise ValueError('Each stop must have lat and lng')
+                raise ValueError("Each stop must have lat and lng")
             if not (-90 <= float(lat) <= 90):
-                raise ValueError(f'Stop latitude out of range: {lat}')
+                raise ValueError(f"Stop latitude out of range: {lat}")
             if not (-180 <= float(lng) <= 180):
-                raise ValueError(f'Stop longitude out of range: {lng}')
+                raise ValueError(f"Stop longitude out of range: {lng}")
         return stops
 
-    @validator('scheduled_time', always=True)
+    @validator("scheduled_time", always=True)
     def validate_scheduled_time(cls, v: Optional[datetime], values: dict) -> Optional[datetime]:
         if v is not None:
             from datetime import timedelta
-            naive = v.replace(tzinfo=None) if v.tzinfo else v
-            if naive < datetime.now(timezone.utc) + timedelta(minutes=5):
-                raise ValueError('Scheduled time must be at least 5 minutes in the future')
 
-            tz_name: Optional[str] = values.get('scheduled_timezone')
+            # Normalise to UTC-aware for the "in the future" comparison, then
+            # strip tz for the DST-gap round-trip check which needs a naive wall time.
+            v_utc = v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+            if v_utc < datetime.now(timezone.utc) + timedelta(minutes=5):
+                raise ValueError("Scheduled time must be at least 5 minutes in the future")
+
+            naive = v_utc.replace(tzinfo=None)
+
+            tz_name: Optional[str] = values.get("scheduled_timezone")
             if tz_name:
                 try:
                     import zoneinfo
+
                     tz = zoneinfo.ZoneInfo(tz_name)
-                except (ImportError, KeyError):
-                    raise ValueError(f'Unknown or unsupported timezone: {tz_name}')
+                except (ImportError, KeyError) as exc:
+                    raise ValueError(f"Unknown or unsupported timezone: {tz_name}") from exc
 
                 # DST-gap guard: construct the wall-clock time in the named
                 # timezone (fold=0 = pre-transition assumption), convert to UTC,
                 # then convert back and verify the hour/minute round-trips.
                 # A mismatch means the local time doesn't exist (clock was
                 # skipped forward over it).
-                utc_tz = zoneinfo.ZoneInfo('UTC')
+                utc_tz = zoneinfo.ZoneInfo("UTC")
                 local = naive.replace(tzinfo=tz, fold=0)
                 back = local.astimezone(utc_tz).astimezone(tz)
                 if back.hour != naive.hour or back.minute != naive.minute:
                     raise ValueError(
-                        f'The time {naive.strftime("%H:%M")} does not exist in '
-                        f'{tz_name} on that date (DST spring-forward gap). '
-                        'Please choose a time after the clocks change.'
+                        f"The time {naive.strftime('%H:%M')} does not exist in "
+                        f"{tz_name} on that date (DST spring-forward gap). "
+                        "Please choose a time after the clocks change."
                     )
         return v

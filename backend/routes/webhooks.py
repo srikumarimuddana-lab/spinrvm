@@ -46,7 +46,6 @@ async def stripe_webhook(request: Request):
     try:
         import stripe
 
-        stripe.api_key = stripe_secret
         event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid payload") from None
@@ -168,9 +167,7 @@ async def stripe_webhook(request: Request):
                 if ride_row:
                     driver_id = ride_row.get("driver_id")
                     if driver_id:
-                        driver_rows = await db_supabase.get_rows(
-                            "drivers", {"id": driver_id}, limit=1
-                        )
+                        driver_rows = await db_supabase.get_rows("drivers", {"id": driver_id}, limit=1)
                         if driver_rows:
                             driver_user_id = driver_rows[0].get("user_id")
                 if driver_user_id:

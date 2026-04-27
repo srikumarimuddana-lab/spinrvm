@@ -13,16 +13,20 @@ const COLORS = {
   accent: SpinrConfig.theme.colors.primary,
 };
 
+type LocationLike = { coords: { latitude: number; longitude: number } };
+
 interface MapControlsProps {
   mapRef: React.RefObject<MapView>;
-  location: { coords: { latitude: number; longitude: number } } | null;
+  location: LocationLike | null;
   currentRegionRef: React.RefObject<{ latitudeDelta: number; longitudeDelta: number }>;
+  onRecenter?: () => Promise<LocationLike | null | void> | LocationLike | null | void;
 }
 
 export const MapControls: React.FC<MapControlsProps> = ({
   mapRef,
   location,
   currentRegionRef,
+  onRecenter,
 }) => {
   const insets = useSafeAreaInsets();
   const handleZoomIn = () => {
@@ -47,11 +51,21 @@ export const MapControls: React.FC<MapControlsProps> = ({
     }
   };
 
-  const handleRecenter = () => {
-    if (location && mapRef.current) {
+  const handleRecenter = async () => {
+    // Fetch a fresh GPS fix first — just animating to the cached `location`
+    // prop would only zoom in on yesterday's position.
+    let fresh: LocationLike | null = null;
+    try {
+      const result = await onRecenter?.();
+      if (result && typeof result === 'object' && 'coords' in result) {
+        fresh = result as LocationLike;
+      }
+    } catch {}
+    const target = fresh ?? location;
+    if (target && mapRef.current) {
       mapRef.current.animateToRegion({
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
+        latitude: target.coords.latitude,
+        longitude: target.coords.longitude,
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       }, 500);

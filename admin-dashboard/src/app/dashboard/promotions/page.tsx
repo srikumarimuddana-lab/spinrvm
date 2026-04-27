@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,9 +17,10 @@ import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { Pagination } from "@/components/ui/pagination";
 import {
     Ticket, Plus, Trash2, ToggleLeft, ToggleRight, Pencil, Search, Download,
-    RefreshCw, Tag, Users, Calendar, Lock, Globe, ChevronLeft, ChevronRight,
+    RefreshCw, Tag, Users, Lock, Globe,
     DollarSign, TrendingUp, BarChart3, X, Check, User, Clock,
 } from "lucide-react";
 import { formatDate, formatCurrency } from "@/lib/utils";
@@ -90,7 +91,7 @@ const DATE_RANGES = [
     { key: "month", label: "This Month" },
 ];
 
-const PER_PAGE = 25;
+const PAGE_SIZE = 25;
 
 function getPromoStatus(p: PromoCode): string {
     if (p.expiry_date && new Date(p.expiry_date) < new Date()) return "expired";
@@ -111,8 +112,15 @@ export default function PromotionsPage() {
     const [editingPromo, setEditingPromo] = useState<PromoCode | null>(null);
     const [saving, setSaving] = useState(false);
 
+    // Promo table pagination (server-side)
+    const [page, setPage] = useState(0);
+    const [hasNextPage, setHasNextPage] = useState(false);
+    const promosReqIdRef = useRef(0);
+
     // Usage History filters
-    const [usagePage, setUsagePage] = useState(1);
+    const [usagePage, setUsagePage] = useState(0);
+    const [usageHasNext, setUsageHasNext] = useState(false);
+    const usageReqIdRef = useRef(0);
     const [usageSearch, setUsageSearch] = useState("");
     const [usageDateRange, setUsageDateRange] = useState("month");
     const [usageDateFrom, setUsageDateFrom] = useState("");
@@ -145,36 +153,100 @@ export default function PromotionsPage() {
 
     // --- Data fetching ---
 
-    const fetchAll = async () => {
-        setLoading(true);
+    const fetchStats = async () => {
         try {
-            const [promosData, statsData] = await Promise.all([
-                getPromotions().catch(() => []),
-                getPromoStats(usageDateRange).catch(() => null),
-            ]);
-            setPromos(Array.isArray(promosData) ? promosData : []);
-            setStats(statsData);
+            const statsData = await getPromoStats(usageDateRange);
+            setStats(statsData ?? null);
         } catch {
+            setStats(null);
+        }
+    };
+
+    const fetchPromos = async () => {
+        setLoading(true);
+        const reqId = ++promosReqIdRef.current;
+        try {
+            const data = await getPromotions({
+                limit: PAGE_SIZE + 1,
+                offset: page * PAGE_SIZE,
+                promo_type: promoTab === "expired" ? undefined : promoTab,
+                status:
+                    promoTab === "expired"
+                        ? "expired"
+                        : "not_expired",
+                search: search.trim() || undefined,
+            });
+            if (reqId !== promosReqIdRef.current) return;
+            const arr = Array.isArray(data) ? data : [];
+            setHasNextPage(arr.length > PAGE_SIZE);
+            setPromos(arr.slice(0, PAGE_SIZE));
+        } catch {
+            if (reqId !== promosReqIdRef.current) return;
             setPromos([]);
+            setHasNextPage(false);
         } finally {
-            setLoading(false);
+            if (reqId === promosReqIdRef.current) setLoading(false);
         }
     };
 
     const fetchUsage = async () => {
         setUsageLoading(true);
+        const reqId = ++usageReqIdRef.current;
         try {
-            const data = await getPromoUsage({ date_from: usageDateFrom || undefined, date_to: usageDateTo || undefined, limit: 500 });
-            setUsage(Array.isArray(data) ? data : []);
+            const data = await getPromoUsage({
+                date_from: usageDateFrom || undefined,
+                date_to: usageDateTo || undefined,
+                limit: PAGE_SIZE + 1,
+                offset: usagePage * PAGE_SIZE,
+            });
+            if (reqId !== usageReqIdRef.current) return;
+            const arr = Array.isArray(data) ? data : [];
+            setUsageHasNext(arr.length > PAGE_SIZE);
+            setUsage(arr.slice(0, PAGE_SIZE));
         } catch {
+            if (reqId !== usageReqIdRef.current) return;
             setUsage([]);
+            setUsageHasNext(false);
         } finally {
-            setUsageLoading(false);
+            if (reqId === usageReqIdRef.current) setUsageLoading(false);
         }
     };
 
-    useEffect(() => { fetchAll(); }, [usageDateRange]);
-    useEffect(() => { fetchUsage(); }, [usageDateFrom, usageDateTo]);
+    const fetchAll = async () => {
+        await Promise.all([fetchStats(), fetchPromos(), fetchUsage()]);
+    };
+
+    // Re-fetch stats when range changes
+    useEffect(() => { fetchStats(); }, [usageDateRange]);
+
+    // Reset to page 0 when tab/search changes (debounce search)
+    useEffect(() => {
+        const t = setTimeout(() => {
+            if (page !== 0) setPage(0);
+            else fetchPromos();
+        }, 300);
+        return () => clearTimeout(t);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [promoTab, search]);
+
+    // Re-fetch promos when page changes
+    useEffect(() => {
+        fetchPromos();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [page]);
+
+    // Reset usage page when filters change
+    useEffect(() => {
+        if (usagePage !== 0) setUsagePage(0);
+        else fetchUsage();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [usageDateFrom, usageDateTo]);
+
+    // Re-fetch usage when its page changes
+    useEffect(() => {
+        fetchUsage();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [usagePage]);
 
     // User search for private coupons
     const fetchUserOptions = useCallback(async (query: string) => {
@@ -202,37 +274,28 @@ export default function PromotionsPage() {
         return () => clearTimeout(timer);
     }, [userSearchText, promoTab, dialogOpen, fetchUserOptions]);
 
-    // --- Filtering ---
+    // Server returns the already-filtered slice for the active tab.
+    // Keep `filtered` as an alias so the existing render code below works unchanged.
+    const filtered = promos;
 
-    // Build promo ID to type lookup for usage filtering
+    // Tab counts come from the stats endpoint (accurate across pages).
+    const publicCount = stats ? Math.max(0, (stats.total_codes || 0)) : 0;
+    const privateCount = stats?.total_private ?? 0;
+    const expiredCount = stats?.expired_codes ?? 0;
+
+    // Usage list is server-paginated. Search/type filters apply only to the loaded page.
     const promoIdTypeMap = useMemo(() => {
         const map: Record<string, string> = {};
         promos.forEach((p) => { map[p.id] = p.promo_type || "discount"; });
         return map;
     }, [promos]);
 
-    const publicPromos = useMemo(() => promos.filter((p) => p.promo_type !== "private" && getPromoStatus(p) !== "expired"), [promos]);
-    const privatePromos = useMemo(() => promos.filter((p) => p.promo_type === "private" && getPromoStatus(p) !== "expired"), [promos]);
-    const expiredPromos = useMemo(() => promos.filter((p) => getPromoStatus(p) === "expired"), [promos]);
-
-    const activeList = promoTab === "public" ? publicPromos : promoTab === "private" ? privatePromos : expiredPromos;
-
-    const filtered = useMemo(() => {
-        return activeList.filter((p) => {
-            const matchSearch = !search || p.code?.toLowerCase().includes(search.toLowerCase()) || p.description?.toLowerCase().includes(search.toLowerCase());
-            return matchSearch;
-        });
-    }, [activeList, search]);
-
-    // Usage filtering with type dropdown and date range
     const filteredUsage = useMemo(() => {
         return usage.filter((u) => {
-            // Search filter
             if (usageSearch) {
                 const q = usageSearch.toLowerCase();
                 if (!u.code?.toLowerCase().includes(q) && !u.user_id?.toLowerCase().includes(q)) return false;
             }
-            // Type filter (public/private/all)
             if (usageTypeFilter !== "all") {
                 const pType = promoIdTypeMap[u.promo_id] || "discount";
                 if (usageTypeFilter === "private" && pType !== "private") return false;
@@ -241,10 +304,6 @@ export default function PromotionsPage() {
             return true;
         });
     }, [usage, usageSearch, usageTypeFilter, promoIdTypeMap]);
-
-    const totalUsagePages = Math.max(1, Math.ceil(filteredUsage.length / PER_PAGE));
-    const paginatedUsage = filteredUsage.slice((usagePage - 1) * PER_PAGE, usagePage * PER_PAGE);
-    useEffect(() => { setUsagePage(1); }, [usageSearch, usageTypeFilter]);
 
     // Chart data filtered by chartFilter
     const chartData = useMemo(() => {
@@ -381,13 +440,13 @@ export default function PromotionsPage() {
             {/* Promo Tabs: Public | Private | Expired */}
             <div className="flex gap-1 border-b">
                 <button onClick={() => setPromoTab("public")} className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px ${promoTab === "public" ? "border-red-500 text-red-600 dark:text-red-400" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
-                    <Globe className="h-4 w-4" /> Public Codes ({publicPromos.length})
+                    <Globe className="h-4 w-4" /> Public Codes ({publicCount})
                 </button>
                 <button onClick={() => setPromoTab("private")} className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px ${promoTab === "private" ? "border-red-500 text-red-600 dark:text-red-400" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
-                    <Lock className="h-4 w-4" /> Private Coupons ({privatePromos.length})
+                    <Lock className="h-4 w-4" /> Private Coupons ({privateCount})
                 </button>
                 <button onClick={() => setPromoTab("expired")} className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px ${promoTab === "expired" ? "border-red-500 text-red-600 dark:text-red-400" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
-                    <Clock className="h-4 w-4" /> Expired ({expiredPromos.length})
+                    <Clock className="h-4 w-4" /> Expired ({expiredCount})
                 </button>
             </div>
 
@@ -404,7 +463,7 @@ export default function PromotionsPage() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                     <div className="flex flex-wrap items-center gap-3">
-                        <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by code or description..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" /></div>
+                        <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by code or description..." aria-label="Search promotions" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" /></div>
                     </div>
 
                     {loading ? (
@@ -443,6 +502,14 @@ export default function PromotionsPage() {
                                     })}
                                 </TableBody>
                             </Table>
+                            <div className="px-4 border-t">
+                                <Pagination
+                                    page={page}
+                                    pageSize={PAGE_SIZE}
+                                    hasNextPage={hasNextPage}
+                                    onPageChange={setPage}
+                                />
+                            </div>
                         </div>
                     )}
                 </CardContent>
@@ -454,7 +521,7 @@ export default function PromotionsPage() {
                     <div className="flex items-center justify-between">
                         <h2 className="text-lg font-semibold flex items-center gap-2"><BarChart3 className="h-5 w-5 text-blue-500" /> Analytics</h2>
                         <Select value={chartFilter} onValueChange={setChartFilter}>
-                            <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                            <SelectTrigger className="w-44" aria-label="Filter chart by promotion type"><SelectValue /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="all">All Promos</SelectItem>
                                 <SelectItem value="public">Public Codes Only</SelectItem>
@@ -513,21 +580,21 @@ export default function PromotionsPage() {
                         ))}
                         <Separator orientation="vertical" className="h-6 mx-1" />
                         <div className="flex items-center gap-2">
-                            <Label className="text-xs text-muted-foreground">From</Label>
-                            <Input type="date" value={usageDateFrom} onChange={(e) => setUsageDateFrom(e.target.value)} className="w-36 h-8 text-xs" />
+                            <Label className="text-xs text-muted-foreground" htmlFor="usage-date-from">From</Label>
+                            <Input id="usage-date-from" type="date" value={usageDateFrom} onChange={(e) => setUsageDateFrom(e.target.value)} className="w-36 h-8 text-xs" />
                         </div>
                         <div className="flex items-center gap-2">
-                            <Label className="text-xs text-muted-foreground">To</Label>
-                            <Input type="date" value={usageDateTo} onChange={(e) => setUsageDateTo(e.target.value)} className="w-36 h-8 text-xs" />
+                            <Label className="text-xs text-muted-foreground" htmlFor="usage-date-to">To</Label>
+                            <Input id="usage-date-to" type="date" value={usageDateTo} onChange={(e) => setUsageDateTo(e.target.value)} className="w-36 h-8 text-xs" />
                         </div>
                         {(usageDateFrom || usageDateTo) && <Button variant="ghost" size="sm" onClick={() => { setUsageDateFrom(""); setUsageDateTo(""); }}>Clear</Button>}
                     </div>
 
                     {/* Usage filters */}
                     <div className="flex flex-wrap items-center gap-3">
-                        <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by code or user ID..." value={usageSearch} onChange={(e) => setUsageSearch(e.target.value)} className="pl-9" /></div>
+                        <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by code or user ID..." aria-label="Search usage history" value={usageSearch} onChange={(e) => setUsageSearch(e.target.value)} className="pl-9" /></div>
                         <Select value={usageTypeFilter} onValueChange={setUsageTypeFilter}>
-                            <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                            <SelectTrigger className="w-44" aria-label="Filter usage by promotion type"><SelectValue /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="all">All Promos</SelectItem>
                                 <SelectItem value="public">Public Codes Only</SelectItem>
@@ -547,7 +614,7 @@ export default function PromotionsPage() {
                                     <TableHead>Date</TableHead><TableHead>User ID</TableHead><TableHead>Code</TableHead><TableHead>Type</TableHead><TableHead>Discount Applied</TableHead>
                                 </TableRow></TableHeader>
                                 <TableBody>
-                                    {paginatedUsage.map((u) => {
+                                    {filteredUsage.map((u) => {
                                         const pType = promoIdTypeMap[u.promo_id] || "discount";
                                         return (
                                             <TableRow key={u.id}>
@@ -561,16 +628,14 @@ export default function PromotionsPage() {
                                     })}
                                 </TableBody>
                             </Table>
-                            {filteredUsage.length > PER_PAGE && (
-                                <div className="flex items-center justify-between px-4 py-3 border-t">
-                                    <p className="text-sm text-muted-foreground">Showing {(usagePage - 1) * PER_PAGE + 1}–{Math.min(usagePage * PER_PAGE, filteredUsage.length)} of {filteredUsage.length}</p>
-                                    <div className="flex items-center gap-2">
-                                        <Button variant="outline" size="sm" onClick={() => setUsagePage((p) => Math.max(1, p - 1))} disabled={usagePage === 1}><ChevronLeft className="h-4 w-4" /></Button>
-                                        <span className="text-sm text-muted-foreground">Page {usagePage} of {totalUsagePages}</span>
-                                        <Button variant="outline" size="sm" onClick={() => setUsagePage((p) => Math.min(totalUsagePages, p + 1))} disabled={usagePage === totalUsagePages}><ChevronRight className="h-4 w-4" /></Button>
-                                    </div>
-                                </div>
-                            )}
+                            <div className="px-4 border-t">
+                                <Pagination
+                                    page={usagePage}
+                                    pageSize={PAGE_SIZE}
+                                    hasNextPage={usageHasNext}
+                                    onPageChange={setUsagePage}
+                                />
+                            </div>
                         </div>
                     )}
                 </CardContent>

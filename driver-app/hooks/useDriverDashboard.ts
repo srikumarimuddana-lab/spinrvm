@@ -9,6 +9,7 @@ import { router } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { useDriverStore } from '../store/driverStore';
 import api from '@shared/api/client';
+import { useDriverConfig } from '@shared/hooks/queries';
 import { API_URL } from '@shared/config';
 import { onForegroundMessage } from '@shared/services/firebase';
 import { Dimensions } from 'react-native';
@@ -43,6 +44,7 @@ interface UseDriverDashboardReturn {
   toggleOnline: () => Promise<void>;
   openNavigation: (lat: number, lng: number, label: string) => void;
   uploadLocationBatch: () => Promise<void>;
+  refreshLocation: (useCache: boolean) => Promise<Location.LocationObject | null>;
 
   // Refs for external use
   mapRef: React.RefObject<any>;
@@ -183,31 +185,27 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     return () => sub.remove();
   }, [refreshProfile]);
 
-  // ─── Fetch driver operational config from backend ────────────────
-  // `GET /drivers/config` returns server-tuned values for the
-  // ride-offer countdown and the pickup-geofence radius. Fetched once
-  // per authenticated session — if it fails the store keeps its
-  // module-level fallbacks (15s countdown, 100m pickup radius) so the
-  // driver flow never breaks on a transient backend hiccup.
+  // ─── Driver operational config — TanStack Query owned ────────────
+  // `useDriverConfig` is a long-staleTime hook: server-tuned values for
+  // the ride-offer countdown and pickup-geofence radius. Persisted cache
+  // means a cold start applies the last-known config without a network
+  // round-trip. When a fresh value lands we mirror it into the driver
+  // store so existing consumers keep reading from the same place.
+  // On error the store retains its module-level fallbacks (15s countdown,
+  // 100m pickup radius) so the flow never breaks on a transient hiccup.
+  const driverConfigQuery = useDriverConfig();
   useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await api.get('/drivers/config');
-        if (cancelled) return;
-        applyDriverConfig(res.data || {});
-      } catch (e) {
-        console.warn('[driver-config] fetch failed, using fallbacks:', e);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [user, applyDriverConfig]);
+    if (driverConfigQuery.data) applyDriverConfig(driverConfigQuery.data);
+  }, [driverConfigQuery.data, applyDriverConfig]);
 
   // ─── Location Tracking ───────────────────────────────────────────
-  useEffect(() => {
-    (async () => {
-      // 0. Load cached location from previous session
+  // Refresh on mount AND whenever the app returns to the foreground so
+  // the map doesn't keep showing a stale fix from the previous session
+  // (e.g. driver left home yesterday, opened app at work — without the
+  // AppState refresh the map would still point at home until
+  // watchPositionAsync starts after Go Online).
+  const refreshLocation = useCallback(async (useCache: boolean) => {
+    if (useCache) {
       try {
         const AsyncStorage = require('@react-native-async-storage/async-storage').default;
         const saved = await AsyncStorage.getItem('spinr_driver_last_location');
@@ -216,30 +214,40 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           setLocation({ coords: { latitude: lat, longitude: lng, heading: 0, speed: 0, accuracy: 100, altitude: 0 }, timestamp: Date.now() } as any);
         }
       } catch {}
+    }
 
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== 'granted') return null;
 
-      // 1. Fast: OS cached location
+    if (useCache) {
       try {
         const lastKnown = await Location.getLastKnownPositionAsync();
         if (lastKnown) { setLocation(lastKnown); locationRef.current = lastKnown; }
       } catch {}
+    }
 
-      // 2. Accurate position (non-blocking)
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
-        .then(loc => {
-          setLocation(loc);
-          locationRef.current = loc;
-          // Save for next cold start
-          try {
-            const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-            AsyncStorage.setItem('spinr_driver_last_location', JSON.stringify({ lat: loc.coords.latitude, lng: loc.coords.longitude }));
-          } catch {}
-        })
-        .catch(() => {});
-    })();
+    try {
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      setLocation(loc);
+      locationRef.current = loc;
+      try {
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        AsyncStorage.setItem('spinr_driver_last_location', JSON.stringify({ lat: loc.coords.latitude, lng: loc.coords.longitude }));
+      } catch {}
+      return loc;
+    } catch {
+      return null;
+    }
   }, []);
+
+  useEffect(() => {
+    refreshLocation(true);
+    const sub = AppState.addEventListener('change', (next) => {
+      // Skip cache on resume — we want a fresh fix, not yesterday's.
+      if (next === 'active') refreshLocation(false);
+    });
+    return () => sub.remove();
+  }, [refreshLocation]);
 
   // ─── Batch Location Upload ───────────────────────────────────────
   // G16: Persist buffer to AsyncStorage so crash doesn't lose GPS
@@ -484,6 +492,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // edge proxy rejects plain ws:// with "Invalid Sec-WebSocket-Accept response".
     const useSecure = API_URL.startsWith('https');
     const wsUrl = `${API_URL.replace(/^https?/, useSecure ? 'wss' : 'ws')}/ws/driver/${currentUser.id}`;
+    // Flip the banner to 'reconnecting' the moment we start connecting.
+    // The initial state is 'disconnected', which renders as the red
+    // "Connection Lost" banner — if we leave it there during the TLS +
+    // auth-handshake window (easily 1–2 s on Railway cold starts), the
+    // driver sees an alarming banner while the socket is actually coming
+    // up fine. 'reconnecting' renders as the amber "Reconnecting…" state
+    // which correctly signals work-in-progress.
+    setConnectionState('reconnecting');
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -491,6 +507,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // `auth` message and will close the socket if it fails. We flip to
     // 'connected' on the first non-error server message, which proves auth
     // passed. Until then, stay in 'reconnecting' (or initial 'disconnected').
+    // Track per-connection auth state. Set to true only after server confirms
+    // auth_success so we never send location before the session is verified.
+    let wsAuthenticated = false;
+
     ws.onopen = () => {
       const currentToken = useAuthStore.getState().token;
       ws.send(JSON.stringify({
@@ -498,21 +518,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         token: currentToken,
         client_type: 'driver',
       }));
-      // Re-send last known location so backend has fresh position after reconnect
-      const loc = locationRef.current;
-      if (loc) {
-        ws.send(JSON.stringify({
-          type: 'driver_location',
-          lat: loc.coords.latitude,
-          lng: loc.coords.longitude,
-          speed: loc.coords.speed ?? null,
-          heading: loc.coords.heading ?? null,
-          accuracy: loc.coords.accuracy ?? null,
-          altitude: loc.coords.altitude ?? null,
-          ride_id: null,
-          tracking_phase: 'online_idle',
-        }));
-      }
+      // Location resend is deferred to after auth_success is confirmed in
+      // onmessage. Sending it here (before the server has processed auth)
+      // could cause the server to close the socket if the message is
+      // processed in the brief window before the main receive loop starts.
     };
 
     ws.onmessage = (event) => {
@@ -522,16 +531,35 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           setWsError(data.message || 'Connection error');
           return;
         }
-        // First valid (non-error) server message = auth accepted; clear any previous error.
-        if (wsRef.current === ws) {
+        // auth_success is the definitive signal that the backend accepted
+        // the connection. Only flip to 'connected' and reset reconnect
+        // counter on this specific message — not on every ping/pong/etc.
+        if (data.type === 'auth_success' && wsRef.current === ws) {
           const wasReconnect = reconnectAttemptRef.current > 0;
           reconnectAttemptRef.current = 0;
           setConnectionState('connected');
           setWsError(null);
+          wsAuthenticated = true;
           // Re-sync active ride state — server buffers no WS events, so any
           // transitions that fired while disconnected are recovered via HTTP.
           if (wasReconnect) {
             fetchActiveRide();
+          }
+          // Now that auth is confirmed, send the cached location so the
+          // backend has a fresh position immediately after reconnect.
+          const loc = locationRef.current;
+          if (loc && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: 'driver_location',
+              lat: loc.coords.latitude,
+              lng: loc.coords.longitude,
+              speed: loc.coords.speed ?? null,
+              heading: loc.coords.heading ?? null,
+              accuracy: loc.coords.accuracy ?? null,
+              altitude: loc.coords.altitude ?? null,
+              ride_id: null,
+              tracking_phase: 'online_idle',
+            }));
           }
         }
         handleWSMessageRef.current(data);
@@ -589,7 +617,13 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOnline, user?.id]);
 
-  // Re-connect when app returns to foreground (mobile networks drop on background)
+  // Uber/Lyft-style presence: proactively close the WebSocket when the
+  // app backgrounds so the backend clears Redis presence immediately
+  // (via the disconnect handler), instead of waiting for the 90 s TTL
+  // to expire. Reconnect on return to foreground. Mobile OSes suspend
+  // background sockets silently — without this the driver shows as
+  // online to admins and can even receive ride offers after the app
+  // was swiped away.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active' && isOnlineRef.current && userRef.current) {
@@ -602,6 +636,18 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           reconnectAttemptRef.current = 0;
           connectWebSocket();
         }
+      } else if (nextState === 'background' && wsRef.current) {
+        // iOS fires 'inactive' for transient foreground interruptions —
+        // permission dialogs (e.g. background-location prompt on Go
+        // Online), incoming calls, Control Center, the app switcher
+        // preview. Closing the WS on those events caused the backend
+        // disconnect handler to flip the driver offline milliseconds
+        // after they tapped Go Online (the permission prompt itself
+        // triggered a close). Only treat a true 'background' transition
+        // as "driver has left the app". 1001 = "going away".
+        try {
+          wsRef.current.close(1001, 'app_backgrounded');
+        } catch {}
       }
     });
     return () => sub.remove();
@@ -648,9 +694,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     setIsOnline(next);
     try {
       await updateDriverStatus(next);
-      if (next) {
-        await Location.requestBackgroundPermissionsAsync();
-      }
     } catch (err: any) {
       setIsOnline(!next);
 
@@ -672,6 +715,28 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           'danger'
         );
       }
+      return;
+    }
+
+    // Ask for background location AFTER the status update resolved.
+    // Keeping this in the same try block would roll the UI back to
+    // offline on any permission failure even though the backend
+    // already has is_online=true — the mismatch drivers see as
+    // "tapped Go Online, app shows offline a second later".
+    // Android is strict about background-location ("Allow all the
+    // time" vs "While using") and reject flows can throw from this
+    // call; a rejection should NOT undo a successful Go Online, it
+    // should just warn that background tracking is unavailable.
+    if (next) {
+      try {
+        await Location.requestBackgroundPermissionsAsync();
+      } catch {
+        showDashAlert(
+          "Background location needed",
+          "You're online, but background location is required to keep getting ride offers while the app is minimized. Enable 'Allow all the time' in Settings.",
+          'warning'
+        );
+      }
     }
   };
 
@@ -684,15 +749,30 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     if (url) Linking.openURL(url);
   };
 
-  // ─── Crash recovery: hydrate from AsyncStorage then fetch from API ──
-  // hydrateDriverRideState() restores the last persisted ride state
-  // instantly (no network required) so the driver sees their active ride
-  // immediately on restart. fetchActiveRide() then confirms/updates the
-  // state with the live server response.
+  // ─── Crash recovery + background-push hydration ──────────────────
+  // 1. Check AsyncStorage for a ride offer received while the app was
+  //    backgrounded or killed. The background FCM handler in _layout.tsx
+  //    writes the full offer to PENDING_OFFER_KEY; we consume it here so
+  //    the offer panel appears instantly without a network round-trip.
+  // 2. hydrateDriverRideState() restores any persisted active-ride state.
+  // 3. fetchActiveRide() confirms live server state and may override both.
   useEffect(() => {
-    if (user) {
+    if (!user) return;
+    (async () => {
+      try {
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        const raw = await AsyncStorage.getItem('spinr_pending_ride_offer');
+        if (raw) {
+          await AsyncStorage.removeItem('spinr_pending_ride_offer');
+          const offer = JSON.parse(raw);
+          Vibration.vibrate([0, 500, 200, 500]);
+          setIncomingRide(offer);
+        }
+      } catch (e) {
+        console.warn('[Push] Failed to hydrate pending ride offer on mount:', e);
+      }
       hydrateDriverRideState().then(() => fetchActiveRide());
-    }
+    })();
   }, [user]);
 
   // ─── Fetch earnings when online ─────────────────────────────────
@@ -786,6 +866,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     toggleOnline,
     openNavigation,
     uploadLocationBatch,
+    refreshLocation,
 
     // Refs
     mapRef,

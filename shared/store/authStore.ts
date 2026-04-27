@@ -6,6 +6,31 @@ import { PhoneAuthProvider, signInWithCredential, signOut, User as FirebaseUser 
 import api, { setInMemoryToken, setRefreshCallback } from '../api/client';
 import { appCache, CACHE_KEYS, CACHE_CONFIG } from '../cache';
 
+// Wipe every auth artifact from local storage. Called whenever initialize
+// lands in a "no valid session" state so stale refresh tokens from a past
+// session can never wedge the next cold start. Previously the Firebase
+// timeout + no-Firebase-user paths left `refresh_token` in SecureStore,
+// which is why users had to uninstall to recover from a failed refresh
+// that returned anything other than 401 (5xx, timeout, "Network request
+// failed"). Safe to call even when nothing is stored — deleteItem is a
+// no-op on missing keys.
+async function clearAuthStorage(): Promise<void> {
+  try {
+    if (Platform.OS === 'web') {
+      sessionStorage.removeItem('auth_token');
+      sessionStorage.removeItem('refresh_token');
+      sessionStorage.removeItem('token_expires_at');
+      return;
+    }
+    await SecureStore.deleteItemAsync('auth_token');
+    await SecureStore.deleteItemAsync('refresh_token');
+    await SecureStore.deleteItemAsync('token_expires_at');
+  } catch (e) {
+    // Best-effort — never let a storage error block the login screen.
+    if (__DEV__) console.log('[Auth] clearAuthStorage failed:', e);
+  }
+}
+
 // Platform-safe secure storage
 // Web uses sessionStorage (clears on tab close) instead of localStorage
 // to reduce token exposure in browser storage.
@@ -169,9 +194,18 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
       const { token, refresh_token: newRefresh, expires_in } = res.data as any;
       await get().setTokens(token, newRefresh, expires_in);
       return true;
-    } catch (e) {
-      console.log('[Auth] Token refresh failed — logging out');
-      await get().logout();
+    } catch (e: any) {
+      // Only wipe the session when the server explicitly rejects the refresh
+      // token (401). Network errors, timeouts, and 5xx are transient — keeping
+      // the refresh token lets the next app launch / request try again instead
+      // of forcing the user back to the OTP screen on a flaky connection.
+      const status = e?.response?.status;
+      if (status === 401) {
+        console.log('[Auth] Refresh token rejected (401) — logging out');
+        await get().logout();
+      } else {
+        console.log('[Auth] Token refresh failed transiently, keeping session:', status ?? e?.message);
+      }
       return false;
     }
   },
@@ -332,7 +366,10 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
         const state = get();
         if (!state.isInitialized) {
           if (__DEV__) console.log('[Auth] Firebase init timed out - forcing completion with no session');
-          set({ user: null, driver: null, token: null, isInitialized: true, isLoading: false });
+          // Clear leftover tokens so the next launch isn't wedged on the
+          // same stale state — this is the no-uninstall recovery path.
+          clearAuthStorage();
+          set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false });
         }
       }, 4000);
 
@@ -379,14 +416,20 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
         } else {
           // No Firebase user AND no stored token → truly logged out
           if (__DEV__) console.log('[Auth] No Firebase user, no stored token → logged out');
+          // Belt-and-suspenders: even if earlier paths already cleared
+          // these, make absolutely sure nothing lingers. Fixes the
+          // "uninstall required" class of bugs where a transient (non-401)
+          // refresh failure left refresh_token in SecureStore.
+          await clearAuthStorage();
           await appCache.clearUserCache();
-          set({ user: null, driver: null, token: null, isInitialized: true, isLoading: false });
+          set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false });
         }
       });
     } else {
       // Firebase not available at all
       if (__DEV__) console.log('[Auth] No stored token, no Firebase → logged out');
-      set({ user: null, driver: null, token: null, isInitialized: true, isLoading: false });
+      await clearAuthStorage();
+      set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false });
     }
   },
 
@@ -527,6 +570,21 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
   },
 
   logout: async () => {
+    // Uber/Lyft-style: a driver explicitly signing out must flip offline
+    // before the socket drops and tokens get wiped. Without this, the
+    // admin live-monitoring map (and any rider mid-match) would keep
+    // seeing the driver as online until their presence TTL expired. We
+    // swallow errors — a flaky network shouldn't block the user from
+    // signing out — and fall through to the normal cleanup.
+    const { driver, token } = get();
+    if (driver?.id && token) {
+      try {
+        await api.put(`/drivers/${driver.id}/status`, { is_online: false });
+      } catch (error) {
+        if (__DEV__) console.log('[Auth] go-offline on logout failed (non-fatal):', error);
+      }
+    }
+
     try {
       if (typeof auth.onAuthStateChanged === 'function') {
         await signOut(auth);

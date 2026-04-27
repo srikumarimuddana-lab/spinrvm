@@ -1,120 +1,126 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  Image, ActivityIndicator, Linking, Platform,
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  ScrollView,
+  ActivityIndicator,
+  StatusBar,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { Image } from 'expo-image';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuthStore } from '@shared/store/authStore';
+import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useWorkProfileStore } from '../../store/workProfileStore';
 
+const BLURHASH_PLACEHOLDER = 'LGF5]+Yk^6#M@-5c,1J5@[or[Q6.';
+
 export default function AccountScreen() {
   const router = useRouter();
-  const { user, logout, logoutAll, updateProfileImage } = useAuthStore();
+  const insets = useSafeAreaInsets();
+  const { user, logout, updateProfileImage } = useAuthStore();
   const { profiles, workModeEnabled } = useWorkProfileStore();
-  const [uploading, setUploading] = useState(false);
-  const [alertState, setAlertState] = useState<{
-    visible: boolean;
-    title: string;
-    message: string;
-    variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
-  }>({ visible: false, title: '', message: '', variant: 'info' });
-
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  const handleLogout = () => {
-    setAlertState({
-      visible: true,
-      title: 'Logout',
-      message: 'Are you sure you want to logout?',
-      variant: 'warning',
-      buttons: [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Logout', style: 'destructive', onPress: async () => { await logout(); router.replace('/login'); } },
-      ],
-    });
-  };
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [companyInfo, setCompanyInfo] = useState<{
+    name?: string; address?: string; phone?: string; email?: string; website?: string;
+  }>({});
 
-  // Sign out of every device this account is logged into — used when a
-  // phone is lost/stolen or the user suspects credential compromise.
-  // Backend bumps token_version (kills all in-flight access tokens) and
-  // revokes every refresh token, so re-auth is required on every device.
-  const handleLogoutAll = () => {
-    setAlertState({
-      visible: true,
-      title: 'Sign out of all devices?',
-      message: 'You will be signed out everywhere this account is logged in. Use this if your phone was lost or you think someone else has access.',
-      variant: 'danger',
-      buttons: [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Sign out everywhere',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await logoutAll();
-            } finally {
-              router.replace('/login');
-            }
-          },
-        },
-      ],
-    });
-  };
+  const [showLogoutAlert, setShowLogoutAlert] = useState(false);
+  const [showPhotoPickerAlert, setShowPhotoPickerAlert] = useState(false);
+  const [feedbackAlert, setFeedbackAlert] = useState<{
+    visible: boolean; title: string; message?: string;
+    variant: 'info' | 'success' | 'danger' | 'warning';
+  }>({ visible: false, title: '', variant: 'info' });
 
-  const takePhoto = async () => {
+  const showFeedback = (
+    title: string,
+    message: string,
+    variant: 'success' | 'danger' | 'warning' | 'info' = 'info',
+  ) => setFeedbackAlert({ visible: true, title, message, variant });
+
+  useEffect(() => {
+    api.get('/company-info')
+      .then(res => setCompanyInfo(res?.data || {}))
+      .catch(() => {});
+  }, []);
+
+  // Refresh user profile each time the tab comes into focus — mirrors the
+  // driver-app profile screen so both sides behave identically.
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      (async () => {
+        setIsRefreshing(true);
+        try {
+          const userRes = await api.get('/auth/me');
+          if (!cancelled && userRes.data) useAuthStore.setState({ user: userRes.data });
+        } catch {}
+        finally { if (!cancelled) setIsRefreshing(false); }
+      })();
+      return () => { cancelled = true; };
+    }, [])
+  );
+
+  const launchCamera = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      setAlertState({ visible: true, title: 'Permission needed', message: 'Allow camera access.', variant: 'warning' });
-      return;
-    }
-    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, aspect: [1, 1], quality: 0.8 });
-    if (!result.canceled && result.assets[0]) {
-      setUploading(true);
-      try { await updateProfileImage(result.assets[0].uri); }
-      catch { setAlertState({ visible: true, title: 'Error', message: 'Upload failed.', variant: 'danger' }); }
-      finally { setUploading(false); }
-    }
-  };
-
-  const pickFromLibrary = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      setAlertState({ visible: true, title: 'Permission needed', message: 'Allow photo library access.', variant: 'warning' });
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.8 });
-    if (!result.canceled && result.assets[0]) {
-      setUploading(true);
-      try { await updateProfileImage(result.assets[0].uri); }
-      catch { setAlertState({ visible: true, title: 'Error', message: 'Upload failed.', variant: 'danger' }); }
-      finally { setUploading(false); }
-    }
-  };
-
-  const handlePickImage = async () => {
-    setAlertState({
-      visible: true,
-      title: 'Profile Picture',
-      message: 'Choose an option',
-      variant: 'info',
-      buttons: [
-        { text: 'Take Photo', onPress: takePhoto },
-        { text: 'Choose from Library', onPress: pickFromLibrary },
-        { text: 'Cancel', style: 'cancel' },
-      ],
+    if (status !== 'granted') return showFeedback('Permission Denied', 'Camera access is needed.', 'warning');
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.7,
     });
+    if (!result.canceled && result.assets[0]) uploadPhoto(result.assets[0].uri);
+  };
+
+  const launchGallery = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') return showFeedback('Permission Denied', 'Library access is needed.', 'warning');
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.7,
+    });
+    if (!result.canceled && result.assets[0]) uploadPhoto(result.assets[0].uri);
+  };
+
+  const uploadPhoto = async (uri: string) => {
+    setIsUploadingPhoto(true);
+    try {
+      await updateProfileImage(uri);
+      showFeedback('Photo Updated', 'Your profile photo has been submitted for review.', 'success');
+    } catch (err: any) {
+      showFeedback('Upload Failed', err.message || 'Failed to upload', 'danger');
+    } finally {
+      setIsUploadingPhoto(false);
+    }
+  };
+
+  const ratingElements = (rating: number) => {
+    const stars = [];
+    for (let i = 1; i <= 5; i++) {
+      stars.push(
+        <Ionicons
+          key={i}
+          name={i <= Math.round(rating) ? 'star' : 'star-outline'}
+          size={14}
+          color={i <= Math.round(rating) ? '#FFD700' : 'rgba(255,255,255,0.3)'}
+        />,
+      );
+    }
+    return stars;
   };
 
   const formatPhone = (phone: string) => {
-    if (!phone) return '';
+    if (!phone) return 'N/A';
     const cleaned = phone.replace(/\D/g, '');
     if (cleaned.length === 11 && cleaned.startsWith('1')) {
       return `+1 (${cleaned.slice(1, 4)}) ${cleaned.slice(4, 7)}-${cleaned.slice(7)}`;
@@ -123,292 +129,631 @@ export default function AccountScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 40 }}>
+    <View style={styles.container}>
+      <StatusBar barStyle="light-content" />
+      <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 90 }} showsVerticalScrollIndicator={false}>
 
-        {/* Profile Header */}
-        <View style={styles.profileSection}>
-          <View style={styles.avatarWrap}>
-            <View style={styles.avatar}>
-              {user?.profile_image ? (
-                <Image source={{ uri: user.profile_image }} style={styles.avatarImg} />
-              ) : (
-                <Ionicons name="person" size={40} color={colors.textDim} />
-              )}
-              {uploading && (
-                <View style={styles.uploadOverlay}>
-                  <ActivityIndicator size="small" color={colors.surface} />
-                </View>
-              )}
+        {/* Premium Header — mirrors driver-app/app/driver/profile.tsx hero */}
+        <LinearGradient
+          colors={[colors.primary, colors.primaryDark]}
+          style={[styles.headerHero, { paddingTop: insets.top + 20 }]}
+        >
+          {isRefreshing && (
+            <View style={{ position: 'absolute', top: insets.top + 10, right: 20 }}>
+              <ActivityIndicator size="small" color="#fff" />
             </View>
-            <TouchableOpacity style={styles.cameraBtn} onPress={handlePickImage} disabled={uploading}>
-              <Ionicons name="camera" size={14} color={colors.surface} />
-            </TouchableOpacity>
-          </View>
+          )}
 
-          <Text style={styles.userName}>{user?.first_name} {user?.last_name}</Text>
-
-          <View style={styles.metaRow}>
-            <View style={styles.metaChip}>
-              <Ionicons name="star" size={12} color="#FFB800" />
-              <Text style={styles.metaText}>{user?.rating ? user.rating.toFixed(1) : '5.0'}</Text>
-            </View>
-            <View style={styles.metaChip}>
-              <Ionicons name="call" size={12} color={colors.primary} />
-              <Text style={styles.metaText}>{formatPhone(user?.phone || '')}</Text>
-            </View>
-            {user?.email && (
-              <View style={styles.metaChip}>
-                <Ionicons name="mail" size={12} color={colors.primary} />
-                <Text style={styles.metaText} numberOfLines={1}>{user.email}</Text>
+          <TouchableOpacity
+            style={styles.avatarContainer}
+            onPress={() => setShowPhotoPickerAlert(true)}
+            activeOpacity={0.8}
+          >
+            {isUploadingPhoto ? (
+              <View style={[styles.avatarPlaceholder, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
+                <ActivityIndicator size="large" color="#fff" />
+              </View>
+            ) : user?.profile_image ? (
+              <Image
+                source={{ uri: user.profile_image }}
+                style={[
+                  styles.avatar,
+                  user.profile_image_status === 'pending_review' && { opacity: 0.7 },
+                ]}
+                placeholder={BLURHASH_PLACEHOLDER}
+                contentFit="cover"
+                transition={200}
+              />
+            ) : (
+              <View style={[styles.avatarPlaceholder, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
+                <Ionicons name="person" size={40} color="#fff" />
               </View>
             )}
-          </View>
-        </View>
-
-        {/* Quick Actions */}
-        <View style={styles.quickRow}>
-          <TouchableOpacity style={styles.quickCard} onPress={() => router.push('/manage-cards' as any)}>
-            <View style={[styles.quickIcon, { backgroundColor: '#EDE9FE' }]}>
-              <Ionicons name="card" size={22} color="#7C3AED" />
+            <View style={styles.cameraButton}>
+              <Ionicons name="camera" size={14} color={colors.primary} />
             </View>
-            <Text style={styles.quickLabel}>Payment</Text>
+            {workModeEnabled && (
+              <View style={styles.verifiedBadge}>
+                <Ionicons name="briefcase" size={16} color="#1D4ED8" />
+              </View>
+            )}
           </TouchableOpacity>
-          <TouchableOpacity style={styles.quickCard} onPress={() => router.push('/emergency-contacts' as any)}>
-            <View style={[styles.quickIcon, { backgroundColor: '#FEE2E2' }]}>
-              <Ionicons name="shield-checkmark" size={22} color="#DC2626" />
-            </View>
-            <Text style={styles.quickLabel}>Safety</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.quickCard} onPress={() => router.push('/support' as any)}>
-            <View style={[styles.quickIcon, { backgroundColor: '#DBEAFE' }]}>
-              <Ionicons name="headset" size={22} color="#2563EB" />
-            </View>
-            <Text style={styles.quickLabel}>Support</Text>
-          </TouchableOpacity>
-        </View>
 
-        {/* Account Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account</Text>
-
-          {profiles.length > 0 && (
-            <MenuItem
-              icon="briefcase-outline" iconColor="#1D4ED8" iconBg="#DBEAFE"
-              title="Work Profile"
-              subtitle={workModeEnabled ? 'Work mode active' : `${profiles.length} company${profiles.length > 1 ? ' accounts' : ''}`}
-              onPress={() => router.push('/work-profile' as any)}
-              badge={workModeEnabled ? 'Work' : undefined}
-            />
+          {user?.profile_image_status === 'pending_review' && (
+            <View style={styles.photoStatusBanner}>
+              <Ionicons name="time-outline" size={14} color="#fff" />
+              <Text style={styles.photoStatusText}>Photo pending review</Text>
+            </View>
           )}
-          <MenuItem
-            icon="person-outline" iconColor={colors.primary} iconBg="#FEF2F2"
-            title="Edit Profile" subtitle="Name, email, phone"
-            onPress={() => router.push('/profile-setup' as any)}
-          />
-          <MenuItem
-            icon="wallet-outline" iconColor="#8B5CF6" iconBg="#EDE9FE"
-            title="Wallet" subtitle="Balance, top-up, transactions"
-            onPress={() => router.push('/wallet' as any)}
-          />
-          <MenuItem
-            icon="card-outline" iconColor="#7C3AED" iconBg="#EDE9FE"
-            title="Payment Methods" subtitle="Add or manage your cards"
-            onPress={() => router.push('/manage-cards' as any)}
-          />
-          <MenuItem
-            icon="calendar-outline" iconColor="#3B82F6" iconBg="#DBEAFE"
-            title="Scheduled Rides" subtitle="Upcoming rides booked in advance"
-            onPress={() => router.push('/scheduled-rides' as any)}
-          />
-          <MenuItem
-            icon="location-outline" iconColor="#F59E0B" iconBg="#FEF3C7"
-            title="Saved Places" subtitle="Home, work, favourites"
-            onPress={() => router.push('/saved-places' as any)}
-          />
-          <MenuItem
-            icon="pricetag-outline" iconColor="#10B981" iconBg="#ECFDF5"
-            title="Promotions" subtitle="Promo codes & rewards"
-            onPress={() => router.push('/promotions' as any)}
-          />
-          <MenuItem
-            icon="notifications-outline" iconColor="#6366F1" iconBg="#EEF2FF"
-            title="Notifications" subtitle="Alerts, ride updates, offers"
-            onPress={() => router.push('/notifications' as any)}
-          />
-          <MenuItem
-            icon="trophy-outline" iconColor="#F59E0B" iconBg="#FEF3C7"
-            title="Rewards" subtitle="Points, tier status, history"
-            onPress={() => router.push('/loyalty' as any)}
-          />
+          {user?.profile_image_status === 'rejected' && (
+            <View style={[styles.photoStatusBanner, { backgroundColor: 'rgba(239, 68, 68, 0.9)' }]}>
+              <Ionicons name="close-circle" size={14} color="#fff" />
+              <Text style={styles.photoStatusText}>Photo rejected — update needed</Text>
+            </View>
+          )}
+
+          <Text style={styles.name}>
+            {user?.first_name ? `${user.first_name} ${user.last_name || ''}`.trim() : 'Rider'}
+          </Text>
+          <Text style={styles.subtitle}>
+            {workModeEnabled ? 'Work mode active' : 'Spinr Rider'}
+          </Text>
+
+          <View style={styles.ratingHeroContainer}>
+            <View style={styles.ratingBox}>
+              <Text style={styles.ratingNumber}>{(user?.rating || 5.0).toFixed(1)}</Text>
+              <View style={styles.starsRow}>{ratingElements(user?.rating || 5)}</View>
+            </View>
+            <View style={styles.ratingDivider} />
+            <View style={styles.ratingBox}>
+              <Text style={styles.ratingNumber}>{user?.total_rides || 0}</Text>
+              <Text style={styles.ratingLabel}>Trips</Text>
+            </View>
+          </View>
+        </LinearGradient>
+
+        <View style={styles.contentBody}>
+
+          {/* Personal Info */}
+          <View style={styles.section}>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionTitle}>Personal Info</Text>
+              <TouchableOpacity onPress={() => router.push('/profile-setup' as any)} style={styles.editBtn}>
+                <Text style={styles.editBtnText}>Edit</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.card}>
+              <View style={styles.cardRow}>
+                <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}>
+                  <Ionicons name="call" size={16} color={colors.primary} />
+                </View>
+                <View style={styles.cardInfo}>
+                  <Text style={styles.cardLabel}>Phone</Text>
+                  <Text style={styles.cardValue}>{formatPhone(user?.phone || '')}</Text>
+                </View>
+              </View>
+              <View style={styles.cardDivider} />
+              <View style={styles.cardRow}>
+                <View style={[styles.iconBox, { backgroundColor: 'rgba(56, 189, 248, 0.1)' }]}>
+                  <Ionicons name="mail" size={16} color="#38BDF8" />
+                </View>
+                <View style={styles.cardInfo}>
+                  <Text style={styles.cardLabel}>Email</Text>
+                  <Text style={styles.cardValue}>{user?.email || 'N/A'}</Text>
+                </View>
+              </View>
+              {user?.gender && (
+                <>
+                  <View style={styles.cardDivider} />
+                  <View style={styles.cardRow}>
+                    <View style={[styles.iconBox, { backgroundColor: 'rgba(245, 158, 11, 0.1)' }]}>
+                      <Ionicons name="person" size={16} color="#F59E0B" />
+                    </View>
+                    <View style={styles.cardInfo}>
+                      <Text style={styles.cardLabel}>Gender</Text>
+                      <Text style={styles.cardValue}>{user.gender}</Text>
+                    </View>
+                  </View>
+                </>
+              )}
+            </View>
+          </View>
+
+          {/* Wallet & Payment */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Wallet & Payment</Text>
+            <View style={styles.card}>
+              <MenuRow
+                styles={styles} colors={colors}
+                icon="wallet" iconColor="#8B5CF6" iconBg="rgba(139, 92, 246, 0.1)"
+                label="Wallet"
+                onPress={() => router.push('/wallet' as any)}
+              />
+              <View style={styles.cardDivider} />
+              <MenuRow
+                styles={styles} colors={colors}
+                icon="card" iconColor="#7C3AED" iconBg="rgba(124, 58, 237, 0.1)"
+                label="Payment Methods"
+                onPress={() => router.push('/manage-cards' as any)}
+              />
+              <View style={styles.cardDivider} />
+              <MenuRow
+                styles={styles} colors={colors}
+                icon="pricetag" iconColor="#10B981" iconBg="rgba(16, 185, 129, 0.1)"
+                label="Promotions"
+                onPress={() => router.push('/promotions' as any)}
+              />
+              <View style={styles.cardDivider} />
+              <MenuRow
+                styles={styles} colors={colors}
+                icon="trophy" iconColor="#F59E0B" iconBg="rgba(245, 158, 11, 0.1)"
+                label="Rewards"
+                onPress={() => router.push('/loyalty' as any)}
+              />
+            </View>
+          </View>
+
+          {/* Rides & Places */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Rides & Places</Text>
+            <View style={styles.card}>
+              <MenuRow
+                styles={styles} colors={colors}
+                icon="calendar" iconColor="#3B82F6" iconBg="rgba(59, 130, 246, 0.1)"
+                label="Scheduled Rides"
+                onPress={() => router.push('/scheduled-rides' as any)}
+              />
+              <View style={styles.cardDivider} />
+              <MenuRow
+                styles={styles} colors={colors}
+                icon="location" iconColor="#F59E0B" iconBg="rgba(245, 158, 11, 0.1)"
+                label="Saved Places"
+                onPress={() => router.push('/saved-places' as any)}
+              />
+            </View>
+          </View>
+
+          {/* Work Profile — only when at least one company is linked */}
+          {profiles.length > 0 && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Work</Text>
+              <View style={styles.card}>
+                <TouchableOpacity
+                  style={styles.actionRow}
+                  activeOpacity={0.7}
+                  onPress={() => router.push('/work-profile' as any)}
+                >
+                  <View style={[styles.iconBox, { backgroundColor: 'rgba(29, 78, 216, 0.1)' }]}>
+                    <Ionicons name="briefcase" size={18} color="#1D4ED8" />
+                  </View>
+                  <View style={styles.actionContent}>
+                    <Text style={styles.actionText}>Work Profile</Text>
+                    <Text style={styles.actionSubtitle}>
+                      {workModeEnabled
+                        ? 'Work mode active'
+                        : `${profiles.length} company${profiles.length > 1 ? ' accounts' : ''}`}
+                    </Text>
+                  </View>
+                  {workModeEnabled && (
+                    <View style={styles.badge}>
+                      <Text style={styles.badgeText}>Work</Text>
+                    </View>
+                  )}
+                  <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {/* Safety & Privacy */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Safety & Privacy</Text>
+            <View style={styles.card}>
+              <MenuRow
+                styles={styles} colors={colors}
+                icon="shield-checkmark" iconColor="#EF4444" iconBg="rgba(239, 68, 68, 0.05)"
+                label="Emergency Contacts"
+                onPress={() => router.push('/emergency-contacts' as any)}
+              />
+              <View style={styles.cardDivider} />
+              <MenuRow
+                styles={styles} colors={colors}
+                icon="alert-circle" iconColor="#F59E0B" iconBg="rgba(245, 158, 11, 0.1)"
+                label="Report a Safety Issue"
+                onPress={() => router.push('/report-safety' as any)}
+              />
+              <View style={styles.cardDivider} />
+              <MenuRow
+                styles={styles} colors={colors}
+                icon="lock-closed" iconColor={colors.textDim} iconBg={colors.surfaceLight}
+                label="Privacy & Settings"
+                onPress={() => router.push('/privacy-settings' as any)}
+              />
+              <View style={styles.cardDivider} />
+              <MenuRow
+                styles={styles} colors={colors}
+                icon="notifications" iconColor="#6366F1" iconBg="rgba(99, 102, 241, 0.1)"
+                label="Notifications"
+                onPress={() => router.push('/notifications' as any)}
+              />
+            </View>
+          </View>
+
+          {/* Settings — mirrors driver's final section, ends with Sign Out */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Settings</Text>
+            <View style={styles.card}>
+              <MenuRow
+                styles={styles} colors={colors}
+                icon="help-circle" iconColor="#2563EB" iconBg="rgba(37, 99, 235, 0.1)"
+                label="Help Center"
+                onPress={() => router.push('/support' as any)}
+              />
+              <View style={styles.cardDivider} />
+              <MenuRow
+                styles={styles} colors={colors}
+                icon="document-text" iconColor={colors.textDim} iconBg={colors.surfaceLight}
+                label="Legal"
+                onPress={() => router.push('/legal?type=tos' as any)}
+              />
+              <View style={styles.cardDivider} />
+              <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => setShowLogoutAlert(true)}>
+                <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.05)' }]}>
+                  <Ionicons name="log-out" size={18} color="#EF4444" />
+                </View>
+                <Text style={[styles.actionText, { color: '#EF4444' }]}>Sign Out</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Company info footer — shows only when admin populated it */}
+          {(companyInfo.address || companyInfo.phone || companyInfo.email || companyInfo.website) && (
+            <View style={styles.companySection}>
+              <Text style={styles.companyName}>{companyInfo.name || 'Spinr'}</Text>
+              {!!companyInfo.address && <Text style={styles.companyLine}>{companyInfo.address}</Text>}
+              {!!companyInfo.phone && <Text style={styles.companyLine}>{companyInfo.phone}</Text>}
+              {!!companyInfo.email && <Text style={styles.companyLine}>{companyInfo.email}</Text>}
+              {!!companyInfo.website && <Text style={styles.companyLine}>{companyInfo.website}</Text>}
+            </View>
+          )}
         </View>
-
-        {/* Safety & Privacy */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Safety & Privacy</Text>
-
-          <MenuItem
-            icon="shield-outline" iconColor="#DC2626" iconBg="#FEE2E2"
-            title="Emergency Contacts" subtitle="Trusted contacts for safety alerts"
-            onPress={() => router.push('/emergency-contacts' as any)}
-          />
-          <MenuItem
-            icon="alert-circle-outline" iconColor="#F59E0B" iconBg="#FEF3C7"
-            title="Report a Safety Issue" subtitle="Report an incident from a ride"
-            onPress={() => router.push('/report-safety' as any)}
-          />
-          <MenuItem
-            icon="lock-closed-outline" iconColor="#6B7280" iconBg="#F3F4F6"
-            title="Privacy & Settings" subtitle="Data, notifications, permissions"
-            onPress={() => router.push('/privacy-settings' as any)}
-          />
-          <MenuItem
-            icon="log-out-outline" iconColor="#DC2626" iconBg="#FEE2E2"
-            title="Sign out of all devices" subtitle="Use if your phone is lost or compromised"
-            onPress={handleLogoutAll}
-          />
-        </View>
-
-        {/* Legal & Help */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Legal & Help</Text>
-
-          <MenuItem
-            icon="help-circle-outline" iconColor="#2563EB" iconBg="#DBEAFE"
-            title="Help Center" subtitle="FAQ, contact us"
-            onPress={() => router.push('/support' as any)}
-          />
-          <MenuItem
-            icon="document-text-outline" iconColor="#6B7280" iconBg="#F3F4F6"
-            title="Legal" subtitle="Terms of service, privacy policy"
-            onPress={() => router.push('/legal?type=tos' as any)}
-          />
-        </View>
-
-        {/* Logout */}
-        <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
-          <Ionicons name="log-out-outline" size={20} color={colors.primary} />
-          <Text style={styles.logoutText}>Log Out</Text>
-        </TouchableOpacity>
-
-        {/* Version */}
-        <Text style={styles.version}>Spinr v1.0.2 · Saskatchewan, Canada</Text>
-
       </ScrollView>
+
+      {/* Alerts */}
       <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+        visible={showLogoutAlert}
+        title="Sign Out"
+        message="Are you sure you want to sign out?"
+        variant="danger"
+        icon="log-out-outline"
+        buttons={[
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Sign Out', style: 'destructive', onPress: async () => { await logout(); router.replace('/login' as any); } },
+        ]}
+        onClose={() => setShowLogoutAlert(false)}
       />
-    </SafeAreaView>
+      <CustomAlert
+        visible={showPhotoPickerAlert}
+        title="Update Photo"
+        message="Choose how to update your profile photo."
+        variant="info"
+        icon="camera-outline"
+        buttons={[
+          { text: 'Take Photo', style: 'default', onPress: launchCamera },
+          { text: 'Library', style: 'default', onPress: launchGallery },
+          { text: 'Cancel', style: 'cancel' },
+        ]}
+        onClose={() => setShowPhotoPickerAlert(false)}
+      />
+      <CustomAlert
+        visible={feedbackAlert.visible}
+        title={feedbackAlert.title}
+        message={feedbackAlert.message}
+        variant={feedbackAlert.variant}
+        buttons={[{ text: 'OK', style: 'default' }]}
+        onClose={() => setFeedbackAlert(prev => ({ ...prev, visible: false }))}
+      />
+    </View>
   );
 }
 
-// Reusable menu item component
-function MenuItem({ icon, iconColor, iconBg, title, subtitle, onPress, badge }: {
+function MenuRow({
+  styles, colors, icon, iconColor, iconBg, label, onPress,
+}: {
+  styles: any; colors: ThemeColors;
   icon: string; iconColor: string; iconBg: string;
-  title: string; subtitle: string; onPress: () => void; badge?: string;
+  label: string; onPress: () => void;
 }) {
-  const { colors } = useTheme();
-  const miStyles = useMemo(() => createMenuItemStyles(colors), [colors]);
-
   return (
-    <TouchableOpacity style={miStyles.row} onPress={onPress} activeOpacity={0.7}>
-      <View style={[miStyles.icon, { backgroundColor: iconBg }]}>
-        <Ionicons name={icon as any} size={20} color={iconColor} />
+    <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={onPress}>
+      <View style={[styles.iconBox, { backgroundColor: iconBg }]}>
+        <Ionicons name={icon as any} size={18} color={iconColor} />
       </View>
-      <View style={miStyles.content}>
-        <Text style={miStyles.title}>{title}</Text>
-        <Text style={miStyles.subtitle}>{subtitle}</Text>
-      </View>
-      {badge && (
-        <View style={miStyles.badge}>
-          <Text style={miStyles.badgeText}>{badge}</Text>
-        </View>
-      )}
-      <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+      <Text style={styles.actionText}>{label}</Text>
+      <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
     </TouchableOpacity>
   );
 }
 
-function createMenuItemStyles(colors: ThemeColors) {
-  return StyleSheet.create({
-    row: {
-      flexDirection: 'row', alignItems: 'center', paddingVertical: 14,
-      borderBottomWidth: 1, borderBottomColor: colors.border,
-    },
-    icon: {
-      width: 40, height: 40, borderRadius: 12,
-      justifyContent: 'center', alignItems: 'center', marginRight: 14,
-    },
-    content: { flex: 1 },
-    title: { fontSize: 15, fontWeight: '600', color: colors.text },
-    subtitle: { fontSize: 12, color: colors.textDim, marginTop: 1 },
-    badge: {
-      backgroundColor: colors.primary, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2, marginRight: 8,
-    },
-    badgeText: { fontSize: 10, fontWeight: '700', color: colors.surface },
-  });
-}
+function createStyles(colors: ThemeColors) { return StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: colors.surfaceLight,
+  },
 
-function createStyles(colors: ThemeColors) {
-  return StyleSheet.create({
-    container: { flex: 1, backgroundColor: colors.surface },
+  // ── Hero ──
+  headerHero: {
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
+    alignItems: 'center',
+    shadowColor: colors.primaryDark,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 10,
+    zIndex: 10,
+  },
+  avatarContainer: {
+    position: 'relative',
+    marginBottom: 16,
+    marginTop: 10,
+  },
+  avatar: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    borderWidth: 4,
+    borderColor: '#fff',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  avatarPlaceholder: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 4,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  cameraButton: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  verifiedBadge: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  photoStatusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(0,0,0,0.15)',
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginBottom: 12,
+  },
+  photoStatusText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#fff',
+  },
+  name: {
+    color: '#fff',
+    fontSize: 26,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  subtitle: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 14,
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  ratingHeroContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderRadius: 16,
+    marginTop: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+  ratingBox: {
+    alignItems: 'center',
+    paddingHorizontal: 12,
+  },
+  ratingDivider: {
+    width: 1,
+    height: 30,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    marginHorizontal: 12,
+  },
+  ratingNumber: {
+    color: '#fff',
+    fontSize: 22,
+    fontWeight: '900',
+  },
+  ratingLabel: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 2,
+    letterSpacing: 1,
+  },
+  starsRow: {
+    flexDirection: 'row',
+    marginTop: 4,
+    gap: 2,
+  },
 
-    // Profile
-    profileSection: { alignItems: 'center', paddingTop: 20, paddingBottom: 24 },
-    avatarWrap: { position: 'relative', marginBottom: 14 },
-    avatar: {
-      width: 90, height: 90, borderRadius: 45, backgroundColor: colors.surfaceLight,
-      justifyContent: 'center', alignItems: 'center', overflow: 'hidden',
-    },
-    avatarImg: { width: 90, height: 90, borderRadius: 45 },
-    uploadOverlay: {
-      ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)',
-      borderRadius: 45, justifyContent: 'center', alignItems: 'center',
-    },
-    cameraBtn: {
-      position: 'absolute', bottom: 0, right: -2,
-      width: 30, height: 30, borderRadius: 15, backgroundColor: colors.primary,
-      justifyContent: 'center', alignItems: 'center', borderWidth: 3, borderColor: colors.surface,
-    },
-    userName: { fontSize: 22, fontWeight: '800', color: colors.text, marginBottom: 8 },
-    metaRow: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8 },
-    metaChip: {
-      flexDirection: 'row', alignItems: 'center', gap: 4,
-      backgroundColor: colors.surfaceLight, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 16,
-    },
-    metaText: { fontSize: 12, fontWeight: '500', color: colors.textDim },
+  // ── Body ──
+  contentBody: {
+    paddingTop: 10,
+  },
+  section: {
+    paddingHorizontal: 16,
+    marginTop: 20,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+    paddingHorizontal: 4,
+  },
+  sectionTitle: {
+    color: colors.text,
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+    marginBottom: 12,
+    paddingHorizontal: 4,
+  },
+  editBtn: {
+    backgroundColor: colors.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  editBtnText: {
+    color: colors.textDim,
+    fontSize: 12,
+    fontWeight: '700',
+  },
 
-    // Quick Actions
-    quickRow: { flexDirection: 'row', paddingHorizontal: 20, gap: 12, marginBottom: 8 },
-    quickCard: {
-      flex: 1, alignItems: 'center', paddingVertical: 16,
-      backgroundColor: colors.surfaceLight, borderRadius: 16,
-    },
-    quickIcon: {
-      width: 48, height: 48, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginBottom: 8,
-    },
-    quickLabel: { fontSize: 12, fontWeight: '600', color: colors.text },
+  // ── Card + rows (static info) ──
+  card: {
+    backgroundColor: colors.surface,
+    borderRadius: 24,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.02)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.04,
+    shadowRadius: 16,
+    elevation: 3,
+  },
+  cardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    gap: 14,
+  },
+  cardDivider: {
+    height: 1,
+    backgroundColor: colors.surfaceLight,
+    marginLeft: 50,
+  },
+  iconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cardInfo: {
+    flex: 1,
+  },
+  cardLabel: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  cardValue: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '700',
+    marginTop: 2,
+  },
 
-    // Sections
-    section: { paddingHorizontal: 20, marginTop: 16 },
-    sectionTitle: {
-      fontSize: 13, fontWeight: '700', color: colors.textDim, letterSpacing: 0.5,
-      textTransform: 'uppercase', marginBottom: 8,
-    },
+  // ── Menu action rows ──
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    gap: 14,
+  },
+  actionContent: {
+    flex: 1,
+  },
+  actionText: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  actionSubtitle: {
+    color: colors.textDim,
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  badge: {
+    backgroundColor: colors.primary,
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    marginRight: 8,
+  },
+  badgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.surface,
+  },
 
-    // Logout
-    logoutBtn: {
-      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-      marginHorizontal: 20, marginTop: 20, paddingVertical: 14,
-      backgroundColor: '#FEF2F2', borderRadius: 14,
-    },
-    logoutText: { fontSize: 15, fontWeight: '600', color: colors.primary },
-
-    version: { fontSize: 12, color: colors.textDim, textAlign: 'center', marginTop: 20 },
-  });
-}
+  // ── Company footer ──
+  companySection: {
+    marginHorizontal: 16,
+    marginTop: 24,
+    marginBottom: 40,
+    paddingTop: 16,
+    alignItems: 'center',
+  },
+  companyName: {
+    color: colors.textDim,
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 6,
+  },
+  companyLine: {
+    color: colors.textDim,
+    fontSize: 11,
+    marginTop: 2,
+    textAlign: 'center',
+  },
+}); }

@@ -47,15 +47,14 @@ else:
     # is misconfigured or temporarily unavailable during a cold start.
     try:
         import redis as _redis_sync
+
         _probe = _redis_sync.from_url(_rate_limit_storage_uri, socket_connect_timeout=2)
         _probe.ping()
         _probe.close()
         scheme = _rate_limit_storage_uri.split("://", 1)[0]
         logger.info(f"Rate limiter using distributed storage backend: {scheme}://…")
     except Exception as _redis_err:
-        logger.warning(
-            f"Redis unavailable — rate limiter using in-memory fallback ({_redis_err})"
-        )
+        logger.warning(f"Redis unavailable — rate limiter using in-memory fallback ({_redis_err})")
         _rate_limit_storage_uri = "memory://"
 
 # Default limiter — reads the real client IP from X-Forwarded-For when the
@@ -190,6 +189,15 @@ document_upload_limit = default_limiter.limit("5/minute")
 
 # Admin endpoints - restrictive for security
 admin_rate_limit = default_limiter.limit("100/minute")
+
+# Admin wallet mutations — additional friction against accidental bulk credit/debit (F-36)
+admin_wallet_limit = default_limiter.limit("10/minute")
+
+# Admin mass notifications — prevent accidental spam blasts (F-36)
+admin_mass_notify_limit = default_limiter.limit("3/minute")
+
+# Admin staff deletion — one-way destructive action, extra caution (F-36)
+admin_staff_delete_limit = default_limiter.limit("5/minute")
 
 
 # ============================================================================

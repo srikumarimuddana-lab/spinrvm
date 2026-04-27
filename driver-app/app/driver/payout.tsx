@@ -19,6 +19,7 @@ import { useRouter } from 'expo-router';
 import { useDriverStore } from '../../store/driverStore';
 import { useAuthStore } from '@shared/store/authStore';
 import api from '@shared/api/client';
+import { useDriverMe, useUpdateDriverMe } from '@shared/hooks/queries';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
@@ -44,9 +45,13 @@ function PayoutScreen() {
     const [stripeOnboarding, setStripeOnboarding] = useState(false);
     const [downloadingT4A, setDownloadingT4A] = useState(false);
     const [downloadingCSV, setDownloadingCSV] = useState(false);
+    // gst_number is part of the driver row served by useDriverMe — keep
+    // a local form state for the input field but seed it from the cached
+    // server value (also re-seeds from the background refetch).
+    const { data: driverMe } = useDriverMe();
+    const updateDriverMe = useUpdateDriverMe();
     const [gstNumber, setGstNumber] = useState('');
     const [showGstForm, setShowGstForm] = useState(false);
-    const [savingGst, setSavingGst] = useState(false);
     const [stripeAccountStatus, setStripeAccountStatus] = useState<string | null>(null);
     const [initialLoading, setInitialLoading] = useState(true);
     const [alert, setAlert] = useState<{
@@ -70,7 +75,7 @@ function PayoutScreen() {
                 fetchDriverBalance(),
                 fetchBankAccount(),
                 loadStripeStatus(),
-                loadGstNumber(),
+                // GST is sourced from useDriverMe — no manual fetch needed.
             ]);
         } catch (err) {
             // Errors are handled individually in each function
@@ -90,14 +95,12 @@ function PayoutScreen() {
         }
     };
 
-    const loadGstNumber = async () => {
-        try {
-            const res = await api.get('/drivers/me');
-            setGstNumber(res.data.gst_number || '');
-        } catch {
-            // Not critical
-        }
-    };
+    // Seed the GST input from the cached driver row whenever it changes.
+    // The hook has its own cache + background refetch, so this replaces
+    // the legacy `loadGstNumber()` round-trip entirely.
+    useEffect(() => {
+        if (driverMe) setGstNumber(driverMe.gst_number || '');
+    }, [driverMe]);
 
     useEffect(() => {
         if (error) {
@@ -136,15 +139,12 @@ function PayoutScreen() {
             return;
         }
 
-        setSavingGst(true);
         try {
-            await api.put('/drivers/me', { gst_number: cleaned || null });
+            await updateDriverMe.mutateAsync({ gst_number: cleaned || null });
             setShowGstForm(false);
             showAlert('Saved', 'GST/BN number updated successfully', 'success');
         } catch (err: any) {
             showAlert('Error', err.response?.data?.detail || 'Failed to save GST number', 'danger');
-        } finally {
-            setSavingGst(false);
         }
     };
 
@@ -246,7 +246,7 @@ function PayoutScreen() {
                 </View>
             </LinearGradient>
 
-            <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+            <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
             <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 140 }} keyboardShouldPersistTaps="handled"
                     automaticallyAdjustKeyboardInsets={true} showsVerticalScrollIndicator={false}>
                 {/* Balance Card */}
@@ -382,9 +382,9 @@ function PayoutScreen() {
                                 <TouchableOpacity
                                     style={styles.saveBtn}
                                     onPress={handleSaveGst}
-                                    disabled={savingGst}
+                                    disabled={updateDriverMe.isPending}
                                 >
-                                    {savingGst ? (
+                                    {updateDriverMe.isPending ? (
                                         <ActivityIndicator size="small" color="#fff" />
                                     ) : (
                                         <Text style={styles.saveBtnText}>Save</Text>

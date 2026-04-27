@@ -1024,6 +1024,118 @@ git add .github/workflows/claude-audit.yml
 
 **End of audit.** Re-run with `/ultrareview` or via the proposed CI on any future change to `.claude/**` or `CLAUDE.md`. Save the next run's JSON as `docs/claude-audit-<YYYY-MM-DD>.json` so the delta tool can diff.
 
+---
+
+## Delta — 2026-04-25 (PR #51 rollout)
+
+**Branch at time of delta:** `claude/claude-config-guide-jZC61`  
+**Trigger:** PR #51 — `feat(claude): tiered PR template + pr-checks pipeline + agents`  
+**Scope:** Read-only delta against 2026-04-22 baseline. Only findings affected by changes since that date are listed.
+
+### Executive Summary Update
+
+| Metric | 2026-04-22 | 2026-04-25 | Change |
+|---|---|---|---|
+| P0 findings open | 6 | 1 | −5 resolved |
+| P1 findings open | 7 | 7 | −1 partial resolve, +1 new |
+| P2 findings open | 8 | 10 | −1 resolved, +3 new |
+| settings.local.json | present (59 allows, 0 denies) | **deleted** | all overrides gone |
+| Hook installed in `.git/hooks/` | **NO** | **YES** (`Apr 24 17:03`) | ✅ |
+| CLAUDE.md size | 156 lines | 450 lines | 3× expansion |
+| Slash commands | 5 | 9 | +4 new |
+| Subagents | 0 | 3 | +3 new |
+| Attribution model | `claude-sonnet-4-6` (stale) | `claude-opus-4-7` (correct) | ✅ |
+| Session model (2026-04-25) | — | `claude-sonnet-4-6` (user `/model` override) | see N-001 |
+
+---
+
+### Resolved Findings
+
+| ID | Title | How resolved |
+|---|---|---|
+| **P0-001** | `settings.local.json` silently overrides deny rules | File deleted; conflict-merge on 2026-04-24 kept the deletion |
+| **P0-002** | Pre-commit hook not installed in `.git/hooks/` | Installed — `-rwxr-xr-x .git/hooks/pre-commit` confirmed `Apr 24 17:03` |
+| **P0-003** | Broad `python:*` / `curl *` wildcards in local settings | File deleted; wildcards gone |
+| **P0-004** | Attribution trailer pinned to stale `claude-sonnet-4-6` | `settings.json:7` updated to `claude-opus-4-7`; confirmed in current file |
+| **P0-005** | Windows machine paths in local settings | File deleted; dead paths gone |
+| **P2-006** | Stale `sprint1/*` force-push allow rules | File deleted |
+| **P1-002** _(partial)_ | No `SessionStart` / `PreToolUse` / `PostToolUse` hooks | `settings.json` hooks block added: `SessionStart` → `session-start.sh`, `PreToolUse` → `pre-migration-write.sh`, `PostToolUse` → `post-python-write.sh`. `Stop`/`PreCompact`/`UserPromptSubmit`/`Notification`/`SubagentStop` still absent. |
+
+---
+
+### Still-Open Findings (unchanged since 2026-04-22)
+
+| ID | Severity | Title | Status |
+|---|---|---|---|
+| P0-006 | P0 | `launch.json` rider/driver swapped | **OPEN** — confirmed: "Rider App (Metro)" runs `--prefix frontend`, "Driver App (Metro)" runs `--prefix rider-app`. Neither correctly maps to `rider-app/` or `driver-app/`. |
+| P1-001 | P1 | `andrej-karpathy-skills` plugin unpinned | **OPEN** |
+| P1-003 | P1 | Doc triangulation contradictions across architecture files | **OPEN** — `.agents/docs/architecture.md` not updated |
+| P1-004 | P1 | Secret regex missing `gho_`/`ghu_`/`ghs_`/`ghr_` GitHub token prefixes | **OPEN** — hook was patched for meta-doc excludes only; patterns unchanged |
+| P1-005 | P1 | PII-in-logs gate uses `--diff-filter=A` (misses modified files) | **OPEN** |
+| P1-006 | P1 | `Write(frontend/**)` still in `settings.json` allow list | **OPEN** — `.claude/settings.json:44` |
+| P1-007 | P1 | Historical commits missing/wrong attribution trailer | **OPEN** — not retroactively fixable; 28 historical commits carry `sonnet-4-6` |
+| P2-001 | P2 | `memory/` and `discovery/` stale scaffolding | **OPEN** |
+| P2-002 | P2 | `.kilo/`, `.emergent/`, `.maestro/`, `audit-framework/` undocumented | **OPEN** |
+| P2-003 | P2 | 8 duplicate `code_review_report_*.json` files in repo root | **OPEN** |
+| P2-004 | P2 | No per-surface `SessionStart` dep-warming | **PARTIAL** — `session-start.sh` hook fires but content not verified for `pip install`/`yarn install` per surface |
+| P2-005 | P2 | Graphify graph stale | **OPEN** — now 6 days behind (`2026-04-19` vs `2026-04-25`); 16 commits unincorporated |
+| P2-007 | P2 | Graphify god nodes partially unreferenced in `CLAUDE.md` | **OPEN** |
+| P2-008 | P2 | Pre-commit hook has no unit tests | **OPEN** |
+
+---
+
+### New Findings
+
+#### N-001 (Advisory) — Session model diverges from `settings.json` pin
+- **File:** `.claude/settings.json:2`
+- **Details:** User ran `/model claude-sonnet-4-6` on 2026-04-25. `settings.json` still pins `claude-opus-4-7`; attribution trailer still references `claude-opus-4-7`. Commits made in this session carry an Opus attribution while the session runs on Sonnet. This is intentional (cost saving) but creates the same attribution drift as the resolved P0-004.
+- **Remediation (if drift matters):** Either update `settings.json:2` to `claude-sonnet-4-6` and fix the attribution trailer to match, or revert to Opus for any session where commits will be made.
+
+#### N-002 (P1) — `claude-review.yml` permanently fails without `ANTHROPIC_API_KEY` secret
+- **File:** `.github/workflows/claude-review.yml:53`
+- **Details:** Workflow fires on every non-draft PR open/sync. Without the repo secret `ANTHROPIC_API_KEY`, `anthropics/claude-code-action@v1` exits immediately with error → red ❌ on every PR. The check is advisory (not a required status check), so it doesn't block merge — but produces permanent visual noise. Confirmed failing on PR #51 (check run `72971136054`).
+- **Remediation options (pick one):**
+  1. Set `ANTHROPIC_API_KEY` repo secret and optionally switch to OAuth token for cost control.
+  2. Delete `claude-review.yml` and rely on local `/review` slash command — 0 incremental cost.
+  3. Change trigger from `pull_request:` to `issue_comment:` only (`/claude review`) — opt-in, reduces run count by ~80%.
+
+#### N-003 (P2) — `CLAUDE.md` 3× expansion increases session token budget
+- **File:** `CLAUDE.md`
+- **Details:** Grew from 156 lines to 450 lines (PR #51 added architecture, conventions, compliance, SLA, and regulatory sections). Estimated token cost at session start: ~4,000–5,000 tokens (was ~1,400). This is 2–3% of a 200K context window — acceptable for now, but trend bears watching.
+- **Remediation:** No immediate action. Flag if `CLAUDE.md` reaches 700+ lines — at that point consider splitting domain sections into `@.claude/context/` imports.
+
+#### N-004 (P2) — 4 new slash commands not yet exercised in any transcript
+- **File:** `.claude/commands/adr.md`, `fare-audit.md`, `incident.md`, `migration-check.md`
+- **Details:** Commands added in PR #51. None appear in transcript history. Cannot confirm they work end-to-end until invoked. The commands delegate to subagents — `fare-audit` → `spinr-money-auditor`, `migration-check` → `spinr-migration-reviewer`.
+- **Remediation:** Exercise each command on the next relevant task; update if broken.
+
+#### N-005 (info) — Pre-commit hook patched with meta-doc exclude list
+- **File:** `.claude/hooks/pre-commit` (commit `e42ad76`)
+- **Details:** `SECRET_SCAN_EXCLUDES` array added to exclude `docs/claude-audit*`, `docs/proposed-claude-audit-*`, and `.claude/hooks/pre-commit` itself from the secret-pattern scan. Fixes false-positive that blocked the merge commit on 2026-04-24. Correctly scoped — no security regression.
+
+---
+
+### Updated Settings Snapshot (2026-04-25)
+
+| Setting | Value |
+|---|---|
+| Pinned model (`settings.json:2`) | `claude-opus-4-7` |
+| Session model (2026-04-25) | `claude-sonnet-4-6` (user override) |
+| Attribution model | `claude-opus-4-7` (matches pin, but not session — see N-001) |
+| Allow rules (project) | 45 (unchanged from 04-22) |
+| Deny rules (project) | 14 (unchanged) |
+| Allow rules (local) | **0** (settings.local.json deleted) |
+| `autoCompactWindow` | 150,000 tokens |
+| `cleanupPeriodDays` | 7 days |
+| Hooks defined | `SessionStart`, `PreToolUse`, `PostToolUse` |
+| Hooks missing | `UserPromptSubmit`, `Notification`, `Stop`, `SubagentStop`, `PreCompact` |
+| Slash commands | 9 (`commit`, `pr`, `review`, `start`, `status`, `adr`, `fare-audit`, `incident`, `migration-check`) |
+| Subagents | 3 (`spinr-security-auditor`, `spinr-money-auditor`, `spinr-migration-reviewer`) |
+
+---
+
+_Delta generated 2026-04-25. Next re-audit trigger: any change to `.claude/**`, `CLAUDE.md`, or `.github/workflows/`._
+
 
 
 

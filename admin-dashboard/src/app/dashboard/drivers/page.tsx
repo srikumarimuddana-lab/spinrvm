@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { getDriverStats, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas } from "@/lib/api";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs } from "@/lib/api";
+import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
@@ -12,7 +13,7 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Users, Wifi, WifiOff, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause } from "lucide-react";
+import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause } from "lucide-react";
 import DriverStatsCards from "./_components/driver-stats-cards";
 import DriverCharts from "./_components/driver-charts";
 import AreaStatsTable from "./_components/area-stats-table";
@@ -30,16 +31,21 @@ const STATUS_TABS = [
     { value: "online", label: "Online", icon: Wifi },
 ];
 
+const PAGE_SIZE = 50;
+
 export default function DriversPage() {
     const [data, setData] = useState<any>(null);
     const [drivers, setDrivers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+    const [tableLoading, setTableLoading] = useState(true);
+    const [page, setPage] = useState(0);
+    const [hasNextPage, setHasNextPage] = useState(false);
+    const reqIdRef = useRef(0);
     const [search, setSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
     const [sortKey, setSortKey] = useState<string>("created_at");
     const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
     const [selected, setSelected] = useState<any>(null);
-    const [verifying, setVerifying] = useState(false);
     const [driverDocs, setDriverDocs] = useState<any[]>([]);
     const [docsLoading, setDocsLoading] = useState(false);
     const [docBusy, setDocBusy] = useState<string | null>(null);
@@ -51,7 +57,16 @@ export default function DriversPage() {
     const [editForm, setEditForm] = useState<Record<string, any>>({});
     const [saving, setSaving] = useState(false);
     const [allServiceAreas, setAllServiceAreas] = useState<any[]>([]);
+    // Vehicle types catalogue + serviceAreaId → allowed type IDs map,
+    // built from active fare_configs — same narrowing the monitoring
+    // page uses so picking an area here shows only vehicle types
+    // actually configured for it.
+    const [vehicleTypes, setVehicleTypes] = useState<{ id: string; name: string }[]>([]);
+    const [vehicleTypesByArea, setVehicleTypesByArea] = useState<Record<string, Set<string>>>({});
     const [serviceAreaId, setServiceAreaId] = useState<string>("");
+    // Vehicle-type filter on the drivers list (client-side — same
+    // shape as serviceAreaId, "" means no filter).
+    const [vehicleTypeFilter, setVehicleTypeFilter] = useState<string>("");
     const [startDate, setStartDate] = useState("");
     const [endDate, setEndDate] = useState("");
     const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
@@ -62,11 +77,78 @@ export default function DriversPage() {
         if (serviceAreaId) params.service_area_id = serviceAreaId;
         if (startDate) params.start_date = startDate;
         if (endDate) params.end_date = endDate;
-        getDriverStats(params).then((res) => { setData(res); setDrivers(res.drivers || []); setServiceAreas(res.service_areas || []); }).catch(() => {}).finally(() => setLoading(false));
+        getDriverStats(params).then((res) => { setData(res); setServiceAreas(res.service_areas || []); }).catch(() => {}).finally(() => setLoading(false));
     }, [serviceAreaId, startDate, endDate]);
 
+    const loadDrivers = useCallback(() => {
+        setTableLoading(true);
+        const reqId = ++reqIdRef.current;
+        const opts: any = { limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE };
+        if (serviceAreaId) opts.service_area_id = serviceAreaId;
+        if (statusFilter === "online") opts.is_online = true;
+        else if (["active", "pending", "needs_review", "suspended", "banned"].includes(statusFilter)) opts.status = statusFilter;
+        getDrivers(opts)
+            .then((rows) => {
+                if (reqId !== reqIdRef.current) return;
+                const arr = Array.isArray(rows) ? rows : [];
+                setHasNextPage(arr.length > PAGE_SIZE);
+                setDrivers(arr.slice(0, PAGE_SIZE));
+            })
+            .catch(() => { if (reqId === reqIdRef.current) { setDrivers([]); setHasNextPage(false); } })
+            .finally(() => { if (reqId === reqIdRef.current) setTableLoading(false); });
+    }, [page, serviceAreaId, statusFilter]);
+
     useEffect(() => { loadData(); }, [loadData]);
-    useEffect(() => { getServiceAreas().then(setAllServiceAreas).catch(() => {}); }, []);
+    useEffect(() => { loadDrivers(); }, [loadDrivers]);
+    // Reset to first page when filters change.
+    useEffect(() => { setPage(0); }, [statusFilter, serviceAreaId]);
+    // Vehicle-type catalogue + areaId → allowed vt-id set. The map is
+    // unioned from BOTH pricing stores because admins can configure
+    // vehicles for an area either way:
+    //   - fare_configs table (used by fare calc, joins by vehicle_type_id)
+    //   - service_areas.vehicle_pricing JSONB (used by the Service Areas
+    //     admin editor, joins by vehicle type NAME)
+    // Without the JSONB half, the drawer complains "No fare configs"
+    // even after the operator set pricing in the Service Areas page.
+    useEffect(() => {
+        Promise.all([
+            getServiceAreas(),
+            getVehicleTypes().catch(() => [] as any[]),
+            getFareConfigs().catch(() => [] as any[]),
+        ])
+            .then(([areas, vt, configs]) => {
+                setAllServiceAreas(areas || []);
+                const types: { id: string; name: string }[] = (vt || []).map((v: any) => ({ id: v.id, name: v.name }));
+                setVehicleTypes(types);
+                const byName: Record<string, string> = {};
+                for (const t of types) byName[t.name] = t.id;
+
+                const map: Record<string, Set<string>> = {};
+                // From fare_configs (direct id refs)
+                for (const c of configs || []) {
+                    if (c?.is_active === false) continue;
+                    const aId = c?.service_area_id;
+                    const vtId = c?.vehicle_type_id;
+                    if (!aId || !vtId) continue;
+                    if (!map[aId]) map[aId] = new Set<string>();
+                    map[aId].add(vtId);
+                }
+                // From service_areas.vehicle_pricing (name-based)
+                for (const area of areas || []) {
+                    const pricing = Array.isArray(area?.vehicle_pricing) ? area.vehicle_pricing : [];
+                    for (const row of pricing) {
+                        const name = row?.vehicle_type;
+                        if (!name) continue;
+                        const vtId = byName[name];
+                        if (!vtId) continue;
+                        if (!map[area.id]) map[area.id] = new Set<string>();
+                        map[area.id].add(vtId);
+                    }
+                }
+                setVehicleTypesByArea(map);
+            })
+            .catch(() => {});
+    }, []);
     useEffect(() => { if (!selected?.id) { setDriverDocs([]); return; } setDocsLoading(true); getDriverDocuments(selected.id).then((d) => setDriverDocs(Array.isArray(d) ? d : [])).catch(() => setDriverDocs([])).finally(() => setDocsLoading(false)); }, [selected?.id]);
     useEffect(() => { setEditing(false); setEditForm({}); }, [selected?.id]);
 
@@ -74,7 +156,7 @@ export default function DriversPage() {
 
     const handleReviewDoc = async (docId: string, status: "approved" | "rejected", reason?: string, expiry?: string) => {
         setDocBusy(docId);
-        try { await reviewDocument(docId, status, reason, expiry ? new Date(expiry).toISOString() : undefined); await reloadDriverDocs(); loadData(); } catch (e: any) { alert("Could not update document: " + (e?.message || "unknown error")); } finally { setDocBusy(null); }
+        try { await reviewDocument(docId, status, reason, expiry ? new Date(expiry).toISOString() : undefined); await reloadDriverDocs(); loadData(); loadDrivers(); } catch (e: any) { alert("Could not update document: " + (e?.message || "unknown error")); } finally { setDocBusy(null); }
     };
 
     const openReviewDialog = (docId: string, action: "approved" | "rejected") => {
@@ -92,13 +174,7 @@ export default function DriversPage() {
     };
     const confirmReview = async () => { if (!reviewingDoc) return; await handleReviewDoc(reviewingDoc.id, reviewingDoc.action, reviewReason || undefined, reviewExpiry || undefined); setReviewingDoc(null); };
 
-    const handleVerify = async (driverId: string, verified: boolean) => {
-        setVerifying(true);
-        try { const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? ""; const token = (await import("@/store/authStore")).useAuthStore.getState().token; await fetch(`${API_BASE}/api/admin/drivers/${driverId}/verify`, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` }, body: JSON.stringify({ verified }) }); loadData(); if (selected?.id === driverId) setSelected({ ...selected, is_verified: verified }); } catch {}
-        setVerifying(false);
-    };
-
-    const startEditing = () => { if (!selected) return; setEditForm({ first_name: selected.first_name || "", last_name: selected.last_name || "", email: selected.email || "", phone: selected.phone || "", city: selected.city || "", service_area_id: selected.service_area_id || "", vehicle_make: selected.vehicle_make || "", vehicle_model: selected.vehicle_model || "", vehicle_color: selected.vehicle_color || "", vehicle_year: selected.vehicle_year || "", license_plate: selected.license_plate || "", vehicle_vin: selected.vehicle_vin || "" }); setEditing(true); };
+    const startEditing = () => { if (!selected) return; setEditForm({ first_name: selected.first_name || "", last_name: selected.last_name || "", email: selected.email || "", phone: selected.phone || "", city: selected.city || "", service_area_id: selected.service_area_id || "", vehicle_type_id: selected.vehicle_type_id || "", vehicle_make: selected.vehicle_make || "", vehicle_model: selected.vehicle_model || "", vehicle_color: selected.vehicle_color || "", vehicle_year: selected.vehicle_year || "", license_plate: selected.license_plate || "", vehicle_vin: selected.vehicle_vin || "" }); setEditing(true); };
 
     const saveEdits = async () => {
         if (!selected) return;
@@ -121,7 +197,8 @@ export default function DriversPage() {
         if (statusFilter === "needs_review") matchStatus = d.status === "needs_review";
         if (statusFilter === "suspended") matchStatus = d.status === "suspended";
         if (statusFilter === "banned") matchStatus = d.status === "banned";
-        return matchSearch && matchStatus;
+        const matchVehicleType = !vehicleTypeFilter || d.vehicle_type_id === vehicleTypeFilter;
+        return matchSearch && matchStatus && matchVehicleType;
     });
 
     // Sort
@@ -133,6 +210,17 @@ export default function DriversPage() {
         else if (sortKey === "total_earnings") { av = a.total_earnings || 0; bv = b.total_earnings || 0; }
         else if (sortKey === "created_at") { av = a.created_at || ""; bv = b.created_at || ""; }
         else if (sortKey === "region") { av = (serviceAreas.find(sa => sa.id === a.service_area_id)?.name || "zzz").toLowerCase(); bv = (serviceAreas.find(sa => sa.id === b.service_area_id)?.name || "zzz").toLowerCase(); }
+        else if (sortKey === "vehicle_type") {
+            // Sort by vehicle-type NAME (resolved from the catalogue);
+            // drivers with no type go to the end of ascending / top of
+            // descending so "Not assigned" is easy to spot.
+            av = (vehicleTypes.find(vt => vt.id === a.vehicle_type_id)?.name || "zzz").toLowerCase();
+            bv = (vehicleTypes.find(vt => vt.id === b.vehicle_type_id)?.name || "zzz").toLowerCase();
+        }
+        else if (sortKey === "is_online") {
+            // Booleans compared as 0/1: desc → online first; asc → offline first.
+            av = a.is_online ? 1 : 0; bv = b.is_online ? 1 : 0;
+        }
         else { av = (a[sortKey] || "").toString().toLowerCase(); bv = (b[sortKey] || "").toString().toLowerCase(); }
         if (av < bv) return sortDir === "asc" ? -1 : 1;
         if (av > bv) return sortDir === "asc" ? 1 : -1;
@@ -143,9 +231,11 @@ export default function DriversPage() {
     const SortIcon = ({ col }: { col: string }) => { if (sortKey !== col) return <ArrowUpDown className="h-3 w-3 opacity-30 inline ml-1" />; return sortDir === "asc" ? <ArrowUp className="h-3 w-3 inline ml-1" /> : <ArrowDown className="h-3 w-3 inline ml-1" />; };
 
     const statusCounts = (s: string) => {
-        if (s === "all") return drivers.length;
-        if (s === "online") return drivers.filter(d => d.is_online).length;
-        return drivers.filter(d => d.status === s).length;
+        const stats = data?.stats;
+        if (!stats) return 0;
+        if (s === "all") return stats.total ?? 0;
+        if (s === "online") return stats.online ?? 0;
+        return stats[s] ?? 0;
     };
     const fmtDate = (d: string) => { if (!d) return "\u2014"; try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
 
@@ -191,23 +281,33 @@ export default function DriversPage() {
             <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
                 <div>
                     <h1 className="text-2xl font-bold">Drivers</h1>
-                    <p className="text-sm text-muted-foreground">{drivers.length} drivers {serviceAreaId ? `in ${selectedAreaName}` : "overall"}</p>
+                    <p className="text-sm text-muted-foreground">{data?.stats?.total ?? 0} drivers {serviceAreaId ? `in ${selectedAreaName}` : "overall"}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                     <div className="flex items-center gap-1.5">
                         <MapPin className="h-4 w-4 text-muted-foreground" />
                         <Select value={serviceAreaId || "all"} onValueChange={(v) => setServiceAreaId(v === "all" ? "" : v)}>
-                            <SelectTrigger className="h-9 text-xs w-[180px]"><SelectValue placeholder="All Service Areas" /></SelectTrigger>
+                            <SelectTrigger className="h-9 text-xs w-[180px]" aria-label="Filter by service area"><SelectValue placeholder="All Service Areas" /></SelectTrigger>
                             <SelectContent><SelectItem value="all">All Service Areas</SelectItem>{serviceAreas.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}</SelectContent>
                         </Select>
                     </div>
                     <div className="flex items-center gap-1.5">
-                        <CalendarRange className="h-4 w-4 text-muted-foreground" />
-                        <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="h-9 w-[140px] text-xs" />
-                        <span className="text-xs text-muted-foreground">to</span>
-                        <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="h-9 w-[140px] text-xs" />
+                        <Car className="h-4 w-4 text-muted-foreground" />
+                        <Select value={vehicleTypeFilter || "all"} onValueChange={(v) => setVehicleTypeFilter(v === "all" ? "" : v)}>
+                            <SelectTrigger className="h-9 text-xs w-[160px]" aria-label="Filter by vehicle type"><SelectValue placeholder="All Vehicle Types" /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all">All Vehicle Types</SelectItem>
+                                {vehicleTypes.map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
+                            </SelectContent>
+                        </Select>
                     </div>
-                    {(serviceAreaId || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
+                    <div className="flex items-center gap-1.5">
+                        <CalendarRange className="h-4 w-4 text-muted-foreground" />
+                        <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="Filter from date" />
+                        <span className="text-xs text-muted-foreground">to</span>
+                        <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="Filter to date" />
+                    </div>
+                    {(serviceAreaId || vehicleTypeFilter || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
                     <Button variant="outline" size="sm" onClick={handleExport} disabled={filtered.length === 0}><Download className="h-4 w-4" /> Export</Button>
                 </div>
             </div>
@@ -223,7 +323,7 @@ export default function DriversPage() {
                             </button>
                         ))}
                     </div>
-                    <div className="relative w-full sm:w-72"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by name, email, plate..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 h-9 text-sm" /></div>
+                    <div className="relative w-full sm:w-72"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by name, email, plate..." aria-label="Search drivers" value={search} onChange={e => setSearch(e.target.value)} className="pl-9 h-9 text-sm" /></div>
                 </div>
 
                 <div className="bg-card border rounded-2xl overflow-hidden shadow-sm">
@@ -233,6 +333,8 @@ export default function DriversPage() {
                                 <TableHead className="h-11 pl-5 w-20"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Actions</span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("name")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Driver<SortIcon col="name" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("status")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Status<SortIcon col="status" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("is_online")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Online<SortIcon col="is_online" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("vehicle_type")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Vehicle Type<SortIcon col="vehicle_type" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("vehicle_make")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Vehicle<SortIcon col="vehicle_make" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none text-center" onClick={() => handleSort("rating")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Rating<SortIcon col="rating" /></span></TableHead>
                                 <TableHead className="h-11 cursor-pointer select-none text-center" onClick={() => handleSort("total_rides")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Rides<SortIcon col="total_rides" /></span></TableHead>
@@ -242,11 +344,13 @@ export default function DriversPage() {
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {loading ? Array.from({ length: 5 }).map((_, i) => (
+                            {tableLoading ? Array.from({ length: 5 }).map((_, i) => (
                                 <TableRow key={i} className="animate-pulse">
                                     <TableCell><div className="h-8 w-16 bg-muted rounded" /></TableCell>
                                     <TableCell className="py-4"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-muted" /><div className="space-y-2"><div className="h-3 w-24 bg-muted rounded" /><div className="h-2 w-16 bg-muted rounded" /></div></div></TableCell>
                                     <TableCell><div className="h-4 w-16 bg-muted rounded" /></TableCell>
+                                    <TableCell><div className="h-4 w-12 bg-muted rounded" /></TableCell>
+                                    <TableCell><div className="h-3 w-16 bg-muted rounded" /></TableCell>
                                     <TableCell><div className="h-3 w-20 bg-muted rounded" /></TableCell>
                                     <TableCell><div className="h-4 w-8 bg-muted rounded mx-auto" /></TableCell>
                                     <TableCell><div className="h-4 w-8 bg-muted rounded mx-auto" /></TableCell>
@@ -256,7 +360,7 @@ export default function DriversPage() {
                                 </TableRow>
                             )) : sorted.length === 0 ? (
                                 <TableRow>
-                                    <TableCell colSpan={9} className="text-center py-20 text-muted-foreground"><Users className="h-12 w-12 mx-auto mb-3 opacity-20" /><p className="text-base font-medium">No drivers found</p><p className="text-sm mt-1">Try adjusting your search or filters</p></TableCell>
+                                    <TableCell colSpan={11} className="text-center py-20 text-muted-foreground"><Users className="h-12 w-12 mx-auto mb-3 opacity-20" /><p className="text-base font-medium">No drivers found</p><p className="text-sm mt-1">Try adjusting your search or filters</p></TableCell>
                                 </TableRow>
                             ) : sorted.map(driver => {
                                 const areaName = serviceAreas.find(a => a.id === driver.service_area_id)?.name;
@@ -289,6 +393,25 @@ export default function DriversPage() {
                                             </div>
                                         </TableCell>
                                         <TableCell>
+                                            <div className="flex flex-col gap-0.5 items-start">
+                                                <Badge variant={driver.is_online ? "default" : "outline"} className={driver.is_online ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px] px-1.5 py-0 border-emerald-200 dark:border-emerald-800" : "text-[10px] px-1.5 py-0 text-muted-foreground"}>
+                                                    <span className={`h-1.5 w-1.5 rounded-full mr-1 ${driver.is_online ? "bg-emerald-500" : "bg-gray-400"}`} />
+                                                    {driver.is_online ? "Online" : "Offline"}
+                                                </Badge>
+                                                {driver.last_status_changed_at && (
+                                                    <span className="text-[10px] text-muted-foreground whitespace-nowrap" title={new Date(driver.last_status_changed_at).toLocaleString()}>
+                                                        {driver.is_online ? "since " : "since "}
+                                                        {new Date(driver.last_status_changed_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </TableCell>
+                                        <TableCell>
+                                            <span className="text-xs text-foreground/80">
+                                                {vehicleTypes.find(v => v.id === driver.vehicle_type_id)?.name || <span className="text-muted-foreground/60 italic">—</span>}
+                                            </span>
+                                        </TableCell>
+                                        <TableCell>
                                             <div className="flex flex-col gap-1 text-xs">
                                                 <div className="flex items-center gap-1.5 text-muted-foreground font-medium">
                                                     <Car className="h-3.5 w-3.5" />
@@ -318,6 +441,13 @@ export default function DriversPage() {
                         </TableBody>
                     </Table>
                 </div>
+
+                <Pagination
+                    page={page}
+                    pageSize={PAGE_SIZE}
+                    hasNextPage={hasNextPage}
+                    onPageChange={setPage}
+                />
             </div>
 
             {!serviceAreaId && <AreaStatsTable areaStats={data?.area_stats || []} loading={loading} onAreaClick={(areaId) => setServiceAreaId(areaId)} />}
@@ -347,7 +477,14 @@ export default function DriversPage() {
                                                 : selected.status === "suspended" ? <Badge className="bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400"><Pause className="h-3 w-3" /> Suspended</Badge>
                                                 : selected.status === "banned" ? <Badge className="bg-red-200 text-red-800 dark:bg-red-900/40 dark:text-red-400"><Ban className="h-3 w-3" /> Banned</Badge>
                                                 : <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"><ShieldAlert className="h-3 w-3" /> Pending</Badge>}
-                                                <Badge variant="outline" className={selected.is_online ? "border-emerald-300 text-emerald-600" : ""}>{selected.is_online ? "Online" : "Offline"}</Badge>
+                                                <Badge variant="outline" className={selected.is_online ? "border-emerald-300 text-emerald-600" : ""}>
+                                                    {selected.is_online ? "Online" : "Offline"}
+                                                    {selected.last_status_changed_at && (
+                                                        <span className="ml-1.5 text-[10px] opacity-70">
+                                                            since {new Date(selected.last_status_changed_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                                                        </span>
+                                                    )}
+                                                </Badge>
                                                 {selected.subscription_status === "active" && <Badge className="bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400"><CreditCard className="h-3 w-3" /> Spinr Pass</Badge>}
                                             </div>
                                         </div>
@@ -400,17 +537,67 @@ export default function DriversPage() {
                                         )}
                                     </DetailSection>
                                     <DetailSection title="Vehicle Information" icon={Car}>
-                                        {editing ? (
+                                        {editing ? (() => {
+                                            // Narrow vehicle-type options to the types with
+                                            // active fare_configs for the currently-selected
+                                            // service area — same convention the monitoring
+                                            // filter uses. No area selected → show every
+                                            // active type.
+                                            const areaId = ef("service_area_id");
+                                            const allowed = areaId ? vehicleTypesByArea[areaId] : null;
+                                            // The dropdown is NEVER disabled — admins must
+                                            // be able to recover any driver from a bad
+                                            // state (vehicle type deleted, area
+                                            // mis-configured, etc.). When the area has no
+                                            // active fare_configs we still show every
+                                            // catalogue type and warn inline so the
+                                            // operator knows configs are missing.
+                                            const areaHasConfigs = !!allowed && allowed.size > 0;
+                                            const availableTypes = areaHasConfigs
+                                                ? vehicleTypes.filter(v => allowed!.has(v.id))
+                                                : vehicleTypes;
+                                            const currentTypeId = ef("vehicle_type_id");
+                                            const currentInList = availableTypes.some(v => v.id === currentTypeId);
+                                            return (
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                    <div>
+                                                        <label className="text-[11px] text-muted-foreground mb-1 block">Vehicle Type</label>
+                                                        <Select
+                                                            value={currentTypeId || "none"}
+                                                            onValueChange={v => setEf("vehicle_type_id", v === "none" ? "" : v)}
+                                                        >
+                                                            <SelectTrigger className="h-9 text-sm">
+                                                                <SelectValue placeholder="Select vehicle type" />
+                                                            </SelectTrigger>
+                                                            <SelectContent>
+                                                                <SelectItem value="none">Not assigned</SelectItem>
+                                                                {availableTypes.map(v => (
+                                                                    <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>
+                                                                ))}
+                                                                {currentTypeId && !currentInList && (
+                                                                    <SelectItem value={currentTypeId}>
+                                                                        {vehicleTypes.find(v => v.id === currentTypeId)?.name || currentTypeId.slice(0, 8)} (deleted)
+                                                                    </SelectItem>
+                                                                )}
+                                                            </SelectContent>
+                                                        </Select>
+                                                        {areaId && !areaHasConfigs && (
+                                                            <p className="text-[10px] text-amber-600 mt-1">
+                                                                No fare configs for this area — set them up in Service Areas → Vehicle Pricing.
+                                                            </p>
+                                                        )}
+                                                    </div>
+                                                    <EditField label="Make" value={ef("vehicle_make")} onChange={v => setEf("vehicle_make", v)} />
+                                                    <EditField label="Model" value={ef("vehicle_model")} onChange={v => setEf("vehicle_model", v)} />
+                                                    <EditField label="Color" value={ef("vehicle_color")} onChange={v => setEf("vehicle_color", v)} />
+                                                    <EditField label="Year" value={ef("vehicle_year")} onChange={v => setEf("vehicle_year", v)} />
+                                                    <EditField label="License Plate" value={ef("license_plate")} onChange={v => setEf("license_plate", v)} />
+                                                    <EditField label="VIN" value={ef("vehicle_vin")} onChange={v => setEf("vehicle_vin", v)} />
+                                                </div>
+                                            );
+                                        })() : (
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                                <EditField label="Make" value={ef("vehicle_make")} onChange={v => setEf("vehicle_make", v)} />
-                                                <EditField label="Model" value={ef("vehicle_model")} onChange={v => setEf("vehicle_model", v)} />
-                                                <EditField label="Color" value={ef("vehicle_color")} onChange={v => setEf("vehicle_color", v)} />
-                                                <EditField label="Year" value={ef("vehicle_year")} onChange={v => setEf("vehicle_year", v)} />
-                                                <EditField label="License Plate" value={ef("license_plate")} onChange={v => setEf("license_plate", v)} />
-                                                <EditField label="VIN" value={ef("vehicle_vin")} onChange={v => setEf("vehicle_vin", v)} />
-                                            </div>
-                                        ) : (
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                <DetailField icon={Car} label="Vehicle Type" value={vehicleTypes.find(v => v.id === selected.vehicle_type_id)?.name || (selected.vehicle_type_id ? selected.vehicle_type_id.slice(0, 8) : "Not assigned")} />
                                                 <DetailField icon={Car} label="Vehicle" value={`${selected.vehicle_color || ""} ${selected.vehicle_make || ""} ${selected.vehicle_model || ""}`.trim() || "\u2014"} />
                                                 <DetailField icon={CalendarRange} label="Year" value={selected.vehicle_year || "\u2014"} />
                                                 <DetailField icon={FileText} label="License Plate" value={selected.license_plate || "\u2014"} mono />
@@ -519,7 +706,7 @@ export default function DriversPage() {
 
                                 {/* Actions & Verification */}
                                 <TabsContent value="verification" className="mt-4 space-y-5">
-                                    <DriverActionBar driver={selected} onActionComplete={() => { loadData(); setSelected(null); }} />
+                                    <DriverActionBar driver={selected} onActionComplete={() => { loadData(); loadDrivers(); setSelected(null); }} />
                                     <DetailSection title="Verification Checklist" icon={CheckCircle}>
                                         <div className="space-y-2">
                                             {(requiredDocs.length > 0 ? requiredDocs : [
@@ -530,9 +717,17 @@ export default function DriversPage() {
                                                 { key: "background_check",     label: "Background Check",   has_expiry: true },
                                             ]).map(rd => {
                                                 const matchingDocs = activeDocs.filter(d => {
-                                                    if (d.requirement_id) return d.requirement_id === rd.key;
+                                                    // 1. Best: match by requirement_key (slug stored since migration 28)
+                                                    if (d.requirement_key) return d.requirement_key === rd.key;
+                                                    // 2. Match by requirement_id (UUID or legacy string key)
+                                                    if (d.requirement_id) return d.requirement_id === (rd as any).id || d.requirement_id === rd.key;
+                                                    // 3. Match document_type against the label or key
                                                     const dt = (d.document_type || "").toLowerCase();
-                                                    return dt === rd.label.toLowerCase() || dt.replace(/[^a-z0-9]/g, "_").includes(rd.key.replace(/[^a-z0-9]/g, "_"));
+                                                    const label = rd.label.toLowerCase();
+                                                    const key = rd.key.toLowerCase().replace(/_/g, " ");
+                                                    if (dt === label || dt === key) return true;
+                                                    // 4. Fuzzy fallback: key slug appears inside document_type
+                                                    return dt.replace(/[^a-z0-9]/g, "_").includes(rd.key.replace(/[^a-z0-9]/g, "_"));
                                                 });
                                                 const hasApproved = matchingDocs.some(d => d.status === "approved");
                                                 const hasPending = matchingDocs.some(d => d.status === "pending");
@@ -614,7 +809,7 @@ export default function DriversPage() {
                                 </label>
                                 <Input type="date" value={reviewExpiry} onChange={e => setReviewExpiry(e.target.value)} className="w-full" />
                                 {reviewingDoc?.requiresExpiry && !reviewExpiry && (
-                                    <p className="text-xs text-red-500 mt-1 flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> Expiry date is required for this document type. This will update the driver's profile.</p>
+                                    <p className="text-xs text-red-500 mt-1 flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> Expiry date is required for this document type. This will update the driver&apos;s profile.</p>
                                 )}
                                 {!reviewingDoc?.requiresExpiry && <p className="text-xs text-muted-foreground mt-1">Leave empty if no expiry.</p>}
                             </div>

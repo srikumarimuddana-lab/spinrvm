@@ -6,22 +6,25 @@ here re-checks auth. Credits and debits recorded via this module carry
 ``admin_id`` in the ledger metadata so refunds/adjustments are auditable.
 """
 
+import uuid
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
     from ...db import db
     from ...dependencies import get_admin_user
+    from ...utils.rate_limiter import admin_wallet_limit
     from ..wallet import _record_transaction, get_or_create_wallet
 except ImportError:
     import db_supabase
     from db import db
     from dependencies import get_admin_user
     from routes.wallet import _record_transaction, get_or_create_wallet
+    from utils.rate_limiter import admin_wallet_limit
 
 router = APIRouter(prefix="/wallet", tags=["Admin Wallet"])
 
@@ -36,12 +39,18 @@ class AdminCreditRequest(BaseModel):
     user_id: str
     amount: float = Field(..., gt=0, le=10_000, description="CAD amount to credit (max $10,000/txn)")
     reason: str = Field(..., min_length=3, max_length=200)
+    idempotency_key: str | None = Field(
+        None, description="Caller-supplied key; duplicate requests return the original result"
+    )
 
 
 class AdminDebitRequest(BaseModel):
     user_id: str
     amount: float = Field(..., gt=0, le=10_000)
     reason: str = Field(..., min_length=3, max_length=200)
+    idempotency_key: str | None = Field(
+        None, description="Caller-supplied key; duplicate requests return the original result"
+    )
 
 
 @router.get("/{user_id}")
@@ -66,7 +75,9 @@ async def admin_get_wallet(
     return {
         "user": {
             "id": user["id"],
-            "name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or user.get("phone") or user.get("email"),
+            "name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+            or user.get("phone")
+            or user.get("email"),
             "phone": user.get("phone"),
             "email": user.get("email"),
         },
@@ -93,8 +104,25 @@ async def admin_get_wallet(
 
 
 @router.post("/credit")
-async def admin_credit_wallet(req: AdminCreditRequest, admin: dict = Depends(get_admin_user)):
+@admin_wallet_limit
+async def admin_credit_wallet(
+    request: Request,
+    req: AdminCreditRequest,
+    admin: dict = Depends(get_admin_user),
+):
     """Credit a user's wallet. Writes an audited ledger entry."""
+    # Idempotency guard (F-37): if a key was supplied, return the existing
+    # transaction rather than applying the credit a second time on retry.
+    if req.idempotency_key:
+        existing_txns = await db_supabase.get_rows(
+            "wallet_transactions",
+            {"reference_id": req.idempotency_key, "type": "admin_credit"},
+            limit=1,
+        )
+        if existing_txns:
+            t = existing_txns[0]
+            return {"balance": float(t["balance_after"]), "transaction_id": t["id"]}
+
     user = await db_supabase.get_user_by_id(req.user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -118,8 +146,29 @@ async def admin_credit_wallet(req: AdminCreditRequest, admin: dict = Depends(get
         txn_type="admin_credit",
         amount=float(credit),
         balance_after=float(new_balance),
+        reference_id=req.idempotency_key,
         description=f"Admin credit: {req.reason}",
         metadata={"admin_id": admin["id"], "reason": req.reason},
+    )
+
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "wallet_credit",
+            "resource": "user",
+            "resource_id": req.user_id,
+            "details": {
+                "amount": float(credit),
+                "old_balance": float(old_balance),
+                "new_balance": float(new_balance),
+                "reason": req.reason,
+                "transaction_id": txn["id"],
+            },
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
     )
 
     return {
@@ -129,8 +178,24 @@ async def admin_credit_wallet(req: AdminCreditRequest, admin: dict = Depends(get
 
 
 @router.post("/debit")
-async def admin_debit_wallet(req: AdminDebitRequest, admin: dict = Depends(get_admin_user)):
+@admin_wallet_limit
+async def admin_debit_wallet(
+    request: Request,
+    req: AdminDebitRequest,
+    admin: dict = Depends(get_admin_user),
+):
     """Debit (deduct from) a user's wallet — refunds, correction, fraud clawback."""
+    # Idempotency guard (F-37): return existing result on retry.
+    if req.idempotency_key:
+        existing_txns = await db_supabase.get_rows(
+            "wallet_transactions",
+            {"reference_id": req.idempotency_key, "type": "admin_debit"},
+            limit=1,
+        )
+        if existing_txns:
+            t = existing_txns[0]
+            return {"balance": float(t["balance_after"]), "transaction_id": t["id"]}
+
     user = await db_supabase.get_user_by_id(req.user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -156,8 +221,29 @@ async def admin_debit_wallet(req: AdminDebitRequest, admin: dict = Depends(get_a
         txn_type="admin_debit",
         amount=-float(debit),
         balance_after=float(new_balance),
+        reference_id=req.idempotency_key,
         description=f"Admin debit: {req.reason}",
         metadata={"admin_id": admin["id"], "reason": req.reason},
+    )
+
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "wallet_debit",
+            "resource": "user",
+            "resource_id": req.user_id,
+            "details": {
+                "amount": float(debit),
+                "old_balance": float(old_balance),
+                "new_balance": float(new_balance),
+                "reason": req.reason,
+                "transaction_id": txn["id"],
+            },
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
     )
 
     return {

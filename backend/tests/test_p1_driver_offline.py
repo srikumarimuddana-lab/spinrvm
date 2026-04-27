@@ -12,13 +12,13 @@ assigned; the driver must complete the trip before going offline.
 Run:
     pytest backend/tests/test_p1_driver_offline.py -v
 """
+
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-
 
 DRIVER_USER_ID = "driver_user_p1_10"
 DRIVER_ID = "driver_row_p1_10"
@@ -56,6 +56,7 @@ def _ride(status: str) -> dict:
 # PUT /drivers/{driver_id}/status — offline-during-trip guard
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.e2e
 @pytest.mark.asyncio
 class TestDriverOfflineMidTrip:
@@ -66,8 +67,9 @@ class TestDriverOfflineMidTrip:
     """
 
     async def test_driver_cannot_go_offline_during_driver_accepted_ride(self):
-        from backend.routes import drivers as drv_mod
         from fastapi import HTTPException
+
+        from backend.routes import drivers as drv_mod
 
         driver = _driver_row()
 
@@ -89,8 +91,9 @@ class TestDriverOfflineMidTrip:
         assert "active trip" in exc_info.value.detail.lower()
 
     async def test_driver_cannot_go_offline_during_trip_in_progress(self):
-        from backend.routes import drivers as drv_mod
         from fastapi import HTTPException
+
+        from backend.routes import drivers as drv_mod
 
         driver = _driver_row()
 
@@ -111,8 +114,9 @@ class TestDriverOfflineMidTrip:
         assert exc_info.value.status_code == 409
 
     async def test_driver_cannot_go_offline_during_driver_arrived(self):
-        from backend.routes import drivers as drv_mod
         from fastapi import HTTPException
+
+        from backend.routes import drivers as drv_mod
 
         driver = _driver_row()
 
@@ -140,8 +144,9 @@ class TestDriverOfflineMidTrip:
         updated_driver = {**driver, "is_online": False, "is_available": False}
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_driver_by_id",
-                  AsyncMock(side_effect=[driver, updated_driver])),
+            patch(
+                "backend.routes.drivers.db_supabase.get_driver_by_id", AsyncMock(side_effect=[driver, updated_driver])
+            ),
             patch(
                 "backend.routes.drivers.db_supabase.get_rows",
                 AsyncMock(return_value=[]),  # no active ride
@@ -165,8 +170,9 @@ class TestDriverOfflineMidTrip:
         updated_driver = {**driver, "is_online": False, "is_available": False}
 
         with (
-            patch("backend.routes.drivers.db_supabase.get_driver_by_id",
-                  AsyncMock(side_effect=[driver, updated_driver])),
+            patch(
+                "backend.routes.drivers.db_supabase.get_driver_by_id", AsyncMock(side_effect=[driver, updated_driver])
+            ),
             patch(
                 "backend.routes.drivers.db_supabase.get_rows",
                 AsyncMock(return_value=[]),  # completed rides not in active_statuses list
@@ -193,8 +199,9 @@ class TestDriverOfflineMidTrip:
         # going online. We verify by returning an active ride from get_rows
         # and asserting no 409 is raised.
         with (
-            patch("backend.routes.drivers.db_supabase.get_driver_by_id",
-                  AsyncMock(side_effect=[driver, updated_driver])),
+            patch(
+                "backend.routes.drivers.db_supabase.get_driver_by_id", AsyncMock(side_effect=[driver, updated_driver])
+            ),
             patch(
                 "backend.routes.drivers.db_supabase.get_rows",
                 AsyncMock(return_value=[]),  # called for docs check, not active-ride
@@ -212,8 +219,9 @@ class TestDriverOfflineMidTrip:
 
     async def test_unauthorized_driver_cannot_toggle_status(self):
         """A driver can only toggle their own status — not another driver's."""
-        from backend.routes import drivers as drv_mod
         from fastapi import HTTPException
+
+        from backend.routes import drivers as drv_mod
 
         driver = _driver_row()  # user_id = DRIVER_USER_ID
 

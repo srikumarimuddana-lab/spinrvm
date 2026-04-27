@@ -152,7 +152,7 @@ export default function MonitoringPage() {
         break;
       }
       case "ride_completed": {
-        const ride = ridesMapRef.current.get(event.ride_id);
+        const _ride = ridesMapRef.current.get(event.ride_id);
         ridesMapRef.current.delete(event.ride_id);
         mapHandlesRef.current?.removeRideMarkers(event.ride_id);
         refreshCounts();
@@ -220,10 +220,21 @@ export default function MonitoringPage() {
     refreshCounts();
   }, [applyDriver, applyRide, refreshCounts]);
 
-  // Load service areas + vehicle types once
+  // Load service areas + vehicle types + pricing sources once. The
+  // serviceAreaId → vehicleTypeId map is unioned from BOTH pricing
+  // stores (fare_configs table AND service_areas.vehicle_pricing
+  // JSONB) — admins can configure vehicles in either place, and
+  // reading only one source caused the drawer to complain "No fare
+  // configs" even when pricing was set via the Service Areas admin.
   useEffect(() => {
-    getServiceAreas()
-      .then((areas: any[]) =>
+    Promise.all([
+      getServiceAreas(),
+      getVehicleTypes().catch(() => [] as any[]),
+      getFareConfigs().catch(() => [] as any[]),
+    ])
+      .then(([rawAreas, vt, configs]) => {
+        const areas: any[] = rawAreas || [];
+
         setServiceAreas(
           areas.map((a) => {
             // Backend stores the shape under `polygon` (may be a raw
@@ -263,31 +274,35 @@ export default function MonitoringPage() {
               fallbackCenter = { lat: a.center_lat, lng: a.center_lng };
             }
             return { id: a.id, name: a.name, geojson, fallbackCenter };
-          })
-        )
-      )
-      .catch(() => {});
+          }),
+        );
 
-    getVehicleTypes()
-      .then((vt: any[]) =>
-        setVehicleTypes(vt.map((v) => ({ id: v.id, name: v.name })))
-      )
-      .catch(() => {});
+        const types = (vt || []).map((v: any) => ({ id: v.id, name: v.name }));
+        setVehicleTypes(types);
+        const byName: Record<string, string> = {};
+        for (const t of types) byName[t.name] = t.id;
 
-    // Build serviceAreaId → vehicleTypeId set from active fare configs.
-    // Silently falling back to {} (empty map) keeps the current behavior
-    // — the "All Vehicles" option shows everything when an area isn't
-    // selected; only the per-area filter depends on this mapping.
-    getFareConfigs()
-      .then((configs: any[]) => {
         const map: Record<string, Set<string>> = {};
+        // From fare_configs (direct id refs)
         for (const c of configs || []) {
           if (c?.is_active === false) continue;
-          const areaId = c?.service_area_id;
+          const aId = c?.service_area_id;
           const vtId = c?.vehicle_type_id;
-          if (!areaId || !vtId) continue;
-          if (!map[areaId]) map[areaId] = new Set<string>();
-          map[areaId].add(vtId);
+          if (!aId || !vtId) continue;
+          if (!map[aId]) map[aId] = new Set<string>();
+          map[aId].add(vtId);
+        }
+        // From service_areas.vehicle_pricing JSONB (name-based)
+        for (const area of areas) {
+          const pricing = Array.isArray(area?.vehicle_pricing) ? area.vehicle_pricing : [];
+          for (const row of pricing) {
+            const name = row?.vehicle_type;
+            if (!name) continue;
+            const vtId = byName[name];
+            if (!vtId) continue;
+            if (!map[area.id]) map[area.id] = new Set<string>();
+            map[area.id].add(vtId);
+          }
         }
         setVehicleTypesByArea(map);
       })

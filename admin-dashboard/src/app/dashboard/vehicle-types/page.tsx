@@ -7,7 +7,7 @@ import {
     updateVehicleType,
     deleteVehicleType,
 } from "@/lib/api";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,7 +18,6 @@ import {
     DialogContent,
     DialogHeader,
     DialogTitle,
-    DialogTrigger,
 } from "@/components/ui/dialog";
 import { Car, Plus, Pencil, Trash2, Users, Image as ImageIcon } from "lucide-react";
 
@@ -103,8 +102,12 @@ export default function VehicleTypesPage() {
         try {
             await deleteVehicleType(id);
             fetchTypes();
-        } catch (err) {
+        } catch (err: any) {
+            // 409 from the backend means the type is still referenced by a
+            // service area or fare config. Show the message so the operator
+            // knows where to clean up before re-trying the delete.
             console.error("Error deleting vehicle type:", err);
+            alert(err?.message || "Could not delete vehicle type");
         }
     };
 

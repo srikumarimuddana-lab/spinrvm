@@ -8,6 +8,7 @@ Runs every 10 minutes (wired from lifespan startup). Each tick:
   4. The webhook handler (Task 5) credits the wallet when the charge
      clears — no work here beyond kicking off the intent.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -65,7 +66,10 @@ async def _process_one(wallet: dict, stripe_secret: str) -> None:
     if today_sum + topup_amount > daily_cap:
         logger.info(
             "autotopup: wallet %s at daily cap (%s + %s > %s)",
-            wallet["id"], today_sum, topup_amount, daily_cap,
+            wallet["id"],
+            today_sum,
+            topup_amount,
+            daily_cap,
         )
         return
 

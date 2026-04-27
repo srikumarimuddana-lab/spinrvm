@@ -12,20 +12,26 @@
 
 // ── Module mocks (before any import) ──────────────────────────────────────
 
-const mockFetchRide = jest.fn(() => Promise.resolve());
-const mockGetState = jest.fn(() => ({ fetchRide: mockFetchRide }));
-
-jest.mock('../../store/rideStore', () => ({
-  useRideStore: Object.assign(
-    (selector: (s: any) => any) =>
-      selector({ currentRide: { id: 'ride-001' }, currentDriver: null }),
-    { getState: mockGetState },
-  ),
-}));
+jest.mock('../../store/rideStore', () => {
+  function mockUseRideStore(selector: (s: any) => any) {
+    return selector({ currentRide: { id: 'ride-001' }, currentDriver: null });
+  }
+  mockUseRideStore.getState = jest.fn(() => ({
+    fetchRide: jest.fn(() => Promise.resolve()),
+    updateDriverLocation: jest.fn(),
+    applyRideStatusFromWS: jest.fn(),
+    clearRide: jest.fn(),
+    addChatMessage: jest.fn(),
+  }));
+  return { useRideStore: mockUseRideStore };
+});
 
 jest.mock('@shared/store/authStore', () => ({
-  useAuthStore: (selector: (s: any) => any) =>
-    selector({ user: { id: 'user-abc' }, token: 'tok-xyz' }),
+  useAuthStore: Object.assign(
+    (selector: (s: any) => any) =>
+      selector({ user: { id: 'user-abc' }, token: 'tok-xyz' }),
+    { getState: () => ({ user: { id: 'user-abc' }, token: 'tok-xyz' }) },
+  ),
 }));
 
 jest.mock('@shared/config', () => ({ API_URL: 'http://localhost:8000' }));
@@ -62,18 +68,29 @@ const instances: MockWebSocket[] = [];
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-import { renderHook, act } from '@testing-library/react-hooks';
+import { renderHook, act } from '@testing-library/react-native';
 import { useRiderSocket } from '../useRiderSocket';
+import { useRideStore } from '../../store/rideStore';
 
 beforeEach(() => {
   instances.length = 0;
   jest.clearAllMocks();
   jest.useFakeTimers();
+  // Reset getState mock to return fresh mock functions each call
+  (useRideStore.getState as jest.Mock).mockImplementation(() => ({
+    fetchRide: mockFetchRide,
+    updateDriverLocation: jest.fn(),
+    applyRideStatusFromWS: jest.fn(),
+    clearRide: jest.fn(),
+    addChatMessage: jest.fn(),
+  }));
 });
 
 afterEach(() => {
   jest.useRealTimers();
 });
+
+const mockFetchRide = jest.fn(() => Promise.resolve());
 
 describe('useRiderSocket — reconnect state preservation (P1-6)', () => {
   it('calls fetchRide on initial connect so state is in sync', async () => {
@@ -116,20 +133,6 @@ describe('useRiderSocket — reconnect state preservation (P1-6)', () => {
   });
 
   it('does not call fetchRide when there is no active ride on reconnect', async () => {
-    // Override the ride store so there is no current ride
-    const { useRideStore } = require('../../store/rideStore');
-    const prevGetState = mockGetState.getMockImplementation();
-    mockGetState.mockReturnValueOnce({ fetchRide: mockFetchRide });
-
-    // Re-mock useRideStore to return null ride
-    jest.doMock('../../store/rideStore', () => ({
-      useRideStore: Object.assign(
-        (selector: (s: any) => any) =>
-          selector({ currentRide: null, currentDriver: null }),
-        { getState: jest.fn(() => ({ fetchRide: mockFetchRide })) },
-      ),
-    }));
-
     // Note: this scenario is prevented upstream — the hook only connects
     // when user?.id && currentRide?.id (useEffect line ~222). So we just
     // assert the guard inside onopen: if rideId is null, fetchRide is not called.

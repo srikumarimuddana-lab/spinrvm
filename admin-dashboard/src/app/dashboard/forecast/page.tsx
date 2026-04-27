@@ -8,11 +8,11 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
-  AreaChart, Area, BarChart, Bar,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
+  AreaChart, Area,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
 } from "recharts";
 import {
-  TrendingUp, Clock, Zap, RefreshCw, Sun, Moon, Activity,
+  TrendingUp, Clock, Zap, RefreshCw, Sun, Activity,
 } from "lucide-react";
 import {
   getDemandForecast, getDemandForecastSummary, getServiceAreas,

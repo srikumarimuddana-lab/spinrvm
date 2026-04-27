@@ -5,9 +5,9 @@ import { useRouter, usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
     LayoutDashboard, Car, Users, DollarSign, Settings, MapPin, Ticket,
-    HelpCircle, Flame, Building2, LifeBuoy,
-    LogOut, Menu, FileText, X, CreditCard, ChevronLeft, ChevronRight,
-    Sun, Moon, Shield, Cloud, Trophy, TrendingUp,
+    Flame, Building2, LifeBuoy,
+    LogOut, Menu, X, ChevronLeft, ChevronRight,
+    Sun, Moon, Shield, Cloud, Trophy, TrendingUp, Activity,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
@@ -51,7 +51,8 @@ const NAV_GROUPS: NavGroup[] = [
         items: [
             { href: "/dashboard/service-areas", label: "Service Areas", icon: MapPin, module: "service_areas" },
             { href: "/dashboard/vehicle-types", label: "Vehicle Types", icon: Car, module: "pricing" },
-            { href: "/dashboard/pricing", label: "Pricing & Billing", icon: DollarSign, module: "pricing" },
+            // Pricing & Billing, including surge, is managed per-area under
+            // Service Areas → Vehicle Pricing. No standalone pricing page.
             { href: "/dashboard/promotions", label: "Promotions", icon: Ticket, module: "promotions" },
             { href: "/dashboard/quests", label: "Quests & Bonuses", icon: Trophy, module: "promotions" },
         ],
@@ -74,6 +75,7 @@ const NAV_GROUPS: NavGroup[] = [
     {
         title: "System",
         items: [
+            { href: "/dashboard/monitoring/redis", label: "Redis & Infra", icon: Activity, module: "settings" },
             { href: "/dashboard/audit-logs", label: "Audit Logs", icon: Shield, module: "settings" },
             { href: "/dashboard/settings", label: "Settings", icon: Settings, module: "settings" },
             { href: "/dashboard/staff", label: "Staff", icon: Users, module: "staff" },

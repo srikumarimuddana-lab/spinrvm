@@ -42,7 +42,9 @@ interface Requirement {
 
 interface DriverDocument {
     id: string;
-    requirement_id: string;
+    requirement_id: string | null;
+    requirement_key?: string | null;
+    document_type?: string | null;
     document_url: string;
     status: 'pending' | 'approved' | 'rejected';
     rejection_reason?: string;
@@ -292,13 +294,16 @@ export default function DocumentsScreen() {
 
     const getDocStatus = (reqId: string, side: 'front' | 'back' = 'front') => {
         const req = requirements.find(r => r.id === reqId);
-        // Primary match: by requirement_id (UUID-based requirements)
-        // Fallback: by document_type name (service-area requirements stored with null requirement_id)
-        const doc = documents.find(d =>
-            (d.requirement_id === reqId ||
-             (!d.requirement_id && req && d.document_type === req.name)) &&
-            (d.side === side || !d.side)
-        );
+        // Match strategies in order: requirement_key (slug, authoritative when
+        // migration 28 is applied) → requirement_id (UUID or legacy slug) →
+        // document_type name (fallback for rows missing requirement_key).
+        const doc = documents.find(d => {
+            const matches =
+                (d.requirement_key && d.requirement_key === reqId) ||
+                (d.requirement_id && d.requirement_id === reqId) ||
+                (!d.requirement_id && !d.requirement_key && req && d.document_type === req.name);
+            return matches && (d.side === side || !d.side);
+        });
         if (!doc) return 'missing';
         return doc;
     };

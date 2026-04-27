@@ -8,6 +8,7 @@
 Using a dependency (not inline middleware) means FastAPI's
 `app.dependency_overrides` mechanism works for tests.
 """
+
 from __future__ import annotations
 
 from fastapi import Depends, HTTPException, Path

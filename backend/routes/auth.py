@@ -106,9 +106,7 @@ async def _record_otp_failure(phone: str) -> None:
                 "1",
                 settings.OTP_LOCKOUT_DURATION_SECONDS,
             )
-            logger.warning(
-                f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures"
-            )
+            logger.warning(f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures")
     except Exception as e:
         logger.warning(f"_record_otp_failure: {e}")
 
@@ -146,6 +144,7 @@ def _make_auth_response(
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
     )
+
 
 @api_router.post("/send-otp")
 @limiter.limit("3/minute")
@@ -191,7 +190,12 @@ async def send_otp(request: Request, body: SendOTPRequest):
         await db_supabase.delete_many("otp_records", {"phone": phone})
         await db_supabase.insert_otp_record(otp_record.dict())
     except Exception as e:
-        logger.warning(f"Could not store OTP in DB: {e}")
+        # B-P1-5: warn-and-continue here meant the SMS was sent but the
+        # OTP record was never written — verify-otp would 400 every code
+        # the user typed because the row to compare against didn't exist.
+        # Surface as 503 so the client retries the send-otp call.
+        logger.error(f"Could not store OTP in DB: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="otp_store_failed") from e
 
     # Send OTP via SMS (Twilio when configured, console log otherwise)
     sms_result = await send_otp_sms(
@@ -225,6 +229,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
         # R-P1-14: Fetch by phone only; compare hashes in constant time with
         # hmac.compare_digest to prevent timing-based hash-prefix leakage.
         import hmac as _hmac
+
         otp_record = await db_supabase.get_otp_record_by_phone(phone)
         if otp_record:
             expected = otp_record.get("code", "")
@@ -291,10 +296,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             # wraps the original exception in .details["original"]; str(e)
             # only gives the generic "Database operation failed" message.
             original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
-            logger.error(
-                f"get_user_by_phone failed for {phone}: type={type(e).__name__} "
-                f"msg={e} original={original}"
-            )
+            logger.error(f"get_user_by_phone failed for {phone}: type={type(e).__name__} msg={e} original={original}")
             # Refuse to silently fall through to user creation — a DB read
             # failure is NOT the same as "user doesn't exist". Creating a
             # new row here generates duplicate accounts on every retry and
@@ -366,7 +368,14 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             try:
                 await db_supabase.create_user(new_user)
             except Exception as e:
-                logger.warning(f"Could not persist new user to DB: {e}")
+                # B-P1-5: warn-and-continue produced a partial-state bug —
+                # we'd hand back an access token whose user_id has no DB row,
+                # then every authenticated call would 401 because
+                # `get_current_user` couldn't find the user. Force a 503 so
+                # the client retries verify-otp instead of pretending login
+                # succeeded.
+                logger.error(f"Could not persist new user to DB: {e}", exc_info=True)
+                raise HTTPException(status_code=503, detail="user_create_failed") from e
             await redis_set(
                 f"session:{user_id}",
                 session_id,
@@ -422,12 +431,18 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
     """
     try:
         from firebase_admin import auth as _firebase_auth  # type: ignore
+
         payload = _firebase_auth.verify_id_token(body.firebase_token)
     except Exception as e:
         raise HTTPException(status_code=401, detail="Invalid Firebase token") from e
 
+    # B-P1-1 / DV-10: enforce audience binding unconditionally. Production fails
+    # fast in core/config._guard_production_secrets when FIREBASE_DRIVER_APP_ID
+    # is unset, so this branch is only reachable in dev/test.
     driver_app_id = settings.FIREBASE_DRIVER_APP_ID
-    if driver_app_id and payload.get("aud") != driver_app_id:
+    if not driver_app_id:
+        raise HTTPException(status_code=503, detail="Driver Firebase audience not configured")
+    if payload.get("aud") != driver_app_id:
         raise HTTPException(status_code=401, detail="Token not issued for driver app")
 
     uid: str = payload.get("uid") or payload.get("user_id") or ""
@@ -456,13 +471,31 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
         try:
             await db_supabase.create_user(new_user)
         except Exception as e:
-            logger.warning(f"firebase_auth: could not persist user {uid}: {e}")
+            # B-P1-5 / CLAUDE.md: never warn-and-continue on auth-DB failure.
+            # If we can't persist the user, the access token we are about to
+            # mint would point at no row — every subsequent request would
+            # 401 against `get_current_user` and the client would loop. 503
+            # so the rider client retries the Firebase exchange instead.
+            logger.error(
+                f"firebase_auth: could not persist user {uid}: {e}",
+                exc_info=True,
+            )
+            raise HTTPException(status_code=503, detail="auth_persist_failed") from e
         user = new_user
     else:
         try:
             await db_supabase.update_one("users", {"id": uid}, {"current_session_id": session_id})
         except Exception as e:
-            logger.warning(f"firebase_auth: could not update session_id for {uid}: {e}")
+            # B-P1-5: same partial-state class. Without a persisted
+            # current_session_id, single-device login can't enforce
+            # ERR_SESSION_EXPIRED on the prior device, and the new token
+            # we're about to mint references a session_id that isn't
+            # recorded server-side.
+            logger.error(
+                f"firebase_auth: could not update session_id for {uid}: {e}",
+                exc_info=True,
+            )
+            raise HTTPException(status_code=503, detail="auth_session_update_failed") from e
         user["current_session_id"] = session_id
 
     user_id = user["id"]

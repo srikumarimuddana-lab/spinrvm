@@ -2,29 +2,85 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 
 // ── Cookie helpers ───────────────────────────────────────────────
-// The JWT is dual-written to sessionStorage (for Zustand/api.ts) AND to
-// an `admin_token` cookie (for the Next.js middleware at src/middleware.ts,
-// which runs on the edge and cannot read sessionStorage). Both sides must
-// stay in lockstep — see middleware.ts for the full rationale.
-const COOKIE_NAME = 'admin_token';
-const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 8; // 8 hours — standard admin session
+// The JWT is dual-written to memory (Zustand) AND to an `admin_token`
+// cookie (for the Next.js middleware at src/middleware.ts, which runs on
+// the edge and cannot read sessionStorage). The access token is NOT
+// persisted to sessionStorage — only the opaque refresh token is stored
+// there. On page reload, silentRefresh() exchanges the refresh token for
+// a new short-lived access token before any API calls are made.
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
+const REFRESH_BEFORE_EXPIRY_MS = 5 * 60 * 1000; // refresh 5 min before access token expires
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes (F-19)
 
-function setAuthCookie(token: string) {
-    if (typeof document === 'undefined') return;
-    const secure = typeof window !== 'undefined' && window.location.protocol === 'https:';
-    const parts = [
-        `${COOKIE_NAME}=${encodeURIComponent(token)}`,
-        'path=/',
-        `max-age=${COOKIE_MAX_AGE_SECONDS}`,
-        'SameSite=Lax',
-    ];
-    if (secure) parts.push('Secure');
-    document.cookie = parts.join('; ');
+let _refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Cookie helpers — delegate to the Next.js API route so the cookie is set
+// HttpOnly by the server (F-02). document.cookie cannot set HttpOnly.
+// Fire-and-forget: the in-memory token drives API calls; the HttpOnly cookie
+// drives middleware route-protection checks on hard refreshes/SSR.
+function setAuthCookie(token: string): void {
+    if (typeof window === 'undefined') return;
+    fetch('/api/auth/set-cookie', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+    }).catch(() => { /* non-critical — middleware redirects to /login if missing */ });
 }
 
-function clearAuthCookie() {
-    if (typeof document === 'undefined') return;
-    document.cookie = `${COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
+function clearAuthCookie(): void {
+    if (typeof window === 'undefined') return;
+    fetch('/api/auth/set-cookie', { method: 'DELETE' }).catch(() => { /* non-critical */ });
+}
+
+function cancelRefreshTimer() {
+    if (_refreshTimer) {
+        clearTimeout(_refreshTimer);
+        _refreshTimer = null;
+    }
+}
+
+function scheduleTokenRefresh(expiryIso: string, silentRefresh: () => Promise<void>) {
+    cancelRefreshTimer();
+    const msUntilExpiry = new Date(expiryIso).getTime() - Date.now();
+    const delay = Math.max(0, msUntilExpiry - REFRESH_BEFORE_EXPIRY_MS);
+    _refreshTimer = setTimeout(silentRefresh, delay);
+}
+
+// ── Idle session timeout (F-19) ─────────────────────────────────
+// Track user activity and auto-logout after IDLE_TIMEOUT_MS of inactivity.
+// Event listeners are registered in the browser only (SSR-safe guard).
+let _idleTimer: ReturnType<typeof setTimeout> | null = null;
+let _idleLogoutFn: (() => void) | null = null;
+
+const _ACTIVITY_EVENTS = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'] as const;
+
+function _resetIdleTimer() {
+    if (!_idleLogoutFn) return;
+    if (_idleTimer) clearTimeout(_idleTimer);
+    _idleTimer = setTimeout(_idleLogoutFn, IDLE_TIMEOUT_MS);
+}
+
+function startIdleWatch(logoutFn: () => void) {
+    if (typeof window === 'undefined') return;
+    stopIdleWatch();
+    _idleLogoutFn = logoutFn;
+    for (const evt of _ACTIVITY_EVENTS) {
+        window.addEventListener(evt, _resetIdleTimer, { passive: true });
+    }
+    _idleTimer = setTimeout(_idleLogoutFn, IDLE_TIMEOUT_MS);
+}
+
+function stopIdleWatch() {
+    if (_idleTimer) {
+        clearTimeout(_idleTimer);
+        _idleTimer = null;
+    }
+    if (typeof window !== 'undefined') {
+        for (const evt of _ACTIVITY_EVENTS) {
+            window.removeEventListener(evt, _resetIdleTimer);
+        }
+    }
+    _idleLogoutFn = null;
 }
 
 interface User {
@@ -40,17 +96,18 @@ interface User {
 
 interface AuthState {
     user: User | null;
+    // Access token lives in memory only — never written to sessionStorage.
     token: string | null;
     isAuthenticated: boolean;
     isLoading: boolean;
     setUser: (user: User | null) => void;
     setToken: (token: string | null) => void;
+    scheduleRefresh: (accessExpiresAt: string) => void;
     setLoading: (loading: boolean) => void;
     logout: () => void;
     checkAuth: () => Promise<void>;
+    silentRefresh: () => Promise<void>;
 }
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 
 export const useAuthStore = create<AuthState>()(
     persist(
@@ -66,6 +123,11 @@ export const useAuthStore = create<AuthState>()(
                     isAuthenticated: !!user,
                     isLoading: false
                 });
+                if (user) {
+                    startIdleWatch(get().logout);
+                } else {
+                    stopIdleWatch();
+                }
             },
 
             setToken: (token) => {
@@ -77,11 +139,17 @@ export const useAuthStore = create<AuthState>()(
                 }
             },
 
+            scheduleRefresh: (accessExpiresAt) => {
+                scheduleTokenRefresh(accessExpiresAt, get().silentRefresh);
+            },
+
             setLoading: (loading) => {
                 set({ isLoading: loading });
             },
 
             logout: () => {
+                cancelRefreshTimer();
+                stopIdleWatch();
                 clearAuthCookie();
                 set({
                     user: null,
@@ -89,6 +157,32 @@ export const useAuthStore = create<AuthState>()(
                     isAuthenticated: false,
                     isLoading: false
                 });
+                // Clear the HttpOnly RT cookie server-side (fire-and-forget).
+                fetch("/api/admin/auth/logout", { method: "POST" }).catch(() => {});
+            },
+
+            // Exchange the HttpOnly refresh cookie for a new short-lived access
+            // token via the /api/admin/auth/refresh Next.js route (which reads the
+            // cookie server-side so JS never sees the token value). Called
+            // proactively by the scheduled timer and on every page reload.
+            // On failure, calls logout() to clear state.
+            silentRefresh: async () => {
+                try {
+                    const res = await fetch(`${API_BASE}/api/admin/auth/refresh`, {
+                        method: "POST",
+                    });
+                    if (!res.ok) {
+                        get().logout();
+                        return;
+                    }
+                    const data: { token: string; access_expires_at: string } = await res.json();
+                    set({ token: data.token });
+                    setAuthCookie(data.token);
+                    scheduleTokenRefresh(data.access_expires_at, get().silentRefresh);
+                    startIdleWatch(get().logout);
+                } catch {
+                    get().logout();
+                }
             },
 
             checkAuth: async () => {
@@ -114,6 +208,7 @@ export const useAuthStore = create<AuthState>()(
                                 isAuthenticated: true,
                                 isLoading: false
                             });
+                            startIdleWatch(get().logout);
                         } else {
                             get().logout();
                         }
@@ -129,21 +224,25 @@ export const useAuthStore = create<AuthState>()(
         {
             name: 'auth-storage',
             storage: createJSONStorage(() => sessionStorage),
+            // Only persist the user profile / auth flag for optimistic rendering.
+            // The access token and refresh token are intentionally NOT stored in
+            // sessionStorage. On page reload, silentRefresh() re-acquires a fresh
+            // access token by presenting the HttpOnly RT cookie to the Next.js
+            // /api/admin/auth/refresh route — JS never sees the RT value.
             partialize: (state) => ({
-                token: state.token,
                 user: state.user,
                 isAuthenticated: state.isAuthenticated,
             }),
             onRehydrateStorage: () => (state) => {
-                // Check auth when store is rehydrated from sessionStorage.
-                // Also re-sync the cookie so middleware sees the session
-                // after a page reload (Zustand rehydrates from sessionStorage,
-                // but the cookie may have been cleared independently).
-                if (state) {
-                    if (state.token) {
-                        setAuthCookie(state.token);
-                    }
-                    state.checkAuth();
+                if (!state) return;
+                if (state.isAuthenticated) {
+                    // Verify the session is still valid and get a fresh access token.
+                    // silentRefresh calls logout() (sets isLoading=false) on failure.
+                    state.silentRefresh().then(() => {
+                        useAuthStore.getState().setLoading(false);
+                    });
+                } else {
+                    state.setLoading(false);
                 }
             },
         }

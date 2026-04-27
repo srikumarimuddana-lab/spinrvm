@@ -44,3 +44,6 @@ coverage.xml
 htmlcov/
 .pytest_cache/
 
+# Generated code-review artifacts (audit output — not source)
+code_review_report_*.json
+

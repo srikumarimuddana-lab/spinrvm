@@ -8,10 +8,12 @@ try:
     from .. import db_supabase
     from ..dependencies import get_current_user
     from ..settings_loader import get_app_settings
+    from ..utils.idempotency import idempotent_endpoint
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
     from settings_loader import get_app_settings
+    from utils.idempotency import idempotent_endpoint
 import logging
 
 import stripe
@@ -50,7 +52,12 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
 
 
 @api_router.post("/create-intent")
-async def create_payment_intent(body: PaymentIntentRequest, current_user: dict = Depends(get_current_user)):
+@idempotent_endpoint(scope="payment_intent")
+async def create_payment_intent(
+    body: PaymentIntentRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
     """Create a Stripe payment intent.
 
     `amount` is validated by Pydantic (positive, ≤ 100000 CAD) before we
@@ -78,10 +85,7 @@ async def create_payment_intent(body: PaymentIntentRequest, current_user: dict =
             if requested != ride_fare:
                 raise HTTPException(
                     status_code=400,
-                    detail=(
-                        f"Payment amount {requested} does not match "
-                        f"ride fare {ride_fare}"
-                    ),
+                    detail=(f"Payment amount {requested} does not match ride fare {ride_fare}"),
                 )
 
         amount = int(body.amount * 100)  # Convert dollars → cents
@@ -105,9 +109,7 @@ async def create_payment_intent(body: PaymentIntentRequest, current_user: dict =
         # Idempotency key ties this PaymentIntent to a specific ride + user so
         # a network retry after a timeout cannot create a second charge. (P2-8)
         idempotency_key = (
-            f"ride-{body.ride_id}-{current_user['id']}"
-            if body.ride_id
-            else f"intent-{current_user['id']}-{amount}"
+            f"ride-{body.ride_id}-{current_user['id']}" if body.ride_id else f"intent-{current_user['id']}-{amount}"
         )
         intent = stripe.PaymentIntent.create(
             **intent_params,
@@ -195,7 +197,6 @@ async def get_payment_methods(current_user: dict = Depends(get_current_user)):
         return {"methods": [], "mock": True}
 
     try:
-        stripe.api_key = stripe_secret
         user = await db_supabase.get_user_by_id(current_user["id"])
         stripe_customer_id = user.get("stripe_customer_id") if user else None
 
@@ -277,9 +278,23 @@ class AddCardRequest(BaseModel):
 # the request at all — before any logging, before JSON parsing by pydantic,
 # before touching Stripe. This is the PCI-DSS perimeter.
 _RAW_CARD_FIELDS = {
-    'card_number', 'cardNumber', 'card_no', 'number', 'pan', 'primary_account_number',
-    'cvv', 'cvv2', 'cvc', 'cvc2', 'security_code', 'card_security_code',
-    'expiry', 'expiration', 'expiration_date', 'exp_month', 'exp_year',
+    "card_number",
+    "cardNumber",
+    "card_no",
+    "number",
+    "pan",
+    "primary_account_number",
+    "cvv",
+    "cvv2",
+    "cvc",
+    "cvc2",
+    "security_code",
+    "card_security_code",
+    "expiry",
+    "expiration",
+    "expiration_date",
+    "exp_month",
+    "exp_year",
 }
 
 
@@ -410,7 +425,6 @@ async def set_default_card(card_id: str, current_user: dict = Depends(get_curren
     stripe_secret = settings.get("stripe_secret_key", "")
     if stripe_secret:
         try:
-            stripe.api_key = stripe_secret
             user = await db_supabase.get_user_by_id(current_user["id"])
             cid = user.get("stripe_customer_id")
             if cid:

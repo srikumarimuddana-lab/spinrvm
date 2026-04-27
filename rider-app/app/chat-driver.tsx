@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
+import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -40,7 +41,6 @@ export default function ChatDriverScreen() {
     if (!rideId) return;
     (async () => {
       try {
-        const api = (await import('@shared/api/client')).default;
         const res = await api.get(`/rides/${rideId}/messages`);
         if (res.data?.messages) {
           setChatMessages(res.data.messages);
@@ -80,7 +80,6 @@ export default function ChatDriverScreen() {
   const handleCall = async () => {
     if (!rideId) return;
     try {
-      const api = (await import('@shared/api/client')).default;
       const res = await api.get(`/rides/${rideId}/call`);
       if (res.data?.phone) {
         const { Linking } = require('react-native');
@@ -95,7 +94,6 @@ export default function ChatDriverScreen() {
     if (!text.trim() || !rideId || sending) return;
     setSending(true);
     try {
-      const api = (await import('@shared/api/client')).default;
       const res = await api.post(`/rides/${rideId}/messages`, { text: text.trim() });
       if (res.data?.message) {
         // Optimistically add to local state (deduplicated by the store).

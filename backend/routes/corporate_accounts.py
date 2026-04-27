@@ -46,6 +46,14 @@ get_current_admin = get_admin_user
 
 router = APIRouter(prefix="/admin/corporate-accounts", tags=["Corporate Accounts"])
 
+# OWNERSHIP ASSUMPTION: All Spinr admins are currently global staff — there are
+# no org-scoped admin roles. For this reason, endpoints authenticate via
+# get_current_admin but do NOT check that the admin "owns" the company_id in
+# the path. If per-org admin roles are ever added, every endpoint in this file
+# must gain an ownership check (e.g. fetched_account["admin_email"] == current_admin["email"])
+# before returning or mutating data.
+
+
 
 # Pydantic models for request/response validation
 class CorporateAccountBase(BaseModel):
@@ -145,9 +153,7 @@ async def kyb_upload_url(
 
     from db_supabase import create_kyb_upload_url
 
-    return await create_kyb_upload_url(
-        company_id=normalized_id, content_type=body.content_type
-    )
+    return await create_kyb_upload_url(company_id=normalized_id, content_type=body.content_type)
 
 
 @router.post("/{company_id}/kyb-review", response_model=CorporateAccountDetailResponse)
@@ -176,21 +182,27 @@ async def kyb_review(
         raise HTTPException(status_code=404, detail="Corporate account not found")
 
     if decision.approve:
-        await ensure_corporate_wallet(company_id=normalized_id)
+        try:
+            await ensure_corporate_wallet(company_id=normalized_id)
+        except Exception as wallet_err:
+            logger.error(f"[KYB] Wallet creation failed for company {normalized_id}: {wallet_err}")
+            raise HTTPException(
+                status_code=503,
+                detail="KYB approved but wallet provisioning failed — please retry",
+            ) from wallet_err
         if not row.get("stripe_customer_id"):
             settings = await get_app_settings()
             stripe_secret = settings.get("stripe_secret_key", "")
             if stripe_secret:
                 import stripe
+
                 customer = stripe.Customer.create(
                     email=row.get("billing_email"),
                     name=row.get("legal_name") or row.get("name"),
                     metadata={"corporate_account_id": normalized_id},
                     api_key=stripe_secret,
                 )
-                await update_corporate_stripe_customer_id(
-                    company_id=normalized_id, stripe_customer_id=customer.id
-                )
+                await update_corporate_stripe_customer_id(company_id=normalized_id, stripe_customer_id=customer.id)
 
     return row
 
@@ -378,8 +390,6 @@ async def change_company_status(
     if transition.status in (CompanyStatus.SUSPENDED, CompanyStatus.CLOSED):
         wallet = await get_corporate_wallet_by_company(normalized_id)
         if wallet and wallet.get("auto_topup_enabled"):
-            await update_corporate_wallet_config(
-                wallet_id=wallet["id"], patch={"auto_topup_enabled": False}
-            )
+            await update_corporate_wallet_config(wallet_id=wallet["id"], patch={"auto_topup_enabled": False})
 
     return row

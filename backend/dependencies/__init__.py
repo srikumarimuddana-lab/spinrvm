@@ -20,10 +20,12 @@ from loguru import logger
 try:
     from . import db_supabase
     from .core.config import settings
+    from .utils.error_handling import DatabaseError, ServiceUnavailableException
     from .utils.redis_client import redis_get
 except ImportError:
     import db_supabase
     from core.config import settings
+    from utils.error_handling import DatabaseError, ServiceUnavailableException
     from utils.redis_client import redis_get
 
 db = db_supabase  # legacy alias
@@ -103,6 +105,7 @@ def create_jwt_token(
 
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=JWT_ALGORITHM)
 
+
 def verify_jwt_token(token: str) -> dict:
     try:
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[JWT_ALGORITHM])
@@ -146,10 +149,14 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             payload = None
 
         if payload:
-            # R-P1-12: Enforce rider app audience — reject tokens minted for the
-            # driver app (which would otherwise create/access rider accounts).
-            rider_app_id = getattr(settings, "FIREBASE_RIDER_APP_ID", None)
-            if rider_app_id and payload.get("aud") != rider_app_id:
+            # R-P1-12 / B-P1-1 / DV-10: enforce rider app audience unconditionally.
+            # Production fails fast in core/config._guard_production_secrets when
+            # FIREBASE_RIDER_APP_ID is unset, so the empty-string branch below is
+            # only reachable in dev/test.
+            rider_app_id = getattr(settings, "FIREBASE_RIDER_APP_ID", None) or ""
+            if not rider_app_id:
+                raise HTTPException(status_code=503, detail="Rider Firebase audience not configured")
+            if payload.get("aud") != rider_app_id:
                 raise HTTPException(status_code=401, detail="ERR_TOKEN_AUDIENCE")
 
             uid = payload.get("uid") or payload.get("user_id")
@@ -181,9 +188,10 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 db_session = user.get("current_session_id")
                 if db_session and token_session and token_session != db_session:
                     raise HTTPException(status_code=401, detail="ERR_SESSION_EXPIRED")
-                driver = (lambda _r: _r[0] if _r else None)(
-                    await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
-                )
+                # Cached (30s) — get_current_user runs on every
+                # authenticated request so this lookup used to dominate
+                # the Supabase read load.
+                driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
                 user["is_driver"] = True if driver else False
             return user
     except HTTPException:
@@ -199,14 +207,21 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 
     # Admin tokens are minted by routes/admin/auth.py and carry `role` +
     # `email` + `modules` claims that regular rider/driver tokens do not
-    # have. Since the token is signed with our own JWT_SECRET, we can
-    # trust these claims and return the user directly without a DB lookup.
-    # Without this check, admin-001 (which has no users row) would be
-    # auto-created as a rider and fail the get_admin_user role check.
+    # have. admin-001 (super admin from env) has no DB row — trust JWT claims
+    # directly. All other staff are validated against admin_staff to enforce
+    # is_active and token_version revocation (fixes audit [03-2/03-3]).
     _admin_roles = {"admin", "super_admin", "operations", "support", "finance", "custom"}
     if payload.get("role") in _admin_roles and payload.get("email"):
+        user_id = payload["user_id"]
+        if user_id != "admin-001":
+            staff_rows = await db_supabase.get_rows("admin_staff", {"id": user_id}, limit=1)
+            staff = staff_rows[0] if staff_rows else None
+            if not staff or not staff.get("is_active", True):
+                raise HTTPException(status_code=401, detail="ERR_ACCOUNT_INACTIVE")
+            if _token_version_mismatch(payload, staff):
+                raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
         return {
-            "id": payload["user_id"],
+            "id": user_id,
             "email": payload.get("email"),
             "phone": payload.get("phone", ""),
             "role": payload["role"],
@@ -216,11 +231,21 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             "is_driver": False,
         }
 
-    user = None
+    # Look up the user row. A transient Supabase failure here MUST surface
+    # as a 503 so the client retries — not be silently swallowed, which
+    # previously cascaded into the "create new user" path below and
+    # produced phantom duplicates (see CLAUDE.md: "Never logger.warning
+    # and continue on a DB/auth error").
     try:
         user = await db_supabase.get_user_by_id(payload["user_id"])
+    except (DatabaseError, ServiceUnavailableException):
+        # run_sync already retried the transient error — it's genuinely
+        # unreachable. Let the DB error propagate to the global handler
+        # which returns a clean 503.
+        raise
     except Exception as e:
-        logger.warning(f"Could not look up user from DB: {e}")
+        logger.error(f"Unexpected error looking up user from DB: {e}", exc_info=True)
+        raise DatabaseError(details={"original": str(e)}) from e
 
     if user:
         token_session = payload.get("session_id")
@@ -264,18 +289,31 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         try:
             await db_supabase.create_user(user)
             logger.info(f"Created new user {user['id']} from JWT")
+        except (DatabaseError, ServiceUnavailableException):
+            # Same rule as the lookup above — surface DB outages as a
+            # clean 503 rather than returning a user dict whose backing
+            # row doesn't exist. That used to cause cascading 401/500s
+            # on every subsequent authenticated call in the session.
+            raise
         except Exception as e:
-            logger.warning(f"Could not insert user into DB: {e}")
+            logger.error(f"Unexpected error inserting user into DB: {e}", exc_info=True)
+            raise DatabaseError(details={"original": str(e)}) from e
         user["is_driver"] = False
         return user
 
     try:
-        driver = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
-        )
+        # Cached driver-by-user lookup (30s). Same reason as the Firebase
+        # path above — this is the JWT hot path for every API call.
+        driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
         user["is_driver"] = True if driver else False
-    except Exception:
-        user["is_driver"] = False
+    except (DatabaseError, ServiceUnavailableException):
+        # Treat the drivers lookup the same as the users lookup — if the
+        # DB is flaking, 503 so the client retries. Silently defaulting
+        # is_driver=False caused drivers to see the rider UI mid-outage.
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error looking up driver row: {e}", exc_info=True)
+        raise DatabaseError(details={"original": str(e)}) from e
     return user
 
 
@@ -285,6 +323,36 @@ async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict
     if role not in ("admin", "super_admin", "operations", "support", "finance", "custom"):
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
+
+
+def require_module(module: str):
+    """Return a FastAPI dependency that enforces module-level RBAC.
+
+    Usage::
+
+        @router.post("/wallet/credit")
+        async def credit(admin: dict = Depends(require_module("earnings"))):
+            ...
+
+    Or at include_router time::
+
+        admin_router.include_router(wallet_router, dependencies=[Depends(require_module("earnings"))])
+
+    super_admin always passes regardless of the modules claim.
+    """
+
+    async def _check(current_user: dict = Depends(get_admin_user)) -> dict:
+        if current_user.get("role") == "super_admin":
+            return current_user
+        modules: list = current_user.get("modules") or []
+        if module not in modules:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access denied — module '{module}' not in your role permissions",
+            )
+        return current_user
+
+    return _check
 
 
 # Alias for backward compatibility

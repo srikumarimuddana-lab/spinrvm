@@ -18,13 +18,13 @@ S8 — Driver views another driver's earnings.
 Run:
     pytest backend/tests/test_p1_security.py -v
 """
+
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
-
 
 RIDER_ID = "user_p1_8_rider"
 DRIVER_USER_ID = "user_p1_8_driver"
@@ -38,12 +38,19 @@ def _ride(status: str, rider_id: str = RIDER_ID, driver_id: str | None = DRIVER_
         "rider_id": rider_id,
         "status": status,
         "driver_id": driver_id,
-        "pickup_lat": 52.13, "pickup_lng": -106.67,
-        "dropoff_lat": 52.12, "dropoff_lng": -106.65,
-        "pickup_address": "123 Main", "dropoff_address": "456 Broadway",
-        "estimated_fare": 18.5, "total_fare": 18.5, "grand_total": 18.5,
-        "distance_km": 3.2, "duration_minutes": 8,
-        "payment_method": "card", "payment_status": "pending",
+        "pickup_lat": 52.13,
+        "pickup_lng": -106.67,
+        "dropoff_lat": 52.12,
+        "dropoff_lng": -106.65,
+        "pickup_address": "123 Main",
+        "dropoff_address": "456 Broadway",
+        "estimated_fare": 18.5,
+        "total_fare": 18.5,
+        "grand_total": 18.5,
+        "distance_km": 3.2,
+        "duration_minutes": 8,
+        "payment_method": "card",
+        "payment_status": "pending",
         "created_at": datetime.utcnow().isoformat(),
     }
     row.update(extra)
@@ -78,8 +85,9 @@ class TestSelfAcceptGuard:
 
     async def test_dual_role_user_cannot_accept_own_ride(self):
         """The dual-role user is their own rider — must get 403."""
-        from backend.routes import drivers as drv_mod
         from fastapi import HTTPException
+
+        from backend.routes import drivers as drv_mod
 
         # Dual-role: driver record exists for the same user_id as the ride's rider
         ride = _ride(status="searching", rider_id=DRIVER_USER_ID, driver_id=None)
@@ -105,8 +113,9 @@ class TestSelfAcceptGuard:
 
     async def test_normal_rider_without_driver_record_gets_404(self):
         """A pure rider (no driver row) gets 404 — no driver record found."""
-        from backend.routes import drivers as drv_mod
         from fastapi import HTTPException
+
+        from backend.routes import drivers as drv_mod
 
         with patch(
             "backend.routes.drivers.db_supabase.get_rows",
@@ -188,8 +197,9 @@ class TestRoleClaimTampering:
     async def test_tampered_role_in_jwt_is_ignored(self):
         """A JWT carrying `role: 'driver'` for a user who is `role: 'rider'`
         in the DB must return the DB role, not the JWT claim."""
-        from backend.dependencies import get_current_user
         from fastapi.security import HTTPAuthorizationCredentials
+
+        from backend.dependencies import get_current_user
 
         # DB user is a rider — role is 'rider'
         db_user = {
@@ -242,8 +252,9 @@ class TestRoleClaimTampering:
     async def test_tampered_admin_role_is_blocked_by_get_admin_user(self):
         """A JWT with `role: 'admin'` for a regular DB user must not pass
         `get_admin_user` because the DB role is 'rider'."""
-        from backend.dependencies import get_admin_user
         from fastapi import HTTPException
+
+        from backend.dependencies import get_admin_user
 
         # DB user is a rider
         rider_user = {
@@ -262,8 +273,9 @@ class TestRoleClaimTampering:
     async def test_auto_created_user_always_gets_rider_role(self):
         """When a JWT references a user_id not yet in the DB, the auto-created
         user must always get `role: 'rider'` — never trust the JWT claim."""
-        from backend.dependencies import get_current_user
         from fastapi.security import HTTPAuthorizationCredentials
+
+        from backend.dependencies import get_current_user
 
         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="fake-jwt")
 
@@ -292,9 +304,7 @@ class TestRoleClaimTampering:
         ):
             user = await get_current_user(credentials=creds)
 
-        assert user["role"] == "rider", (
-            f"Auto-created user got role='{user.get('role')}' — must always be 'rider'"
-        )
+        assert user["role"] == "rider", f"Auto-created user got role='{user.get('role')}' — must always be 'rider'"
         if created_users:
             assert created_users[0]["role"] == "rider"
 
@@ -334,7 +344,7 @@ class TestDriverEarningsIsolation:
             "backend.routes.drivers.db_supabase.get_rows",
             AsyncMock(side_effect=_capture_get_rows),
         ):
-            result = await drv_mod.get_driver_earnings(
+            _result = await drv_mod.get_driver_earnings(
                 period="week",
                 current_user={"id": DRIVER_USER_ID},
             )
@@ -349,8 +359,9 @@ class TestDriverEarningsIsolation:
     async def test_earnings_returns_404_for_unknown_user(self):
         """A caller with a valid token but no driver row gets 404, not another
         driver's earnings."""
-        from backend.routes import drivers as drv_mod
         from fastapi import HTTPException
+
+        from backend.routes import drivers as drv_mod
 
         with patch(
             "backend.routes.drivers.db_supabase.get_rows",
@@ -404,7 +415,6 @@ class TestDriverEarningsIsolation:
         assert ride_queries, "No rides query found"
         rides_q = ride_queries[0]["query"]
         assert rides_q.get("driver_id") == DRIVER_ID, (
-            f"Rides for earnings must be scoped to driver_id={DRIVER_ID}; "
-            f"got query={rides_q}"
+            f"Rides for earnings must be scoped to driver_id={DRIVER_ID}; got query={rides_q}"
         )
         assert result["total_earnings"] == 15.0

@@ -1,7 +1,7 @@
 import logging
-import uuid
+import re
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Query
 
@@ -16,13 +16,42 @@ db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
 
+
+async def log_audit(
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    actor: str,
+    details: str = "",
+) -> None:
+    """Write a single row to the audit_logs table.
+
+    Non-raising: callers wrap this in try/except so a DB hiccup never
+    blocks the parent operation. Failures are logged at WARNING level.
+    """
+    try:
+        await db_supabase.insert_one(
+            "audit_logs",
+            {
+                "action": action,
+                "entity_type": entity_type,
+                "resource_id": entity_id,
+                "actor_id": actor,
+                "details": details,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as exc:
+        logger.warning(f"[AUDIT] log_audit({action}, {entity_type}, {entity_id}) failed: {exc}")
+
+
 router = APIRouter()
 
 # ── GPS Location History Cleanup ──
 
 
 @router.post("/maintenance/cleanup-location-history")
-async def admin_cleanup_location_history(days: int = 30):
+async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
     """Delete old driver_location_history rows.
 
     By default deletes rows older than 30 days. On ride completion the
@@ -113,22 +142,9 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         )
         return 2 * R * math.asin(math.sqrt(a))
 
-    # Pull all GPS points from that day
-    all_points = await db_supabase.get_rows(
-        "driver_location_history",
-        {"timestamp": {"$gte": day_start_iso, "$lt": day_end_iso}},
-        order="timestamp",
-        limit=1000000,
-    )
-
-    # Group by driver
-    by_driver: Dict[str, list] = defaultdict(list)
-    for p in all_points or []:
-        did = p.get("driver_id")
-        if did and p.get("lat") and p.get("lng"):
-            by_driver[did].append(p)
-
-    # Pull all rides from that day to count + sum earnings
+    # Pull all rides from that day to determine the set of active driver IDs
+    # and to count/sum earnings. 10 k rides/day is a safe upper bound for the
+    # near term; revisit if Spinr expands to > 10 k daily rides per market.
     day_rides = await db_supabase.get_rows(
         "rides",
         {"created_at": {"$gte": day_start_iso, "$lt": day_end_iso}},
@@ -153,12 +169,36 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         if did:
             declines_by_driver[did] += 1
 
-    all_driver_ids = set(by_driver.keys()) | set(rides_by_driver.keys())
+    # Discover drivers who were online that day via a lightweight distinct-value
+    # query (only driver_id + timestamp; no coordinates loaded yet). Fetching
+    # 1 M rows across all drivers in one query OOMs the process; instead we
+    # collect driver IDs here and fetch GPS points per driver below.
+    presence_rows = await db_supabase.get_rows(
+        "driver_location_history",
+        {"timestamp": {"$gte": day_start_iso, "$lt": day_end_iso}},
+        order="timestamp",
+        limit=50000,  # enough to identify all active drivers; full points fetched per-driver
+    )
+    drivers_with_gps: set = set()
+    for p in presence_rows or []:
+        did = p.get("driver_id")
+        if did:
+            drivers_with_gps.add(did)
+
+    all_driver_ids = drivers_with_gps | set(rides_by_driver.keys())
 
     created = 0
     updated = 0
     for driver_id in all_driver_ids:
-        points = sorted(by_driver.get(driver_id, []), key=lambda x: str(x.get("timestamp", "")))
+        # Fetch this driver's GPS points for the day in a targeted query rather
+        # than carrying all drivers' points in memory simultaneously.
+        raw_points = await db_supabase.get_rows(
+            "driver_location_history",
+            {"driver_id": driver_id, "timestamp": {"$gte": day_start_iso, "$lt": day_end_iso}},
+            order="timestamp",
+            limit=100000,  # ~1 GPS point/sec × max 24 h online = 86 400 points; 100 k is a safe cap
+        )
+        points = [p for p in (raw_points or []) if p.get("lat") and p.get("lng")]
         rides = rides_by_driver.get(driver_id, [])
 
         # Online minutes (simple: span from first to last point)
@@ -247,23 +287,26 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
 
 
 @router.get("/audit-logs")
-async def get_audit_logs(limit: int = Query(50), offset: int = Query(0)):
-    """Get audit log entries."""
-    logs = await db_supabase.get_rows("audit_logs", order="created_at", desc=True, limit=limit)
+async def get_audit_logs(
+    limit: int = Query(50),
+    offset: int = Query(0),
+    action: Optional[str] = Query(None),
+    entity_type: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+):
+    """Get audit log entries with optional filters and pagination."""
+    filters: Dict[str, Any] = {}
+    if action:
+        filters["action"] = action
+    if entity_type:
+        filters["entity_type"] = entity_type
+    if search:
+        term = re.escape(search.strip())
+        if term:
+            filters["$or"] = [
+                {"actor_id": {"$regex": term, "$options": "i"}},
+                {"resource_id": {"$regex": term, "$options": "i"}},
+                {"details": {"$regex": term, "$options": "i"}},
+            ]
+    logs = await db_supabase.get_rows("audit_logs", filters, order="created_at", desc=True, limit=limit, offset=offset)
     return logs
-
-
-async def log_audit(action: str, entity_type: str, entity_id: str, user_email: str, details: str = ""):
-    """Record an audit log entry. Call from admin endpoints."""
-    await db_supabase.insert_one(
-        "audit_logs",
-        {
-            "id": str(uuid.uuid4()),
-            "action": action,  # created, updated, deleted, login, status_change
-            "entity_type": entity_type,  # driver, user, ride, promotion, service_area, staff, setting
-            "entity_id": entity_id,
-            "user_email": user_email,
-            "details": details,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )

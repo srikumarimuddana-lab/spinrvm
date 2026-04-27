@@ -453,10 +453,32 @@ async def spinr_exception_handler(request: Request, exc: SpinrException) -> JSON
     request_id = _resolve_request_id(request)
 
     if exc.should_log:
-        logger.warning(
+        # Per CLAUDE.md: DB / auth / payment errors must surface loudly with
+        # the underlying cause — `exc.message` on DatabaseError is the
+        # generic "Database operation failed" sentinel; the real Postgres /
+        # supabase-py exception string lives in `exc.details['original']`.
+        # 5xx are logged at ERROR with that original cause so the root cause
+        # is visible; 4xx stay at WARNING.
+        original = (exc.details or {}).get("original")
+        level = "ERROR" if exc.status_code >= 500 else "WARNING"
+        parts = [
+            f"[{request_id}] {request.method} {request.url.path}",
             f"SpinrException: {exc.error_code.name} - {exc.message}",
-            extra={"path": request.url.path, "method": request.method, "error_code": exc.error_code.value},
-        )
+            f"error_code={exc.error_code.value}",
+        ]
+        if original:
+            parts.append(f"original={original}")
+        if exc.details:
+            parts.append(f"details={exc.details}")
+        # opt(raw=True) disables loguru's format-template parsing — APIError
+        # `original` strings often contain literal '{' / '}' from dict reprs
+        # (e.g. "{'message': ..., 'code': '22P02'}") which otherwise trip
+        # KeyError inside `.format()` and take down the error handler itself.
+        # Matches the pattern used by general_exception_handler below.
+        try:
+            logger.opt(raw=True).log(level, " | ".join(parts) + "\n")
+        except Exception:  # noqa: S110 - never let logging crash the handler
+            pass
 
     content = exc.to_dict()
     if isinstance(content.get("error"), dict):

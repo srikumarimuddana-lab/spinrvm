@@ -39,12 +39,10 @@ export default function TrackRide() {
   useEffect(() => {
     const fetchRideStatus = async () => {
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-        // Try the public share token endpoint first
-        const res = await fetch(`${apiUrl}/api/v1/rides/track/${shareToken}`);
+        // Use relative URLs — Next.js proxy (next.config.ts) rewrites /api/* to backend.
+        const res = await fetch(`/api/v1/rides/track/${shareToken}`);
         if (!res.ok) {
-          // Fallback: try as ride ID with v1 prefix
-          const fallback = await fetch(`${apiUrl}/api/v1/rides/${shareToken}`);
+          const fallback = await fetch(`/api/v1/rides/${shareToken}`);
           if (!fallback.ok) throw new Error('Ride not found or link expired');
           const data = await fallback.json();
           const rideData = data.ride || data;

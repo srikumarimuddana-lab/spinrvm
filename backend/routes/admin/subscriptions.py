@@ -3,13 +3,17 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
+    from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user  # noqa: F401
+    from utils.audit_logger import log_admin_action  # noqa: F401
 
 from .drivers import _batch_fetch_drivers_and_users, _user_display_name
 
@@ -54,7 +58,7 @@ async def list_subscription_plans():
 
 
 @router.post("/subscription-plans")
-async def create_subscription_plan(req: SubscriptionPlanCreate):
+async def create_subscription_plan(req: SubscriptionPlanCreate, admin: dict = Depends(get_admin_user)):
     """Create a new driver subscription plan."""
     plan = {
         "id": str(uuid.uuid4()),
@@ -71,23 +75,38 @@ async def create_subscription_plan(req: SubscriptionPlanCreate):
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("subscription_plans", plan)
+    await log_admin_action(
+        admin,
+        "subscription_plan_created",
+        "subscription_plans",
+        plan["id"],
+        {"name": req.name, "price": req.price, "duration_days": req.duration_days},
+    )
     return plan
 
 
 @router.put("/subscription-plans/{plan_id}")
-async def update_subscription_plan(plan_id: str, req: SubscriptionPlanUpdate):
+async def update_subscription_plan(plan_id: str, req: SubscriptionPlanUpdate, admin: dict = Depends(get_admin_user)):
     """Update a subscription plan."""
     updates = {k: v for k, v in req.dict().items() if v is not None}
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("subscription_plans", {"id": plan_id}, updates)
+        await log_admin_action(
+            admin,
+            "subscription_plan_updated",
+            "subscription_plans",
+            plan_id,
+            {"updated_fields": list(updates.keys())},
+        )
     return {"success": True}
 
 
 @router.delete("/subscription-plans/{plan_id}")
-async def delete_subscription_plan(plan_id: str):
+async def delete_subscription_plan(plan_id: str, admin: dict = Depends(get_admin_user)):
     """Delete a subscription plan."""
     await db_supabase.delete_many("subscription_plans", {"id": plan_id})
+    await log_admin_action(admin, "subscription_plan_deleted", "subscription_plans", plan_id, {})
     return {"success": True}
 
 

@@ -1,4 +1,4 @@
 {
-  "regions": ["yyz1"],
+  "regions": ["iad1"],
   "$schema": "https://openapi.vercel.sh/vercel.json"
 }

@@ -85,8 +85,11 @@ class TestSendRideMessage:
 
         driver_row = _driver_row()
 
-        # find_one calls: (1) ride row, (2) driver-role check for sender (None=rider),
-        # (3) driver lookup by driver_id to get user_id for WS target
+        # send_ride_message makes up to three db.find_one calls:
+        #   1. get ride by id
+        #   2. get driver by user_id (for is_driver auth check) — returns None for riders
+        #   3. get driver by driver_id (for WS forwarding target) — only when sender is rider
+        # Provide all three slots to avoid StopAsyncIteration.
         find_calls = [ride, None, driver_row if ride.get("driver_id") else None]
 
         with (

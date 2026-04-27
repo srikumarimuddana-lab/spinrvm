@@ -182,33 +182,36 @@ class TestSelectDriverByAlgorithm:
 
 
 def _make_db():
-    """Minimal mock db using the flat interface DispatchService actually calls."""
+    """Minimal mock db supporting the flat Supabase-style interface DispatchService uses."""
     db = MagicMock()
     db.find_one = AsyncMock(return_value=None)
     db.get_rows = AsyncMock(return_value=[])
-    db.update_one = AsyncMock(return_value={"id": "mock"})
-    db.insert_one = AsyncMock(return_value={"id": "mock"})
+    db.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
+    db.insert_one = AsyncMock(return_value=None)
     return db
 
 
-@pytest.mark.asyncio
+pytestmark = pytest.mark.anyio
+
+
 class TestDispatchServiceClaim:
     async def test_claim_driver_returns_true_when_row_was_available(self):
         db = _make_db()
-        db.update_one = AsyncMock(return_value={"id": "d1"})
+        db.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
         svc = DispatchService(db)
         assert await svc.claim_driver("d1") is True
 
     async def test_claim_driver_returns_false_when_row_already_taken(self):
         db = _make_db()
-        db.update_one = AsyncMock(return_value=None)
+        db.update_one = AsyncMock(return_value=MagicMock(modified_count=0))
         svc = DispatchService(db)
         assert await svc.claim_driver("d1") is False
 
     async def test_claim_any_driver_returns_first_successful(self):
         """First driver is taken, second succeeds — walk the list."""
         db = _make_db()
-        db.update_one = AsyncMock(side_effect=[None, {"id": "d2"}])
+        results = [MagicMock(modified_count=0), MagicMock(modified_count=1)]
+        db.update_one = AsyncMock(side_effect=results)
         svc = DispatchService(db)
 
         ranked = [({"id": "d1"}, 1.0), ({"id": "d2"}, 2.0)]
@@ -217,7 +220,7 @@ class TestDispatchServiceClaim:
 
     async def test_claim_any_driver_returns_none_when_all_taken(self):
         db = _make_db()
-        db.update_one = AsyncMock(return_value=None)
+        db.update_one = AsyncMock(return_value=MagicMock(modified_count=0))
         svc = DispatchService(db)
 
         ranked = [({"id": "d1"}, 1.0), ({"id": "d2"}, 2.0)]
@@ -225,7 +228,6 @@ class TestDispatchServiceClaim:
         assert out is None
 
 
-@pytest.mark.asyncio
 class TestDispatchServiceAssign:
     async def test_assign_driver_flips_ride_to_driver_assigned(self):
         db = _make_db()
@@ -237,9 +239,10 @@ class TestDispatchServiceAssign:
 
         db.update_one.assert_awaited_once()
         call_args = db.update_one.await_args
-        # First arg is table name, second is filter, third is update
+        # First positional arg is table name, second is filter, third is update
         assert call_args.args[0] == "rides"
         assert call_args.args[1] == {"id": "r1"}
+        # Update sets driver_id, status, timestamps
         update = call_args.args[2]["$set"]
         assert update["driver_id"] == "d1"
         assert update["status"] == "driver_assigned"
@@ -247,7 +250,6 @@ class TestDispatchServiceAssign:
         assert update["updated_at"] == now
 
 
-@pytest.mark.asyncio
 class TestDispatchServiceLastAssigned:
     async def test_returns_last_assigned_driver_id(self):
         db = _make_db()
@@ -262,7 +264,6 @@ class TestDispatchServiceLastAssigned:
         assert await svc.last_assigned_driver_id() is None
 
 
-@pytest.mark.asyncio
 class TestDispatchServiceFindCandidates:
     async def test_queries_online_available_matching_vehicle_type(self):
         db = _make_db()

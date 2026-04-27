@@ -135,12 +135,17 @@ class TestRidePIIFiltering:
 
     @pytest.mark.asyncio
     async def test_driver_pii_excluded(self, ride_with_driver):
-        """The response's `driver` object must NOT contain forbidden fields."""
+        """The response's `driver` object must NOT contain forbidden fields.
+
+        get_ride uses the flat db_supabase API:
+            db_supabase.get_ride(ride_id)
+            db_supabase.get_driver_by_id(driver_id)
+            db_supabase.get_rows("drivers", {...}) — for is_driver check
+        """
         with (
             patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_with_driver)),
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=FULL_DRIVER_ROW)),
-            patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
         ):
             from backend.routes.rides import get_ride
 
@@ -159,7 +164,6 @@ class TestRidePIIFiltering:
             patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_with_driver)),
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
             patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=FULL_DRIVER_ROW)),
-            patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
         ):
             from backend.routes.rides import get_ride
 
@@ -181,7 +185,7 @@ class TestRidePIIFiltering:
         with (
             patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_no_driver)),
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
-            patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
+            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=None)),
         ):
             from backend.routes.rides import get_ride
 

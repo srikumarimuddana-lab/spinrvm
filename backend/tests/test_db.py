@@ -122,7 +122,14 @@ class TestDBWrapper:
 
 
 class TestUserCollection:
-    """Tests for user-specific database operations."""
+    """Tests for user-specific database operations.
+
+    Collection delegates to db_supabase via the flat API.  We mock at the
+    ``find_one`` / ``insert_one`` / ``update_one`` level so these tests are
+    not sensitive to the two-module-object issue (bare ``db_supabase`` vs
+    ``backend.db_supabase``) that exists when pytest adds both parent and
+    child directories to sys.path.
+    """
 
     @pytest.fixture
     def user_collection(self):
@@ -131,48 +138,38 @@ class TestUserCollection:
         return db.users
 
     @pytest.mark.asyncio
-    async def test_find_one_user_by_id(self, user_collection, mock_supabase_client):
+    async def test_find_one_user_by_id(self, user_collection):
         """Test finding a user by ID."""
+        from unittest.mock import AsyncMock, patch
+
         mock_data = {"id": "user_123", "phone": "+1234567890", "email": "test@example.com"}
 
-        # Setup mock response
-        mock_response = MagicMock()
-        mock_response.data = [mock_data]
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
-            return_value=mock_response
-        )
-
-        result = await user_collection.find_one({"id": "user_123"})
+        with patch("backend.db.db.find_one", AsyncMock(return_value=mock_data)):
+            result = await user_collection.find_one({"id": "user_123"})
 
         assert result is not None
         assert result["id"] == "user_123"
         assert result["phone"] == "+1234567890"
 
     @pytest.mark.asyncio
-    async def test_find_one_user_not_found(self, user_collection, mock_supabase_client):
+    async def test_find_one_user_not_found(self, user_collection):
         """Test finding a user that doesn't exist."""
-        mock_response = MagicMock()
-        mock_response.data = []
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
-            return_value=mock_response
-        )
+        from unittest.mock import AsyncMock, patch
 
-        result = await user_collection.find_one({"id": "nonexistent"})
+        with patch("backend.db.db.find_one", AsyncMock(return_value=None)):
+            result = await user_collection.find_one({"id": "nonexistent"})
 
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_find_one_user_by_phone(self, user_collection, mock_supabase_client):
+    async def test_find_one_user_by_phone(self, user_collection):
         """Test finding a user by phone number."""
+        from unittest.mock import AsyncMock, patch
+
         mock_data = {"id": "user_123", "phone": "+1234567890"}
 
-        mock_response = MagicMock()
-        mock_response.data = [mock_data]
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
-            return_value=mock_response
-        )
-
-        result = await user_collection.find_one({"phone": "+1234567890"})
+        with patch("backend.db.db.find_one", AsyncMock(return_value=mock_data)):
+            result = await user_collection.find_one({"phone": "+1234567890"})
 
         assert result is not None
         assert result["phone"] == "+1234567890"
@@ -188,47 +185,44 @@ class TestDriverCollection:
         return db.drivers
 
     @pytest.mark.asyncio
-    async def test_find_available_drivers(self, driver_collection, mock_supabase_client):
-        """Test finding available drivers."""
-        mock_data = [
-            {"id": "driver_1", "is_available": True, "is_online": True},
-            {"id": "driver_2", "is_available": True, "is_online": True},
-        ]
+    async def test_find_available_drivers(self, driver_collection):
+        """Test finding available drivers via Collection.find_one delegation."""
+        from unittest.mock import AsyncMock, patch
 
-        mock_response = MagicMock()
-        mock_response.data = mock_data
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
-            return_value=mock_response
-        )
+        mock_data = {"id": "driver_1", "is_available": True, "is_online": True}
 
-        await driver_collection.find_one({"is_available": True})
+        with patch("backend.db.db.find_one", AsyncMock(return_value=mock_data)) as mock_find:
+            result = await driver_collection.find_one({"is_available": True})
 
-        # Verify the mock was called
-        mock_supabase_client.table.assert_called_with("drivers")
+        assert result is not None
+        assert result["id"] == "driver_1"
+        mock_find.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_update_driver_location(self, driver_collection, mock_supabase_client):
-        """Test updating driver location."""
-        mock_response = MagicMock()
-        mock_response.data = [{"lat": 52.2, "lng": -106.7}]
-        mock_supabase_client.rpc.return_value.execute = MagicMock(return_value=mock_response)
+    async def test_update_driver_location(self, driver_collection):
+        """Test updating driver location via Collection.update_one delegation."""
+        from unittest.mock import AsyncMock, patch
 
-        # This uses the RPC function for location update
-        await driver_collection.update_one({"id": "driver_123"}, {"$set": {"lat": 52.2, "lng": -106.7}})
+        mock_result = MagicMock()
+        mock_result.modified_count = 1
+
+        with patch("backend.db.db.update_one", AsyncMock(return_value=mock_result)) as mock_update:
+            await driver_collection.update_one({"id": "driver_123"}, {"$set": {"lat": 52.2, "lng": -106.7}})
+
+        mock_update.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_set_driver_available(self, driver_collection, mock_supabase_client):
-        """Test setting driver availability."""
-        mock_response = MagicMock()
-        mock_response.data = [{"id": "driver_123", "is_available": True}]
+    async def test_set_driver_available(self, driver_collection):
+        """Test setting driver availability via Collection.update_one delegation."""
+        from unittest.mock import AsyncMock, patch
 
-        mock_query = MagicMock()
-        mock_query.update.return_value = mock_query
-        mock_query.eq.return_value = mock_query
-        mock_query.execute = MagicMock(return_value=mock_response)
-        mock_supabase_client.table.return_value = mock_query
+        mock_result = MagicMock()
+        mock_result.modified_count = 1
 
-        await driver_collection.update_one({"id": "driver_123"}, {"$set": {"is_available": True}})
+        with patch("backend.db.db.update_one", AsyncMock(return_value=mock_result)) as mock_update:
+            await driver_collection.update_one({"id": "driver_123"}, {"$set": {"is_available": True}})
+
+        mock_update.assert_awaited_once()
 
 
 class TestRideCollection:
@@ -241,48 +235,34 @@ class TestRideCollection:
         return db.rides
 
     @pytest.mark.asyncio
-    async def test_find_ride_by_id(self, ride_collection, mock_supabase_client):
-        """Test finding a ride by ID."""
+    async def test_find_ride_by_id(self, ride_collection):
+        """Test finding a ride by ID via Collection.find_one delegation."""
+        from unittest.mock import AsyncMock, patch
+
         mock_data = {"id": "ride_123", "rider_id": "user_123", "status": "completed"}
 
-        mock_response = MagicMock()
-        mock_response.data = [mock_data]
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
-            return_value=mock_response
-        )
-
-        result = await ride_collection.find_one({"id": "ride_123"})
+        with patch("backend.db.db.find_one", AsyncMock(return_value=mock_data)):
+            result = await ride_collection.find_one({"id": "ride_123"})
 
         assert result is not None
         assert result["id"] == "ride_123"
 
     @pytest.mark.asyncio
-    async def test_find_rides_by_status(self, ride_collection, mock_supabase_client):
-        """Test finding rides by status."""
-        mock_data = [{"id": "ride_1", "status": "pending"}, {"id": "ride_2", "status": "pending"}]
-
-        mock_response = MagicMock()
-        mock_response.data = mock_data
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
-            return_value=mock_response
-        )
-
+    async def test_find_rides_by_status(self, ride_collection):
+        """Test finding rides by status — Collection.find returns a MockCursor."""
         cursor = ride_collection.find({"status": "pending"})
         assert cursor is not None
+        assert cursor.filter == {"status": "pending"}
 
     @pytest.mark.asyncio
-    async def test_count_rides(self, ride_collection, mock_supabase_client):
-        """Test counting rides."""
-        mock_response = MagicMock()
-        mock_response.count = 100
+    async def test_count_rides(self, ride_collection):
+        """Test counting rides via Collection.count_documents delegation."""
+        from unittest.mock import AsyncMock, patch
 
-        # Supabase returns count via a different mechanism
-        mock_supabase_client.table.return_value.select.return_value.eq.return_value.execute = MagicMock(
-            return_value=mock_response
-        )
+        with patch("backend.db.db.get_rows", AsyncMock(return_value=[{}, {}, {}])):
+            count = await ride_collection.count_documents({"status": "completed"})
 
-        await ride_collection.count_documents({"status": "completed"})
-        # The count handling depends on implementation
+        assert count == 3
 
 
 class TestOTPRecordOperations:
@@ -301,66 +281,50 @@ class TestOTPRecordOperations:
         return db.otp_records
 
     @pytest.mark.asyncio
-    async def test_insert_otp_record(self, otp_records_collection, mock_supabase_client):
-        """Test inserting an OTP record."""
-        mock_response = MagicMock()
-        mock_response.data = [{"id": "otp_123"}]
-        mock_supabase_client.table.return_value.insert.return_value = MagicMock(
-            execute=MagicMock(return_value=mock_response)
-        )
+    async def test_insert_otp_record(self, otp_records_collection):
+        """Test inserting an OTP record via Collection.insert_one delegation."""
+        from unittest.mock import AsyncMock, patch
+
+        mock_result = {"id": "otp_123"}
 
         otp_data = {"phone": "+1234567890", "code": "123456", "expires_at": "2024-01-01T00:10:00Z"}
 
-        result = await otp_records_collection.insert_one(otp_data)
+        with patch("backend.db.db.insert_one", AsyncMock(return_value=mock_result)):
+            result = await otp_records_collection.insert_one(otp_data)
+
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_find_otp_by_phone_and_code(self, otp_records_collection, mock_supabase_client):
-        """Test finding OTP by phone and code."""
+    async def test_find_otp_by_phone_and_code(self, otp_records_collection):
+        """Test finding OTP by phone and code via Collection.find_one delegation."""
+        from unittest.mock import AsyncMock, patch
+
         mock_data = {"id": "otp_123", "phone": "+1234567890", "code": "123456", "verified": False}
 
-        mock_response = MagicMock()
-        mock_response.data = [mock_data]
-
-        mock_query = MagicMock()
-        mock_query.select.return_value = mock_query
-        mock_query.eq.return_value = mock_query
-        mock_query.limit.return_value = mock_query
-        mock_query.execute = MagicMock(return_value=mock_response)
-        mock_supabase_client.table.return_value = mock_query
-
-        result = await otp_records_collection.find_one({"phone": "+1234567890", "code": "123456"})
+        with patch("backend.db.db.find_one", AsyncMock(return_value=mock_data)):
+            result = await otp_records_collection.find_one({"phone": "+1234567890", "code": "123456"})
 
         assert result is not None
         assert result["code"] == "123456"
 
     @pytest.mark.asyncio
-    async def test_verify_otp(self, otp_records_collection, mock_supabase_client):
-        """Test verifying an OTP record."""
-        mock_response = MagicMock()
-        mock_response.data = [{"id": "otp_123", "verified": True}]
+    async def test_verify_otp(self, otp_records_collection):
+        """Test verifying an OTP record via Collection.update_one delegation."""
+        from unittest.mock import AsyncMock, patch
 
-        mock_query = MagicMock()
-        mock_query.update.return_value = mock_query
-        mock_query.eq.return_value = mock_query
-        mock_query.execute = MagicMock(return_value=mock_response)
-        mock_supabase_client.table.return_value = mock_query
+        mock_result = MagicMock()
+        mock_result.modified_count = 1
 
-        await otp_records_collection.update_one({"id": "otp_123"}, {"$set": {"verified": True}})
+        with patch("backend.db.db.update_one", AsyncMock(return_value=mock_result)):
+            await otp_records_collection.update_one({"id": "otp_123"}, {"$set": {"verified": True}})
 
     @pytest.mark.asyncio
-    async def test_delete_expired_otp(self, otp_records_collection, mock_supabase_client):
-        """Test deleting expired OTP records."""
-        mock_response = MagicMock()
-        mock_response.count = 1
+    async def test_delete_expired_otp(self, otp_records_collection):
+        """Test deleting expired OTP records via Collection.delete_one delegation."""
+        from unittest.mock import AsyncMock, patch
 
-        mock_query = MagicMock()
-        mock_query.delete.return_value = mock_query
-        mock_query.lt.return_value = mock_query
-        mock_query.execute = MagicMock(return_value=mock_response)
-        mock_supabase_client.table.return_value = mock_query
-
-        await otp_records_collection.delete_one({"id": "otp_123"})
+        with patch("backend.db.db.delete_one", AsyncMock(return_value=None)):
+            await otp_records_collection.delete_one({"id": "otp_123"})
 
 
 class TestDatabaseSupabaseFunctions:

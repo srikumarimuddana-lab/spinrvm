@@ -64,14 +64,27 @@ _LOCK_KEY = "otp_lock:{}"
 
 
 async def _check_otp_lockout(phone: str) -> None:
-    """Raise 429 if phone is currently locked out. Raises 503 on Redis errors (fail closed)."""
+    """Raise 429 if phone is currently locked out. Raises 503 on Redis errors (fail closed).
+
+    B-P1-8: Mirrors the response shape pinned by the slowapi 429 path
+    (utils/rate_limiter.py::rate_limit_exceeded_handler) so mobile
+    clients can use a single 429 parser regardless of which gate
+    (slowapi window or OTP lockout) tripped. RateLimit-* headers per
+    draft-ietf-httpapi-ratelimit-headers; Retry-After per RFC 9110.
+    """
     try:
         locked = await redis_get(_LOCK_KEY.format(phone))
         if locked:
+            retry_after = int(settings.OTP_LOCKOUT_DURATION_SECONDS)
             raise HTTPException(
                 status_code=429,
                 detail="ERR_OTP_LOCKED",
-                headers={"Retry-After": str(settings.OTP_LOCKOUT_DURATION_SECONDS)},
+                headers={
+                    "Retry-After": str(retry_after),
+                    "RateLimit-Limit": str(int(settings.OTP_MAX_FAILURES)),
+                    "RateLimit-Remaining": "0",
+                    "RateLimit-Reset": str(retry_after),
+                },
             )
     except HTTPException:
         raise
@@ -177,7 +190,12 @@ async def send_otp(request: Request, body: SendOTPRequest):
         await db_supabase.delete_many("otp_records", {"phone": phone})
         await db_supabase.insert_otp_record(otp_record.dict())
     except Exception as e:
-        logger.warning(f"Could not store OTP in DB: {e}")
+        # B-P1-5: warn-and-continue here meant the SMS was sent but the
+        # OTP record was never written — verify-otp would 400 every code
+        # the user typed because the row to compare against didn't exist.
+        # Surface as 503 so the client retries the send-otp call.
+        logger.error(f"Could not store OTP in DB: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="otp_store_failed") from e
 
     # Send OTP via SMS (Twilio when configured, console log otherwise)
     sms_result = await send_otp_sms(
@@ -350,7 +368,14 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             try:
                 await db_supabase.create_user(new_user)
             except Exception as e:
-                logger.warning(f"Could not persist new user to DB: {e}")
+                # B-P1-5: warn-and-continue produced a partial-state bug —
+                # we'd hand back an access token whose user_id has no DB row,
+                # then every authenticated call would 401 because
+                # `get_current_user` couldn't find the user. Force a 503 so
+                # the client retries verify-otp instead of pretending login
+                # succeeded.
+                logger.error(f"Could not persist new user to DB: {e}", exc_info=True)
+                raise HTTPException(status_code=503, detail="user_create_failed") from e
             await redis_set(
                 f"session:{user_id}",
                 session_id,
@@ -375,11 +400,20 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
         # of being re-wrapped as a generic 500.
         raise
     except Exception as e:
-        logger.error(f"CRITICAL ERROR IN VERIFY_OTP: {e}")
-        import traceback
-
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Internal Login Error: {str(e)}") from e
+        # B-P3-leak-cleanup: NEVER interpolate {e} into the client-
+        # facing detail. This path is reachable UNAUTHENTICATED, so a
+        # leak here exposes Supabase row IDs, Firebase JWT errors, and
+        # internal stack frames to anyone with internet access. The
+        # framework sanitiser (utils/error_handling.py) already replaces
+        # 5xx detail with "Internal server error", but the manual
+        # str(e) made the leak's intent explicit; clean it up so the
+        # next contributor doesn't copy the pattern. logger.exception
+        # captures the full traceback server-side automatically.
+        logger.exception("CRITICAL ERROR IN VERIFY_OTP")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal Login Error",
+        ) from e
 
 
 class FirebaseAuthRequest(BaseModel):
@@ -402,8 +436,13 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
     except Exception as e:
         raise HTTPException(status_code=401, detail="Invalid Firebase token") from e
 
+    # B-P1-1 / DV-10: enforce audience binding unconditionally. Production fails
+    # fast in core/config._guard_production_secrets when FIREBASE_DRIVER_APP_ID
+    # is unset, so this branch is only reachable in dev/test.
     driver_app_id = settings.FIREBASE_DRIVER_APP_ID
-    if driver_app_id and payload.get("aud") != driver_app_id:
+    if not driver_app_id:
+        raise HTTPException(status_code=503, detail="Driver Firebase audience not configured")
+    if payload.get("aud") != driver_app_id:
         raise HTTPException(status_code=401, detail="Token not issued for driver app")
 
     uid: str = payload.get("uid") or payload.get("user_id") or ""
@@ -432,13 +471,31 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
         try:
             await db_supabase.create_user(new_user)
         except Exception as e:
-            logger.warning(f"firebase_auth: could not persist user {uid}: {e}")
+            # B-P1-5 / CLAUDE.md: never warn-and-continue on auth-DB failure.
+            # If we can't persist the user, the access token we are about to
+            # mint would point at no row — every subsequent request would
+            # 401 against `get_current_user` and the client would loop. 503
+            # so the rider client retries the Firebase exchange instead.
+            logger.error(
+                f"firebase_auth: could not persist user {uid}: {e}",
+                exc_info=True,
+            )
+            raise HTTPException(status_code=503, detail="auth_persist_failed") from e
         user = new_user
     else:
         try:
             await db_supabase.update_one("users", {"id": uid}, {"current_session_id": session_id})
         except Exception as e:
-            logger.warning(f"firebase_auth: could not update session_id for {uid}: {e}")
+            # B-P1-5: same partial-state class. Without a persisted
+            # current_session_id, single-device login can't enforce
+            # ERR_SESSION_EXPIRED on the prior device, and the new token
+            # we're about to mint references a session_id that isn't
+            # recorded server-side.
+            logger.error(
+                f"firebase_auth: could not update session_id for {uid}: {e}",
+                exc_info=True,
+            )
+            raise HTTPException(status_code=503, detail="auth_session_update_failed") from e
         user["current_session_id"] = session_id
 
     user_id = user["id"]
@@ -635,5 +692,23 @@ async def logout_all(request: Request, current_user: dict = Depends(get_current_
         raise HTTPException(status_code=500, detail="Could not invalidate sessions") from e
 
     revoked = await revoke_all_for_user(user_id)
+
+    # B-P1-11: kick any live WebSocket sockets so the user is logged
+    # out instantly rather than waiting up to 30s for the heartbeat
+    # to re-validate token_version. Best-effort — the heartbeat is
+    # the safety net, so a kick failure here must not fail the
+    # logout-all response. The heartbeat re-read still closes the
+    # socket on its next tick.
+    try:
+        try:
+            from ..socket_manager import manager as ws_manager
+        except ImportError:  # pragma: no cover — package-relative fallback
+            from socket_manager import manager as ws_manager
+        await ws_manager.kick_user(
+            user_id, client_types=["rider", "driver"], reason="logout_all",
+        )
+    except Exception as e:
+        logger.warning(f"logout-all: WS kick failed for {user_id}: {e}")
+
     logger.info(f"logout-all: user={user_id} token_version→{new_version} revoked_refresh={revoked}")
     return {"success": True, "revoked_refresh_tokens": revoked}

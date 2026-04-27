@@ -3,7 +3,9 @@ Enhanced Error Handling Patterns for Spinr
 Provides structured error handling, custom exceptions, and error middleware.
 """
 
+import re
 import traceback
+import uuid
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Optional
@@ -12,6 +14,50 @@ from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from loguru import logger
+
+# B-P2-1: short ALL-CAPS sentinels (e.g. ERR_AUTH_UNAVAILABLE,
+# ERR_OTP_LOCKED) are vetted by the route author and let mobile clients
+# branch UI without parsing English. Anything else on a 5xx response is
+# treated as a possible exception leak and replaced with a generic
+# message — full detail still hits the server log paired with the
+# request_id. See docs/runbooks/error-responses.md.
+_SENTINEL_DETAIL_RE = re.compile(r"^ERR_[A-Z0-9_]+$")
+
+
+def _resolve_request_id(request: Request) -> str:
+    """Read the request_id set by RequestIDMiddleware (core/middleware.py).
+
+    Falls back to a fresh UUID only if the middleware didn't run, which
+    happens in test harnesses that mount handlers without the full
+    middleware stack. In production every request has a state-bound id
+    that's also bound to the loguru context — so the request_id in the
+    error body MATCHES the request_id in every server log line for that
+    request lifecycle. Without this, support tickets quoting a client-
+    side request_id couldn't be cross-referenced against logs.
+    """
+    rid = getattr(getattr(request, "state", None), "request_id", None)
+    if isinstance(rid, str) and rid:
+        return rid
+    return uuid.uuid4().hex[:12]
+
+
+def _should_sanitize_5xx_detail(detail: object) -> bool:
+    """True if a 5xx HTTPException detail looks like an exception leak
+    rather than a vetted sentinel.
+
+    Pass-through criteria: short ALL-CAPS ``ERR_*`` sentinel.
+    Sanitize criteria: anything else — non-string detail, free text,
+    interpolated exception strings, etc.
+
+    The single rule (sentinel-or-sanitize) is deliberately strict so
+    a future contributor can't accidentally leak by writing a
+    plausible-sounding sentence. Routes that need to convey 5xx info
+    should either (a) raise a ``SpinrException`` (structured fields,
+    explicit message) or (b) introduce a new ``ERR_*`` sentinel.
+    """
+    if not isinstance(detail, str):
+        return True
+    return not bool(_SENTINEL_DETAIL_RE.match(detail))
 
 
 class ErrorCode(Enum):
@@ -404,9 +450,7 @@ class DuplicateRecordError(SpinrException):
 # Error handling middleware
 async def spinr_exception_handler(request: Request, exc: SpinrException) -> JSONResponse:
     """Handle SpinrException and return formatted JSON response."""
-    import uuid as _uuid
-
-    request_id = _uuid.uuid4().hex[:12]
+    request_id = _resolve_request_id(request)
 
     if exc.should_log:
         # Per CLAUDE.md: DB / auth / payment errors must surface loudly with
@@ -467,12 +511,12 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     # template parsing, matching the defensive pattern in
     # general_exception_handler below. Previously every 422 bubbled up as a
     # 500 because this handler crashed while handling the validation error.
-    import uuid as _uuid
-
-    request_id = _uuid.uuid4().hex[:12]
+    request_id = _resolve_request_id(request)
 
     try:
-        logger.opt(raw=True).warning(f"Validation error at {request.method} {request.url.path}: {errors}\n")
+        logger.opt(raw=True).warning(
+            f"[{request_id}] Validation error at {request.method} {request.url.path}: {errors}\n"
+        )
     except Exception:  # noqa: S110
         # Never let logging take down the error handler itself.
         pass
@@ -503,26 +547,71 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
     top-level `detail` field so the mobile client's fetch wrapper (which
     reads `errorData.detail`) shows the real server message instead of
     the generic "Request failed" fallback.
-    """
-    import uuid as _uuid
 
-    request_id = _uuid.uuid4().hex[:12]
+    B-P2-1: 5xx ``detail`` strings are sanitized unless they match the
+    ``ERR_*`` sentinel pattern. Routes that did
+    ``raise HTTPException(500, detail=str(e))`` would previously leak
+    Stripe charge IDs, Supabase constraint names, JWT library errors,
+    etc. straight to the client. The full detail still hits the server
+    log paired with the request_id so ops can correlate via the id the
+    user quotes. 4xx pass through unchanged (those messages are
+    intended user-facing UX — "Invalid phone number", "Card declined").
+
+    Also propagates ``exc.headers``: routes that raise HTTPException
+    with `Retry-After` / `RateLimit-*` (e.g. the OTP lockout path,
+    B-P1-8) had their headers silently dropped by the previous
+    implementation. The propagation order is `exc.headers` LAST so a
+    route can override `X-Request-ID` if it really wants to (no
+    current callers do; defensive).
+    """
+    request_id = _resolve_request_id(request)
+
+    detail = exc.detail
+    sanitized = False
+    if exc.status_code >= 500 and _should_sanitize_5xx_detail(detail):
+        try:
+            logger.opt(raw=True).error(
+                f"[{request_id}] Sanitised 5xx HTTPException detail at "
+                f"{request.method} {request.url.path}: status={exc.status_code} "
+                f"detail={str(detail)[:500]}"
+            )
+        except Exception:  # noqa: S110
+            # Never let logging take down the error handler itself.
+            pass
+        detail = "Internal server error"
+        sanitized = True
+
+    error_obj: Dict[str, Any] = {
+        "code": exc.status_code,
+        "message": detail,
+        "request_id": request_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    if sanitized:
+        # Explicit signal so a future contributor reading the response
+        # in dev tools knows the message was scrubbed (vs the route
+        # genuinely returning "Internal server error").
+        error_obj["sanitised"] = True
+
+    headers: Dict[str, str] = {
+        **_cors_headers_for(request),
+        "X-Request-ID": request_id,
+    }
+    if exc.headers:
+        # Last-write-wins: route-supplied headers override our defaults
+        # for everything except request_id, which we re-pin below so a
+        # buggy route can't corrupt the correlation id.
+        headers.update(exc.headers)
+        headers["X-Request-ID"] = request_id
+
     return JSONResponse(
         status_code=exc.status_code,
         content={
             "success": False,
-            "detail": exc.detail,  # legacy/compat — what the mobile client reads
-            "error": {
-                "code": exc.status_code,
-                "message": exc.detail,
-                "request_id": request_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            },
+            "detail": detail,  # legacy/compat — what the mobile client reads
+            "error": error_obj,
         },
-        headers={
-            **_cors_headers_for(request),
-            "X-Request-ID": request_id,
-        },
+        headers=headers,
     )
 
 
@@ -583,12 +672,12 @@ def _cors_headers_for(request: Request) -> Dict[str, str]:
 
 async def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """Handle unexpected exceptions and return formatted response."""
-    # Generate a short correlation ID the client can echo back so we can
-    # find the matching server log entry without grepping through the
-    # whole file. Included in both the log line and the JSON response.
-    import uuid as _uuid
-
-    request_id = _uuid.uuid4().hex[:12]
+    # B-P2-1: read the middleware-bound request_id so the response the
+    # client sees matches the id that loguru contextualize() stamped
+    # into every log line for this request lifecycle. Without this,
+    # the handler generated a fresh UUID and a support ticket quoting
+    # that id couldn't be cross-referenced against the request logs.
+    request_id = _resolve_request_id(request)
 
     # Loguru treats the first positional arg as a format template, so
     # embedding the traceback directly (which frequently contains '{'

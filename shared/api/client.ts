@@ -134,6 +134,77 @@ const extractErrorMessage = (data: any): string => {
   return 'Request failed';
 };
 
+// ─── B-P1-8: typed rate-limit error ────────────────────────────────────
+// Backend (utils/rate_limiter.py + routes/auth.py::_check_otp_lockout)
+// emits 429 with:
+//   Retry-After: <seconds>           — RFC 9110 (integer seconds form)
+//   RateLimit-Limit: <amount>        — IETF draft-ietf-httpapi-ratelimit-headers
+//   RateLimit-Remaining: 0
+//   RateLimit-Reset: <seconds>
+// We surface those as a typed error so callers (login forms, "sign out
+// of all devices" buttons, OTP screens) can show "try again in 60s"
+// UX instead of a generic "Request failed". We DO NOT auto-retry —
+// rate-limited POSTs may have side effects, and even safe GETs would
+// just block the spinner for the window. The caller decides.
+export class RateLimitError extends Error {
+  status = 429 as const;
+  retryAfterSeconds: number;
+  limit: number | null;
+  remaining: number | null;
+  resetSeconds: number | null;
+  data: any;
+  requestId?: string;
+
+  constructor(opts: {
+    message: string;
+    retryAfterSeconds: number;
+    limit: number | null;
+    remaining: number | null;
+    resetSeconds: number | null;
+    data: any;
+    requestId?: string;
+  }) {
+    super(opts.message);
+    this.name = 'RateLimitError';
+    this.retryAfterSeconds = opts.retryAfterSeconds;
+    this.limit = opts.limit;
+    this.remaining = opts.remaining;
+    this.resetSeconds = opts.resetSeconds;
+    this.data = opts.data;
+    this.requestId = opts.requestId;
+  }
+}
+
+// Parse a Retry-After header per RFC 9110 §10.2.3:
+//   - integer seconds (delta-seconds form)         → preferred
+//   - HTTP-date (e.g. "Fri, 31 Dec 2025 23:59:59 GMT")
+// Returns the delay in seconds, or `fallback` if absent/malformed.
+// Negative values are clamped to 0 (servers occasionally send "0" to
+// mean "retry immediately"; a negative would be a bug we shouldn't
+// propagate as a sleep duration).
+const parseRetryAfter = (header: string | null, fallback: number): number => {
+  if (!header) return fallback;
+  const trimmed = header.trim();
+  // delta-seconds form
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = parseInt(trimmed, 10);
+    return Number.isFinite(seconds) ? Math.max(seconds, 0) : fallback;
+  }
+  // HTTP-date form
+  const dateMs = Date.parse(trimmed);
+  if (Number.isFinite(dateMs)) {
+    const deltaSeconds = Math.ceil((dateMs - Date.now()) / 1000);
+    return Math.max(deltaSeconds, 0);
+  }
+  return fallback;
+};
+
+const parseIntHeader = (header: string | null): number | null => {
+  if (!header) return null;
+  const n = parseInt(header.trim(), 10);
+  return Number.isFinite(n) ? n : null;
+};
+
 // In-memory ring buffer of recent API errors so we can surface them in a
 // debug screen (or just logcat them) without the user having to reproduce
 // on-device with Metro attached. Capped at 50 entries.
@@ -211,6 +282,32 @@ const handleApiError = async (response: Response, method: string, url: string, r
     exception_type: exceptionType,
     data: errorData,
   });
+
+  // B-P1-8: surface 429s as a typed RateLimitError so login/OTP/logout
+  // screens can show "try again in N seconds" instead of falling into
+  // the generic "Request failed" path. Body fallback: if the header
+  // is missing for some upstream reason (proxy strip, etc.) we still
+  // have errorData.retry_after / limit from the JSON body.
+  if (response.status === 429) {
+    const retryAfterSeconds = parseRetryAfter(
+      response.headers.get('Retry-After'),
+      typeof errorData?.retry_after === 'number' ? errorData.retry_after : 60,
+    );
+    const limit =
+      parseIntHeader(response.headers.get('RateLimit-Limit')) ??
+      (typeof errorData?.limit === 'number' ? errorData.limit : null);
+    const remaining = parseIntHeader(response.headers.get('RateLimit-Remaining'));
+    const resetSeconds = parseIntHeader(response.headers.get('RateLimit-Reset'));
+    throw new RateLimitError({
+      message,
+      retryAfterSeconds,
+      limit,
+      remaining,
+      resetSeconds,
+      data: errorData,
+      requestId: requestId || undefined,
+    });
+  }
 
   // ── G2: Catch expired / invalid tokens globally ──────────────
   // If the backend returns 401, the JWT has expired or been revoked.

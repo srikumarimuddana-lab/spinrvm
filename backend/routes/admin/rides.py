@@ -535,6 +535,10 @@ async def admin_get_ride_route_map(
         raise HTTPException(status_code=502, detail="Failed to fetch route map") from e
 
 
+_HEATMAP_MAX_ROWS = 5_000
+_HEATMAP_COLUMNS = "pickup_lat,pickup_lng,dropoff_lat,dropoff_lng,corporate_account_id"
+
+
 @router.get("/rides/heatmap-data")
 async def admin_get_heatmap_data(
     filter: str = Query("all"),
@@ -569,7 +573,17 @@ async def admin_get_heatmap_data(
     if service_area_id:
         query_filters["service_area_id"] = service_area_id
 
-    rides = await db_supabase.get_rows("rides", query_filters, order="created_at", desc=True, limit=10000)
+    # Fetch only the 5 coordinate/billing columns — ride rows carry large JSONB
+    # fields (route_polyline, phase_polylines) that are irrelevant here and
+    # would cause OOM when multiplied across thousands of rows.
+    rides = await db_supabase.get_rows(
+        "rides",
+        query_filters,
+        order="created_at",
+        desc=True,
+        limit=_HEATMAP_MAX_ROWS,
+        columns=_HEATMAP_COLUMNS,
+    )
 
     pickup_points = []
     dropoff_points = []

@@ -570,6 +570,7 @@ export default function SubscriptionsPage() {
                                         page={subPage}
                                         totalCount={filteredSubs.length}
                                         pageSize={PAGE_SIZE}
+                                        hasNextPage={subPage * PAGE_SIZE < filteredSubs.length}
                                         onPageChange={setSubPage}
                                     />
                                 </div>

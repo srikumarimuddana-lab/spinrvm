@@ -13,6 +13,7 @@ try:
     from ...core.config import settings
     from ...core.csrf import clear_csrf_cookie, generate_csrf_token, set_csrf_cookie
     from ...utils.password import hash_password, verify_password
+    from ...utils.password_policy import validate_admin_password
     from ...utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from ...utils.refresh_tokens import (
         issue_refresh_token,
@@ -541,9 +542,8 @@ async def change_password(request: Request, body: ChangePasswordRequest, authori
     if not ok:
         raise HTTPException(status_code=400, detail="Current password is incorrect")
 
-    # Enforce minimum length on the new password.
-    if len(body.new_password) < 12:
-        raise HTTPException(status_code=400, detail="New password must be at least 12 characters")
+    # Enforce admin password policy (A-P4-3): 20 chars, complexity, not common.
+    validate_admin_password(body.new_password)
 
     # Hash + store.
     new_hash = hash_password(body.new_password)
@@ -615,8 +615,7 @@ async def admin_reset_password(request: Request, body: ResetPasswordRequest):
     if not staff_id:
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
 
-    if len(body.new_password) < 12:
-        raise HTTPException(status_code=400, detail="New password must be at least 12 characters")
+    validate_admin_password(body.new_password)
 
     staff = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
     if not staff or not staff.get("is_active", True):

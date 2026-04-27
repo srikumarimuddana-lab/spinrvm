@@ -124,6 +124,49 @@ def _round(v: Decimal) -> Decimal:
     return v.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
 
 
+def _reestimate_fare_for_stops(ride: dict, new_stops: list) -> dict:
+    """Recalculate distance, duration, and fare after a stop mutation.
+
+    Derives per-km and per-minute rates from the values already stored on the
+    ride row (distance_fare / (distance_km * surge) and time_fare / (duration *
+    surge)), then applies them to the new multi-leg distance.  Returns a dict
+    suitable for merging into a $set update.
+    """
+    # Build ordered waypoints: pickup → stops → dropoff
+    waypoints = [
+        (ride["pickup_lat"], ride["pickup_lng"]),
+        *[(s["lat"], s["lng"]) for s in new_stops],
+        (ride["dropoff_lat"], ride["dropoff_lng"]),
+    ]
+    new_distance_km = sum(
+        calculate_distance(waypoints[i][0], waypoints[i][1], waypoints[i + 1][0], waypoints[i + 1][1])
+        for i in range(len(waypoints) - 1)
+    )
+    new_duration_minutes = max(5, int(new_distance_km / 30 * 60) + 5)
+
+    surge = _d(ride.get("surge_multiplier", 1.0)) or _d(1)
+    old_dist = _d(ride.get("distance_km") or 1)
+    old_dur = _d(ride.get("duration_minutes") or 1)
+
+    per_km_effective = _d(ride.get("distance_fare", 0)) / (old_dist * surge)
+    per_min_effective = _d(ride.get("time_fare", 0)) / (old_dur * surge)
+
+    new_distance_fare = _round(per_km_effective * _d(new_distance_km) * surge)
+    new_time_fare = _round(per_min_effective * _d(new_duration_minutes) * surge)
+    new_total = _round(
+        _d(ride.get("base_fare", 0)) + new_distance_fare + new_time_fare + _d(ride.get("booking_fee", 0))
+    )
+
+    return {
+        "distance_km": round(new_distance_km, 2),
+        "duration_minutes": new_duration_minutes,
+        "distance_fare": _f(new_distance_fare),
+        "time_fare": _f(new_time_fare),
+        "estimated_fare": _f(new_total),
+        "total_fare": _f(new_total),
+    }
+
+
 def _f(v: Decimal) -> float:
     """Convert Decimal back to float for Pydantic / JSON serialisation."""
     return float(v)
@@ -2043,10 +2086,11 @@ async def add_stop_mid_trip(ride_id: str, req: AddStopMidTripRequest, current_us
     else:
         stops.append(new_stop)
 
+    fare_update = _reestimate_fare_for_stops(ride, stops)
     await db.update_one(
         "rides",
         {"id": ride_id},
-        {"$set": {"stops": stops, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": {**fare_update, "stops": stops, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
 
     # Notify driver via WebSocket
@@ -2054,11 +2098,16 @@ async def add_stop_mid_trip(ride_id: str, req: AddStopMidTripRequest, current_us
         driver = await db.find_one("drivers", {"id": ride["driver_id"]})
         if driver and driver.get("user_id"):
             await manager.send_personal_message(
-                {"type": "stops_updated", "ride_id": ride_id, "stops": stops},
+                {
+                    "type": "stops_updated",
+                    "ride_id": ride_id,
+                    "stops": stops,
+                    "estimated_fare": fare_update["estimated_fare"],
+                },
                 f"driver_{driver['user_id']}",
             )
 
-    return {"success": True, "stops": stops}
+    return {"success": True, "stops": stops, **fare_update}
 
 
 @api_router.delete("/{ride_id}/stops/{stop_index}")
@@ -2078,10 +2127,11 @@ async def remove_stop_mid_trip(ride_id: str, stop_index: int, current_user: dict
 
     stops.pop(stop_index)
 
+    fare_update = _reestimate_fare_for_stops(ride, stops)
     await db.update_one(
         "rides",
         {"id": ride_id},
-        {"$set": {"stops": stops, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": {**fare_update, "stops": stops, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
 
     # Notify driver
@@ -2089,11 +2139,16 @@ async def remove_stop_mid_trip(ride_id: str, stop_index: int, current_user: dict
         driver = await db.find_one("drivers", {"id": ride["driver_id"]})
         if driver and driver.get("user_id"):
             await manager.send_personal_message(
-                {"type": "stops_updated", "ride_id": ride_id, "stops": stops},
+                {
+                    "type": "stops_updated",
+                    "ride_id": ride_id,
+                    "stops": stops,
+                    "estimated_fare": fare_update["estimated_fare"],
+                },
                 f"driver_{driver['user_id']}",
             )
 
-    return {"success": True, "stops": stops}
+    return {"success": True, "stops": stops, **fare_update}
 
 
 class EmergencyRequest(BaseModel):

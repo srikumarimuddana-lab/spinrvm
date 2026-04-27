@@ -111,7 +111,7 @@ async def get_dispute(dispute_id: str, current_user: dict = Depends(get_current_
 
 # ============ Admin Dispute Endpoints ============
 
-admin_router = APIRouter(prefix="/admin/disputes", tags=["Admin Disputes"])
+admin_router = APIRouter(prefix="/disputes", tags=["Admin Disputes"])
 
 
 @admin_router.get("")

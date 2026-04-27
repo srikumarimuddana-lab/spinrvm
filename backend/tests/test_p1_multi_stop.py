@@ -184,15 +184,6 @@ class TestAddStopMidTrip:
 
         assert exc_info.value.status_code == 403
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "Fare recalculation on mid-trip stop is not yet implemented. "
-            "add_stop_mid_trip() updates the stops array and notifies the driver "
-            "but does not call the fare estimator or update estimated_fare / total_fare. "
-            "TODO: add fare re-estimate on stop mutation; update riders and driver UIs."
-        ),
-    )
     async def test_fare_is_recalculated_after_stop_added(self):
         """Adding a stop should trigger a fare recalculation."""
         ride = _ride(status="in_progress")

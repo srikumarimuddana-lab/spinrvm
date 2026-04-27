@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { useAuthStore } from '@/store/authStore';
+import { useAuthStore, _resetAuthInitializedForTesting } from '@/store/authStore';
 
 describe('authStore', () => {
   beforeEach(() => {
+    // Reset per-page-load init guard so initAuth() can be exercised in each test.
+    _resetAuthInitializedForTesting();
     // Reset store state
     useAuthStore.setState({
       user: null,
@@ -108,6 +110,70 @@ describe('authStore', () => {
       expect(state.csrfToken).toBeNull();
       expect(state.isAuthenticated).toBe(false);
       expect(state.isLoading).toBe(false);
+    });
+  });
+
+  describe('initAuth', () => {
+    it('should set isLoading=false and unauthenticated when no session cookies exist', async () => {
+      // No CSRF cookie → silentRefresh sends no header → BFF returns 403 → logout()
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+      });
+
+      await useAuthStore.getState().initAuth();
+
+      const state = useAuthStore.getState();
+      expect(state.isAuthenticated).toBe(false);
+      expect(state.isLoading).toBe(false);
+      expect(state.token).toBeNull();
+    });
+
+    it('should restore session and populate user when valid cookies exist', async () => {
+      const mockUser = { id: 'admin-1', email: 'admin@spinr.ca', role: 'super_admin' };
+      // First fetch: silentRefresh succeeds
+      // Second fetch: setAuthCookie (fire-and-forget, called inside silentRefresh)
+      // Third fetch: checkAuth succeeds
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            token: 'access-token',
+            access_expires_at: new Date(Date.now() + 900_000).toISOString(),
+            csrf_token: 'new-csrf',
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) }) // setAuthCookie
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ authenticated: true, user: mockUser }),
+        });
+
+      await useAuthStore.getState().initAuth();
+
+      const state = useAuthStore.getState();
+      expect(state.token).toBe('access-token');
+      expect(state.csrfToken).toBe('new-csrf');
+      expect(state.user).toEqual(mockUser);
+      expect(state.isAuthenticated).toBe(true);
+      expect(state.isLoading).toBe(false);
+    });
+
+    it('should only run once per page load even if called multiple times', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+      });
+
+      const store = useAuthStore.getState();
+      await store.initAuth();
+      await store.initAuth(); // second call must be a no-op
+
+      // fetch should have been called only for the first initAuth
+      const callCount = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: string[]) => c[0]?.includes?.('/api/admin/auth/refresh')
+      ).length;
+      expect(callCount).toBe(1);
     });
   });
 

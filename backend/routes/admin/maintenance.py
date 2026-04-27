@@ -39,25 +39,21 @@ async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
     deleted_historical = 0
     deleted_idle = 0
     try:
-        # Count rows to be deleted for reporting
-        old_rows = await db_supabase.get_rows(
-            "driver_location_history",
-            {"timestamp": {"$lt": cutoff_historical}},
-            limit=100000,
+        # Use count_documents so we never load GPS rows into memory just to count them.
+        # At ~100 bytes/row, fetching 100k rows to do len() would push ~10 MB per call.
+        deleted_historical = await db_supabase.count_documents(
+            "driver_location_history", {"timestamp": {"$lt": cutoff_historical}}
         )
-        deleted_historical = len(old_rows or [])
         if deleted_historical > 0:
             await db_supabase.delete_many("driver_location_history", {"timestamp": {"$lt": cutoff_historical}})
     except Exception as e:
         logger.warning(f"Cleanup historical GPS failed: {e}")
 
     try:
-        idle_rows = await db_supabase.get_rows(
+        deleted_idle = await db_supabase.count_documents(
             "driver_location_history",
             {"timestamp": {"$lt": cutoff_idle}, "tracking_phase": "online_idle"},
-            limit=100000,
         )
-        deleted_idle = len(idle_rows or [])
         if deleted_idle > 0:
             await db_supabase.delete_many(
                 "driver_location_history", {"timestamp": {"$lt": cutoff_idle}, "tracking_phase": "online_idle"}
@@ -127,11 +123,14 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         if did:
             rides_by_driver[did].append(r)
 
-    # Pull decline audit log entries for the day to count per driver
+    # Pull decline audit log entries for the day to count per driver.
+    # Cap at 10 000: even at peak utilisation (1 000 drivers × 10 declines
+    # each) this is well within a safe memory budget.  Only driver_id and
+    # the action field are used downstream; the full row is small (~200 B).
     decline_logs = await db.get_rows(
         "audit_logs",
         {"action": "ride_declined", "created_at": {"$gte": day_start_iso, "$lt": day_end_iso}},
-        limit=100000,
+        limit=10000,
     )
     declines_by_driver: Dict[str, int] = defaultdict(int)
     for entry in decline_logs or []:
@@ -140,15 +139,15 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         if did:
             declines_by_driver[did] += 1
 
-    # Discover drivers who were online that day via a lightweight distinct-value
-    # query (only driver_id + timestamp; no coordinates loaded yet). Fetching
-    # 1 M rows across all drivers in one query OOMs the process; instead we
-    # collect driver IDs here and fetch GPS points per driver below.
+    # Discover drivers who were online that day. We only need driver_id, so
+    # fetching a single column avoids loading lat/lng/tracking_phase/etc.
+    # for potentially 50k rows (~10× memory saving vs select *).
     presence_rows = await db_supabase.get_rows(
         "driver_location_history",
         {"timestamp": {"$gte": day_start_iso, "$lt": day_end_iso}},
         order="timestamp",
         limit=50000,  # enough to identify all active drivers; full points fetched per-driver
+        columns="driver_id",
     )
     drivers_with_gps: set = set()
     for p in presence_rows or []:

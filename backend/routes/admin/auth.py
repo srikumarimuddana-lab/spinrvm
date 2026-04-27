@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import jwt
-import pyotp  # noqa: F401
+import pyotp
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 from slowapi import Limiter

@@ -191,7 +191,9 @@ export const useAuthStore = create<AuthState>()(
                         return;
                     }
                     const data: { token: string; access_expires_at: string; csrf_token?: string } = await res.json();
-                    set({ token: data.token, ...(data.csrf_token ? { csrfToken: data.csrf_token } : {}) });
+                    // Always overwrite csrfToken — if absent the session is broken; next
+                    // refresh will fail CSRF and trigger a clean logout.
+                    set({ token: data.token, csrfToken: data.csrf_token ?? null });
                     setAuthCookie(data.token);
                     scheduleTokenRefresh(data.access_expires_at, get().silentRefresh);
                     startIdleWatch(get().logout);

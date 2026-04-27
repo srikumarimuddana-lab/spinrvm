@@ -9,6 +9,7 @@ const BACKEND_URL =
   "http://127.0.0.1:8000";
 
 const RT_COOKIE = "spinr_admin_rt";
+const CSRF_COOKIE = "csrf_token";
 const RT_MAX_AGE = 30 * 24 * 60 * 60; // 30 days — matches backend refresh token TTL
 
 export async function POST(req: NextRequest) {
@@ -42,6 +43,17 @@ export async function POST(req: NextRequest) {
       sameSite: "strict",
       secure: process.env.NODE_ENV === "production",
       path: "/api/admin/auth",
+      maxAge: RT_MAX_AGE,
+    });
+  }
+  // Browser-readable CSRF cookie for the double-submit bootstrap on page reload.
+  // Not HttpOnly so document.cookie can read it in silentRefresh().
+  if (clientData.csrf_token) {
+    res.cookies.set(CSRF_COOKIE, clientData.csrf_token, {
+      httpOnly: false,
+      sameSite: "strict",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
       maxAge: RT_MAX_AGE,
     });
   }

@@ -9,6 +9,7 @@ const BACKEND_URL =
   "http://127.0.0.1:8000";
 
 const RT_COOKIE = "spinr_admin_rt";
+const CSRF_COOKIE = "csrf_token";
 
 export async function POST(req: NextRequest) {
   const refreshToken = req.cookies.get(RT_COOKIE)?.value;
@@ -28,6 +29,13 @@ export async function POST(req: NextRequest) {
     sameSite: "strict",
     secure: process.env.NODE_ENV === "production",
     path: "/api/admin/auth",
+    maxAge: 0,
+  });
+  res.cookies.set(CSRF_COOKIE, "", {
+    httpOnly: false,
+    sameSite: "strict",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
     maxAge: 0,
   });
   return res;

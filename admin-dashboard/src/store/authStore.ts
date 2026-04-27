@@ -105,10 +105,14 @@ interface AuthState {
     user: User | null;
     // Access token lives in memory only — never written to sessionStorage.
     token: string | null;
+    // CSRF double-submit token — read from the csrf_token cookie on refresh,
+    // sent as X-CSRF-Token on every state-changing request.
+    csrfToken: string | null;
     isAuthenticated: boolean;
     isLoading: boolean;
     setUser: (user: User | null) => void;
     setToken: (token: string | null) => void;
+    setCsrfToken: (token: string | null) => void;
     scheduleRefresh: (accessExpiresAt: string) => void;
     setLoading: (loading: boolean) => void;
     logout: () => void;
@@ -121,6 +125,7 @@ export const useAuthStore = create<AuthState>()(
         (set, get) => ({
             user: null,
             token: null,
+            csrfToken: null,
             isAuthenticated: false,
             isLoading: true,
 
@@ -146,6 +151,10 @@ export const useAuthStore = create<AuthState>()(
                 }
             },
 
+            setCsrfToken: (token) => {
+                set({ csrfToken: token });
+            },
+
             scheduleRefresh: (accessExpiresAt) => {
                 scheduleTokenRefresh(accessExpiresAt, get().silentRefresh);
             },
@@ -158,14 +167,19 @@ export const useAuthStore = create<AuthState>()(
                 cancelRefreshTimer();
                 stopIdleWatch();
                 clearAuthCookie();
+                const csrfToken = get().csrfToken;
                 set({
                     user: null,
                     token: null,
+                    csrfToken: null,
                     isAuthenticated: false,
                     isLoading: false
                 });
                 // Clear the HttpOnly RT cookie server-side (fire-and-forget).
-                fetch("/api/admin/auth/logout", { method: "POST" }).catch(() => {});
+                fetch("/api/admin/auth/logout", {
+                    method: "POST",
+                    headers: csrfToken ? { "X-CSRF-Token": csrfToken } : {},
+                }).catch(() => {});
             },
 
             // Exchange the HttpOnly refresh cookie for a new short-lived access
@@ -175,15 +189,22 @@ export const useAuthStore = create<AuthState>()(
             // On failure, calls logout() to clear state.
             silentRefresh: async () => {
                 try {
+                    // Read the csrf_token cookie (set on last login/refresh) to
+                    // bootstrap the CSRF header before the in-memory token is available.
+                    const csrfCookie = typeof document !== "undefined"
+                        ? (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/)?.[1] ?? null)
+                        : null;
+                    const csrfHeader = csrfCookie ?? get().csrfToken;
                     const res = await fetch(`${API_BASE}/api/admin/auth/refresh`, {
                         method: "POST",
+                        headers: csrfHeader ? { "X-CSRF-Token": csrfHeader } : {},
                     });
                     if (!res.ok) {
                         get().logout();
                         return;
                     }
-                    const data: { token: string; access_expires_at: string } = await res.json();
-                    set({ token: data.token });
+                    const data: { token: string; access_expires_at: string; csrf_token?: string } = await res.json();
+                    set({ token: data.token, csrfToken: data.csrf_token ?? null });
                     setAuthCookie(data.token);
                     scheduleTokenRefresh(data.access_expires_at, get().silentRefresh);
                     startIdleWatch(get().logout);

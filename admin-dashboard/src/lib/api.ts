@@ -9,12 +9,17 @@ import { useAuthStore } from "@/store/authStore";
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     // Get token from Zustand store
-    const token = useAuthStore.getState().token;
+    const store = useAuthStore.getState();
+    const token = store.token;
     const headers: Record<string, string> = {
         "Content-Type": "application/json",
         ...(options.headers as Record<string, string>),
     };
     if (token) headers["Authorization"] = `Bearer ${token}`;
+    const method = (options.method ?? "GET").toUpperCase();
+    if (!["GET", "HEAD", "OPTIONS"].includes(method) && store.csrfToken) {
+        headers["X-CSRF-Token"] = store.csrfToken;
+    }
 
     const url = `${API_BASE}${path}`;
     try {
@@ -27,7 +32,6 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
             // For the login endpoint, fall through to the !res.ok handler so
             // "Invalid credentials" is shown to the user rather than "Unauthorized".
             if (path !== "/api/admin/auth/login") {
-                const store = useAuthStore.getState();
                 // Attempt one silent refresh before giving up. The HttpOnly
                 // refresh cookie is sent automatically — no need to check for
                 // a token in JS state.

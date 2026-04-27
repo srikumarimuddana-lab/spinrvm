@@ -57,6 +57,7 @@ except ImportError:
 
 try:
     import stripe
+
     # stripe v10+ exposes errors directly on the top-level package;
     # the stripe.error sub-module was removed in stripe-python v15.
     _StripeCardError = stripe.CardError  # type: ignore[attr-defined]
@@ -127,7 +128,7 @@ async def charge_ride(
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "") or ""
     if not stripe_secret:
-        logger.warning(
+        logger.error(
             "stripe_secret_key not configured; skipping real charge for ride=%s",
             ride.get("id"),
         )
@@ -251,7 +252,7 @@ async def charge_ride(
     # Any other status (canceled, processing) is a failure we don't
     # automatically retry — processing should resolve via webhook;
     # canceled means someone else killed the PI.
-    logger.warning(
+    logger.error(
         "Unhandled PaymentIntent status=%s for ride=%s pi=%s",
         status,
         ride_id,

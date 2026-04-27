@@ -10,6 +10,7 @@ try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...utils.password import hash_password, verify_password
+    from ...utils.password_policy import validate_admin_password
     from ...utils.rate_limiter import admin_staff_delete_limit
     from ...utils.refresh_tokens import revoke_all_for_user
 except ImportError:
@@ -114,14 +115,10 @@ async def create_staff(req: StaffCreateRequest, admin: dict = Depends(require_ro
 
     Only super_admin can create new staff members.
     """
-    # Basic password policy: short passwords defeat bcrypt's cost factor
-    # because the keyspace is too small. 12 chars is the floor; operators
-    # should pick much longer in practice.
-    if not req.password or len(req.password) < 12:
-        raise HTTPException(
-            status_code=400,
-            detail="Password must be at least 12 characters long.",
-        )
+    if not req.password:
+        raise HTTPException(status_code=400, detail="Password is required.")
+    # A-P4-3: 20-char minimum, complexity, common-password blacklist.
+    validate_admin_password(req.password)
 
     # Check if email already exists
     existing = (lambda _r: _r[0] if _r else None)(

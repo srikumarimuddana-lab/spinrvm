@@ -430,7 +430,7 @@ async def set_default_card(card_id: str, current_user: dict = Depends(get_curren
             if cid:
                 stripe.Customer.modify(cid, invoice_settings={"default_payment_method": card_id}, api_key=stripe_secret)
         except Exception as e:
-            logger.warning(f"Stripe set default: {e}")
+            logger.error(f"Stripe set default failed for card {card_id}: {e}", exc_info=True)
 
     return {"success": True}
 
@@ -444,7 +444,7 @@ async def delete_card(card_id: str, current_user: dict = Depends(get_current_use
         try:
             stripe.PaymentMethod.detach(card_id, api_key=stripe_secret)
         except Exception as e:
-            logger.warning(f"Stripe detach: {e}")
+            logger.error(f"Stripe detach failed for card {card_id}: {e}", exc_info=True)
 
     user = await db_supabase.get_user_by_id(current_user["id"])
     if user and user.get("default_payment_method") == card_id:

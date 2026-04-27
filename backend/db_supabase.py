@@ -883,7 +883,13 @@ async def get_rides_for_user(rider_id: str, limit: int = 100):
     )
 
 
-async def get_rides_for_driver(driver_id: str, statuses: Optional[List[str]] = None, limit: int = 100):
+async def get_rides_for_driver(
+    driver_id: str,
+    statuses: Optional[List[str]] = None,
+    limit: int = 100,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+):
     if not supabase:
         return []
 
@@ -892,6 +898,10 @@ async def get_rides_for_driver(driver_id: str, statuses: Optional[List[str]] = N
         if statuses:
             status_filters = ",".join([f"status.eq.{s}" for s in statuses])
             q = q.or_(status_filters)
+        if from_date:
+            q = q.gte("created_at", from_date)
+        if to_date:
+            q = q.lt("created_at", to_date)
         q = q.order("created_at", desc=True).limit(limit)
         return _rows_from_res(q.execute())
 
@@ -1053,12 +1063,13 @@ async def get_rows(
     desc: bool = False,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
+    columns: str = "*",
 ):
     if not supabase:
         return []
 
     def _fn():
-        q = supabase.table(table).select("*")
+        q = supabase.table(table).select(columns)
         q = _apply_filters(q, filters)
         if order:
             q = q.order(order, desc=desc)
@@ -1284,9 +1295,7 @@ async def wallet_pay_for_ride(wallet_id: str, ride_id: str, amount: "Decimal") -
     return await run_sync(_fn)
 
 
-async def wallet_transfer(
-    sender_id: str, recipient_id: str, amount: "Decimal"
-) -> "tuple[Decimal, Decimal]":
+async def wallet_transfer(sender_id: str, recipient_id: str, amount: "Decimal") -> "tuple[Decimal, Decimal]":
     """Atomically transfer between two wallets. Returns (sender_balance, recipient_balance).
 
     Raises ValueError('insufficient_funds') if sender balance < amount.
@@ -1344,9 +1353,7 @@ async def increment_promo_uses(promo_id: str, max_uses: int) -> bool:
     return await run_sync(_fn)
 
 
-async def fare_split_pay_share(
-    wallet_id: str, participant_id: str, amount: "Decimal"
-) -> "Decimal":
+async def fare_split_pay_share(wallet_id: str, participant_id: str, amount: "Decimal") -> "Decimal":
     """Atomically deduct `amount` from `wallet_id` and mark `participant_id`
     as paid in a single Postgres transaction. Returns the new wallet balance.
     Raises ValueError('insufficient_funds') when balance is insufficient.

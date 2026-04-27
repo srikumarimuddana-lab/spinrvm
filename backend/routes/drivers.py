@@ -446,7 +446,14 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
     query_filters["created_at"] = {"$gte": cutoff}
     query_filters["service_area_id"] = driver["service_area_id"]
 
-    rides = await db_supabase.get_rows("rides", query_filters, order="created_at", desc=True, limit=5000)
+    rides = await db_supabase.get_rows(
+        "rides",
+        query_filters,
+        order="created_at",
+        desc=True,
+        limit=2_000,
+        columns="pickup_lat,pickup_lng",
+    )
 
     points = []
     for r in rides:
@@ -1506,10 +1513,13 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
-    # TODO: filter get_rides_for_driver by (year-01-01 .. year+1-01-01); the
-    # Supabase adapter currently returns all rides for the driver.
-    rides_cursor = db_supabase.get_rides_for_driver(driver, limit=100)
-    rides = await rides_cursor.to_list(length=10000) if hasattr(rides_cursor, "to_list") else list(rides_cursor)
+    rides = await db_supabase.get_rides_for_driver(
+        driver["id"],
+        statuses=["completed"],
+        from_date=f"{year}-01-01",
+        to_date=f"{year + 1}-01-01",
+        limit=10000,
+    )
 
     total_earnings = sum(r.get("driver_earnings", 0) for r in rides)
 

@@ -113,7 +113,6 @@ async def admin_send_notification(request: Request, notification: NotificationRe
     notification_type = notification.type
     audience = notification.audience
 
-    # Create notification document
     notification_doc = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
@@ -131,10 +130,8 @@ async def admin_send_notification(request: Request, notification: NotificationRe
     except ImportError:
         from features import send_push_notification
 
-    # If targeting specific user, insert and send
     if user_id:
         await db_supabase.insert_one("notifications", notification_doc)
-        # TODO: Integrate with push notification service (FCM)
         logger.info(f"Notification sent to user {user_id}: {title}")
     elif audience == "all":
         all_users = await db.get_rows("users", {}, limit=10000)

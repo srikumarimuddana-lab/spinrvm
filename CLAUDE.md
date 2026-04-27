@@ -2,6 +2,26 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Working Style
+
+### Task decomposition (mandatory)
+- Before starting any implementation, break it into subtasks of ≤ 3 files each.
+- Use `TodoWrite` to track every subtask; mark done immediately after each commit.
+- Never start the next subtask until the current one is committed.
+- If a task touches > 5 files, use `/plan` to decompose it first.
+
+### Context / token discipline
+- Keep responses short; avoid re-reading files you already read this session.
+- When context grows large (many tool calls in session), prefer targeted `grep`/`Read` with `offset`+`limit` over full file reads.
+- If you hit a "prompt too long" error: stop, commit current work, summarize progress in one sentence, then continue in a fresh thought — do NOT retry the same giant prompt.
+
+### Request timeouts
+- For long-running bash commands (installs, full test suites), use `run_in_background: true`; never spin in a sleep loop waiting for output.
+- Break large pip/npm installs into separate steps so a single timeout doesn't block everything.
+
+### Batch size rule
+- Limit each commit to one logical change. If a diff exceeds ~200 lines, split it.
+
 ## Context Imports
 
 Sprint-scoped and domain-deep context is loaded on demand, not baked into this file. Reference these when the task enters the relevant area:
@@ -208,7 +228,7 @@ Rules:
 
 Migrations live in `backend/migrations/` and are applied in filename order by `backend/migrate.py`.
 
-Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number (currently at `37_*`). Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge.
+Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number (currently at `52_*`; next free slot is `53`). Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed.
 
 Migration rules:
 - **Append-only**: never edit a merged migration. Schema changes go in a new file.

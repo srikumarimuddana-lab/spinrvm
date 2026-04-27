@@ -1,8 +1,11 @@
+import hashlib  # noqa: F401
 import logging
+import secrets  # noqa: F401
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import jwt
+import pyotp  # noqa: F401
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 from slowapi import Limiter
@@ -11,6 +14,7 @@ from slowapi.util import get_remote_address
 try:
     from ... import db_supabase
     from ...core.config import settings
+    from ...utils.audit_logger import log_admin_action  # noqa: F401
     from ...utils.password import hash_password, verify_password
     from ...utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr
     from ...utils.refresh_tokens import (
@@ -22,6 +26,7 @@ try:
 except ImportError:
     import db_supabase
     from core.config import settings
+    from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.password import hash_password, verify_password
     from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr
     from utils.refresh_tokens import (
@@ -54,19 +59,31 @@ def _lockout_key(email: str) -> str:
 
 
 async def _is_account_locked(email: str) -> bool:
-    val = await redis_get(_lockout_key(email))
-    return val is not None and int(val) >= _LOGIN_MAX_FAILURES
+    try:
+        val = await redis_get(_lockout_key(email))
+        return val is not None and int(val) >= _LOGIN_MAX_FAILURES
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[REDIS] _is_account_locked check failed for admin login ({email!r}): {e}")
+        raise HTTPException(status_code=503, detail="ERR_AUTH_UNAVAILABLE") from None
 
 
 async def _record_login_failure(email: str) -> None:
-    key = _lockout_key(email)
-    count = await redis_incr(key)
-    if count == 1:
-        await redis_expire(key, _LOGIN_LOCKOUT_TTL_SECONDS)
+    try:
+        key = _lockout_key(email)
+        count = await redis_incr(key)
+        if count == 1:
+            await redis_expire(key, _LOGIN_LOCKOUT_TTL_SECONDS)
+    except Exception as e:
+        logger.error(f"[REDIS] _record_login_failure could not persist failure count ({email!r}): {e}")
 
 
 async def _clear_login_failures(email: str) -> None:
-    await redis_delete(_lockout_key(email))
+    try:
+        await redis_delete(_lockout_key(email))
+    except Exception as e:
+        logger.error(f"[REDIS] _clear_login_failures could not clear failure count ({email!r}): {e}")
 
 
 # Auth sub-router — mounted at /admin/auth by server.py directly
@@ -261,6 +278,10 @@ async def admin_login(request: Request, body: LoginRequest):
             await db_supabase.update_one(
                 "admin_staff", {"id": staff["id"]}, {"last_login": datetime.now(timezone.utc).isoformat()}
             )
+            if staff.get("mfa_enabled"):
+                mfa_token = _mint_mfa_challenge_token(staff["id"])
+                await _clear_login_failures(body.email)
+                return {"mfa_required": True, "mfa_token": mfa_token}
             modules = staff.get("modules", ["dashboard"])
             token, access_expires_at = _mint_admin_access_token(
                 user_id=staff["id"],
@@ -494,3 +515,193 @@ async def change_password(request: Request, body: ChangePasswordRequest, authori
 
     logger.info(f"Password changed for admin_staff id={user_id}")
     return {"success": True, "message": "Password changed successfully"}
+
+
+# ── MFA models ──────────────────────────────────────────────────────────────
+
+
+class MfaConfirmRequest(BaseModel):
+    totp_code: str
+
+
+class MfaDisableRequest(BaseModel):
+    totp_code: str
+    password: str
+
+
+class MfaChallengeRequest(BaseModel):
+    mfa_token: str
+    totp_code: str
+
+
+# ── MFA helpers ──────────────────────────────────────────────────────────────
+
+
+def _mint_mfa_challenge_token(user_id: str) -> str:
+    now = datetime.now(timezone.utc)
+    return jwt.encode(
+        {"type": "mfa_challenge", "user_id": user_id, "exp": now + timedelta(minutes=5)},
+        settings.JWT_SECRET,
+        algorithm=settings.ALGORITHM,
+    )
+
+
+def _generate_backup_codes() -> tuple[list[str], list[dict]]:
+    codes: list[str] = []
+    records: list[dict] = []
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+    for _ in range(10):
+        code = "".join(secrets.choice(alphabet) for _ in range(8))
+        h = hashlib.sha256(code.encode()).hexdigest()
+        codes.append(code)
+        records.append({"hash": h, "used": False})
+    return codes, records
+
+
+def _consume_backup_code(code: str, stored: list[dict]) -> tuple[bool, list[dict]]:
+    h = hashlib.sha256(code.upper().encode()).hexdigest()
+    updated = list(stored)
+    for i, entry in enumerate(updated):
+        if not entry.get("used") and entry.get("hash") == h:
+            updated[i] = {**entry, "used": True}
+            return True, updated
+    return False, stored
+
+
+async def _require_staff_from_token(authorization: str | None) -> dict:
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        scheme, token = authorization.split()
+        if scheme.lower() != "bearer":
+            raise HTTPException(status_code=401, detail="Invalid auth scheme")
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+    except (ValueError, jwt.InvalidTokenError) as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {e}") from e
+    user_id = payload.get("user_id")
+    if not user_id or user_id == "admin-001":
+        raise HTTPException(
+            status_code=400,
+            detail="MFA is not available for the super admin env account. Use a staff account.",
+        )
+    staff = await db.find_one("admin_staff", {"id": user_id})
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+    return staff
+
+
+# ── MFA endpoints ─────────────────────────────────────────────────────────
+
+
+@admin_auth_router.get("/mfa/status")
+async def admin_mfa_status(authorization: Optional[str] = Header(None)):
+    """Return MFA enrollment status for the authenticated staff member."""
+    staff = await _require_staff_from_token(authorization)
+    return {"mfa_enabled": bool(staff.get("mfa_enabled"))}
+
+
+@admin_auth_router.post("/mfa/enroll")
+@limiter.limit("5/minute")
+async def admin_mfa_enroll(request: Request, authorization: Optional[str] = Header(None)):
+    """Begin TOTP enrollment. Returns secret + otpauth URI; confirm with /mfa/confirm."""
+    staff = await _require_staff_from_token(authorization)
+    secret = pyotp.random_base32()
+    uri = pyotp.TOTP(secret).provisioning_uri(name=staff["email"], issuer_name="Spinr Admin")
+    await db_supabase.update_one("admin_staff", {"id": staff["id"]}, {"mfa_secret_pending": secret})
+    return {"secret": secret, "otpauth_uri": uri}
+
+
+@admin_auth_router.post("/mfa/confirm")
+@limiter.limit("5/minute")
+async def admin_mfa_confirm(request: Request, body: MfaConfirmRequest, authorization: Optional[str] = Header(None)):
+    """Confirm TOTP enrollment by verifying the first code. Activates MFA and issues backup codes."""
+    staff = await _require_staff_from_token(authorization)
+    pending = staff.get("mfa_secret_pending")
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending MFA enrollment. Call /mfa/enroll first.")
+    if not pyotp.TOTP(pending).verify(body.totp_code, valid_window=1):
+        raise HTTPException(status_code=400, detail="Invalid TOTP code")
+    plaintext_codes, hashed_records = _generate_backup_codes()
+    await db_supabase.update_one(
+        "admin_staff",
+        {"id": staff["id"]},
+        {"mfa_enabled": True, "mfa_secret": pending, "mfa_secret_pending": None, "mfa_backup_codes": hashed_records},
+    )
+    await log_admin_action(staff, "mfa_enabled", "admin_staff", staff["id"], {})
+    return {"backup_codes": plaintext_codes}
+
+
+@admin_auth_router.post("/mfa/disable")
+@limiter.limit("3/minute")
+async def admin_mfa_disable(request: Request, body: MfaDisableRequest, authorization: Optional[str] = Header(None)):
+    """Disable MFA. Requires current password + valid TOTP code."""
+    staff = await _require_staff_from_token(authorization)
+    if not staff.get("mfa_enabled"):
+        raise HTTPException(status_code=400, detail="MFA is not enabled on this account")
+    ok, _ = verify_password(body.password, staff.get("password_hash", ""))
+    if not ok:
+        raise HTTPException(status_code=400, detail="Incorrect password")
+    if not pyotp.TOTP(staff["mfa_secret"]).verify(body.totp_code, valid_window=1):
+        raise HTTPException(status_code=400, detail="Invalid TOTP code")
+    await db_supabase.update_one(
+        "admin_staff",
+        {"id": staff["id"]},
+        {"mfa_enabled": False, "mfa_secret": None, "mfa_backup_codes": None},
+    )
+    await log_admin_action(staff, "mfa_disabled", "admin_staff", staff["id"], {})
+    return {"success": True}
+
+
+@admin_auth_router.post("/mfa/challenge")
+@limiter.limit("10/minute")
+async def admin_mfa_challenge(request: Request, body: MfaChallengeRequest):
+    """Exchange an MFA challenge token + TOTP (or backup code) for full admin tokens."""
+    try:
+        payload = jwt.decode(body.mfa_token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+    except jwt.InvalidTokenError as e:
+        raise HTTPException(status_code=401, detail=f"Invalid MFA token: {e}") from e
+    if payload.get("type") != "mfa_challenge":
+        raise HTTPException(status_code=401, detail="Invalid token type")
+    user_id = payload.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid MFA token")
+    staff = await db.find_one("admin_staff", {"id": user_id})
+    if not staff or not staff.get("is_active", True):
+        raise HTTPException(status_code=401, detail="Account not found or inactive")
+    if not staff.get("mfa_enabled") or not staff.get("mfa_secret"):
+        raise HTTPException(status_code=400, detail="MFA not configured for this account")
+    totp_valid = pyotp.TOTP(staff["mfa_secret"]).verify(body.totp_code, valid_window=1)
+    if not totp_valid:
+        backup_codes = staff.get("mfa_backup_codes") or []
+        matched, updated_codes = _consume_backup_code(body.totp_code, backup_codes)
+        if not matched:
+            raise HTTPException(status_code=401, detail="Invalid TOTP code or backup code")
+        await db_supabase.update_one("admin_staff", {"id": user_id}, {"mfa_backup_codes": updated_codes})
+    user_agent = request.headers.get("user-agent", "")
+    client_ip = get_remote_address(request)
+    modules = staff.get("modules", ["dashboard"])
+    token, access_expires_at = _mint_admin_access_token(
+        user_id=staff["id"],
+        email=staff["email"],
+        role=staff.get("role", "custom"),
+        modules=modules,
+        phone=staff["email"],
+        token_version=int(staff.get("token_version") or 0),
+    )
+    refresh_raw, _, refresh_expires_at = await issue_refresh_token(
+        staff["id"], audience="admin", user_agent=user_agent, ip=client_ip
+    )
+    return {
+        "user": {
+            "id": staff["id"],
+            "email": staff["email"],
+            "role": staff.get("role", "custom"),
+            "first_name": staff.get("first_name", ""),
+            "last_name": staff.get("last_name", ""),
+            "modules": modules,
+        },
+        "token": token,
+        "refresh_token": refresh_raw,
+        "access_expires_at": access_expires_at.isoformat(),
+        "refresh_expires_at": refresh_expires_at.isoformat(),
+    }

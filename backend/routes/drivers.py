@@ -15,6 +15,7 @@ try:
     from ..features import send_email, send_push_notification
     from ..geo_utils import calculate_distance
     from ..logging_utils import diag_logger
+    from ..models.ride_status import RideStatus
     from ..schemas import Driver, RideRatingRequest
     from ..socket_manager import manager
     from ..utils.crypto import hash_otp
@@ -28,6 +29,7 @@ except ImportError:
     from features import send_email, send_push_notification
     from geo_utils import calculate_distance
     from logging_utils import diag_logger
+    from models.ride_status import RideStatus  # noqa: F401
     from schemas import Driver, RideRatingRequest
     from socket_manager import manager
     from utils.crypto import hash_otp
@@ -123,11 +125,11 @@ api_router = APIRouter(prefix="/drivers", tags=["Drivers"])
 #   • restarting a cancelled ride
 #   • marking "arrived" on a completed ride
 # Idempotent destination states are included to make retries safe.
-ARRIVE_FROM_STATES = ("driver_assigned", "driver_accepted", "driver_arrived")
+ARRIVE_FROM_STATES = (RideStatus.DRIVER_ASSIGNED, RideStatus.DRIVER_ACCEPTED, RideStatus.DRIVER_ARRIVED)
 # verify-otp and start both move driver_arrived → in_progress.
 # in_progress is idempotent for both (retry after network blip).
-START_FROM_STATES = ("driver_arrived", "in_progress")
-COMPLETE_FROM_STATES = ("in_progress",)
+START_FROM_STATES = (RideStatus.DRIVER_ARRIVED, RideStatus.IN_PROGRESS)
+COMPLETE_FROM_STATES = (RideStatus.IN_PROGRESS,)
 
 
 async def _generate_and_store_ride_snapshot(
@@ -2141,7 +2143,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # payment_status value, and it masked genuine failures from the
     # webhook dispatcher in webhooks.py.
     update_fields: Dict[str, Any] = {
-        "status": "completed",
+        "status": RideStatus.COMPLETED,
         "ride_completed_at": datetime.now(timezone.utc),
         "updated_at": datetime.now(timezone.utc),
         "planned_distance_km": planned_distance,

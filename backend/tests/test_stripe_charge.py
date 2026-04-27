@@ -82,7 +82,10 @@ class TestUnconfigured:
     async def test_no_stripe_key_returns_unconfigured(self):
         from backend.utils.stripe_charge import charge_ride
 
-        with _patch_settings(secret=""):
+        # Patch stripe to a real MagicMock so the `stripe is None` guard is
+        # bypassed and the empty-key guard is reached instead.
+        stripe_patch, _ = _patch_stripe()
+        with _patch_settings(secret=""), stripe_patch:
             outcome = await charge_ride(**_KW)
         assert outcome.status == "unconfigured"
         assert "not configured" in (outcome.error_message or "").lower()
@@ -91,7 +94,8 @@ class TestUnconfigured:
         from backend.utils.stripe_charge import charge_ride
 
         kw = {**_KW, "stripe_customer_id": None}
-        with _patch_settings():
+        stripe_patch, _ = _patch_stripe()
+        with _patch_settings(), stripe_patch:
             outcome = await charge_ride(**kw)
         assert outcome.status == "failed"
         assert "Stripe customer" in (outcome.error_message or "")
@@ -100,7 +104,8 @@ class TestUnconfigured:
         from backend.utils.stripe_charge import charge_ride
 
         kw = {**_KW, "payment_method_id": None}
-        with _patch_settings():
+        stripe_patch, _ = _patch_stripe()
+        with _patch_settings(), stripe_patch:
             outcome = await charge_ride(**kw)
         assert outcome.status == "failed"
         assert "payment method" in (outcome.error_message or "").lower()
@@ -252,12 +257,20 @@ class TestStripeOpsError:
         class _FakeStripeError(Exception):
             pass
 
+        # _NeverMatches ensures _FakeStripeError is NOT caught by the
+        # _StripeCardError handler first (both default to Exception when the
+        # stripe package isn't installed, so we must replace the card-error
+        # class with something that won't match).
+        class _NeverMatches(Exception):
+            pass
+
         mock_stripe = MagicMock()
         mock_stripe.PaymentIntent.create.side_effect = _FakeStripeError("api_connection_error: Unable to reach Stripe")
 
         with (
             _patch_settings(),
             patch("backend.utils.stripe_charge.stripe", mock_stripe),
+            patch("backend.utils.stripe_charge._StripeCardError", _NeverMatches),
             patch("backend.utils.stripe_charge._StripeBaseError", _FakeStripeError),
         ):
             outcome = await charge_ride(**_KW)

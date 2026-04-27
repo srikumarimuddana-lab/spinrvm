@@ -351,9 +351,12 @@ def sanitize_string(
         value = re.sub(r"<[^>]*>", "", value)
 
     if _SUSPICIOUS_PATTERN.search(value):
-        if raise_exception:
-            raise HTTPException(status_code=400, detail="Invalid input: suspicious content detected")
-        return False, None
+        # Log for security monitoring but do not reject — these patterns appear
+        # in legitimate inputs such as street addresses (#4), SQL keywords in
+        # user-supplied notes, and inline comments. Rejecting them silently
+        # breaks valid use-cases without meaningfully blocking injections
+        # (which are stopped at the parameterised-query level in Supabase).
+        logger.warning(f"Suspicious pattern detected in user input (logged, not rejected): {value[:80]!r}")
 
     return True, value
 

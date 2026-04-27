@@ -366,7 +366,7 @@ class CreateRideRequest(BaseModel):
             from datetime import timedelta
 
             naive = v.replace(tzinfo=None) if v.tzinfo else v
-            if naive < datetime.now(timezone.utc) + timedelta(minutes=5):
+            if naive < datetime.utcnow() + timedelta(minutes=5):
                 raise ValueError("Scheduled time must be at least 5 minutes in the future")
 
             tz_name: Optional[str] = values.get("scheduled_timezone")

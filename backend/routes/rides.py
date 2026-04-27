@@ -2277,11 +2277,8 @@ async def get_ride_messages(ride_id: str, current_user: dict = Depends(get_curre
     if not (is_rider or is_driver):
         raise HTTPException(status_code=403, detail="Not authorized to track this ride")
 
-    messages_cursor = db_supabase.get_rows(
+    messages = await db_supabase.get_rows(
         "ride_messages", {"ride_id": ride_id}, limit=100, order="timestamp", desc=False
-    )
-    messages = (
-        await messages_cursor.to_list(length=100) if hasattr(messages_cursor, "to_list") else list(messages_cursor)
     )
 
     # Serialize datetime

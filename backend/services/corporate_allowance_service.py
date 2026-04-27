@@ -8,7 +8,8 @@ the RPC validates they exist before mutating anything.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from decimal import Decimal
+from typing import Any, Dict, Optional, Union
 
 try:
     from ..db_supabase import run_sync  # type: ignore
@@ -24,10 +25,10 @@ async def _apply(
     allowance_id: str,
     member_id: str,
     type_: str,
-    amount: float,
+    amount: Union[Decimal, float],
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
-    floor: Optional[float] = None,
+    floor: Optional[Union[Decimal, float]] = None,
 ) -> Dict[str, Any]:
     params = {
         "p_wallet_id": wallet_id,
@@ -55,10 +56,10 @@ async def apply_grant(
     wallet_id: str,
     allowance_id: str,
     member_id: str,
-    amount: float,
+    amount: Union[Decimal, float],
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
-    floor: Optional[float] = None,
+    floor: Optional[Union[Decimal, float]] = None,
 ) -> Dict[str, Any]:
     if amount <= 0:
         raise ValueError("grant amount must be positive")
@@ -99,7 +100,7 @@ async def apply_rollback(
     wallet_id: str,
     allowance_id: str,
     member_id: str,
-    amount: float,
+    amount: Union[Decimal, float],
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> Dict[str, Any]:

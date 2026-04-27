@@ -1,5 +1,6 @@
+import time
 from datetime import datetime, timezone
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, List, Optional
 
 from fastapi import WebSocket
 from loguru import logger
@@ -10,10 +11,32 @@ except ImportError:
     from logging_utils import diag_logger  # type: ignore
 
 
+# B-P1-12: per-user inbound message rate-limit. The receive loop in
+# routes/websocket.py used to enforce a per-CONNECTION cap (30 msg/s
+# via a closure-scoped timestamp list), which an attacker could side-
+# step by opening N sockets to get N×30 effective throughput. The
+# bucket below aggregates across every WebSocket the user has open on
+# THIS machine; the cap is now ``WS_MAX_MESSAGES_PER_SECOND_PER_USER``.
+#
+# Cross-replica enforcement requires Redis (sliding-window counter
+# keyed on user_id). On a typical Fly affinity-LB deploy a user's
+# sockets are pinned to one machine, so per-machine ≈ per-user. The
+# remaining attack vector — an attacker who can force-balance their
+# sockets across replicas — is bounded by ``replica_count × cap``,
+# which at our current 1-2 replica scale is still the right order of
+# magnitude tighter than the prior per-connection-only cap. Promoting
+# this to Redis is a P3 follow-up tracked in
+# docs/runbooks/websockets.md.
+WS_MAX_MESSAGES_PER_SECOND_PER_USER = 30
+
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
         self.driver_locations: Dict[str, Dict] = {}
+        # B-P1-12: per-user inbound msg timestamps. See module-level
+        # comment above for the cross-machine caveat.
+        self._user_msg_timestamps: Dict[str, List[float]] = {}
 
     async def connect(self, websocket: WebSocket, client_id: str):
         # WebSocket is already accepted in the endpoint handler
@@ -34,6 +57,72 @@ class ConnectionManager:
             f"remaining={len(self.active_connections)} "
             f"all_keys={list(self.active_connections.keys())}"
         )
+        # B-P1-12: drop the user's rate-limit bucket if this was their
+        # last socket on this machine. Without this the dict would grow
+        # unbounded as users come and go (16 bytes per stale empty list,
+        # so not catastrophic, but trivial to bound here).
+        user_id = self._user_id_from_key(client_id)
+        if user_id is not None:
+            self._maybe_drop_user_bucket(user_id)
+
+    @staticmethod
+    def _user_id_from_key(client_id: str) -> Optional[str]:
+        """Parse the ``user_id`` out of a ``{client_type}_{user_id}`` key.
+        Returns None if the key doesn't match the expected shape — defensive
+        only; in practice every key in active_connections is built via
+        ``f"{client_type}_{user['id']}"`` in routes/websocket.py."""
+        for prefix in ("rider_", "driver_", "admin_"):
+            if client_id.startswith(prefix):
+                return client_id[len(prefix):]
+        return None
+
+    def _has_sockets_for_user(self, user_id: str) -> bool:
+        """True iff at least one ``{rider,driver,admin}_{user_id}`` key
+        is in active_connections. Used to decide whether to evict the
+        per-user msg bucket on disconnect."""
+        for ct in ("rider", "driver", "admin"):
+            if f"{ct}_{user_id}" in self.active_connections:
+                return True
+        return False
+
+    def _maybe_drop_user_bucket(self, user_id: str) -> None:
+        if not self._has_sockets_for_user(user_id):
+            self._user_msg_timestamps.pop(user_id, None)
+
+    def note_user_message(
+        self,
+        user_id: str,
+        *,
+        max_per_second: int = WS_MAX_MESSAGES_PER_SECOND_PER_USER,
+    ) -> bool:
+        """Record an inbound WebSocket message for ``user_id`` against
+        the per-user sliding-window rate limit.
+
+        Returns True if the message is within budget; False if the user
+        has exceeded ``max_per_second`` messages over the prior 1-second
+        window across ALL their open sockets on this machine. The
+        caller (routes/websocket.py receive loop) emits a typed
+        ``rate_limited`` frame on False and drops the message — the
+        socket is NOT closed, matching the prior per-connection
+        behaviour so a brief burst doesn't tear down a healthy session.
+
+        Synchronous on purpose: ``time.monotonic()`` doesn't need an
+        event loop, which makes this trivially unit-testable without
+        an async harness. Bucket trimming is in-place to avoid GC
+        churn under sustained high message rates from drivers (one
+        location_update per second is the steady state).
+        """
+        now_ts = time.monotonic()
+        cutoff = now_ts - 1.0
+        bucket = self._user_msg_timestamps.get(user_id)
+        if bucket is None:
+            bucket = []
+            self._user_msg_timestamps[user_id] = bucket
+        bucket[:] = [t for t in bucket if t >= cutoff]
+        if len(bucket) >= max_per_second:
+            return False
+        bucket.append(now_ts)
+        return True
 
     async def send_personal_message(self, message: dict, client_id: str):
         """Send a message to a client, possibly on a different machine.
@@ -159,6 +248,11 @@ class ConnectionManager:
                 f"disconnect_user: kicked {closed} local socket(s) "
                 f"for user_id={user_id} reason={reason}"
             )
+        # B-P1-12: drop the user's rate-limit bucket if no sockets remain
+        # for this user on this machine. ``client_types`` may have been
+        # narrower than the user's full set (e.g. an admin logout that
+        # only kicks admin sockets), so re-check rather than blindly pop.
+        self._maybe_drop_user_bucket(user_id)
         return closed
 
     async def kick_user(

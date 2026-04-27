@@ -258,9 +258,6 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             )
         )
 
-        # Rate limiting state
-        _msg_timestamps: list = []
-
         # Main message loop
         while True:
             raw = await websocket.receive_text()
@@ -278,13 +275,28 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 await websocket.send_json({"type": "error", "message": "invalid_json"})
                 continue
 
-            # Per-connection rate limiting
-            now_ts = asyncio.get_event_loop().time()
-            _msg_timestamps = [t for t in _msg_timestamps if now_ts - t < 1.0]
-            if len(_msg_timestamps) >= WS_MAX_MESSAGES_PER_SECOND:
-                await websocket.send_json({"type": "error", "message": "rate_limited"})
+            # B-P1-12: Per-USER rate limiting (not per-connection).
+            # Replaces the old closure-scoped _msg_timestamps which an
+            # attacker could side-step by opening N sockets to get
+            # N×WS_MAX_MESSAGES_PER_SECOND throughput. The manager's
+            # bucket aggregates across every WebSocket the user has
+            # open on this machine. See docs/runbooks/websockets.md
+            # for the multi-replica caveat. We drop the offending
+            # message but keep the socket alive — a brief burst from
+            # a buggy reconnect should not force a re-auth round-trip.
+            if not manager.note_user_message(
+                user["id"], max_per_second=WS_MAX_MESSAGES_PER_SECOND,
+            ):
+                await websocket.send_json(
+                    {
+                        "type": "rate_limited",
+                        "scope": "user",
+                        "limit": WS_MAX_MESSAGES_PER_SECOND,
+                        "window_seconds": 1,
+                        "retry_after_seconds": 1,
+                    }
+                )
                 continue
-            _msg_timestamps.append(now_ts)
 
             # GAP FIX: Handle pong responses (client acknowledges our ping)
             if data.get("type") == "pong":

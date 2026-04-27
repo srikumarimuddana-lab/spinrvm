@@ -64,14 +64,27 @@ _LOCK_KEY = "otp_lock:{}"
 
 
 async def _check_otp_lockout(phone: str) -> None:
-    """Raise 429 if phone is currently locked out. Raises 503 on Redis errors (fail closed)."""
+    """Raise 429 if phone is currently locked out. Raises 503 on Redis errors (fail closed).
+
+    B-P1-8: Mirrors the response shape pinned by the slowapi 429 path
+    (utils/rate_limiter.py::rate_limit_exceeded_handler) so mobile
+    clients can use a single 429 parser regardless of which gate
+    (slowapi window or OTP lockout) tripped. RateLimit-* headers per
+    draft-ietf-httpapi-ratelimit-headers; Retry-After per RFC 9110.
+    """
     try:
         locked = await redis_get(_LOCK_KEY.format(phone))
         if locked:
+            retry_after = int(settings.OTP_LOCKOUT_DURATION_SECONDS)
             raise HTTPException(
                 status_code=429,
                 detail="ERR_OTP_LOCKED",
-                headers={"Retry-After": str(settings.OTP_LOCKOUT_DURATION_SECONDS)},
+                headers={
+                    "Retry-After": str(retry_after),
+                    "RateLimit-Limit": str(int(settings.OTP_MAX_FAILURES)),
+                    "RateLimit-Remaining": "0",
+                    "RateLimit-Reset": str(retry_after),
+                },
             )
     except HTTPException:
         raise

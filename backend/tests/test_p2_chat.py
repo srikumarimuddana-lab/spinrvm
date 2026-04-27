@@ -85,8 +85,9 @@ class TestSendRideMessage:
 
         driver_row = _driver_row()
 
-        # find_one returns: ride (1st call), driver lookup for WS target
-        find_calls = [ride, driver_row if ride.get("driver_id") else None]
+        # find_one calls: (1) ride row, (2) driver-role check for sender (None=rider),
+        # (3) driver lookup by driver_id to get user_id for WS target
+        find_calls = [ride, None, driver_row if ride.get("driver_id") else None]
 
         with (
             patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=find_calls)),

@@ -21,7 +21,7 @@ validate the handler's response shapes and DB-write contracts.
 from __future__ import annotations
 
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -52,8 +52,8 @@ def _install_common_patches(outcome, *, ride_row=None, already_paid=False):
     """Patch the handler's DB + Stripe dependencies for a single call.
 
     `outcome` is a ChargeOutcome instance that charge_ride() will return.
-    Pass `already_paid=True` to simulate the idempotency guard already
-    having fired (atomic update_one modified 0 rows)."""
+    Pass `already_paid=True` to simulate the atomic guard losing the race
+    (db_supabase.update_one returns None because payment_status was not "pending")."""
     ride = ride_row or _completed_ride()
     rider_user = {
         "id": RIDER_ID,
@@ -67,7 +67,8 @@ def _install_common_patches(outcome, *, ride_row=None, already_paid=False):
         updates.append(patch)
         return {"modified_count": 1}
 
-    guard_result = MagicMock(modified_count=0 if already_paid else 1)
+    # Supabase update_one returns None when 0 rows matched the filter.
+    guard_row = None if already_paid else {"id": RIDE_ID}
 
     # Capture receipt email send if it fires
     async def _fake_receipt(*a, **kw):
@@ -78,7 +79,7 @@ def _install_common_patches(outcome, *, ride_row=None, already_paid=False):
         patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=rider_user)),
         patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=None)),
         patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
-        patch("backend.routes.rides.db.update_one", AsyncMock(return_value=guard_result)),
+        patch("backend.routes.rides.db_supabase.update_one", AsyncMock(return_value=guard_row)),
         patch("backend.routes.rides.charge_ride", AsyncMock(return_value=outcome)),
     ]
     return patches, updates

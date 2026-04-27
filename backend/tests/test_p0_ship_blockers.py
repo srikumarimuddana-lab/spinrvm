@@ -995,12 +995,13 @@ class TestProcessPaymentHTTP:
         with (
             patch.object(rides_mod, "db_supabase") as mock_db,
             patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)),
-            patch.object(rides_mod, "db") as _mock_legacy_db,
         ):
             mock_db.get_ride = AsyncMock(return_value=ride)
-            mock_db.get_user_by_id = AsyncMock(return_value={"stripe_customer_id": "cus_1"})
+            mock_db.get_user_by_id = AsyncMock(
+                return_value={"stripe_customer_id": "cus_1", "default_payment_method": "pm_1"}
+            )
             mock_db.update_ride = AsyncMock()
-            _mock_legacy_db.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
+            mock_db.update_one = AsyncMock(return_value={"id": "ride_http_1"})
 
             client = _app_with_mocked_auth()
             resp = client.post("/rides/ride_http_1/process-payment", json={"tip_amount": "0"})
@@ -1021,12 +1022,13 @@ class TestProcessPaymentHTTP:
         with (
             patch.object(rides_mod, "db_supabase") as mock_db,
             patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)),
-            patch.object(rides_mod, "db") as _mock_legacy_db,
         ):
             mock_db.get_ride = AsyncMock(return_value=ride)
-            mock_db.get_user_by_id = AsyncMock(return_value={"stripe_customer_id": "cus_1"})
+            mock_db.get_user_by_id = AsyncMock(
+                return_value={"stripe_customer_id": "cus_1", "default_payment_method": "pm_1"}
+            )
             mock_db.update_ride = AsyncMock()
-            _mock_legacy_db.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
+            mock_db.update_one = AsyncMock(return_value={"id": "ride_http_1"})
 
             client = _app_with_mocked_auth()
             resp = client.post("/rides/ride_http_1/process-payment", json={"tip_amount": "0"})
@@ -1036,8 +1038,8 @@ class TestProcessPaymentHTTP:
         assert detail.get("code") == "card_declined"
         assert detail.get("decline_code") == "insufficient_funds"
 
-    async def test_stripe_failed_returns_502(self):
-        """charge_ride returns failed (ops error) → process_payment returns 502."""
+    async def test_stripe_failed_returns_402(self):
+        """charge_ride returns failed (ops error) → process_payment returns 402 payment_error."""
         rides_mod = self._load_rides_module()
         ride = _make_ride()
         outcome = ChargeOutcome(
@@ -1048,16 +1050,17 @@ class TestProcessPaymentHTTP:
         with (
             patch.object(rides_mod, "db_supabase") as mock_db,
             patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)),
-            patch.object(rides_mod, "db") as _mock_legacy_db,
         ):
             mock_db.get_ride = AsyncMock(return_value=ride)
-            mock_db.get_user_by_id = AsyncMock(return_value={"stripe_customer_id": "cus_1"})
+            mock_db.get_user_by_id = AsyncMock(
+                return_value={"stripe_customer_id": "cus_1", "default_payment_method": "pm_1"}
+            )
             mock_db.update_ride = AsyncMock()
-            _mock_legacy_db.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
+            mock_db.update_one = AsyncMock(return_value={"id": "ride_http_1"})
 
             client = _app_with_mocked_auth()
             resp = client.post("/rides/ride_http_1/process-payment", json={"tip_amount": "0"})
 
-        assert resp.status_code == 502
+        assert resp.status_code == 402
         detail = resp.json().get("detail", {})
-        assert detail.get("code") == "payment_processor_error"
+        assert detail.get("code") == "payment_error"

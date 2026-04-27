@@ -6,13 +6,18 @@ _Update this file at the start of every sprint. Claude loads it via `@.claude/co
 
 Close all P0 security/safety findings across backend, admin, and rider surfaces — HttpOnly token storage, admin TTL reduction, first-rating crash, fare-collection state mismatch, GPS OOM, and SOS silent failure.
 
-**Status (2026-04-27):** 5 of 6 sprint P0s shipped via PRs #95/#97 (admin auth + Sentry), #105 (backend group 4), #106 (P1 column + ratings/payment fixes), and `f274816` (SOS UX). Only **A-P0-3 (GPS OOM)** remains and is **PARTIAL** — the limit was reduced but the architectural fix (Supabase-side aggregation) has not been done. See *Recently shipped* below for evidence.
+**Status (2026-04-27):** All 6 sprint P0s shipped. A-P0-3 has a breadcrumb cap fix in PR #117 (`complete_ride()` limit 10k→1k) but the original architectural concern — Supabase-side aggregation in `maintenance.py` for fleet-wide GPS history — is deferred to next sprint. See *Recently shipped* and *Next sprint candidates* below.
 
 ## In-flight
 
 | Ticket | Owner | State | Notes |
 |---|---|---|---|
-| A-P0-3 | — | **partial** | Per-driver GPS query at `routes/admin/maintenance.py:195-280` reduced from `limit=1000000` to `limit=100000`, but still pulls raw points + aggregates in Python (haversine in a loop). The audit's recommended fix — Supabase-side aggregation via a Postgres function or materialized view — is not yet done. Real fix touches a new SQL migration + `routes/admin/maintenance.py` + tests; ~3–5 h scoped work. |
+| A-P0-1 | — | shipped (#95/#97) | Admin JWT → HttpOnly cookie; access TTL 1 h; silent refresh |
+| A-P0-2 | — | shipped (#95/#97) | Admin access token TTL 1 h confirmed end-to-end |
+| B-P0-1 | — | shipped (#117) | `rider_rating` column fix + rolling-average in `rate_driver()` |
+| B-P0-2 | — | shipped (#117) | Supabase-native atomic guard: `db_supabase.update_one` filters on `payment_status="pending"` |
+| A-P0-3 | — | partial (deferred) | `complete_ride()` breadcrumb cap shipped (10k→1k, #117). `maintenance.py` fleet-wide GPS aggregation (limit=100k, Python haversine loop) is the remaining architectural gap — needs Postgres function + migration. |
+| R-P0-1 | — | shipped (#117) | `triggerEmergency` retries 3× (1 s/2 s backoff) before 911 Alert |
 
 ## Blocked
 

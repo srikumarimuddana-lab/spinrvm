@@ -184,6 +184,7 @@ export interface AuthResponse {
 export interface AdminLoginResponse {
     token: string;
     access_expires_at: string;
+    csrf_token?: string;
     user: {
         id: string;
         email: string;

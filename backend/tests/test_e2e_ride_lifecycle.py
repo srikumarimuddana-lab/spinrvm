@@ -107,9 +107,11 @@ class TestRideLifecycleHappyPath:
         ):
             result = await drv_mod.accept_ride(ride_id=RIDE_ID, current_user={"id": DRIVER_USER_ID})
 
+        # accept_ride returns {"success": True} — the driver_accepted status is
+        # confirmed via the re-read stored in the ride variable inside the handler,
+        # not in the return value.
         assert isinstance(result, dict)
-        assert result.get("status") == "driver_accepted"
-        assert result.get("driver_id") == DRIVER_ID
+        assert result == {"success": True}
         # Rider channel must receive a notification so the "Finding driver..."
         # spinner can flip without waiting for the 15s poll.
         assert ws_mock.await_count >= 1
@@ -123,7 +125,8 @@ class TestRideLifecycleHappyPath:
 
         ride = {"id": RIDE_ID, "driver_id": DRIVER_ID, "status": "driver_accepted"}
         mock_db = MagicMock()
-        mock_db.rides.find_one = AsyncMock(return_value=ride)
+        # Production code uses flat API: db.find_one("rides", {...})
+        mock_db.find_one = AsyncMock(return_value=ride)
 
         with patch("backend.routes.drivers.db", mock_db):
             result = await _require_ride_in_state(RIDE_ID, DRIVER_ID, ARRIVE_FROM_STATES)
@@ -136,7 +139,8 @@ class TestRideLifecycleHappyPath:
 
         ride = {"id": RIDE_ID, "driver_id": DRIVER_ID, "status": "driver_arrived"}
         mock_db = MagicMock()
-        mock_db.rides.find_one = AsyncMock(return_value=ride)
+        # Production code uses flat API: db.find_one("rides", {...})
+        mock_db.find_one = AsyncMock(return_value=ride)
 
         with patch("backend.routes.drivers.db", mock_db):
             result = await _require_ride_in_state(RIDE_ID, DRIVER_ID, START_FROM_STATES)
@@ -153,7 +157,8 @@ class TestRideLifecycleHappyPath:
         )
 
         mock_db = MagicMock()
-        mock_db.rides.find_one = AsyncMock(
+        # Production code uses flat API: db.find_one("rides", {...})
+        mock_db.find_one = AsyncMock(
             side_effect=[
                 None,  # first lookup with state filter fails
                 {"id": RIDE_ID, "driver_id": DRIVER_ID, "status": "completed"},

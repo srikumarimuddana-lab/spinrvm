@@ -14,12 +14,11 @@ from pydantic import BaseModel
 try:
     from .. import db_supabase
     from ..dependencies import get_admin_user, get_current_user
-    from ..routes.admin.maintenance import log_audit
     from ..settings_loader import get_app_settings
+    from ..utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user, get_current_user
-    from routes.admin.maintenance import log_audit
     from settings_loader import get_app_settings
 
 db = db_supabase  # legacy alias
@@ -234,16 +233,17 @@ async def admin_resolve_dispute(
 
     await db_supabase.update_one("disputes", {"id": dispute_id}, update_data)
 
-    try:
-        await log_audit(
-            "dispute_resolved",
-            "dispute",
-            dispute_id,
-            current_admin.get("email", current_admin.get("id", "unknown")),
-            f"Resolution: {req.resolution}. Amount: {req.refund_amount or 0}. Note: {req.admin_note or ''}",
-        )
-    except Exception as audit_err:
-        logger.error(f"[AUDIT] Failed to write audit log for dispute {dispute_id}: {audit_err}")
+    await log_admin_action(
+        current_admin,
+        "dispute_resolved",
+        "dispute",
+        dispute_id,
+        {
+            "resolution": req.resolution,
+            "refund_amount": str(req.refund_amount or 0),
+            "admin_note": req.admin_note or "",
+        },
+    )
 
     return {
         "success": True,

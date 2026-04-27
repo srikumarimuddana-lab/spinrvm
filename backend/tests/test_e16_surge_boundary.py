@@ -27,7 +27,7 @@ Run:
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -64,10 +64,17 @@ def _body(token: str | None = None):
 
 
 def _request():
-    req = MagicMock()
-    req.headers = {}
-    req.client = MagicMock(host="127.0.0.1")
-    return req
+    from starlette.requests import Request as StarletteRequest
+
+    return StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/rides",
+            "query_string": b"",
+            "headers": [],
+        }
+    )
 
 
 def _sign_token(
@@ -95,6 +102,15 @@ def _sign_token(
 async def _call_create_ride(body, current_surge: float = 1.0):
     """Call create_ride with minimal mocks; returns (inserted_row_or_None, exception_or_None)."""
     from backend.routes import rides as rides_mod
+    from backend.utils.rate_limiter import default_limiter
+
+    # Reset in-memory rate-limit counters before each call so the 6 tests in
+    # this class don't collectively exhaust the 5/minute ride_request_limit.
+    _storage = default_limiter._storage
+    if hasattr(_storage, "storage"):
+        _storage.storage.clear()
+    if hasattr(_storage, "events"):
+        _storage.events.clear()
 
     rider_row = {"id": RIDER_ID, "status": "active", "stripe_customer_id": "cus_x"}
     inserted = []

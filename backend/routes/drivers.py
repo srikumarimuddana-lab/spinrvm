@@ -573,7 +573,7 @@ async def register_driver(
                 {"role": "driver", "is_driver": True},
             )
         except Exception as exc:
-            logger.warning(f"register_driver: failed to flip users.role for {user_id}: {exc}")
+            logger.error(f"register_driver: failed to flip users.role for {user_id}: {exc}", exc_info=True)
 
     return serialize_doc(new_driver)
 
@@ -1470,8 +1470,16 @@ async def request_payout(
             status = "completed"
             stripe_payout_id = transfer.id
         except Exception as e:
-            logger.error(f"Stripe transfer failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Payout failed: {str(e)}") from e
+            # B-P3-leak-cleanup: same pattern as the subscription
+            # charge fix — Stripe transfer errors carry account IDs
+            # (acct_…), transfer IDs (tr_…), and bank-account hints
+            # we must not ship. logger.exception captures the full
+            # traceback server-side.
+            logger.exception("Stripe transfer failed for driver payout")
+            raise HTTPException(
+                status_code=500,
+                detail="Payout failed. Please contact support.",
+            ) from e
 
     payout = {
         "id": str(uuid.uuid4()),
@@ -1497,11 +1505,14 @@ async def get_payout_history(
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
-    payouts_cursor = db_supabase.get_rows("payouts", {"driver_id": driver["id"]}, limit=100)
-    if hasattr(payouts_cursor, "sort"):
-        payouts_cursor = payouts_cursor.sort("created_at", -1).skip(offset).limit(limit)
-
-    payouts = await payouts_cursor.to_list(length=limit) if hasattr(payouts_cursor, "to_list") else list(payouts_cursor)
+    payouts = await db_supabase.get_rows(
+        "payouts",
+        {"driver_id": driver["id"]},
+        limit=limit,
+        offset=offset,
+        order="created_at",
+        desc=True,
+    )
     return {"success": True, "payouts": [serialize_doc(p) for p in payouts]}
 
 
@@ -1890,7 +1901,7 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
         asyncio.create_task(match_driver_to_ride(ride_id))
         logger.info(f"Re-matching ride {ride_id} after driver {driver['id']} declined")
     except Exception as e:
-        logger.warning(f"Could not trigger re-matching for ride {ride_id}: {e}")
+        logger.error(f"Could not trigger re-matching for ride {ride_id}: {e}", exc_info=True)
 
     return {"success": True}
 
@@ -2056,7 +2067,8 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             {
                 "ride_id": ride_id,
             },
-            limit=10000,
+            limit=1000,
+            order="timestamp",
         )
         all_breadcrumbs = [b for b in all_breadcrumbs if b.get("lat") and b.get("lng")]
         all_breadcrumbs.sort(key=lambda b: str(b.get("timestamp", "")))
@@ -3118,8 +3130,19 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             else:
                 logger.info("Stripe not configured; marking subscription paid without charge")
         except Exception as _stripe_err:
-            logger.error(f"Stripe charge failed for driver {driver['id']}: {_stripe_err}")
-            raise HTTPException(status_code=402, detail=f"Payment failed: {_stripe_err}") from _stripe_err
+            # B-P2-1: NEVER interpolate the underlying exception into the
+            # client-facing detail. Stripe error strings carry charge IDs
+            # (ch_…), customer IDs (cus_…), decline codes, and sometimes
+            # last-4-digits — none of which the rider/driver app should
+            # see. logger.exception captures the full traceback server-
+            # side; the request_id in the response body lets support
+            # correlate against the log entry. This is the canonical
+            # pattern referenced by docs/runbooks/error-responses.md.
+            logger.exception(f"Stripe subscription charge failed for driver {driver['id']}")
+            raise HTTPException(
+                status_code=402,
+                detail="Payment failed. Please try another payment method or contact support.",
+            ) from _stripe_err
 
     subscription = {
         "id": str(uuid.uuid4()),

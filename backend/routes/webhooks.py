@@ -213,7 +213,23 @@ async def stripe_webhook(request: Request):
             )
 
     else:
-        logger.info(f"Unhandled Stripe event type: {event_type}")
+        _HANDLED = {
+            "payment_intent.succeeded",
+            "payment_intent.payment_failed",
+            "checkout.session.completed",
+        }
+        if event_type in _HANDLED:
+            logger.error(
+                f"[WEBHOOK] Event type {event_type!r} matched allowlist but fell through dispatch — "
+                "handler logic gap; check for missing elif branch",
+                extra={"domain": "payments", "event_id": event_id},
+            )
+        else:
+            logger.warning(
+                f"[WEBHOOK] Unhandled Stripe event type {event_type!r} — "
+                "add to dispatch or update Stripe dashboard webhook subscriptions",
+                extra={"domain": "payments", "event_id": event_id},
+            )
 
     # Success — stamp processed_at. Non-fatal if this fails (we've
     # already finished the side effects, and Stripe won't retry a 2xx).

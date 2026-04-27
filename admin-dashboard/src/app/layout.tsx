@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Analytics } from "@vercel/analytics/next";
+import { AuthInitializer } from "@/components/auth-initializer";
 
 export const metadata: Metadata = {
   title: "Spinr Admin",
@@ -30,12 +31,20 @@ export default async function RootLayout({
         >
           <SidebarProvider>
             <TooltipProvider>
+              <AuthInitializer />
               {children}
               <Toaster />
             </TooltipProvider>
           </SidebarProvider>
         </ThemeProvider>
-        <Analytics />
+        {/* Strip dynamic entity IDs from page paths before they reach Vercel's US
+            edge ingestion — /dashboard/drivers/abc123 → /dashboard/drivers/[id] ([22-3]) */}
+        <Analytics
+          beforeSend={(event) => ({
+            ...event,
+            url: event.url.replace(/\/[0-9a-f-]{8,}(?=\/|$)/gi, '/[id]'),
+          })}
+        />
       </body>
     </html>
   );

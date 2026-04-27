@@ -141,6 +141,27 @@ jobs:
           else echo "No lockfile in ${{ matrix.module }}"
           fi
 
+  # G4c — Blocking npm audit for admin-dashboard ([17-3])
+  # Separated from the yarn-audit matrix so it can be enforced independently.
+  # Baselining window is over once [19-1]/[19-2] CVE overrides are merged.
+  npm-audit-admin:
+    name: G4c · npm audit (admin-dashboard, HIGH blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: admin-dashboard/package-lock.json
+      - name: Install dependencies
+        working-directory: admin-dashboard
+        run: npm ci
+      - name: Audit for HIGH+ CVEs
+        working-directory: admin-dashboard
+        run: npm audit --audit-level=high
+
   # G5 — Secret scanning
   gitleaks:
     name: G5 · Gitleaks (secrets)
@@ -157,7 +178,7 @@ jobs:
   # Summary job — required check for branch protection once gates are enforced
   summary:
     name: Security gates summary
-    needs: [bandit, eslint-security, semgrep, pip-audit, yarn-audit, gitleaks]
+    needs: [bandit, eslint-security, semgrep, pip-audit, yarn-audit, npm-audit-admin, gitleaks]
     if: always()
     runs-on: ubuntu-latest
     steps:

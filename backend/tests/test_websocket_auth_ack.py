@@ -10,10 +10,15 @@ sends `{"type": "auth_success"}` right after `manager.connect()` to close that
 window. These tests pin that behavior.
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+# Matches the test value we inject into the settings mock. Any non-empty
+# string works — it just needs to equal payload["aud"] so the audience check
+# passes without touching a real Firebase project.
+_TEST_FIREBASE_APP_ID = "test-firebase-app-id"
 
 
 @pytest.fixture
@@ -50,37 +55,93 @@ def admin_user():
     }
 
 
-def _patch_auth_and_db(user, driver_profile=None):
-    """Context-manager-ish helper: patch Firebase + db_supabase so the WS
-    endpoint can complete auth without touching real services."""
-    patches = [
-        # Firebase verify → returns a payload carrying the user id
+def _make_settings_mock(client_type: str) -> MagicMock:
+    """Return a settings-shaped mock with the right FIREBASE_*_APP_ID set."""
+    m = MagicMock()
+    m.FIREBASE_DRIVER_APP_ID = _TEST_FIREBASE_APP_ID if client_type == "driver" else ""
+    m.FIREBASE_RIDER_APP_ID = _TEST_FIREBASE_APP_ID if client_type == "rider" else ""
+    return m
+
+
+def _patch_firebase_auth_and_db(user, driver_profile=None, client_type="driver"):
+    """Patches for driver/rider WebSocket auth via Firebase token.
+
+    Since B-P1-1 the endpoint validates payload["aud"] against
+    settings.FIREBASE_{DRIVER,RIDER}_APP_ID. We inject a matching test value
+    via a settings mock and include the same value in the Firebase payload so
+    the audience check passes in test.
+    """
+    firebase_payload = {
+        "uid": user["id"],
+        "phone_number": user.get("phone", ""),
+        "aud": _TEST_FIREBASE_APP_ID,
+    }
+    return [
+        patch("backend.routes.websocket.settings", _make_settings_mock(client_type)),
         patch(
             "backend.routes.websocket.firebase_auth.verify_id_token",
-            return_value={"uid": user["id"], "phone_number": user["phone"]},
+            return_value=firebase_payload,
         ),
-        # db_supabase.get_user_by_id → returns our user fixture
         patch(
             "backend.routes.websocket.db_supabase.get_user_by_id",
             new=AsyncMock(return_value=user),
         ),
-        # For driver client type, the endpoint checks get_rows("drivers", ...)
         patch(
             "backend.routes.websocket.db_supabase.get_rows",
             new=AsyncMock(return_value=[driver_profile] if driver_profile else []),
         ),
-        # Driver online-broadcast path touches db.find_one
         patch(
             "backend.routes.websocket.db.find_one",
             new=AsyncMock(return_value=driver_profile),
         ),
-        # Silence the admin broadcast
         patch(
             "backend.routes.websocket.manager.broadcast_to_admins",
             new=AsyncMock(return_value=None),
         ),
     ]
-    return patches
+
+
+def _patch_jwt_auth_and_db(user, db_user=None):
+    """Patches for admin WebSocket auth via legacy JWT.
+
+    Admin tokens are minted by the backend (not Firebase), so Firebase
+    verify_id_token is forced to raise — this triggers the JWT fallback path
+    in the endpoint. The JWT payload carries role + email so the admin-user
+    shortcut in the fallback applies without a DB lookup.
+    """
+    jwt_payload = {
+        "user_id": user["id"],
+        "role": user.get("role", "rider"),
+        # email is required for the admin-user-from-payload shortcut
+        "email": user.get("email", f"{user['id']}@spinr.test"),
+        "phone": user.get("phone", ""),
+    }
+    return [
+        patch(
+            "backend.routes.websocket.firebase_auth.verify_id_token",
+            side_effect=Exception("firebase not used for admin tokens"),
+        ),
+        patch(
+            "backend.routes.websocket.verify_jwt_token",
+            return_value=jwt_payload,
+        ),
+        patch(
+            "backend.routes.websocket.db_supabase.get_user_by_id",
+            new=AsyncMock(return_value=db_user or user),
+        ),
+        patch(
+            "backend.routes.websocket.db_supabase.get_rows",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "backend.routes.websocket.db.find_one",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "backend.routes.websocket.manager.broadcast_to_admins",
+            new=AsyncMock(return_value=None),
+        ),
+    ]
 
 
 def test_driver_auth_success_is_sent_immediately(app_with_ws, driver_user):
@@ -89,7 +150,7 @@ def test_driver_auth_success_is_sent_immediately(app_with_ws, driver_user):
     flip off the "Connection lost" banner."""
     driver_profile = {"id": "driver_1", "user_id": driver_user["id"], "is_online": True}
 
-    patches = _patch_auth_and_db(driver_user, driver_profile=driver_profile)
+    patches = _patch_firebase_auth_and_db(driver_user, driver_profile=driver_profile, client_type="driver")
     for p in patches:
         p.start()
     try:
@@ -105,14 +166,16 @@ def test_driver_auth_success_is_sent_immediately(app_with_ws, driver_user):
 
 
 def test_admin_auth_success_is_sent_immediately(app_with_ws, admin_user):
-    """Same contract for admin clients — they use the same banner pattern."""
-    patches = _patch_auth_and_db(admin_user, driver_profile=None)
+    """Same contract for admin clients — they use the same banner pattern.
+    Admin tokens go through the legacy JWT path (not Firebase), so Firebase
+    is forced to fail and the JWT fallback is mocked instead."""
+    patches = _patch_jwt_auth_and_db(admin_user)
     for p in patches:
         p.start()
     try:
         client = TestClient(app_with_ws)
         with client.websocket_connect(f"/ws/admin/{admin_user['id']}") as ws:
-            ws.send_json({"type": "auth", "token": "fake-firebase-token"})
+            ws.send_json({"type": "auth", "token": "fake-jwt-token"})
             msg = ws.receive_json()
             assert msg["type"] == "auth_success"
             assert msg["client_type"] == "admin"
@@ -171,8 +234,7 @@ def test_invalid_token_closes_socket_without_ack(app_with_ws):
 def test_driver_without_driver_row_gets_error_not_ack(app_with_ws, driver_user):
     """A user with no drivers-table row cannot connect as a driver — the
     endpoint closes with `user_is_not_a_driver`, NEVER auth_success."""
-    # driver_profile=None → get_rows returns [] so the driver-row check fails
-    patches = _patch_auth_and_db(driver_user, driver_profile=None)
+    patches = _patch_firebase_auth_and_db(driver_user, driver_profile=None, client_type="driver")
     for p in patches:
         p.start()
     try:
@@ -195,7 +257,8 @@ def test_admin_without_admin_role_gets_error_not_ack(app_with_ws):
     """A user with role='rider' cannot connect as admin — closes with
     `admin_access_required`, never auth_success."""
     rider_user = {"id": "user_rider_1", "role": "rider", "phone": "+15551234567"}
-    patches = _patch_auth_and_db(rider_user, driver_profile=None)
+    # JWT path: role='rider' not in admin roles → DB lookup → role check fails
+    patches = _patch_jwt_auth_and_db(rider_user, db_user=rider_user)
     for p in patches:
         p.start()
     try:
@@ -204,7 +267,7 @@ def test_admin_without_admin_role_gets_error_not_ack(app_with_ws):
         client = TestClient(app_with_ws)
         with pytest.raises(WebSocketDisconnect):
             with client.websocket_connect(f"/ws/admin/{rider_user['id']}") as ws:
-                ws.send_json({"type": "auth", "token": "fake-firebase-token"})
+                ws.send_json({"type": "auth", "token": "fake-jwt-token"})
                 msg = ws.receive_json()
                 assert msg["type"] == "error"
                 assert msg["message"] == "admin_access_required"

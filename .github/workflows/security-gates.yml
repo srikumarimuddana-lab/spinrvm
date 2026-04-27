@@ -124,7 +124,8 @@ jobs:
   yarn-audit:
     name: G4b · yarn audit (JS deps)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # Blocking on HIGH+ CVEs — baseline was clean when this was enabled (2026-04-27).
+    continue-on-error: false
     strategy:
       matrix:
         module: [rider-app, driver-app, admin-dashboard, shared]
@@ -136,8 +137,8 @@ jobs:
       - name: Audit
         working-directory: ${{ matrix.module }}
         run: |
-          if [ -f yarn.lock ]; then yarn audit --level high || true
-          elif [ -f package-lock.json ]; then npm audit --audit-level=high || true
+          if [ -f yarn.lock ]; then yarn audit --level high
+          elif [ -f package-lock.json ]; then npm audit --audit-level=high
           else echo "No lockfile in ${{ matrix.module }}"
           fi
 

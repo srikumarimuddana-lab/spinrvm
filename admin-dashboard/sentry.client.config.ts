@@ -32,6 +32,7 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
     'email', 'phone', 'phone_number', 'address', 'lat', 'lng',
     'latitude', 'longitude', 'token', 'password', 'authorization',
     'full_name', 'first_name', 'last_name',
+    'driver_id', 'rider_id', 'ride_id',
   ]);
 
   function scrubObj(obj: Record<string, unknown>): void {
@@ -57,15 +58,18 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
 
-  // Capture 20% of transactions for performance monitoring.
-  // Raise to 1.0 in staging; lower to 0.05 in production if volume is high.
-  tracesSampleRate: process.env.NODE_ENV === 'production' ? 0.2 : 1.0,
+  // Admin is low-traffic (<5k req/day); 100% sampling gives full perf visibility
+  // on this high-blast-radius surface without meaningful cost.
+  tracesSampleRate: 1.0,
 
   // Replays: 10% of sessions, 100% of sessions with errors.
   replaysSessionSampleRate: 0.1,
   replaysOnErrorSampleRate: 1.0,
 
   environment: process.env.NODE_ENV ?? 'development',
+
+  // Release tag enables regression-tracking per deploy (Vercel injects the var).
+  release: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA,
 
   // Only initialize when a DSN is present — keeps local dev clean.
   enabled: !!process.env.NEXT_PUBLIC_SENTRY_DSN,
@@ -74,9 +78,13 @@ Sentry.init({
 
   integrations: [
     Sentry.replayIntegration({
-      // Mask PII in session replays.
+      // Mask PII in session replays. Block media so driver document images
+      // (uploaded IDs) cannot be captured in replay recordings.
       maskAllText: true,
-      blockAllMedia: false,
+      blockAllMedia: true,
     }),
   ],
 });
+
+// Tag every event with the surface so cross-surface dashboards stay clean.
+Sentry.setTag('surface', 'admin');

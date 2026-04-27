@@ -253,12 +253,13 @@ jobs:
         working-directory: admin-dashboard
         run: npm run build
 
-  # E2E Tests (run on main branch only)
+  # E2E Tests — non-blocking on PRs, blocking on main merges.
+  # Findings during PR phase are uploaded as artifacts for review.
   e2e-test:
     name: E2E tests (Playwright)
     runs-on: ubuntu-latest
     needs: [backend-test]
-    if: github.ref == 'refs/heads/main'
+    continue-on-error: ${{ github.ref != 'refs/heads/main' }}
     defaults:
       run:
         working-directory: admin-dashboard

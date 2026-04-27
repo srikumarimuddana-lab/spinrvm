@@ -9,9 +9,11 @@ from pydantic import BaseModel
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
+    from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
-    from dependencies import get_admin_user
+    from dependencies import get_admin_user  # noqa: F401
+    from utils.audit_logger import log_admin_action  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -167,9 +169,7 @@ async def admin_get_dispute_details(dispute_id: str):
     if not dispute:
         raise HTTPException(status_code=404, detail="Dispute not found")
 
-    # Get related ride information
     ride = await db_supabase.get_ride(dispute.get("ride_id"))
-
     return {**dispute, "ride_details": ride}
 
 
@@ -204,8 +204,14 @@ async def admin_resolve_dispute(
         "resolved_at": datetime.now(timezone.utc).isoformat(),
         "resolved_by": admin["id"],
     }
-
     await db_supabase.update_one("disputes", {"id": dispute_id}, resolution_data)
+    await log_admin_action(
+        admin,
+        "dispute_resolved",
+        "disputes",
+        dispute_id,
+        {"status": resolution.status, "notes": resolution.notes},
+    )
     return {"message": "Dispute resolved"}
 
 
@@ -272,9 +278,7 @@ async def admin_get_ticket_details(ticket_id: str):
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
 
-    # Get ticket messages
     messages = await db_supabase.get_rows("support_messages", {"ticket_id": ticket_id}, order="created_at", limit=100)
-
     return {**ticket, "messages": messages}
 
 
@@ -288,11 +292,8 @@ async def admin_reply_to_ticket(ticket_id: str, reply: TicketReplyRequest, admin
         "message": reply.message,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
-
-    # Insert message
     await db_supabase.insert_one("support_messages", message_doc)
 
-    # Update ticket status if needed
     if reply.status:
         await db_supabase.update_one(
             "support_tickets",
@@ -300,6 +301,13 @@ async def admin_reply_to_ticket(ticket_id: str, reply: TicketReplyRequest, admin
             {"status": reply.status, "updated_at": datetime.now(timezone.utc).isoformat()},
         )
 
+    await log_admin_action(
+        admin,
+        "ticket_reply",
+        "support_tickets",
+        ticket_id,
+        {"status": reply.status},
+    )
     return {"message": "Reply sent"}
 
 
@@ -341,7 +349,7 @@ async def admin_delete_ticket(ticket_id: str):
 
 
 @router.post("/rides/{ride_id}/flag")
-async def admin_flag_ride_participant(ride_id: str, req: FlagRequest):
+async def admin_flag_ride_participant(ride_id: str, req: FlagRequest, admin: dict = Depends(get_admin_user)):
     """Flag a rider or driver from a ride. 3 active flags = auto-ban."""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -364,8 +372,14 @@ async def admin_flag_ride_participant(ride_id: str, req: FlagRequest):
         "flagged_by": "admin",
         "is_active": True,
     }
-
     result = await db_supabase.create_flag(flag_data)
+    await log_admin_action(
+        admin,
+        "flag_created",
+        "flags",
+        flag_data["id"],
+        {"ride_id": ride_id, "target_type": req.target_type, "target_id": target_id, "reason": req.reason},
+    )
     return result
 
 
@@ -390,11 +404,12 @@ async def admin_list_flags(
 
 
 @router.put("/flags/{flag_id}/deactivate")
-async def admin_deactivate_flag(flag_id: str):
+async def admin_deactivate_flag(flag_id: str, admin: dict = Depends(get_admin_user)):
     """Deactivate a flag (soft delete)."""
     result = await db_supabase.update_one("flags", {"id": flag_id}, {"$set": {"is_active": False}})
     if not result:
         raise HTTPException(status_code=404, detail="Flag not found")
+    await log_admin_action(admin, "flag_deactivated", "flags", flag_id, {})
     return {"message": "Flag deactivated"}
 
 
@@ -432,7 +447,6 @@ async def admin_create_complaint(ride_id: str, req: ComplaintRequest):
         "status": "open",
         "created_by": "admin",
     }
-
     complaint = await db_supabase.create_complaint(complaint_data)
     return complaint
 
@@ -453,6 +467,13 @@ async def admin_resolve_complaint(
     )
     if not result:
         raise HTTPException(status_code=404, detail="Complaint not found")
+    await log_admin_action(
+        admin,
+        "complaint_resolved",
+        "complaints",
+        complaint_id,
+        {"status": req.status},
+    )
     return result
 
 

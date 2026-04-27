@@ -8,35 +8,28 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 // persisted to sessionStorage — only the opaque refresh token is stored
 // there. On page reload, silentRefresh() exchanges the refresh token for
 // a new short-lived access token before any API calls are made.
-const COOKIE_NAME = 'admin_token';
-const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 8; // 8 hours — standard admin session
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 const REFRESH_BEFORE_EXPIRY_MS = 5 * 60 * 1000; // refresh 5 min before access token expires
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes (F-19)
 
 let _refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
-// NOTE (F-02): document.cookie cannot set HttpOnly — the flag is only settable
-// by the server. A full fix requires a Next.js API route (/api/auth/set-cookie)
-// that accepts the token and responds with Set-Cookie: HttpOnly; Secure.
-// Until that API route is implemented, SameSite=Strict reduces XSS exposure
-// by blocking cross-site requests from carrying this cookie.
-function setAuthCookie(token: string) {
-    if (typeof document === 'undefined') return;
-    const secure = typeof window !== 'undefined' && window.location.protocol === 'https:';
-    const parts = [
-        `${COOKIE_NAME}=${encodeURIComponent(token)}`,
-        'path=/',
-        `max-age=${COOKIE_MAX_AGE_SECONDS}`,
-        'SameSite=Strict',
-    ];
-    if (secure) parts.push('Secure');
-    document.cookie = parts.join('; ');
+// Cookie helpers — delegate to the Next.js API route so the cookie is set
+// HttpOnly by the server (F-02). document.cookie cannot set HttpOnly.
+// Fire-and-forget: the in-memory token drives API calls; the HttpOnly cookie
+// drives middleware route-protection checks on hard refreshes/SSR.
+function setAuthCookie(token: string): void {
+    if (typeof window === 'undefined') return;
+    fetch('/api/auth/set-cookie', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+    }).catch(() => { /* non-critical — middleware redirects to /login if missing */ });
 }
 
-function clearAuthCookie() {
-    if (typeof document === 'undefined') return;
-    document.cookie = `${COOKIE_NAME}=; path=/; max-age=0; SameSite=Strict`;
+function clearAuthCookie(): void {
+    if (typeof window === 'undefined') return;
+    fetch('/api/auth/set-cookie', { method: 'DELETE' }).catch(() => { /* non-critical */ });
 }
 
 function cancelRefreshTimer() {

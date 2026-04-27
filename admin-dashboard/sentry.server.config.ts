@@ -14,7 +14,7 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
     }
     event.request.headers = safe;
   }
-  if (event.request?.cookies) event.request.cookies = {};
+  if (event.request?.cookies) event.request.cookies = { _filtered: '[Filtered]' };
   if (event.request?.query_string) event.request.query_string = '[Filtered]';
 
   const PII_KEYS = new Set([

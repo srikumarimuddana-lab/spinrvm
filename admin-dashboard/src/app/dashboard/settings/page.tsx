@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getSettings, updateSettings } from "@/lib/api";
+import { getSettings, updateSettings, mfaStatus, mfaDisable } from "@/lib/api";
+import { MfaEnrollDialog } from "@/components/mfa-enroll-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,20 +17,53 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
-import { Save, Check } from "lucide-react";
+import { Save, Check, ShieldCheck, ShieldOff } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 export default function SettingsPage() {
+    const { toast } = useToast();
     const [settings, setSettings] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
+
+    const [mfaEnabled, setMfaEnabled] = useState(false);
+    const [mfaLoading, setMfaLoading] = useState(true);
+    const [showEnrollDialog, setShowEnrollDialog] = useState(false);
+    const [showDisableForm, setShowDisableForm] = useState(false);
+    const [disableTotp, setDisableTotp] = useState("");
+    const [disablePassword, setDisablePassword] = useState("");
+    const [disabling, setDisabling] = useState(false);
+    const [disableError, setDisableError] = useState("");
 
     useEffect(() => {
         getSettings()
             .then(setSettings)
             .catch(() => { })
             .finally(() => setLoading(false));
+
+        mfaStatus()
+            .then((d) => setMfaEnabled(d.mfa_enabled))
+            .catch(() => { })
+            .finally(() => setMfaLoading(false));
     }, []);
+
+    const handleDisableMfa = async () => {
+        setDisabling(true);
+        setDisableError("");
+        try {
+            await mfaDisable(disableTotp, disablePassword);
+            setMfaEnabled(false);
+            setShowDisableForm(false);
+            setDisableTotp("");
+            setDisablePassword("");
+            toast({ title: "MFA disabled", description: "Two-factor authentication has been removed from your account." });
+        } catch (e: any) {
+            setDisableError(e.message || "Failed to disable MFA. Check your code and password.");
+        } finally {
+            setDisabling(false);
+        }
+    };
 
     const handleSave = async () => {
         if (!settings) return;
@@ -256,6 +290,94 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
+                    {/* Two-Factor Authentication */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Two-Factor Authentication</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            {mfaLoading ? (
+                                <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                            ) : mfaEnabled ? (
+                                <>
+                                    <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+                                        <ShieldCheck className="h-4 w-4" />
+                                        MFA is enabled on your account.
+                                    </div>
+                                    {showDisableForm ? (
+                                        <div className="space-y-3">
+                                            {disableError && (
+                                                <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+                                                    {disableError}
+                                                </div>
+                                            )}
+                                            <div className="space-y-1">
+                                                <Label htmlFor="disable-totp">Authenticator Code</Label>
+                                                <Input
+                                                    id="disable-totp"
+                                                    type="text"
+                                                    inputMode="numeric"
+                                                    placeholder="000000"
+                                                    maxLength={8}
+                                                    value={disableTotp}
+                                                    onChange={(e) => setDisableTotp(e.target.value.toUpperCase())}
+                                                />
+                                            </div>
+                                            <div className="space-y-1">
+                                                <Label htmlFor="disable-password">Current Password</Label>
+                                                <Input
+                                                    id="disable-password"
+                                                    type="password"
+                                                    placeholder="••••••••"
+                                                    value={disablePassword}
+                                                    onChange={(e) => setDisablePassword(e.target.value)}
+                                                />
+                                            </div>
+                                            <div className="flex gap-2">
+                                                <Button
+                                                    variant="destructive"
+                                                    onClick={handleDisableMfa}
+                                                    disabled={disabling || disableTotp.length < 6 || !disablePassword}
+                                                >
+                                                    {disabling ? "Disabling…" : "Disable MFA"}
+                                                </Button>
+                                                <Button
+                                                    variant="outline"
+                                                    onClick={() => { setShowDisableForm(false); setDisableError(""); }}
+                                                >
+                                                    Cancel
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <Button
+                                            variant="outline"
+                                            className="gap-2"
+                                            onClick={() => setShowDisableForm(true)}
+                                        >
+                                            <ShieldOff className="h-4 w-4" />
+                                            Disable MFA
+                                        </Button>
+                                    )}
+                                </>
+                            ) : (
+                                <>
+                                    <p className="text-sm text-muted-foreground">
+                                        Protect your account with an authenticator app. Required for all staff with elevated permissions.
+                                    </p>
+                                    <Button
+                                        className="gap-2"
+                                        onClick={() => setShowEnrollDialog(true)}
+                                    >
+                                        <ShieldCheck className="h-4 w-4" />
+                                        Enable MFA
+                                    </Button>
+                                </>
+                            )}
+                        </CardContent>
+                    </Card>
+
                     {/* Legal Documents */}
                     <Card className="border-border/50 lg:col-span-2">
                         <CardHeader>
@@ -338,6 +460,12 @@ export default function SettingsPage() {
                     </Card>
                 </div>
             )}
+
+            <MfaEnrollDialog
+                open={showEnrollDialog}
+                onOpenChange={setShowEnrollDialog}
+                onEnrolled={() => setMfaEnabled(true)}
+            />
         </div>
     );
 }

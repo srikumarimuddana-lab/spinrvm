@@ -2067,7 +2067,8 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             {
                 "ride_id": ride_id,
             },
-            limit=10000,
+            limit=1000,
+            order="timestamp",
         )
         all_breadcrumbs = [b for b in all_breadcrumbs if b.get("lat") and b.get("lng")]
         all_breadcrumbs.sort(key=lambda b: str(b.get("timestamp", "")))
@@ -3137,9 +3138,7 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             # side; the request_id in the response body lets support
             # correlate against the log entry. This is the canonical
             # pattern referenced by docs/runbooks/error-responses.md.
-            logger.exception(
-                f"Stripe subscription charge failed for driver {driver['id']}"
-            )
+            logger.exception(f"Stripe subscription charge failed for driver {driver['id']}")
             raise HTTPException(
                 status_code=402,
                 detail="Payment failed. Please try another payment method or contact support.",

@@ -139,7 +139,9 @@ function RideInProgressScreenContent() {
           text: 'Call 911',
           style: 'destructive',
           onPress: () => {
-            if (rideId) triggerEmergency(rideId as string);
+            // Fire-and-forget — 911 is the primary action regardless of backend result.
+            // .catch() prevents unhandled rejection now that triggerEmergency rethrows.
+            if (rideId) void triggerEmergency(rideId as string).catch(() => {});
             Linking.openURL('tel:911');
           },
         },

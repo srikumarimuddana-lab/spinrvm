@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
+// PIPEDA data residency: pin to Canadian (Toronto) region (F-22).
+export const preferredRegion = "yyz1";
+
 const BACKEND_URL =
   process.env.BACKEND_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
